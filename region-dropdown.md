@@ -1,0 +1,421 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - button "Skip to main content"
+    - banner "Microsoft Azure" [ref=e3]:
+      - button "Show Microsoft Cloud menu" [ref=e5] [cursor=pointer]:
+        - img [ref=e7]
+      - button "Show portal menu" [ref=e9] [cursor=pointer]:
+        - img [ref=e10]
+      - heading "Microsoft Azure" [level=1] [ref=e12]:
+        - link "Microsoft Azure" [ref=e13] [cursor=pointer]:
+          - /url: "#home"
+      - search [ref=e14]:
+        - generic [ref=e15]:
+          - img [ref=e17]
+          - textbox "Search resources, services, and docs (G+/)" [ref=e20]
+      - button "Copilot" [ref=e21] [cursor=pointer]:
+        - img [ref=e23]
+        - generic [ref=e25]: Copilot
+      - generic [ref=e618]:
+        - button "Cloud Shell" [ref=e619] [cursor=pointer]:
+          - img [ref=e620]
+        - generic "Notifications 1 unread" [ref=e622]:
+          - button "Notifications" [ref=e623] [cursor=pointer]:
+            - img [ref=e624]
+          - generic [ref=e626]: "1"
+        - button "Settings" [ref=e627] [cursor=pointer]:
+          - img [ref=e628]
+        - button "Support + Troubleshooting" [ref=e631] [cursor=pointer]:
+          - img [ref=e632]
+        - button "Feedback" [ref=e634] [cursor=pointer]:
+          - img [ref=e635]
+      - button "Account menu Currently signed in as shiv@bijlanis.com, under Default Directory (shivbijlanis.onmicrosoft.com) tenant" [ref=e33] [cursor=pointer]:
+        - 'generic "Name: Shiv Bijlani Email: shiv@bijlanis.com Directory: Default Directory (9eb5173b-0ca2-461b-85b3-0c0b051e7c50) Domain: shivbijlanis.onmicrosoft.com Your sign in used multifactor authentication." [ref=e34]':
+          - generic [ref=e637]:
+            - generic [ref=e638]: shiv@bijlanis.com
+            - generic [ref=e639]: Default Directory (shivbijlanis.onmicrosoft.com)
+          - img [ref=e37]
+    - main [ref=e42]:
+      - generic [ref=e311]:
+        - navigation "Navigation history" [ref=e640]:
+          - navigation "breadcrumb" [ref=e643]:
+            - list [ref=e644]:
+              - listitem [ref=e645]:
+                - link "Home" [ref=e646] [cursor=pointer]:
+                  - /url: "#home"
+        - region "Create a virtual machine" [ref=e648]:
+          - generic "Create a virtual machine" [ref=e651]:
+            - generic [ref=e654]:
+              - heading "Create a virtual machine" [level=2] [ref=e655]: Create a virtual machine
+              - generic [ref=e656]:
+                - button "More content actions" [ref=e658] [cursor=pointer]:
+                  - img [ref=e661]
+                - group "Chat suggestions from Copilot" [ref=e665]:
+                  - generic [ref=e666]:
+                    - button "Chat suggestions from Copilot" [expanded] [ref=e667]:
+                      - img [ref=e670]
+                    - button "Help me create a VM optimized for high availability" [ref=e1145]
+                  - button "Help me create a low cost VM" [ref=e1147]
+                  - button "Help me choose the right VM size for my workload" [ref=e1149]
+                - button "Close content 'Create a virtual machine'" [ref=e675] [cursor=pointer]:
+                  - img [ref=e678]
+          - generic [ref=e691]:
+            - generic [ref=e694]:
+              - generic [ref=e695]:
+                - tablist [ref=e696]:
+                  - tab "Basics" [selected] [ref=e697] [cursor=pointer]:
+                    - generic [ref=e699]: Basics
+                  - tab "Disks" [ref=e700] [cursor=pointer]:
+                    - generic [ref=e702]: Disks
+                  - tab "Networking" [ref=e703] [cursor=pointer]:
+                    - generic [ref=e705]: Networking
+                  - tab "Management" [ref=e706] [cursor=pointer]:
+                    - generic [ref=e708]: Management
+                  - tab "Monitoring" [ref=e709] [cursor=pointer]:
+                    - generic [ref=e711]: Monitoring
+                  - tab "Advanced" [ref=e712] [cursor=pointer]:
+                    - generic [ref=e714]: Advanced
+                  - tab "Tags" [ref=e715] [cursor=pointer]:
+                    - generic [ref=e717]: Tags
+                  - tab "Review + create" [ref=e718] [cursor=pointer]:
+                    - generic [ref=e720]: Review + create
+                - generic: Required
+              - tabpanel "Basics" [ref=e721]:
+                - generic [ref=e722]:
+                  - generic [ref=e724]:
+                    - text: Create a virtual machine that runs Linux or Windows. Select an image from Azure marketplace or use your own customized image. Complete the Basics tab then Review + create to provision a virtual machine with default parameters or review each tab for full customization.
+                    - generic [ref=e725]:
+                      - link "Learn more about virtual machines" [ref=e726] [cursor=pointer]:
+                        - /url: http://go.microsoft.com/fwlink/?LinkId=2127231
+                        - text: Learn more
+                      - img [ref=e728]
+                  - heading "Project details" [level=2] [ref=e731]
+                  - generic [ref=e733]: Select the subscription to manage deployed resources and costs. Use resource groups like folders to organize and manage all your resources.
+                  - group [ref=e734]:
+                    - generic [ref=e735]:
+                      - text: Subscription
+                      - button "Subscription" [ref=e742] [cursor=pointer]:
+                        - img [ref=e745]
+                    - generic [ref=e750]:
+                      - combobox "Subscription" [ref=e752] [cursor=pointer]: Visual Studio Enterprise Subscription
+                      - button "Toggle" [ref=e753] [cursor=pointer]:
+                        - generic:
+                          - img
+                  - group [ref=e754]:
+                    - generic [ref=e755]:
+                      - text: Resource group
+                      - button "Resource group" [ref=e762] [cursor=pointer]:
+                        - img [ref=e765]
+                    - generic [ref=e769]:
+                      - generic [ref=e770]:
+                        - combobox "Create new or use existing Resource group" [ref=e772] [cursor=pointer]: (New) rg-shiv-devbox
+                        - button "Toggle" [ref=e773] [cursor=pointer]:
+                          - generic:
+                            - img
+                      - 'button "Resource group: Create new" [ref=e778] [cursor=pointer]': Create new
+                  - heading "Instance details" [level=2] [ref=e780]
+                  - generic [ref=e781]:
+                    - generic [ref=e782]:
+                      - generic [ref=e783]: Virtual machine name
+                      - button "Virtual machine name" [ref=e790] [cursor=pointer]:
+                        - img [ref=e793]
+                    - generic [ref=e799]:
+                      - textbox "Virtual machine name" [ref=e801]:
+                        - /placeholder: ""
+                        - text: shiv-devbox
+                      - button [ref=e1276]:
+                        - img [ref=e1277]
+                  - group [ref=e802]:
+                    - generic [ref=e803]:
+                      - text: Region
+                      - button "Region" [ref=e805] [cursor=pointer]:
+                        - img [ref=e808]
+                    - generic [ref=e812]:
+                      - generic [ref=e813]:
+                        - combobox "Region" [active] [ref=e815] [cursor=pointer]: (US) East US
+                        - button "Toggle" [ref=e816] [cursor=pointer]:
+                          - generic:
+                            - img
+                      - button "Deploy to an Azure Extended Zone" [ref=e1155] [cursor=pointer]
+                  - generic [ref=e821]:
+                    - generic [ref=e822]:
+                      - text: Availability options
+                      - button "Azure offers a range of options for managing availability and resiliency for your applications. Architect your solution to use replicated VMs in Availability Zones or Availability Sets to protect your apps and data from datacenter outages and maintenance events." [ref=e824] [cursor=pointer]:
+                        - img [ref=e827]
+                    - generic [ref=e832]:
+                      - combobox "Availability options" [ref=e834] [cursor=pointer]: Availability zone
+                      - button "Toggle" [ref=e835] [cursor=pointer]:
+                        - generic:
+                          - img
+                  - generic [ref=e1156]:
+                    - generic [ref=e1157]:
+                      - generic [ref=e1158]: Zone options
+                      - button "Zone options" [ref=e1160] [cursor=pointer]:
+                        - img [ref=e1163]
+                    - generic [ref=e1167]:
+                      - radiogroup "Zone options" [ref=e1170]:
+                        - radio "Self-selected zone Choose up to 3 availability zones, one VM per zone" [checked] [ref=e1171]:
+                          - generic [ref=e1173]:
+                            - text: Self-selected zone
+                            - generic [ref=e1174]: Choose up to 3 availability zones, one VM per zone
+                        - radio "Azure-selected zone (Preview) Let Azure assign the best zone for your needs" [disabled]:
+                          - generic:
+                            - text: Azure-selected zone (Preview)
+                            - generic: Let Azure assign the best zone for your needs
+                      - status "Using an Azure-selected zone is not supported in region 'East US'." [ref=e1177]:
+                        - img [ref=e1180]
+                        - generic [ref=e1185]: Using an Azure-selected zone is not supported in region 'East US'.
+                  - generic [ref=e1186]:
+                    - generic [ref=e1187]:
+                      - text: Availability zone
+                      - button "Availability zone" [ref=e1194] [cursor=pointer]:
+                        - img [ref=e1197]
+                    - generic [ref=e1201]:
+                      - generic [ref=e1202]:
+                        - generic: Zone 1
+                        - combobox "Availability zone" [ref=e1204] [cursor=pointer]: Zone 1
+                        - button "Toggle" [ref=e1205] [cursor=pointer]:
+                          - generic:
+                            - img
+                      - generic [ref=e1207]:
+                        - img [ref=e1209]
+                        - generic [ref=e1212]:
+                          - text: You can now select multiple zones. Selecting multiple zones will create one VM per zone.
+                          - generic [ref=e1213]:
+                            - link "Learn more about creating virtual machines in an availability zone" [ref=e1214] [cursor=pointer]:
+                              - /url: https://go.microsoft.com/fwlink/?LinkId=2189629
+                              - text: Learn more
+                            - img [ref=e1216]
+                  - generic [ref=e837]:
+                    - generic [ref=e838]:
+                      - text: Security type
+                      - button "Security type" [ref=e840] [cursor=pointer]:
+                        - img [ref=e843]
+                    - generic [ref=e847]:
+                      - generic [ref=e848]:
+                        - combobox "Security type" [ref=e850] [cursor=pointer]: Trusted launch virtual machines
+                        - button "Toggle" [ref=e851] [cursor=pointer]:
+                          - generic:
+                            - img
+                      - button "Configure additional security features for this virtual machine" [ref=e854] [cursor=pointer]: Configure security features
+                  - generic [ref=e855]:
+                    - generic [ref=e856]:
+                      - text: Image
+                      - button "Image" [ref=e863] [cursor=pointer]:
+                        - img [ref=e866]
+                    - generic [ref=e870]:
+                      - generic [ref=e871]:
+                        - combobox "Image" [ref=e873] [cursor=pointer]:
+                          - generic [ref=e1218]:
+                            - img [ref=e1220]
+                            - generic [ref=e1221]: Ubuntu Server 24.04 LTS - x64 Gen2
+                        - button "Toggle" [ref=e878] [cursor=pointer]:
+                          - generic:
+                            - img
+                      - generic [ref=e881]:
+                        - button "See all images" [ref=e882] [cursor=pointer]
+                        - text: "|"
+                        - button "Configure VM generation" [ref=e883] [cursor=pointer]
+                  - generic [ref=e884]:
+                    - generic [ref=e885]:
+                      - generic [ref=e886]: VM architecture
+                      - button "VM architecture" [ref=e888] [cursor=pointer]:
+                        - img [ref=e891]
+                    - radiogroup "VM architecture" [ref=e898]:
+                      - radio "Arm64" [ref=e899]:
+                        - generic [ref=e901]: Arm64
+                      - radio "x64" [checked] [ref=e902]:
+                        - generic [ref=e904]: x64
+                  - generic [ref=e906]:
+                    - generic [ref=e907]:
+                      - generic [ref=e908]: Run with Azure Spot discount
+                      - button "Run with Azure Spot discount" [ref=e910] [cursor=pointer]:
+                        - img [ref=e913]
+                    - checkbox "Run with Azure Spot discount" [ref=e919]
+                  - generic [ref=e921]:
+                    - generic [ref=e922]:
+                      - text: Size
+                      - button "Select a VM size to support the workload that you want to run. The size that you choose then determines factors such as processing power, memory, and storage capacity. Azure offers a wide variety of sizes to support many types of uses. Azure charges an hourly price based on the VM's size and operating system." [ref=e924] [cursor=pointer]:
+                        - img [ref=e927]
+                    - generic [ref=e931]:
+                      - generic [ref=e932]:
+                        - combobox "Virtual machine size" [ref=e934] [cursor=pointer]: Standard_D2s_v3 - 2 vcpus, 8 GiB memory ($70.08)
+                        - button "Toggle" [ref=e935] [cursor=pointer]:
+                          - generic:
+                            - img
+                      - generic [ref=e937]:
+                        - button "See all sizes" [ref=e939] [cursor=pointer]
+                        - generic [ref=e1227]:
+                          - text: "|"
+                          - button "Customize cores" [ref=e1228] [cursor=pointer]
+                  - generic [ref=e941]:
+                    - generic [ref=e942]:
+                      - generic [ref=e943]: Enable Hibernation
+                      - button "Enable Hibernation" [ref=e945] [cursor=pointer]:
+                        - img [ref=e948]
+                    - generic [ref=e952]:
+                      - generic [ref=e953]:
+                        - checkbox "Enable Hibernation" [disabled]
+                      - status "Learn more" [ref=e1231]:
+                        - img [ref=e1234]
+                        - generic [ref=e1239]:
+                          - text: Hibernate does not currently support Trusted launch and Confidential virtual machines for Linux images.
+                          - generic [ref=e1240]:
+                            - link "Learn more about hibernation for VMs" [ref=e1241] [cursor=pointer]:
+                              - /url: http://go.microsoft.com/fwlink/?LinkId=2174358
+                              - text: Learn more
+                            - img [ref=e1243]
+                  - heading "Administrator account" [level=2] [ref=e957]
+                  - generic [ref=e958]:
+                    - generic [ref=e959]:
+                      - generic [ref=e960]: Authentication type
+                      - button "Authentication type" [ref=e962] [cursor=pointer]:
+                        - img [ref=e965]
+                    - generic [ref=e969]:
+                      - radiogroup "Authentication type" [ref=e972]:
+                        - radio "SSH public key" [checked] [ref=e973]:
+                          - generic [ref=e975]: SSH public key
+                        - radio "Password" [ref=e976]:
+                          - generic [ref=e978]: Password
+                      - status "Azure now automatically generates an SSH key pair for you and allows you to store it for future use. It is a fast, simple, and secure way to connect to your virtual machine." [ref=e981]:
+                        - img [ref=e984]
+                        - generic [ref=e989]: Azure now automatically generates an SSH key pair for you and allows you to store it for future use. It is a fast, simple, and secure way to connect to your virtual machine.
+                  - generic [ref=e990]:
+                    - generic [ref=e991]:
+                      - generic [ref=e992]: Username
+                      - button "Username" [ref=e999] [cursor=pointer]:
+                        - img [ref=e1002]
+                    - generic [ref=e1008]:
+                      - textbox "Username" [ref=e1010]:
+                        - /placeholder: ""
+                        - text: azureuser
+                      - button [ref=e1012]:
+                        - img [ref=e1013]
+                  - generic [ref=e1015]:
+                    - generic [ref=e1016]: SSH public key source
+                    - generic [ref=e1018]:
+                      - combobox "SSH public key source" [ref=e1020] [cursor=pointer]: Generate new key pair
+                      - button "Toggle" [ref=e1021] [cursor=pointer]:
+                        - generic:
+                          - img
+                  - generic [ref=e1022]:
+                    - generic [ref=e1024]: SSH Key Type
+                    - generic [ref=e1025]:
+                      - radiogroup "SSH Key Type" [ref=e1028]:
+                        - radio "RSA SSH Format" [checked] [ref=e1029]:
+                          - generic [ref=e1031]: RSA SSH Format
+                        - radio "Ed25519 SSH Format" [ref=e1032]:
+                          - generic [ref=e1034]: Ed25519 SSH Format
+                      - status "Ed25519 provides a fixed security level of no more than 128 bits for 256-bit key, while RSA could offer better security with keys longer than 3072 bits." [ref=e1037]:
+                        - img [ref=e1040]
+                        - generic [ref=e1045]: Ed25519 provides a fixed security level of no more than 128 bits for 256-bit key, while RSA could offer better security with keys longer than 3072 bits.
+                  - generic [ref=e1046]:
+                    - generic [ref=e1048]: Key pair name
+                    - generic [ref=e1056]:
+                      - textbox "Key pair name" [ref=e1058]:
+                        - /placeholder: Name the SSH public key
+                        - text: shiv-devbox_key
+                      - button [ref=e1280]:
+                        - img [ref=e1281]
+                  - generic [ref=e1059]:
+                    - generic [ref=e1061]:
+                      - heading "Inbound port rules" [level=3] [ref=e1062]
+                      - generic [ref=e1063]: Select which virtual machine network ports are accessible from the public internet. You can specify more limited or granular network access on the Networking tab.
+                    - generic [ref=e1064]:
+                      - generic [ref=e1065]:
+                        - generic [ref=e1066]:
+                          - generic [ref=e1067]: Public inbound ports
+                          - button "Public inbound ports" [ref=e1074] [cursor=pointer]:
+                            - img [ref=e1077]
+                        - radiogroup "Public inbound ports" [ref=e1084]:
+                          - radio "None" [ref=e1085]:
+                            - generic [ref=e1087]: None
+                          - radio "Allow selected ports" [checked] [ref=e1088]:
+                            - generic [ref=e1090]: Allow selected ports
+                      - generic [ref=e1091]:
+                        - generic [ref=e1092]: Select inbound ports
+                        - generic [ref=e1098]:
+                          - generic [ref=e1099]:
+                            - generic: SSH (22)
+                            - combobox "Select inbound ports" [ref=e1101] [cursor=pointer]: SSH (22)
+                            - button "Toggle" [ref=e1102] [cursor=pointer]:
+                              - generic:
+                                - img
+                          - status "This will allow all IP addresses to access your virtual machine. This is only recommended for testing. Use the Advanced controls in the Networking tab to create rules to limit inbound traffic to known IP addresses." [ref=e1106]:
+                            - img [ref=e1109]
+                            - generic [ref=e1114]: This will allow all IP addresses to access your virtual machine. This is only recommended for testing. Use the Advanced controls in the Networking tab to create rules to limit inbound traffic to known IP addresses.
+                    - text: "!"
+            - generic [ref=e1116]:
+              - button "< Previous" [disabled] [ref=e1118]:
+                - generic [ref=e1119]: < Previous
+              - 'button "Next : Disks >" [ref=e1121] [cursor=pointer]':
+                - generic [ref=e1122]: "Next : Disks >"
+              - button "Review + create" [ref=e1124] [cursor=pointer]:
+                - generic [ref=e1125]: Review + create
+              - generic [ref=e1130]:
+                - img [ref=e1132]
+                - link "Give feedback about your experience" [ref=e1134] [cursor=pointer]:
+                  - /url: "#"
+                  - text: Give feedback
+  - generic:
+    - generic:
+      - generic: Type to filter result or use down arrow to choose options
+  - img [ref=e244]
+  - img [ref=e245]
+  - img [ref=e246]
+  - img [ref=e247]
+  - img [ref=e248]
+  - img [ref=e249]
+  - img [ref=e250]
+  - img [ref=e251]
+  - img [ref=e252]
+  - img [ref=e253]
+  - img [ref=e254]
+  - img [ref=e255]
+  - img [ref=e256]
+  - img [ref=e257]
+  - img [ref=e258]
+  - img [ref=e259]
+  - img [ref=e260]
+  - img [ref=e261]
+  - img [ref=e262]
+  - img [ref=e263]
+  - img [ref=e264]
+  - img [ref=e265]
+  - img [ref=e266]
+  - img [ref=e267]
+  - img [ref=e268]
+  - img [ref=e269]
+  - img [ref=e270]
+  - img [ref=e271]
+  - img [ref=e309]
+  - img [ref=e310]
+  - img [ref=e598]
+  - img [ref=e599]
+  - img [ref=e600]
+  - img [ref=e601]
+  - img [ref=e602]
+  - img [ref=e603]
+  - img [ref=e604]
+  - img [ref=e605]
+  - img [ref=e606]
+  - img [ref=e607]
+  - img [ref=e608]
+  - img [ref=e609]
+  - img [ref=e610]
+  - img [ref=e611]
+  - img [ref=e612]
+  - img [ref=e613]
+  - img [ref=e614]
+  - img [ref=e615]
+  - img [ref=e616]
+  - img [ref=e617]
+  - img [ref=e1135]
+  - img [ref=e1136]
+  - img [ref=e1137]
+  - img [ref=e1138]
+  - img [ref=e1139]
+  - img [ref=e1140]
+  - img [ref=e1141]
+  - img [ref=e1142]
+  - img [ref=e1143]

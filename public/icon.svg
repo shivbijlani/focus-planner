@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="80" fill="url(#bg)"/>
+  <!-- Checklist lines -->
+  <g fill="none" stroke="#e94560" stroke-width="16" stroke-linecap="round">
+    <!-- Check mark 1 -->
+    <polyline points="120,180 148,208 192,152" stroke-linejoin="round"/>
+    <!-- Check mark 2 -->
+    <polyline points="120,268 148,296 192,240" stroke-linejoin="round"/>
+    <!-- Line 3 (unchecked box) -->
+    <rect x="120" y="316" width="72" height="48" rx="8" stroke-width="12"/>
+  </g>
+  <!-- Text lines -->
+  <g fill="#eee">
+    <rect x="224" y="164" width="180" height="20" rx="10"/>
+    <rect x="224" y="252" width="140" height="20" rx="10"/>
+    <rect x="224" y="332" width="160" height="20" rx="10"/>
+  </g>
+  <!-- Accent dot -->
+  <circle cx="400" cy="120" r="24" fill="#e94560" opacity="0.8"/>
+</svg>
