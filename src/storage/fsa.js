@@ -135,15 +135,17 @@ export async function getMaxJournalId(dirHandle) {
 
 const SCAFFOLD_FOCUS_PLAN = `## Today
 
-| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |
+| ID | 🎯 | Task | Work Priority | Added | Linked ID |
 |---|---|------|---------------|-------|-----------|
 
 ## Tomorrow
 
-| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |
+| ID | 🎯 | Task | Work Priority | Added | Linked ID |
 |---|---|------|---------------|-------|-----------|
 
-## Manager Priorities
+## Work Priorities
+
+## Personal Priorities
 
 `
 

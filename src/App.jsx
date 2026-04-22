@@ -613,7 +613,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   }
   
   const priorityCol = headers.find(h => h.includes('🎯')) || '🎯'
-  const mngrPriorityCol = headers.find(h => h.includes('Mngr') || h.includes('Priority')) || 'Mngr Priority'
+  const mngrPriorityCol = headers.find(h => h.includes('Mngr') || h.includes('Work') || h.includes('Priority')) || 'Work Priority'
   
   const handleContextMenu = (e) => {
     e.preventDefault()
@@ -818,7 +818,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
             )
           }
           
-          // Special handling for Manager Priority column — read-only, derived from linked ID chain
+          // Special handling for Work Priority column — read-only, derived from linked ID chain
           if (h === mngrPriorityCol) {
             const resolved = resolveManagerPriority(taskId, linkedIdMap || {}, managerPriorities)
             const isSelfPriority = taskId && managerPriorities[taskId]
@@ -828,7 +828,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                 <td key={i}>
                   <span 
                     className="mngr-priority-link mngr-priority-self"
-                    title={`This task is Manager Priority #${managerPriorities[taskId]}`}
+                    title={`This task is Work Priority #${managerPriorities[taskId]}`}
                     onClick={(e) => { e.stopPropagation(); onScrollToPriorities() }}
                   >
                     ★ #{managerPriorities[taskId]}
@@ -843,7 +843,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                 <td key={i}>
                   <span 
                     className="mngr-priority-link"
-                    title={`Linked to Manager Priority #${resolved.order}: ${resolvedName || resolved.id}`}
+                    title={`Linked to Work Priority #${resolved.order}: ${resolvedName || resolved.id}`}
                     onClick={(e) => { e.stopPropagation(); onScrollToPriorities() }}
                   >
                     {resolvedName || `Task ${resolved.id}`}
@@ -903,7 +903,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   )
 }
 
-// Sort tasks: 🔴 urgent always on top, then manager priority (🐸 first within each), then icon
+// Sort tasks: 🔴 urgent always on top, then work priority (🐸 first within each), then icon
 function sortTasksByPriority(rows, rawLines, headers, linkedIdMap, managerPriorities) {
   const priorityOrder = { '🔴': 0, '🐸': 1, '🟡': 2, '🔵': 3, '📖': 4, '⚪': 5, '✅': 6 }
   const priorityCol = headers.find(h => h.includes('🎯')) || '🎯'
@@ -951,7 +951,7 @@ function sortTasksByPriority(rows, rawLines, headers, linkedIdMap, managerPriori
 }
 
 // Collapsible section component
-function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority }) {
+function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, personalPriorities, onScrollToPriorities, onScrollToPersonalPriorities, onTaskAction, onMoveToCompleted, onAddTask, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, onPromoteToPersonalPriority, onRemoveFromPersonalPriority }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const { headers, rows, rawLines } = parseMarkdownTable(tableLines)
   const [contextMenu, setContextMenu] = useState(null)
@@ -1088,19 +1088,33 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
       })
     }
     
-    // Add "Promote/Remove Manager Priority" option
+    // Add "Promote/Remove Work Priority" option
     if (taskId) {
       if (managerPriorities[taskId]) {
         options.push({
-          label: 'Remove from Manager Priorities',
+          label: 'Remove from Work Priorities',
           icon: '⭐',
           action: () => onRemoveFromManagerPriority(taskId)
         })
       } else {
         options.push({
-          label: 'Promote to Manager Priority',
+          label: 'Promote to Work Priority',
           icon: '⭐',
           action: () => onPromoteToManagerPriority(taskId)
+        })
+      }
+      // Add "Promote/Remove Personal Priority" option
+      if (personalPriorities && personalPriorities[taskId]) {
+        options.push({
+          label: 'Remove from Personal Priorities',
+          icon: '🌟',
+          action: () => onRemoveFromPersonalPriority(taskId)
+        })
+      } else {
+        options.push({
+          label: 'Promote to Personal Priority',
+          icon: '🌟',
+          action: () => onPromoteToPersonalPriority(taskId)
         })
       }
     }
@@ -1140,7 +1154,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
           <span className="sort-info-tooltip">
             <strong>Sort Order</strong><br/>
             1. 🔴 Urgent — always on top<br/>
-            2. Manager Priority (🐸 first within each)<br/>
+            2. Work Priority (🐸 first within each)<br/>
             3. Priority icon: 🐸 → 🟡 → 🔵 → 📖 → ⚪ → ✅
           </span>
         </span>
@@ -1216,7 +1230,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
 }
 
 // Manager Priorities Section
-function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, tasksByPriority = {}, taskLookup = {} }) {
+function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, tasksByPriority = {}, taskLookup = {}, title = 'Work Priorities', sectionId = 'work-priorities' }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const [isAdding, setIsAdding] = useState(false)
   const [newPriority, setNewPriority] = useState('')
@@ -1238,7 +1252,7 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, tasksB
       return
     }
     // Expand collapsed sections and retry
-    const collapsedHeaders = document.querySelectorAll('.task-section:not(.manager-priorities-section) .section-header .collapse-icon')
+    const collapsedHeaders = document.querySelectorAll('.task-section:not(.manager-priorities-section) .section-header .collapse-icon, .task-section:not(.personal-priorities-section) .section-header .collapse-icon')
     let expanded = false
     collapsedHeaders.forEach(icon => {
       if (icon.textContent.trim() === '▶') {
@@ -1314,13 +1328,13 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, tasksB
   const allTaskIds = taskLookup ? Object.keys(taskLookup) : []
   
   return (
-    <div className="task-section manager-priorities-section" id="manager-priorities">
-      <h2 
+    <div className="task-section manager-priorities-section" id={sectionId}>
+      <h2
         className="section-header"
         onClick={() => setIsOpen(!isOpen)}
       >
         <span className="collapse-icon">{isOpen ? '▼' : '▶'}</span>
-        Manager Priorities
+        {title}
         <span className="task-count">({priorityList.length})</span>
         <button 
           className="add-task-btn"
@@ -1524,11 +1538,17 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
   const taskSections = sections.filter(s => 
     s.title === 'Today' || s.title === 'Deferred'
   )
-  const managerPrioritiesSection = sections.find(s => s.title === 'Manager Priorities')
-  
-  // Parse manager priorities for lookup
-  const managerPriorities = managerPrioritiesSection 
+  const managerPrioritiesSection = sections.find(s =>
+    s.title === 'Work Priorities' || s.title === 'Manager Priorities'
+  )
+  const personalPrioritiesSection = sections.find(s => s.title === 'Personal Priorities')
+
+  // Parse manager (work) priorities and personal priorities for lookup
+  const managerPriorities = managerPrioritiesSection
     ? parseManagerPriorities(managerPrioritiesSection.lines)
+    : {}
+  const personalPriorities = personalPrioritiesSection
+    ? parseManagerPriorities(personalPrioritiesSection.lines)
     : {}
   
   // Build lookup from current focus plan tasks + linked ID map + ADO lookup for chain walking
@@ -1589,10 +1609,20 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
   const activeTaskIds = Object.keys(currentTaskLookup)
   
   const scrollToPriorities = () => {
-    const el = document.getElementById('manager-priorities')
+    const el = document.getElementById('work-priorities')
     if (el) {
       el.scrollIntoView({ behavior: 'smooth' })
-      // Also expand the section
+      const header = el.querySelector('.section-header')
+      if (header && el.querySelector('.priorities-content') === null) {
+        header.click()
+      }
+    }
+  }
+
+  const scrollToPersonalPriorities = () => {
+    const el = document.getElementById('personal-priorities')
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth' })
       const header = el.querySelector('.section-header')
       if (header && el.querySelector('.priorities-content') === null) {
         header.click()
@@ -1681,7 +1711,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
     // Extract task info from row
     const taskId = extractTaskId(row)
     const taskName = row['Task'] || ''
-    const mngrPriority = row['Mngr Priority'] || '-'
+    const mngrPriority = row['Work Priority'] || row['Mngr Priority'] || '-'
     
     // Get today's date
     const today = new Date().toISOString().split('T')[0]
@@ -1770,7 +1800,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
           '',
           weekHeader,
           '',
-          '| # | 🎯 | Task | Mngr Priority | Completed Date |',
+          '| # | 🎯 | Task | Work Priority | Completed Date |',
           '|---|---|------|---------------|----------------|',
           completedRow
         ]
@@ -1955,33 +1985,36 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
     }
   }
   
-  const handleUpdateManagerPriorities = async (newLines) => {
-    // Rebuild the content with updated manager priorities
+  const updateNamedSection = async (sectionName, newLines) => {
     const lines = content.split('\n')
-    let inMPSection = false
-    let mpStartIndex = -1
-    let mpEndIndex = -1
-    
+    let inSection = false
+    let startIndex = -1
+    let endIndex = -1
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]
-      if (line.startsWith('## Manager Priorities')) {
-        inMPSection = true
-        mpStartIndex = i
-      } else if (inMPSection && line.startsWith('## ')) {
-        mpEndIndex = i
+      if (line.startsWith(`## ${sectionName}`)) {
+        inSection = true
+        startIndex = i
+      } else if (inSection && line.startsWith('## ')) {
+        endIndex = i
         break
       }
     }
-    
-    if (mpStartIndex === -1) return
-    if (mpEndIndex === -1) mpEndIndex = lines.length
-    
-    // Replace the manager priorities section
-    const beforeMP = lines.slice(0, mpStartIndex + 1)
-    const afterMP = lines.slice(mpEndIndex)
-    const newContent = [...beforeMP, '', ...newLines, '', ...afterMP].join('\n')
-    
-    await onContentUpdate(newContent)
+    if (startIndex === -1) return
+    if (endIndex === -1) endIndex = lines.length
+    const before = lines.slice(0, startIndex + 1)
+    const after = lines.slice(endIndex)
+    await onContentUpdate([...before, '', ...newLines, '', ...after].join('\n'))
+  }
+
+  const handleUpdateManagerPriorities = async (newLines) => {
+    // Support both legacy "Manager Priorities" and new "Work Priorities"
+    const sectionName = managerPrioritiesSection?.title || 'Work Priorities'
+    await updateNamedSection(sectionName, newLines)
+  }
+
+  const handleUpdatePersonalPriorities = async (newLines) => {
+    await updateNamedSection('Personal Priorities', newLines)
   }
   
   const handlePromoteToManagerPriority = async (taskId) => {
@@ -2011,7 +2044,6 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
       const match = line.trim().match(/^\d+\.\s+(.+)$/)
       return !(match && match[1].trim() === taskId)
     })
-    // Renumber
     let num = 1
     const renumbered = mpLines.map(line => {
       const match = line.trim().match(/^\d+\.\s+(.+)$/)
@@ -2019,6 +2051,42 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
       return line
     })
     await handleUpdateManagerPriorities(renumbered)
+  }
+
+  const handlePromoteToPersonalPriority = async (taskId) => {
+    if (!personalPrioritiesSection) return
+    const ppLines = [...personalPrioritiesSection.lines]
+    let lastNumIndex = -1
+    let maxNum = 0
+    for (let i = 0; i < ppLines.length; i++) {
+      const match = ppLines[i].trim().match(/^(\d+)\.\s+/)
+      if (match) {
+        lastNumIndex = i
+        maxNum = Math.max(maxNum, parseInt(match[1], 10))
+      }
+    }
+    const newLine = `${maxNum + 1}. ${taskId}`
+    if (lastNumIndex >= 0) {
+      ppLines.splice(lastNumIndex + 1, 0, newLine)
+    } else {
+      ppLines.push(newLine)
+    }
+    await handleUpdatePersonalPriorities(ppLines)
+  }
+
+  const handleRemoveFromPersonalPriority = async (taskId) => {
+    if (!personalPrioritiesSection) return
+    const ppLines = personalPrioritiesSection.lines.filter(line => {
+      const match = line.trim().match(/^\d+\.\s+(.+)$/)
+      return !(match && match[1].trim() === taskId)
+    })
+    let num = 1
+    const renumbered = ppLines.map(line => {
+      const match = line.trim().match(/^\d+\.\s+(.+)$/)
+      if (match) return `${num++}. ${match[1]}`
+      return line
+    })
+    await handleUpdatePersonalPriorities(renumbered)
   }
   
   return (
@@ -2033,7 +2101,9 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
           onNavigate={onNavigate}
           defaultOpen={section.title === 'Today'}
           managerPriorities={managerPriorities}
+          personalPriorities={personalPriorities}
           onScrollToPriorities={scrollToPriorities}
+          onScrollToPersonalPriorities={scrollToPersonalPriorities}
           onTaskAction={handleTaskAction}
           onMoveToCompleted={handleMoveToCompleted}
           onAddTask={handleAddTask}
@@ -2050,16 +2120,32 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
           adoLookup={adoLookup}
           onPromoteToManagerPriority={handlePromoteToManagerPriority}
           onRemoveFromManagerPriority={handleRemoveFromManagerPriority}
+          onPromoteToPersonalPriority={handlePromoteToPersonalPriority}
+          onRemoveFromPersonalPriority={handleRemoveFromPersonalPriority}
         />
       ))}
-      
+
       {managerPrioritiesSection && (
-        <ManagerPrioritiesSection 
+        <ManagerPrioritiesSection
           lines={managerPrioritiesSection.lines}
           defaultOpen={false}
           onUpdate={handleUpdateManagerPriorities}
           tasksByPriority={tasksByPriority}
           taskLookup={taskLookup}
+          title="Work Priorities"
+          sectionId="work-priorities"
+        />
+      )}
+
+      {personalPrioritiesSection && (
+        <ManagerPrioritiesSection
+          lines={personalPrioritiesSection.lines}
+          defaultOpen={false}
+          onUpdate={handleUpdatePersonalPriorities}
+          tasksByPriority={{}}
+          taskLookup={taskLookup}
+          title="Personal Priorities"
+          sectionId="personal-priorities"
         />
       )}
       
