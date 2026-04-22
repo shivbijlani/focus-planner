@@ -57,7 +57,7 @@ function AdoLinkDialog({ onClose, onSave, currentUrl }) {
     } else {
       // If it looks like just a number, ask for full URL
       if (/^\d+$/.test(trimmed)) {
-        alert('Please paste a full ADO URL, not just the ID')
+        alert('Please paste a full URL, not just the ID')
         return
       }
       onSave({ id: '?', url: trimmed })
@@ -68,13 +68,13 @@ function AdoLinkDialog({ onClose, onSave, currentUrl }) {
   return (
     <div className="dialog-overlay" onClick={onClose}>
       <div className="dialog" onClick={e => e.stopPropagation()}>
-        <h3>🔗 Link to Bug Database</h3>
-        <p className="dialog-hint">Paste the Azure DevOps work item URL</p>
+        <h3>🔗 External Link</h3>
+        <p className="dialog-hint">Paste a URL — if it's an Azure DevOps or Jira ticket, the ticket number will be extracted and shown as a clickable badge.</p>
         <input
           type="text"
           value={url}
           onChange={e => setUrl(e.target.value)}
-          placeholder="https://dev.azure.com/org/project/_workitems/edit/12345"
+          placeholder="https://..."
           autoFocus
           onKeyDown={e => {
             if (e.key === 'Enter') handleSave()
@@ -696,7 +696,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
             return (
               <td key={i} title={taskName} className="id-cell">
                 {adoLink ? (
-                  <a className="external-link ado-id-link" href={adoLink.url} target="_blank" rel="noopener noreferrer" title={`ADO #${adoLink.id}`} onClick={(e) => e.stopPropagation()}>
+                  <a className="external-link ado-id-link" href={adoLink.url} target="_blank" rel="noopener noreferrer" title={`Ticket #${adoLink.id}`} onClick={(e) => e.stopPropagation()}>
                     {adoLink.id}
                   </a>
                 ) : (
@@ -732,7 +732,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                       const linkedNumMatch = linkedId.match(/^(\d+)$/)
                       const linkedAdoLink = linkedNumMatch && adoLookup ? adoLookup[linkedNumMatch[1]] : null
                       if (linkedAdoLink) {
-                        return <a className="linked-id-link external-link ado-id-link" href={linkedAdoLink.url} target="_blank" rel="noopener noreferrer" title={linkedTaskName || `ADO #${linkedAdoLink.id}`} onClick={(e) => e.stopPropagation()}>{linkedAdoLink.id}</a>
+                        return <a className="linked-id-link external-link ado-id-link" href={linkedAdoLink.url} target="_blank" rel="noopener noreferrer" title={linkedTaskName || `Ticket #${linkedAdoLink.id}`} onClick={(e) => e.stopPropagation()}>{linkedAdoLink.id}</a>
                       }
                       return <span className="linked-id-link" onClick={navigateToLinkedId} title={linkedTaskName || `Go to task ${linkedId.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')}`}>{parseLinks(linkedId, onNavigate)}</span>
                     })()}
@@ -1109,7 +1109,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
     const idObj = row['ID']
     const currentAdoLink = typeof idObj === 'object' ? idObj.adoLink : null
     options.push({
-      label: currentAdoLink ? 'Edit Bug DB Link' : 'Link to Bug DB',
+      label: currentAdoLink ? 'Edit external link' : 'External link',
       icon: '🔗',
       action: () => setAdoLinkDialog({ rawLine, currentUrl: currentAdoLink ? currentAdoLink.url : '' })
     })
