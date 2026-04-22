@@ -2,26 +2,29 @@
   "name": "Focus Planner",
   "short_name": "Planner",
   "description": "Markdown-backed task planner for focus and productivity",
-  "start_url": "/",
+  "start_url": "/focus-planner/",
+  "scope": "/focus-planner/",
   "display": "standalone",
   "background_color": "#1a1a2e",
   "theme_color": "#1a1a2e",
   "icons": [
     {
-      "src": "/icon.svg",
+      "src": "/focus-planner/icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"
     },
     {
-      "src": "/icon-192.png",
+      "src": "/focus-planner/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
-      "src": "/icon-512.png",
+      "src": "/focus-planner/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }
