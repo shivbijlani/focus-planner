@@ -2018,7 +2018,11 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
   }
   
   const handlePromoteToManagerPriority = async (taskId) => {
-    if (!managerPrioritiesSection) return
+    if (!managerPrioritiesSection) {
+      const newContent = content.trimEnd() + '\n\n## Work Priorities\n\n1. ' + taskId + '\n'
+      await onContentUpdate(newContent)
+      return
+    }
     const mpLines = [...managerPrioritiesSection.lines]
     let lastNumIndex = -1
     let maxNum = 0
@@ -2054,7 +2058,12 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
   }
 
   const handlePromoteToPersonalPriority = async (taskId) => {
-    if (!personalPrioritiesSection) return
+    if (!personalPrioritiesSection) {
+      // Section missing — append it to the file
+      const newContent = content.trimEnd() + '\n\n## Personal Priorities\n\n1. ' + taskId + '\n'
+      await onContentUpdate(newContent)
+      return
+    }
     const ppLines = [...personalPrioritiesSection.lines]
     let lastNumIndex = -1
     let maxNum = 0
