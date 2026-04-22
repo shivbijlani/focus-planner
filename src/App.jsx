@@ -969,7 +969,8 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
   // Sort rows: urgent first, then manager priority, then eisenhower icon
   const { sortedRows, sortedRawLines } = sortTasksByPriority(rows, rawLines, headers, linkedIdMap, managerPriorities)
   
-  if (sortedRows.length === 0 && !showAddDialog) return null
+  const isTaskSection = title === 'Today' || title === 'Deferred'
+  if (sortedRows.length === 0 && !showAddDialog && !isTaskSection) return null
   
   const openTaskPiP = async (taskId, taskName, priority, journalPath) => {
     const pipWindow = await documentPictureInPicture.requestWindow({
