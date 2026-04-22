@@ -50,10 +50,18 @@ function AdoLinkDialog({ onClose, onSave, currentUrl }) {
       onClose()
       return
     }
-    // Extract work item ID from ADO URL
-    const idMatch = trimmed.match(/\/(\d+)\/?$/)
-    if (idMatch) {
-      onSave({ id: idMatch[1], url: trimmed.replace(/\/$/, '') })
+    // Extract ticket/incident ID from URL — try end-of-path first (ADO),
+    // then any 5+ digit segment in the path (ICM, Jira, GitHub, etc.)
+    const extractId = (url) => {
+      const endMatch = url.match(/\/(\d+)\/?(?:[?#].*)?$/)
+      if (endMatch) return endMatch[1]
+      const midMatch = url.match(/\/(\d{5,})\//)
+      if (midMatch) return midMatch[1]
+      return null
+    }
+    const extractedId = extractId(trimmed)
+    if (extractedId) {
+      onSave({ id: extractedId, url: trimmed.replace(/\/$/, '') })
     } else {
       // If it looks like just a number, ask for full URL
       if (/^\d+$/.test(trimmed)) {
@@ -1825,8 +1833,17 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
     const maxJournalId = await getMaxJournalId()
     maxId = Math.max(maxId, maxJournalId)
     
-    // Check if linkedTask is an ADO URL
-    const adoUrlMatch = linkedTask ? linkedTask.trim().match(/^https?:\/\/.*\/(\d+)\/?$/) : null
+    // Check if linkedTask is a URL with an extractable ticket/incident ID
+    const extractTicketId = (url) => {
+      const endMatch = url.match(/\/(\d+)\/?(?:[?#].*)?$/)
+      if (endMatch) return endMatch[1]
+      const midMatch = url.match(/\/(\d{5,})\//)
+      if (midMatch) return midMatch[1]
+      return null
+    }
+    const trimmedLinked = linkedTask ? linkedTask.trim() : ''
+    const isUrl = /^https?:\/\//.test(trimmedLinked)
+    const adoUrlMatch = isUrl ? { id: extractTicketId(trimmedLinked), url: trimmedLinked } : null
     
     // Find the target section, locate insert point, and track max ID
     for (let i = 0; i < lines.length; i++) {
@@ -1856,9 +1873,9 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
     if (insertIndex !== -1) {
       const newId = maxId + 1
       const today = new Date().toISOString().split('T')[0]
-      if (adoUrlMatch) {
-        const adoId = adoUrlMatch[1]
-        const adoUrl = linkedTask.trim().replace(/\/$/, '')
+      if (adoUrlMatch && adoUrlMatch.id) {
+        const adoId = adoUrlMatch.id
+        const adoUrl = adoUrlMatch.url.replace(/\/$/, '')
         const newRow = `| ${newId},[${adoId}](${adoUrl}) | ${priority} | ${task} | - | ${today} | |`
         lines.splice(insertIndex, 0, newRow)
       } else {
