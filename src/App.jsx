@@ -1239,7 +1239,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
 }
 
 // Manager Priorities Section
-function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, tasksByPriority = {}, taskLookup = {}, title = 'Work Priorities', sectionId = 'work-priorities' }) {
+function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddAndPrioritize, tasksByPriority = {}, taskLookup = {}, title = 'Work Priorities', sectionId = 'work-priorities' }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const [isAdding, setIsAdding] = useState(false)
   const [newPriority, setNewPriority] = useState('')
@@ -1282,22 +1282,22 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, tasksB
   }
   
   const handleAdd = () => {
-    if (!newPriority.trim()) return
-    const newLines = [...lines]
-    let lastNumIndex = -1
-    for (let i = 0; i < newLines.length; i++) {
-      if (/^\d+\.\s+/.test(newLines[i].trim())) {
-        lastNumIndex = i
-      }
-    }
-    const newNum = priorityList.length + 1
-    const newLine = `${newNum}. ${newPriority.trim()}`
-    if (lastNumIndex >= 0) {
-      newLines.splice(lastNumIndex + 1, 0, newLine)
+    const text = newPriority.trim()
+    if (!text) return
+    if (onAddAndPrioritize) {
+      onAddAndPrioritize(text)
     } else {
-      newLines.push(newLine)
+      const newLines = [...lines]
+      let lastNumIndex = -1
+      for (let i = 0; i < newLines.length; i++) {
+        if (/^\d+\.\s+/.test(newLines[i].trim())) lastNumIndex = i
+      }
+      const newNum = priorityList.length + 1
+      const newLine = `${newNum}. ${text}`
+      if (lastNumIndex >= 0) newLines.splice(lastNumIndex + 1, 0, newLine)
+      else newLines.push(newLine)
+      onUpdate(newLines)
     }
-    onUpdate(newLines)
     setNewPriority('')
     setIsAdding(false)
   }
@@ -1433,7 +1433,7 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, tasksB
                 list="add-priority-task-ids"
                 value={newPriority}
                 onChange={(e) => setNewPriority(e.target.value)}
-                placeholder="Task ID..."
+                placeholder="Task name..."
                 autoFocus
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') handleAdd()
@@ -1887,6 +1887,61 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
     }
   }
   
+  const handleAddAndPrioritize = async (taskName, prioritySectionTitle) => {
+    const lines = content.split('\n')
+    let maxId = await getMaxJournalId()
+    let todayInsertIndex = -1
+    let inToday = false
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (line.startsWith('## ')) inToday = line.replace('## ', '').trim() === 'Today'
+      if (inToday && line.trim().startsWith('|') && line.includes('---')) todayInsertIndex = i + 1
+      if (line.trim().startsWith('|')) {
+        const cells = line.split('|').slice(1, -1).map(c => c.trim())
+        if (cells.length >= 1 && cells[0] !== 'ID' && !/^[-:]+$/.test(cells[0])) {
+          const numMatch = cells[0].match(/^(\d+)/)
+          if (numMatch) maxId = Math.max(maxId, parseInt(numMatch[1], 10))
+        }
+      }
+    }
+
+    if (todayInsertIndex === -1) return
+    const newId = maxId + 1
+    const today = new Date().toISOString().split('T')[0]
+    const newRow = `| ${newId} | 🟡 | ${taskName} | - | ${today} | |`
+    lines.splice(todayInsertIndex, 0, newRow)
+
+    // Add the new task ID to the priority section
+    let inPriority = false
+    let lastNumIndex = -1
+    let numCount = 0
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (line.startsWith('## ')) {
+        if (inPriority) break
+        inPriority = line.replace('## ', '').trim() === prioritySectionTitle
+      }
+      if (inPriority && /^\d+\.\s+/.test(line.trim())) {
+        lastNumIndex = i
+        numCount++
+      }
+    }
+    const priorityLine = `${numCount + 1}. ${newId}`
+    if (lastNumIndex >= 0) {
+      lines.splice(lastNumIndex + 1, 0, priorityLine)
+    } else {
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].startsWith('## ') && lines[i].replace('## ', '').trim() === prioritySectionTitle) {
+          lines.splice(i + 1, 0, priorityLine)
+          break
+        }
+      }
+    }
+
+    await onContentUpdate(lines.join('\n'))
+  }
+
   const handlePromoteTodo = async (todoText, parentTaskId, parentRow) => {
     const lines = content.split('\n')
     let inTodaySection = false
@@ -2157,6 +2212,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
           lines={managerPrioritiesSection.lines}
           defaultOpen={false}
           onUpdate={handleUpdateManagerPriorities}
+          onAddAndPrioritize={(name) => handleAddAndPrioritize(name, managerPrioritiesSection.title)}
           tasksByPriority={tasksByPriority}
           taskLookup={taskLookup}
           title="Work Priorities"
@@ -2169,6 +2225,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
           lines={personalPrioritiesSection.lines}
           defaultOpen={false}
           onUpdate={handleUpdatePersonalPriorities}
+          onAddAndPrioritize={(name) => handleAddAndPrioritize(name, personalPrioritiesSection.title)}
           tasksByPriority={{}}
           taskLookup={taskLookup}
           title="Personal Priorities"
