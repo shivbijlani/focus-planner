@@ -1596,6 +1596,29 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
       }
     }
   }
+
+  // Build tasksByPersonalPriority: same as above but resolving against personal priorities
+  const tasksByPersonalPriority = {}
+  for (const section of taskSections) {
+    const { headers, rows } = parseMarkdownTable(section.lines)
+    const priorityCol = headers.find(h => h.includes('🎯')) || '🎯'
+    for (const row of rows) {
+      const id = extractTaskId(row)
+      if (!id) continue
+      // Skip tasks that ARE personal priorities themselves
+      if (personalPriorities[id]) continue
+      const resolved = resolveManagerPriority(id, linkedIdMap, personalPriorities)
+      if (resolved) {
+        if (!tasksByPersonalPriority[resolved.id]) tasksByPersonalPriority[resolved.id] = []
+        tasksByPersonalPriority[resolved.id].push({
+          id,
+          task: row['Task'] || '',
+          priority: row[priorityCol] || '',
+          section: section.title
+        })
+      }
+    }
+  }
   
   // Fetch completed tasks for linked ID lookup
   useEffect(() => {
@@ -2226,7 +2249,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
           defaultOpen={false}
           onUpdate={handleUpdatePersonalPriorities}
           onAddAndPrioritize={(name) => handleAddAndPrioritize(name, personalPrioritiesSection.title)}
-          tasksByPriority={{}}
+          tasksByPriority={tasksByPersonalPriority}
           taskLookup={taskLookup}
           title="Personal Priorities"
           sectionId="personal-priorities"
