@@ -144,7 +144,7 @@ body {
   margin-bottom: 1.5rem;
   background: #16213e;
   border-radius: 8px;
-  overflow: hidden;
+  /* overflow: hidden removed — it was clipping the sort-info tooltip */
 }
 
 .section-header {
@@ -157,6 +157,7 @@ body {
   user-select: none;
   font-size: 1.2rem;
   color: #fff;
+  border-radius: 8px 8px 0 0;
 }
 
 .section-header:hover {
@@ -435,8 +436,9 @@ tr.highlight-flash {
   display: none;
   position: absolute;
   top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
+  right: 0;
+  left: auto;
+  transform: none;
   margin-top: 0.5rem;
   background: #1e293b;
   border: 1px solid #3b82f6;
