@@ -2542,6 +2542,7 @@ function App() {
   const [selectedFile, setSelectedFile] = useState('focus-plan.md')
   const [content, setContent] = useState('')
   const [pendingScrollToTaskId, setPendingScrollToTaskId] = useState(null)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
 
   const loadFiles = async () => {
     try {
@@ -2554,6 +2555,7 @@ function App() {
 
   const handleSelectFile = async (path) => {
     setSelectedFile(path)
+    setSidebarOpen(false)
     try {
       const text = await storage.read(path)
       if (path === 'focus-plan.md') {
@@ -2677,9 +2679,19 @@ function App() {
   const isCompletedPlan = selectedFile === 'focus-plan-completed.md'
 
   return (
-    <div className="app">
+    <div className={`app${sidebarOpen ? ' sidebar-open' : ''}`}>
+      {sidebarOpen && (
+        <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
+      )}
       <aside className="sidebar">
-        <h2>📋 Planner</h2>
+        <div className="sidebar-header">
+          <h2>📋 Planner</h2>
+          <button
+            className="sidebar-close-btn"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Close sidebar"
+          >✕</button>
+        </div>
         <FolderPicker folderName={folderName} onPick={handlePick} />
         <FileTree
           items={files}
@@ -2689,6 +2701,14 @@ function App() {
         />
       </aside>
       <main className="content">
+        <div className="mobile-nav-bar">
+          <button
+            className="mobile-menu-btn"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open file menu"
+          >☰ Files</button>
+          {selectedFile && <span className="mobile-file-name">{selectedFile.replace(/.*\//, '')}</span>}
+        </div>
         {content ? (
           isFocusPlan ? (
             <FocusPlanView

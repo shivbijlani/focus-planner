@@ -25,7 +25,7 @@ body {
 }
 
 .sidebar h2 {
-  margin-bottom: 0.5rem;
+  margin-bottom: 0;
   color: #e94560;
 }
 
@@ -171,7 +171,6 @@ body {
 .task-count {
   font-size: 0.9rem;
   color: #94a3b8;
-  margin-left: auto;
 }
 
 .task-table-container {
@@ -418,7 +417,7 @@ tr.highlight-flash {
 .sort-info-wrapper {
   position: relative;
   display: inline-block;
-  margin-left: 0.4rem;
+  margin-left: auto;
   cursor: default;
 }
 
@@ -759,6 +758,11 @@ tr.highlight-flash {
 /* Manager Priorities Section */
 .manager-priorities-section {
   border: 1px solid #0f3460;
+}
+
+/* Manager/other sections: no sort-info-wrapper, so push add button right */
+.manager-priorities-section .section-header .add-task-btn {
+  margin-left: auto;
 }
 
 .priorities-content {
@@ -1168,7 +1172,6 @@ tr.highlight-flash {
 
 /* Add Task Button */
 .add-task-btn {
-  margin-left: auto;
   background: #22c55e;
   color: white;
   border: none;
@@ -1339,4 +1342,168 @@ tr.highlight-flash {
   margin-top: 20px;
   font-size: 0.8rem;
   color: #475569;
+}
+
+/* ── Mobile navigation elements (hidden on desktop) ─────────────── */
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.sidebar-header h2 {
+  margin: 0;
+}
+
+.sidebar-close-btn {
+  display: none;
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.sidebar-close-btn:hover {
+  background: #0f3460;
+  color: #eee;
+}
+
+.sidebar-backdrop {
+  display: none;
+}
+
+.mobile-nav-bar {
+  display: none;
+}
+
+.mobile-menu-btn {
+  background: #0f3460;
+  border: 1px solid #1e3a5f;
+  color: #94a3b8;
+  padding: 0.4rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.mobile-menu-btn:hover {
+  border-color: #e94560;
+  color: #eee;
+}
+
+.mobile-file-name {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Responsive: ≤ 768px ─────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .app {
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Sidebar becomes a fixed full-screen overlay, slides in from the left */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 85vw;
+    max-width: 320px;
+    height: 100%;
+    z-index: 200;
+    transform: translateX(-110%);
+    transition: transform 0.25s ease;
+    border-right: 1px solid #0f3460;
+  }
+
+  .app.sidebar-open .sidebar {
+    transform: translateX(0);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.6);
+  }
+
+  /* Dim backdrop when sidebar is open */
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 199;
+  }
+
+  .sidebar-close-btn {
+    display: block;
+  }
+
+  /* Content fills the full viewport */
+  .content {
+    padding: 0.75rem;
+    min-height: 100vh;
+  }
+
+  .mobile-nav-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid #0f3460;
+  }
+
+  /* Dialogs: avoid fixed min-widths that overflow on small screens */
+  .dialog {
+    min-width: 0;
+    width: calc(100vw - 2rem);
+    max-width: 520px;
+  }
+
+  .add-task-dialog {
+    min-width: 0;
+    width: calc(100vw - 2rem);
+    max-width: 500px;
+  }
+
+  /* Stack form rows vertically */
+  .form-row {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  /* Table: allow horizontal scroll on narrow screens */
+  .task-table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Onboarding card padding */
+  .onboarding-card {
+    padding: 24px 16px;
+    margin: 0 1rem;
+  }
+
+  /* Focus plan view: remove max-width constraint */
+  .focus-plan-view {
+    max-width: 100%;
+  }
+
+  /* Legend below table */
+  .legend {
+    margin-top: 1rem;
+  }
+
+  /* Editor header: allow wrapping */
+  .editor-header {
+    flex-wrap: wrap;
+  }
 }
