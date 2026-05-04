@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import './App.css'
 import * as storage from './storage/storage.js'
+import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority } from './taskSort.js'
 
 // Context Menu component
 function ContextMenu({ x, y, options, onClose }) {
@@ -430,34 +431,6 @@ function parseLinks(text, onNavigate) {
   return parts.length > 0 ? parts : text
 }
 
-// Parse manager priorities from markdown (now stores task IDs, not names)
-function parseManagerPriorities(lines) {
-  const priorities = {}
-  let order = 1
-  for (const line of lines) {
-    const trimmedLine = line.trim()
-    const match = trimmedLine.match(/^\d+\.\s+(.+)$/)
-    if (match) {
-      priorities[match[1].trim()] = order
-      order++
-    }
-  }
-  return priorities
-}
-
-// Walk the linked ID chain to find a manager priority (max depth 5)
-function resolveManagerPriority(taskId, linkedIdMap, managerPriorities, maxDepth = 5) {
-  let current = taskId
-  for (let i = 0; i < maxDepth; i++) {
-    if (!current) return null
-    if (managerPriorities[current]) {
-      return { id: current, order: managerPriorities[current] }
-    }
-    current = linkedIdMap[current] || null
-  }
-  return null
-}
-
 // Icon tooltip descriptions
 const iconTooltips = {
   '🔴': 'Urgent & Important',
@@ -550,21 +523,6 @@ function renderIconsWithTooltips(text, keyOffset = 0) {
     }
     return part
   }).filter(p => p !== '')
-}
-
-// Extract task ID from row
-function extractTaskId(row) {
-  const idValue = row['ID']
-  if (typeof idValue === 'object') {
-    // ID is an object with {id, linkedId}
-    const id = idValue.id
-    // Extract numeric ID from link text or plain number
-    const match = id.match(/\[?(\d+)\]?/)
-    return match ? match[1] : null
-  }
-  // Plain numeric ID
-  const match = String(idValue).match(/^(\d+)$/)
-  return match ? match[1] : null
 }
 
 // Task row component with expandable todos
@@ -911,53 +869,6 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   )
 }
 
-// Sort tasks: 🔴 urgent always on top, then work priority (🐸 first within each), then icon
-function sortTasksByPriority(rows, rawLines, headers, linkedIdMap, managerPriorities) {
-  const priorityOrder = { '🔴': 0, '🐸': 1, '🟡': 2, '🔵': 3, '📖': 4, '⚪': 5, '✅': 6 }
-  const priorityCol = headers.find(h => h.includes('🎯')) || '🎯'
-
-  const getIcon = (row) => {
-    const val = row[priorityCol] || '⚪'
-    return Object.keys(priorityOrder).find(icon => val.includes(icon)) || '⚪'
-  }
-  
-  // Create paired array to sort together
-  const paired = rows.map((row, i) => ({ row, rawLine: rawLines[i] }))
-  
-  paired.sort((a, b) => {
-    const aIcon = getIcon(a.row)
-    const bIcon = getIcon(b.row)
-    const aUrgent = aIcon === '🔴'
-    const bUrgent = bIcon === '🔴'
-
-    // First: 🔴 urgent items always float to top
-    if (aUrgent !== bUrgent) return aUrgent ? -1 : 1
-
-    // Second: sort by derived manager priority (lower order = higher priority)
-    const aTaskId = extractTaskId(a.row)
-    const bTaskId = extractTaskId(b.row)
-    const aManager = aTaskId ? resolveManagerPriority(aTaskId, linkedIdMap || {}, managerPriorities || {}) : null
-    const bManager = bTaskId ? resolveManagerPriority(bTaskId, linkedIdMap || {}, managerPriorities || {}) : null
-    const aManagerOrder = aManager ? aManager.order : Infinity
-    const bManagerOrder = bManager ? bManager.order : Infinity
-    
-    if (aManagerOrder !== bManagerOrder) {
-      return aManagerOrder - bManagerOrder
-    }
-    
-    // Third: sort by eisenhower priority icon (🐸 floats to top within each group)
-    const aPriorityRank = priorityOrder[aIcon] ?? 5
-    const bPriorityRank = priorityOrder[bIcon] ?? 5
-    
-    return aPriorityRank - bPriorityRank
-  })
-  
-  return {
-    sortedRows: paired.map(p => p.row),
-    sortedRawLines: paired.map(p => p.rawLine)
-  }
-}
-
 // Collapsible section component
 function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, personalPriorities, onScrollToPriorities, onScrollToPersonalPriorities, onTaskAction, onMoveToCompleted, onAddTask, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, onPromoteToPersonalPriority, onRemoveFromPersonalPriority }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
@@ -966,7 +877,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [adoLinkDialog, setAdoLinkDialog] = useState(null)
   
-  // Sort rows: urgent first, then manager priority, then eisenhower icon
+  // Sort rows: urgent first, then manager priority, then dependency depth, then eisenhower icon
   const { sortedRows, sortedRawLines } = sortTasksByPriority(rows, rawLines, headers, linkedIdMap, managerPriorities)
   
   const isTaskSection = title === 'Today' || title === 'Deferred'
