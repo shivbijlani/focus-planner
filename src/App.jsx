@@ -2,6 +2,58 @@ import { useState, useEffect, useRef } from 'react'
 import './App.css'
 import * as storage from './storage/storage.js'
 
+const VIRTUAL_COMBINED_FOLDER_PATH = '__virtual__/combined'
+const VIRTUAL_COMBINED_VIEW_PATH = '__virtual__/combined/focus-plans.md'
+
+function getParentDir(path) {
+  const idx = path.lastIndexOf('/')
+  return idx === -1 ? '' : path.slice(0, idx)
+}
+
+function joinPlannerPath(basePath, childPath) {
+  if (!basePath) return childPath
+  return `${basePath}/${childPath}`
+}
+
+function flattenFilePaths(items) {
+  const paths = []
+  const walk = (nodes) => {
+    for (const node of nodes || []) {
+      if (node.type === 'file') {
+        paths.push(node.path)
+        continue
+      }
+      if (node.type === 'directory') {
+        walk(node.children)
+      }
+    }
+  }
+  walk(items)
+  return paths
+}
+
+function findFocusPlanPaths(items) {
+  return flattenFilePaths(items)
+    .filter(path => path.endsWith('focus-plan.md'))
+    .sort((a, b) => a.localeCompare(b))
+}
+
+function withCombinedViewFolder(items) {
+  const combinedFolder = {
+    name: 'Combined View',
+    type: 'directory',
+    path: VIRTUAL_COMBINED_FOLDER_PATH,
+    children: [
+      {
+        name: 'focus-plans.md',
+        type: 'file',
+        path: VIRTUAL_COMBINED_VIEW_PATH,
+      },
+    ],
+  }
+  return [combinedFolder, ...(items || [])]
+}
+
 // Context Menu component
 function ContextMenu({ x, y, options, onClose }) {
   const menuRef = useRef(null)
@@ -568,7 +620,7 @@ function extractTaskId(row) {
 }
 
 // Task row component with expandable todos
-function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, activeTaskIds, linkedIdMap, adoLookup }) {
+function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, activeTaskIds, linkedIdMap, adoLookup, planBasePath = '' }) {
   const [todosExpanded, setTodosExpanded] = useState(false)
   const [todos, setTodos] = useState(null)
   const [todosLoading, setTodosLoading] = useState(false)
@@ -584,16 +636,15 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   // Check if journal exists for this task ID
   useEffect(() => {
     if (taskId && !journalChecked) {
-      storage.checkJournal(taskId)
-        .then(data => {
-          if (data.exists) {
-            setJournalPath(data.path)
-          }
+      const candidatePath = joinPlannerPath(planBasePath, `journal/task-${taskId}.md`)
+      storage.read(candidatePath)
+        .then(() => {
+          setJournalPath(candidatePath)
           setJournalChecked(true)
         })
         .catch(() => setJournalChecked(true))
     }
-  }, [taskId])
+  }, [taskId, journalChecked, planBasePath])
   
   // Fetch todos when journal path is known
   useEffect(() => {
@@ -959,7 +1010,7 @@ function sortTasksByPriority(rows, rawLines, headers, linkedIdMap, managerPriori
 }
 
 // Collapsible section component
-function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, personalPriorities, onScrollToPriorities, onScrollToPersonalPriorities, onTaskAction, onMoveToCompleted, onAddTask, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, onPromoteToPersonalPriority, onRemoveFromPersonalPriority }) {
+function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, personalPriorities, onScrollToPriorities, onScrollToPersonalPriorities, onTaskAction, onMoveToCompleted, onAddTask, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, onPromoteToPersonalPriority, onRemoveFromPersonalPriority, planBasePath = '' }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const { headers, rows, rawLines } = parseMarkdownTable(tableLines)
   const [contextMenu, setContextMenu] = useState(null)
@@ -1204,7 +1255,8 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
                   taskLookup={taskLookup}
                   activeTaskIds={activeTaskIds}
                   linkedIdMap={linkedIdMap}
-                  adoLookup={adoLookup}/>
+                  adoLookup={adoLookup}
+                  planBasePath={planBasePath}/>
               ))}
             </tbody>
           </table>
@@ -1538,11 +1590,52 @@ function buildLinkedIdMap(tableLines) {
   return map
 }
 
+function CombinedFocusPlanView({ plans, onNavigate, onPlanContentUpdate, onOpenPlan, fileTree }) {
+  return (
+    <div className="focus-plan-view combined-focus-view">
+      <h1>🧩 Combined Focus Plans</h1>
+      <p className="combined-intro">
+        This is a virtual view. Each section writes directly to its source focus plan folder.
+      </p>
+
+      {plans.length === 0 && (
+        <div className="combined-empty">
+          <p>No focus plans found. Add a focus-plan.md file in one or more folders.</p>
+        </div>
+      )}
+
+      {plans.map((plan) => (
+        <section key={plan.path} className="combined-plan-card">
+          <div className="combined-plan-header">
+            <div>
+              <h2>{plan.label}</h2>
+              <p className="combined-plan-path">{plan.path}</p>
+            </div>
+            <button className="combined-open-btn" onClick={() => onOpenPlan(plan.path)}>
+              Open Source File
+            </button>
+          </div>
+
+          <FocusPlanView
+            content={plan.content}
+            onNavigate={onNavigate}
+            onContentUpdate={(newContent) => onPlanContentUpdate(plan.path, newContent)}
+            planBasePath={plan.basePath}
+            fileTree={fileTree}
+            showTitle={false}
+          />
+        </section>
+      ))}
+    </div>
+  )
+}
+
 // Focus Plan View component
-function FocusPlanView({ content, onNavigate, onContentUpdate }) {
+function FocusPlanView({ content, onNavigate, onContentUpdate, planBasePath = '', fileTree = [], showTitle = true, title = '📋 Focus Plan' }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const sections = parseFocusPlan(content)
-  
+  const completedPlanPath = joinPlannerPath(planBasePath, 'focus-plan-completed.md')
+
   // Find sections
   const taskSections = sections.filter(s => 
     s.title === 'Today' || s.title === 'Deferred'
@@ -1622,7 +1715,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
   
   // Fetch completed tasks for linked ID lookup
   useEffect(() => {
-    storage.read('focus-plan-completed.md')
+    storage.read(completedPlanPath)
       .then(content => {
         if (content) {
           const completedSections = parseFocusPlan(content)
@@ -1634,7 +1727,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
         }
       })
       .catch(() => {})
-  }, [])
+  }, [completedPlanPath])
   
   // Merge lookups: current tasks take priority (full lookup for display, active-only for dropdowns)
   const taskLookup = { ...completedTaskLookup, ...currentTaskLookup }
@@ -1752,11 +1845,10 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
     let todoItems = []
     if (taskId) {
       try {
-        const journalData = await storage.checkJournal(taskId)
-        if (journalData.exists) {
-          const todos = await storage.getTodos(journalData.path)
-          todoItems = todos.map(t => t.text)
-        }
+        const journalPath = joinPlannerPath(planBasePath, `journal/task-${taskId}.md`)
+        await storage.read(journalPath)
+        const todos = await storage.getTodos(journalPath)
+        todoItems = todos.map(t => t.text)
       } catch (e) {
         console.error('Failed to fetch journal todos:', e)
       }
@@ -1797,7 +1889,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
     
     // Add to focus-plan-completed.md under the current week
     try {
-      const completedContent = await storage.read('focus-plan-completed.md').catch(() => '# Completed Tasks\n')
+      const completedContent = await storage.read(completedPlanPath).catch(() => '# Completed Tasks\n')
       const completedLines = completedContent.split('\n')
       
       // Compute Monday of the current week (M/D/YYYY format)
@@ -1841,7 +1933,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
         completedLines.splice(insertIndex, 0, completedRow)
       }
       
-      await storage.write('focus-plan-completed.md', completedLines.join('\n'))
+      await storage.write(completedPlanPath, completedLines.join('\n'))
     } catch (e) {
       console.error('Failed to update completed file:', e)
     }
@@ -1854,7 +1946,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
     let maxId = 0
     
     // Get max ID from journal files
-    const maxJournalId = await getMaxJournalId()
+    const maxJournalId = await getMaxJournalId(planBasePath, fileTree)
     maxId = Math.max(maxId, maxJournalId)
     
     // Check if linkedTask is a URL with an extractable ticket/incident ID
@@ -1912,7 +2004,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
   
   const handleAddAndPrioritize = async (taskName, prioritySectionTitle) => {
     const lines = content.split('\n')
-    let maxId = await getMaxJournalId()
+    let maxId = await getMaxJournalId(planBasePath, fileTree)
     let todayInsertIndex = -1
     let inToday = false
 
@@ -1972,7 +2064,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
     let maxId = 0
     
     // Get max ID from journal files first
-    const maxJournalId = await getMaxJournalId()
+    const maxJournalId = await getMaxJournalId(planBasePath, fileTree)
     maxId = Math.max(maxId, maxJournalId)
     
     // Find max ID and the Today section to insert the new task
@@ -2017,7 +2109,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
     // Clean task name for title (remove markdown links and special chars)
     const cleanTaskName = taskName.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim()
     const journalContent = `# Task ${taskId}: ${cleanTaskName}\n\n- TODO: \n`
-    const journalPath = `journal/task-${taskId}.md`
+    const journalPath = joinPlannerPath(planBasePath, `journal/task-${taskId}.md`)
     
     try {
       await storage.write(journalPath, journalContent)
@@ -2196,7 +2288,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
   
   return (
     <div className="focus-plan-view">
-      <h1>📋 Focus Plan</h1>
+      {showTitle && <h1>{title}</h1>}
       
       {taskSections.map((section, i) => (
         <TaskSection
@@ -2227,6 +2319,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
           onRemoveFromManagerPriority={handleRemoveFromManagerPriority}
           onPromoteToPersonalPriority={handlePromoteToPersonalPriority}
           onRemoveFromPersonalPriority={handleRemoveFromPersonalPriority}
+          planBasePath={planBasePath}
         />
       ))}
 
@@ -2263,7 +2356,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
 
 // Generic markdown view for other files - now editable
 // Completed Plan View - rich rendering for focus-plan-completed.md
-function CompletedPlanView({ content, onNavigate }) {
+function CompletedPlanView({ content, onNavigate, planBasePath = '' }) {
   const sections = parseFocusPlan(content)
 
   const getPriorityClass = (priority) => {
@@ -2280,7 +2373,7 @@ function CompletedPlanView({ content, onNavigate }) {
       <div className="editor-header">
         <button
           className="back-to-focus-btn"
-          onClick={() => onNavigate('focus-plan.md')}
+          onClick={() => onNavigate(joinPlannerPath(planBasePath, 'focus-plan.md'))}
           title="Back to Focus Plan"
         >
           ← Focus Plan
@@ -2433,21 +2526,33 @@ function MarkdownView({ content, filePath, onContentUpdate, onNavigate }) {
 
 // Auto-assign unique IDs to tasks without IDs
 // Get max task ID from journal filenames
-async function getMaxJournalId() {
+async function getMaxJournalId(basePath = '', fileTree = null) {
   try {
+    if (basePath) {
+      const tree = fileTree || await storage.getFiles()
+      const paths = flattenFilePaths(tree)
+      const journalPrefix = `${basePath}/journal/task-`
+      let maxId = 0
+      for (const path of paths) {
+        if (!path.startsWith(journalPrefix) || !path.endsWith('.md')) continue
+        const m = path.match(/task-(\d+)\.md$/)
+        if (m) maxId = Math.max(maxId, Number(m[1]))
+      }
+      return maxId
+    }
     return await storage.maxJournalId()
   } catch {
     return 0
   }
 }
 
-async function ensureUniqueIds(content, updateFile) {
+async function ensureUniqueIds(content, updateFile, basePath = '', fileTree = null) {
   const lines = content.split(/\r?\n/)  // Handle both Unix and Windows line endings
   let maxId = 0
   const linesToUpdate = []
   
   // Get max ID from existing journal files
-  const maxJournalId = await getMaxJournalId()
+  const maxJournalId = await getMaxJournalId(basePath, fileTree)
   maxId = Math.max(maxId, maxJournalId)
   
   // First pass: find max ID in content and lines needing IDs
@@ -2541,27 +2646,45 @@ function App() {
   const [folderName, setFolderName] = useState('')
   const [selectedFile, setSelectedFile] = useState('focus-plan.md')
   const [content, setContent] = useState('')
+  const [combinedPlans, setCombinedPlans] = useState([])
   const [pendingScrollToTaskId, setPendingScrollToTaskId] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
 
-  const loadFiles = async () => {
-    try {
-      const data = await storage.getFiles()
-      setFiles(data)
-    } catch (err) {
-      console.error('Failed to load files:', err)
-    }
+  const loadCombinedPlans = async (tree = files) => {
+    const planPaths = findFocusPlanPaths(tree)
+    const plans = await Promise.all(planPaths.map(async (path) => {
+      try {
+        const planContent = await storage.read(path)
+        const basePath = getParentDir(path)
+        return {
+          path,
+          basePath,
+          content: planContent,
+          label: basePath || '(root)',
+        }
+      } catch {
+        return null
+      }
+    }))
+    setCombinedPlans(plans.filter(Boolean))
   }
 
   const handleSelectFile = async (path) => {
     setSelectedFile(path)
     setSidebarOpen(false)
+
+    if (path === VIRTUAL_COMBINED_VIEW_PATH) {
+      await loadCombinedPlans(files)
+      return
+    }
+
     try {
       const text = await storage.read(path)
-      if (path === 'focus-plan.md') {
+      if (path.endsWith('focus-plan.md')) {
+        const basePath = getParentDir(path)
         const updatedContent = await ensureUniqueIds(text, async (newContent) => {
           await storage.write(path, newContent)
-        })
+        }, basePath, files)
         setContent(updatedContent)
       } else {
         setContent(text)
@@ -2573,7 +2696,8 @@ function App() {
 
   const initWithHandle = async () => {
     await storage.scaffold()
-    await loadFiles()
+    const data = await storage.getFiles()
+    setFiles(data)
     setFolderName(storage.folderName())
     setAppState('ready')
     handleSelectFile('focus-plan.md')
@@ -2644,6 +2768,20 @@ function App() {
     }
   }
 
+  const handlePlanContentUpdate = async (planPath, newContent) => {
+    try {
+      await storage.write(planPath, newContent)
+      setCombinedPlans(prev => prev.map(plan => (
+        plan.path === planPath ? { ...plan, content: newContent } : plan
+      )))
+      if (selectedFile === planPath) {
+        setContent(newContent)
+      }
+    } catch (err) {
+      console.error('Failed to update focus plan:', err)
+    }
+  }
+
   if (appState === 'not-supported') {
     return (
       <div className="onboarding">
@@ -2675,8 +2813,11 @@ function App() {
     )
   }
 
-  const isFocusPlan = selectedFile === 'focus-plan.md'
-  const isCompletedPlan = selectedFile === 'focus-plan-completed.md'
+  const isCombinedView = selectedFile === VIRTUAL_COMBINED_VIEW_PATH
+  const isFocusPlan = selectedFile.endsWith('focus-plan.md') && !isCombinedView
+  const isCompletedPlan = selectedFile.endsWith('focus-plan-completed.md')
+  const selectedBasePath = getParentDir(selectedFile)
+  const sidebarItems = withCombinedViewFolder(files)
 
   return (
     <div className={`app${sidebarOpen ? ' sidebar-open' : ''}`}>
@@ -2694,7 +2835,7 @@ function App() {
         </div>
         <FolderPicker folderName={folderName} onPick={handlePick} />
         <FileTree
-          items={files}
+          items={sidebarItems}
           onSelect={handleSelectFile}
           selectedPath={selectedFile}
           defaultOpen={false}
@@ -2709,17 +2850,28 @@ function App() {
           >☰ Files</button>
           {selectedFile && <span className="mobile-file-name">{selectedFile.replace(/.*\//, '')}</span>}
         </div>
-        {content ? (
+        {isCombinedView ? (
+          <CombinedFocusPlanView
+            plans={combinedPlans}
+            onNavigate={handleNavigate}
+            onPlanContentUpdate={handlePlanContentUpdate}
+            onOpenPlan={handleSelectFile}
+            fileTree={files}
+          />
+        ) : content ? (
           isFocusPlan ? (
             <FocusPlanView
               content={content}
               onNavigate={handleNavigate}
               onContentUpdate={handleContentUpdate}
+              planBasePath={selectedBasePath}
+              fileTree={files}
             />
           ) : isCompletedPlan ? (
             <CompletedPlanView
               content={content}
               onNavigate={handleNavigate}
+              planBasePath={selectedBasePath}
             />
           ) : (
             <MarkdownView

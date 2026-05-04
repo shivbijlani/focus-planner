@@ -757,6 +757,65 @@ tr.highlight-flash {
   width: 100%;
 }
 
+.combined-focus-view {
+  max-width: 1400px;
+}
+
+.combined-intro {
+  color: #94a3b8;
+  margin-bottom: 1rem;
+}
+
+.combined-empty {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  padding: 1rem;
+  color: #94a3b8;
+}
+
+.combined-plan-card {
+  background: #0f1c36;
+  border: 1px solid #1d2b4a;
+  border-radius: 10px;
+  padding: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.combined-plan-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.combined-plan-header h2 {
+  margin: 0;
+  color: #e2e8f0;
+  font-size: 1.1rem;
+}
+
+.combined-plan-path {
+  margin: 0.15rem 0 0;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  font-family: monospace;
+}
+
+.combined-open-btn {
+  background: #0f3460;
+  color: #e2e8f0;
+  border: 1px solid #2f4f7f;
+  border-radius: 6px;
+  padding: 0.45rem 0.7rem;
+  cursor: pointer;
+}
+
+.combined-open-btn:hover {
+  background: #1a4a7a;
+}
+
 /* Manager Priorities Section */
 .manager-priorities-section {
   border: 1px solid #0f3460;
