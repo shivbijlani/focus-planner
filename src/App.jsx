@@ -2597,7 +2597,8 @@ function App() {
         if (hasPendingMigration()) {
           const migratedTo = await resumePendingMigration()
           if (migratedTo) {
-            await initWithProvider(migratedTo)
+            // Reload so the normal init path runs cleanly with fresh tokens
+            window.location.reload()
             return
           }
         }
