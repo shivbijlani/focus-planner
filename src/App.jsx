@@ -2416,43 +2416,35 @@ async function ensureUniqueIds(content, updateFile) {
   return content
 }
 
-function FolderPicker({ folderName, storageProvider, onPick }) {
-  const [migrateOpen, setMigrateOpen] = useState(false)
-
+function FolderPicker({ folderName }) {
   return (
-    <>
-      <div className="folder-picker">
-        <button
-          className="folder-picker-trigger"
-          onClick={onPick}
-          title={folderName ? `Storage: ${folderName}\nClick to change` : 'Click to choose storage'}
-        >
-          <span className="folder-picker-icon">📁</span>
-          <span className="folder-picker-path">{folderName || '(no folder)'}</span>
-        </button>
-        <button
-          className="folder-picker-switch"
-          onClick={() => setMigrateOpen(true)}
-          title="Migrate to different storage"
-        >⇄ Migrate storage</button>
-      </div>
-      {migrateOpen && (
-        <MigrateDialog
-          storageProvider={storageProvider}
-          folderName={folderName}
-          onClose={() => setMigrateOpen(false)}
-        />
-      )}
-    </>
+    <div className="folder-picker">
+      <span className="folder-picker-icon">📁</span>
+      <span className="folder-picker-path" title={folderName}>{folderName || '(no folder)'}</span>
+    </div>
   )
 }
 
-function MigrateDialog({ storageProvider, folderName, onClose }) {
-  const [confirming, setConfirming] = useState(null)
+const PROVIDER_ICONS = {
+  [PROVIDERS.LOCAL_STORAGE]: '🗂️',
+  [PROVIDERS.FSA]: '💾',
+  [PROVIDERS.ONEDRIVE]: '☁️',
+  [PROVIDERS.GOOGLE_DRIVE]: '🌐',
+}
+
+function StorageFooter({ storageProvider, folderName, onPick }) {
+  const [open, setOpen] = useState(false)
+  const [view, setView] = useState('menu') // 'menu' | 'migrate'
+  const [confirmTarget, setConfirmTarget] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [keepSource, setKeepSource] = useState(true)
+
+  const providerIcon = PROVIDER_ICONS[storageProvider] || '📁'
   const others = getAvailableProviders().filter(id => id !== storageProvider)
+
+  const reset = () => { setView('menu'); setConfirmTarget(null); setError('') }
+  const close = () => { setOpen(false); reset() }
 
   const startMigrate = async (toId) => {
     setError('')
@@ -2462,10 +2454,7 @@ function MigrateDialog({ storageProvider, folderName, onClose }) {
         deleteSource: !keepSource,
         fromId: storageProvider,
       })
-      if (result.ok) {
-        window.location.reload()
-        return
-      }
+      if (result.ok) { window.location.reload(); return }
       if (result.redirected) return
       setError(result.error || 'Migration failed')
     } catch (e) {
@@ -2476,70 +2465,80 @@ function MigrateDialog({ storageProvider, folderName, onClose }) {
   }
 
   return (
-    <div className="storage-picker-overlay" onClick={onClose}>
-      <div className="storage-picker" onClick={e => e.stopPropagation()}>
-        <h1 className="storage-picker-title">Migrate Storage</h1>
-        <p className="storage-picker-subtitle">
-          Currently using <strong>{getProviderName(storageProvider)}</strong> ({folderName})
-        </p>
+    <div className="sidebar-storage-footer">
+      <button
+        className="storage-footer-toggle"
+        onClick={() => { setOpen(o => !o); if (open) reset() }}
+        title="Storage settings"
+      >
+        <span className="storage-footer-icon">{providerIcon}</span>
+        <span className="storage-footer-label">{getProviderName(storageProvider)}</span>
+        <span className="storage-footer-chevron">{open ? '▲' : '⚙'}</span>
+      </button>
 
-        {!confirming && (
-          <>
-            <p className="storage-picker-subtitle">Choose a destination — your data will be copied.</p>
-            <div className="storage-options">
+      {open && (
+        <div className="storage-footer-panel">
+          {view === 'menu' && (
+            <>
+              <div className="storage-footer-info">{folderName}</div>
+              {storageProvider === PROVIDERS.FSA && (
+                <button className="storage-footer-btn" onClick={() => { close(); onPick() }}>
+                  📂 Change folder
+                </button>
+              )}
+              {others.length > 0 && (
+                <button className="storage-footer-btn" onClick={() => setView('migrate')}>
+                  ⇄ Migrate data
+                </button>
+              )}
+            </>
+          )}
+
+          {view === 'migrate' && !confirmTarget && (
+            <>
+              <div className="storage-footer-section">Migrate data to:</div>
               {others.map(id => (
-                <div key={id} className="storage-option">
-                  <div className="storage-option-icon">
-                    {id === PROVIDERS.LOCAL_STORAGE ? '🗂️'
-                      : id === PROVIDERS.FSA ? '💾'
-                      : id === PROVIDERS.ONEDRIVE ? '☁️' : '🌐'}
-                  </div>
-                  <div className="storage-option-info">
-                    <div className="storage-option-name">{getProviderName(id)}</div>
-                  </div>
-                  <button
-                    className="storage-option-btn"
-                    onClick={() => setConfirming(id)}
-                    disabled={busy}
-                  >Migrate →</button>
-                </div>
+                <button key={id} className="storage-footer-btn" onClick={() => setConfirmTarget(id)}>
+                  {PROVIDER_ICONS[id] || '📁'} {getProviderName(id)} →
+                </button>
               ))}
-            </div>
-            <button className="btn-cancel" style={{ marginTop: '0.75rem' }} onClick={onClose}>Cancel</button>
-          </>
-        )}
+              <button className="storage-footer-btn secondary" onClick={reset}>↩ Back</button>
+            </>
+          )}
 
-        {confirming && (
-          <div>
-            <p>
-              Migrate to <strong>{getProviderName(confirming)}</strong>?
-              All your planner files (including journal entries) will be copied.
-            </p>
-            {storageProvider === PROVIDERS.LOCAL_STORAGE && (
-              <label style={{ display: 'block', margin: '0.75rem 0', fontSize: '0.9rem' }}>
-                <input
-                  type="checkbox"
-                  checked={!keepSource}
-                  onChange={e => setKeepSource(!e.target.checked)}
-                />{' '}
-                Delete browser storage copy after successful migration
-              </label>
-            )}
-            {(confirming === PROVIDERS.ONEDRIVE || confirming === PROVIDERS.GOOGLE_DRIVE) && (
-              <p className="storage-picker-note">
-                You will be redirected to sign in. Your data will copy automatically when you return.
-              </p>
-            )}
-            {error && <div className="storage-picker-error">⚠️ {error}</div>}
-            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', justifyContent: 'flex-end' }}>
-              <button className="btn-cancel" onClick={() => setConfirming(null)} disabled={busy}>Back</button>
-              <button className="storage-option-btn" onClick={() => startMigrate(confirming)} disabled={busy}>
-                {busy ? <span className="spinner" /> : 'Yes, migrate'}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+          {view === 'migrate' && confirmTarget && (
+            <>
+              <div className="storage-footer-section">
+                Copy all data to <strong>{getProviderName(confirmTarget)}</strong>?
+              </div>
+              {storageProvider === PROVIDERS.LOCAL_STORAGE && (
+                <label className="storage-footer-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={!keepSource}
+                    onChange={e => setKeepSource(!e.target.checked)}
+                  />
+                  Delete browser copy after
+                </label>
+              )}
+              {(confirmTarget === PROVIDERS.ONEDRIVE || confirmTarget === PROVIDERS.GOOGLE_DRIVE) && (
+                <div className="storage-footer-note">
+                  You'll be redirected to sign in, then data copies automatically.
+                </div>
+              )}
+              {error && <div className="storage-footer-error">⚠️ {error}</div>}
+              <div className="storage-footer-actions">
+                <button className="storage-footer-btn" onClick={() => startMigrate(confirmTarget)} disabled={busy}>
+                  {busy ? '…' : 'Migrate'}
+                </button>
+                <button className="storage-footer-btn secondary" onClick={() => setConfirmTarget(null)} disabled={busy}>
+                  Back
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -2706,13 +2705,16 @@ function App() {
             aria-label="Close sidebar"
           >✕</button>
         </div>
-        <FolderPicker folderName={folderName} storageProvider={storageProvider} onPick={handlePick} />
-        <FileTree
-          items={files}
-          onSelect={handleSelectFile}
-          selectedPath={selectedFile}
-          defaultOpen={false}
-        />
+        <FolderPicker folderName={folderName} />
+        <div className="sidebar-file-tree">
+          <FileTree
+            items={files}
+            onSelect={handleSelectFile}
+            selectedPath={selectedFile}
+            defaultOpen={false}
+          />
+        </div>
+        <StorageFooter storageProvider={storageProvider} folderName={folderName} onPick={handlePick} />
       </aside>
       <main className="content">
         <div className="mobile-nav-bar">

@@ -19,9 +19,17 @@ body {
   width: 280px;
   background: #16213e;
   padding: 1rem;
-  overflow-y: auto;
   border-right: 1px solid #0f3460;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-file-tree {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .sidebar h2 {
@@ -30,33 +38,12 @@ body {
 }
 
 .folder-picker {
-  margin-bottom: 0.75rem;
-}
-
-.folder-picker-trigger {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
-  background: #0f3460;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  color: #94a3b8;
-  cursor: pointer;
-  padding: 6px 8px;
-  font-size: 0.7rem;
-  text-align: left;
-  min-width: 0;
-}
-
-.folder-picker-trigger:hover:not(:disabled) {
-  border-color: #e94560;
-  color: #eee;
-}
-
-.folder-picker-trigger:disabled {
-  opacity: 0.5;
-  cursor: wait;
+  padding: 4px 2px 6px;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid #0f3460;
 }
 
 .folder-picker-icon {
@@ -72,12 +59,137 @@ body {
   direction: rtl;
   text-align: left;
   font-family: monospace;
+  font-size: 0.7rem;
+  color: #64748b;
 }
 
-.folder-picker-error {
-  color: #e94560;
+/* ── Storage footer ─────────────────────────────────────────────────── */
+.sidebar-storage-footer {
+  margin-top: auto;
+  border-top: 1px solid #0f3460;
+  padding-top: 0.5rem;
+  flex-shrink: 0;
+}
+
+.storage-footer-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  padding: 6px 4px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  text-align: left;
+}
+
+.storage-footer-toggle:hover {
+  background: #0f3460;
+  color: #94a3b8;
+}
+
+.storage-footer-icon { flex-shrink: 0; }
+
+.storage-footer-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storage-footer-chevron {
+  flex-shrink: 0;
   font-size: 0.65rem;
-  margin-top: 4px;
+  color: #475569;
+}
+
+.storage-footer-panel {
+  background: #0d1b35;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.storage-footer-info {
+  font-size: 0.7rem;
+  color: #475569;
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 0.2rem;
+}
+
+.storage-footer-section {
+  font-size: 0.72rem;
+  color: #64748b;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.1rem;
+}
+
+.storage-footer-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: #162444;
+  border: 1px solid #1e3a5f;
+  color: #94a3b8;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.storage-footer-btn:hover:not(:disabled) {
+  border-color: #e94560;
+  color: #eee;
+}
+
+.storage-footer-btn:disabled { opacity: 0.5; cursor: wait; }
+
+.storage-footer-btn.secondary {
+  background: none;
+  border-color: transparent;
+  color: #475569;
+}
+
+.storage-footer-btn.secondary:hover:not(:disabled) {
+  color: #94a3b8;
+  border-color: #1e3a5f;
+}
+
+.storage-footer-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: #94a3b8;
+  cursor: pointer;
+}
+
+.storage-footer-note {
+  font-size: 0.72rem;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.storage-footer-error {
+  font-size: 0.72rem;
+  color: #e94560;
+}
+
+.storage-footer-actions {
+  display: flex;
+  gap: 0.4rem;
 }
 
 .file-tree {
@@ -1656,24 +1768,6 @@ tr.highlight-flash {
 }
 
 /* Switch button in FolderPicker */
-.folder-picker-switch {
-  background: none;
-  border: none;
-  color: #4b5563;
-  cursor: pointer;
-  font-size: 0.85rem;
-  padding: 2px 4px;
-  border-radius: 3px;
-  margin-top: 2px;
-  display: block;
-  width: 100%;
-  text-align: left;
-}
-
-.folder-picker-switch:hover {
-  color: #94a3b8;
-}
-
 /* ── Mobile responsive ─────────────────────────────── */
 @media (max-width: 768px) {
   .sidebar {
@@ -1683,6 +1777,7 @@ tr.highlight-flash {
     bottom: 0;
     z-index: 200;
     transition: left 0.2s ease;
+    overflow: hidden;
   }
 
   .app.sidebar-open .sidebar {
