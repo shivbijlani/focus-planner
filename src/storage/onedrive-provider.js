@@ -8,8 +8,16 @@ const GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
 const AUTH_ENDPOINT = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize'
 const TOKEN_ENDPOINT = 'https://login.microsoftonline.com/common/oauth2/v2.0/token'
 
-// Azure SPA app registered for plannermd.com
-// Redirect URIs: https://plannermd.com/ and https://shivbijlani.github.io/focus-planner/
+// Azure SPA app "Focus Planner" — already registered, need to fill in CLIENT_ID.
+// To find the CLIENT_ID:
+//   1. Go to https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade
+//   2. Click "All applications" tab, search for "Focus Planner"
+//   3. Copy the "Application (client) ID" (a UUID like xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+//   4. Replace TODO_REGISTER_APP below with that UUID
+// Also verify redirect URIs include BOTH:
+//   - https://plannermd.com/
+//   - https://shivbijlani.github.io/focus-planner/
+// In Azure Portal: App → Authentication → Add URI if either is missing
 const CLIENT_ID = 'TODO_REGISTER_APP'
 const SCOPES = 'Files.ReadWrite offline_access'
 const REMOTE_FOLDER = 'focus-planner'

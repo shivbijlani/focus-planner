@@ -10,8 +10,20 @@ const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3'
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth'
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
 
-// Google OAuth2 SPA app — no client_secret needed with PKCE
-// Redirect URIs registered: https://plannermd.com/ and https://shivbijlani.github.io/focus-planner/
+// Google OAuth2 SPA app — needs to be registered in Google Cloud Console.
+// To register and get CLIENT_ID:
+//   1. Go to https://console.cloud.google.com/
+//   2. Create a project (or select an existing one)
+//   3. APIs & Services → Library → search "Google Drive API" → Enable it
+//   4. APIs & Services → Credentials → Create Credentials → OAuth 2.0 Client ID
+//   5. Application type: Web application
+//   6. Add Authorized JavaScript origins: https://plannermd.com AND https://shivbijlani.github.io
+//   7. Add Authorized redirect URIs:
+//      - https://plannermd.com/
+//      - https://shivbijlani.github.io/focus-planner/
+//   8. Click Create — copy the Client ID (ends in .apps.googleusercontent.com)
+//   9. Replace TODO_REGISTER_GOOGLE_APP below with that Client ID
+// Also set up OAuth consent screen: External user type, scope = drive.file
 const CLIENT_ID = 'TODO_REGISTER_GOOGLE_APP'
 const SCOPES = 'https://www.googleapis.com/auth/drive.file'
 const FOLDER_NAME = 'focus-planner'
