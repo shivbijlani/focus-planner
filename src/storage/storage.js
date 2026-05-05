@@ -5,6 +5,7 @@
 export { parseTodos } from './fsa.js'
 
 export const PROVIDERS = {
+  LOCAL_STORAGE: 'local-storage',
   FSA: 'fsa',
   ONEDRIVE: 'onedrive',
   GOOGLE_DRIVE: 'google-drive',
@@ -12,6 +13,7 @@ export const PROVIDERS = {
 
 export function getProviderName(id) {
   switch (id) {
+    case PROVIDERS.LOCAL_STORAGE: return 'Browser Storage'
     case PROVIDERS.FSA: return 'Local Folder'
     case PROVIDERS.ONEDRIVE: return 'OneDrive'
     case PROVIDERS.GOOGLE_DRIVE: return 'Google Drive'
@@ -20,7 +22,7 @@ export function getProviderName(id) {
 }
 
 export function getAvailableProviders() {
-  const list = []
+  const list = [PROVIDERS.LOCAL_STORAGE]
   if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
     list.push(PROVIDERS.FSA)
   }

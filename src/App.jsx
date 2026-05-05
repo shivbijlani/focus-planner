@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import './App.css'
 import * as storage from './storage/storage.js'
+import { setActiveProvider, getActiveProvider, PROVIDERS, getProviderName, getAvailableProviders } from './storage/storage.js'
+import { LocalStorageProvider } from './storage/localstorage-provider.js'
+import { migrate, resumePendingMigration, hasPendingMigration, makeProvider } from './storage/migrate.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority } from './taskSort.js'
 import { StoragePicker } from './StoragePicker.jsx'
 
@@ -2413,27 +2416,130 @@ async function ensureUniqueIds(content, updateFile) {
   return content
 }
 
-function FolderPicker({ folderName, onPick }) {
-  const handleSwitch = () => {
-    localStorage.removeItem('fp-storage-provider')
-    window.location.reload()
+function FolderPicker({ folderName, storageProvider, onPick }) {
+  const [migrateOpen, setMigrateOpen] = useState(false)
+
+  return (
+    <>
+      <div className="folder-picker">
+        <button
+          className="folder-picker-trigger"
+          onClick={onPick}
+          title={folderName ? `Storage: ${folderName}\nClick to change` : 'Click to choose storage'}
+        >
+          <span className="folder-picker-icon">📁</span>
+          <span className="folder-picker-path">{folderName || '(no folder)'}</span>
+        </button>
+        <button
+          className="folder-picker-switch"
+          onClick={() => setMigrateOpen(true)}
+          title="Migrate to different storage"
+        >⇄ Migrate storage</button>
+      </div>
+      {migrateOpen && (
+        <MigrateDialog
+          storageProvider={storageProvider}
+          folderName={folderName}
+          onClose={() => setMigrateOpen(false)}
+        />
+      )}
+    </>
+  )
+}
+
+function MigrateDialog({ storageProvider, folderName, onClose }) {
+  const [confirming, setConfirming] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [keepSource, setKeepSource] = useState(true)
+  const others = getAvailableProviders().filter(id => id !== storageProvider)
+
+  const startMigrate = async (toId) => {
+    setError('')
+    setBusy(true)
+    try {
+      const result = await migrate(getActiveProvider(), toId, {
+        deleteSource: !keepSource,
+        fromId: storageProvider,
+      })
+      if (result.ok) {
+        window.location.reload()
+        return
+      }
+      if (result.redirected) return
+      setError(result.error || 'Migration failed')
+    } catch (e) {
+      setError(e.message || 'Migration failed')
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
-    <div className="folder-picker">
-      <button
-        className="folder-picker-trigger"
-        onClick={onPick}
-        title={folderName ? `Storage: ${folderName}\nClick to change` : 'Click to choose storage'}
-      >
-        <span className="folder-picker-icon">📁</span>
-        <span className="folder-picker-path">{folderName || '(no folder)'}</span>
-      </button>
-      <button
-        className="folder-picker-switch"
-        onClick={handleSwitch}
-        title="Switch storage provider"
-      >⇄</button>
+    <div className="storage-picker-overlay" onClick={onClose}>
+      <div className="storage-picker" onClick={e => e.stopPropagation()}>
+        <h1 className="storage-picker-title">Migrate Storage</h1>
+        <p className="storage-picker-subtitle">
+          Currently using <strong>{getProviderName(storageProvider)}</strong> ({folderName})
+        </p>
+
+        {!confirming && (
+          <>
+            <p className="storage-picker-subtitle">Choose a destination — your data will be copied.</p>
+            <div className="storage-options">
+              {others.map(id => (
+                <div key={id} className="storage-option">
+                  <div className="storage-option-icon">
+                    {id === PROVIDERS.LOCAL_STORAGE ? '🗂️'
+                      : id === PROVIDERS.FSA ? '💾'
+                      : id === PROVIDERS.ONEDRIVE ? '☁️' : '🌐'}
+                  </div>
+                  <div className="storage-option-info">
+                    <div className="storage-option-name">{getProviderName(id)}</div>
+                  </div>
+                  <button
+                    className="storage-option-btn"
+                    onClick={() => setConfirming(id)}
+                    disabled={busy}
+                  >Migrate →</button>
+                </div>
+              ))}
+            </div>
+            <button className="btn-cancel" style={{ marginTop: '0.75rem' }} onClick={onClose}>Cancel</button>
+          </>
+        )}
+
+        {confirming && (
+          <div>
+            <p>
+              Migrate to <strong>{getProviderName(confirming)}</strong>?
+              All your planner files (including journal entries) will be copied.
+            </p>
+            {storageProvider === PROVIDERS.LOCAL_STORAGE && (
+              <label style={{ display: 'block', margin: '0.75rem 0', fontSize: '0.9rem' }}>
+                <input
+                  type="checkbox"
+                  checked={!keepSource}
+                  onChange={e => setKeepSource(!e.target.checked)}
+                />{' '}
+                Delete browser storage copy after successful migration
+              </label>
+            )}
+            {(confirming === PROVIDERS.ONEDRIVE || confirming === PROVIDERS.GOOGLE_DRIVE) && (
+              <p className="storage-picker-note">
+                You will be redirected to sign in. Your data will copy automatically when you return.
+              </p>
+            )}
+            {error && <div className="storage-picker-error">⚠️ {error}</div>}
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', justifyContent: 'flex-end' }}>
+              <button className="btn-cancel" onClick={() => setConfirming(null)} disabled={busy}>Back</button>
+              <button className="storage-option-btn" onClick={() => startMigrate(confirming)} disabled={busy}>
+                {busy ? <span className="spinner" /> : 'Yes, migrate'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -2486,16 +2592,41 @@ function App() {
   }
 
   useEffect(() => {
-    // Check if we have a saved provider and try to restore it
-    const savedProvider = localStorage.getItem('fp-storage-provider')
-    const hasOAuthCode = new URLSearchParams(window.location.search).get('code')
+    (async () => {
+      try {
+        // 1. If returning from OAuth redirect with a pending migration, finish it
+        if (hasPendingMigration()) {
+          const migratedTo = await resumePendingMigration()
+          if (migratedTo) {
+            await initWithProvider(migratedTo)
+            return
+          }
+        }
 
-    if (savedProvider || hasOAuthCode) {
-      // StoragePicker will handle restoration automatically
-      setAppState('pick-storage')
-    } else {
-      setAppState('pick-storage')
-    }
+        // 2. Look for saved provider
+        const savedId = localStorage.getItem('fp-storage-provider') || PROVIDERS.LOCAL_STORAGE
+        const provider = makeProvider(savedId)
+        const ok = await provider.restore()
+        if (ok) {
+          setActiveProvider(provider)
+          localStorage.setItem('fp-storage-provider', savedId)
+          await initWithProvider(savedId)
+        } else if (savedId !== PROVIDERS.LOCAL_STORAGE) {
+          // Cloud auth failed — fall back to localStorage so user isn't locked out
+          const fallback = new LocalStorageProvider()
+          await fallback.restore()
+          setActiveProvider(fallback)
+          localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
+          await initWithProvider(PROVIDERS.LOCAL_STORAGE)
+        } else {
+          // Should never happen — LocalStorage always succeeds
+          setAppState('pick-storage')
+        }
+      } catch (e) {
+        console.error('Storage init failed:', e)
+        setAppState('pick-storage')
+      }
+    })()
   }, [])
 
   const handlePick = async () => {
@@ -2575,7 +2706,7 @@ function App() {
             aria-label="Close sidebar"
           >✕</button>
         </div>
-        <FolderPicker folderName={folderName} onPick={handlePick} />
+        <FolderPicker folderName={folderName} storageProvider={storageProvider} onPick={handlePick} />
         <FileTree
           items={files}
           onSelect={handleSelectFile}
