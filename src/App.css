@@ -1509,3 +1509,250 @@ tr.highlight-flash {
     flex-wrap: wrap;
   }
 }
+
+/* ── StoragePicker ─────────────────────────────────── */
+.storage-picker-overlay {
+  position: fixed;
+  inset: 0;
+  background: #1a1a2e;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.storage-picker {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 12px;
+  padding: 2rem;
+  max-width: 540px;
+  width: 100%;
+  text-align: center;
+}
+
+.storage-picker-logo {
+  font-size: 2.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.storage-picker-title {
+  font-size: 1.8rem;
+  color: #e94560;
+  margin-bottom: 0.25rem;
+}
+
+.storage-picker-subtitle {
+  color: #94a3b8;
+  margin-bottom: 1.5rem;
+  font-size: 0.95rem;
+}
+
+.storage-picker-error {
+  background: #2a1a1a;
+  border: 1px solid #e94560;
+  border-radius: 6px;
+  color: #f87171;
+  padding: 0.6rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+.storage-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.storage-option {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  background: #0f3460;
+  border: 1px solid #1a4a7a;
+  border-radius: 8px;
+  padding: 0.875rem 1rem;
+  text-align: left;
+  transition: border-color 0.15s;
+}
+
+.storage-option:hover {
+  border-color: #e94560;
+}
+
+.storage-option-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+}
+
+.storage-option-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.storage-option-name {
+  font-weight: 600;
+  color: #eee;
+  margin-bottom: 0.2rem;
+}
+
+.storage-option-desc {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  line-height: 1.4;
+}
+
+.storage-option-btn {
+  padding: 0.5rem 1.1rem;
+  background: #e94560;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-width: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+.storage-option-btn:hover:not(:disabled) {
+  background: #c73652;
+}
+
+.storage-option-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.storage-option-btn.loading {
+  background: #374151;
+}
+
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid transparent;
+  border-top-color: #eee;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.storage-picker-note {
+  font-size: 0.78rem;
+  color: #4b5563;
+  line-height: 1.5;
+}
+
+/* Switch button in FolderPicker */
+.folder-picker-switch {
+  background: none;
+  border: none;
+  color: #4b5563;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 2px 4px;
+  border-radius: 3px;
+  margin-top: 2px;
+  display: block;
+  width: 100%;
+  text-align: left;
+}
+
+.folder-picker-switch:hover {
+  color: #94a3b8;
+}
+
+/* ── Mobile responsive ─────────────────────────────── */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    left: -280px;
+    top: 0;
+    bottom: 0;
+    z-index: 200;
+    transition: left 0.2s ease;
+  }
+
+  .app.sidebar-open .sidebar {
+    left: 0;
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 199;
+  }
+
+  .content {
+    padding: 0.75rem;
+  }
+
+  .mobile-nav-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+    margin-bottom: 0.5rem;
+    border-bottom: 1px solid #0f3460;
+  }
+
+  .mobile-menu-btn {
+    background: #0f3460;
+    border: none;
+    color: #eee;
+    padding: 0.4rem 0.75rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    white-space: nowrap;
+  }
+
+  .mobile-file-name {
+    color: #94a3b8;
+    font-size: 0.85rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .task-table {
+    font-size: 0.8rem;
+  }
+
+  .task-table th,
+  .task-table td {
+    padding: 0.4rem 0.5rem;
+  }
+
+  .storage-picker {
+    padding: 1.25rem;
+  }
+
+  .storage-option {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 480px) {
+  .storage-picker-title {
+    font-size: 1.4rem;
+  }
+
+  .storage-option-btn {
+    width: 100%;
+    margin-top: 0.25rem;
+  }
+}

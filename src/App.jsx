@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import './App.css'
 import * as storage from './storage/storage.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority } from './taskSort.js'
+import { StoragePicker } from './StoragePicker.jsx'
 
 // Context Menu component
 function ContextMenu({ x, y, options, onClose }) {
@@ -2413,43 +2414,36 @@ async function ensureUniqueIds(content, updateFile) {
 }
 
 function FolderPicker({ folderName, onPick }) {
-  const [error, setError] = useState(null)
-  const [busy, setBusy] = useState(false)
-
-  const handlePick = async () => {
-    setError(null)
-    setBusy(true)
-    try {
-      await onPick()
-    } catch (e) {
-      if (e?.name !== 'AbortError') {
-        setError('Failed to open folder')
-      }
-    }
-    setBusy(false)
+  const handleSwitch = () => {
+    localStorage.removeItem('fp-storage-provider')
+    window.location.reload()
   }
 
   return (
     <div className="folder-picker">
       <button
         className="folder-picker-trigger"
-        onClick={handlePick}
-        disabled={busy}
-        title={folderName ? `Folder: ${folderName}\nClick to change` : 'Click to open planner folder'}
+        onClick={onPick}
+        title={folderName ? `Storage: ${folderName}\nClick to change` : 'Click to choose storage'}
       >
         <span className="folder-picker-icon">📁</span>
         <span className="folder-picker-path">{folderName || '(no folder)'}</span>
       </button>
-      {error && <div className="folder-picker-error">{error}</div>}
+      <button
+        className="folder-picker-switch"
+        onClick={handleSwitch}
+        title="Switch storage provider"
+      >⇄</button>
     </div>
   )
 }
 
 function App() {
-  // 'loading' | 'not-supported' | 'no-folder' | 'ready'
+  // 'loading' | 'pick-storage' | 'ready'
   const [appState, setAppState] = useState('loading')
   const [files, setFiles] = useState([])
   const [folderName, setFolderName] = useState('')
+  const [storageProvider, setStorageProvider] = useState('')
   const [selectedFile, setSelectedFile] = useState('focus-plan.md')
   const [content, setContent] = useState('')
   const [pendingScrollToTaskId, setPendingScrollToTaskId] = useState(null)
@@ -2482,33 +2476,34 @@ function App() {
     }
   }
 
-  const initWithHandle = async () => {
+  const initWithProvider = async (providerId) => {
     await storage.scaffold()
     await loadFiles()
     setFolderName(storage.folderName())
+    setStorageProvider(providerId)
     setAppState('ready')
     handleSelectFile('focus-plan.md')
   }
 
   useEffect(() => {
-    if (!storage.isSupported()) {
-      setAppState('not-supported')
-      return
+    // Check if we have a saved provider and try to restore it
+    const savedProvider = localStorage.getItem('fp-storage-provider')
+    const hasOAuthCode = new URLSearchParams(window.location.search).get('code')
+
+    if (savedProvider || hasOAuthCode) {
+      // StoragePicker will handle restoration automatically
+      setAppState('pick-storage')
+    } else {
+      setAppState('pick-storage')
     }
-    storage.restore().then(handle => {
-      if (handle) {
-        initWithHandle()
-      } else {
-        setAppState('no-folder')
-      }
-    }).catch(() => setAppState('no-folder'))
   }, [])
 
   const handlePick = async () => {
-    const handle = await storage.pick()
-    if (handle) {
-      await initWithHandle()
-    }
+    setAppState('pick-storage')
+  }
+
+  const handleStorageReady = async (providerId) => {
+    await initWithProvider(providerId)
   }
 
   const handleNavigate = (path, scrollToTaskId) => {
@@ -2555,35 +2550,12 @@ function App() {
     }
   }
 
-  if (appState === 'not-supported') {
-    return (
-      <div className="onboarding">
-        <div className="onboarding-card">
-          <h1>📋 Focus Planner</h1>
-          <p>This app requires the File System Access API, which is only available in <strong>Chrome</strong> or <strong>Edge</strong>.</p>
-          <p style={{ marginTop: '12px', color: '#94a3b8', fontSize: '0.9rem' }}>Please open this page in Chrome or Edge to continue.</p>
-        </div>
-      </div>
-    )
-  }
-
   if (appState === 'loading') {
     return <div className="loading">Loading planner...</div>
   }
 
-  if (appState === 'no-folder') {
-    return (
-      <div className="onboarding">
-        <div className="onboarding-card">
-          <h1>📋 Focus Planner</h1>
-          <p>Pick the folder where your planner markdown files live. The app reads and writes directly to that folder — no server, no cloud, just files you own.</p>
-          <button className="pick-folder-btn" onClick={handlePick}>
-            Open planner folder
-          </button>
-          <p className="onboarding-hint">Tip: use a OneDrive or Dropbox folder for free cross-device sync.</p>
-        </div>
-      </div>
-    )
+  if (appState === 'pick-storage') {
+    return <StoragePicker onReady={handleStorageReady} />
   }
 
   const isFocusPlan = selectedFile === 'focus-plan.md'

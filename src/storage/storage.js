@@ -1,59 +1,99 @@
-import {
-  isSupported, pickFolder, restoreFolder,
-  readFile, writeFile, deleteFile,
-  journalExists, parseTodos, listFiles,
-  getMaxJournalId, scaffoldIfEmpty,
-} from './fsa.js'
+/**
+ * Storage abstraction layer for focus-planner.
+ * Supports: FSA (local), OneDrive, Google Drive.
+ */
+export { parseTodos } from './fsa.js'
 
-let _handle = null
+export const PROVIDERS = {
+  FSA: 'fsa',
+  ONEDRIVE: 'onedrive',
+  GOOGLE_DRIVE: 'google-drive',
+}
 
-export { isSupported, parseTodos }
+export function getProviderName(id) {
+  switch (id) {
+    case PROVIDERS.FSA: return 'Local Folder'
+    case PROVIDERS.ONEDRIVE: return 'OneDrive'
+    case PROVIDERS.GOOGLE_DRIVE: return 'Google Drive'
+    default: return id
+  }
+}
 
-export function getHandle() { return _handle }
-export function hasHandle() { return _handle !== null }
-export function folderName() { return _handle?.name || '' }
+export function getAvailableProviders() {
+  const list = []
+  if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
+    list.push(PROVIDERS.FSA)
+  }
+  list.push(PROVIDERS.ONEDRIVE, PROVIDERS.GOOGLE_DRIVE)
+  return list
+}
+
+// ── Active provider singleton ──────────────────────────
+
+let _provider = null
+
+export function setActiveProvider(p) { _provider = p }
+export function getActiveProvider() { return _provider }
+export function hasProvider() { return _provider !== null }
+
+// ── Delegating API (unchanged surface for App.jsx) ─────
+
+export function isSupported() {
+  // Always true — cloud providers are fallback for unsupported browsers
+  return true
+}
+
+export function folderName() {
+  return _provider?.folderName() ?? ''
+}
 
 export async function pick() {
-  const handle = await pickFolder()
-  _handle = handle
-  return handle
+  if (!_provider) throw new Error('No provider set')
+  return _provider.pick()
 }
 
 export async function restore() {
-  const handle = await restoreFolder()
-  _handle = handle
-  return handle
+  if (!_provider) return null
+  return _provider.restore()
 }
 
 export async function scaffold() {
-  return scaffoldIfEmpty(_handle)
+  if (!_provider) throw new Error('No provider set')
+  return _provider.scaffold()
 }
 
 export async function read(path) {
-  return readFile(_handle, path)
+  if (!_provider) throw new Error('No provider set')
+  return _provider.read(path)
 }
 
 export async function write(path, content) {
-  return writeFile(_handle, path, content)
+  if (!_provider) throw new Error('No provider set')
+  return _provider.write(path, content)
 }
 
 export async function remove(path) {
-  return deleteFile(_handle, path)
-}
-
-export async function checkJournal(taskId) {
-  return journalExists(_handle, taskId)
-}
-
-export async function getTodos(path) {
-  const content = await readFile(_handle, path)
-  return parseTodos(content)
+  if (!_provider) throw new Error('No provider set')
+  return _provider.remove(path)
 }
 
 export async function getFiles() {
-  return listFiles(_handle)
+  if (!_provider) throw new Error('No provider set')
+  return _provider.getFiles()
+}
+
+export async function checkJournal(taskId) {
+  if (!_provider) throw new Error('No provider set')
+  return _provider.checkJournal(taskId)
+}
+
+export async function getTodos(path) {
+  const content = await read(path)
+  const { parseTodos } = await import('./fsa.js')
+  return parseTodos(content)
 }
 
 export async function maxJournalId() {
-  return getMaxJournalId(_handle)
+  if (!_provider) throw new Error('No provider set')
+  return _provider.maxJournalId()
 }
