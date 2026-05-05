@@ -16,17 +16,25 @@ const TOKEN_ENDPOINT = 'https://login.microsoftonline.com/common/oauth2/v2.0/tok
 //   - https://shivbijlani.github.io/focus-planner/
 const CLIENT_ID = '4f22242f-c9a7-4a61-9208-8ca0e5ef8697'
 const SCOPES = 'Files.ReadWrite offline_access'
-const REMOTE_FOLDER = 'focus-planner'
+const DEFAULT_FOLDER = 'focus-planner'
+const FOLDER_KEY = 'od_folder'
 
 export class OneDriveProvider {
-  constructor() {
+  constructor(folderName = null) {
     this._token = null
     this._refreshToken = null
     this._expiresAt = null
+    this._folder = folderName || localStorage.getItem(FOLDER_KEY) || DEFAULT_FOLDER
+    if (folderName) localStorage.setItem(FOLDER_KEY, folderName)
     this._loadTokens()
   }
 
-  folderName() { return `OneDrive/${REMOTE_FOLDER}` }
+  folderName() { return `OneDrive/${this._folder}` }
+
+  setFolder(name) {
+    this._folder = name
+    localStorage.setItem(FOLDER_KEY, name)
+  }
 
   /** Called on user button click — initiates PKCE redirect */
   async pick() {
@@ -82,7 +90,7 @@ export class OneDriveProvider {
 
   async read(path) {
     await this._ensureToken()
-    const url = `${GRAPH_BASE}/me/drive/root:/${REMOTE_FOLDER}/${path}:/content`
+    const url = `${GRAPH_BASE}/me/drive/root:/${this._folder}/${path}:/content`
     const res = await fetch(url, { headers: this._authHeader() })
     if (res.status === 404) return ''
     if (!res.ok) throw new Error(`OneDrive read failed: ${res.status}`)
@@ -97,7 +105,7 @@ export class OneDriveProvider {
     if (parts.length > 1) {
       await this._ensureSubfolder(parts.slice(0, -1).join('/'))
     }
-    const url = `${GRAPH_BASE}/me/drive/root:/${REMOTE_FOLDER}/${path}:/content`
+    const url = `${GRAPH_BASE}/me/drive/root:/${this._folder}/${path}:/content`
     const res = await fetch(url, {
       method: 'PUT',
       headers: { ...this._authHeader(), 'Content-Type': 'text/plain; charset=utf-8' },
@@ -108,7 +116,7 @@ export class OneDriveProvider {
 
   async remove(path) {
     await this._ensureToken()
-    const url = `${GRAPH_BASE}/me/drive/root:/${REMOTE_FOLDER}/${path}`
+    const url = `${GRAPH_BASE}/me/drive/root:/${this._folder}/${path}`
     const res = await fetch(url, { method: 'DELETE', headers: this._authHeader() })
     if (res.status !== 204 && res.status !== 404) {
       throw new Error(`OneDrive delete failed: ${res.status}`)
@@ -117,7 +125,7 @@ export class OneDriveProvider {
 
   async getFiles() {
     await this._ensureToken()
-    return this._listRecursive(REMOTE_FOLDER)
+    return this._listRecursive(this._folder)
   }
 
   async checkJournal(taskId) {
@@ -130,7 +138,7 @@ export class OneDriveProvider {
   async maxJournalId() {
     await this._ensureToken()
     try {
-      const url = `${GRAPH_BASE}/me/drive/root:/${REMOTE_FOLDER}/journal:/children`
+      const url = `${GRAPH_BASE}/me/drive/root:/${this._folder}/journal:/children`
       const res = await fetch(url, { headers: this._authHeader() })
       if (!res.ok) return 0
       const data = await res.json()
@@ -165,21 +173,21 @@ export class OneDriveProvider {
   }
 
   async _ensureFolder() {
-    const url = `${GRAPH_BASE}/me/drive/root:/${REMOTE_FOLDER}`
+    const url = `${GRAPH_BASE}/me/drive/root:/${this._folder}`
     const res = await fetch(url, { headers: this._authHeader() })
     if (res.status === 404) {
       await fetch(`${GRAPH_BASE}/me/drive/root/children`, {
         method: 'POST',
         headers: { ...this._authHeader(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: REMOTE_FOLDER, folder: {}, '@microsoft.graph.conflictBehavior': 'rename' }),
+        body: JSON.stringify({ name: this._folder, folder: {}, '@microsoft.graph.conflictBehavior': 'rename' }),
       })
     }
   }
 
   async _ensureSubfolder(subPath) {
-    // subPath is relative to REMOTE_FOLDER, e.g. "journal"
+    // subPath is relative to this._folder, e.g. "journal"
     const parts = subPath.split('/')
-    let current = REMOTE_FOLDER
+    let current = this._folder
     for (const part of parts) {
       current += `/${part}`
       const url = `${GRAPH_BASE}/me/drive/root:/${current}`

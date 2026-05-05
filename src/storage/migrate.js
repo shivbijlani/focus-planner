@@ -10,12 +10,12 @@ import { GoogleDriveProvider } from './google-drive-provider.js'
 
 const MIGRATION_KEY = 'fp-pending-migration'
 
-export function makeProvider(id) {
+export function makeProvider(id, opts = {}) {
   switch (id) {
     case PROVIDERS.LOCAL_STORAGE: return new LocalStorageProvider()
     case PROVIDERS.FSA: return new FSAProvider()
-    case PROVIDERS.ONEDRIVE: return new OneDriveProvider()
-    case PROVIDERS.GOOGLE_DRIVE: return new GoogleDriveProvider()
+    case PROVIDERS.ONEDRIVE: return new OneDriveProvider(opts.folderName || null)
+    case PROVIDERS.GOOGLE_DRIVE: return new GoogleDriveProvider(opts.folderName || null)
     default: throw new Error(`Unknown provider: ${id}`)
   }
 }
@@ -73,6 +73,7 @@ export async function migrate(fromProvider, toId, opts = {}) {
       payload,
       deleteSource: !!opts.deleteSource,
       fromId: opts.fromId || null,
+      folderName: opts.folderName || null,
     }))
     // restore() returns truthy on success, or redirects on first auth
     const ok = await target.restore()
@@ -110,7 +111,7 @@ export async function resumePendingMigration() {
   const pending = readPendingMigration()
   if (!pending) return null
 
-  const target = makeProvider(pending.toId)
+  const target = makeProvider(pending.toId, { folderName: pending.folderName || null })
   const ok = await target.restore()
   if (!ok) return null
 

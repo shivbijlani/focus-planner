@@ -31,19 +31,27 @@ const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
 //   5. Replace TODO_REGISTER_GOOGLE_APP below with that Client ID
 const CLIENT_ID = 'TODO_REGISTER_GOOGLE_APP'
 const SCOPES = 'https://www.googleapis.com/auth/drive.file'
-const FOLDER_NAME = 'focus-planner'
+const DEFAULT_FOLDER = 'focus-planner'
+const FOLDER_KEY = 'gd_folder'
 
 export class GoogleDriveProvider {
-  constructor() {
+  constructor(folderName = null) {
     this._token = null
     this._refreshToken = null
     this._expiresAt = null
     this._folderId = null
     this._fileIndex = {} // path → fileId cache
+    this._folder = folderName || localStorage.getItem(FOLDER_KEY) || DEFAULT_FOLDER
+    if (folderName) localStorage.setItem(FOLDER_KEY, folderName)
     this._loadTokens()
   }
 
-  folderName() { return `Google Drive/${FOLDER_NAME}` }
+  folderName() { return `Google Drive/${this._folder}` }
+
+  setFolder(name) {
+    this._folder = name
+    localStorage.setItem(FOLDER_KEY, name)
+  }
 
   async pick() {
     await this._startPKCE()
@@ -169,7 +177,7 @@ export class GoogleDriveProvider {
   async _ensureFolder() {
     if (this._folderId) return this._folderId
     // Try to find existing folder
-    const q = `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`
+    const q = `name='${this._folder}' and mimeType='application/vnd.google-apps.folder' and trashed=false`
     const res = await fetch(`${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=files(id,name)`, {
       headers: this._authHeader(),
     })
@@ -182,7 +190,7 @@ export class GoogleDriveProvider {
     const create = await fetch(`${DRIVE_API}/files`, {
       method: 'POST',
       headers: { ...this._authHeader(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' }),
+      body: JSON.stringify({ name: this._folder, mimeType: 'application/vnd.google-apps.folder' }),
     })
     const created = await create.json()
     this._folderId = created.id

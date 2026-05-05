@@ -2439,12 +2439,25 @@ function StorageFooter({ storageProvider, folderName, onPick }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [keepSource, setKeepSource] = useState(true)
+  const [customFolder, setCustomFolder] = useState('focus-planner')
 
   const providerIcon = PROVIDER_ICONS[storageProvider] || '📁'
   const others = getAvailableProviders().filter(id => id !== storageProvider)
+  const isCloud = (id) => id === PROVIDERS.ONEDRIVE || id === PROVIDERS.GOOGLE_DRIVE
 
   const reset = () => { setView('menu'); setConfirmTarget(null); setError('') }
   const close = () => { setOpen(false); reset() }
+
+  const handleConfirmTarget = (id) => {
+    setConfirmTarget(id)
+    // Pre-fill with current folder name if already on a cloud provider, else default
+    const existing = id === PROVIDERS.ONEDRIVE
+      ? (localStorage.getItem('od_folder') || 'focus-planner')
+      : id === PROVIDERS.GOOGLE_DRIVE
+        ? (localStorage.getItem('gd_folder') || 'focus-planner')
+        : 'focus-planner'
+    setCustomFolder(existing)
+  }
 
   const startMigrate = async (toId) => {
     setError('')
@@ -2453,6 +2466,7 @@ function StorageFooter({ storageProvider, folderName, onPick }) {
       const result = await migrate(getActiveProvider(), toId, {
         deleteSource: !keepSource,
         fromId: storageProvider,
+        folderName: isCloud(toId) ? (customFolder.trim() || 'focus-planner') : undefined,
       })
       if (result.ok) { window.location.reload(); return }
       if (result.redirected) return
@@ -2498,7 +2512,7 @@ function StorageFooter({ storageProvider, folderName, onPick }) {
             <>
               <div className="storage-footer-section">Migrate data to:</div>
               {others.map(id => (
-                <button key={id} className="storage-footer-btn" onClick={() => setConfirmTarget(id)}>
+                <button key={id} className="storage-footer-btn" onClick={() => handleConfirmTarget(id)}>
                   {PROVIDER_ICONS[id] || '📁'} {getProviderName(id)} →
                 </button>
               ))}
@@ -2511,6 +2525,18 @@ function StorageFooter({ storageProvider, folderName, onPick }) {
               <div className="storage-footer-section">
                 Copy all data to <strong>{getProviderName(confirmTarget)}</strong>?
               </div>
+              {isCloud(confirmTarget) && (
+                <div className="storage-footer-field">
+                  <label className="storage-footer-label-sm">Folder name</label>
+                  <input
+                    className="storage-footer-input"
+                    value={customFolder}
+                    onChange={e => setCustomFolder(e.target.value)}
+                    placeholder="focus-planner"
+                    disabled={busy}
+                  />
+                </div>
+              )}
               {storageProvider === PROVIDERS.LOCAL_STORAGE && (
                 <label className="storage-footer-checkbox">
                   <input
@@ -2521,7 +2547,7 @@ function StorageFooter({ storageProvider, folderName, onPick }) {
                   Delete browser copy after
                 </label>
               )}
-              {(confirmTarget === PROVIDERS.ONEDRIVE || confirmTarget === PROVIDERS.GOOGLE_DRIVE) && (
+              {isCloud(confirmTarget) && (
                 <div className="storage-footer-note">
                   You'll be redirected to sign in, then data copies automatically.
                 </div>
