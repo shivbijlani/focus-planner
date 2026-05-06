@@ -221,6 +221,23 @@ body {
   gap: 0.4rem;
 }
 
+.storage-footer-option-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+}
+.storage-footer-option-name {
+  font-size: 0.8rem;
+  color: #cbd5e1;
+  font-weight: 500;
+}
+.storage-footer-option-tagline {
+  font-size: 0.7rem;
+  color: #475569;
+  font-style: italic;
+}
+
 .file-tree {
   list-style: none;
   padding-left: 0;

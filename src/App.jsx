@@ -2423,6 +2423,13 @@ const PROVIDER_ICONS = {
   [PROVIDERS.GOOGLE_DRIVE]: '🌐',
 }
 
+const STORAGE_META = {
+  [PROVIDERS.LOCAL_STORAGE]: { tagline: 'No setup · this browser only' },
+  [PROVIDERS.FSA]: { tagline: 'Plain text files on your computer' },
+  [PROVIDERS.ONEDRIVE]: { tagline: 'Sign in to sync across devices' },
+  [PROVIDERS.GOOGLE_DRIVE]: { tagline: 'Sign in to sync across devices' },
+}
+
 function StorageFooter({ storageProvider, folderName, onPick }) {
   const [open, setOpen] = useState(false)
   const [view, setView] = useState('menu') // 'menu' | 'migrate'
@@ -2503,8 +2510,9 @@ function StorageFooter({ storageProvider, folderName, onPick }) {
               <div className="settings-dialog-section">
                 <div className="storage-footer-section">Switch to:</div>
                 {others.map(id => (
-                  <button key={id} className="storage-footer-btn" onClick={() => setConfirmTarget(id)}>
-                    {PROVIDER_ICONS[id] || "📁"} {isCloud(id) ? `Sign in to sync with ${getProviderName(id)}` : getProviderName(id)} →
+                    <button key={id} className="storage-footer-btn storage-footer-option-btn" onClick={() => setConfirmTarget(id)}>
+                      <span className="storage-footer-option-name">{PROVIDER_ICONS[id] || "📁"} {getProviderName(id)}</span>
+                      <span className="storage-footer-option-tagline">{STORAGE_META[id]?.tagline || ""}</span>
                   </button>
                 ))}
                 <button className="storage-footer-btn secondary" onClick={reset}>↩ Back</button>
