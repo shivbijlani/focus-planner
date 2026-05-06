@@ -4,8 +4,46 @@ import * as storage from './storage/storage.js'
 import { setActiveProvider, getActiveProvider, PROVIDERS, getProviderName, getAvailableProviders } from './storage/storage.js'
 import { LocalStorageProvider } from './storage/localstorage-provider.js'
 import { migrate, resumePendingMigration, hasPendingMigration, makeProvider } from './storage/migrate.js'
+import {
+  loadSources, migrateLegacy, getSources, getActiveSourceId, setActiveSource,
+  addSource, renameSource, removeSource, getProvider, restoreSource,
+  availableProviderTypesForAdd,
+  beginAddCloudSource, consumePendingAdd, abortPendingAdd,
+} from './storage/sources.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority } from './taskSort.js'
 import { StoragePicker } from './StoragePicker.jsx'
+
+// ── Multi-source path helpers ───────────────────────────────────────
+// In single-source mode all paths are plain ("focus-plan.md").
+// In multi-source mode paths are namespaced ("s2::focus-plan.md") so the
+// sidebar tree, selectedFile state and the dispatcher can tell sources apart.
+// The "combined" sourceId is virtual — it has no provider; reads are
+// synthesized from every real source.
+const COMBINED_ID = 'combined'
+
+function splitSourcePath(qualified) {
+  if (!qualified) return { sourceId: null, path: '' }
+  const idx = qualified.indexOf('::')
+  if (idx === -1) return { sourceId: null, path: qualified }
+  return { sourceId: qualified.slice(0, idx), path: qualified.slice(idx + 2) }
+}
+
+function joinSourcePath(sourceId, path) {
+  return sourceId ? `${sourceId}::${path}` : path
+}
+
+function prefixTreePaths(items, sourceId) {
+  return items.map(item => {
+    if (item.type === 'directory') {
+      return {
+        ...item,
+        path: joinSourcePath(sourceId, item.path),
+        children: item.children ? prefixTreePaths(item.children, sourceId) : [],
+      }
+    }
+    return { ...item, path: joinSourcePath(sourceId, item.path) }
+  })
+}
 
 // Context Menu component
 function ContextMenu({ x, y, options, onClose }) {
@@ -874,7 +912,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
 }
 
 // Collapsible section component
-function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, personalPriorities, onScrollToPriorities, onScrollToPersonalPriorities, onTaskAction, onMoveToCompleted, onAddTask, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, onPromoteToPersonalPriority, onRemoveFromPersonalPriority }) {
+function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const { headers, rows, rawLines } = parseMarkdownTable(tableLines)
   const [contextMenu, setContextMenu] = useState(null)
@@ -1012,33 +1050,19 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
       })
     }
     
-    // Add "Promote/Remove Work Priority" option
+    // Add "Promote/Remove Priority" option (unified — was Work + Personal)
     if (taskId) {
       if (managerPriorities[taskId]) {
         options.push({
-          label: 'Remove from Work Priorities',
+          label: 'Remove from Priorities',
           icon: '⭐',
           action: () => onRemoveFromManagerPriority(taskId)
         })
       } else {
         options.push({
-          label: 'Promote to Work Priority',
+          label: 'Promote to Priority',
           icon: '⭐',
           action: () => onPromoteToManagerPriority(taskId)
-        })
-      }
-      // Add "Promote/Remove Personal Priority" option
-      if (personalPriorities && personalPriorities[taskId]) {
-        options.push({
-          label: 'Remove from Personal Priorities',
-          icon: '🌟',
-          action: () => onRemoveFromPersonalPriority(taskId)
-        })
-      } else {
-        options.push({
-          label: 'Promote to Personal Priority',
-          icon: '🌟',
-          action: () => onPromoteToPersonalPriority(taskId)
         })
       }
     }
@@ -1396,6 +1420,88 @@ function parseFocusPlan(content) {
   return sections
 }
 
+// Section-name predicates. The unified "Priorities" section absorbs the
+// legacy split between "Work Priorities" and "Manager Priorities".
+function isPrioritiesSection(title) {
+  return title === 'Priorities' || title === 'Work Priorities' || title === 'Manager Priorities'
+}
+function isPersonalPrioritiesSection(title) {
+  return title === 'Personal Priorities'
+}
+
+/**
+ * One-shot migration: collapse legacy `Work Priorities` + `Personal Priorities`
+ * (or just the legacy heading) into a single `## Priorities` section.
+ *
+ * Returns the migrated content, or `null` if no migration was needed (so callers
+ * can avoid pointless writes).
+ */
+function migratePrioritiesSections(content) {
+  const lines = content.split('\n')
+  const sections = []
+  let current = null
+  let buffer = []
+  let headerLineIdx = -1
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (line.startsWith('## ')) {
+      if (current) sections.push({ ...current, lines: buffer, end: i })
+      current = { title: line.replace('## ', '').trim(), start: i, headerLine: line }
+      buffer = []
+      if (headerLineIdx === -1) headerLineIdx = i
+    } else if (current) {
+      buffer.push(line)
+    }
+  }
+  if (current) sections.push({ ...current, lines: buffer, end: lines.length })
+
+  const work = sections.find(s => isPrioritiesSection(s.title))
+  const personal = sections.find(s => isPersonalPrioritiesSection(s.title))
+  if (!work && !personal) return null
+  // Already canonical and no Personal section → no-op.
+  if (work && work.title === 'Priorities' && !personal) return null
+
+  const collectEntries = (lines) => lines
+    .map(l => l.trim().match(/^\d+\.\s+(.+)$/))
+    .filter(Boolean)
+    .map(m => m[1].trim())
+
+  const workEntries = work ? collectEntries(work.lines) : []
+  const personalEntries = personal ? collectEntries(personal.lines) : []
+  const seen = new Set()
+  const merged = []
+  for (const e of [...workEntries, ...personalEntries]) {
+    if (seen.has(e)) continue
+    seen.add(e)
+    merged.push(e)
+  }
+
+  // Rebuild the file: drop the old sections, insert a single Priorities section
+  // wherever the first of them used to live (preserving ordering relative to Today/Deferred).
+  const toRemove = new Set()
+  for (const s of [work, personal]) {
+    if (!s) continue
+    for (let i = s.start; i < s.end; i++) toRemove.add(i)
+  }
+  const insertAt = work ? work.start : personal.start
+  const out = []
+  for (let i = 0; i < lines.length; i++) {
+    if (i === insertAt) {
+      out.push('## Priorities')
+      out.push('')
+      merged.forEach((e, idx) => out.push(`${idx + 1}. ${e}`))
+      out.push('')
+    }
+    if (toRemove.has(i)) continue
+    out.push(lines[i])
+  }
+  // Trim trailing blank lines accumulated by repeated migrations
+  while (out.length > 1 && out[out.length - 1] === '' && out[out.length - 2] === '') {
+    out.pop()
+  }
+  return out.join('\n')
+}
+
 // Build task ID to name lookup from table lines
 function buildTaskIdLookup(tableLines) {
   const lookup = {}
@@ -1462,19 +1568,14 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
   const taskSections = sections.filter(s => 
     s.title === 'Today' || s.title === 'Deferred'
   )
-  const managerPrioritiesSection = sections.find(s =>
-    s.title === 'Work Priorities' || s.title === 'Manager Priorities'
-  )
-  const personalPrioritiesSection = sections.find(s => s.title === 'Personal Priorities')
+  const managerPrioritiesSection = sections.find(s => isPrioritiesSection(s.title))
 
-  // Parse manager (work) priorities and personal priorities for lookup
+  // Parse the unified Priorities section. We keep the variable name
+  // `managerPriorities` for compatibility with downstream sort/lookup helpers.
   const managerPriorities = managerPrioritiesSection
     ? parseManagerPriorities(managerPrioritiesSection.lines)
     : {}
-  const personalPriorities = personalPrioritiesSection
-    ? parseManagerPriorities(personalPrioritiesSection.lines)
-    : {}
-  
+
   // Build lookup from current focus plan tasks + linked ID map + ADO lookup for chain walking
   const currentTaskLookup = {}
   const linkedIdMap = {}
@@ -1488,7 +1589,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
   if (managerPrioritiesSection) {
     Object.assign(adoLookup, buildAdoLookup(managerPrioritiesSection.lines))
   }
-  
+
   // Build tasksByPriority: group tasks by which manager priority they resolve to via chain walking
   const tasksByPriority = {}
   for (const section of taskSections) {
@@ -1503,29 +1604,6 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
       if (resolved) {
         if (!tasksByPriority[resolved.id]) tasksByPriority[resolved.id] = []
         tasksByPriority[resolved.id].push({
-          id,
-          task: row['Task'] || '',
-          priority: row[priorityCol] || '',
-          section: section.title
-        })
-      }
-    }
-  }
-
-  // Build tasksByPersonalPriority: same as above but resolving against personal priorities
-  const tasksByPersonalPriority = {}
-  for (const section of taskSections) {
-    const { headers, rows } = parseMarkdownTable(section.lines)
-    const priorityCol = headers.find(h => h.includes('🎯')) || '🎯'
-    for (const row of rows) {
-      const id = extractTaskId(row)
-      if (!id) continue
-      // Skip tasks that ARE personal priorities themselves
-      if (personalPriorities[id]) continue
-      const resolved = resolveManagerPriority(id, linkedIdMap, personalPriorities)
-      if (resolved) {
-        if (!tasksByPersonalPriority[resolved.id]) tasksByPersonalPriority[resolved.id] = []
-        tasksByPersonalPriority[resolved.id].push({
           id,
           task: row['Task'] || '',
           priority: row[priorityCol] || '',
@@ -1556,7 +1634,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
   const activeTaskIds = Object.keys(currentTaskLookup)
   
   const scrollToPriorities = () => {
-    const el = document.getElementById('work-priorities')
+    const el = document.getElementById('priorities')
     if (el) {
       el.scrollIntoView({ behavior: 'smooth' })
       const header = el.querySelector('.section-header')
@@ -1566,17 +1644,6 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
     }
   }
 
-  const scrollToPersonalPriorities = () => {
-    const el = document.getElementById('personal-priorities')
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth' })
-      const header = el.querySelector('.section-header')
-      if (header && el.querySelector('.priorities-content') === null) {
-        header.click()
-      }
-    }
-  }
-  
   const handleTaskAction = async (action, rawLine, fromSection, toSection) => {
     // Move task from one section to another
     const lines = content.split('\n')
@@ -2019,18 +2086,34 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
   }
 
   const handleUpdateManagerPriorities = async (newLines) => {
-    // Support both legacy "Manager Priorities" and new "Work Priorities"
-    const sectionName = managerPrioritiesSection?.title || 'Work Priorities'
-    await updateNamedSection(sectionName, newLines)
+    // Always normalize the section heading to "Priorities" while writing.
+    const sectionName = managerPrioritiesSection?.title || 'Priorities'
+    if (sectionName !== 'Priorities') {
+      // Migration on first write: rename heading to canonical form too.
+      const lines = content.split('\n')
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === `## ${sectionName}`) { lines[i] = '## Priorities'; break }
+      }
+      // Persist the rename, then update body.
+      const renamed = lines.join('\n')
+      // Replace section body inline so we don't write twice.
+      const beforeLines = renamed.split('\n')
+      let inSection = false, startIndex = -1, endIndex = -1
+      for (let i = 0; i < beforeLines.length; i++) {
+        if (beforeLines[i].startsWith('## Priorities')) { inSection = true; startIndex = i }
+        else if (inSection && beforeLines[i].startsWith('## ')) { endIndex = i; break }
+      }
+      if (endIndex === -1) endIndex = beforeLines.length
+      const out = [...beforeLines.slice(0, startIndex + 1), '', ...newLines, '', ...beforeLines.slice(endIndex)]
+      await onContentUpdate(out.join('\n'))
+      return
+    }
+    await updateNamedSection('Priorities', newLines)
   }
 
-  const handleUpdatePersonalPriorities = async (newLines) => {
-    await updateNamedSection('Personal Priorities', newLines)
-  }
-  
   const handlePromoteToManagerPriority = async (taskId) => {
     if (!managerPrioritiesSection) {
-      const newContent = content.trimEnd() + '\n\n## Work Priorities\n\n1. ' + taskId + '\n'
+      const newContent = content.trimEnd() + '\n\n## Priorities\n\n1. ' + taskId + '\n'
       await onContentUpdate(newContent)
       return
     }
@@ -2068,47 +2151,6 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
     await handleUpdateManagerPriorities(renumbered)
   }
 
-  const handlePromoteToPersonalPriority = async (taskId) => {
-    if (!personalPrioritiesSection) {
-      // Section missing — append it to the file
-      const newContent = content.trimEnd() + '\n\n## Personal Priorities\n\n1. ' + taskId + '\n'
-      await onContentUpdate(newContent)
-      return
-    }
-    const ppLines = [...personalPrioritiesSection.lines]
-    let lastNumIndex = -1
-    let maxNum = 0
-    for (let i = 0; i < ppLines.length; i++) {
-      const match = ppLines[i].trim().match(/^(\d+)\.\s+/)
-      if (match) {
-        lastNumIndex = i
-        maxNum = Math.max(maxNum, parseInt(match[1], 10))
-      }
-    }
-    const newLine = `${maxNum + 1}. ${taskId}`
-    if (lastNumIndex >= 0) {
-      ppLines.splice(lastNumIndex + 1, 0, newLine)
-    } else {
-      ppLines.push(newLine)
-    }
-    await handleUpdatePersonalPriorities(ppLines)
-  }
-
-  const handleRemoveFromPersonalPriority = async (taskId) => {
-    if (!personalPrioritiesSection) return
-    const ppLines = personalPrioritiesSection.lines.filter(line => {
-      const match = line.trim().match(/^\d+\.\s+(.+)$/)
-      return !(match && match[1].trim() === taskId)
-    })
-    let num = 1
-    const renumbered = ppLines.map(line => {
-      const match = line.trim().match(/^\d+\.\s+(.+)$/)
-      if (match) return `${num++}. ${match[1]}`
-      return line
-    })
-    await handleUpdatePersonalPriorities(renumbered)
-  }
-  
   return (
     <div className="focus-plan-view">
       <h1>📋 Focus Plan</h1>
@@ -2121,9 +2163,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
           onNavigate={onNavigate}
           defaultOpen={section.title === 'Today'}
           managerPriorities={managerPriorities}
-          personalPriorities={personalPriorities}
           onScrollToPriorities={scrollToPriorities}
-          onScrollToPersonalPriorities={scrollToPersonalPriorities}
           onTaskAction={handleTaskAction}
           onMoveToCompleted={handleMoveToCompleted}
           onAddTask={handleAddTask}
@@ -2140,8 +2180,6 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
           adoLookup={adoLookup}
           onPromoteToManagerPriority={handlePromoteToManagerPriority}
           onRemoveFromManagerPriority={handleRemoveFromManagerPriority}
-          onPromoteToPersonalPriority={handlePromoteToPersonalPriority}
-          onRemoveFromPersonalPriority={handleRemoveFromPersonalPriority}
         />
       ))}
 
@@ -2153,21 +2191,8 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
           onAddAndPrioritize={(name) => handleAddAndPrioritize(name, managerPrioritiesSection.title)}
           tasksByPriority={tasksByPriority}
           taskLookup={taskLookup}
-          title="Work Priorities"
-          sectionId="work-priorities"
-        />
-      )}
-
-      {personalPrioritiesSection && (
-        <ManagerPrioritiesSection
-          lines={personalPrioritiesSection.lines}
-          defaultOpen={false}
-          onUpdate={handleUpdatePersonalPriorities}
-          onAddAndPrioritize={(name) => handleAddAndPrioritize(name, personalPrioritiesSection.title)}
-          tasksByPriority={tasksByPersonalPriority}
-          taskLookup={taskLookup}
-          title="Personal Priorities"
-          sectionId="personal-priorities"
+          title="Priorities"
+          sectionId="priorities"
         />
       )}
       
@@ -2430,19 +2455,56 @@ const STORAGE_META = {
   [PROVIDERS.GOOGLE_DRIVE]: { tagline: 'Sign in to sync across devices' },
 }
 
-function StorageFooter({ storageProvider, folderName, onPick }) {
+function TourModal({ onClose }) {
+  return (
+    <div className="dialog-overlay" onClick={onClose}>
+      <div className="settings-dialog" onClick={e => e.stopPropagation()}>
+        <div className="settings-dialog-header">
+          <h3>Welcome to Focus Planner 👋</h3>
+          <button className="settings-dialog-close" onClick={onClose}>✕</button>
+        </div>
+        <div className="settings-dialog-section">
+          <ul className="tour-list">
+            <li><strong>Today &amp; Deferred</strong> — your top focus plan lives in <code>focus-plan.md</code>. Add tasks with the <strong>+</strong> button; right-click to defer or complete.</li>
+            <li><strong>Priorities</strong> — pin top-of-mind themes in the <em>Priorities</em> section so tasks can be tagged against them.</li>
+            <li><strong>Journals</strong> — every task with a journal entry expands to show its TODO / DONE bullets inline.</li>
+            <li><strong>Sources</strong> — open <em>Settings</em> to add more storage sources (e.g. a Work folder + a Personal folder). With multiple sources, a ✨ <strong>Combined</strong> view appears at the top.</li>
+            <li><strong>Sync</strong> — start with browser storage, then upgrade to a local folder, OneDrive, or Google Drive whenever you're ready. Your tasks come with you.</li>
+          </ul>
+        </div>
+        <div className="settings-dialog-section">
+          <button className="storage-footer-btn" onClick={onClose}>Got it</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function StorageFooter({ storageProvider, folderName, onPick, onSourcesChanged }) {
   const [open, setOpen] = useState(false)
-  const [view, setView] = useState('menu') // 'menu' | 'migrate'
+  const [tourOpen, setTourOpen] = useState(false)
+  const [view, setView] = useState('menu') // 'menu' | 'migrate' | 'add-source' | 'rename'
   const [confirmTarget, setConfirmTarget] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [keepSource, setKeepSource] = useState(true)
+  const [renamingId, setRenamingId] = useState(null)
+  const [renameValue, setRenameValue] = useState('')
+
+  const sources = getSources()
+  const activeId = getActiveSourceId()
+  const isMulti = sources.length > 1
 
   const providerIcon = PROVIDER_ICONS[storageProvider] || '📁'
   const others = getAvailableProviders().filter(id => id !== storageProvider)
   const isCloud = (id) => id === PROVIDERS.ONEDRIVE || id === PROVIDERS.GOOGLE_DRIVE
+  // Show "Sync to the cloud" CTA in place of Settings when the user is still
+  // on default browser storage with a single source — i.e. they haven't set up
+  // any local-folder or cloud sync yet. Once they upgrade (or add a 2nd
+  // source), revert to the standard ⚙ Settings affordance.
+  const isBrowserOnly = !isMulti && storageProvider === PROVIDERS.LOCAL_STORAGE
 
-  const reset = () => { setView('menu'); setConfirmTarget(null); setError('') }
+  const reset = () => { setView('menu'); setConfirmTarget(null); setError(''); setRenamingId(null) }
   const close = () => { setOpen(false); reset() }
 
   const startMigrate = async (toId) => {
@@ -2463,18 +2525,130 @@ function StorageFooter({ storageProvider, folderName, onPick }) {
     }
   }
 
+  // Add a brand-new source. Only LocalStorage and FSA are supported here —
+  // cloud sources need an OAuth redirect dance that the existing migrate flow
+  // owns and is not worth duplicating until there's clear demand.
+  const addLocalStorageSource = async () => {
+    setBusy(true); setError('')
+    try {
+      if (sources.some(s => s.providerType === PROVIDERS.LOCAL_STORAGE)) {
+        setError('Browser Storage is already a source.')
+        return
+      }
+      const src = addSource({ providerType: PROVIDERS.LOCAL_STORAGE, name: 'Browser Storage' })
+      const p = getProvider(src.id)
+      await p.restore()
+      await p.scaffold()
+      await setActiveSource(src.id)
+      onSourcesChanged?.()
+      close()
+    } catch (e) {
+      setError(e.message || 'Failed to add source')
+    } finally { setBusy(false) }
+  }
+
+  const addFsaSource = async () => {
+    setBusy(true); setError('')
+    try {
+      const src = addSource({ providerType: PROVIDERS.FSA, name: 'Local Folder' })
+      const p = getProvider(src.id)
+      try {
+        const handle = await p.pick()
+        if (!handle) {
+          await removeSource(src.id)
+          setError('Folder selection cancelled.')
+          return
+        }
+        renameSource(src.id, handle.name || 'Local Folder')
+        await p.scaffold()
+        await setActiveSource(src.id)
+        onSourcesChanged?.()
+        close()
+      } catch (e) {
+        await removeSource(src.id)
+        throw e
+      }
+    } catch (e) {
+      setError(e.message || 'Failed to add source')
+    } finally { setBusy(false) }
+  }
+
+  const addCloudSource = async (providerType) => {
+    setBusy(true); setError('')
+    try {
+      // Persists registry entry, sets pending flag, and triggers OAuth redirect.
+      // The page reloads on success — init handles the rest.
+      await beginAddCloudSource(providerType)
+    } catch (e) {
+      // Roll back the half-created entry if pick threw before redirecting.
+      try { await abortPendingAdd() } catch { /* noop */ }
+      setError(e.message || 'Failed to start sign-in')
+      setBusy(false)
+    }
+  }
+
+  const switchToSource = async (id) => {
+    if (id === activeId) return
+    await setActiveSource(id)
+    onSourcesChanged?.()
+    close()
+  }
+
+  const removeSourceById = async (id) => {
+    if (sources.length <= 1) {
+      setError('Cannot remove the last source.')
+      return
+    }
+    if (!confirm('Remove this source? Files in the source are not deleted.')) return
+    await removeSource(id)
+    onSourcesChanged?.()
+  }
+
+  const startRename = (id, currentName) => {
+    setRenamingId(id)
+    setRenameValue(currentName)
+  }
+  const commitRename = () => {
+    if (renamingId && renameValue.trim()) {
+      renameSource(renamingId, renameValue.trim())
+      onSourcesChanged?.()
+    }
+    setRenamingId(null)
+  }
+
   return (
     <>
       <div className="sidebar-storage-footer">
         <button
           className="storage-footer-toggle"
-          onClick={() => setOpen(true)}
-          title="Settings"
+          onClick={() => setTourOpen(true)}
+          title="Take a quick tour of Focus Planner"
         >
-          <span className="storage-footer-icon">⚙</span>
-          <span className="storage-footer-label">Settings</span>
+          <span className="storage-footer-icon">📚</span>
+          <span className="storage-footer-label">Take a tour</span>
         </button>
+        {isBrowserOnly ? (
+          <button
+            className="storage-footer-toggle storage-footer-cta"
+            onClick={() => { setView('migrate'); setOpen(true) }}
+            title="Move your tasks to a local folder or the cloud"
+          >
+            <span className="storage-footer-icon">☁️</span>
+            <span className="storage-footer-label">Sync to the cloud</span>
+          </button>
+        ) : (
+          <button
+            className="storage-footer-toggle"
+            onClick={() => setOpen(true)}
+            title="Settings"
+          >
+            <span className="storage-footer-icon">⚙</span>
+            <span className="storage-footer-label">Settings</span>
+          </button>
+        )}
       </div>
+
+      {tourOpen && <TourModal onClose={() => setTourOpen(false)} />}
 
       {open && (
         <div className="dialog-overlay" onClick={close}>
@@ -2485,14 +2659,90 @@ function StorageFooter({ storageProvider, folderName, onPick }) {
             </div>
 
             <div className="settings-dialog-section">
-              <div className="settings-dialog-section-title">Storage</div>
-              <div className="settings-dialog-info">
-                {providerIcon} {folderName || getProviderName(storageProvider)}
-              </div>
+              <div className="settings-dialog-section-title">Sources</div>
+              {sources.map(s => {
+                const icon = PROVIDER_ICONS[s.providerType] || '📁'
+                const isActive = s.id === activeId
+                if (renamingId === s.id) {
+                  return (
+                    <div key={s.id} className="storage-footer-source-row">
+                      <span className="storage-footer-source-icon">{icon}</span>
+                      <input
+                        className="storage-footer-source-rename"
+                        value={renameValue}
+                        autoFocus
+                        onChange={e => setRenameValue(e.target.value)}
+                        onBlur={commitRename}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') commitRename()
+                          if (e.key === 'Escape') setRenamingId(null)
+                        }}
+                      />
+                    </div>
+                  )
+                }
+                return (
+                  <div key={s.id} className={`storage-footer-source-row${isActive ? ' active' : ''}`}>
+                    <button
+                      className="storage-footer-source-main"
+                      onClick={() => switchToSource(s.id)}
+                      title={isActive ? 'Active source' : 'Click to switch to this source'}
+                    >
+                      <span className="storage-footer-source-icon">{icon}</span>
+                      <span className="storage-footer-source-name">{s.name}</span>
+                      {isActive && <span className="storage-footer-source-active">●</span>}
+                    </button>
+                    <button
+                      className="storage-footer-source-action"
+                      title="Rename"
+                      onClick={() => startRename(s.id, s.name)}
+                    >✎</button>
+                    {sources.length > 1 && (
+                      <button
+                        className="storage-footer-source-action"
+                        title="Remove source"
+                        onClick={() => removeSourceById(s.id)}
+                      >🗑</button>
+                    )}
+                  </div>
+                )
+              })}
+              {view !== 'add-source' ? (
+                <button className="storage-footer-btn" onClick={() => { setView('add-source'); setError('') }}>
+                  + Add source
+                </button>
+              ) : (
+                <div className="storage-footer-add-source">
+                  {availableProviderTypesForAdd().map(t => {
+                    const onClick = t === PROVIDERS.LOCAL_STORAGE ? addLocalStorageSource
+                      : t === PROVIDERS.FSA ? addFsaSource
+                      : () => addCloudSource(t)
+                    return (
+                      <button key={t} className="storage-footer-btn storage-footer-option-btn" onClick={onClick} disabled={busy}>
+                        <span className="storage-footer-option-name">{PROVIDER_ICONS[t] || '📁'} {getProviderName(t)}</span>
+                        <span className="storage-footer-option-tagline">{STORAGE_META[t]?.tagline || ''}</span>
+                      </button>
+                    )
+                  })}
+                  {availableProviderTypesForAdd().length === 0 && (
+                    <div className="storage-footer-note">All available source types are already in use.</div>
+                  )}
+                  {(availableProviderTypesForAdd().includes(PROVIDERS.ONEDRIVE) ||
+                    availableProviderTypesForAdd().includes(PROVIDERS.GOOGLE_DRIVE)) && (
+                    <div className="storage-footer-note">Cloud sources will redirect you to sign in. The page will reload after.</div>
+                  )}
+                  {error && <div className="storage-footer-error">⚠️ {error}</div>}
+                  <button className="storage-footer-btn secondary" onClick={() => setView('menu')} disabled={busy}>↩ Back</button>
+                </div>
+              )}
             </div>
 
-            {view === 'menu' && (
+            {!isMulti && view === 'menu' && (
               <div className="settings-dialog-section">
+                <div className="settings-dialog-section-title">Storage actions</div>
+                <div className="settings-dialog-info">
+                  Active: {providerIcon} {folderName || getProviderName(storageProvider)}
+                </div>
                 {storageProvider === PROVIDERS.FSA && (
                   <button className="storage-footer-btn" onClick={() => { close(); onPick() }}>
                     📂 Change folder
@@ -2556,34 +2806,235 @@ function StorageFooter({ storageProvider, folderName, onPick }) {
     </>
   )
 }
+// Combined Focus Plan view — read-only synthesis across all sources.
+// The merged Today/Deferred tables get a "Source" column; each source's
+// Priorities section is rendered separately so they don't collide.
+function CombinedFocusPlanView({ sources, onNavigate }) {
+  const [perSource, setPerSource] = useState(null) // [{source, sections}]
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const results = await Promise.all(sources.map(async (s) => {
+          try {
+            const text = await storage.readFromSource(s.id, 'focus-plan.md')
+            const migrated = migratePrioritiesSections(text) ?? text
+            return { source: s, sections: parseFocusPlan(migrated) }
+          } catch {
+            return { source: s, sections: [] }
+          }
+        }))
+        if (!cancelled) setPerSource(results)
+      } catch (e) {
+        if (!cancelled) setError(e.message || String(e))
+      }
+    })()
+    return () => { cancelled = true }
+  }, [sources])
+
+  if (error) return <div className="placeholder"><h1>✨ Combined</h1><p>Failed to load: {error}</p></div>
+  if (!perSource) return <div className="placeholder"><h1>✨ Combined</h1><p>Loading…</p></div>
+
+  // Merge tables across sources. Each row is augmented with a Source label.
+  const mergeSection = (title) => {
+    const merged = []
+    for (const { source, sections } of perSource) {
+      const sec = sections.find(s => s.title === title)
+      if (!sec) continue
+      const { headers, rows } = parseMarkdownTable(sec.lines)
+      for (const row of rows) {
+        merged.push({ row, headers, source })
+      }
+    }
+    return merged
+  }
+  const today = mergeSection('Today')
+  const deferred = mergeSection('Deferred')
+
+  const renderTable = (title, items, defaultOpen = true) => {
+    if (items.length === 0) return null
+    const headerSet = items[0].headers
+    return (
+      <CombinedSection
+        key={title}
+        title={title}
+        items={items}
+        baseHeaders={headerSet}
+        defaultOpen={defaultOpen}
+        onNavigate={onNavigate}
+      />
+    )
+  }
+
+  return (
+    <div className="focus-plan-view combined-view">
+      <h1>✨ Combined Focus Plan</h1>
+      <div className="combined-banner">
+        Read-only view across {sources.length} sources. Open a source folder to edit.
+      </div>
+      {renderTable('Today', today, true)}
+      {renderTable('Deferred', deferred, false)}
+      {perSource.map(({ source, sections }) => {
+        const pri = sections.find(s => isPrioritiesSection(s.title))
+        if (!pri) return null
+        return (
+          <ManagerPrioritiesSection
+            key={source.id}
+            lines={pri.lines}
+            defaultOpen={false}
+            onUpdate={() => {}}
+            onAddAndPrioritize={() => {}}
+            tasksByPriority={{}}
+            taskLookup={{}}
+            title={`${source.name} — Priorities`}
+            sectionId={`combined-priorities-${source.id}`}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+function CombinedSection({ title, items, baseHeaders, defaultOpen, onNavigate }) {
+  const [isOpen, setIsOpen] = useState(defaultOpen)
+  const headers = ['Source', ...baseHeaders]
+  return (
+    <div className="task-section">
+      <h2 className="section-header" onClick={() => setIsOpen(!isOpen)}>
+        <span className="collapse-icon">{isOpen ? '▼' : '▶'}</span>
+        {title}
+        <span className="task-count">({items.length})</span>
+      </h2>
+      {isOpen && (
+        <div className="task-table-container">
+          <table className="task-table">
+            <thead>
+              <tr>{headers.map((h, i) => <th key={i}>{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {items.map(({ row, source }, i) => (
+                <tr key={`${source.id}-${i}`}>
+                  <td><span className="combined-source-badge">{source.name}</span></td>
+                  {baseHeaders.map((h, ci) => {
+                    const val = row[h]
+                    if ((h === 'ID' || h === '#') && typeof val === 'object') {
+                      return <td key={ci}>{parseLinks(val.id, onNavigate)}</td>
+                    }
+                    return <td key={ci}>{renderCellWithTooltips(typeof val === 'object' ? (val.id ?? '') : val, onNavigate)}</td>
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function App() {
   // 'loading' | 'pick-storage' | 'ready'
   const [appState, setAppState] = useState('loading')
   const [files, setFiles] = useState([])
   const [folderName, setFolderName] = useState('')
   const [storageProvider, setStorageProvider] = useState('')
+  // selectedFile uses qualified paths in multi-source mode (`${sourceId}::${path}`),
+  // plain paths in single-source mode. The dispatcher in handleSelectFile/etc.
+  // copes with both shapes.
   const [selectedFile, setSelectedFile] = useState('focus-plan.md')
   const [content, setContent] = useState('')
   const [pendingScrollToTaskId, setPendingScrollToTaskId] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  // Re-render trigger for the source list when Settings mutates it.
+  const [sourcesVersion, setSourcesVersion] = useState(0)
+  // Re-read every render so post-init/post-mutation state is always fresh.
+  // sourcesVersion is the explicit reactivity trigger.
+  void sourcesVersion
+  const sources = getSources()
+  const isMulti = sources.length > 1
 
+  /**
+   * Build the sidebar tree.
+   *  - 0/1 source → return that source's tree directly (no wrapper folders,
+   *    no Combined entry — the UI looks identical to before).
+   *  - 2+ sources → wrap each source's tree in a top-level folder, with
+   *    "✨ Combined" prepended.
+   */
   const loadFiles = async () => {
     try {
-      const data = await storage.getFiles()
-      setFiles(data)
+      // Read fresh registry — the closure-captured `sources` may be stale during init.
+      const liveSources = getSources()
+      if (liveSources.length <= 1) {
+        const data = await storage.getFiles()
+        setFiles(data)
+        return
+      }
+      const perSource = await Promise.all(
+        liveSources.map(async (s) => {
+          try {
+            const tree = await storage.getFilesFromSource(s.id)
+            return { source: s, tree }
+          } catch {
+            return { source: s, tree: [] }
+          }
+        })
+      )
+      const combinedFolder = {
+        name: '✨ Combined',
+        type: 'directory',
+        path: `${COMBINED_ID}::`,
+        children: [
+          { name: 'focus-plan.md', type: 'file', path: `${COMBINED_ID}::focus-plan.md` },
+        ],
+      }
+      const sourceFolders = perSource.map(({ source, tree }) => ({
+        name: source.name,
+        type: 'directory',
+        path: `${source.id}::`,
+        children: prefixTreePaths(tree, source.id),
+      }))
+      setFiles([combinedFolder, ...sourceFolders])
     } catch (err) {
       console.error('Failed to load files:', err)
     }
   }
 
-  const handleSelectFile = async (path) => {
-    setSelectedFile(path)
+  const handleSelectFile = async (qualifiedPath) => {
+    const { sourceId, path } = splitSourcePath(qualifiedPath)
+    setSelectedFile(qualifiedPath)
     setSidebarOpen(false)
+
+    // Combined virtual file → CombinedFocusPlanView reads its own data, just clear content.
+    if (sourceId === COMBINED_ID) {
+      setContent('')
+      return
+    }
+
+    // Switch active source if the file lives in a non-active source.
+    if (sourceId && sourceId !== getActiveSourceId()) {
+      try {
+        await setActiveSource(sourceId)
+        setStorageProvider(sources.find(s => s.id === sourceId)?.providerType || '')
+        setFolderName(storage.folderName())
+      } catch (e) {
+        console.error('Failed to switch source:', e)
+      }
+    }
+
     try {
-      const text = await storage.read(path)
-      if (path === 'focus-plan.md') {
-        const updatedContent = await ensureUniqueIds(text, async (newContent) => {
-          await storage.write(path, newContent)
+      const text = await storage.read(path || qualifiedPath)
+      const target = path || qualifiedPath
+      if (target === 'focus-plan.md') {
+        // Run the legacy Work/Personal Priorities → unified Priorities migration once.
+        const migrated = migratePrioritiesSections(text)
+        const startContent = migrated ?? text
+        if (migrated && migrated !== text) {
+          await storage.write(target, migrated)
+        }
+        const updatedContent = await ensureUniqueIds(startContent, async (newContent) => {
+          await storage.write(target, newContent)
         })
         setContent(updatedContent)
       } else {
@@ -2594,11 +3045,40 @@ function App() {
     }
   }
 
+  const refreshAfterSourcesChange = async () => {
+    setSourcesVersion(v => v + 1)
+    await loadFiles()
+    const liveSources = getSources()
+    const active = liveSources.find(s => s.id === getActiveSourceId())
+    if (active) {
+      setStorageProvider(active.providerType)
+      setFolderName(storage.folderName())
+    }
+    // If selection no longer points to a valid place (e.g. Combined after
+    // collapsing back to a single source, or a deleted source), reset to the
+    // canonical focus plan view.
+    const { sourceId } = splitSourcePath(selectedFile)
+    const isCombined = sourceId === COMBINED_ID
+    const sourceMissing = sourceId && sourceId !== COMBINED_ID && !liveSources.some(s => s.id === sourceId)
+    if ((isCombined && liveSources.length <= 1) || sourceMissing) {
+      const target = liveSources.length > 1 ? `${COMBINED_ID}::focus-plan.md` : 'focus-plan.md'
+      await handleSelectFile(target)
+    }
+  }
+
   const initWithProvider = async (providerId) => {
     await storage.scaffold()
+    // Ensure we have a sources registry. If first run on legacy install,
+    // the legacy → registry migration was already attempted; otherwise
+    // create the canonical single-source entry now.
+    if (getSources().length === 0) {
+      const src = addSource({ providerType: providerId, name: storage.folderName() || getProviderName(providerId) })
+      await setActiveSource(src.id)
+    }
     await loadFiles()
     setFolderName(storage.folderName())
     setStorageProvider(providerId)
+    setSourcesVersion(v => v + 1)
     setAppState('ready')
     handleSelectFile('focus-plan.md')
   }
@@ -2610,36 +3090,96 @@ function App() {
         if (hasPendingMigration()) {
           const migratedTo = await resumePendingMigration()
           if (migratedTo) {
-            // Reload so the normal init path runs cleanly with fresh tokens
             window.location.reload()
             return
           }
         }
 
-        // 2. Look for saved provider
-        const savedId = localStorage.getItem('fp-storage-provider') || PROVIDERS.LOCAL_STORAGE
-        const provider = makeProvider(savedId)
-        const ok = await provider.restore()
-        if (ok) {
-          setActiveProvider(provider)
-          localStorage.setItem('fp-storage-provider', savedId)
-          await initWithProvider(savedId)
-        } else if (savedId !== PROVIDERS.LOCAL_STORAGE) {
-          // Cloud auth failed — fall back to localStorage so user isn't locked out
+        // 2. Load (and one-shot migrate) the multi-source registry.
+        loadSources()
+        migrateLegacy()
+        const registry = getSources()
+
+        if (registry.length > 0) {
+          // If we're returning from an "add cloud source" OAuth redirect,
+          // restore that source FIRST so it consumes the ?code= param —
+          // otherwise other cloud providers' restore() would try (and fail)
+          // to exchange the code as their own.
+          const pendingAddId = consumePendingAdd()
+          let scaffoldedAddId = null
+          if (pendingAddId) {
+            try {
+              const p = await restoreSource(pendingAddId)
+              if (p) {
+                await p.scaffold()
+                scaffoldedAddId = pendingAddId
+              } else {
+                // User cancelled / token exchange failed — roll back the entry.
+                await removeSource(pendingAddId)
+              }
+            } catch (e) {
+              console.error('Cloud source add failed, rolling back:', e)
+              await removeSource(pendingAddId)
+            }
+          }
+          // Restore each source's provider eagerly so cross-source reads work.
+          const restoredIds = new Set()
+          if (scaffoldedAddId) restoredIds.add(scaffoldedAddId)
+          let firstHealthyId = scaffoldedAddId || null
+          for (const s of getSources()) {
+            if (restoredIds.has(s.id)) continue
+            try {
+              const p = await restoreSource(s.id)
+              if (p) {
+                restoredIds.add(s.id)
+                if (!firstHealthyId) firstHealthyId = s.id
+              }
+            } catch {
+              /* ignore — surfaces in Settings if the user picks it */
+            }
+          }
+          // Pick the saved active source if it restored, otherwise the first that did.
+          const savedActive = getActiveSourceId()
+          const targetId = restoredIds.has(savedActive) ? savedActive : firstHealthyId
+          if (targetId) {
+            await setActiveSource(targetId)
+            const active = getSources().find(s => s.id === targetId)
+            await initWithProvider(active.providerType)
+            return
+          }
+          // No source restored cleanly — fall back to LocalStorage.
+        }
+
+        // 3. Legacy single-provider path (no registry yet — migrateLegacy() didn't run because
+        // there was no fp-storage-provider key either). Fresh install → pick storage.
+        const savedId = localStorage.getItem('fp-storage-provider')
+        if (!savedId) {
+          // Auto-bootstrap LocalStorage as the default first source.
           const fallback = new LocalStorageProvider()
           await fallback.restore()
           setActiveProvider(fallback)
           localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
           await initWithProvider(PROVIDERS.LOCAL_STORAGE)
+          return
+        }
+        const provider = makeProvider(savedId)
+        const ok = await provider.restore()
+        if (ok) {
+          setActiveProvider(provider)
+          await initWithProvider(savedId)
         } else {
-          // Should never happen — LocalStorage always succeeds
-          setAppState('pick-storage')
+          const fallback = new LocalStorageProvider()
+          await fallback.restore()
+          setActiveProvider(fallback)
+          localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
+          await initWithProvider(PROVIDERS.LOCAL_STORAGE)
         }
       } catch (e) {
         console.error('Storage init failed:', e)
         setAppState('pick-storage')
       }
     })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handlePick = async () => {
@@ -2686,8 +3226,10 @@ function App() {
   }, [content, pendingScrollToTaskId])
 
   const handleContentUpdate = async (newContent) => {
+    const { path, sourceId } = splitSourcePath(selectedFile)
+    if (sourceId === COMBINED_ID) return // Combined view is read-only
     try {
-      await storage.write(selectedFile, newContent)
+      await storage.write(path || selectedFile, newContent)
       setContent(newContent)
     } catch (err) {
       console.error('Failed to update file:', err)
@@ -2702,8 +3244,11 @@ function App() {
     return <StoragePicker onReady={handleStorageReady} />
   }
 
-  const isFocusPlan = selectedFile === 'focus-plan.md'
-  const isCompletedPlan = selectedFile === 'focus-plan-completed.md'
+  const { sourceId: selSourceId, path: selPath } = splitSourcePath(selectedFile)
+  const isCombinedFocusPlan = selSourceId === COMBINED_ID && (selPath === 'focus-plan.md' || selPath === '')
+  const localPath = selPath || selectedFile
+  const isFocusPlan = !isCombinedFocusPlan && localPath === 'focus-plan.md'
+  const isCompletedPlan = !isCombinedFocusPlan && localPath === 'focus-plan-completed.md'
 
   return (
     <div className={`app${sidebarOpen ? ' sidebar-open' : ''}`}>
@@ -2724,10 +3269,16 @@ function App() {
             items={files}
             onSelect={handleSelectFile}
             selectedPath={selectedFile}
-            defaultOpen={false}
+            defaultOpen={isMulti}
           />
         </div>
-        <StorageFooter storageProvider={storageProvider} folderName={folderName} onPick={handlePick} />
+        <StorageFooter
+          storageProvider={storageProvider}
+          folderName={folderName}
+          onPick={handlePick}
+          onSourcesChanged={refreshAfterSourcesChange}
+          sourcesVersion={sourcesVersion}
+        />
       </aside>
       <main className="content">
         <div className="mobile-nav-bar">
@@ -2736,9 +3287,11 @@ function App() {
             onClick={() => setSidebarOpen(true)}
             aria-label="Open file menu"
           >☰ Files</button>
-          {selectedFile && <span className="mobile-file-name">{selectedFile.replace(/.*\//, '')}</span>}
+          {selectedFile && <span className="mobile-file-name">{(selPath || selectedFile).replace(/.*\//, '')}</span>}
         </div>
-        {content ? (
+        {isCombinedFocusPlan ? (
+          <CombinedFocusPlanView sources={sources} onNavigate={handleNavigate} />
+        ) : content ? (
           isFocusPlan ? (
             <FocusPlanView
               content={content}
@@ -2753,7 +3306,7 @@ function App() {
           ) : (
             <MarkdownView
               content={content}
-              filePath={selectedFile}
+              filePath={localPath}
               onContentUpdate={handleContentUpdate}
               onNavigate={handleNavigate}
             />

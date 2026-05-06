@@ -1,19 +1,27 @@
-import { get, set } from 'idb-keyval'
+import { get, set, del } from 'idb-keyval'
 
-const DB_KEY = 'focus-planner-dir-handle'
+const LEGACY_DB_KEY = 'focus-planner-dir-handle'
+
+function dbKey(suffix) {
+  return suffix ? `${LEGACY_DB_KEY}:${suffix}` : LEGACY_DB_KEY
+}
 
 export function isSupported() {
   return typeof window !== 'undefined' && 'showDirectoryPicker' in window
 }
 
-export async function pickFolder() {
+export async function pickFolder(suffix) {
   const handle = await window.showDirectoryPicker({ mode: 'readwrite' })
-  await set(DB_KEY, handle)
+  await set(dbKey(suffix), handle)
   return handle
 }
 
-export async function restoreFolder() {
-  const handle = await get(DB_KEY)
+export async function forgetFolder(suffix) {
+  await del(dbKey(suffix))
+}
+
+export async function restoreFolder(suffix) {
+  const handle = await get(dbKey(suffix))
   if (!handle) return null
   try {
     const permission = await handle.queryPermission({ mode: 'readwrite' })
@@ -143,9 +151,7 @@ const SCAFFOLD_FOCUS_PLAN = `## Today
 | ID | 🎯 | Task | Work Priority | Added | Linked ID |
 |---|---|------|---------------|-------|-----------|
 
-## Work Priorities
-
-## Personal Priorities
+## Priorities
 
 `
 

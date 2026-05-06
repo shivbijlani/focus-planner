@@ -2,28 +2,33 @@
  * FSA provider — wraps the existing fsa.js for desktop Chromium browsers.
  */
 import {
-  pickFolder, restoreFolder,
+  pickFolder, restoreFolder, forgetFolder,
   readFile, writeFile, deleteFile,
   journalExists, listFiles,
   getMaxJournalId, scaffoldIfEmpty,
 } from './fsa.js'
-import { get, set } from 'idb-keyval'
 
 export class FSAProvider {
-  constructor() {
+  constructor(sourceId) {
     this._handle = null
+    this._sourceId = sourceId || null
   }
 
   folderName() { return this._handle?.name ?? '' }
 
   async pick() {
-    this._handle = await pickFolder()
+    this._handle = await pickFolder(this._sourceId)
     return this._handle
   }
 
   async restore() {
-    this._handle = await restoreFolder()
+    this._handle = await restoreFolder(this._sourceId)
     return this._handle
+  }
+
+  async forget() {
+    await forgetFolder(this._sourceId)
+    this._handle = null
   }
 
   async scaffold() {

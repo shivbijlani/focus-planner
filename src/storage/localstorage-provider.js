@@ -16,9 +16,7 @@ const SCAFFOLD_FOCUS_PLAN = `## Today
 | ID | 🎯 | Task | Work Priority | Added | Linked ID |
 |---|---|------|---------------|-------|-----------|
 
-## Work Priorities
-
-## Personal Priorities
+## Priorities
 
 `
 
