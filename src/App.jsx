@@ -2457,86 +2457,97 @@ function StorageFooter({ storageProvider, folderName, onPick }) {
   }
 
   return (
-    <div className="sidebar-storage-footer">
-      <button
-        className="storage-footer-toggle"
-        onClick={() => { setOpen(o => !o); if (open) reset() }}
-        title="Settings"
-      >
-        <span className="storage-footer-icon">⚙</span>
-        <span className="storage-footer-label">Settings</span>
-        <span className="storage-footer-chevron">{open ? '▲' : '▼'}</span>
-      </button>
+    <>
+      <div className="sidebar-storage-footer">
+        <button
+          className="storage-footer-toggle"
+          onClick={() => setOpen(true)}
+          title="Settings"
+        >
+          <span className="storage-footer-icon">⚙</span>
+          <span className="storage-footer-label">Settings</span>
+        </button>
+      </div>
 
       {open && (
-        <div className="storage-footer-panel">
-          {view === 'menu' && (
-            <>
-              <div className="storage-footer-info">
+        <div className="dialog-overlay" onClick={close}>
+          <div className="settings-dialog" onClick={e => e.stopPropagation()}>
+            <div className="settings-dialog-header">
+              <h3>Settings</h3>
+              <button className="settings-dialog-close" onClick={close}>✕</button>
+            </div>
+
+            <div className="settings-dialog-section">
+              <div className="settings-dialog-section-title">Storage</div>
+              <div className="settings-dialog-info">
                 {providerIcon} {folderName || getProviderName(storageProvider)}
               </div>
-              {storageProvider === PROVIDERS.FSA && (
-                <button className="storage-footer-btn" onClick={() => { close(); onPick() }}>
-                  📂 Change folder
-                </button>
-              )}
-              {others.length > 0 && (
-                <button className="storage-footer-btn" onClick={() => setView('migrate')}>
-                  ⇄ Migrate data
-                </button>
-              )}
-            </>
-          )}
+            </div>
 
-          {view === 'migrate' && !confirmTarget && (
-            <>
-              <div className="storage-footer-section">Migrate data to:</div>
-              {others.map(id => (
-                <button key={id} className="storage-footer-btn" onClick={() => setConfirmTarget(id)}>
-                  {PROVIDER_ICONS[id] || '📁'} {getProviderName(id)} →
-                </button>
-              ))}
-              <button className="storage-footer-btn secondary" onClick={reset}>↩ Back</button>
-            </>
-          )}
-
-          {view === 'migrate' && confirmTarget && (
-            <>
-              <div className="storage-footer-section">
-                Copy all data to <strong>{getProviderName(confirmTarget)}</strong>?
+            {view === 'menu' && (
+              <div className="settings-dialog-section">
+                {storageProvider === PROVIDERS.FSA && (
+                  <button className="storage-footer-btn" onClick={() => { close(); onPick() }}>
+                    📂 Change folder
+                  </button>
+                )}
+                {others.length > 0 && (
+                  <button className="storage-footer-btn" onClick={() => setView('migrate')}>
+                    ⇄ Migrate data
+                  </button>
+                )}
               </div>
-              {storageProvider === PROVIDERS.LOCAL_STORAGE && (
-                <label className="storage-footer-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={!keepSource}
-                    onChange={e => setKeepSource(!e.target.checked)}
-                  />
-                  Delete browser copy after
-                </label>
-              )}
-              {isCloud(confirmTarget) && (
-                <div className="storage-footer-note">
-                  You'll be redirected to sign in, then data copies automatically.
+            )}
+
+            {view === 'migrate' && !confirmTarget && (
+              <div className="settings-dialog-section">
+                <div className="storage-footer-section">Migrate data to:</div>
+                {others.map(id => (
+                  <button key={id} className="storage-footer-btn" onClick={() => setConfirmTarget(id)}>
+                    {PROVIDER_ICONS[id] || '📁'} {getProviderName(id)} →
+                  </button>
+                ))}
+                <button className="storage-footer-btn secondary" onClick={reset}>↩ Back</button>
+              </div>
+            )}
+
+            {view === 'migrate' && confirmTarget && (
+              <div className="settings-dialog-section">
+                <div className="storage-footer-section">
+                  Copy all data to <strong>{getProviderName(confirmTarget)}</strong>?
                 </div>
-              )}
-              {error && <div className="storage-footer-error">⚠️ {error}</div>}
-              <div className="storage-footer-actions">
-                <button className="storage-footer-btn" onClick={() => startMigrate(confirmTarget)} disabled={busy}>
-                  {busy ? '…' : 'Migrate'}
-                </button>
-                <button className="storage-footer-btn secondary" onClick={() => setConfirmTarget(null)} disabled={busy}>
-                  Back
-                </button>
+                {storageProvider === PROVIDERS.LOCAL_STORAGE && (
+                  <label className="storage-footer-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={!keepSource}
+                      onChange={e => setKeepSource(!e.target.checked)}
+                    />
+                    Delete browser copy after
+                  </label>
+                )}
+                {isCloud(confirmTarget) && (
+                  <div className="storage-footer-note">
+                    You'll be redirected to sign in, then data copies automatically.
+                  </div>
+                )}
+                {error && <div className="storage-footer-error">⚠️ {error}</div>}
+                <div className="storage-footer-actions">
+                  <button className="storage-footer-btn" onClick={() => startMigrate(confirmTarget)} disabled={busy}>
+                    {busy ? '…' : 'Migrate'}
+                  </button>
+                  <button className="storage-footer-btn secondary" onClick={() => setConfirmTarget(null)} disabled={busy}>
+                    Back
+                  </button>
+                </div>
               </div>
-            </>
-          )}
+            )}
+          </div>
         </div>
       )}
-    </div>
+    </>
   )
 }
-
 function App() {
   // 'loading' | 'pick-storage' | 'ready'
   const [appState, setAppState] = useState('loading')

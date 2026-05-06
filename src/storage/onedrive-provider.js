@@ -3,7 +3,6 @@
  * Uses the special App Folder (Files.ReadWrite.AppFolder scope) —
  * sandboxed to /Apps/focus-planner/ with no broad file access needed.
  */
-import { parseTodos } from './fsa.js'
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
 const AUTH_ENDPOINT = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize'
