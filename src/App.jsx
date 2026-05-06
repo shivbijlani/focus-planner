@@ -2455,8 +2455,34 @@ const STORAGE_META = {
   [PROVIDERS.GOOGLE_DRIVE]: { tagline: 'Sign in to sync across devices' },
 }
 
+function TourModal({ onClose }) {
+  return (
+    <div className="dialog-overlay" onClick={onClose}>
+      <div className="settings-dialog" onClick={e => e.stopPropagation()}>
+        <div className="settings-dialog-header">
+          <h3>Welcome to Focus Planner 👋</h3>
+          <button className="settings-dialog-close" onClick={onClose}>✕</button>
+        </div>
+        <div className="settings-dialog-section">
+          <ul className="tour-list">
+            <li><strong>Today &amp; Deferred</strong> — your top focus plan lives in <code>focus-plan.md</code>. Add tasks with the <strong>+</strong> button; right-click to defer or complete.</li>
+            <li><strong>Priorities</strong> — pin top-of-mind themes in the <em>Priorities</em> section so tasks can be tagged against them.</li>
+            <li><strong>Journals</strong> — every task with a journal entry expands to show its TODO / DONE bullets inline.</li>
+            <li><strong>Sources</strong> — open <em>Settings</em> to add more storage sources (e.g. a Work folder + a Personal folder). With multiple sources, a ✨ <strong>Combined</strong> view appears at the top.</li>
+            <li><strong>Sync</strong> — start with browser storage, then upgrade to a local folder, OneDrive, or Google Drive whenever you're ready. Your tasks come with you.</li>
+          </ul>
+        </div>
+        <div className="settings-dialog-section">
+          <button className="storage-footer-btn" onClick={onClose}>Got it</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function StorageFooter({ storageProvider, folderName, onPick, onSourcesChanged }) {
   const [open, setOpen] = useState(false)
+  const [tourOpen, setTourOpen] = useState(false)
   const [view, setView] = useState('menu') // 'menu' | 'migrate' | 'add-source' | 'rename'
   const [confirmTarget, setConfirmTarget] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -2472,6 +2498,11 @@ function StorageFooter({ storageProvider, folderName, onPick, onSourcesChanged }
   const providerIcon = PROVIDER_ICONS[storageProvider] || '📁'
   const others = getAvailableProviders().filter(id => id !== storageProvider)
   const isCloud = (id) => id === PROVIDERS.ONEDRIVE || id === PROVIDERS.GOOGLE_DRIVE
+  // Show "Sync to the cloud" CTA in place of Settings when the user is still
+  // on default browser storage with a single source — i.e. they haven't set up
+  // any local-folder or cloud sync yet. Once they upgrade (or add a 2nd
+  // source), revert to the standard ⚙ Settings affordance.
+  const isBrowserOnly = !isMulti && storageProvider === PROVIDERS.LOCAL_STORAGE
 
   const reset = () => { setView('menu'); setConfirmTarget(null); setError(''); setRenamingId(null) }
   const close = () => { setOpen(false); reset() }
@@ -2590,13 +2621,34 @@ function StorageFooter({ storageProvider, folderName, onPick, onSourcesChanged }
       <div className="sidebar-storage-footer">
         <button
           className="storage-footer-toggle"
-          onClick={() => setOpen(true)}
-          title="Settings"
+          onClick={() => setTourOpen(true)}
+          title="Take a quick tour of Focus Planner"
         >
-          <span className="storage-footer-icon">⚙</span>
-          <span className="storage-footer-label">Settings</span>
+          <span className="storage-footer-icon">📚</span>
+          <span className="storage-footer-label">Take a tour</span>
         </button>
+        {isBrowserOnly ? (
+          <button
+            className="storage-footer-toggle storage-footer-cta"
+            onClick={() => { setView('migrate'); setOpen(true) }}
+            title="Move your tasks to a local folder or the cloud"
+          >
+            <span className="storage-footer-icon">☁️</span>
+            <span className="storage-footer-label">Sync to the cloud</span>
+          </button>
+        ) : (
+          <button
+            className="storage-footer-toggle"
+            onClick={() => setOpen(true)}
+            title="Settings"
+          >
+            <span className="storage-footer-icon">⚙</span>
+            <span className="storage-footer-label">Settings</span>
+          </button>
+        )}
       </div>
+
+      {tourOpen && <TourModal onClose={() => setTourOpen(false)} />}
 
       {open && (
         <div className="dialog-overlay" onClick={close}>

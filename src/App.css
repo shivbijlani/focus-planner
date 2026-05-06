@@ -69,6 +69,32 @@ body {
   border-top: 1px solid #0f3460;
   padding-top: 0.5rem;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.storage-footer-cta {
+  color: #93c5fd !important;
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.storage-footer-cta:hover {
+  background: rgba(59, 130, 246, 0.18) !important;
+  color: #bfdbfe !important;
+}
+
+.tour-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  line-height: 1.5;
+}
+.tour-list li { margin-bottom: 0.6rem; }
+.tour-list code {
+  background: #0f3460;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.85em;
 }
 
 .storage-footer-toggle {
