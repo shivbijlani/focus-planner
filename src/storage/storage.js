@@ -99,3 +99,21 @@ export async function maxJournalId() {
   if (!_provider) throw new Error('No provider set')
   return _provider.maxJournalId()
 }
+
+// ── Cross-source read helpers (for Combined view) ─────
+// These bypass the active-provider singleton so the Combined view can
+// pull data from every registered source in parallel.
+
+export async function readFromSource(sourceId, path) {
+  const { getProvider } = await import('./sources.js')
+  const p = getProvider(sourceId)
+  if (!p) throw new Error(`No provider for source ${sourceId}`)
+  return p.read(path)
+}
+
+export async function getFilesFromSource(sourceId) {
+  const { getProvider } = await import('./sources.js')
+  const p = getProvider(sourceId)
+  if (!p) throw new Error(`No provider for source ${sourceId}`)
+  return p.getFiles()
+}
