@@ -8,6 +8,7 @@ import {
   loadSources, migrateLegacy, getSources, getActiveSourceId, setActiveSource,
   addSource, renameSource, removeSource, getProvider, restoreSource,
   availableProviderTypesForAdd,
+  beginAddCloudSource, consumePendingAdd, abortPendingAdd,
 } from './storage/sources.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority } from './taskSort.js'
 import { StoragePicker } from './StoragePicker.jsx'
@@ -2541,6 +2542,20 @@ function StorageFooter({ storageProvider, folderName, onPick, onSourcesChanged }
     } finally { setBusy(false) }
   }
 
+  const addCloudSource = async (providerType) => {
+    setBusy(true); setError('')
+    try {
+      // Persists registry entry, sets pending flag, and triggers OAuth redirect.
+      // The page reloads on success — init handles the rest.
+      await beginAddCloudSource(providerType)
+    } catch (e) {
+      // Roll back the half-created entry if pick threw before redirecting.
+      try { await abortPendingAdd() } catch { /* noop */ }
+      setError(e.message || 'Failed to start sign-in')
+      setBusy(false)
+    }
+  }
+
   const switchToSource = async (id) => {
     if (id === activeId) return
     await setActiveSource(id)
@@ -2646,17 +2661,24 @@ function StorageFooter({ storageProvider, folderName, onPick, onSourcesChanged }
                 </button>
               ) : (
                 <div className="storage-footer-add-source">
-                  <button className="storage-footer-btn storage-footer-option-btn" onClick={addLocalStorageSource} disabled={busy}>
-                    <span className="storage-footer-option-name">{PROVIDER_ICONS[PROVIDERS.LOCAL_STORAGE]} Browser Storage</span>
-                    <span className="storage-footer-option-tagline">{STORAGE_META[PROVIDERS.LOCAL_STORAGE]?.tagline}</span>
-                  </button>
-                  {availableProviderTypesForAdd().includes(PROVIDERS.FSA) && (
-                    <button className="storage-footer-btn storage-footer-option-btn" onClick={addFsaSource} disabled={busy}>
-                      <span className="storage-footer-option-name">{PROVIDER_ICONS[PROVIDERS.FSA]} Local Folder</span>
-                      <span className="storage-footer-option-tagline">{STORAGE_META[PROVIDERS.FSA]?.tagline}</span>
-                    </button>
+                  {availableProviderTypesForAdd().map(t => {
+                    const onClick = t === PROVIDERS.LOCAL_STORAGE ? addLocalStorageSource
+                      : t === PROVIDERS.FSA ? addFsaSource
+                      : () => addCloudSource(t)
+                    return (
+                      <button key={t} className="storage-footer-btn storage-footer-option-btn" onClick={onClick} disabled={busy}>
+                        <span className="storage-footer-option-name">{PROVIDER_ICONS[t] || '📁'} {getProviderName(t)}</span>
+                        <span className="storage-footer-option-tagline">{STORAGE_META[t]?.tagline || ''}</span>
+                      </button>
+                    )
+                  })}
+                  {availableProviderTypesForAdd().length === 0 && (
+                    <div className="storage-footer-note">All available source types are already in use.</div>
                   )}
-                  <div className="storage-footer-note">Cloud sources can't be added as a 2nd source yet — use Switch storage to migrate the current source instead.</div>
+                  {(availableProviderTypesForAdd().includes(PROVIDERS.ONEDRIVE) ||
+                    availableProviderTypesForAdd().includes(PROVIDERS.GOOGLE_DRIVE)) && (
+                    <div className="storage-footer-note">Cloud sources will redirect you to sign in. The page will reload after.</div>
+                  )}
                   {error && <div className="storage-footer-error">⚠️ {error}</div>}
                   <button className="storage-footer-btn secondary" onClick={() => setView('menu')} disabled={busy}>↩ Back</button>
                 </div>
@@ -3027,10 +3049,33 @@ function App() {
         const registry = getSources()
 
         if (registry.length > 0) {
+          // If we're returning from an "add cloud source" OAuth redirect,
+          // restore that source FIRST so it consumes the ?code= param —
+          // otherwise other cloud providers' restore() would try (and fail)
+          // to exchange the code as their own.
+          const pendingAddId = consumePendingAdd()
+          let scaffoldedAddId = null
+          if (pendingAddId) {
+            try {
+              const p = await restoreSource(pendingAddId)
+              if (p) {
+                await p.scaffold()
+                scaffoldedAddId = pendingAddId
+              } else {
+                // User cancelled / token exchange failed — roll back the entry.
+                await removeSource(pendingAddId)
+              }
+            } catch (e) {
+              console.error('Cloud source add failed, rolling back:', e)
+              await removeSource(pendingAddId)
+            }
+          }
           // Restore each source's provider eagerly so cross-source reads work.
           const restoredIds = new Set()
-          let firstHealthyId = null
-          for (const s of registry) {
+          if (scaffoldedAddId) restoredIds.add(scaffoldedAddId)
+          let firstHealthyId = scaffoldedAddId || null
+          for (const s of getSources()) {
+            if (restoredIds.has(s.id)) continue
             try {
               const p = await restoreSource(s.id)
               if (p) {

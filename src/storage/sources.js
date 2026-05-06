@@ -22,6 +22,9 @@ import { GoogleDriveProvider } from './google-drive-provider.js'
 
 const SOURCES_KEY = 'fp-sources'
 const ACTIVE_KEY = 'fp-active-source'
+// Set when we redirect to a cloud OAuth flow as part of "add source".
+// Cleared once the post-redirect init completes the source's setup.
+const PENDING_ADD_KEY = 'fp-pending-source-add'
 
 // In-memory cache: sourceId -> Provider instance (lazy-instantiated, restored once).
 const _providers = new Map()
@@ -190,3 +193,46 @@ export function availableProviderTypesForAdd() {
   const all = [PROVIDERS.LOCAL_STORAGE, PROVIDERS.FSA, PROVIDERS.ONEDRIVE, PROVIDERS.GOOGLE_DRIVE]
   return all.filter(t => t === PROVIDERS.FSA || !used.has(t))
 }
+
+/**
+ * Begin adding a cloud source. Pre-creates the registry entry, marks it
+ * pending, and triggers the provider's OAuth redirect. The page will reload
+ * after the user signs in; the post-redirect init must call
+ * `consumePendingAdd()` to find and finish the new source.
+ */
+export async function beginAddCloudSource(providerType, name) {
+  const src = addSource({ providerType, name: name || getProviderName(providerType) })
+  localStorage.setItem(PENDING_ADD_KEY, src.id)
+  // Persist the pre-redirect active source so we can decide whether to
+  // switch to the new one after auth (we do, because the user just
+  // explicitly asked to add it).
+  _activeId = src.id
+  localStorage.setItem(ACTIVE_KEY, src.id)
+  const p = getProvider(src.id)
+  await p.pick() // redirects away — no return
+  return src
+}
+
+/** True iff there's an in-flight cloud-source add waiting to be finished. */
+export function hasPendingAdd() {
+  return !!localStorage.getItem(PENDING_ADD_KEY)
+}
+
+/**
+ * Finish a pending cloud-source add after the OAuth redirect.
+ * Returns the source id if a pending add was finished (caller should
+ * scaffold + activate), or null if no pending add was queued.
+ */
+export function consumePendingAdd() {
+  const id = localStorage.getItem(PENDING_ADD_KEY)
+  if (!id) return null
+  localStorage.removeItem(PENDING_ADD_KEY)
+  return id
+}
+
+/** Roll back a pending add when restore failed (e.g. user denied auth). */
+export async function abortPendingAdd() {
+  const id = consumePendingAdd()
+  if (id) await removeSource(id)
+}
+
