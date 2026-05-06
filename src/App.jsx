@@ -82,7 +82,7 @@ function AdoLinkDialog({ onClose, onSave, currentUrl }) {
     <div className="dialog-overlay" onClick={onClose}>
       <div className="dialog" onClick={e => e.stopPropagation()}>
         <h3>🔗 External Link</h3>
-        <p className="dialog-hint">Paste a URL — if it's an Azure DevOps or Jira ticket, the ticket number will be extracted and shown as a clickable badge.</p>
+        <p className="dialog-hint">Paste a ticket URL — the ticket number will be extracted and shown as a clickable badge. Works with Azure DevOps, Jira, GitHub Issues, Linear, Shortcut, and more.</p>
         <input
           type="text"
           value={url}
@@ -226,13 +226,13 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds }) {
               </select>
             </div>
             <div className="form-field">
-              <label>Linked Task / ADO Link</label>
+              <label title="Works with Azure DevOps, Jira, GitHub Issues, Linear, Shortcut, and more — paste any ticket URL">External Ticket <span className="label-hint">ℹ</span></label>
               <input
                 type="text"
                 list="add-task-linked-ids"
                 value={linkedTask}
                 onChange={(e) => setLinkedTask(e.target.value)}
-                placeholder="Task ID or ADO URL..."
+                placeholder="Paste a ticket URL or task ID…"
               />
               <datalist id="add-task-linked-ids">
                 {allTaskIds.map(tid => (
@@ -2493,7 +2493,7 @@ function StorageFooter({ storageProvider, folderName, onPick }) {
                 )}
                 {others.length > 0 && (
                   <button className="storage-footer-btn" onClick={() => setView('migrate')}>
-                    ⇄ Migrate data
+                    ⇄ Switch storage
                   </button>
                 )}
               </div>
@@ -2501,10 +2501,10 @@ function StorageFooter({ storageProvider, folderName, onPick }) {
 
             {view === 'migrate' && !confirmTarget && (
               <div className="settings-dialog-section">
-                <div className="storage-footer-section">Migrate data to:</div>
+                <div className="storage-footer-section">Switch to:</div>
                 {others.map(id => (
                   <button key={id} className="storage-footer-btn" onClick={() => setConfirmTarget(id)}>
-                    {PROVIDER_ICONS[id] || '📁'} {getProviderName(id)} →
+                    {PROVIDER_ICONS[id] || "📁"} {isCloud(id) ? `Sign in to sync with ${getProviderName(id)}` : getProviderName(id)} →
                   </button>
                 ))}
                 <button className="storage-footer-btn secondary" onClick={reset}>↩ Back</button>
@@ -2514,7 +2514,7 @@ function StorageFooter({ storageProvider, folderName, onPick }) {
             {view === 'migrate' && confirmTarget && (
               <div className="settings-dialog-section">
                 <div className="storage-footer-section">
-                  Copy all data to <strong>{getProviderName(confirmTarget)}</strong>?
+                  Switch to <strong>{getProviderName(confirmTarget)}</strong>?
                 </div>
                 {storageProvider === PROVIDERS.LOCAL_STORAGE && (
                   <label className="storage-footer-checkbox">
@@ -2528,13 +2528,13 @@ function StorageFooter({ storageProvider, folderName, onPick }) {
                 )}
                 {isCloud(confirmTarget) && (
                   <div className="storage-footer-note">
-                    You'll be redirected to sign in, then data copies automatically.
+                    You'll be redirected to sign in. Your data will be copied over automatically.
                   </div>
                 )}
                 {error && <div className="storage-footer-error">⚠️ {error}</div>}
                 <div className="storage-footer-actions">
                   <button className="storage-footer-btn" onClick={() => startMigrate(confirmTarget)} disabled={busy}>
-                    {busy ? '…' : 'Migrate'}
+                    {busy ? 'Switching…' : 'Switch'}
                   </button>
                   <button className="storage-footer-btn secondary" onClick={() => setConfirmTarget(null)} disabled={busy}>
                     Back

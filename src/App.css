@@ -1374,6 +1374,12 @@ tr.highlight-flash {
   color: #94a3b8;
   font-size: 0.85rem;
 }
+.label-hint {
+  font-size: 0.75rem;
+  color: #64748b;
+  cursor: help;
+  margin-left: 2px;
+}
 
 .form-field input,
 .form-field select {
