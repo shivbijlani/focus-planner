@@ -14,7 +14,7 @@ export function makeProvider(id, opts = {}) {
   switch (id) {
     case PROVIDERS.LOCAL_STORAGE: return new LocalStorageProvider()
     case PROVIDERS.FSA: return new FSAProvider()
-    case PROVIDERS.ONEDRIVE: return new OneDriveProvider(opts.folderName || null)
+    case PROVIDERS.ONEDRIVE: return new OneDriveProvider()
     case PROVIDERS.GOOGLE_DRIVE: return new GoogleDriveProvider(opts.folderName || null)
     default: throw new Error(`Unknown provider: ${id}`)
   }
@@ -111,7 +111,7 @@ export async function resumePendingMigration() {
   const pending = readPendingMigration()
   if (!pending) return null
 
-  const target = makeProvider(pending.toId, { folderName: pending.folderName || null })
+  const target = makeProvider(pending.toId)
   const ok = await target.restore()
   if (!ok) return null
 

@@ -1,6 +1,7 @@
 /**
  * OneDrive provider for focus-planner using Microsoft Graph API + PKCE OAuth2.
- * Files stored under /focus-planner/ in the user's OneDrive.
+ * Uses the special App Folder (Files.ReadWrite.AppFolder scope) —
+ * sandboxed to /Apps/focus-planner/ with no broad file access needed.
  */
 import { parseTodos } from './fsa.js'
 
@@ -9,37 +10,26 @@ const AUTH_ENDPOINT = 'https://login.microsoftonline.com/common/oauth2/v2.0/auth
 const TOKEN_ENDPOINT = 'https://login.microsoftonline.com/common/oauth2/v2.0/token'
 
 // Azure SPA app "Focus Planner" — registered 2026-05-05.
-// App ID: 4f22242f-c9a7-4a61-9208-8ca0e5ef8697
-// Tenant: Personal Microsoft accounts + any Entra ID
-// Redirect URIs:
-//   - https://plannermd.com/
-//   - https://shivbijlani.github.io/focus-planner/
 const CLIENT_ID = '4f22242f-c9a7-4a61-9208-8ca0e5ef8697'
-const SCOPES = 'Files.ReadWrite offline_access'
-const DEFAULT_FOLDER = 'focus-planner'
-const FOLDER_KEY = 'od_folder'
+const SCOPES = 'Files.ReadWrite.AppFolder offline_access'
+
+// All files live directly under the app folder root
+const APPROOT = `${GRAPH_BASE}/me/drive/special/approot`
 
 export class OneDriveProvider {
-  constructor(folderName = null) {
+  constructor() {
     this._token = null
     this._refreshToken = null
     this._expiresAt = null
-    this._folder = folderName || localStorage.getItem(FOLDER_KEY) || DEFAULT_FOLDER
-    if (folderName) localStorage.setItem(FOLDER_KEY, folderName)
     this._loadTokens()
   }
 
-  folderName() { return `OneDrive/${this._folder}` }
-
-  setFolder(name) {
-    this._folder = name
-    localStorage.setItem(FOLDER_KEY, name)
-  }
+  folderName() { return 'OneDrive (App Folder)' }
 
   /** Called on user button click — initiates PKCE redirect */
   async pick() {
     await this._startPKCE()
-    return null // will redirect; page will resume via restore()
+    return null
   }
 
   /**
@@ -47,7 +37,6 @@ export class OneDriveProvider {
    * If URL has ?code= → complete token exchange.
    */
   async restore() {
-    // Check for OAuth2 callback code in URL
     const params = new URLSearchParams(window.location.search)
     const code = params.get('code')
     const state = params.get('state')
@@ -62,12 +51,11 @@ export class OneDriveProvider {
       const ok = await this._exchangeCode(code, state)
       if (ok) {
         window.history.replaceState({}, '', window.location.pathname)
-        return true // signals ready
+        return true
       }
       return null
     }
 
-    // Try existing tokens
     if (this._isTokenValid()) return true
     if (this._refreshToken) {
       const ok = await this._refreshAccessToken()
@@ -77,7 +65,6 @@ export class OneDriveProvider {
   }
 
   async scaffold() {
-    await this._ensureFolder()
     const files = [
       ['focus-plan.md', `## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|---|---|------|---------------|-------|----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|---|---|------|---------------|-------|----------|\n\n## Work Priorities\n\n## Personal Priorities\n\n`],
       ['focus-plan-completed.md', '# Completed Tasks\n'],
@@ -90,7 +77,7 @@ export class OneDriveProvider {
 
   async read(path) {
     await this._ensureToken()
-    const url = `${GRAPH_BASE}/me/drive/root:/${this._folder}/${path}:/content`
+    const url = `${APPROOT}:/${path}:/content`
     const res = await fetch(url, { headers: this._authHeader() })
     if (res.status === 404) return ''
     if (!res.ok) throw new Error(`OneDrive read failed: ${res.status}`)
@@ -99,13 +86,12 @@ export class OneDriveProvider {
 
   async write(path, content) {
     await this._ensureToken()
-    await this._ensureFolder()
-    // Ensure subdirectory exists for journal/ paths
+    // For subdirectory paths (e.g. journal/task-1.md), ensure the subdir exists
     const parts = path.split('/')
     if (parts.length > 1) {
       await this._ensureSubfolder(parts.slice(0, -1).join('/'))
     }
-    const url = `${GRAPH_BASE}/me/drive/root:/${this._folder}/${path}:/content`
+    const url = `${APPROOT}:/${path}:/content`
     const res = await fetch(url, {
       method: 'PUT',
       headers: { ...this._authHeader(), 'Content-Type': 'text/plain; charset=utf-8' },
@@ -116,7 +102,7 @@ export class OneDriveProvider {
 
   async remove(path) {
     await this._ensureToken()
-    const url = `${GRAPH_BASE}/me/drive/root:/${this._folder}/${path}`
+    const url = `${APPROOT}:/${path}`
     const res = await fetch(url, { method: 'DELETE', headers: this._authHeader() })
     if (res.status !== 204 && res.status !== 404) {
       throw new Error(`OneDrive delete failed: ${res.status}`)
@@ -125,7 +111,7 @@ export class OneDriveProvider {
 
   async getFiles() {
     await this._ensureToken()
-    return this._listRecursive(this._folder)
+    return this._listRecursive('')
   }
 
   async checkJournal(taskId) {
@@ -138,7 +124,7 @@ export class OneDriveProvider {
   async maxJournalId() {
     await this._ensureToken()
     try {
-      const url = `${GRAPH_BASE}/me/drive/root:/${this._folder}/journal:/children`
+      const url = `${APPROOT}:/journal:/children`
       const res = await fetch(url, { headers: this._authHeader() })
       if (!res.ok) return 0
       const data = await res.json()
@@ -153,8 +139,10 @@ export class OneDriveProvider {
 
   // ── Private helpers ──────────────────────────────────
 
-  async _listRecursive(folderPath, prefix = '') {
-    const url = `${GRAPH_BASE}/me/drive/root:/${folderPath}:/children`
+  async _listRecursive(subPath, prefix = '') {
+    const url = subPath
+      ? `${APPROOT}:/${subPath}:/children`
+      : `${APPROOT}/children`
     const res = await fetch(url, { headers: this._authHeader() })
     if (!res.ok) return []
     const data = await res.json()
@@ -163,7 +151,7 @@ export class OneDriveProvider {
       const name = item.name
       const path = prefix ? `${prefix}/${name}` : name
       if (item.folder) {
-        const children = await this._listRecursive(`${folderPath}/${name}`, path)
+        const children = await this._listRecursive(subPath ? `${subPath}/${name}` : name, path)
         items.push({ name, type: 'directory', path, children })
       } else if (name.endsWith('.md')) {
         items.push({ name, type: 'file', path })
@@ -172,28 +160,17 @@ export class OneDriveProvider {
     return items
   }
 
-  async _ensureFolder() {
-    const url = `${GRAPH_BASE}/me/drive/root:/${this._folder}`
-    const res = await fetch(url, { headers: this._authHeader() })
-    if (res.status === 404) {
-      await fetch(`${GRAPH_BASE}/me/drive/root/children`, {
-        method: 'POST',
-        headers: { ...this._authHeader(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: this._folder, folder: {}, '@microsoft.graph.conflictBehavior': 'rename' }),
-      })
-    }
-  }
-
   async _ensureSubfolder(subPath) {
-    // subPath is relative to this._folder, e.g. "journal"
     const parts = subPath.split('/')
-    let current = this._folder
+    let current = ''
     for (const part of parts) {
-      current += `/${part}`
-      const url = `${GRAPH_BASE}/me/drive/root:/${current}`
-      const res = await fetch(url, { headers: this._authHeader() })
+      const parentUrl = current
+        ? `${APPROOT}:/${current}:/children`
+        : `${APPROOT}/children`
+      current = current ? `${current}/${part}` : part
+      const checkUrl = `${APPROOT}:/${current}`
+      const res = await fetch(checkUrl, { headers: this._authHeader() })
       if (res.status === 404) {
-        const parentUrl = `${GRAPH_BASE}/me/drive/root:/${current.split('/').slice(0, -1).join('/')}:/children`
         await fetch(parentUrl, {
           method: 'POST',
           headers: { ...this._authHeader(), 'Content-Type': 'application/json' },
@@ -235,14 +212,12 @@ export class OneDriveProvider {
       redirect_uri: _redirectUri(),
       code_verifier: verifier,
     })
-
     const res = await fetch(TOKEN_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
     })
     if (!res.ok) return false
-
     const data = await res.json()
     this._saveTokens(data)
     sessionStorage.removeItem('onedrive_verifier')
@@ -280,7 +255,7 @@ export class OneDriveProvider {
   }
 
   _isTokenValid() {
-    return this._token && this._expiresAt && Date.now() < this._expiresAt
+    return !!(this._token && this._expiresAt && Date.now() < this._expiresAt)
   }
 
   _authHeader() {
