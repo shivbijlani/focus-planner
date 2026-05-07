@@ -201,10 +201,11 @@ function PriorityDropdown({ currentPriority, onChangePriority }) {
 }
 
 // Add Task Dialog component
-function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds }) {
+function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sources, defaultSourceId }) {
   const [task, setTask] = useState('')
   const [priority, setPriority] = useState('🟡')
   const [linkedTask, setLinkedTask] = useState('')
+  const [sourceId, setSourceId] = useState(defaultSourceId || (sources && sources[0]?.id) || '')
   const dialogRef = useRef(null)
   const inputRef = useRef(null)
   
@@ -229,7 +230,7 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds }) {
   const handleSubmit = (e) => {
     e.preventDefault()
     if (task.trim()) {
-      onAdd({ task: task.trim(), priority, linkedTask: linkedTask.trim(), section })
+      onAdd({ task: task.trim(), priority, linkedTask: linkedTask.trim(), section, sourceId })
       onClose()
     }
   }
@@ -241,6 +242,16 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds }) {
       <div ref={dialogRef} className="add-task-dialog">
         <h3>Add Task to {section}</h3>
         <form onSubmit={handleSubmit}>
+          {sources && sources.length > 0 && (
+            <div className="form-field">
+              <label>Source</label>
+              <select value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+                {sources.map(s => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="form-field">
             <label>Task</label>
             <input
@@ -328,6 +339,11 @@ function daysSince(dateStr) {
 }
 
 // Parse markdown table into structured data
+function displayHeader(h) {
+  if (h === 'Mngr Priority' || h === 'Work Priority') return 'Priority'
+  return h
+}
+
 function parseMarkdownTable(lines) {
   const rows = []
   const rawLines = []
@@ -1122,7 +1138,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
           <table className="task-table">
             <thead>
               <tr>
-                {headers.map((h, i) => <th key={i}>{h}</th>)}
+                {headers.map((h, i) => <th key={i}>{displayHeader(h)}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -2269,6 +2285,7 @@ function CompletedWeekSection({ title, headers, rows, getPriorityClass, onNaviga
                   let label = h
                   if (h === '#') label = 'ID'
                   else if (h === 'Completed Date') label = 'Completed'
+                  else label = displayHeader(h)
                   return <th key={i}>{label}</th>
                 })}
               </tr>
@@ -2812,6 +2829,8 @@ function StorageFooter({ storageProvider, folderName, onPick, onSourcesChanged }
 function CombinedFocusPlanView({ sources, onNavigate }) {
   const [perSource, setPerSource] = useState(null) // [{source, sections}]
   const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
+  const [addDialog, setAddDialog] = useState(null) // { section }
 
   useEffect(() => {
     let cancelled = false
@@ -2832,7 +2851,57 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
       }
     })()
     return () => { cancelled = true }
-  }, [sources])
+  }, [sources, reloadKey])
+
+  const handleAdd = async ({ task, priority, linkedTask, section, sourceId }) => {
+    if (!sourceId) return
+    const text = await storage.readFromSource(sourceId, 'focus-plan.md')
+    const lines = text.split('\n')
+    let inTargetSection = false
+    let insertIndex = -1
+    let maxId = await storage.maxJournalIdFromSource(sourceId)
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (line.startsWith('## ')) {
+        inTargetSection = line.replace('## ', '').trim() === section
+      }
+      if (inTargetSection && insertIndex === -1 && line.trim().startsWith('|') && line.includes('---')) {
+        insertIndex = i + 1
+      }
+      if (line.trim().startsWith('|')) {
+        const cells = line.split('|').slice(1, -1).map(c => c.trim())
+        if (cells.length >= 1 && cells[0] !== 'ID' && !/^[-:]+$/.test(cells[0])) {
+          const numMatch = cells[0].match(/^(\d+)/)
+          if (numMatch) maxId = Math.max(maxId, parseInt(numMatch[1], 10))
+        }
+      }
+    }
+    if (insertIndex === -1) return
+    const newId = maxId + 1
+    const today = new Date().toISOString().split('T')[0]
+    const trimmedLinked = linkedTask ? linkedTask.trim() : ''
+    const isUrl = /^https?:\/\//.test(trimmedLinked)
+    const extractTicketId = (url) => {
+      const endMatch = url.match(/\/(\d+)\/?(?:[?#].*)?$/)
+      if (endMatch) return endMatch[1]
+      const midMatch = url.match(/\/(\d{5,})\//)
+      if (midMatch) return midMatch[1]
+      return null
+    }
+    if (isUrl) {
+      const adoId = extractTicketId(trimmedLinked)
+      if (adoId) {
+        const adoUrl = trimmedLinked.replace(/\/$/, '')
+        lines.splice(insertIndex, 0, `| ${newId},[${adoId}](${adoUrl}) | ${priority} | ${task} | - | ${today} | |`)
+      } else {
+        lines.splice(insertIndex, 0, `| ${newId} | ${priority} | ${task} | - | ${today} | ${trimmedLinked} |`)
+      }
+    } else {
+      lines.splice(insertIndex, 0, `| ${newId} | ${priority} | ${task} | - | ${today} | ${trimmedLinked} |`)
+    }
+    await storage.writeToSource(sourceId, 'focus-plan.md', lines.join('\n'))
+    setReloadKey(k => k + 1)
+  }
 
   if (error) return <div className="placeholder"><h1>✨ Combined</h1><p>Failed to load: {error}</p></div>
   if (!perSource) return <div className="placeholder"><h1>✨ Combined</h1><p>Loading…</p></div>
@@ -2854,8 +2923,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
   const deferred = mergeSection('Deferred')
 
   const renderTable = (title, items, defaultOpen = true) => {
-    if (items.length === 0) return null
-    const headerSet = items[0].headers
+    const headerSet = items[0]?.headers || ['ID', '🎯', 'Task', 'Mngr Priority', 'Added', 'Linked ID']
     return (
       <CombinedSection
         key={title}
@@ -2864,6 +2932,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
         baseHeaders={headerSet}
         defaultOpen={defaultOpen}
         onNavigate={onNavigate}
+        onAddClick={() => setAddDialog({ section: title })}
       />
     )
   }
@@ -2871,9 +2940,6 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
   return (
     <div className="focus-plan-view combined-view">
       <h1>✨ Combined Focus Plan</h1>
-      <div className="combined-banner">
-        Read-only view across {sources.length} sources. Open a source folder to edit.
-      </div>
       {renderTable('Today', today, true)}
       {renderTable('Deferred', deferred, false)}
       {perSource.map(({ source, sections }) => {
@@ -2921,30 +2987,45 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
           />
         )
       })}
+      {addDialog && (
+        <AddTaskDialog
+          section={addDialog.section}
+          sources={sources}
+          defaultSourceId={sources[0]?.id}
+          onClose={() => setAddDialog(null)}
+          onAdd={handleAdd}
+        />
+      )}
     </div>
   )
 }
 
-function CombinedSection({ title, items, baseHeaders, defaultOpen, onNavigate }) {
+function CombinedSection({ title, items, baseHeaders, defaultOpen, onNavigate, onAddClick }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
-  const headers = ['Source', ...baseHeaders]
+  const headers = baseHeaders
   return (
     <div className="task-section">
       <h2 className="section-header" onClick={() => setIsOpen(!isOpen)}>
         <span className="collapse-icon">{isOpen ? '▼' : '▶'}</span>
         {title}
         <span className="task-count">({items.length})</span>
+        {onAddClick && (
+          <button
+            className="add-task-btn"
+            onClick={(e) => { e.stopPropagation(); onAddClick() }}
+            title={`Add task to ${title}`}
+          >+</button>
+        )}
       </h2>
       {isOpen && (
         <div className="task-table-container">
           <table className="task-table">
             <thead>
-              <tr>{headers.map((h, i) => <th key={i}>{h}</th>)}</tr>
+              <tr>{headers.map((h, i) => <th key={i}>{displayHeader(h)}</th>)}</tr>
             </thead>
             <tbody>
               {items.map(({ row, source }, i) => (
                 <tr key={`${source.id}-${i}`}>
-                  <td><span className="combined-source-badge">{source.name}</span></td>
                   {baseHeaders.map((h, ci) => {
                     const val = row[h]
                     if ((h === 'ID' || h === '#') && typeof val === 'object') {

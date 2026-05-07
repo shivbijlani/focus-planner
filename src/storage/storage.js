@@ -111,6 +111,20 @@ export async function readFromSource(sourceId, path) {
   return p.read(path)
 }
 
+export async function writeToSource(sourceId, path, content) {
+  const { getProvider } = await import('./sources.js')
+  const p = getProvider(sourceId)
+  if (!p) throw new Error(`No provider for source ${sourceId}`)
+  return p.write(path, content)
+}
+
+export async function maxJournalIdFromSource(sourceId) {
+  const { getProvider } = await import('./sources.js')
+  const p = getProvider(sourceId)
+  if (!p) return 0
+  try { return await p.maxJournalId() } catch { return 0 }
+}
+
 export async function getFilesFromSource(sourceId) {
   const { getProvider } = await import('./sources.js')
   const p = getProvider(sourceId)
