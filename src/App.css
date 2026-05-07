@@ -766,6 +766,43 @@ tr.highlight-flash {
   background: #7f1d1d44 !important;
 }
 
+/* Move-to-source dialog list */
+.move-task-list {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+}
+
+.move-task-list li {
+  padding: 0.2rem 0;
+}
+
+.move-task-list strong {
+  color: #93c5fd;
+  margin-right: 0.35rem;
+}
+
+.move-task-tag {
+  color: #fbbf24;
+  font-size: 0.75rem;
+  margin-left: 0.35rem;
+}
+
+.move-broken-list strong {
+  color: #fca5a5;
+}
+
+.dialog-warning {
+  color: #fbbf24 !important;
+}
+
 /* Task with todos */
 .task-with-todos {
   display: flex;

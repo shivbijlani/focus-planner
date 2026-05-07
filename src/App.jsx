@@ -11,6 +11,7 @@ import {
   beginAddCloudSource, consumePendingAdd, abortPendingAdd,
 } from './storage/sources.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority } from './taskSort.js'
+import { computeMoveSet, computeBrokenLinks } from './moveTask.js'
 import { StoragePicker } from './StoragePicker.jsx'
 
 // ── Multi-source path helpers ───────────────────────────────────────
@@ -136,6 +137,51 @@ function AdoLinkDialog({ onClose, onSave, currentUrl }) {
           {currentUrl && <button className="dialog-remove-btn" onClick={() => { onSave(null); onClose() }}>Remove Link</button>}
           <button onClick={onClose}>Cancel</button>
           <button className="dialog-save-btn" onClick={handleSave}>Save</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Confirmation dialog shown before moving a task (and possibly its
+// dependency subtree) from the active source to another source.
+function MoveToSourceDialog({ targetName, movingTasks, brokenLinks, onClose, onConfirm }) {
+  return (
+    <div className="dialog-overlay" onClick={onClose}>
+      <div className="dialog" onClick={e => e.stopPropagation()}>
+        <h3>📦 Move to {targetName}</h3>
+        <p className="dialog-hint">
+          {movingTasks.length === 1
+            ? 'The following task will be moved:'
+            : `The following ${movingTasks.length} tasks will be moved together:`}
+        </p>
+        <ul className="move-task-list">
+          {movingTasks.map(t => (
+            <li key={t.id}>
+              <strong>#{t.id}</strong> {t.name || '(no name)'}
+              {t.isPriority && <span className="move-task-tag"> ⭐ priority</span>}
+            </li>
+          ))}
+        </ul>
+        {brokenLinks.length > 0 && (
+          <>
+            <p className="dialog-hint dialog-warning">
+              ⚠️ {brokenLinks.length === 1 ? 'This link will break' : `${brokenLinks.length} links will break`} because the linked task is moving to another source:
+            </p>
+            <ul className="move-task-list move-broken-list">
+              {brokenLinks.map(b => (
+                <li key={`${b.fromId}->${b.toId}`}>
+                  <strong>#{b.fromId}</strong> {b.fromName || ''} → <strong>#{b.toId}</strong>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        <div className="dialog-actions">
+          <button onClick={onClose}>Cancel</button>
+          <button className="dialog-save-btn" onClick={() => { onConfirm(); onClose() }}>
+            Move
+          </button>
         </div>
       </div>
     </div>
@@ -912,7 +958,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
 }
 
 // Collapsible section component
-function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority }) {
+function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const { headers, rows, rawLines } = parseMarkdownTable(tableLines)
   const [contextMenu, setContextMenu] = useState(null)
@@ -1076,6 +1122,17 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
       action: () => setAdoLinkDialog({ rawLine, currentUrl: currentAdoLink ? currentAdoLink.url : '' })
     })
     
+    // Add "Move to {source}" options when there are multiple sources.
+    if (otherSources && otherSources.length > 0 && taskId) {
+      for (const src of otherSources) {
+        options.push({
+          label: `Move to ${src.name}`,
+          icon: '📦',
+          action: () => onMoveToSource(rawLine, row, taskId, src.id),
+        })
+      }
+    }
+
     // Add "Delete Task" option (also deletes journal if exists)
     options.push({
       label: 'Delete Task',
@@ -1560,7 +1617,7 @@ function buildLinkedIdMap(tableLines) {
 }
 
 // Focus Plan View component
-function FocusPlanView({ content, onNavigate, onContentUpdate }) {
+function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const sections = parseFocusPlan(content)
   
@@ -2151,6 +2208,202 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
     await handleUpdateManagerPriorities(renumbered)
   }
 
+  // ── Move-to-source ────────────────────────────────────────────────
+  // Right-click → "Move to {source}" hands the task (and, for a manager
+  // priority, its full dependency subtree) over to another source's
+  // focus-plan.md. The dialog summarises which tasks are travelling and
+  // which incoming links will break before the move is committed.
+  const [moveDialog, setMoveDialog] = useState(null)
+
+  const findRawLineForTaskId = (id) => {
+    for (const section of taskSections) {
+      for (const line of section.lines) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('|')) continue
+        const cells = trimmed.split('|').slice(1, -1).map(c => c.trim())
+        if (cells.length === 0) continue
+        const idCell = cells[0]
+        const localId = idCell.indexOf(',[') !== -1
+          ? idCell.substring(0, idCell.indexOf(',['))
+          : idCell
+        if (localId === String(id)) return { rawLine: trimmed, sectionTitle: section.title }
+      }
+    }
+    return null
+  }
+
+  const handleMoveToSource = (rawLine, row, taskId, targetSourceId) => {
+    if (!targetSourceId || !taskId) return
+    const target = (otherSources || []).find(s => s.id === targetSourceId)
+    if (!target) return
+
+    const moveSet = computeMoveSet(taskId, managerPriorities, linkedIdMap, activeTaskIds)
+    const movingTasks = [...moveSet].map(id => ({
+      id,
+      name: taskLookup[id] || (id === taskId ? (row['Task'] || '') : ''),
+      isPriority: !!managerPriorities[id],
+    }))
+    const brokenLinks = computeBrokenLinks(moveSet, linkedIdMap, taskLookup)
+
+    setMoveDialog({
+      target,
+      taskId,
+      rawLine,
+      movingTasks,
+      brokenLinks,
+    })
+  }
+
+  const performMoveToSource = async ({ target, movingTasks }) => {
+    const movingIds = new Set(movingTasks.map(t => t.id))
+    // Collect raw lines + journal task IDs in deterministic order.
+    const movingRows = []
+    for (const t of movingTasks) {
+      const found = findRawLineForTaskId(t.id)
+      if (found) movingRows.push({ ...found, taskId: t.id })
+    }
+    if (movingRows.length === 0) return
+
+    // 1. Build the new content for the current source: drop matching rows
+    //    from Today/Deferred and remove any matching Priorities entries.
+    const removalSet = new Set(movingRows.map(r => r.rawLine))
+    const lines = content.split('\n')
+    let inPriorities = false
+    const newLines = []
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('## ')) {
+        inPriorities = isPrioritiesSection(trimmed.replace(/^##\s+/, ''))
+        newLines.push(line)
+        continue
+      }
+      if (removalSet.has(trimmed)) continue
+      if (inPriorities) {
+        const m = trimmed.match(/^\d+\.\s+(.+)$/)
+        if (m && movingIds.has(m[1].trim())) continue
+      }
+      newLines.push(line)
+    }
+    // Renumber the remaining Priorities entries.
+    const renumbered = []
+    let pInside = false
+    let pIdx = 1
+    for (const line of newLines) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('## ')) {
+        pInside = isPrioritiesSection(trimmed.replace(/^##\s+/, ''))
+        if (pInside) pIdx = 1
+        renumbered.push(line)
+        continue
+      }
+      if (pInside) {
+        const m = line.match(/^(\s*)\d+\.\s+(.+)$/)
+        if (m) {
+          renumbered.push(`${m[1]}${pIdx++}. ${m[2]}`)
+          continue
+        }
+      }
+      renumbered.push(line)
+    }
+
+    // 2. Build the new content for the target source. We need to read its
+    //    current focus-plan.md, then append moving rows under Today and
+    //    moving manager-priority entries under Priorities.
+    const targetProvider = getProvider(target.id)
+    if (!targetProvider) {
+      alert(`Cannot reach source "${target.name}". Please check that the source is connected.`)
+      return
+    }
+    let targetContent = ''
+    try {
+      targetContent = await targetProvider.read('focus-plan.md')
+    } catch {
+      // Target may not have a focus-plan yet — start with a minimal one.
+      targetContent =
+        '# Focus Plan\n\n## Today\n\n| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |\n|---|---|------|---------------|-------|-----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |\n|---|---|------|---------------|-------|-----------|\n'
+    }
+
+    const tLines = targetContent.split('\n')
+    // Find Today section's insertion point (right after the separator row).
+    let inToday = false
+    let todayInsertIdx = -1
+    for (let i = 0; i < tLines.length; i++) {
+      const trimmed = tLines[i].trim()
+      if (trimmed.startsWith('## ')) {
+        inToday = trimmed.replace(/^##\s+/, '') === 'Today'
+        continue
+      }
+      if (inToday && trimmed.startsWith('|') && trimmed.includes('---')) {
+        todayInsertIdx = i + 1
+        break
+      }
+    }
+    if (todayInsertIdx === -1) {
+      // No Today section in target — append one.
+      tLines.push(
+        '',
+        '## Today',
+        '',
+        '| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |',
+        '|---|---|------|---------------|-------|-----------|',
+      )
+      todayInsertIdx = tLines.length
+    }
+    const rowsToInsert = movingRows.map(r => r.rawLine)
+    tLines.splice(todayInsertIdx, 0, ...rowsToInsert)
+
+    // Append any moving Priorities entries to the target's Priorities section.
+    const priorityIdsMoving = movingTasks.filter(t => t.isPriority).map(t => t.id)
+    if (priorityIdsMoving.length > 0) {
+      let pStart = -1
+      let pEnd = tLines.length
+      for (let i = 0; i < tLines.length; i++) {
+        const trimmed = tLines[i].trim()
+        if (trimmed.startsWith('## ') && isPrioritiesSection(trimmed.replace(/^##\s+/, ''))) {
+          pStart = i
+        } else if (pStart !== -1 && trimmed.startsWith('## ')) {
+          pEnd = i
+          break
+        }
+      }
+      if (pStart === -1) {
+        tLines.push('', '## Priorities', '')
+        pStart = tLines.length - 2
+        pEnd = tLines.length
+      }
+      let maxNum = 0
+      for (let i = pStart + 1; i < pEnd; i++) {
+        const m = tLines[i].trim().match(/^(\d+)\.\s+/)
+        if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10))
+      }
+      const newEntries = priorityIdsMoving.map((id, i) => `${maxNum + i + 1}. ${id}`)
+      // Insert before pEnd (end of section), trimming trailing blanks.
+      let insertAt = pEnd
+      while (insertAt > pStart + 1 && tLines[insertAt - 1].trim() === '') insertAt--
+      tLines.splice(insertAt, 0, ...newEntries)
+    }
+
+    // 3. Move journals (best effort — silently skip those that don't exist).
+    const activeProvider = getActiveProvider()
+    for (const t of movingTasks) {
+      const journalPath = `journal/task-${t.id}.md`
+      try {
+        const journalContent = await activeProvider.read(journalPath)
+        if (typeof journalContent === 'string') {
+          await targetProvider.write(journalPath, journalContent)
+          await activeProvider.remove(journalPath)
+        }
+      } catch {
+        // No journal for this task — fine.
+      }
+    }
+
+    // 4. Persist both sides. Write the target first so a failure there
+    //    doesn't leave us with deleted-but-not-moved tasks.
+    await targetProvider.write('focus-plan.md', tLines.join('\n'))
+    await onContentUpdate(renumbered.join('\n'))
+  }
+
   return (
     <div className="focus-plan-view">
       <h1>📋 Focus Plan</h1>
@@ -2180,6 +2433,8 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
           adoLookup={adoLookup}
           onPromoteToManagerPriority={handlePromoteToManagerPriority}
           onRemoveFromManagerPriority={handleRemoveFromManagerPriority}
+          otherSources={otherSources}
+          onMoveToSource={handleMoveToSource}
         />
       ))}
 
@@ -2195,7 +2450,23 @@ function FocusPlanView({ content, onNavigate, onContentUpdate }) {
           sectionId="priorities"
         />
       )}
-      
+
+      {moveDialog && (
+        <MoveToSourceDialog
+          targetName={moveDialog.target.name}
+          movingTasks={moveDialog.movingTasks}
+          brokenLinks={moveDialog.brokenLinks}
+          onClose={() => setMoveDialog(null)}
+          onConfirm={() => {
+            const dlg = moveDialog
+            setMoveDialog(null)
+            performMoveToSource(dlg).catch(err => {
+              console.error('Move to source failed:', err)
+              alert(`Failed to move tasks to ${dlg.target.name}: ${err.message || err}`)
+            })
+          }}
+        />
+      )}
 
     </div>
   )
@@ -3325,6 +3596,7 @@ function App() {
               content={content}
               onNavigate={handleNavigate}
               onContentUpdate={handleContentUpdate}
+              otherSources={sources.filter(s => s.id !== getActiveSourceId())}
             />
           ) : isCompletedPlan ? (
             <CompletedPlanView
