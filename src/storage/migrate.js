@@ -83,7 +83,6 @@ export async function migrate(fromProvider, toId, opts = {}) {
       await restoreFiles(target, payload)
       sessionStorage.removeItem(MIGRATION_KEY)
       setActiveProvider(target)
-      localStorage.setItem('fp-storage-provider', toId)
       if (opts.deleteSource && fromProvider.clear) fromProvider.clear()
       return { ok: true }
     }
@@ -102,7 +101,6 @@ export async function migrate(fromProvider, toId, opts = {}) {
   await target.scaffold()
   await restoreFiles(target, payload)
   setActiveProvider(target)
-  localStorage.setItem('fp-storage-provider', toId)
   if (opts.deleteSource && fromProvider.clear) fromProvider.clear()
   return { ok: true }
 }
@@ -118,7 +116,6 @@ export async function resumePendingMigration() {
   await target.scaffold()
   await restoreFiles(target, pending.payload)
   setActiveProvider(target)
-  localStorage.setItem('fp-storage-provider', pending.toId)
   if (pending.deleteSource && pending.fromId === PROVIDERS.LOCAL_STORAGE) {
     new LocalStorageProvider().clear()
   }

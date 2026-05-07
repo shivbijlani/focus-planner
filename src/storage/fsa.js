@@ -21,18 +21,7 @@ export async function forgetFolder(suffix) {
 }
 
 export async function restoreFolder(suffix) {
-  let handle = await get(dbKey(suffix))
-  // Backward-compat: if the registry was migrated from a legacy single-FSA
-  // setup, the handle still lives at the unsuffixed key. Adopt it under the
-  // new suffixed key and clean up the legacy slot so this is one-shot.
-  if (!handle && suffix) {
-    const legacy = await get(LEGACY_DB_KEY)
-    if (legacy) {
-      await set(dbKey(suffix), legacy)
-      await del(LEGACY_DB_KEY)
-      handle = legacy
-    }
-  }
+  const handle = await get(dbKey(suffix))
   if (!handle) return null
   try {
     const permission = await handle.queryPermission({ mode: 'readwrite' })
