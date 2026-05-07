@@ -272,13 +272,21 @@ function PriorityDropdown({ currentPriority, onChangePriority }) {
 }
 
 // Add Task Dialog component
-function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sources, defaultSourceId }) {
+function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sources, defaultSourceId, perSourceTaskLookup }) {
   const [task, setTask] = useState('')
   const [priority, setPriority] = useState('🟡')
   const [linkedTask, setLinkedTask] = useState('')
   const [sourceId, setSourceId] = useState(defaultSourceId || (sources && sources[0]?.id) || '')
   const dialogRef = useRef(null)
   const inputRef = useRef(null)
+
+  // Resolve the task lookup for the currently-selected source.
+  // In multi-source (Combined) view: use perSourceTaskLookup[sourceId].
+  // In single-source view: fall back to the taskLookup / activeTaskIds props.
+  const effectiveTaskLookup = (perSourceTaskLookup && sourceId && perSourceTaskLookup[sourceId])
+    ? perSourceTaskLookup[sourceId]
+    : (taskLookup || {})
+  const effectiveTaskIds = Object.keys(effectiveTaskLookup)
   
   useEffect(() => {
     inputRef.current?.focus()
@@ -305,9 +313,7 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
       onClose()
     }
   }
-  
-  const allTaskIds = activeTaskIds || (taskLookup ? Object.keys(taskLookup) : [])
-  
+
   return (
     <div className="dialog-overlay">
       <div ref={dialogRef} className="add-task-dialog">
@@ -355,8 +361,8 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
                 placeholder="Paste a ticket URL or task ID…"
               />
               <datalist id="add-task-linked-ids">
-                {allTaskIds.map(tid => (
-                  <option key={tid} value={tid}>{taskLookup[tid]}</option>
+                {effectiveTaskIds.map(tid => (
+                  <option key={tid} value={tid}>{effectiveTaskLookup[tid]}</option>
                 ))}
               </datalist>
             </div>
@@ -3272,13 +3278,18 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
   const currentTaskLookup = {}
   const linkedIdMap = {}
   const adoLookup = {}
-  for (const { sections } of perSource) {
+  // Per-source task lookups for the Add Task dialog's linked-task search.
+  const perSourceTaskLookup = {}
+  for (const { source, sections } of perSource) {
+    const srcLookup = {}
     for (const sec of sections) {
       if (sec.title !== 'Today' && sec.title !== 'Deferred') continue
       Object.assign(currentTaskLookup, buildTaskIdLookup(sec.lines))
+      Object.assign(srcLookup, buildTaskIdLookup(sec.lines))
       Object.assign(linkedIdMap, buildLinkedIdMap(sec.lines))
       Object.assign(adoLookup, buildAdoLookup(sec.lines))
     }
+    perSourceTaskLookup[source.id] = srcLookup
   }
   const taskLookup = { ...completedTaskLookup, ...currentTaskLookup }
   const activeTaskIds = Object.keys(currentTaskLookup)
@@ -3711,6 +3722,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
           section={addDialog.section}
           sources={sources}
           defaultSourceId={sources[0]?.id}
+          perSourceTaskLookup={perSourceTaskLookup}
           onClose={() => setAddDialog(null)}
           onAdd={async (args) => { await handleAdd(args); setAddDialog(null) }}
         />
