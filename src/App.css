@@ -803,6 +803,20 @@ tr.highlight-flash {
   color: #fbbf24 !important;
 }
 
+.move-in-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.25rem 0;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+.move-in-progress .spinner {
+  border-top-color: #60a5fa;
+  flex-shrink: 0;
+}
+
 /* Task with todos */
 .task-with-todos {
   display: flex;
