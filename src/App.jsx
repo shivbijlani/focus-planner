@@ -9,6 +9,7 @@ import {
   addSource, renameSource, removeSource, getProvider, restoreSource,
   availableProviderTypesForAdd,
   beginAddCloudSource, consumePendingAdd, abortPendingAdd,
+  beginReauth, consumePendingReauth,
 } from './storage/sources.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority } from './taskSort.js'
 import { computeMoveSet, computeBrokenLinks } from './moveTask.js'
@@ -1253,11 +1254,27 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
 }
 
 // Manager Priorities Section
-function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddAndPrioritize, tasksByPriority = {}, taskLookup = {}, title = 'Work Priorities', sectionId = 'work-priorities' }) {
+function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddAndPrioritize, tasksByPriority = {}, taskLookup = {}, title = 'Work Priorities', sectionId = 'work-priorities', otherSources, onMoveToSource, sourceId }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const [isAdding, setIsAdding] = useState(false)
   const [newPriority, setNewPriority] = useState('')
   const [expandedPriorities, setExpandedPriorities] = useState({})
+  const [contextMenu, setContextMenu] = useState(null)
+
+  const handlePriorityContextMenu = (e, id, taskName) => {
+    e.preventDefault()
+    const options = []
+    if (otherSources && otherSources.length > 0 && onMoveToSource) {
+      for (const src of otherSources) {
+        options.push({
+          label: `Move to ${src.name}`,
+          icon: '📦',
+          action: () => onMoveToSource(null, { Task: taskName }, id, src.id, sourceId),
+        })
+      }
+    }
+    if (options.length > 0) setContextMenu({ x: e.clientX, y: e.clientY, options })
+  }
   const priorities = parseManagerPriorities(lines)
   const priorityList = Object.entries(priorities).sort((a, b) => a[1] - b[1])
   
@@ -1385,7 +1402,7 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
               const taskName = taskLookup[id] || `Task ${id}`
               
               return (
-                <li key={id} className="priority-item">
+                <li key={id} className="priority-item" onContextMenu={(e) => handlePriorityContextMenu(e, id, taskName)}>
                   <div className="priority-item-header">
                     <span className="priority-number">#{num}</span>
                     <span className="priority-name priority-name-clickable" onClick={() => scrollToTask(id)} title={taskName}>
@@ -1464,6 +1481,14 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
             </div>
           )}
         </div>
+      )}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          options={contextMenu.options}
+          onClose={() => setContextMenu(null)}
+        />
       )}
     </div>
   )
@@ -2463,6 +2488,8 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
           taskLookup={taskLookup}
           title="Priorities"
           sectionId="priorities"
+          otherSources={otherSources}
+          onMoveToSource={handleMoveToSource}
         />
       )}
 
@@ -2767,7 +2794,7 @@ function TourModal({ onClose }) {
   )
 }
 
-function StorageFooter({ storageProvider, folderName, onPick, onSourcesChanged }) {
+function StorageFooter({ storageProvider, folderName, onPick, onSourcesChanged, failedSourceIds = new Set(), onClearFailed }) {
   const [open, setOpen] = useState(false)
   const [tourOpen, setTourOpen] = useState(false)
   const [view, setView] = useState('menu') // 'menu' | 'migrate' | 'add-source' | 'rename'
@@ -2977,19 +3004,34 @@ function StorageFooter({ storageProvider, folderName, onPick, onSourcesChanged }
                     >
                       <span className="storage-footer-source-icon">{icon}</span>
                       <span className="storage-footer-source-name">{s.name}</span>
-                      {isActive && <span className="storage-footer-source-active">●</span>}
+                      {failedSourceIds.has(s.id) && <span title="Authentication required" style={{color:'#f59e0b'}}>⚠</span>}
+                      {isActive && !failedSourceIds.has(s.id) && <span className="storage-footer-source-active">●</span>}
                     </button>
-                    <button
-                      className="storage-footer-source-action"
-                      title="Rename"
-                      onClick={() => startRename(s.id, s.name)}
-                    >✎</button>
-                    {sources.length > 1 && (
+                    {failedSourceIds.has(s.id) ? (
                       <button
                         className="storage-footer-source-action"
-                        title="Remove source"
-                        onClick={() => removeSourceById(s.id)}
-                      >🗑</button>
+                        title="Re-authenticate this source"
+                        style={{color:'#f59e0b', fontWeight:'bold'}}
+                        onClick={async () => {
+                          onClearFailed?.(s.id)
+                          await beginReauth(s.id)
+                        }}
+                      >↻ Re-connect</button>
+                    ) : (
+                      <>
+                        <button
+                          className="storage-footer-source-action"
+                          title="Rename"
+                          onClick={() => startRename(s.id, s.name)}
+                        >✎</button>
+                        {sources.length > 1 && (
+                          <button
+                            className="storage-footer-source-action"
+                            title="Remove source"
+                            onClick={() => removeSourceById(s.id)}
+                          >🗑</button>
+                        )}
+                      </>
                     )}
                   </div>
                 )
@@ -3345,9 +3387,9 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
     return null
   }
 
-  const handleMoveToSource = (rawLine, row, taskId, targetSourceId) => {
+  const handleMoveToSource = (rawLine, row, taskId, targetSourceId, explicitFromSourceId = null) => {
     if (!targetSourceId || !taskId) return
-    const fromSourceId = sourceForLine(rawLine)
+    const fromSourceId = explicitFromSourceId || sourceForLine(rawLine)
     if (!fromSourceId || fromSourceId === targetSourceId) return
     const target = sources.find(s => s.id === targetSourceId)
     if (!target) return
@@ -3638,6 +3680,9 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
             taskLookup={{ ...completedTaskLookup, ...localTaskLookup }}
             title={`${source.name} — Priorities`}
             sectionId={`combined-priorities-${source.id}`}
+            sourceId={source.id}
+            otherSources={sources.filter(s => s.id !== source.id)}
+            onMoveToSource={handleMoveToSource}
           />
         )
       })}
@@ -3687,6 +3732,8 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   // Re-render trigger for the source list when Settings mutates it.
   const [sourcesVersion, setSourcesVersion] = useState(0)
+  // Sources that failed to restore on init (cloud sources needing re-authentication).
+  const [failedSourceIds, setFailedSourceIds] = useState(new Set())
   // Re-read every render so post-init/post-mutation state is always fresh.
   // sourcesVersion is the explicit reactivity trigger.
   void sourcesVersion
@@ -3818,7 +3865,9 @@ function App() {
     setStorageProvider(providerId)
     setSourcesVersion(v => v + 1)
     setAppState('ready')
-    handleSelectFile('focus-plan.md')
+    const liveSources = getSources()
+    const defaultFile = liveSources.length > 1 ? `${COMBINED_ID}::focus-plan.md` : 'focus-plan.md'
+    handleSelectFile(defaultFile)
   }
 
   useEffect(() => {
@@ -3839,6 +3888,13 @@ function App() {
         const registry = getSources()
 
         if (registry.length > 0) {
+          // If we're returning from a re-auth OAuth redirect (for an existing source),
+          // restore that source FIRST so it consumes the ?code= param.
+          const pendingReauthId = consumePendingReauth()
+          if (pendingReauthId) {
+            try { await restoreSource(pendingReauthId) } catch { /* ok — will retry later */ }
+          }
+
           // If we're returning from an "add cloud source" OAuth redirect,
           // restore that source FIRST so it consumes the ?code= param —
           // otherwise other cloud providers' restore() would try (and fail)
@@ -3862,8 +3918,10 @@ function App() {
           }
           // Restore each source's provider eagerly so cross-source reads work.
           const restoredIds = new Set()
+          if (pendingReauthId) restoredIds.add(pendingReauthId) // already restored above
           if (scaffoldedAddId) restoredIds.add(scaffoldedAddId)
-          let firstHealthyId = scaffoldedAddId || null
+          let firstHealthyId = pendingReauthId || scaffoldedAddId || null
+          const failed = new Set()
           for (const s of getSources()) {
             if (restoredIds.has(s.id)) continue
             try {
@@ -3871,11 +3929,14 @@ function App() {
               if (p) {
                 restoredIds.add(s.id)
                 if (!firstHealthyId) firstHealthyId = s.id
+              } else {
+                failed.add(s.id)
               }
             } catch {
-              /* ignore — surfaces in Settings if the user picks it */
+              failed.add(s.id)
             }
           }
+          if (failed.size > 0) setFailedSourceIds(failed)
           // Pick the saved active source if it restored, otherwise the first that did.
           const savedActive = getActiveSourceId()
           const targetId = restoredIds.has(savedActive) ? savedActive : firstHealthyId
@@ -4016,6 +4077,8 @@ function App() {
           onPick={handlePick}
           onSourcesChanged={refreshAfterSourcesChange}
           sourcesVersion={sourcesVersion}
+          failedSourceIds={failedSourceIds}
+          onClearFailed={(id) => setFailedSourceIds(prev => { const n = new Set(prev); n.delete(id); return n })}
         />
       </aside>
       <main className="content">

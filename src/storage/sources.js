@@ -236,3 +236,30 @@ export async function abortPendingAdd() {
   if (id) await removeSource(id)
 }
 
+// ── Re-authentication for existing cloud sources ─────────────────────────────
+// Used when a source's tokens have expired and the user clicks "Re-connect".
+
+const PENDING_REAUTH_KEY = 'fp-pending-reauth'
+
+/**
+ * Trigger a PKCE re-auth flow for an existing cloud source.
+ * Sets a marker in localStorage, then redirects to the provider's OAuth page.
+ * On return, consumePendingReauth() finishes the token exchange.
+ */
+export async function beginReauth(sourceId) {
+  localStorage.setItem(PENDING_REAUTH_KEY, sourceId)
+  const p = getProvider(sourceId)
+  await p.pick() // redirects away — no return
+}
+
+/**
+ * Finish a pending re-auth after the OAuth redirect.
+ * Returns the source id that was re-authing, or null if none was pending.
+ */
+export function consumePendingReauth() {
+  const id = localStorage.getItem(PENDING_REAUTH_KEY)
+  if (!id) return null
+  localStorage.removeItem(PENDING_REAUTH_KEY)
+  return id
+}
+

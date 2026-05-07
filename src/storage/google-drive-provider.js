@@ -86,7 +86,7 @@ export class GoogleDriveProvider {
   async scaffold() {
     await this._ensureFolder()
     const files = [
-      ['focus-plan.md', `## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|---|---|------|---------------|-------|----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|---|---|------|---------------|-------|----------|\n\n## Work Priorities\n\n## Personal Priorities\n\n`],
+      ['focus-plan.md', `## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Priorities\n\n`],
       ['focus-plan-completed.md', '# Completed Tasks\n'],
     ]
     for (const [name, content] of files) {

@@ -65,7 +65,7 @@ export class OneDriveProvider {
 
   async scaffold() {
     const files = [
-      ['focus-plan.md', `## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|---|---|------|---------------|-------|----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|---|---|------|---------------|-------|----------|\n\n## Work Priorities\n\n## Personal Priorities\n\n`],
+      ['focus-plan.md', `## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Priorities\n\n`],
       ['focus-plan-completed.md', '# Completed Tasks\n'],
     ]
     for (const [name, content] of files) {
@@ -243,14 +243,23 @@ export class OneDriveProvider {
     return true
   }
 
+  /**
+   * True if the provider cannot read/write because tokens are missing or expired
+   * and refresh failed. Call `pick()` to re-authenticate.
+   */
+  needsAuth() {
+    return !this._isTokenValid() && !this._refreshToken
+  }
+
   async _ensureToken() {
     if (this._isTokenValid()) return
     if (this._refreshToken) {
       const ok = await this._refreshAccessToken()
       if (ok) return
     }
-    await this._startPKCE()
-    throw new Error('Redirecting to OneDrive login…')
+    // Do NOT redirect automatically here — throw so callers can handle gracefully.
+    // The user must explicitly click "Re-connect" (which calls pick()) to re-auth.
+    throw new Error('OneDrive authentication required. Please re-connect in Settings.')
   }
 
   _isTokenValid() {
@@ -282,6 +291,11 @@ export class OneDriveProvider {
     localStorage.removeItem('od_token')
     localStorage.removeItem('od_refresh')
     localStorage.removeItem('od_expires')
+  }
+
+  /** Remove all persisted credentials so re-adding requires a fresh OAuth flow. */
+  async forget() {
+    this._clearTokens()
   }
 }
 

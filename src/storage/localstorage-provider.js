@@ -8,13 +8,13 @@ const PREFIX = 'fp-file:'
 
 const SCAFFOLD_FOCUS_PLAN = `## Today
 
-| ID | 🎯 | Task | Work Priority | Added | Linked ID |
-|---|---|------|---------------|-------|-----------|
+| ID | 🎯 | Task | Priority | Added | Linked ID |
+|---|---|------|----------|-------|-----------|
 
 ## Deferred
 
-| ID | 🎯 | Task | Work Priority | Added | Linked ID |
-|---|---|------|---------------|-------|-----------|
+| ID | 🎯 | Task | Priority | Added | Linked ID |
+|---|---|------|----------|-------|-----------|
 
 ## Priorities
 
