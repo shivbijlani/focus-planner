@@ -13,6 +13,8 @@ import {
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority } from './taskSort.js'
 import { computeMoveSet, computeBrokenLinks } from './moveTask.js'
 import { StoragePicker } from './StoragePicker.jsx'
+import { isPrioritiesSection } from './focusPlanShared.js'
+import * as ops from './focusPlanOps.js'
 
 // ── Multi-source path helpers ───────────────────────────────────────
 // In single-source mode all paths are plain ("focus-plan.md").
@@ -1201,7 +1203,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
             <tbody>
               {sortedRows.map((row, i) => (
                 <TaskRow 
-                  key={extractTaskId(row) || `row-${i}`} 
+                  key={`${extractTaskId(row) || 'row'}-${i}`} 
                   row={row} 
                   headers={headers} 
                   onNavigate={onNavigate}
@@ -1493,11 +1495,8 @@ function parseFocusPlan(content) {
   return sections
 }
 
-// Section-name predicates. The unified "Priorities" section absorbs the
-// legacy split between "Work Priorities" and "Manager Priorities".
-function isPrioritiesSection(title) {
-  return title === 'Priorities' || title === 'Work Priorities' || title === 'Manager Priorities'
-}
+// Section-name predicates moved to focusPlanShared.js so they can be reused
+// from focusPlanOps.js without an import cycle.
 function isPersonalPrioritiesSection(title) {
   return title === 'Personal Priorities'
 }
@@ -3094,15 +3093,23 @@ function StorageFooter({ storageProvider, folderName, onPick, onSourcesChanged }
     </>
   )
 }
-// Combined Focus Plan view — read-only synthesis across all sources.
-// The merged Today/Deferred tables get a "Source" column; each source's
-// Priorities section is rendered separately so they don't collide.
+// Combined Focus Plan view — same UI as FocusPlanView but synthesised
+// from every source's focus-plan.md. Each rendered task row remembers
+// which source it came from so right-click actions, drag-to-defer, edits
+// and deletes can be routed back to the correct source's storage.
+//
+// Per-source Priorities sections are rendered separately (so numbering
+// from different sources doesn't collide); each one is fully editable
+// and writes back to its source.
 function CombinedFocusPlanView({ sources, onNavigate }) {
-  const [perSource, setPerSource] = useState(null) // [{source, sections}]
+  const [perSource, setPerSource] = useState(null) // [{ source, content, sections }]
+  const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const [error, setError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
   const [addDialog, setAddDialog] = useState(null) // { section }
+  const [moveDialog, setMoveDialog] = useState(null)
 
+  // Reload all sources' focus-plan.md content.
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -3111,9 +3118,9 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
           try {
             const text = await storage.readFromSource(s.id, 'focus-plan.md')
             const migrated = migratePrioritiesSections(text) ?? text
-            return { source: s, sections: parseFocusPlan(migrated) }
+            return { source: s, content: migrated, sections: parseFocusPlan(migrated) }
           } catch {
-            return { source: s, sections: [] }
+            return { source: s, content: '', sections: [] }
           }
         }))
         if (!cancelled) setPerSource(results)
@@ -3124,191 +3131,542 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
     return () => { cancelled = true }
   }, [sources, reloadKey])
 
-  const handleAdd = async ({ task, priority, linkedTask, section, sourceId }) => {
-    if (!sourceId) return
-    const text = await storage.readFromSource(sourceId, 'focus-plan.md')
-    const lines = text.split('\n')
-    let inTargetSection = false
-    let insertIndex = -1
-    let maxId = await storage.maxJournalIdFromSource(sourceId)
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
-      if (line.startsWith('## ')) {
-        inTargetSection = line.replace('## ', '').trim() === section
-      }
-      if (inTargetSection && insertIndex === -1 && line.trim().startsWith('|') && line.includes('---')) {
-        insertIndex = i + 1
-      }
-      if (line.trim().startsWith('|')) {
-        const cells = line.split('|').slice(1, -1).map(c => c.trim())
-        if (cells.length >= 1 && cells[0] !== 'ID' && !/^[-:]+$/.test(cells[0])) {
-          const numMatch = cells[0].match(/^(\d+)/)
-          if (numMatch) maxId = Math.max(maxId, parseInt(numMatch[1], 10))
-        }
-      }
-    }
-    if (insertIndex === -1) return
-    const newId = maxId + 1
-    const today = new Date().toISOString().split('T')[0]
-    const trimmedLinked = linkedTask ? linkedTask.trim() : ''
-    const isUrl = /^https?:\/\//.test(trimmedLinked)
-    const extractTicketId = (url) => {
-      const endMatch = url.match(/\/(\d+)\/?(?:[?#].*)?$/)
-      if (endMatch) return endMatch[1]
-      const midMatch = url.match(/\/(\d{5,})\//)
-      if (midMatch) return midMatch[1]
-      return null
-    }
-    if (isUrl) {
-      const adoId = extractTicketId(trimmedLinked)
-      if (adoId) {
-        const adoUrl = trimmedLinked.replace(/\/$/, '')
-        lines.splice(insertIndex, 0, `| ${newId},[${adoId}](${adoUrl}) | ${priority} | ${task} | - | ${today} | |`)
-      } else {
-        lines.splice(insertIndex, 0, `| ${newId} | ${priority} | ${task} | - | ${today} | ${trimmedLinked} |`)
-      }
-    } else {
-      lines.splice(insertIndex, 0, `| ${newId} | ${priority} | ${task} | - | ${today} | ${trimmedLinked} |`)
-    }
-    await storage.writeToSource(sourceId, 'focus-plan.md', lines.join('\n'))
-    setReloadKey(k => k + 1)
-  }
+  // Pull completed-task labels from every source so linked-id chains can
+  // resolve names that have already been archived.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const merged = {}
+      await Promise.all(sources.map(async (s) => {
+        try {
+          const text = await storage.readFromSource(s.id, 'focus-plan-completed.md')
+          if (!text) return
+          const sections = parseFocusPlan(text)
+          for (const sec of sections) Object.assign(merged, buildTaskIdLookup(sec.lines))
+        } catch { /* ignore */ }
+      }))
+      if (!cancelled) setCompletedTaskLookup(merged)
+    })()
+    return () => { cancelled = true }
+  }, [sources, reloadKey])
 
   if (error) return <div className="placeholder"><h1>✨ Combined</h1><p>Failed to load: {error}</p></div>
   if (!perSource) return <div className="placeholder"><h1>✨ Combined</h1><p>Loading…</p></div>
 
-  // Merge tables across sources. Each row is augmented with a Source label.
-  const mergeSection = (title) => {
-    const merged = []
+  // ── Build merged tables and source lookup maps ──────────────────────
+  // For each task section (Today / Deferred), concatenate the body lines
+  // from every source. We keep the original raw rows untouched so:
+  //   - Task IDs render exactly as they do in the per-source view.
+  //   - Right-click handlers can match by raw line text and route the
+  //     write back to the right source.
+  //
+  // Note: TaskSection works off table-shaped `lines` (header row,
+  // separator row, then data rows). We re-emit a fresh header from the
+  // first source that provides one so the columns line up.
+
+  const lineToSource = new Map() // rawLine -> sourceId
+  const taskIdToSource = new Map() // taskId -> sourceId (for priority operations)
+
+  const buildMergedSection = (title) => {
+    let header = null
+    let separator = null
+    const dataLines = []
     for (const { source, sections } of perSource) {
       const sec = sections.find(s => s.title === title)
       if (!sec) continue
-      const { headers, rows } = parseMarkdownTable(sec.lines)
-      for (const row of rows) {
-        merged.push({ row, headers, source })
+      for (const line of sec.lines) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('|')) continue
+        if (trimmed.includes('---')) {
+          if (!separator) separator = line
+          continue
+        }
+        const cells = trimmed.split('|').slice(1, -1).map(c => c.trim())
+        if (cells.length === 0) continue
+        if (cells[0] === 'ID' || cells[0] === '#') {
+          if (!header) header = line
+          continue
+        }
+        dataLines.push(line)
+        lineToSource.set(trimmed, source.id)
+        const idCell = cells[0]
+        const localId = idCell.indexOf(',[') !== -1
+          ? idCell.substring(0, idCell.indexOf(',[')).trim()
+          : idCell
+        if (localId) taskIdToSource.set(localId, source.id)
       }
     }
-    return merged
+    if (!header) header = '| ID | 🎯 | Task | Priority | Added | Linked ID |'
+    if (!separator) separator = '|---|---|------|----------|-------|-----------|'
+    return [header, separator, ...dataLines]
   }
-  const today = mergeSection('Today')
-  const deferred = mergeSection('Deferred')
 
-  const renderTable = (title, items, defaultOpen = true) => {
-    const headerSet = items[0]?.headers || ['ID', '🎯', 'Task', 'Mngr Priority', 'Added', 'Linked ID']
-    return (
-      <CombinedSection
-        key={title}
-        title={title}
-        items={items}
-        baseHeaders={headerSet}
-        defaultOpen={defaultOpen}
-        onNavigate={onNavigate}
-        onAddClick={() => setAddDialog({ section: title })}
-      />
-    )
+  const todaySectionLines = buildMergedSection('Today')
+  const deferredSectionLines = buildMergedSection('Deferred')
+
+  // Build merged lookups for resolveManagerPriority / linked tasks.
+  // taskLookup is many-to-one (taskId → name). On collision we keep the
+  // first source's entry — combined view doesn't try to disambiguate
+  // identical IDs across sources (vanishingly rare in practice).
+  const currentTaskLookup = {}
+  const linkedIdMap = {}
+  const adoLookup = {}
+  for (const { sections } of perSource) {
+    for (const sec of sections) {
+      if (sec.title !== 'Today' && sec.title !== 'Deferred') continue
+      Object.assign(currentTaskLookup, buildTaskIdLookup(sec.lines))
+      Object.assign(linkedIdMap, buildLinkedIdMap(sec.lines))
+      Object.assign(adoLookup, buildAdoLookup(sec.lines))
+    }
+  }
+  const taskLookup = { ...completedTaskLookup, ...currentTaskLookup }
+  const activeTaskIds = Object.keys(currentTaskLookup)
+
+  // ── Source-routing helpers ──────────────────────────────────────────
+  // Each handler below identifies the source from either the raw line
+  // text or a task id, reads that source's current content, applies the
+  // pure operation from focusPlanOps, and writes back via writeToSource.
+
+  const sourceForLine = (rawLine) => lineToSource.get(rawLine.trim())
+  const sourceForTask = (taskId) => taskIdToSource.get(String(taskId))
+
+  const applyOp = async (sourceId, opFn) => {
+    if (!sourceId) return
+    const text = await storage.readFromSource(sourceId, 'focus-plan.md')
+    const result = opFn(text)
+    const newContent = typeof result === 'string' ? result : result.content
+    if (newContent === text) return
+    await storage.writeToSource(sourceId, 'focus-plan.md', newContent)
+    setReloadKey(k => k + 1)
+  }
+
+  // ── Today / Deferred handlers ──────────────────────────────────────
+
+  const handleTaskAction = (action, rawLine, fromSection, toSection) =>
+    applyOp(sourceForLine(rawLine), c => ops.opMoveBetweenSections(c, rawLine, fromSection, toSection))
+
+  const handleChangePriority = (rawLine, oldPriority, newPriority) =>
+    applyOp(sourceForLine(rawLine), c => ops.opChangePriority(c, rawLine, oldPriority, newPriority))
+
+  const handleRenameTask = (rawLine, newTaskName) =>
+    applyOp(sourceForLine(rawLine), c => ops.opRenameTask(c, rawLine, newTaskName))
+
+  const handleChangeLinkedId = (rawLine, newLinkedId) =>
+    applyOp(sourceForLine(rawLine), c => ops.opChangeLinkedId(c, rawLine, newLinkedId))
+
+  const handleLinkToAdoBugDb = (rawLine, adoLink) =>
+    applyOp(sourceForLine(rawLine), c => ops.opLinkToAdoBugDb(c, rawLine, adoLink))
+
+  const handleDeleteTask = async (rawLine, fromSection, journalPath) => {
+    const sid = sourceForLine(rawLine)
+    if (!sid) return
+    await applyOp(sid, c => ops.opDeleteTask(c, rawLine))
+    if (journalPath) {
+      try { await storage.removeFromSource(sid, journalPath) } catch (e) { console.error('Failed to delete journal:', e) }
+    }
+  }
+
+  const handlePromoteTodo = async (todoText, parentTaskId) => {
+    // Promote into the same source as the parent task.
+    const sid = sourceForTask(parentTaskId) || sources[0]?.id
+    if (!sid) return
+    const max = await storage.maxJournalIdFromSource(sid)
+    await applyOp(sid, c => ops.opPromoteTodoToTask(c, todoText, parentTaskId, max))
+  }
+
+  const handleAdd = async ({ task, priority, linkedTask, section, sourceId }) => {
+    if (!sourceId) return
+    const max = await storage.maxJournalIdFromSource(sourceId)
+    await applyOp(sourceId, c => ops.opAddTask(c, { task, priority, linkedTask, section }, max))
+  }
+
+  const handleCreateJournal = async (taskId, taskName) => {
+    const sid = sourceForTask(taskId)
+    if (!sid) return
+    const cleanName = (taskName || '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim()
+    const journalPath = `journal/task-${taskId}.md`
+    try {
+      await storage.writeToSource(sid, journalPath, `# Task ${taskId}: ${cleanName}\n\n- TODO: \n`)
+      onNavigate(journalPath)
+    } catch (e) {
+      console.error('Failed to create journal:', e)
+    }
+  }
+
+  const handleMoveToCompleted = async (rawLine, row, fromSection) => {
+    const sid = sourceForLine(rawLine)
+    if (!sid) return
+    const taskId = extractTaskId(row)
+    const taskName = row['Task'] || ''
+    const priority = row['Work Priority'] || row['Mngr Priority'] || row['Priority'] || '-'
+    let todoItems = []
+    if (taskId) {
+      try {
+        const j = await storage.checkJournalFromSource(sid, taskId)
+        if (j.exists) {
+          const todos = await storage.getTodosFromSource(sid, j.path)
+          todoItems = todos.map(t => t.text)
+        }
+      } catch (e) { console.error('Failed to fetch journal todos:', e) }
+    }
+    const completedRow = ops.buildCompletedRow({ taskId, taskName, priority, todoItems })
+    // Write the focus-plan deletion and the completed-plan append in
+    // sequence against the same source.
+    const focusText = await storage.readFromSource(sid, 'focus-plan.md')
+    const newFocus = ops.opRemoveTaskFromFocusPlan(focusText, rawLine, fromSection)
+    let completedText = ''
+    try { completedText = await storage.readFromSource(sid, 'focus-plan-completed.md') } catch { /* file may not exist */ }
+    const newCompleted = ops.opAppendToCompleted(completedText, completedRow)
+    await storage.writeToSource(sid, 'focus-plan-completed.md', newCompleted)
+    await storage.writeToSource(sid, 'focus-plan.md', newFocus)
+    setReloadKey(k => k + 1)
+  }
+
+  // Right-click → "Move to {source}" works the same as in FocusPlanView,
+  // except that the "from" source is determined by the row's source map
+  // rather than the active provider.
+  const findRawLineForTaskIdInSource = (sourceId, id) => {
+    const entry = perSource.find(p => p.source.id === sourceId)
+    if (!entry) return null
+    for (const sec of entry.sections) {
+      if (sec.title !== 'Today' && sec.title !== 'Deferred') continue
+      for (const line of sec.lines) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('|')) continue
+        const cells = trimmed.split('|').slice(1, -1).map(c => c.trim())
+        if (cells.length === 0) continue
+        const idCell = cells[0]
+        const localId = idCell.indexOf(',[') !== -1
+          ? idCell.substring(0, idCell.indexOf(',['))
+          : idCell
+        if (localId === String(id)) return { rawLine: trimmed, sectionTitle: sec.title }
+      }
+    }
+    return null
+  }
+
+  const handleMoveToSource = (rawLine, row, taskId, targetSourceId) => {
+    if (!targetSourceId || !taskId) return
+    const fromSourceId = sourceForLine(rawLine)
+    if (!fromSourceId || fromSourceId === targetSourceId) return
+    const target = sources.find(s => s.id === targetSourceId)
+    if (!target) return
+    const fromEntry = perSource.find(p => p.source.id === fromSourceId)
+    if (!fromEntry) return
+    const fromManagerPriorities = (() => {
+      const sec = fromEntry.sections.find(s => isPrioritiesSection(s.title))
+      return sec ? parseManagerPriorities(sec.lines) : {}
+    })()
+    const fromLinkedMap = {}
+    const fromActiveIds = []
+    for (const sec of fromEntry.sections) {
+      if (sec.title !== 'Today' && sec.title !== 'Deferred') continue
+      Object.assign(fromLinkedMap, buildLinkedIdMap(sec.lines))
+      fromActiveIds.push(...Object.keys(buildTaskIdLookup(sec.lines)))
+    }
+    const moveSet = computeMoveSet(taskId, fromManagerPriorities, fromLinkedMap, fromActiveIds)
+    const movingTasks = [...moveSet].map(id => ({
+      id,
+      name: taskLookup[id] || (id === taskId ? (row['Task'] || '') : ''),
+      isPriority: !!fromManagerPriorities[id],
+    }))
+    const brokenLinks = computeBrokenLinks(moveSet, fromLinkedMap, taskLookup)
+    setMoveDialog({ target, fromSourceId, taskId, rawLine, movingTasks, brokenLinks })
+  }
+
+  const performMoveToSource = async ({ target, fromSourceId, movingTasks }) => {
+    const fromEntry = perSource.find(p => p.source.id === fromSourceId)
+    if (!fromEntry) return
+    const movingIds = new Set(movingTasks.map(t => t.id))
+    const movingRows = []
+    for (const t of movingTasks) {
+      const found = findRawLineForTaskIdInSource(fromSourceId, t.id)
+      if (found) movingRows.push({ ...found, taskId: t.id })
+    }
+    if (movingRows.length === 0) return
+
+    const removalSet = new Set(movingRows.map(r => r.rawLine))
+    const fromLines = fromEntry.content.split('\n')
+    let inPriorities = false
+    const newFromLines = []
+    for (const line of fromLines) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('## ')) {
+        inPriorities = isPrioritiesSection(trimmed.replace(/^##\s+/, ''))
+        newFromLines.push(line)
+        continue
+      }
+      if (removalSet.has(trimmed)) continue
+      if (inPriorities) {
+        const m = trimmed.match(/^\d+\.\s+(.+)$/)
+        if (m && movingIds.has(m[1].trim())) continue
+      }
+      newFromLines.push(line)
+    }
+    // Renumber
+    const renumbered = []
+    let pInside = false
+    let pIdx = 1
+    for (const line of newFromLines) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('## ')) {
+        pInside = isPrioritiesSection(trimmed.replace(/^##\s+/, ''))
+        if (pInside) pIdx = 1
+        renumbered.push(line)
+        continue
+      }
+      if (pInside) {
+        const m = line.match(/^(\s*)\d+\.\s+(.+)$/)
+        if (m) { renumbered.push(`${m[1]}${pIdx++}. ${m[2]}`); continue }
+      }
+      renumbered.push(line)
+    }
+
+    // Build target content
+    let targetContent = ''
+    try { targetContent = await storage.readFromSource(target.id, 'focus-plan.md') }
+    catch {
+      targetContent = '# Focus Plan\n\n## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|-----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|-----------|\n'
+    }
+    const tLines = targetContent.split('\n')
+    let inToday = false
+    let todayInsertIdx = -1
+    for (let i = 0; i < tLines.length; i++) {
+      const trimmed = tLines[i].trim()
+      if (trimmed.startsWith('## ')) {
+        inToday = trimmed.replace(/^##\s+/, '') === 'Today'
+        continue
+      }
+      if (inToday && trimmed.startsWith('|') && trimmed.includes('---')) {
+        todayInsertIdx = i + 1
+        break
+      }
+    }
+    if (todayInsertIdx === -1) {
+      tLines.push('', '## Today', '', '| ID | 🎯 | Task | Priority | Added | Linked ID |', '|---|---|------|----------|-------|-----------|')
+      todayInsertIdx = tLines.length
+    }
+    tLines.splice(todayInsertIdx, 0, ...movingRows.map(r => r.rawLine))
+
+    const priorityIdsMoving = movingTasks.filter(t => t.isPriority).map(t => t.id)
+    if (priorityIdsMoving.length > 0) {
+      let pStart = -1
+      let pEnd = tLines.length
+      for (let i = 0; i < tLines.length; i++) {
+        const trimmed = tLines[i].trim()
+        if (trimmed.startsWith('## ') && isPrioritiesSection(trimmed.replace(/^##\s+/, ''))) pStart = i
+        else if (pStart !== -1 && trimmed.startsWith('## ')) { pEnd = i; break }
+      }
+      if (pStart === -1) {
+        tLines.push('', '## Priorities', '')
+        pStart = tLines.length - 2
+        pEnd = tLines.length
+      }
+      let maxNum = 0
+      for (let i = pStart + 1; i < pEnd; i++) {
+        const m = tLines[i].trim().match(/^(\d+)\.\s+/)
+        if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10))
+      }
+      const newEntries = priorityIdsMoving.map((id, i) => `${maxNum + i + 1}. ${id}`)
+      let insertAt = pEnd
+      while (insertAt > pStart + 1 && tLines[insertAt - 1].trim() === '') insertAt--
+      tLines.splice(insertAt, 0, ...newEntries)
+    }
+
+    // Move journals
+    for (const t of movingTasks) {
+      const journalPath = `journal/task-${t.id}.md`
+      try {
+        const journalContent = await storage.readFromSource(fromSourceId, journalPath)
+        if (typeof journalContent === 'string' && journalContent.length > 0) {
+          await storage.writeToSource(target.id, journalPath, journalContent)
+          await storage.removeFromSource(fromSourceId, journalPath)
+        }
+      } catch { /* no journal — skip */ }
+    }
+
+    await storage.writeToSource(target.id, 'focus-plan.md', tLines.join('\n'))
+    await storage.writeToSource(fromSourceId, 'focus-plan.md', renumbered.join('\n'))
+    setReloadKey(k => k + 1)
+  }
+
+  // ── Per-source priorities ──────────────────────────────────────────
+  // For each source we render its own ManagerPrioritiesSection so
+  // numbering stays scoped to that source. Edits write back to the
+  // source via the same op functions FocusPlanView would use.
+
+  const buildPriorityHandlers = (sourceId) => ({
+    onUpdate: (newLines) =>
+      applyOp(sourceId, c => ops.opUpdateManagerPriorities(c, newLines)),
+    onAddAndPrioritize: async (taskName, prioritySectionTitle) => {
+      const max = await storage.maxJournalIdFromSource(sourceId)
+      await applyOp(sourceId, c => ops.opAddAndPrioritize(c, taskName, prioritySectionTitle, max))
+    },
+    onPromoteToManagerPriority: (taskId) =>
+      applyOp(sourceId, c => ops.opPromoteToManagerPriority(c, taskId)),
+    onRemoveFromManagerPriority: (taskId) =>
+      applyOp(sourceId, c => ops.opRemoveFromManagerPriority(c, taskId)),
+  })
+
+  // Expose promote/remove to the right-click menu by routing the task id
+  // back to its owning source.
+  const handlePromoteToManagerPriority = (taskId) => {
+    const sid = sourceForTask(taskId)
+    if (!sid) return
+    return buildPriorityHandlers(sid).onPromoteToManagerPriority(taskId)
+  }
+  const handleRemoveFromManagerPriority = (taskId) => {
+    const sid = sourceForTask(taskId)
+    if (!sid) return
+    return buildPriorityHandlers(sid).onRemoveFromManagerPriority(taskId)
+  }
+
+  // ── Render ──────────────────────────────────────────────────────────
+
+  const scrollToPriorities = () => {
+    const el = document.querySelector('[id^="combined-priorities-"]')
+    if (el) el.scrollIntoView({ behavior: 'smooth' })
+  }
+
+  // Aggregate manager priorities across all sources for sort/colour
+  // hints in TaskSection. Entries from different sources don't collide
+  // unless task IDs do — same caveat as taskLookup above.
+  const managerPriorities = {}
+  for (const { sections } of perSource) {
+    const sec = sections.find(s => isPrioritiesSection(s.title))
+    if (sec) Object.assign(managerPriorities, parseManagerPriorities(sec.lines))
   }
 
   return (
     <div className="focus-plan-view combined-view">
       <h1>✨ Combined Focus Plan</h1>
-      {renderTable('Today', today, true)}
-      {renderTable('Deferred', deferred, false)}
+
+      <TaskSection
+        title="Today"
+        tableLines={todaySectionLines}
+        onNavigate={onNavigate}
+        defaultOpen={true}
+        managerPriorities={managerPriorities}
+        onScrollToPriorities={scrollToPriorities}
+        onTaskAction={handleTaskAction}
+        onMoveToCompleted={handleMoveToCompleted}
+        onAddTask={() => setAddDialog({ section: 'Today' })}
+        onCreateJournal={handleCreateJournal}
+        onChangePriority={handleChangePriority}
+        onDeleteTask={handleDeleteTask}
+        onPromoteTodo={handlePromoteTodo}
+        onRenameTask={handleRenameTask}
+        onChangeLinkedId={handleChangeLinkedId}
+        onLinkToAdoBugDb={handleLinkToAdoBugDb}
+        taskLookup={taskLookup}
+        activeTaskIds={activeTaskIds}
+        linkedIdMap={linkedIdMap}
+        adoLookup={adoLookup}
+        onPromoteToManagerPriority={handlePromoteToManagerPriority}
+        onRemoveFromManagerPriority={handleRemoveFromManagerPriority}
+        otherSources={sources}
+        onMoveToSource={handleMoveToSource}
+      />
+
+      <TaskSection
+        title="Deferred"
+        tableLines={deferredSectionLines}
+        onNavigate={onNavigate}
+        defaultOpen={false}
+        managerPriorities={managerPriorities}
+        onScrollToPriorities={scrollToPriorities}
+        onTaskAction={handleTaskAction}
+        onMoveToCompleted={handleMoveToCompleted}
+        onAddTask={() => setAddDialog({ section: 'Deferred' })}
+        onCreateJournal={handleCreateJournal}
+        onChangePriority={handleChangePriority}
+        onDeleteTask={handleDeleteTask}
+        onPromoteTodo={handlePromoteTodo}
+        onRenameTask={handleRenameTask}
+        onChangeLinkedId={handleChangeLinkedId}
+        onLinkToAdoBugDb={handleLinkToAdoBugDb}
+        taskLookup={taskLookup}
+        activeTaskIds={activeTaskIds}
+        linkedIdMap={linkedIdMap}
+        adoLookup={adoLookup}
+        onPromoteToManagerPriority={handlePromoteToManagerPriority}
+        onRemoveFromManagerPriority={handleRemoveFromManagerPriority}
+        otherSources={sources}
+        onMoveToSource={handleMoveToSource}
+      />
+
       {perSource.map(({ source, sections }) => {
         const pri = sections.find(s => isPrioritiesSection(s.title))
         if (!pri) return null
         const taskSections = sections.filter(s => s.title === 'Today' || s.title === 'Deferred')
-        const taskLookup = {}
-        const linkedIdMap = {}
-        for (const section of taskSections) {
-          Object.assign(taskLookup, buildTaskIdLookup(section.lines))
-          Object.assign(linkedIdMap, buildLinkedIdMap(section.lines))
+        const localTaskLookup = {}
+        const localLinkedMap = {}
+        for (const sec of taskSections) {
+          Object.assign(localTaskLookup, buildTaskIdLookup(sec.lines))
+          Object.assign(localLinkedMap, buildLinkedIdMap(sec.lines))
         }
-        const managerPriorities = parseManagerPriorities(pri.lines)
+        const localManagerPriorities = parseManagerPriorities(pri.lines)
         const tasksByPriority = {}
-        for (const section of taskSections) {
-          const { headers, rows } = parseMarkdownTable(section.lines)
+        for (const sec of taskSections) {
+          const { headers, rows } = parseMarkdownTable(sec.lines)
           const priorityCol = headers.find(h => h.includes('🎯')) || '🎯'
           for (const row of rows) {
             const id = extractTaskId(row)
             if (!id) continue
-            if (managerPriorities[id]) continue
-            const resolved = resolveManagerPriority(id, linkedIdMap, managerPriorities)
+            if (localManagerPriorities[id]) continue
+            const resolved = resolveManagerPriority(id, localLinkedMap, localManagerPriorities)
             if (resolved) {
               if (!tasksByPriority[resolved.id]) tasksByPriority[resolved.id] = []
               tasksByPriority[resolved.id].push({
                 id,
                 task: row['Task'] || '',
                 priority: row[priorityCol] || '',
-                section: section.title,
+                section: sec.title,
               })
             }
           }
         }
+        const handlers = buildPriorityHandlers(source.id)
         return (
           <ManagerPrioritiesSection
             key={source.id}
             lines={pri.lines}
             defaultOpen={false}
-            onUpdate={() => {}}
-            onAddAndPrioritize={() => {}}
+            onUpdate={handlers.onUpdate}
+            onAddAndPrioritize={(name) => handlers.onAddAndPrioritize(name, pri.title)}
             tasksByPriority={tasksByPriority}
-            taskLookup={taskLookup}
+            taskLookup={{ ...completedTaskLookup, ...localTaskLookup }}
             title={`${source.name} — Priorities`}
             sectionId={`combined-priorities-${source.id}`}
           />
         )
       })}
+
       {addDialog && (
         <AddTaskDialog
           section={addDialog.section}
           sources={sources}
           defaultSourceId={sources[0]?.id}
           onClose={() => setAddDialog(null)}
-          onAdd={handleAdd}
+          onAdd={async (args) => { await handleAdd(args); setAddDialog(null) }}
         />
       )}
-    </div>
-  )
-}
 
-function CombinedSection({ title, items, baseHeaders, defaultOpen, onNavigate, onAddClick }) {
-  const [isOpen, setIsOpen] = useState(defaultOpen)
-  const headers = baseHeaders
-  return (
-    <div className="task-section">
-      <h2 className="section-header" onClick={() => setIsOpen(!isOpen)}>
-        <span className="collapse-icon">{isOpen ? '▼' : '▶'}</span>
-        {title}
-        <span className="task-count">({items.length})</span>
-        {onAddClick && (
-          <button
-            className="add-task-btn"
-            onClick={(e) => { e.stopPropagation(); onAddClick() }}
-            title={`Add task to ${title}`}
-          >+</button>
-        )}
-      </h2>
-      {isOpen && (
-        <div className="task-table-container">
-          <table className="task-table">
-            <thead>
-              <tr>{headers.map((h, i) => <th key={i}>{displayHeader(h)}</th>)}</tr>
-            </thead>
-            <tbody>
-              {items.map(({ row, source }, i) => (
-                <tr key={`${source.id}-${i}`}>
-                  {baseHeaders.map((h, ci) => {
-                    const val = row[h]
-                    if ((h === 'ID' || h === '#') && typeof val === 'object') {
-                      return <td key={ci}>{parseLinks(val.id, onNavigate)}</td>
-                    }
-                    return <td key={ci}>{renderCellWithTooltips(typeof val === 'object' ? (val.id ?? '') : val, onNavigate)}</td>
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {moveDialog && (
+        <MoveToSourceDialog
+          targetName={moveDialog.target.name}
+          movingTasks={moveDialog.movingTasks}
+          brokenLinks={moveDialog.brokenLinks}
+          onClose={() => setMoveDialog(null)}
+          onConfirm={() => {
+            const dlg = moveDialog
+            setMoveDialog(null)
+            performMoveToSource(dlg).catch(err => {
+              console.error('Move to source failed:', err)
+              alert(`Failed to move tasks to ${dlg.target.name}: ${err.message || err}`)
+            })
+          }}
+        />
       )}
     </div>
   )
