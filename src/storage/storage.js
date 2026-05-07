@@ -131,3 +131,28 @@ export async function getFilesFromSource(sourceId) {
   if (!p) throw new Error(`No provider for source ${sourceId}`)
   return p.getFiles()
 }
+
+export async function removeFromSource(sourceId, path) {
+  const { getProvider } = await import('./sources.js')
+  const p = getProvider(sourceId)
+  if (!p) throw new Error(`No provider for source ${sourceId}`)
+  return p.remove(path)
+}
+
+export async function checkJournalFromSource(sourceId, taskId) {
+  const { getProvider } = await import('./sources.js')
+  const p = getProvider(sourceId)
+  if (!p) return { exists: false }
+  try { return await p.checkJournal(taskId) } catch { return { exists: false } }
+}
+
+export async function getTodosFromSource(sourceId, path) {
+  const { getProvider } = await import('./sources.js')
+  const p = getProvider(sourceId)
+  if (!p) return []
+  try {
+    const content = await p.read(path)
+    const { parseTodos } = await import('./fsa.js')
+    return parseTodos(content)
+  } catch { return [] }
+}
