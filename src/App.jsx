@@ -149,41 +149,63 @@ function AdoLinkDialog({ onClose, onSave, currentUrl }) {
 // Confirmation dialog shown before moving a task (and possibly its
 // dependency subtree) from the active source to another source.
 function MoveToSourceDialog({ targetName, movingTasks, brokenLinks, onClose, onConfirm }) {
+  const [moving, setMoving] = useState(false)
+
+  const handleMove = async () => {
+    setMoving(true)
+    try {
+      await onConfirm()
+      onClose()
+    } catch (err) {
+      setMoving(false)
+      alert(`Failed to move tasks to ${targetName}: ${err.message || err}`)
+    }
+  }
+
   return (
-    <div className="dialog-overlay" onClick={onClose}>
+    <div className="dialog-overlay" onClick={moving ? undefined : onClose}>
       <div className="dialog" onClick={e => e.stopPropagation()}>
         <h3>📦 Move to {targetName}</h3>
-        <p className="dialog-hint">
-          {movingTasks.length === 1
-            ? 'The following task will be moved:'
-            : `The following ${movingTasks.length} tasks will be moved together:`}
-        </p>
-        <ul className="move-task-list">
-          {movingTasks.map(t => (
-            <li key={t.id}>
-              <strong>#{t.id}</strong> {t.name || '(no name)'}
-              {t.isPriority && <span className="move-task-tag"> ⭐ priority</span>}
-            </li>
-          ))}
-        </ul>
-        {brokenLinks.length > 0 && (
+        {moving ? (
+          <div className="move-in-progress">
+            <span className="spinner" />
+            Moving tasks to {targetName}…
+          </div>
+        ) : (
           <>
-            <p className="dialog-hint dialog-warning">
-              ⚠️ {brokenLinks.length === 1 ? 'This link will break' : `${brokenLinks.length} links will break`} because the linked task is moving to another source:
+            <p className="dialog-hint">
+              {movingTasks.length === 1
+                ? 'The following task will be moved:'
+                : `The following ${movingTasks.length} tasks will be moved together:`}
             </p>
-            <ul className="move-task-list move-broken-list">
-              {brokenLinks.map(b => (
-                <li key={`${b.fromId}->${b.toId}`}>
-                  <strong>#{b.fromId}</strong> {b.fromName || ''} → <strong>#{b.toId}</strong>
+            <ul className="move-task-list">
+              {movingTasks.map(t => (
+                <li key={t.id}>
+                  <strong>#{t.id}</strong> {t.name || '(no name)'}
+                  {t.isPriority && <span className="move-task-tag"> ⭐ priority</span>}
                 </li>
               ))}
             </ul>
+            {brokenLinks.length > 0 && (
+              <>
+                <p className="dialog-hint dialog-warning">
+                  ⚠️ {brokenLinks.length === 1 ? 'This link will break' : `${brokenLinks.length} links will break`} because the linked task is moving to another source:
+                </p>
+                <ul className="move-task-list move-broken-list">
+                  {brokenLinks.map(b => (
+                    <li key={`${b.fromId}->${b.toId}`}>
+                      <strong>#{b.fromId}</strong> {b.fromName || ''} → <strong>#{b.toId}</strong>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
           </>
         )}
         <div className="dialog-actions">
-          <button onClick={onClose}>Cancel</button>
-          <button className="dialog-save-btn" onClick={() => { onConfirm(); onClose() }}>
-            Move
+          <button onClick={onClose} disabled={moving}>Cancel</button>
+          <button className="dialog-save-btn" onClick={handleMove} disabled={moving}>
+            {moving ? 'Moving…' : 'Move'}
           </button>
         </div>
       </div>
@@ -2499,13 +2521,9 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
           movingTasks={moveDialog.movingTasks}
           brokenLinks={moveDialog.brokenLinks}
           onClose={() => setMoveDialog(null)}
-          onConfirm={() => {
+          onConfirm={async () => {
             const dlg = moveDialog
-            setMoveDialog(null)
-            performMoveToSource(dlg).catch(err => {
-              console.error('Move to source failed:', err)
-              alert(`Failed to move tasks to ${dlg.target.name}: ${err.message || err}`)
-            })
+            await performMoveToSource(dlg)
           }}
         />
       )}
@@ -3703,16 +3721,13 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
           movingTasks={moveDialog.movingTasks}
           brokenLinks={moveDialog.brokenLinks}
           onClose={() => setMoveDialog(null)}
-          onConfirm={() => {
+          onConfirm={async () => {
             const dlg = moveDialog
-            setMoveDialog(null)
-            performMoveToSource(dlg).catch(err => {
-              console.error('Move to source failed:', err)
-              alert(`Failed to move tasks to ${dlg.target.name}: ${err.message || err}`)
-            })
+            await performMoveToSource(dlg)
           }}
         />
       )}
+
     </div>
   )
 }
