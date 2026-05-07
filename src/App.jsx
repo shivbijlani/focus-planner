@@ -1254,11 +1254,27 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
 }
 
 // Manager Priorities Section
-function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddAndPrioritize, tasksByPriority = {}, taskLookup = {}, title = 'Work Priorities', sectionId = 'work-priorities' }) {
+function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddAndPrioritize, tasksByPriority = {}, taskLookup = {}, title = 'Work Priorities', sectionId = 'work-priorities', otherSources, onMoveToSource, sourceId }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const [isAdding, setIsAdding] = useState(false)
   const [newPriority, setNewPriority] = useState('')
   const [expandedPriorities, setExpandedPriorities] = useState({})
+  const [contextMenu, setContextMenu] = useState(null)
+
+  const handlePriorityContextMenu = (e, id, taskName) => {
+    e.preventDefault()
+    const options = []
+    if (otherSources && otherSources.length > 0 && onMoveToSource) {
+      for (const src of otherSources) {
+        options.push({
+          label: `Move to ${src.name}`,
+          icon: '📦',
+          action: () => onMoveToSource(null, { Task: taskName }, id, src.id, sourceId),
+        })
+      }
+    }
+    if (options.length > 0) setContextMenu({ x: e.clientX, y: e.clientY, options })
+  }
   const priorities = parseManagerPriorities(lines)
   const priorityList = Object.entries(priorities).sort((a, b) => a[1] - b[1])
   
@@ -1386,7 +1402,7 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
               const taskName = taskLookup[id] || `Task ${id}`
               
               return (
-                <li key={id} className="priority-item">
+                <li key={id} className="priority-item" onContextMenu={(e) => handlePriorityContextMenu(e, id, taskName)}>
                   <div className="priority-item-header">
                     <span className="priority-number">#{num}</span>
                     <span className="priority-name priority-name-clickable" onClick={() => scrollToTask(id)} title={taskName}>
@@ -1465,6 +1481,14 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
             </div>
           )}
         </div>
+      )}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          options={contextMenu.options}
+          onClose={() => setContextMenu(null)}
+        />
       )}
     </div>
   )
@@ -2464,6 +2488,8 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
           taskLookup={taskLookup}
           title="Priorities"
           sectionId="priorities"
+          otherSources={otherSources}
+          onMoveToSource={handleMoveToSource}
         />
       )}
 
@@ -3361,9 +3387,9 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
     return null
   }
 
-  const handleMoveToSource = (rawLine, row, taskId, targetSourceId) => {
+  const handleMoveToSource = (rawLine, row, taskId, targetSourceId, explicitFromSourceId = null) => {
     if (!targetSourceId || !taskId) return
-    const fromSourceId = sourceForLine(rawLine)
+    const fromSourceId = explicitFromSourceId || sourceForLine(rawLine)
     if (!fromSourceId || fromSourceId === targetSourceId) return
     const target = sources.find(s => s.id === targetSourceId)
     if (!target) return
@@ -3654,6 +3680,9 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
             taskLookup={{ ...completedTaskLookup, ...localTaskLookup }}
             title={`${source.name} — Priorities`}
             sectionId={`combined-priorities-${source.id}`}
+            sourceId={source.id}
+            otherSources={sources.filter(s => s.id !== source.id)}
+            onMoveToSource={handleMoveToSource}
           />
         )
       })}
