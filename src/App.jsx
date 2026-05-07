@@ -999,7 +999,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
 }
 
 // Collapsible section component
-function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource }) {
+function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const { headers, rows, rawLines } = parseMarkdownTable(tableLines)
   const [contextMenu, setContextMenu] = useState(null)
@@ -1208,6 +1208,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
           className="add-task-btn"
           onClick={(e) => {
             e.stopPropagation()
+            if (onAddClick) { onAddClick(); return }
             setShowAddDialog(true)
           }}
           title={`Add task to ${title}`}
@@ -3610,7 +3611,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
         onScrollToPriorities={scrollToPriorities}
         onTaskAction={handleTaskAction}
         onMoveToCompleted={handleMoveToCompleted}
-        onAddTask={() => setAddDialog({ section: 'Today' })}
+        onAddClick={() => setAddDialog({ section: 'Today' })}
         onCreateJournal={handleCreateJournal}
         onChangePriority={handleChangePriority}
         onDeleteTask={handleDeleteTask}
@@ -3637,7 +3638,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
         onScrollToPriorities={scrollToPriorities}
         onTaskAction={handleTaskAction}
         onMoveToCompleted={handleMoveToCompleted}
-        onAddTask={() => setAddDialog({ section: 'Deferred' })}
+        onAddClick={() => setAddDialog({ section: 'Deferred' })}
         onCreateJournal={handleCreateJournal}
         onChangePriority={handleChangePriority}
         onDeleteTask={handleDeleteTask}
