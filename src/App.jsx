@@ -3836,7 +3836,9 @@ function App() {
     setStorageProvider(providerId)
     setSourcesVersion(v => v + 1)
     setAppState('ready')
-    handleSelectFile('focus-plan.md')
+    const liveSources = getSources()
+    const defaultFile = liveSources.length > 1 ? `${COMBINED_ID}::focus-plan.md` : 'focus-plan.md'
+    handleSelectFile(defaultFile)
   }
 
   useEffect(() => {
