@@ -2879,6 +2879,34 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
       {perSource.map(({ source, sections }) => {
         const pri = sections.find(s => isPrioritiesSection(s.title))
         if (!pri) return null
+        const taskSections = sections.filter(s => s.title === 'Today' || s.title === 'Deferred')
+        const taskLookup = {}
+        const linkedIdMap = {}
+        for (const section of taskSections) {
+          Object.assign(taskLookup, buildTaskIdLookup(section.lines))
+          Object.assign(linkedIdMap, buildLinkedIdMap(section.lines))
+        }
+        const managerPriorities = parseManagerPriorities(pri.lines)
+        const tasksByPriority = {}
+        for (const section of taskSections) {
+          const { headers, rows } = parseMarkdownTable(section.lines)
+          const priorityCol = headers.find(h => h.includes('🎯')) || '🎯'
+          for (const row of rows) {
+            const id = extractTaskId(row)
+            if (!id) continue
+            if (managerPriorities[id]) continue
+            const resolved = resolveManagerPriority(id, linkedIdMap, managerPriorities)
+            if (resolved) {
+              if (!tasksByPriority[resolved.id]) tasksByPriority[resolved.id] = []
+              tasksByPriority[resolved.id].push({
+                id,
+                task: row['Task'] || '',
+                priority: row[priorityCol] || '',
+                section: section.title,
+              })
+            }
+          }
+        }
         return (
           <ManagerPrioritiesSection
             key={source.id}
@@ -2886,8 +2914,8 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
             defaultOpen={false}
             onUpdate={() => {}}
             onAddAndPrioritize={() => {}}
-            tasksByPriority={{}}
-            taskLookup={{}}
+            tasksByPriority={tasksByPriority}
+            taskLookup={taskLookup}
             title={`${source.name} — Priorities`}
             sectionId={`combined-priorities-${source.id}`}
           />
