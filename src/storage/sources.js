@@ -68,26 +68,6 @@ export function loadSources() {
   return _sources
 }
 
-/**
- * One-time migration: convert the legacy single-provider setup into a
- * single-entry sources registry. Returns true if a migration happened.
- */
-export function migrateLegacy() {
-  if (readJSON(SOURCES_KEY)) return false
-  const legacy = localStorage.getItem('fp-storage-provider')
-  if (!legacy) return false
-  const id = 's1'
-  _sources = [{
-    id,
-    name: getProviderName(legacy),
-    providerType: legacy,
-  }]
-  _activeId = id
-  writeSources()
-  localStorage.setItem(ACTIVE_KEY, id)
-  return true
-}
-
 export function getSources() { return _sources ? [..._sources] : [] }
 export function getActiveSourceId() { return _activeId }
 export function getActiveSource() {
@@ -161,7 +141,6 @@ export function renameSource(sourceId, name) {
 export async function removeSource(sourceId) {
   const idx = _sources?.findIndex(s => s.id === sourceId) ?? -1
   if (idx < 0) return
-  const src = _sources[idx]
   const provider = _providers.get(sourceId)
   if (provider?.forget) {
     try { await provider.forget() } catch { /* ignore */ }
@@ -177,12 +156,6 @@ export async function removeSource(sourceId) {
     } else {
       localStorage.removeItem(ACTIVE_KEY)
       setActiveProvider(null)
-    }
-  }
-  // Also clear legacy single-provider key if this was the last source matching it
-  if (_sources.every(s => s.providerType !== src.providerType)) {
-    if (localStorage.getItem('fp-storage-provider') === src.providerType) {
-      localStorage.removeItem('fp-storage-provider')
     }
   }
 }

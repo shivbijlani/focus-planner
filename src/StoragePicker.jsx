@@ -22,9 +22,8 @@ export function StoragePicker({ onReady }) {
   const [connecting, setConnecting] = useState(null) // provider id being connected
   const [error, setError] = useState('')
 
-  // On mount: check for saved provider or returning from OAuth redirect
+  // On mount: check for returning from OAuth redirect
   useEffect(() => {
-    const savedId = localStorage.getItem('fp-storage-provider')
     const hasODCode = new URLSearchParams(window.location.search).get('code') && sessionStorage.getItem('onedrive_verifier')
     const hasGDCode = new URLSearchParams(window.location.search).get('code') && sessionStorage.getItem('gd_verifier')
 
@@ -32,8 +31,6 @@ export function StoragePicker({ onReady }) {
       tryConnect(PROVIDERS.ONEDRIVE, true)
     } else if (hasGDCode) {
       tryConnect(PROVIDERS.GOOGLE_DRIVE, true)
-    } else if (savedId) {
-      tryConnect(savedId, true)
     }
   }, [])
 
@@ -46,7 +43,6 @@ export function StoragePicker({ onReady }) {
       if (result) {
         // Restore succeeded (has valid tokens or just completed OAuth)
         setActiveProvider(provider)
-        localStorage.setItem('fp-storage-provider', id)
         onReady(id)
         return
       }
@@ -73,8 +69,6 @@ export function StoragePicker({ onReady }) {
   const handlePick = async (id) => {
     setConnecting(id)
     setError('')
-    // Save before redirect so we can resume
-    localStorage.setItem('fp-storage-provider', id)
     try {
       const provider = makeProvider(id)
       if (id === PROVIDERS.FSA) {

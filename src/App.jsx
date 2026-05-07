@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import './App.css'
 import * as storage from './storage/storage.js'
-import { setActiveProvider, getActiveProvider, PROVIDERS, getProviderName, getAvailableProviders } from './storage/storage.js'
-import { LocalStorageProvider } from './storage/localstorage-provider.js'
-import { migrate, resumePendingMigration, hasPendingMigration, makeProvider } from './storage/migrate.js'
+import { getActiveProvider, PROVIDERS, getProviderName, getAvailableProviders } from './storage/storage.js'
+import { migrate, resumePendingMigration, hasPendingMigration } from './storage/migrate.js'
 import {
-  loadSources, migrateLegacy, getSources, getActiveSourceId, setActiveSource,
+  loadSources, getSources, getActiveSourceId, setActiveSource,
   addSource, renameSource, removeSource, getProvider, restoreSource,
   availableProviderTypesForAdd,
   beginAddCloudSource, consumePendingAdd, abortPendingAdd,
@@ -3177,9 +3176,9 @@ function App() {
 
   const initWithProvider = async (providerId) => {
     await storage.scaffold()
-    // Ensure we have a sources registry. If first run on legacy install,
-    // the legacy → registry migration was already attempted; otherwise
-    // create the canonical single-source entry now.
+    // Ensure we have a sources registry entry. On fresh installs the bootstrap
+    // path creates one before calling here; this guard handles the StoragePicker
+    // path where the user picks a provider that isn't in the registry yet.
     if (getSources().length === 0) {
       const src = addSource({ providerType: providerId, name: storage.folderName() || getProviderName(providerId) })
       await setActiveSource(src.id)
@@ -3204,9 +3203,8 @@ function App() {
           }
         }
 
-        // 2. Load (and one-shot migrate) the multi-source registry.
+        // 2. Load the multi-source registry.
         loadSources()
-        migrateLegacy()
         const registry = getSources()
 
         if (registry.length > 0) {
@@ -3259,30 +3257,11 @@ function App() {
           // No source restored cleanly — fall back to LocalStorage.
         }
 
-        // 3. Legacy single-provider path (no registry yet — migrateLegacy() didn't run because
-        // there was no fp-storage-provider key either). Fresh install → pick storage.
-        const savedId = localStorage.getItem('fp-storage-provider')
-        if (!savedId) {
-          // Auto-bootstrap LocalStorage as the default first source.
-          const fallback = new LocalStorageProvider()
-          await fallback.restore()
-          setActiveProvider(fallback)
-          localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
-          await initWithProvider(PROVIDERS.LOCAL_STORAGE)
-          return
-        }
-        const provider = makeProvider(savedId)
-        const ok = await provider.restore()
-        if (ok) {
-          setActiveProvider(provider)
-          await initWithProvider(savedId)
-        } else {
-          const fallback = new LocalStorageProvider()
-          await fallback.restore()
-          setActiveProvider(fallback)
-          localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
-          await initWithProvider(PROVIDERS.LOCAL_STORAGE)
-        }
+        // 3. No sources yet — fresh install. Bootstrap a default LocalStorage source.
+        const src = addSource({ providerType: PROVIDERS.LOCAL_STORAGE, name: getProviderName(PROVIDERS.LOCAL_STORAGE) })
+        await setActiveSource(src.id)
+        await getProvider(src.id).restore()
+        await initWithProvider(PROVIDERS.LOCAL_STORAGE)
       } catch (e) {
         console.error('Storage init failed:', e)
         setAppState('pick-storage')
