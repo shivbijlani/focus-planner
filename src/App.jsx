@@ -5,7 +5,7 @@ import { setActiveProvider, getActiveProvider, PROVIDERS, TARGET_STATUS, getProv
 import { LocalStorageProvider } from './storage/localstorage-provider.js'
 import { resumePendingMigration, hasPendingMigration, makeProvider } from './storage/migrate.js'
 import {
-  loadSources, migrateLegacy, getSources, getActiveSourceId, setActiveSource,
+  loadSources, migrateLegacy, getSources, getActiveSourceId, getActiveSource, setActiveSource,
   addSource, removeSource, getProvider, restoreSource,
   consumePendingAdd, consumePendingReauth,
 } from './storage/sources.js'
@@ -2844,8 +2844,48 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
   const sources = getSources()
   const activeId = getActiveSourceId()
   const isMulti = sources.length > 1
+  const activePrimary = getActiveSource()?.providerType ?? PROVIDERS.LOCAL_STORAGE
+  const fsaSupported = typeof window !== 'undefined' && 'showDirectoryPicker' in window
 
   const close = () => { setOpen(false); setError('') }
+
+  const pickLocalFolder = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      const existing = getSources().find(s => s.providerType === PROVIDERS.FSA)
+      let sourceId = existing?.id
+      if (!sourceId) {
+        const src = addSource({ providerType: PROVIDERS.FSA })
+        sourceId = src.id
+      }
+      const p = getProvider(sourceId)
+      const handle = await p.pick()
+      if (!handle) { setBusy(false); return }
+      await p.scaffold()
+      await setActiveSource(sourceId)
+      window.location.reload()
+    } catch (e) {
+      if (!e.message?.toLowerCase().includes('aborted')) {
+        setError(e.message || 'Could not access folder')
+      }
+      setBusy(false)
+    }
+  }
+
+  const useBrowserStorage = async () => {
+    setBusy(true)
+    try {
+      const existing = getSources().find(s => s.providerType === PROVIDERS.LOCAL_STORAGE)
+      if (existing) {
+        await setActiveSource(existing.id)
+        window.location.reload()
+      }
+    } catch (e) {
+      setError(e.message || 'Switch failed')
+      setBusy(false)
+    }
+  }
 
   const connectOneDrive = async () => {
     setError('')
@@ -2925,16 +2965,60 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
 
             <div className="settings-dialog-section">
               <div className="settings-dialog-section-title">Storage</div>
-              <div className="device-storage-card">
+
+              {/* Browser Storage */}
+              <div className={`sync-target-card${activePrimary === PROVIDERS.LOCAL_STORAGE ? ' active-source' : ''}`}>
                 <div className="sync-target-main">
                   <span className="sync-target-icon">{PROVIDER_ICONS[PROVIDERS.LOCAL_STORAGE]}</span>
                   <div>
-                    <div className="sync-target-name">This device</div>
-                    <div className="sync-target-status">Changes save instantly on this device.</div>
+                    <div className="sync-target-name">Browser Storage</div>
+                    <div className="sync-target-status">Saves in this browser. Private, fast, works offline.</div>
                   </div>
                 </div>
+                {activePrimary === PROVIDERS.LOCAL_STORAGE
+                  ? <span className="sync-active-badge">● Active</span>
+                  : <button className="storage-footer-btn sync-target-action" onClick={useBrowserStorage} disabled={busy}>Use this</button>
+                }
               </div>
-              {folderName && <div className="settings-dialog-subtle">Storage location: {folderName}</div>}
+
+              {/* Local Folder */}
+              {fsaSupported && (
+                <div className={`sync-target-card${activePrimary === PROVIDERS.FSA ? ' active-source' : ''}`}>
+                  <div className="sync-target-main">
+                    <span className="sync-target-icon">📂</span>
+                    <div>
+                      <div className="sync-target-name">Local Folder</div>
+                      <div className="sync-target-status">
+                        {activePrimary === PROVIDERS.FSA && folderName
+                          ? folderName
+                          : 'Store in a folder on this device — readable by AI agents.'}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    className="storage-footer-btn sync-target-action"
+                    onClick={pickLocalFolder}
+                    disabled={busy}
+                  >
+                    {busy ? '...' : activePrimary === PROVIDERS.FSA ? 'Change' : 'Choose folder'}
+                  </button>
+                </div>
+              )}
+
+              {/* AI agent callout */}
+              {fsaSupported && (
+                <div className="settings-ai-callout">
+                  <div className="settings-ai-callout-title">💡 Use with AI agents</div>
+                  <div className="settings-ai-callout-body">
+                    A local folder stores plain Markdown — any AI tool can read and write your files directly:
+                    <ul>
+                      <li>Ask Copilot, Claude, or ChatGPT to summarise your week</li>
+                      <li>Use Cursor or any AI editor to bulk-edit journals</li>
+                      <li>Write scripts or shell automations to process tasks</li>
+                    </ul>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="settings-dialog-section">

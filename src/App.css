@@ -2118,9 +2118,49 @@ tr.highlight-flash {
   flex-shrink: 0;
 }
 
-.advanced-sync {
-  color: #94a3b8;
+.sync-target-card.active-source {
+  border-color: #3b82f6;
+  background: #0f2a4a;
 }
+
+.sync-active-badge {
+  color: #22c55e;
+  font-size: 0.75rem;
+  font-weight: 600;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.settings-ai-callout {
+  background: #0a1c35;
+  border: 1px solid #1a3352;
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+}
+
+.settings-ai-callout-title {
+  color: #93c5fd;
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+
+.settings-ai-callout-body {
+  color: #64748b;
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.settings-ai-callout-body ul {
+  margin: 0.35rem 0 0 1rem;
+  padding: 0;
+}
+
+.settings-ai-callout-body li {
+  margin-bottom: 0.15rem;
+}
+
+
 
 .advanced-sync summary {
   cursor: pointer;
