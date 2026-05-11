@@ -1,0 +1,10 @@
+{
+  "name": "@focus/folder-sync",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  }
+}

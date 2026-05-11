@@ -2,14 +2,16 @@
  * StoragePicker — shown on first visit or when no storage is configured.
  * Lets user choose Local Folder, OneDrive, or Google Drive.
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { PROVIDERS, getAvailableProviders, getProviderName, setActiveProvider } from './storage/storage.js'
+import { LocalStorageProvider } from './storage/localstorage-provider.js'
 import { FSAProvider } from './storage/fsa-provider.js'
 import { OneDriveProvider } from './storage/onedrive-provider.js'
 import { GoogleDriveProvider } from './storage/google-drive-provider.js'
 
 function makeProvider(id) {
   switch (id) {
+    case PROVIDERS.LOCAL_STORAGE: return new LocalStorageProvider()
     case PROVIDERS.FSA: return new FSAProvider()
     case PROVIDERS.ONEDRIVE: return new OneDriveProvider()
     case PROVIDERS.GOOGLE_DRIVE: return new GoogleDriveProvider()
@@ -22,22 +24,7 @@ export function StoragePicker({ onReady }) {
   const [connecting, setConnecting] = useState(null) // provider id being connected
   const [error, setError] = useState('')
 
-  // On mount: check for saved provider or returning from OAuth redirect
-  useEffect(() => {
-    const savedId = localStorage.getItem('fp-storage-provider')
-    const hasODCode = new URLSearchParams(window.location.search).get('code') && sessionStorage.getItem('onedrive_verifier')
-    const hasGDCode = new URLSearchParams(window.location.search).get('code') && sessionStorage.getItem('gd_verifier')
-
-    if (hasODCode) {
-      tryConnect(PROVIDERS.ONEDRIVE, true)
-    } else if (hasGDCode) {
-      tryConnect(PROVIDERS.GOOGLE_DRIVE, true)
-    } else if (savedId) {
-      tryConnect(savedId, true)
-    }
-  }, [])
-
-  const tryConnect = async (id, silent = false) => {
+  const tryConnect = useCallback(async (id, silent = false) => {
     setConnecting(id)
     setError('')
     try {
@@ -50,7 +37,12 @@ export function StoragePicker({ onReady }) {
         onReady(id)
         return
       }
-      if (id === PROVIDERS.FSA) {
+      if (id === PROVIDERS.LOCAL_STORAGE) {
+        await provider.restore()
+        await provider.scaffold()
+        setActiveProvider(provider)
+        onReady(id)
+      } else if (id === PROVIDERS.FSA) {
         // FSA restore failed — need user to pick
         setConnecting(null)
         if (!silent) setError('Could not restore folder access. Please pick a folder.')
@@ -68,7 +60,19 @@ export function StoragePicker({ onReady }) {
       }
       setConnecting(null)
     }
-  }
+  }, [onReady])
+
+  // On mount: check for saved provider or returning from OAuth redirect
+  useEffect(() => {
+    const savedId = localStorage.getItem('fp-storage-provider')
+    const hasODCode = new URLSearchParams(window.location.search).get('code') && sessionStorage.getItem('onedrive_verifier')
+    const hasGDCode = new URLSearchParams(window.location.search).get('code') && sessionStorage.getItem('gd_verifier')
+
+    const targetId = hasODCode ? PROVIDERS.ONEDRIVE : hasGDCode ? PROVIDERS.GOOGLE_DRIVE : savedId
+    if (targetId) {
+      setTimeout(() => tryConnect(targetId, true), 0)
+    }
+  }, [tryConnect])
 
   const handlePick = async (id) => {
     setConnecting(id)
@@ -99,6 +103,7 @@ export function StoragePicker({ onReady }) {
 
   const descriptions = {
     [PROVIDERS.FSA]: 'Store files locally on this device. Works in Chrome & Edge on desktop. No account needed.',
+    [PROVIDERS.LOCAL_STORAGE]: 'Default local store in this browser. Fast, private, and works offline.',
     [PROVIDERS.ONEDRIVE]: 'Store in your Microsoft OneDrive. Works on any device and browser, including mobile.',
     [PROVIDERS.GOOGLE_DRIVE]: 'Store in your Google Drive. Works on any device and browser, including mobile.',
   }

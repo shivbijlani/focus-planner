@@ -2,7 +2,13 @@
  * Storage abstraction layer for focus-planner.
  * Supports: FSA (local), OneDrive, Google Drive.
  */
+import { createFolderSync, TARGET_STATUS } from '../../packages/folder-sync/src/index.js'
+import { LocalStorageProvider } from './localstorage-provider.js'
+import { OneDriveProvider } from './onedrive-provider.js'
+import { GoogleDriveProvider } from './google-drive-provider.js'
+
 export { parseTodos } from './fsa.js'
+export { TARGET_STATUS }
 
 export const PROVIDERS = {
   LOCAL_STORAGE: 'local-storage',
@@ -33,10 +39,109 @@ export function getAvailableProviders() {
 // ── Active provider singleton ──────────────────────────
 
 let _provider = null
+let _folderSync = null
+
+const LOCAL_FOLDER_ID = 'browser-storage'
+
+function getFolderSync() {
+  if (_folderSync) return _folderSync
+
+  const localStore = new LocalStorageProvider()
+  _folderSync = createFolderSync({
+    configKey: 'fp-folder-sync-config-v1',
+    metaPrefix: 'fp-folder-sync-meta:',
+    pendingKey: 'fp-folder-sync-pending-target',
+    localFolders: [{
+      id: LOCAL_FOLDER_ID,
+      name: 'Browser Storage',
+      store: {
+        read: path => localStore.read(path),
+        write: (path, content) => localStore.write(path, content),
+        listPaths: () => localStore.listAllPaths(),
+      },
+      targets: [
+        oneDriveTarget(),
+        googleDriveTarget(),
+      ],
+    }],
+  })
+  return _folderSync
+}
+
+function oneDriveTarget() {
+  const provider = new OneDriveProvider()
+  return {
+    id: PROVIDERS.ONEDRIVE,
+    label: 'OneDrive',
+    restore: () => provider.restore(),
+    connect: () => provider.pick(),
+    write: (path, content) => provider.write(path, content),
+    remove: path => provider.remove(path),
+    read: path => provider.read(path),
+    list: () => provider.listFlat(),
+  }
+}
+
+function googleDriveTarget() {
+  const provider = new GoogleDriveProvider()
+  return {
+    id: PROVIDERS.GOOGLE_DRIVE,
+    label: 'Google Drive',
+    restore: () => provider.restore(),
+    connect: () => provider.pick(),
+    write: (path, content) => provider.write(path, content),
+    remove: path => provider.remove(path),
+    read: path => provider.read(path),
+    list: () => provider.listFlat(),
+  }
+}
 
 export function setActiveProvider(p) { _provider = p }
 export function getActiveProvider() { return _provider }
 export function hasProvider() { return _provider !== null }
+
+export function configureLocalFirstStorage() {
+  const provider = new LocalStorageProvider()
+  setActiveProvider(provider)
+  localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
+  return provider
+}
+
+export function getLocalFolderId() {
+  return LOCAL_FOLDER_ID
+}
+
+export function getSyncStatus() {
+  return getFolderSync().getStatus()
+}
+
+export function subscribeSyncStatus(listener) {
+  return getFolderSync().subscribe(listener)
+}
+
+export async function restoreSyncTargets() {
+  return getFolderSync().restoreTargets()
+}
+
+export function startAutoSync() {
+  return getFolderSync().startAutoSync()
+}
+
+export async function connectSyncTarget(targetId) {
+  return getFolderSync().connectTarget(LOCAL_FOLDER_ID, targetId)
+}
+
+export async function syncNow(targetId = null) {
+  return getFolderSync().syncNow(LOCAL_FOLDER_ID, targetId)
+}
+
+export async function pullNow(targetId = null) {
+  return getFolderSync().pullNow(LOCAL_FOLDER_ID, targetId)
+}
+
+export function onLocalChange(listener) {
+  return getFolderSync().onLocalChange(listener)
+}
 
 // ── Delegating API (unchanged surface for App.jsx) ─────
 
@@ -71,12 +176,14 @@ export async function read(path) {
 
 export async function write(path, content) {
   if (!_provider) throw new Error('No provider set')
-  return _provider.write(path, content)
+  await _provider.write(path, content)
+  await getFolderSync().markDirty(path, 'write', LOCAL_FOLDER_ID)
 }
 
 export async function remove(path) {
   if (!_provider) throw new Error('No provider set')
-  return _provider.remove(path)
+  await _provider.remove(path)
+  await getFolderSync().markDirty(path, 'delete', LOCAL_FOLDER_ID)
 }
 
 export async function getFiles() {

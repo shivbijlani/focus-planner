@@ -113,6 +113,32 @@ export class OneDriveProvider {
     return this._listRecursive('')
   }
 
+  async listFlat() {
+    await this._ensureToken()
+    return this._listFlatRecursive('')
+  }
+
+  async _listFlatRecursive(subPath, prefix = '') {
+    const url = subPath
+      ? `${APPROOT}:/${subPath}:/children?$select=name,lastModifiedDateTime,eTag,folder`
+      : `${APPROOT}/children?$select=name,lastModifiedDateTime,eTag,folder`
+    const res = await fetch(url, { headers: this._authHeader() })
+    if (!res.ok) return []
+    const data = await res.json()
+    const entries = []
+    for (const item of data.value ?? []) {
+      const name = item.name
+      const path = prefix ? `${prefix}/${name}` : name
+      if (item.folder) {
+        const children = await this._listFlatRecursive(subPath ? `${subPath}/${name}` : name, path)
+        entries.push(...children)
+      } else if (name.endsWith('.md')) {
+        entries.push({ path, mtime: item.lastModifiedDateTime, etag: item.eTag })
+      }
+    }
+    return entries
+  }
+
   async checkJournal(taskId) {
     const path = `journal/task-${taskId}.md`
     const content = await this.read(path)

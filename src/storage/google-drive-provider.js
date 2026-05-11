@@ -150,6 +150,27 @@ export class GoogleDriveProvider {
     return this._listRecursive(folderId, '')
   }
 
+  async listFlat() {
+    await this._ensureToken()
+    const folderId = await this._ensureFolder()
+    return this._listFlatRecursive(folderId, '')
+  }
+
+  async _listFlatRecursive(folderId, prefix) {
+    const items = await this._listFolder(folderId)
+    const entries = []
+    for (const item of items) {
+      const path = prefix ? `${prefix}/${item.name}` : item.name
+      if (item.mimeType === 'application/vnd.google-apps.folder') {
+        const children = await this._listFlatRecursive(item.id, path)
+        entries.push(...children)
+      } else if (item.name.endsWith('.md')) {
+        entries.push({ path, mtime: item.modifiedTime ?? null, etag: item.id })
+      }
+    }
+    return entries
+  }
+
   async checkJournal(taskId) {
     const path = `journal/task-${taskId}.md`
     const content = await this.read(path)

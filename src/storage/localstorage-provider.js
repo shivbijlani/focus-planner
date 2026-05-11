@@ -66,7 +66,11 @@ export class LocalStorageProvider {
   }
 
   async checkJournal(taskId) {
-    return localStorage.getItem(PREFIX + `journal/task-${taskId}.md`) !== null
+    const path = `journal/task-${taskId}.md`
+    return {
+      exists: localStorage.getItem(PREFIX + path) !== null,
+      path,
+    }
   }
 
   async maxJournalId() {

@@ -1987,7 +1987,7 @@ tr.highlight-flash {
   border: 1px solid #1e3a5f;
   border-radius: 10px;
   padding: 1.25rem;
-  width: 320px;
+  width: 360px;
   max-width: 90vw;
   display: flex;
   flex-direction: column;
@@ -2034,4 +2034,96 @@ tr.highlight-flash {
   font-size: 0.8rem;
   color: #64748b;
   font-family: monospace;
+}
+
+.settings-dialog-subtle {
+  color: #64748b;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.sync-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #64748b;
+  box-shadow: 0 0 0 2px rgba(100, 116, 139, 0.15);
+}
+
+.sync-dot.synced { background: #22c55e; box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.15); }
+.sync-dot.syncing,
+.sync-dot.pending { background: #f59e0b; box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.15); }
+.sync-dot.reconnect-needed,
+.sync-dot.error { background: #e94560; box-shadow: 0 0 0 2px rgba(233, 69, 96, 0.15); }
+
+.sync-target-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  background: #101f3b;
+  border: 1px solid #1e3a5f;
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+.device-storage-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: #101f3b;
+  border: 1px solid #1e3a5f;
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+.sync-target-card.muted {
+  opacity: 0.78;
+}
+
+.sync-target-main {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.sync-target-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.sync-target-name {
+  color: #e2e8f0;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.sync-target-status {
+  color: #64748b;
+  font-size: 0.74rem;
+  margin-top: 2px;
+}
+
+.sync-target-status.synced { color: #22c55e; }
+.sync-target-status.syncing,
+.sync-target-status.pending { color: #f59e0b; }
+.sync-target-status.reconnect-needed,
+.sync-target-status.error { color: #e94560; }
+
+.sync-target-action {
+  width: auto;
+  min-width: 82px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.advanced-sync {
+  color: #94a3b8;
+}
+
+.advanced-sync summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: #64748b;
 }

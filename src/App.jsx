@@ -1,15 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import './App.css'
 import * as storage from './storage/storage.js'
-import { setActiveProvider, getActiveProvider, PROVIDERS, getProviderName, getAvailableProviders } from './storage/storage.js'
+import { setActiveProvider, getActiveProvider, PROVIDERS, TARGET_STATUS, getProviderName } from './storage/storage.js'
 import { LocalStorageProvider } from './storage/localstorage-provider.js'
-import { migrate, resumePendingMigration, hasPendingMigration, makeProvider } from './storage/migrate.js'
+import { resumePendingMigration, hasPendingMigration, makeProvider } from './storage/migrate.js'
 import {
   loadSources, migrateLegacy, getSources, getActiveSourceId, setActiveSource,
-  addSource, renameSource, removeSource, getProvider, restoreSource,
-  availableProviderTypesForAdd,
-  beginAddCloudSource, consumePendingAdd, abortPendingAdd,
-  beginReauth, consumePendingReauth,
+  addSource, removeSource, getProvider, restoreSource,
+  consumePendingAdd, consumePendingReauth,
 } from './storage/sources.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority } from './taskSort.js'
 import { computeMoveSet, computeBrokenLinks } from './moveTask.js'
@@ -2787,11 +2785,13 @@ const PROVIDER_ICONS = {
   [PROVIDERS.GOOGLE_DRIVE]: '🌐',
 }
 
-const STORAGE_META = {
-  [PROVIDERS.LOCAL_STORAGE]: { tagline: 'No setup · this browser only' },
-  [PROVIDERS.FSA]: { tagline: 'Plain text files on your computer' },
-  [PROVIDERS.ONEDRIVE]: { tagline: 'Sign in to sync across devices' },
-  [PROVIDERS.GOOGLE_DRIVE]: { tagline: 'Sign in to sync across devices' },
+const SYNC_LABELS = {
+  [TARGET_STATUS.DISCONNECTED]: 'Not backed up',
+  [TARGET_STATUS.PENDING]: 'Waiting to back up',
+  [TARGET_STATUS.SYNCING]: 'Backing up...',
+  [TARGET_STATUS.SYNCED]: 'Backed up just now',
+  [TARGET_STATUS.RECONNECT_NEEDED]: 'Sign in again to continue backup',
+  [TARGET_STATUS.ERROR]: 'Backup failed - try again',
 }
 
 function TourModal({ onClose }) {
@@ -2808,7 +2808,7 @@ function TourModal({ onClose }) {
             <li><strong>Priorities</strong> — pin top-of-mind themes in the <em>Priorities</em> section so tasks can be tagged against them.</li>
             <li><strong>Journals</strong> — every task with a journal entry expands to show its TODO / DONE bullets inline.</li>
             <li><strong>Sources</strong> — open <em>Settings</em> to add more storage sources (e.g. a Work folder + a Personal folder). With multiple sources, a ✨ <strong>Combined</strong> view appears at the top.</li>
-            <li><strong>Sync</strong> — start with browser storage, then upgrade to a local folder, OneDrive, or Google Drive whenever you're ready. Your tasks come with you.</li>
+            <li><strong>Sync</strong> — your data is stored in the browser first, then backed up to OneDrive in the background.</li>
           </ul>
         </div>
         <div className="settings-dialog-section">
@@ -2819,140 +2819,58 @@ function TourModal({ onClose }) {
   )
 }
 
-function StorageFooter({ storageProvider, folderName, onPick, onSourcesChanged, failedSourceIds = new Set(), onClearFailed }) {
+function targetStatus(syncStatus, targetId) {
+  return syncStatus?.folders?.[storage.getLocalFolderId()]?.targets?.[targetId] ?? {
+    status: TARGET_STATUS.DISCONNECTED,
+    message: '',
+  }
+}
+
+function backupActionLabel(providerStatus, disconnectedLabel = 'Sign in') {
+  if (providerStatus === TARGET_STATUS.RECONNECT_NEEDED) return 'Sign in again'
+  if (providerStatus === TARGET_STATUS.DISCONNECTED) return disconnectedLabel
+  return 'Sync now'
+}
+
+function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) {
   const [open, setOpen] = useState(false)
   const [tourOpen, setTourOpen] = useState(false)
-  const [view, setView] = useState('menu') // 'menu' | 'migrate' | 'add-source' | 'rename'
-  const [confirmTarget, setConfirmTarget] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [keepSource, setKeepSource] = useState(true)
-  const [renamingId, setRenamingId] = useState(null)
-  const [renameValue, setRenameValue] = useState('')
+  const oneDrive = targetStatus(syncStatus, PROVIDERS.ONEDRIVE)
+  const aggregate = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
+  const syncClass = aggregate.replace(/[^a-z-]/g, '')
 
   const sources = getSources()
   const activeId = getActiveSourceId()
   const isMulti = sources.length > 1
 
-  const providerIcon = PROVIDER_ICONS[storageProvider] || '📁'
-  const others = getAvailableProviders().filter(id => id !== storageProvider)
-  const isCloud = (id) => id === PROVIDERS.ONEDRIVE || id === PROVIDERS.GOOGLE_DRIVE
-  // Show "Sync to the cloud" CTA in place of Settings when the user is still
-  // on default browser storage with a single source — i.e. they haven't set up
-  // any local-folder or cloud sync yet. Once they upgrade (or add a 2nd
-  // source), revert to the standard ⚙ Settings affordance.
-  const isBrowserOnly = !isMulti && storageProvider === PROVIDERS.LOCAL_STORAGE
+  const close = () => { setOpen(false); setError('') }
 
-  const reset = () => { setView('menu'); setConfirmTarget(null); setError(''); setRenamingId(null) }
-  const close = () => { setOpen(false); reset() }
-
-  const startMigrate = async (toId) => {
+  const connectOneDrive = async () => {
     setError('')
     setBusy(true)
     try {
-      const result = await migrate(getActiveProvider(), toId, {
-        deleteSource: !keepSource,
-        fromId: storageProvider,
-      })
-      if (result.ok) { window.location.reload(); return }
+      const result = await storage.connectSyncTarget(PROVIDERS.ONEDRIVE)
       if (result.redirected) return
-      setError(result.error || 'Migration failed')
+      await storage.syncNow(PROVIDERS.ONEDRIVE)
     } catch (e) {
-      setError(e.message || 'Migration failed')
+      setError(e.message || 'OneDrive connection failed')
     } finally {
       setBusy(false)
     }
   }
 
-  // Add a brand-new source. Only LocalStorage and FSA are supported here —
-  // cloud sources need an OAuth redirect dance that the existing migrate flow
-  // owns and is not worth duplicating until there's clear demand.
-  const addLocalStorageSource = async () => {
-    setBusy(true); setError('')
+  const syncOneDrive = async () => {
+    setError('')
+    setBusy(true)
     try {
-      if (sources.some(s => s.providerType === PROVIDERS.LOCAL_STORAGE)) {
-        setError('Browser Storage is already a source.')
-        return
-      }
-      const src = addSource({ providerType: PROVIDERS.LOCAL_STORAGE, name: 'Browser Storage' })
-      const p = getProvider(src.id)
-      await p.restore()
-      await p.scaffold()
-      await setActiveSource(src.id)
-      onSourcesChanged?.()
-      close()
+      await storage.syncNow(PROVIDERS.ONEDRIVE)
     } catch (e) {
-      setError(e.message || 'Failed to add source')
-    } finally { setBusy(false) }
-  }
-
-  const addFsaSource = async () => {
-    setBusy(true); setError('')
-    try {
-      const src = addSource({ providerType: PROVIDERS.FSA, name: 'Local Folder' })
-      const p = getProvider(src.id)
-      try {
-        const handle = await p.pick()
-        if (!handle) {
-          await removeSource(src.id)
-          setError('Folder selection cancelled.')
-          return
-        }
-        renameSource(src.id, handle.name || 'Local Folder')
-        await p.scaffold()
-        await setActiveSource(src.id)
-        onSourcesChanged?.()
-        close()
-      } catch (e) {
-        await removeSource(src.id)
-        throw e
-      }
-    } catch (e) {
-      setError(e.message || 'Failed to add source')
-    } finally { setBusy(false) }
-  }
-
-  const addCloudSource = async (providerType) => {
-    setBusy(true); setError('')
-    try {
-      // Persists registry entry, sets pending flag, and triggers OAuth redirect.
-      // The page reloads on success — init handles the rest.
-      await beginAddCloudSource(providerType)
-    } catch (e) {
-      // Roll back the half-created entry if pick threw before redirecting.
-      try { await abortPendingAdd() } catch { /* noop */ }
-      setError(e.message || 'Failed to start sign-in')
+      setError(e.message || 'Backup failed')
+    } finally {
       setBusy(false)
     }
-  }
-
-  const switchToSource = async (id) => {
-    if (id === activeId) return
-    await setActiveSource(id)
-    onSourcesChanged?.()
-    close()
-  }
-
-  const removeSourceById = async (id) => {
-    if (sources.length <= 1) {
-      setError('Cannot remove the last source.')
-      return
-    }
-    if (!confirm('Remove this source? Files in the source are not deleted.')) return
-    await removeSource(id)
-    onSourcesChanged?.()
-  }
-
-  const startRename = (id, currentName) => {
-    setRenamingId(id)
-    setRenameValue(currentName)
-  }
-  const commitRename = () => {
-    if (renamingId && renameValue.trim()) {
-      renameSource(renamingId, renameValue.trim())
-      onSourcesChanged?.()
-    }
-    setRenamingId(null)
   }
 
   return (
@@ -2966,25 +2884,15 @@ function StorageFooter({ storageProvider, folderName, onPick, onSourcesChanged, 
           <span className="storage-footer-icon">📚</span>
           <span className="storage-footer-label">Take a tour</span>
         </button>
-        {isBrowserOnly ? (
-          <button
-            className="storage-footer-toggle storage-footer-cta"
-            onClick={() => { setView('migrate'); setOpen(true) }}
-            title="Move your tasks to a local folder or the cloud"
-          >
-            <span className="storage-footer-icon">☁️</span>
-            <span className="storage-footer-label">Sync to the cloud</span>
-          </button>
-        ) : (
-          <button
-            className="storage-footer-toggle"
-            onClick={() => setOpen(true)}
-            title="Settings"
-          >
-            <span className="storage-footer-icon">⚙</span>
-            <span className="storage-footer-label">Settings</span>
-          </button>
-        )}
+        <button
+          className="storage-footer-toggle"
+          onClick={() => setOpen(true)}
+          title="Settings"
+        >
+          <span className="storage-footer-icon">⚙</span>
+          <span className="storage-footer-label">Settings</span>
+          <span className={`sync-dot ${syncClass}`} title={SYNC_LABELS[aggregate] || 'Not backed up'} />
+        </button>
       </div>
 
       {tourOpen && <TourModal onClose={() => setTourOpen(false)} />}
@@ -2997,163 +2905,86 @@ function StorageFooter({ storageProvider, folderName, onPick, onSourcesChanged, 
               <button className="settings-dialog-close" onClick={close}>✕</button>
             </div>
 
-            <div className="settings-dialog-section">
-              <div className="settings-dialog-section-title">Sources</div>
-              {sources.map(s => {
-                const icon = PROVIDER_ICONS[s.providerType] || '📁'
-                const isActive = s.id === activeId
-                if (renamingId === s.id) {
+            {isMulti && (
+              <div className="settings-dialog-section">
+                <div className="settings-dialog-section-title">Sources</div>
+                {sources.map(s => {
+                  const icon = PROVIDER_ICONS[s.providerType] || '📁'
+                  const isActive = s.id === activeId
                   return (
-                    <div key={s.id} className="storage-footer-source-row">
-                      <span className="storage-footer-source-icon">{icon}</span>
-                      <input
-                        className="storage-footer-source-rename"
-                        value={renameValue}
-                        autoFocus
-                        onChange={e => setRenameValue(e.target.value)}
-                        onBlur={commitRename}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') commitRename()
-                          if (e.key === 'Escape') setRenamingId(null)
-                        }}
-                      />
-                    </div>
-                  )
-                }
-                return (
-                  <div key={s.id} className={`storage-footer-source-row${isActive ? ' active' : ''}`}>
-                    <button
-                      className="storage-footer-source-main"
-                      onClick={() => switchToSource(s.id)}
-                      title={isActive ? 'Active source' : 'Click to switch to this source'}
-                    >
+                    <div key={s.id} className={`storage-footer-source-row${isActive ? ' active' : ''}`}>
                       <span className="storage-footer-source-icon">{icon}</span>
                       <span className="storage-footer-source-name">{s.name}</span>
                       {failedSourceIds.has(s.id) && <span title="Authentication required" style={{color:'#f59e0b'}}>⚠</span>}
                       {isActive && !failedSourceIds.has(s.id) && <span className="storage-footer-source-active">●</span>}
-                    </button>
-                    {failedSourceIds.has(s.id) ? (
-                      <button
-                        className="storage-footer-source-action"
-                        title="Re-authenticate this source"
-                        style={{color:'#f59e0b', fontWeight:'bold'}}
-                        onClick={async () => {
-                          onClearFailed?.(s.id)
-                          await beginReauth(s.id)
-                        }}
-                      >↻ Re-connect</button>
-                    ) : (
-                      <>
-                        <button
-                          className="storage-footer-source-action"
-                          title="Rename"
-                          onClick={() => startRename(s.id, s.name)}
-                        >✎</button>
-                        {sources.length > 1 && (
-                          <button
-                            className="storage-footer-source-action"
-                            title="Remove source"
-                            onClick={() => removeSourceById(s.id)}
-                          >🗑</button>
-                        )}
-                      </>
-                    )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            <div className="settings-dialog-section">
+              <div className="settings-dialog-section-title">Storage</div>
+              <div className="device-storage-card">
+                <div className="sync-target-main">
+                  <span className="sync-target-icon">{PROVIDER_ICONS[PROVIDERS.LOCAL_STORAGE]}</span>
+                  <div>
+                    <div className="sync-target-name">This device</div>
+                    <div className="sync-target-status">Changes save instantly on this device.</div>
                   </div>
-                )
-              })}
-              {view !== 'add-source' ? (
-                <button className="storage-footer-btn" onClick={() => { setView('add-source'); setError('') }}>
-                  + Add source
-                </button>
-              ) : (
-                <div className="storage-footer-add-source">
-                  {availableProviderTypesForAdd().map(t => {
-                    const onClick = t === PROVIDERS.LOCAL_STORAGE ? addLocalStorageSource
-                      : t === PROVIDERS.FSA ? addFsaSource
-                      : () => addCloudSource(t)
-                    return (
-                      <button key={t} className="storage-footer-btn storage-footer-option-btn" onClick={onClick} disabled={busy}>
-                        <span className="storage-footer-option-name">{PROVIDER_ICONS[t] || '📁'} {getProviderName(t)}</span>
-                        <span className="storage-footer-option-tagline">{STORAGE_META[t]?.tagline || ''}</span>
-                      </button>
-                    )
-                  })}
-                  {availableProviderTypesForAdd().length === 0 && (
-                    <div className="storage-footer-note">All available source types are already in use.</div>
-                  )}
-                  {(availableProviderTypesForAdd().includes(PROVIDERS.ONEDRIVE) ||
-                    availableProviderTypesForAdd().includes(PROVIDERS.GOOGLE_DRIVE)) && (
-                    <div className="storage-footer-note">Cloud sources will redirect you to sign in. The page will reload after.</div>
-                  )}
-                  {error && <div className="storage-footer-error">⚠️ {error}</div>}
-                  <button className="storage-footer-btn secondary" onClick={() => setView('menu')} disabled={busy}>↩ Back</button>
                 </div>
-              )}
+              </div>
+              {folderName && <div className="settings-dialog-subtle">Storage location: {folderName}</div>}
             </div>
 
-            {!isMulti && view === 'menu' && (
-              <div className="settings-dialog-section">
-                <div className="settings-dialog-section-title">Storage actions</div>
-                <div className="settings-dialog-info">
-                  Active: {providerIcon} {folderName || getProviderName(storageProvider)}
-                </div>
-                {storageProvider === PROVIDERS.FSA && (
-                  <button className="storage-footer-btn" onClick={() => { close(); onPick() }}>
-                    📂 Change folder
-                  </button>
-                )}
-                {others.length > 0 && (
-                  <button className="storage-footer-btn" onClick={() => setView('migrate')}>
-                    ⇄ Switch storage
-                  </button>
-                )}
-              </div>
-            )}
-
-            {view === 'migrate' && !confirmTarget && (
-              <div className="settings-dialog-section">
-                <div className="storage-footer-section">Switch to:</div>
-                {others.map(id => (
-                    <button key={id} className="storage-footer-btn storage-footer-option-btn" onClick={() => setConfirmTarget(id)}>
-                      <span className="storage-footer-option-name">{PROVIDER_ICONS[id] || "📁"} {getProviderName(id)}</span>
-                      <span className="storage-footer-option-tagline">{STORAGE_META[id]?.tagline || ""}</span>
-                  </button>
-                ))}
-                <button className="storage-footer-btn secondary" onClick={reset}>↩ Back</button>
-              </div>
-            )}
-
-            {view === 'migrate' && confirmTarget && (
-              <div className="settings-dialog-section">
-                <div className="storage-footer-section">
-                  Switch to <strong>{getProviderName(confirmTarget)}</strong>?
-                </div>
-                {storageProvider === PROVIDERS.LOCAL_STORAGE && (
-                  <label className="storage-footer-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={!keepSource}
-                      onChange={e => setKeepSource(!e.target.checked)}
-                    />
-                    Delete browser copy after
-                  </label>
-                )}
-                {isCloud(confirmTarget) && (
-                  <div className="storage-footer-note">
-                    You'll be redirected to sign in. Your data will be copied over automatically.
+            <div className="settings-dialog-section">
+              <div className="settings-dialog-section-title">Backup & sync</div>
+              <div className="sync-target-card muted">
+                <div className="sync-target-main">
+                  <span className="sync-target-icon">{PROVIDER_ICONS[PROVIDERS.GOOGLE_DRIVE]}</span>
+                  <div>
+                    <div className="sync-target-name">Google Drive</div>
+                    <div className="sync-target-status">
+                      Coming soon
+                    </div>
                   </div>
-                )}
-                {error && <div className="storage-footer-error">⚠️ {error}</div>}
-                <div className="storage-footer-actions">
-                  <button className="storage-footer-btn" onClick={() => startMigrate(confirmTarget)} disabled={busy}>
-                    {busy ? 'Switching…' : 'Switch'}
-                  </button>
-                  <button className="storage-footer-btn secondary" onClick={() => setConfirmTarget(null)} disabled={busy}>
-                    Back
-                  </button>
                 </div>
+                <button className="storage-footer-btn sync-target-action" disabled>
+                  Coming soon
+                </button>
               </div>
-            )}
+              <div className="sync-target-card">
+                <div className="sync-target-main">
+                  <span className="sync-target-icon">{PROVIDER_ICONS[PROVIDERS.ONEDRIVE]}</span>
+                  <div>
+                    <div className="sync-target-name">OneDrive</div>
+                    <div className={`sync-target-status ${oneDrive.status}`}>
+                      {SYNC_LABELS[oneDrive.status] || oneDrive.status}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  className="storage-footer-btn sync-target-action"
+                  onClick={oneDrive.status === TARGET_STATUS.DISCONNECTED || oneDrive.status === TARGET_STATUS.RECONNECT_NEEDED ? connectOneDrive : syncOneDrive}
+                  disabled={busy}
+                >
+                  {busy ? 'Working...' : backupActionLabel(oneDrive.status)}
+                </button>
+              </div>
+              {oneDrive.message && <div className="storage-footer-error">{oneDrive.message}</div>}
+              <div className="storage-footer-note">
+                You can keep using Focus Planner without signing in. If you edit offline, backup resumes when you reconnect.
+              </div>
+            </div>
+
+            <details className="settings-dialog-section advanced-sync">
+              <summary>Advanced</summary>
+              <div className="storage-footer-note">
+                Planner stores Markdown files and OneDrive access is limited to this app's folder.
+              </div>
+            </details>
+
+            {error && <div className="storage-footer-error">⚠️ {error}</div>}
           </div>
         </div>
       )}
@@ -3750,12 +3581,14 @@ function App() {
   const [appState, setAppState] = useState('loading')
   const [files, setFiles] = useState([])
   const [folderName, setFolderName] = useState('')
-  const [storageProvider, setStorageProvider] = useState('')
+  const [, setStorageProvider] = useState('')
   // selectedFile uses qualified paths in multi-source mode (`${sourceId}::${path}`),
   // plain paths in single-source mode. The dispatcher in handleSelectFile/etc.
   // copes with both shapes.
+  const [syncStatus, setSyncStatus] = useState(storage.getSyncStatus())
   const [selectedFile, setSelectedFile] = useState('focus-plan.md')
   const [content, setContent] = useState('')
+  const selectedFileRef = useRef('focus-plan.md')
   const [pendingScrollToTaskId, setPendingScrollToTaskId] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   // Re-render trigger for the source list when Settings mutates it.
@@ -3817,6 +3650,7 @@ function App() {
   const handleSelectFile = async (qualifiedPath) => {
     const { sourceId, path } = splitSourcePath(qualifiedPath)
     setSelectedFile(qualifiedPath)
+    selectedFileRef.current = path
     setSidebarOpen(false)
 
     // Combined virtual file → CombinedFocusPlanView reads its own data, just clear content.
@@ -3858,27 +3692,6 @@ function App() {
     }
   }
 
-  const refreshAfterSourcesChange = async () => {
-    setSourcesVersion(v => v + 1)
-    await loadFiles()
-    const liveSources = getSources()
-    const active = liveSources.find(s => s.id === getActiveSourceId())
-    if (active) {
-      setStorageProvider(active.providerType)
-      setFolderName(storage.folderName())
-    }
-    // If selection no longer points to a valid place (e.g. Combined after
-    // collapsing back to a single source, or a deleted source), reset to the
-    // canonical focus plan view.
-    const { sourceId } = splitSourcePath(selectedFile)
-    const isCombined = sourceId === COMBINED_ID
-    const sourceMissing = sourceId && sourceId !== COMBINED_ID && !liveSources.some(s => s.id === sourceId)
-    if ((isCombined && liveSources.length <= 1) || sourceMissing) {
-      const target = liveSources.length > 1 ? `${COMBINED_ID}::focus-plan.md` : 'focus-plan.md'
-      await handleSelectFile(target)
-    }
-  }
-
   const initWithProvider = async (providerId) => {
     await storage.scaffold()
     // Ensure we have a sources registry. If first run on legacy install,
@@ -3901,6 +3714,9 @@ function App() {
   useEffect(() => {
     (async () => {
       try {
+        // Configure local-first storage with background sync support
+        storage.configureLocalFirstStorage()
+
         // 1. If returning from OAuth redirect with a pending migration, finish it
         if (hasPendingMigration()) {
           const migratedTo = await resumePendingMigration()
@@ -4001,6 +3817,10 @@ function App() {
           localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
           await initWithProvider(PROVIDERS.LOCAL_STORAGE)
         }
+
+        // Restore sync targets and start background sync after storage is ready
+        await storage.restoreSyncTargets()
+        storage.startAutoSync()
       } catch (e) {
         console.error('Storage init failed:', e)
         setAppState('pick-storage')
@@ -4009,9 +3829,23 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const handlePick = async () => {
-    setAppState('pick-storage')
-  }
+  // Subscribe to sync status changes
+  useEffect(() => {
+    return storage.subscribeSyncStatus((status) => setSyncStatus(status))
+  }, [])
+
+  // Re-read current file when local storage changes (e.g. after sync pull)
+  useEffect(() => {
+    return storage.onLocalChange(async (changedPath) => {
+      const current = selectedFileRef.current
+      if (current && changedPath === current) {
+        try {
+          const text = await storage.read(current)
+          setContent(text)
+        } catch { /* ignore */ }
+      }
+    })
+  }, [])
 
   const handleStorageReady = async (providerId) => {
     await initWithProvider(providerId)
@@ -4100,13 +3934,9 @@ function App() {
           />
         </div>
         <StorageFooter
-          storageProvider={storageProvider}
           folderName={folderName}
-          onPick={handlePick}
-          onSourcesChanged={refreshAfterSourcesChange}
-          sourcesVersion={sourcesVersion}
+          syncStatus={syncStatus}
           failedSourceIds={failedSourceIds}
-          onClearFailed={(id) => setFailedSourceIds(prev => { const n = new Set(prev); n.delete(id); return n })}
         />
       </aside>
       <main className="content">
