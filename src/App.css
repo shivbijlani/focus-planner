@@ -2131,24 +2131,40 @@ tr.highlight-flash {
   white-space: nowrap;
 }
 
-.settings-ai-callout {
+.settings-ai-details {
   background: #0a1c35;
   border: 1px solid #1a3352;
   border-radius: 8px;
-  padding: 0.65rem 0.75rem;
+  padding: 0.5rem 0.75rem;
 }
 
-.settings-ai-callout-title {
+.settings-ai-details > summary {
+  cursor: pointer;
   color: #93c5fd;
   font-size: 0.75rem;
   font-weight: 600;
-  margin-bottom: 0.3rem;
+  list-style: none;
+  padding: 0.15rem 0;
+}
+
+.settings-ai-details > summary::-webkit-details-marker { display: none; }
+
+.settings-ai-details > summary::after {
+  content: ' ›';
+  display: inline-block;
+  transition: transform 0.15s;
+  color: #475569;
+}
+
+.settings-ai-details[open] > summary::after {
+  transform: rotate(90deg);
 }
 
 .settings-ai-callout-body {
   color: #64748b;
   font-size: 0.72rem;
   line-height: 1.5;
+  margin-top: 0.4rem;
 }
 
 .settings-ai-callout-body ul {

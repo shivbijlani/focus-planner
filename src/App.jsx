@@ -3033,10 +3033,10 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
                 </div>
               )}
 
-              {/* AI agent callout */}
+              {/* AI agent collapsible */}
               {fsaSupported && (
-                <div className="settings-ai-callout">
-                  <div className="settings-ai-callout-title">💡 Use with AI agents</div>
+                <details className="settings-ai-details">
+                  <summary>💡 Use with AI agents</summary>
                   <div className="settings-ai-callout-body">
                     A local folder stores plain Markdown — any AI tool can read and write your files directly:
                     <ul>
@@ -3045,7 +3045,7 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
                       <li>Write scripts or shell automations to process tasks</li>
                     </ul>
                   </div>
-                </div>
+                </details>
               )}
             </div>
 
@@ -3093,13 +3093,6 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
                 You can keep using Focus Planner without signing in. If you edit offline, backup resumes when you reconnect.
               </div>
             </div>
-
-            <details className="settings-dialog-section advanced-sync">
-              <summary>Advanced</summary>
-              <div className="storage-footer-note">
-                Planner stores Markdown files and OneDrive access is limited to this app's folder.
-              </div>
-            </details>
 
             {error && <div className="storage-footer-error">⚠️ {error}</div>}
           </div>
