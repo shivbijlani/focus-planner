@@ -2913,6 +2913,34 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
     }
   }
 
+  const connectGoogleDrive = async () => {
+    setError('')
+    setBusy(true)
+    try {
+      const result = await storage.connectSyncTarget(PROVIDERS.GOOGLE_DRIVE)
+      if (result.redirected) return
+      await storage.syncNow(PROVIDERS.GOOGLE_DRIVE)
+    } catch (e) {
+      setError(e.message || 'Google Drive connection failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const syncGoogleDrive = async () => {
+    setError('')
+    setBusy(true)
+    try {
+      await storage.syncNow(PROVIDERS.GOOGLE_DRIVE)
+    } catch (e) {
+      setError(e.message || 'Backup failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const googleDrive = targetStatus(syncStatus, PROVIDERS.GOOGLE_DRIVE)
+
   return (
     <>
       <div className="sidebar-storage-footer">
@@ -3023,20 +3051,25 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
 
             <div className="settings-dialog-section">
               <div className="settings-dialog-section-title">Backup & sync</div>
-              <div className="sync-target-card muted">
+              <div className="sync-target-card">
                 <div className="sync-target-main">
                   <span className="sync-target-icon">{PROVIDER_ICONS[PROVIDERS.GOOGLE_DRIVE]}</span>
                   <div>
                     <div className="sync-target-name">Google Drive</div>
-                    <div className="sync-target-status">
-                      Coming soon
+                    <div className={`sync-target-status ${googleDrive.status}`}>
+                      {SYNC_LABELS[googleDrive.status] || googleDrive.status}
                     </div>
                   </div>
                 </div>
-                <button className="storage-footer-btn sync-target-action" disabled>
-                  Coming soon
+                <button
+                  className="storage-footer-btn sync-target-action"
+                  onClick={googleDrive.status === TARGET_STATUS.DISCONNECTED || googleDrive.status === TARGET_STATUS.RECONNECT_NEEDED ? connectGoogleDrive : syncGoogleDrive}
+                  disabled={busy}
+                >
+                  {busy ? 'Working...' : backupActionLabel(googleDrive.status)}
                 </button>
               </div>
+              {googleDrive.message && <div className="storage-footer-error">{googleDrive.message}</div>}
               <div className="sync-target-card">
                 <div className="sync-target-main">
                   <span className="sync-target-icon">{PROVIDER_ICONS[PROVIDERS.ONEDRIVE]}</span>

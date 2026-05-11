@@ -29,7 +29,7 @@ const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
 //        https://shivbijlani.github.io/focus-planner/
 //   4. Copy the Client ID (ends in .apps.googleusercontent.com)
 //   5. Replace TODO_REGISTER_GOOGLE_APP below with that Client ID
-const CLIENT_ID = 'TODO_REGISTER_GOOGLE_APP'
+const CLIENT_ID = '1019840819252-jcrbpshgai7ror14pmimsv413qcuce17.apps.googleusercontent.com'
 const SCOPES = 'https://www.googleapis.com/auth/drive.file'
 const DEFAULT_FOLDER = 'focus-planner'
 const FOLDER_KEY = 'gd_folder'
