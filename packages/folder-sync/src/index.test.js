@@ -120,14 +120,18 @@ describe('folder sync', () => {
     expect(sync.getStatus().folders.browser.targets.onedrive.status).toBe(TARGET_STATUS.SYNCED)
   })
 
-  it('does not overwrite locally dirty files during pull', async () => {
+  it('treats remote as authoritative on initial connect (does not clobber backup with local scaffold)', async () => {
+    // Regression test for issue #19: on first connect, scaffolded local
+    // content must not overwrite the existing remote backup. We pull
+    // remote first; local "dirty" only kicks in after a successful sync
+    // has established baseline metadata.
     const storage = memoryStorage()
-    const store = memoryStore({ 'focus-plan.md': 'local edits' })
+    const store = memoryStore({ 'focus-plan.md': 'scaffold template' })
     const oneDrive = target()
     oneDrive.list.mockResolvedValue([
       { path: 'focus-plan.md', mtime: '2026-05-09T12:00:00Z', etag: 'old' },
     ])
-    oneDrive.read.mockResolvedValue('remote old content')
+    oneDrive.read.mockResolvedValue('real backup content')
 
     const sync = createFolderSync({
       storage,
@@ -139,9 +143,9 @@ describe('folder sync', () => {
 
     await sync.connectTarget('browser', 'onedrive')
 
-    // Local file was dirty (marked for push), so remote should NOT overwrite it
-    expect(store.get('focus-plan.md')).toBe('local edits')
-    // And it should have been pushed to remote
-    expect(oneDrive.write).toHaveBeenCalledWith('focus-plan.md', 'local edits')
+    // Remote wins on initial connect — local scaffold is overwritten by backup.
+    expect(store.get('focus-plan.md')).toBe('real backup content')
+    // And we do NOT push the scaffold back up over the real backup.
+    expect(oneDrive.write).not.toHaveBeenCalledWith('focus-plan.md', 'scaffold template')
   })
 })

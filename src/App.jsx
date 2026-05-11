@@ -3827,108 +3827,18 @@ function App() {
         // Configure local-first storage with background sync support
         storage.configureLocalFirstStorage()
 
-        // 1. If returning from OAuth redirect with a pending migration, finish it
-        if (hasPendingMigration()) {
-          const migratedTo = await resumePendingMigration()
-          if (migratedTo) {
-            window.location.reload()
-            return
-          }
-        }
-
-        // 2. Load (and one-shot migrate) the multi-source registry.
-        loadSources()
-        migrateLegacy()
-        const registry = getSources()
-
-        if (registry.length > 0) {
-          // If we're returning from a re-auth OAuth redirect (for an existing source),
-          // restore that source FIRST so it consumes the ?code= param.
-          const pendingReauthId = consumePendingReauth()
-          if (pendingReauthId) {
-            try { await restoreSource(pendingReauthId) } catch { /* ok — will retry later */ }
-          }
-
-          // If we're returning from an "add cloud source" OAuth redirect,
-          // restore that source FIRST so it consumes the ?code= param —
-          // otherwise other cloud providers' restore() would try (and fail)
-          // to exchange the code as their own.
-          const pendingAddId = consumePendingAdd()
-          let scaffoldedAddId = null
-          if (pendingAddId) {
-            try {
-              const p = await restoreSource(pendingAddId)
-              if (p) {
-                await p.scaffold()
-                scaffoldedAddId = pendingAddId
-              } else {
-                // User cancelled / token exchange failed — roll back the entry.
-                await removeSource(pendingAddId)
-              }
-            } catch (e) {
-              console.error('Cloud source add failed, rolling back:', e)
-              await removeSource(pendingAddId)
-            }
-          }
-          // Restore each source's provider eagerly so cross-source reads work.
-          const restoredIds = new Set()
-          if (pendingReauthId) restoredIds.add(pendingReauthId) // already restored above
-          if (scaffoldedAddId) restoredIds.add(scaffoldedAddId)
-          let firstHealthyId = pendingReauthId || scaffoldedAddId || null
-          const failed = new Set()
-          for (const s of getSources()) {
-            if (restoredIds.has(s.id)) continue
-            try {
-              const p = await restoreSource(s.id)
-              if (p) {
-                restoredIds.add(s.id)
-                if (!firstHealthyId) firstHealthyId = s.id
-              } else {
-                failed.add(s.id)
-              }
-            } catch {
-              failed.add(s.id)
-            }
-          }
-          if (failed.size > 0) setFailedSourceIds(failed)
-          // Pick the saved active source if it restored, otherwise the first that did.
-          const savedActive = getActiveSourceId()
-          const targetId = restoredIds.has(savedActive) ? savedActive : firstHealthyId
-          if (targetId) {
-            await setActiveSource(targetId)
-            const active = getSources().find(s => s.id === targetId)
-            await initWithProvider(active.providerType)
-            return
-          }
-          // No source restored cleanly — fall back to LocalStorage.
-        }
-
-        // 3. Legacy single-provider path (no registry yet — migrateLegacy() didn't run because
-        // there was no fp-storage-provider key either). Fresh install → pick storage.
-        const savedId = localStorage.getItem('fp-storage-provider')
-        if (!savedId) {
-          // Auto-bootstrap LocalStorage as the default first source.
-          const fallback = new LocalStorageProvider()
-          await fallback.restore()
-          setActiveProvider(fallback)
-          localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
-          await initWithProvider(PROVIDERS.LOCAL_STORAGE)
+        // Initialise the storage provider. Returns true if init handled
+        // everything, false if a hard fallback to pick-storage UI is needed.
+        const initialised = await initStorage()
+        if (!initialised) {
+          setAppState('pick-storage')
           return
         }
-        const provider = makeProvider(savedId)
-        const ok = await provider.restore()
-        if (ok) {
-          setActiveProvider(provider)
-          await initWithProvider(savedId)
-        } else {
-          const fallback = new LocalStorageProvider()
-          await fallback.restore()
-          setActiveProvider(fallback)
-          localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
-          await initWithProvider(PROVIDERS.LOCAL_STORAGE)
-        }
 
-        // Restore sync targets and start background sync after storage is ready
+        // Always restore sync targets and start background sync after the
+        // storage provider is ready. This is what consumes the OAuth ?code=
+        // query param after a Sign-in redirect (via the pending-target marker
+        // in sessionStorage) and what enables the background push/pull loop.
         await storage.restoreSyncTargets()
         storage.startAutoSync()
       } catch (e) {
@@ -3938,6 +3848,112 @@ function App() {
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Returns true if storage was initialised, false if the caller should
+  // surface the pick-storage UI.
+  const initStorage = async () => {
+    // 1. If returning from OAuth redirect with a pending migration, finish it
+    if (hasPendingMigration()) {
+      const migratedTo = await resumePendingMigration()
+      if (migratedTo) {
+        window.location.reload()
+        return true
+      }
+    }
+
+    // 2. Load (and one-shot migrate) the multi-source registry.
+    loadSources()
+    migrateLegacy()
+    const registry = getSources()
+
+    if (registry.length > 0) {
+      // If we're returning from a re-auth OAuth redirect (for an existing source),
+      // restore that source FIRST so it consumes the ?code= param.
+      const pendingReauthId = consumePendingReauth()
+      if (pendingReauthId) {
+        try { await restoreSource(pendingReauthId) } catch { /* ok — will retry later */ }
+      }
+
+      // If we're returning from an "add cloud source" OAuth redirect,
+      // restore that source FIRST so it consumes the ?code= param —
+      // otherwise other cloud providers' restore() would try (and fail)
+      // to exchange the code as their own.
+      const pendingAddId = consumePendingAdd()
+      let scaffoldedAddId = null
+      if (pendingAddId) {
+        try {
+          const p = await restoreSource(pendingAddId)
+          if (p) {
+            await p.scaffold()
+            scaffoldedAddId = pendingAddId
+          } else {
+            // User cancelled / token exchange failed — roll back the entry.
+            await removeSource(pendingAddId)
+          }
+        } catch (e) {
+          console.error('Cloud source add failed, rolling back:', e)
+          await removeSource(pendingAddId)
+        }
+      }
+      // Restore each source's provider eagerly so cross-source reads work.
+      const restoredIds = new Set()
+      if (pendingReauthId) restoredIds.add(pendingReauthId) // already restored above
+      if (scaffoldedAddId) restoredIds.add(scaffoldedAddId)
+      let firstHealthyId = pendingReauthId || scaffoldedAddId || null
+      const failed = new Set()
+      for (const s of getSources()) {
+        if (restoredIds.has(s.id)) continue
+        try {
+          const p = await restoreSource(s.id)
+          if (p) {
+            restoredIds.add(s.id)
+            if (!firstHealthyId) firstHealthyId = s.id
+          } else {
+            failed.add(s.id)
+          }
+        } catch {
+          failed.add(s.id)
+        }
+      }
+      if (failed.size > 0) setFailedSourceIds(failed)
+      // Pick the saved active source if it restored, otherwise the first that did.
+      const savedActive = getActiveSourceId()
+      const targetId = restoredIds.has(savedActive) ? savedActive : firstHealthyId
+      if (targetId) {
+        await setActiveSource(targetId)
+        const active = getSources().find(s => s.id === targetId)
+        await initWithProvider(active.providerType)
+        return true
+      }
+      // No source restored cleanly — fall back to LocalStorage.
+    }
+
+    // 3. Legacy single-provider path (no registry yet — migrateLegacy() didn't run because
+    // there was no fp-storage-provider key either). Fresh install → pick storage.
+    const savedId = localStorage.getItem('fp-storage-provider')
+    if (!savedId) {
+      // Auto-bootstrap LocalStorage as the default first source.
+      const fallback = new LocalStorageProvider()
+      await fallback.restore()
+      setActiveProvider(fallback)
+      localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
+      await initWithProvider(PROVIDERS.LOCAL_STORAGE)
+      return true
+    }
+    const provider = makeProvider(savedId)
+    const ok = await provider.restore()
+    if (ok) {
+      setActiveProvider(provider)
+      await initWithProvider(savedId)
+    } else {
+      const fallback = new LocalStorageProvider()
+      await fallback.restore()
+      setActiveProvider(fallback)
+      localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
+      await initWithProvider(PROVIDERS.LOCAL_STORAGE)
+    }
+    return true
+  }
 
   // Subscribe to sync status changes
   useEffect(() => {

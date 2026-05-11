@@ -66,8 +66,9 @@ export function createFolderSync(options) {
           setTargetStatus(folder.id, target.id, TARGET_STATUS.PENDING)
           if (pending === targetKey(folder.id, target.id)) {
             removeSessionItem(pendingKey)
-            await markLocalOnlyDirty(folder, target)
+            // Pull-before-push on first connect (see connectTarget comment).
             const pulled = await mergeFromTarget(folder, target)
+            await markLocalOnlyDirty(folder, target)
             changedPaths = changedPaths.concat(pulled)
           } else {
             // Existing connection — pull remote changes on restore
@@ -91,8 +92,14 @@ export function createFolderSync(options) {
     const restored = await tryRestoreTarget(target)
     if (restored) {
       enableTarget(folder.id, target.id)
-      await markLocalOnlyDirty(folder, target)
+      // Pull-before-push: treat the remote as the source of truth on
+      // (re)connect so we don't clobber an existing backup with whatever
+      // happens to be in the local store (e.g. a scaffold template).
+      // We pull FIRST, then mark only the files the remote doesn't have
+      // as dirty so they get pushed up. Files that pulled cleanly are not
+      // marked dirty and so won't be pushed back over the just-pulled copy.
       const pulled = await mergeFromTarget(folder, target)
+      await markLocalOnlyDirty(folder, target)
       await syncNow(folder.id, target.id)
       emitChanges(pulled)
       return { ok: true }
