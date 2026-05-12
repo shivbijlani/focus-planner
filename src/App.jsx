@@ -6,7 +6,7 @@ import { LocalStorageProvider } from './storage/localstorage-provider.js'
 import { resumePendingMigration, hasPendingMigration, makeProvider } from './storage/migrate.js'
 import {
   loadSources, migrateLegacy, getSources, getActiveSourceId, getActiveSource, setActiveSource,
-  addSource, removeSource, getProvider, restoreSource,
+  addSource, removeSource, renameSource, getProvider, restoreSource,
   consumePendingAdd, consumePendingReauth,
 } from './storage/sources.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority } from './taskSort.js'
@@ -2894,7 +2894,7 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
   const activePrimary = getActiveSource()?.providerType ?? PROVIDERS.LOCAL_STORAGE
   const fsaSupported = typeof window !== 'undefined' && 'showDirectoryPicker' in window
   const localStorageSource = sources.find(s => s.providerType === PROVIDERS.LOCAL_STORAGE)
-  const fsaSource = sources.find(s => s.providerType === PROVIDERS.FSA)
+  const fsaSources = sources.filter(s => s.providerType === PROVIDERS.FSA)
 
   // Probe each non-active source's emptiness when the dialog opens so we can
   // show a Remove button on truly empty sources. "Empty" means no task rows in
@@ -2943,25 +2943,73 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
     }
   }
 
-  const pickLocalFolder = async () => {
+  const addLocalFolder = async () => {
+    setBusy(true)
+    setError('')
+    let createdId = null
+    try {
+      const src = addSource({ providerType: PROVIDERS.FSA })
+      createdId = src.id
+      const p = getProvider(src.id)
+      const handle = await p.pick()
+      if (!handle) {
+        // User cancelled the picker — roll back the orphan source entry.
+        await removeSource(src.id)
+        setBusy(false)
+        return
+      }
+      renameSource(src.id, handle.name)
+      await p.scaffold()
+      await setActiveSource(src.id)
+      window.location.reload()
+    } catch (e) {
+      if (createdId) {
+        try { await removeSource(createdId) } catch { /* ignore */ }
+      }
+      if (!e.message?.toLowerCase().includes('aborted')) {
+        setError(e.message || 'Could not access folder')
+      }
+      setBusy(false)
+    }
+  }
+
+  const changeLocalFolder = async (sourceId) => {
     setBusy(true)
     setError('')
     try {
-      const existing = getSources().find(s => s.providerType === PROVIDERS.FSA)
-      let sourceId = existing?.id
-      if (!sourceId) {
-        const src = addSource({ providerType: PROVIDERS.FSA })
-        sourceId = src.id
-      }
       const p = getProvider(sourceId)
       const handle = await p.pick()
       if (!handle) { setBusy(false); return }
+      renameSource(sourceId, handle.name)
       await p.scaffold()
-      await setActiveSource(sourceId)
+      if (sourceId !== activeId) await setActiveSource(sourceId)
       window.location.reload()
     } catch (e) {
       if (!e.message?.toLowerCase().includes('aborted')) {
         setError(e.message || 'Could not access folder')
+      }
+      setBusy(false)
+    }
+  }
+
+  const useLocalFolder = async (sourceId) => {
+    setBusy(true)
+    setError('')
+    try {
+      const p = getProvider(sourceId)
+      // Try restoring the saved handle. If it's gone (e.g. permission cleared),
+      // fall back to a fresh pick so the user can re-grant access.
+      const restored = await p.restore()
+      if (!restored) {
+        const handle = await p.pick()
+        if (!handle) { setBusy(false); return }
+        renameSource(sourceId, handle.name)
+      }
+      await setActiveSource(sourceId)
+      window.location.reload()
+    } catch (e) {
+      if (!e.message?.toLowerCase().includes('aborted')) {
+        setError(e.message || 'Could not switch folder')
       }
       setBusy(false)
     }
@@ -3114,37 +3162,74 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
                 </div>
               </div>
 
-              {/* Local Folder */}
+              {/* Local Folders — one card per FSA source, plus an "Add" affordance */}
+              {fsaSupported && fsaSources.map(s => {
+                const isActive = s.id === activeId
+                const provider = getProvider(s.id)
+                const restoredName = provider?.folderName?.() || ''
+                const displayName = restoredName || s.name || 'Local Folder'
+                return (
+                  <div key={s.id} className={`sync-target-card${isActive ? ' active-source' : ''}`}>
+                    <div className="sync-target-main">
+                      <span className="sync-target-icon">📂</span>
+                      <div>
+                        <div className="sync-target-name">{displayName}</div>
+                        <div className="sync-target-status">
+                          {isActive
+                            ? 'Active — stored as Markdown in this folder'
+                            : 'Local Folder — switch to use'}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="sync-target-actions">
+                      {isActive
+                        ? <span className="sync-active-badge">● Active</span>
+                        : <button className="storage-footer-btn sync-target-action" onClick={() => useLocalFolder(s.id)} disabled={busy}>Use this</button>
+                      }
+                      <button
+                        className="storage-footer-btn sync-target-action"
+                        onClick={() => changeLocalFolder(s.id)}
+                        disabled={busy}
+                        title="Pick a different folder for this source"
+                      >
+                        Change
+                      </button>
+                      {!isActive && (
+                        <button
+                          className="sync-target-remove"
+                          onClick={() => askRemoveSource(s.id, displayName)}
+                          disabled={busy || !emptySources[s.id]}
+                          title={emptySources[s.id] ? 'Disconnect this folder' : 'Has data — cannot remove'}
+                          aria-label={`Remove ${displayName}`}
+                        >🗑</button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
               {fsaSupported && (
-                <div className={`sync-target-card${activePrimary === PROVIDERS.FSA ? ' active-source' : ''}`}>
+                <div className="sync-target-card sync-target-add">
                   <div className="sync-target-main">
-                    <span className="sync-target-icon">📂</span>
+                    <span className="sync-target-icon">➕</span>
                     <div>
-                      <div className="sync-target-name">Local Folder</div>
+                      <div className="sync-target-name">
+                        {fsaSources.length === 0 ? 'Local Folder' : 'Add another local folder'}
+                      </div>
                       <div className="sync-target-status">
-                        {activePrimary === PROVIDERS.FSA && folderName
-                          ? folderName
-                          : 'Store in a folder on this device — readable by AI agents.'}
+                        {fsaSources.length === 0
+                          ? 'Store in a folder on this device — readable by AI agents.'
+                          : 'Connect a second folder (e.g. Work + Personal).'}
                       </div>
                     </div>
                   </div>
                   <div className="sync-target-actions">
                     <button
                       className="storage-footer-btn sync-target-action"
-                      onClick={pickLocalFolder}
+                      onClick={addLocalFolder}
                       disabled={busy}
                     >
-                      {busy ? '...' : activePrimary === PROVIDERS.FSA ? 'Change' : 'Choose folder'}
+                      {busy ? '...' : fsaSources.length === 0 ? 'Choose folder' : 'Add folder'}
                     </button>
-                    {fsaSource && fsaSource.id !== activeId && (
-                      <button
-                        className="sync-target-remove"
-                        onClick={() => askRemoveSource(fsaSource.id, fsaSource.name || 'Local Folder')}
-                        disabled={busy || !emptySources[fsaSource.id]}
-                        title={emptySources[fsaSource.id] ? 'Disconnect this folder' : 'Has data — cannot remove'}
-                        aria-label="Remove Local Folder"
-                      >🗑</button>
-                    )}
                   </div>
                 </div>
               )}
