@@ -42,17 +42,10 @@ export class LocalStorageProvider {
   async restore() { return true } // always ready
 
   async scaffold() {
-    // Don't scaffold if the legacy file from a previous version still has
-    // real content — the rename migration in src/storage/rename-files.js
-    // will move it to PLAN_FILE on next startup. Without this guard we'd
-    // race the migration and end up with an empty scaffold at PLAN_FILE
-    // and the real data orphaned at the legacy name.
-    const hasLegacyPlan = localStorage.getItem(PREFIX + 'focus-plan.md')
-    const hasLegacyCompleted = localStorage.getItem(PREFIX + 'focus-plan-completed.md')
-    if (localStorage.getItem(PREFIX + PLAN_FILE) === null && !hasLegacyPlan) {
+    if (localStorage.getItem(PREFIX + PLAN_FILE) === null) {
       localStorage.setItem(PREFIX + PLAN_FILE, SCAFFOLD_PLAN)
     }
-    if (localStorage.getItem(PREFIX + COMPLETED_FILE) === null && !hasLegacyCompleted) {
+    if (localStorage.getItem(PREFIX + COMPLETED_FILE) === null) {
       localStorage.setItem(PREFIX + COMPLETED_FILE, SCAFFOLD_COMPLETED)
     }
   }

@@ -9,7 +9,6 @@ import {
   addSource, removeSource, getProvider, restoreSource,
   consumePendingAdd, consumePendingReauth,
 } from './storage/sources.js'
-import { migrateProviderFileNames } from './storage/rename-files.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority } from './taskSort.js'
 import { computeMoveSet, computeBrokenLinks } from './moveTask.js'
 import { StoragePicker } from './StoragePicker.jsx'
@@ -3942,20 +3941,6 @@ function App() {
   }
 
   const initWithProvider = async (providerId) => {
-    // Rename migration must run BEFORE scaffold so the active source's
-    // existing legacy files (focus-plan.md, focus-plan-completed.md) get
-    // renamed before scaffold would otherwise write empty templates at
-    // the new names. Use the current active provider directly.
-    const activeProvider = storage.getActiveProvider()
-    const activeId = getActiveSourceId() || 's1'
-    if (activeProvider) {
-      // Route through storage.write/remove so folder-sync picks up the
-      // rename and propagates it to OneDrive / Google Drive.
-      await migrateProviderFileNames(activeId, activeProvider, {
-        write: (p, c) => storage.write(p, c),
-        remove: (p) => storage.remove(p),
-      })
-    }
     await storage.scaffold()
     // Ensure we have a sources registry. If first run on legacy install,
     // the legacy → registry migration was already attempted; otherwise
@@ -3986,15 +3971,6 @@ function App() {
         if (!initialised) {
           setAppState('pick-storage')
           return
-        }
-
-        // One-time file-name migration (focus-plan.md → planner.md).
-        // Runs against every restored source; per-source flag prevents
-        // re-running once successful. Failures are non-fatal — the
-        // migration retries on next startup.
-        for (const s of getSources()) {
-          const p = getProvider(s.id)
-          if (p) await migrateProviderFileNames(s.id, p)
         }
 
         // Always restore sync targets and start background sync after the
