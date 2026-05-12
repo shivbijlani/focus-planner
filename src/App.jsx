@@ -2826,6 +2826,50 @@ function targetStatus(syncStatus, targetId) {
   }
 }
 
+// A source is "empty" when it has no journal entries and no task rows in
+// focus-plan.md / focus-plan-completed.md. Scaffold-only counts as empty so
+// users can clean up storage they never actually used. Returns true on any
+// read failure so we never block deletion if the source is unreachable.
+async function isSourceEmpty(provider) {
+  try {
+    const plan = (await provider.read('focus-plan.md').catch(() => '')) || ''
+    const completed = (await provider.read('focus-plan-completed.md').catch(() => '')) || ''
+    const planRows = countTaskRows(plan)
+    const completedRows = countTaskRows(completed)
+    if (planRows + completedRows > 0) return false
+    // Look for any journal/* entries via the provider's tree.
+    const tree = await provider.getFiles?.().catch(() => null)
+    if (!tree) return true
+    return !treeHasJournals(tree)
+  } catch {
+    return true
+  }
+}
+
+// A "task row" is a markdown table data row that starts with a numeric ID
+// column — i.e. "| 123 | ..." — which is the shape every focus-plan task and
+// completed-task entry uses.
+function countTaskRows(md) {
+  if (!md) return 0
+  let n = 0
+  for (const line of md.split(/\r?\n/)) {
+    if (/^\s*\|\s*\d/.test(line)) n++
+  }
+  return n
+}
+
+function treeHasJournals(items) {
+  for (const item of items || []) {
+    if (item.type === 'directory' && item.name === 'journal') {
+      // Any file inside the journal directory counts.
+      if ((item.children || []).some(c => c.type === 'file')) return true
+    } else if (item.type === 'directory' && item.children) {
+      if (treeHasJournals(item.children)) return true
+    }
+  }
+  return false
+}
+
 function backupActionLabel(providerStatus, disconnectedLabel = 'Sign in') {
   if (providerStatus === TARGET_STATUS.RECONNECT_NEEDED) return 'Sign in again'
   if (providerStatus === TARGET_STATUS.DISCONNECTED) return disconnectedLabel
@@ -2837,6 +2881,8 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
   const [tourOpen, setTourOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [emptySources, setEmptySources] = useState({}) // sourceId -> boolean
+  const [removeConfirm, setRemoveConfirm] = useState(null) // { sourceId, name }
   const oneDrive = targetStatus(syncStatus, PROVIDERS.ONEDRIVE)
   const aggregate = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
   const syncClass = aggregate.replace(/[^a-z-]/g, '')
@@ -2846,8 +2892,55 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
   const isMulti = sources.length > 1
   const activePrimary = getActiveSource()?.providerType ?? PROVIDERS.LOCAL_STORAGE
   const fsaSupported = typeof window !== 'undefined' && 'showDirectoryPicker' in window
+  const localStorageSource = sources.find(s => s.providerType === PROVIDERS.LOCAL_STORAGE)
+  const fsaSource = sources.find(s => s.providerType === PROVIDERS.FSA)
 
-  const close = () => { setOpen(false); setError('') }
+  // Probe each non-active source's emptiness when the dialog opens so we can
+  // show a Remove button on truly empty sources. "Empty" means no task rows in
+  // focus-plan.md and no journal files.
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    ;(async () => {
+      const next = {}
+      for (const s of sources) {
+        if (s.id === activeId) continue
+        try {
+          const p = getProvider(s.id)
+          if (!p) continue
+          // Cloud sources are backup targets, not removable here
+          if (s.providerType !== PROVIDERS.LOCAL_STORAGE && s.providerType !== PROVIDERS.FSA) continue
+          next[s.id] = await isSourceEmpty(p)
+        } catch {
+          next[s.id] = false
+        }
+      }
+      if (!cancelled) setEmptySources(next)
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, activeId, sources.length])
+
+  const close = () => { setOpen(false); setError(''); setRemoveConfirm(null) }
+
+  const askRemoveSource = (sourceId, name) => {
+    setError('')
+    setRemoveConfirm({ sourceId, name })
+  }
+
+  const confirmRemoveSource = async () => {
+    if (!removeConfirm) return
+    setBusy(true)
+    try {
+      await removeSource(removeConfirm.sourceId)
+      setRemoveConfirm(null)
+      // Reload so the file tree, active provider, and sources state all settle.
+      window.location.reload()
+    } catch (e) {
+      setError(e.message || 'Could not remove source')
+      setBusy(false)
+    }
+  }
 
   const pickLocalFolder = async () => {
     setBusy(true)
@@ -3003,10 +3096,21 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
                     <div className="sync-target-status">Saves in this browser. Private, fast, works offline.</div>
                   </div>
                 </div>
-                {activePrimary === PROVIDERS.LOCAL_STORAGE
-                  ? <span className="sync-active-badge">● Active</span>
-                  : <button className="storage-footer-btn sync-target-action" onClick={useBrowserStorage} disabled={busy}>Use this</button>
-                }
+                <div className="sync-target-actions">
+                  {activePrimary === PROVIDERS.LOCAL_STORAGE
+                    ? <span className="sync-active-badge">● Active</span>
+                    : <button className="storage-footer-btn sync-target-action" onClick={useBrowserStorage} disabled={busy}>Use this</button>
+                  }
+                  {localStorageSource && localStorageSource.id !== activeId && (
+                    <button
+                      className="sync-target-remove"
+                      onClick={() => askRemoveSource(localStorageSource.id, 'Browser Storage')}
+                      disabled={busy || !emptySources[localStorageSource.id]}
+                      title={emptySources[localStorageSource.id] ? 'Remove Browser Storage' : 'Has data — cannot remove'}
+                      aria-label="Remove Browser Storage"
+                    >🗑</button>
+                  )}
+                </div>
               </div>
 
               {/* Local Folder */}
@@ -3023,13 +3127,24 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
                       </div>
                     </div>
                   </div>
-                  <button
-                    className="storage-footer-btn sync-target-action"
-                    onClick={pickLocalFolder}
-                    disabled={busy}
-                  >
-                    {busy ? '...' : activePrimary === PROVIDERS.FSA ? 'Change' : 'Choose folder'}
-                  </button>
+                  <div className="sync-target-actions">
+                    <button
+                      className="storage-footer-btn sync-target-action"
+                      onClick={pickLocalFolder}
+                      disabled={busy}
+                    >
+                      {busy ? '...' : activePrimary === PROVIDERS.FSA ? 'Change' : 'Choose folder'}
+                    </button>
+                    {fsaSource && fsaSource.id !== activeId && (
+                      <button
+                        className="sync-target-remove"
+                        onClick={() => askRemoveSource(fsaSource.id, fsaSource.name || 'Local Folder')}
+                        disabled={busy || !emptySources[fsaSource.id]}
+                        title={emptySources[fsaSource.id] ? 'Disconnect this folder' : 'Has data — cannot remove'}
+                        aria-label="Remove Local Folder"
+                      >🗑</button>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -3095,6 +3210,28 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
             </div>
 
             {error && <div className="storage-footer-error">⚠️ {error}</div>}
+          </div>
+        </div>
+      )}
+
+      {removeConfirm && (
+        <div className="dialog-overlay" onClick={() => !busy && setRemoveConfirm(null)}>
+          <div className="settings-dialog" onClick={e => e.stopPropagation()} style={{ maxWidth: '420px' }}>
+            <div className="settings-dialog-header">
+              <h3>Remove {removeConfirm.name}?</h3>
+              <button className="settings-dialog-close" onClick={() => !busy && setRemoveConfirm(null)} disabled={busy}>✕</button>
+            </div>
+            <div className="settings-dialog-section">
+              <div className="storage-footer-note">
+                This storage is empty — there are no tasks or journals to lose. You can add it again later.
+              </div>
+              <div className="storage-footer-actions">
+                <button className="storage-footer-btn secondary" onClick={() => setRemoveConfirm(null)} disabled={busy}>Cancel</button>
+                <button className="storage-footer-btn danger" onClick={confirmRemoveSource} disabled={busy}>
+                  {busy ? 'Removing...' : 'Remove'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

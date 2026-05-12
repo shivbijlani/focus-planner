@@ -91,6 +91,11 @@ export class LocalStorageProvider {
   clear() {
     allKeys().forEach(k => localStorage.removeItem(k))
   }
+
+  /** Called when this source is removed from the registry. */
+  async forget() {
+    this.clear()
+  }
 }
 
 function buildTree(paths) {

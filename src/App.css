@@ -2118,6 +2118,50 @@ tr.highlight-flash {
   flex-shrink: 0;
 }
 
+.sync-target-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.sync-target-remove {
+  background: transparent;
+  border: 1px solid #1e3a5f;
+  color: #94a3b8;
+  border-radius: 6px;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.15s;
+}
+
+.sync-target-remove:hover:not(:disabled) {
+  background: #2a0e1a;
+  border-color: #e94560;
+  color: #e94560;
+}
+
+.sync-target-remove:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.storage-footer-btn.danger {
+  background: #e94560;
+  color: white;
+  border-color: #e94560;
+}
+
+.storage-footer-btn.danger:hover:not(:disabled) {
+  background: #c93651;
+  border-color: #c93651;
+}
+
 .sync-target-card.active-source {
   border-color: #3b82f6;
   background: #0f2a4a;
