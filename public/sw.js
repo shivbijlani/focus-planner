@@ -1,4 +1,4 @@
-const CACHE_NAME = 'focus-planner-v2';
+const CACHE_NAME = 'planner-v3';
 
 self.addEventListener('install', () => self.skipWaiting());
 

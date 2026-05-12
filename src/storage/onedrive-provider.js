@@ -1,14 +1,16 @@
 /**
- * OneDrive provider for focus-planner using Microsoft Graph API + PKCE OAuth2.
- * Uses the special App Folder (Files.ReadWrite.AppFolder scope) —
- * sandboxed to /Apps/focus-planner/ with no broad file access needed.
+ * OneDrive provider — Microsoft Graph API + PKCE OAuth2.
+ * Uses the special App Folder (Files.ReadWrite.AppFolder scope) so all access
+ * is sandboxed to /Apps/<AAD app display name>/ with no broad file permissions.
  */
+import { PLAN_FILE, COMPLETED_FILE } from '../config/branding.js'
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
 const AUTH_ENDPOINT = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize'
 const TOKEN_ENDPOINT = 'https://login.microsoftonline.com/common/oauth2/v2.0/token'
 
-// Azure SPA app "Focus Planner" — registered 2026-05-05.
+// Azure SPA app — registered 2026-05-05. The AAD app's display name controls
+// the OneDrive folder path (`/Apps/<display name>/`); keep them in sync.
 const CLIENT_ID = '4f22242f-c9a7-4a61-9208-8ca0e5ef8697'
 const SCOPES = 'Files.ReadWrite.AppFolder offline_access'
 
@@ -65,8 +67,8 @@ export class OneDriveProvider {
 
   async scaffold() {
     const files = [
-      ['focus-plan.md', `## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Priorities\n\n`],
-      ['focus-plan-completed.md', '# Completed Tasks\n'],
+      [PLAN_FILE, `## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Priorities\n\n`],
+      [COMPLETED_FILE, '# Completed Tasks\n'],
     ]
     for (const [name, content] of files) {
       const existing = await this.read(name)

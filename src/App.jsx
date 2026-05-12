@@ -9,11 +9,13 @@ import {
   addSource, removeSource, getProvider, restoreSource,
   consumePendingAdd, consumePendingReauth,
 } from './storage/sources.js'
+import { migrateProviderFileNames } from './storage/rename-files.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority } from './taskSort.js'
 import { computeMoveSet, computeBrokenLinks } from './moveTask.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
+import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 
 // ── Multi-source path helpers ───────────────────────────────────────
 // In single-source mode all paths are plain ("focus-plan.md").
@@ -784,11 +786,11 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                     targetRow.classList.add('highlight-flash')
                     setTimeout(() => targetRow.classList.remove('highlight-flash'), 1500)
                   } else {
-                    onNavigate('focus-plan-completed.md', linkedId)
+                    onNavigate(COMPLETED_FILE, linkedId)
                   }
                 }, 100)
               } else {
-                onNavigate('focus-plan-completed.md', linkedId)
+                onNavigate(COMPLETED_FILE, linkedId)
               }
             }
 
@@ -1739,7 +1741,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
   
   // Fetch completed tasks for linked ID lookup
   useEffect(() => {
-    storage.read('focus-plan-completed.md')
+    storage.read(COMPLETED_FILE)
       .then(content => {
         if (content) {
           const completedSections = parseFocusPlan(content)
@@ -1903,7 +1905,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
     
     // Add to focus-plan-completed.md under the current week
     try {
-      const completedContent = await storage.read('focus-plan-completed.md').catch(() => '# Completed Tasks\n')
+      const completedContent = await storage.read(COMPLETED_FILE).catch(() => '# Completed Tasks\n')
       const completedLines = completedContent.split('\n')
       
       // Compute Monday of the current week (M/D/YYYY format)
@@ -1947,7 +1949,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
         completedLines.splice(insertIndex, 0, completedRow)
       }
       
-      await storage.write('focus-plan-completed.md', completedLines.join('\n'))
+      await storage.write(COMPLETED_FILE, completedLines.join('\n'))
     } catch (e) {
       console.error('Failed to update completed file:', e)
     }
@@ -2383,7 +2385,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
     }
     let targetContent = ''
     try {
-      targetContent = await targetProvider.read('focus-plan.md')
+      targetContent = await targetProvider.read(PLAN_FILE)
     } catch {
       // Target may not have a focus-plan yet — start with a minimal one.
       targetContent =
@@ -2467,13 +2469,13 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
 
     // 4. Persist both sides. Write the target first so a failure there
     //    doesn't leave us with deleted-but-not-moved tasks.
-    await targetProvider.write('focus-plan.md', tLines.join('\n'))
+    await targetProvider.write(PLAN_FILE, tLines.join('\n'))
     await onContentUpdate(renumbered.join('\n'))
   }
 
   return (
     <div className="focus-plan-view">
-      <h1>📋 Focus Plan</h1>
+      <h1>📋 {APP_NAME}</h1>
       
       {taskSections.map((section, i) => (
         <TaskSection
@@ -2556,7 +2558,7 @@ function CompletedPlanView({ content, onNavigate }) {
       <div className="editor-header">
         <button
           className="back-to-focus-btn"
-          onClick={() => onNavigate('focus-plan.md')}
+          onClick={() => onNavigate(PLAN_FILE)}
           title="Back to Focus Plan"
         >
           ← Focus Plan
@@ -2683,7 +2685,7 @@ function MarkdownView({ content, filePath, onContentUpdate, onNavigate }) {
       <div className="editor-header">
         <button 
           className="back-to-focus-btn"
-          onClick={() => onNavigate('focus-plan.md')}
+          onClick={() => onNavigate(PLAN_FILE)}
           title="Back to Focus Plan"
         >
           ← Focus Plan
@@ -2799,12 +2801,12 @@ function TourModal({ onClose }) {
     <div className="dialog-overlay" onClick={onClose}>
       <div className="settings-dialog" onClick={e => e.stopPropagation()}>
         <div className="settings-dialog-header">
-          <h3>Welcome to Focus Planner 👋</h3>
+          <h3>Welcome to {APP_NAME} 👋</h3>
           <button className="settings-dialog-close" onClick={onClose}>✕</button>
         </div>
         <div className="settings-dialog-section">
           <ul className="tour-list">
-            <li><strong>Today &amp; Deferred</strong> — your top focus plan lives in <code>focus-plan.md</code>. Add tasks with the <strong>+</strong> button; right-click to defer or complete.</li>
+            <li><strong>Today &amp; Deferred</strong> — your top plan lives in <code>{PLAN_FILE}</code>. Add tasks with the <strong>+</strong> button; right-click to defer or complete.</li>
             <li><strong>Priorities</strong> — pin top-of-mind themes in the <em>Priorities</em> section so tasks can be tagged against them.</li>
             <li><strong>Journals</strong> — every task with a journal entry expands to show its TODO / DONE bullets inline.</li>
             <li><strong>Sources</strong> — open <em>Settings</em> to add more storage sources (e.g. a Work folder + a Personal folder). With multiple sources, a ✨ <strong>Combined</strong> view appears at the top.</li>
@@ -2832,8 +2834,8 @@ function targetStatus(syncStatus, targetId) {
 // read failure so we never block deletion if the source is unreachable.
 async function isSourceEmpty(provider) {
   try {
-    const plan = (await provider.read('focus-plan.md').catch(() => '')) || ''
-    const completed = (await provider.read('focus-plan-completed.md').catch(() => '')) || ''
+    const plan = (await provider.read(PLAN_FILE).catch(() => '')) || ''
+    const completed = (await provider.read(COMPLETED_FILE).catch(() => '')) || ''
     const planRows = countTaskRows(plan)
     const completedRows = countTaskRows(completed)
     if (planRows + completedRows > 0) return false
@@ -3040,7 +3042,7 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
         <button
           className="storage-footer-toggle"
           onClick={() => setTourOpen(true)}
-          title="Take a quick tour of Focus Planner"
+          title={`Take a quick tour of ${APP_NAME}`}
         >
           <span className="storage-footer-icon">📚</span>
           <span className="storage-footer-label">Take a tour</span>
@@ -3205,7 +3207,7 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
               </div>
               {oneDrive.message && <div className="storage-footer-error">{oneDrive.message}</div>}
               <div className="storage-footer-note">
-                You can keep using Focus Planner without signing in. If you edit offline, backup resumes when you reconnect.
+                You can keep using {APP_NAME} without signing in. If you edit offline, backup resumes when you reconnect.
               </div>
             </div>
 
@@ -3261,7 +3263,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
       try {
         const results = await Promise.all(sources.map(async (s) => {
           try {
-            const text = await storage.readFromSource(s.id, 'focus-plan.md')
+            const text = await storage.readFromSource(s.id, PLAN_FILE)
             const migrated = migratePrioritiesSections(text) ?? text
             return { source: s, content: migrated, sections: parseFocusPlan(migrated) }
           } catch {
@@ -3284,7 +3286,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
       const merged = {}
       await Promise.all(sources.map(async (s) => {
         try {
-          const text = await storage.readFromSource(s.id, 'focus-plan-completed.md')
+          const text = await storage.readFromSource(s.id, COMPLETED_FILE)
           if (!text) return
           const sections = parseFocusPlan(text)
           for (const sec of sections) Object.assign(merged, buildTaskIdLookup(sec.lines))
@@ -3382,11 +3384,11 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
 
   const applyOp = async (sourceId, opFn) => {
     if (!sourceId) return
-    const text = await storage.readFromSource(sourceId, 'focus-plan.md')
+    const text = await storage.readFromSource(sourceId, PLAN_FILE)
     const result = opFn(text)
     const newContent = typeof result === 'string' ? result : result.content
     if (newContent === text) return
-    await storage.writeToSource(sourceId, 'focus-plan.md', newContent)
+    await storage.writeToSource(sourceId, PLAN_FILE, newContent)
     setReloadKey(k => k + 1)
   }
 
@@ -3462,13 +3464,13 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
     const completedRow = ops.buildCompletedRow({ taskId, taskName, priority, todoItems })
     // Write the focus-plan deletion and the completed-plan append in
     // sequence against the same source.
-    const focusText = await storage.readFromSource(sid, 'focus-plan.md')
+    const focusText = await storage.readFromSource(sid, PLAN_FILE)
     const newFocus = ops.opRemoveTaskFromFocusPlan(focusText, rawLine, fromSection)
     let completedText = ''
-    try { completedText = await storage.readFromSource(sid, 'focus-plan-completed.md') } catch { /* file may not exist */ }
+    try { completedText = await storage.readFromSource(sid, COMPLETED_FILE) } catch { /* file may not exist */ }
     const newCompleted = ops.opAppendToCompleted(completedText, completedRow)
-    await storage.writeToSource(sid, 'focus-plan-completed.md', newCompleted)
-    await storage.writeToSource(sid, 'focus-plan.md', newFocus)
+    await storage.writeToSource(sid, COMPLETED_FILE, newCompleted)
+    await storage.writeToSource(sid, PLAN_FILE, newFocus)
     setReloadKey(k => k + 1)
   }
 
@@ -3574,7 +3576,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
 
     // Build target content
     let targetContent = ''
-    try { targetContent = await storage.readFromSource(target.id, 'focus-plan.md') }
+    try { targetContent = await storage.readFromSource(target.id, PLAN_FILE) }
     catch {
       targetContent = '# Focus Plan\n\n## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|-----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|-----------|\n'
     }
@@ -3635,8 +3637,8 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
       } catch { /* no journal — skip */ }
     }
 
-    await storage.writeToSource(target.id, 'focus-plan.md', tLines.join('\n'))
-    await storage.writeToSource(fromSourceId, 'focus-plan.md', renumbered.join('\n'))
+    await storage.writeToSource(target.id, PLAN_FILE, tLines.join('\n'))
+    await storage.writeToSource(fromSourceId, PLAN_FILE, renumbered.join('\n'))
     setReloadKey(k => k + 1)
   }
 
@@ -3833,9 +3835,9 @@ function App() {
   // plain paths in single-source mode. The dispatcher in handleSelectFile/etc.
   // copes with both shapes.
   const [syncStatus, setSyncStatus] = useState(storage.getSyncStatus())
-  const [selectedFile, setSelectedFile] = useState('focus-plan.md')
+  const [selectedFile, setSelectedFile] = useState(PLAN_FILE)
   const [content, setContent] = useState('')
-  const selectedFileRef = useRef('focus-plan.md')
+  const selectedFileRef = useRef(PLAN_FILE)
   const [pendingScrollToTaskId, setPendingScrollToTaskId] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   // Re-render trigger for the source list when Settings mutates it.
@@ -3879,7 +3881,7 @@ function App() {
         type: 'directory',
         path: `${COMBINED_ID}::`,
         children: [
-          { name: 'focus-plan.md', type: 'file', path: `${COMBINED_ID}::focus-plan.md` },
+          { name: PLAN_FILE, type: 'file', path: `${COMBINED_ID}::${PLAN_FILE}` },
         ],
       }
       const sourceFolders = perSource.map(({ source, tree }) => ({
@@ -3920,7 +3922,7 @@ function App() {
     try {
       const text = await storage.read(path || qualifiedPath)
       const target = path || qualifiedPath
-      if (target === 'focus-plan.md') {
+      if (target === PLAN_FILE) {
         // Run the legacy Work/Personal Priorities → unified Priorities migration once.
         const migrated = migratePrioritiesSections(text)
         const startContent = migrated ?? text
@@ -3940,6 +3942,20 @@ function App() {
   }
 
   const initWithProvider = async (providerId) => {
+    // Rename migration must run BEFORE scaffold so the active source's
+    // existing legacy files (focus-plan.md, focus-plan-completed.md) get
+    // renamed before scaffold would otherwise write empty templates at
+    // the new names. Use the current active provider directly.
+    const activeProvider = storage.getActiveProvider()
+    const activeId = getActiveSourceId() || 's1'
+    if (activeProvider) {
+      // Route through storage.write/remove so folder-sync picks up the
+      // rename and propagates it to OneDrive / Google Drive.
+      await migrateProviderFileNames(activeId, activeProvider, {
+        write: (p, c) => storage.write(p, c),
+        remove: (p) => storage.remove(p),
+      })
+    }
     await storage.scaffold()
     // Ensure we have a sources registry. If first run on legacy install,
     // the legacy → registry migration was already attempted; otherwise
@@ -3954,7 +3970,7 @@ function App() {
     setSourcesVersion(v => v + 1)
     setAppState('ready')
     const liveSources = getSources()
-    const defaultFile = liveSources.length > 1 ? `${COMBINED_ID}::focus-plan.md` : 'focus-plan.md'
+    const defaultFile = liveSources.length > 1 ? `${COMBINED_ID}::${PLAN_FILE}` : PLAN_FILE
     handleSelectFile(defaultFile)
   }
 
@@ -3970,6 +3986,15 @@ function App() {
         if (!initialised) {
           setAppState('pick-storage')
           return
+        }
+
+        // One-time file-name migration (focus-plan.md → planner.md).
+        // Runs against every restored source; per-source flag prevents
+        // re-running once successful. Failures are non-fatal — the
+        // migration retries on next startup.
+        for (const s of getSources()) {
+          const p = getProvider(s.id)
+          if (p) await migrateProviderFileNames(s.id, p)
         }
 
         // Always restore sync targets and start background sync after the
@@ -4169,10 +4194,10 @@ function App() {
   }
 
   const { sourceId: selSourceId, path: selPath } = splitSourcePath(selectedFile)
-  const isCombinedFocusPlan = selSourceId === COMBINED_ID && (selPath === 'focus-plan.md' || selPath === '')
+  const isCombinedFocusPlan = selSourceId === COMBINED_ID && (selPath === PLAN_FILE || selPath === '')
   const localPath = selPath || selectedFile
-  const isFocusPlan = !isCombinedFocusPlan && localPath === 'focus-plan.md'
-  const isCompletedPlan = !isCombinedFocusPlan && localPath === 'focus-plan-completed.md'
+  const isFocusPlan = !isCombinedFocusPlan && localPath === PLAN_FILE
+  const isCompletedPlan = !isCombinedFocusPlan && localPath === COMPLETED_FILE
 
   return (
     <div className={`app${sidebarOpen ? ' sidebar-open' : ''}`}>

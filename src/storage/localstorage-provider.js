@@ -1,12 +1,15 @@
 /**
- * Browser localStorage provider for focus-planner — default for new visitors.
- * Stores all markdown files under `fp-file:<path>` keys.
+ * Browser localStorage provider — default for new visitors.
+ * Stores all markdown files under `fp-file:<path>` keys. The `fp-` prefix
+ * is historical (predates the rebrand) and kept for backwards compatibility
+ * with existing user data; see src/config/branding.js for user-visible names.
  */
 import { parseTodos } from './fsa.js'
+import { PLAN_FILE, COMPLETED_FILE } from '../config/branding.js'
 
 const PREFIX = 'fp-file:'
 
-const SCAFFOLD_FOCUS_PLAN = `## Today
+const SCAFFOLD_PLAN = `## Today
 
 | ID | 🎯 | Task | Priority | Added | Linked ID |
 |---|---|------|----------|-------|-----------|
@@ -39,11 +42,18 @@ export class LocalStorageProvider {
   async restore() { return true } // always ready
 
   async scaffold() {
-    if (localStorage.getItem(PREFIX + 'focus-plan.md') === null) {
-      localStorage.setItem(PREFIX + 'focus-plan.md', SCAFFOLD_FOCUS_PLAN)
+    // Don't scaffold if the legacy file from a previous version still has
+    // real content — the rename migration in src/storage/rename-files.js
+    // will move it to PLAN_FILE on next startup. Without this guard we'd
+    // race the migration and end up with an empty scaffold at PLAN_FILE
+    // and the real data orphaned at the legacy name.
+    const hasLegacyPlan = localStorage.getItem(PREFIX + 'focus-plan.md')
+    const hasLegacyCompleted = localStorage.getItem(PREFIX + 'focus-plan-completed.md')
+    if (localStorage.getItem(PREFIX + PLAN_FILE) === null && !hasLegacyPlan) {
+      localStorage.setItem(PREFIX + PLAN_FILE, SCAFFOLD_PLAN)
     }
-    if (localStorage.getItem(PREFIX + 'focus-plan-completed.md') === null) {
-      localStorage.setItem(PREFIX + 'focus-plan-completed.md', SCAFFOLD_COMPLETED)
+    if (localStorage.getItem(PREFIX + COMPLETED_FILE) === null && !hasLegacyCompleted) {
+      localStorage.setItem(PREFIX + COMPLETED_FILE, SCAFFOLD_COMPLETED)
     }
   }
 

@@ -1,5 +1,8 @@
 import { get, set, del } from 'idb-keyval'
+import { PLAN_FILE, COMPLETED_FILE } from '../config/branding.js'
 
+// Historical key — kept under this name so existing folder handles continue
+// to load after the Planner rebrand. The name is internal-only.
 const LEGACY_DB_KEY = 'focus-planner-dir-handle'
 
 function dbKey(suffix) {
@@ -152,7 +155,7 @@ export async function getMaxJournalId(dirHandle) {
   }
 }
 
-const SCAFFOLD_FOCUS_PLAN = `## Today
+const SCAFFOLD_PLAN = `## Today
 
 | ID | 🎯 | Task | Work Priority | Added | Linked ID |
 |---|---|------|---------------|-------|-----------|
@@ -170,12 +173,12 @@ const SCAFFOLD_COMPLETED = `# Completed Tasks
 `
 
 export async function scaffoldIfEmpty(dirHandle) {
-  const hasFocusPlan = await fileExists(dirHandle, 'focus-plan.md')
-  if (!hasFocusPlan) {
-    await writeFile(dirHandle, 'focus-plan.md', SCAFFOLD_FOCUS_PLAN)
+  const hasPlan = await fileExists(dirHandle, PLAN_FILE)
+  if (!hasPlan) {
+    await writeFile(dirHandle, PLAN_FILE, SCAFFOLD_PLAN)
   }
-  const hasCompleted = await fileExists(dirHandle, 'focus-plan-completed.md')
+  const hasCompleted = await fileExists(dirHandle, COMPLETED_FILE)
   if (!hasCompleted) {
-    await writeFile(dirHandle, 'focus-plan-completed.md', SCAFFOLD_COMPLETED)
+    await writeFile(dirHandle, COMPLETED_FILE, SCAFFOLD_COMPLETED)
   }
 }

@@ -1,37 +1,22 @@
 /**
- * Google Drive provider for focus-planner using Drive API v3 + PKCE OAuth2.
- * Files stored in appDataFolder (private to this app) OR in a named folder.
- * We use a named folder "focus-planner" for easy user visibility.
+ * Google Drive provider — Drive API v3 + PKCE OAuth2.
+ * Files are stored under a named folder (default: "Planner") in the user's
+ * Drive root so they're easy to find. Folder name is overridable per-source.
  */
 import { parseTodos } from './fsa.js'
+import { PLAN_FILE, COMPLETED_FILE, CLOUD_FOLDER_NAME } from '../config/branding.js'
 
 const DRIVE_API = 'https://www.googleapis.com/drive/v3'
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3'
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth'
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
 
-// Google OAuth2 SPA app — partial setup completed:
-//   ✓ Google Cloud project created: focus-planner-495417
-//   ✓ Google Drive API enabled
-//   ✓ OAuth consent screen: App name "focus-planner", support email shiv@bijlanis.com,
-//     User type: External (started — may need to finish Contact Info + Finish steps)
-// To finish setup and get CLIENT_ID:
-//   1. Go to https://console.cloud.google.com/auth/audience?project=focus-planner-495417
-//      and complete the consent screen (Contact Information → Finish)
-//   2. Go to https://console.cloud.google.com/apis/credentials?project=focus-planner-495417
-//   3. Create Credentials → OAuth client ID
-//      Application type: Web application
-//      Authorized JavaScript origins:
-//        https://plannermd.com
-//        https://shivbijlani.github.io
-//      Authorized redirect URIs:
-//        https://plannermd.com/
-//        https://shivbijlani.github.io/focus-planner/
-//   4. Copy the Client ID (ends in .apps.googleusercontent.com)
-//   5. Replace TODO_REGISTER_GOOGLE_APP below with that Client ID
+// Google OAuth2 SPA app — Cloud project: focus-planner-495417. The display
+// name on the consent screen ("Planner") is a user-visible label; this code
+// only depends on the client ID.
 const CLIENT_ID = '1019840819252-jcrbpshgai7ror14pmimsv413qcuce17.apps.googleusercontent.com'
 const SCOPES = 'https://www.googleapis.com/auth/drive.file'
-const DEFAULT_FOLDER = 'focus-planner'
+const DEFAULT_FOLDER = CLOUD_FOLDER_NAME
 const FOLDER_KEY = 'gd_folder'
 
 export class GoogleDriveProvider {
@@ -86,8 +71,8 @@ export class GoogleDriveProvider {
   async scaffold() {
     await this._ensureFolder()
     const files = [
-      ['focus-plan.md', `## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Priorities\n\n`],
-      ['focus-plan-completed.md', '# Completed Tasks\n'],
+      [PLAN_FILE, `## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Priorities\n\n`],
+      [COMPLETED_FILE, '# Completed Tasks\n'],
     ]
     for (const [name, content] of files) {
       const existing = await this.read(name)
