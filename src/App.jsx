@@ -4210,6 +4210,14 @@ function App() {
             aria-label="Open file menu"
           >☰ Files</button>
           {selectedFile && <span className="mobile-file-name">{(selPath || selectedFile).replace(/.*\//, '')}</span>}
+          <button
+            className="mobile-sync-badge"
+            onClick={() => setSidebarOpen(true)}
+            aria-label={SYNC_LABELS[syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED] || 'Sync status'}
+            title={SYNC_LABELS[syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED] || 'Sync status'}
+          >
+            <span className={`sync-dot ${(syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED).replace(/[^a-z-]/g, '')}`} />
+          </button>
         </div>
         {isCombinedFocusPlan ? (
           <CombinedFocusPlanView sources={sources} onNavigate={handleNavigate} />

@@ -1649,6 +1649,8 @@ tr.highlight-flash {
   white-space: nowrap;
 }
 
+.mobile-sync-badge { display: none; }
+
 /* ── Responsive: ≤ 768px ─────────────────────────────────────────── */
 @media (max-width: 768px) {
   .app {
@@ -1950,6 +1952,25 @@ tr.highlight-flash {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .mobile-sync-badge {
+    background: transparent;
+    border: none;
+    padding: 0.35rem;
+    margin: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .mobile-sync-badge .sync-dot {
+    width: 10px;
+    height: 10px;
   }
 
   .task-table {
