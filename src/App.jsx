@@ -831,7 +831,12 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                       const linkedNumMatch = linkedId.match(/^(\d+)$/)
                       const linkedAdoLink = linkedNumMatch && adoLookup ? adoLookup[linkedNumMatch[1]] : null
                       if (linkedAdoLink) {
-                        return <a className="linked-id-link external-link ado-id-link" href={linkedAdoLink.url} target="_blank" rel="noopener noreferrer" title={linkedTaskName || `Ticket #${linkedAdoLink.id}`} onClick={(e) => e.stopPropagation()}>{linkedAdoLink.id}</a>
+                        return (
+                          <span className="linked-id-link" onClick={navigateToLinkedId} title={linkedTaskName ? `${linkedTaskName} — go to task ${linkedId}` : `Go to task ${linkedId} (Ticket #${linkedAdoLink.id})`}>
+                            <span className="linked-id-local">{linkedId}</span>
+                            <a className="external-link ado-id-link ado-id-badge" href={linkedAdoLink.url} target="_blank" rel="noopener noreferrer" title={`Open ticket #${linkedAdoLink.id}`} onClick={(e) => e.stopPropagation()}>{linkedAdoLink.id}</a>
+                          </span>
+                        )
                       }
                       return <span className="linked-id-link" onClick={navigateToLinkedId} title={linkedTaskName || `Go to task ${linkedId.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')}`}>{parseLinks(linkedId, onNavigate)}</span>
                     })()}
