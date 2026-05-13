@@ -462,6 +462,17 @@ body {
   content: none;
 }
 
+/* When the ADO link appears next to the local task ID, render it as a
+   compact badge so the local ID remains the primary identifier. */
+.ado-id-badge {
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid #a78bfa;
+  border-radius: 4px;
+  font-size: 0.75em;
+  line-height: 1;
+}
+
 /* Legend */
 .legend {
   margin-top: 2rem;

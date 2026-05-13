@@ -795,12 +795,11 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
 
             return (
               <td key={i} title={taskName} className="id-cell">
-                {adoLink ? (
-                  <a className="external-link ado-id-link" href={adoLink.url} target="_blank" rel="noopener noreferrer" title={`Ticket #${adoLink.id}`} onClick={(e) => e.stopPropagation()}>
+                {parseLinks(id, onNavigate)}
+                {adoLink && (
+                  <a className="external-link ado-id-link ado-id-badge" href={adoLink.url} target="_blank" rel="noopener noreferrer" title={`Ticket #${adoLink.id}`} onClick={(e) => e.stopPropagation()}>
                     {adoLink.id}
                   </a>
-                ) : (
-                  parseLinks(id, onNavigate)
                 )}
                 {isEditingLinkedId ? (
                   <span className="linked-id-edit-wrapper">
