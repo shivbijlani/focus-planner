@@ -15,7 +15,11 @@ import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
-import { InstallButton, InstallModal, InstallNudge, InstallSettingsSection } from './components/InstallPrompt.jsx'
+import {
+  InstallButton, InstallModal, InstallNudge,
+  InstallSettingsSection, InstallSuccessToast,
+} from '../packages/install-prompt/src/index.js'
+import '../packages/install-prompt/src/styles/install-prompt.css'
 
 // ── Multi-source path helpers ───────────────────────────────────────
 // In single-source mode all paths are plain ("focus-plan.md").
@@ -3136,7 +3140,14 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
   return (
     <>
       <div className="sidebar-storage-footer">
-        <InstallButton onOpen={() => setInstallOpen(true)} />
+        <InstallButton
+          onOpen={() => setInstallOpen(true)}
+          appName={APP_NAME}
+          label="Install app"
+          className="storage-footer-toggle"
+          iconClassName="storage-footer-icon"
+          labelClassName="storage-footer-label"
+        />
         <button
           className="storage-footer-toggle"
           onClick={() => setTourOpen(true)}
@@ -3156,8 +3167,9 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
         </button>
       </div>
 
-      <InstallNudge onOpen={() => setInstallOpen(true)} />
-      {installOpen && <InstallModal onClose={() => setInstallOpen(false)} />}
+      <InstallNudge onOpen={() => setInstallOpen(true)} appName={APP_NAME} />
+      <InstallSuccessToast appName={APP_NAME} />
+      {installOpen && <InstallModal onClose={() => setInstallOpen(false)} appName={APP_NAME} />}
       {tourOpen && <TourModal onClose={() => setTourOpen(false)} />}
 
       {open && (
@@ -3168,7 +3180,7 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
               <button className="settings-dialog-close" onClick={close}>✕</button>
             </div>
 
-            <InstallSettingsSection onOpen={() => setInstallOpen(true)} />
+            <InstallSettingsSection onOpen={() => setInstallOpen(true)} appName={APP_NAME} />
 
             {isMulti && (
               <div className="settings-dialog-section">
