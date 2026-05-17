@@ -2280,3 +2280,35 @@ tr.highlight-flash {
   font-size: 0.78rem;
   color: #64748b;
 }
+
+
+/* Install app nudge — bottom-right toast */
+.install-nudge {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: #1e293b;
+  color: #f1f5f9;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.25);
+  z-index: 900;
+  max-width: 380px;
+  animation: install-nudge-in 0.25s ease-out;
+}
+@keyframes install-nudge-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.install-nudge-icon { font-size: 1.5rem; }
+.install-nudge-text { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.85rem; }
+.install-nudge-text strong { font-size: 0.95rem; }
+.install-nudge-actions { display: flex; gap: 0.4rem; margin-left: auto; }
+@media (max-width: 520px) {
+  .install-nudge { left: 1rem; right: 1rem; max-width: none; }
+}
+

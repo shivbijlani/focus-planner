@@ -15,6 +15,7 @@ import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
+import { InstallButton, InstallModal, InstallNudge } from './components/InstallPrompt.jsx'
 
 // ── Multi-source path helpers ───────────────────────────────────────
 // In single-source mode all paths are plain ("focus-plan.md").
@@ -2915,6 +2916,7 @@ function backupActionLabel(providerStatus, disconnectedLabel = 'Sign in') {
 function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) {
   const [open, setOpen] = useState(false)
   const [tourOpen, setTourOpen] = useState(false)
+  const [installOpen, setInstallOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [emptySources, setEmptySources] = useState({}) // sourceId -> boolean
@@ -3134,6 +3136,7 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
   return (
     <>
       <div className="sidebar-storage-footer">
+        <InstallButton onOpen={() => setInstallOpen(true)} />
         <button
           className="storage-footer-toggle"
           onClick={() => setTourOpen(true)}
@@ -3153,6 +3156,8 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
         </button>
       </div>
 
+      <InstallNudge onOpen={() => setInstallOpen(true)} />
+      {installOpen && <InstallModal onClose={() => setInstallOpen(false)} />}
       {tourOpen && <TourModal onClose={() => setTourOpen(false)} />}
 
       {open && (
