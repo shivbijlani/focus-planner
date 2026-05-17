@@ -4068,6 +4068,38 @@ function App() {
         // in sessionStorage) and what enables the background push/pull loop.
         await storage.restoreSyncTargets()
         storage.startAutoSync()
+
+        // If a previously-enabled backup target failed to restore (e.g.
+        // OneDrive refresh token revoked), redirect the user to sign in
+        // immediately on page load. Without this, the app would let them
+        // edit data locally, then later overwrite changes made on another
+        // device when sync eventually resumes.
+        //
+        // Skip the redirect when:
+        //   - offline (can't reach the IdP anyway),
+        //   - returning from an OAuth redirect (URL has code/state/error),
+        //   - we already auto-redirected this session (avoid loops if the
+        //     user cancels the sign-in screen).
+        if (typeof navigator !== 'undefined' && navigator.onLine) {
+          const oauthParams = new URLSearchParams(window.location.search)
+          const inOAuthFlow = oauthParams.has('code') || oauthParams.has('state') || oauthParams.has('error')
+          if (!inOAuthFlow) {
+            const status = storage.getSyncStatus()
+            const targets = status?.folders?.[storage.getLocalFolderId()]?.targets || {}
+            for (const [targetId, t] of Object.entries(targets)) {
+              if (t.status !== TARGET_STATUS.RECONNECT_NEEDED) continue
+              const flagKey = `fp-folder-sync-auto-reconnect:${targetId}`
+              if (sessionStorage.getItem(flagKey)) continue
+              sessionStorage.setItem(flagKey, '1')
+              try {
+                await storage.connectSyncTarget(targetId) // redirects
+              } catch (err) {
+                console.warn('Auto-reconnect failed:', err)
+              }
+              break // only redirect for one target
+            }
+          }
+        }
       } catch (e) {
         console.error('Storage init failed:', e)
         setAppState('pick-storage')
