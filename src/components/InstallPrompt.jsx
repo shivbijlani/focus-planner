@@ -177,6 +177,38 @@ export function InstallModal({ onClose }) {
   )
 }
 
+export function InstallSettingsSection({ onOpen }) {
+  const { installed, platform, hasNativePrompt } = useInstallPrompt()
+  if (installed) return null
+
+  const platformLabel =
+    platform === 'ios' ? 'iPhone / iPad'
+    : platform === 'android' ? 'Android'
+    : 'this computer'
+
+  return (
+    <div className="settings-dialog-section">
+      <div className="settings-dialog-section-title">Install app</div>
+      <div className="sync-target-card">
+        <div className="sync-target-main">
+          <span className="sync-target-icon">📱</span>
+          <div>
+            <div className="sync-target-name">Install on {platformLabel}</div>
+            <div className="sync-target-status">
+              Get a home-screen icon, faster launch, full-screen view, and offline access.
+            </div>
+          </div>
+        </div>
+        <div className="sync-target-actions">
+          <button className="storage-footer-btn sync-target-action" onClick={onOpen}>
+            {hasNativePrompt ? 'Install' : 'How to install'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function InstallNudge({ onOpen }) {
   const { eligible, dismiss } = useInstallPrompt()
   if (!eligible) return null

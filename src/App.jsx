@@ -15,7 +15,7 @@ import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
-import { InstallButton, InstallModal, InstallNudge } from './components/InstallPrompt.jsx'
+import { InstallButton, InstallModal, InstallNudge, InstallSettingsSection } from './components/InstallPrompt.jsx'
 
 // ── Multi-source path helpers ───────────────────────────────────────
 // In single-source mode all paths are plain ("focus-plan.md").
@@ -3167,6 +3167,8 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
               <h3>Settings</h3>
               <button className="settings-dialog-close" onClick={close}>✕</button>
             </div>
+
+            <InstallSettingsSection onOpen={() => setInstallOpen(true)} />
 
             {isMulti && (
               <div className="settings-dialog-section">
