@@ -376,18 +376,49 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
   )
 }
 
-function FileTree({ items, onSelect, selectedPath, defaultOpen = false }) {
+function FileTree({ items, onSelect, selectedPath }) {
+  // Track which folders are open. All folders start collapsed; clicking a
+  // folder both expands it and (if it contains planner.md as a direct child)
+  // jumps straight to that file so the user doesn't have to drill in.
+  const [openPaths, setOpenPaths] = useState(() => new Set())
+
+  const toggle = (path) => {
+    setOpenPaths(prev => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
+  const handleFolderClick = (item) => {
+    toggle(item.path)
+    const planner = (item.children || []).find(
+      c => c.type === 'file' && c.name === PLAN_FILE
+    )
+    if (planner) onSelect(planner.path)
+  }
+
   return (
     <ul className="file-tree">
       {items.map((item) => (
         <li key={item.path}>
           {item.type === 'directory' ? (
-            <details open={defaultOpen}>
-              <summary className="folder">📁 {item.name}</summary>
-              {item.children && (
-                <FileTree items={item.children} onSelect={onSelect} selectedPath={selectedPath} defaultOpen={defaultOpen} />
+            <>
+              <button
+                type="button"
+                className={`folder${openPaths.has(item.path) ? ' open' : ''}`}
+                onClick={() => handleFolderClick(item)}
+                aria-expanded={openPaths.has(item.path)}
+              >
+                <span className="folder-caret">{openPaths.has(item.path) ? '▾' : '▸'}</span>
+                <span className="folder-icon">📁</span>
+                <span className="folder-name">{item.name}</span>
+              </button>
+              {openPaths.has(item.path) && item.children && (
+                <FileTree items={item.children} onSelect={onSelect} selectedPath={selectedPath} />
               )}
-            </details>
+            </>
           ) : (
             <button
               className={`file ${selectedPath === item.path ? 'selected' : ''}`}
@@ -4315,7 +4346,6 @@ function App() {
             items={files}
             onSelect={handleSelectFile}
             selectedPath={selectedFile}
-            defaultOpen={isMulti}
           />
         </div>
         <StorageFooter

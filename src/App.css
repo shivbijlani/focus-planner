@@ -282,6 +282,27 @@ body {
   cursor: pointer;
   color: #94a3b8;
   padding: 0.25rem 0;
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.9rem;
+  border-radius: 4px;
+}
+
+.folder:hover {
+  background: #0f3460;
+  color: #fff;
+}
+
+.folder-caret {
+  display: inline-block;
+  width: 0.8rem;
+  font-size: 0.7rem;
+  opacity: 0.7;
 }
 
 .file {
