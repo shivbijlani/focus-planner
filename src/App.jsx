@@ -2959,9 +2959,9 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
 
   const close = () => { setOpen(false); setError(''); setRemoveConfirm(null) }
 
-  const askRemoveSource = (sourceId, name) => {
+  const askRemoveSource = (sourceId, name, isCloud = false) => {
     setError('')
-    setRemoveConfirm({ sourceId, name })
+    setRemoveConfirm({ sourceId, name, isCloud })
   }
 
   const confirmRemoveSource = async () => {
@@ -3175,6 +3175,16 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
                       <span className="storage-footer-source-name">{s.name}</span>
                       {failedSourceIds.has(s.id) && <span title="Authentication required" style={{color:'#f59e0b'}}>⚠</span>}
                       {isActive && !failedSourceIds.has(s.id) && <span className="storage-footer-source-active">●</span>}
+                      {!isActive && (
+                        <button
+                          className="sync-target-remove"
+                          style={{ marginLeft: 'auto' }}
+                          onClick={() => askRemoveSource(s.id, s.name, s.providerType === PROVIDERS.ONEDRIVE || s.providerType === PROVIDERS.GOOGLE_DRIVE)}
+                          disabled={busy}
+                          title={`Remove ${s.name}`}
+                          aria-label={`Remove ${s.name}`}
+                        >🗑</button>
+                      )}
                     </div>
                   )
                 })}
@@ -3381,7 +3391,9 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
             </div>
             <div className="settings-dialog-section">
               <div className="storage-footer-note">
-                This storage is empty — there are no tasks or journals to lose. You can add it again later.
+                {removeConfirm.isCloud
+                  ? 'Your local data is safe. This removes the cloud connection; you can reconnect any time by signing in again.'
+                  : 'This storage is empty — there are no tasks or journals to lose. You can add it again later.'}
               </div>
               <div className="storage-footer-actions">
                 <button className="storage-footer-btn secondary" onClick={() => setRemoveConfirm(null)} disabled={busy}>Cancel</button>
