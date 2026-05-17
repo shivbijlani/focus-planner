@@ -389,6 +389,10 @@ export class GoogleDriveProvider {
     localStorage.removeItem('gd_refresh')
     localStorage.removeItem('gd_expires')
   }
+
+  async forget() {
+    this._clearTokens()
+  }
 }
 
 function _redirectUri() {

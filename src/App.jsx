@@ -3116,6 +3116,19 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
     }
   }
 
+  const disconnectTarget = async (targetId, label) => {
+    if (!window.confirm(`Disconnect ${label}? Your local files stay intact; cloud backup will stop until you sign in again.`)) return
+    setError('')
+    setBusy(true)
+    try {
+      await storage.disconnectSyncTarget(targetId)
+    } catch (e) {
+      setError(e.message || 'Disconnect failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const googleDrive = targetStatus(syncStatus, PROVIDERS.GOOGLE_DRIVE)
 
   return (
@@ -3297,13 +3310,25 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
                     </div>
                   </div>
                 </div>
-                <button
-                  className="storage-footer-btn sync-target-action"
-                  onClick={googleDrive.status === TARGET_STATUS.DISCONNECTED || googleDrive.status === TARGET_STATUS.RECONNECT_NEEDED ? connectGoogleDrive : syncGoogleDrive}
-                  disabled={busy}
-                >
-                  {busy ? 'Working...' : backupActionLabel(googleDrive.status)}
-                </button>
+                <div className="sync-target-actions">
+                  <button
+                    className="storage-footer-btn sync-target-action"
+                    onClick={googleDrive.status === TARGET_STATUS.DISCONNECTED || googleDrive.status === TARGET_STATUS.RECONNECT_NEEDED ? connectGoogleDrive : syncGoogleDrive}
+                    disabled={busy}
+                  >
+                    {busy ? 'Working...' : backupActionLabel(googleDrive.status)}
+                  </button>
+                  {googleDrive.status !== TARGET_STATUS.DISCONNECTED && (
+                    <button
+                      className="sync-target-remove"
+                      title="Disconnect Google Drive"
+                      onClick={() => disconnectTarget(PROVIDERS.GOOGLE_DRIVE, 'Google Drive')}
+                      disabled={busy}
+                    >
+                      🗑
+                    </button>
+                  )}
+                </div>
               </div>
               {googleDrive.message && <div className="storage-footer-error">{googleDrive.message}</div>}
               <div className="sync-target-card">
@@ -3316,13 +3341,25 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
                     </div>
                   </div>
                 </div>
-                <button
-                  className="storage-footer-btn sync-target-action"
-                  onClick={oneDrive.status === TARGET_STATUS.DISCONNECTED || oneDrive.status === TARGET_STATUS.RECONNECT_NEEDED ? connectOneDrive : syncOneDrive}
-                  disabled={busy}
-                >
-                  {busy ? 'Working...' : backupActionLabel(oneDrive.status)}
-                </button>
+                <div className="sync-target-actions">
+                  <button
+                    className="storage-footer-btn sync-target-action"
+                    onClick={oneDrive.status === TARGET_STATUS.DISCONNECTED || oneDrive.status === TARGET_STATUS.RECONNECT_NEEDED ? connectOneDrive : syncOneDrive}
+                    disabled={busy}
+                  >
+                    {busy ? 'Working...' : backupActionLabel(oneDrive.status)}
+                  </button>
+                  {oneDrive.status !== TARGET_STATUS.DISCONNECTED && (
+                    <button
+                      className="sync-target-remove"
+                      title="Disconnect OneDrive"
+                      onClick={() => disconnectTarget(PROVIDERS.ONEDRIVE, 'OneDrive')}
+                      disabled={busy}
+                    >
+                      🗑
+                    </button>
+                  )}
+                </div>
               </div>
               {oneDrive.message && <div className="storage-footer-error">{oneDrive.message}</div>}
               <div className="storage-footer-note">

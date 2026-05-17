@@ -131,6 +131,19 @@ export async function connectSyncTarget(targetId) {
   return getFolderSync().connectTarget(LOCAL_FOLDER_ID, targetId)
 }
 
+export async function disconnectSyncTarget(targetId) {
+  // Clear the target's enabled flag in folder-sync config and forget cached
+  // tokens / handles so the next "Sign in" starts a fresh OAuth flow.
+  const fs = getFolderSync()
+  fs.disconnectTarget(LOCAL_FOLDER_ID, targetId)
+  try {
+    let provider = null
+    if (targetId === PROVIDERS.ONEDRIVE) provider = new OneDriveProvider()
+    else if (targetId === PROVIDERS.GOOGLE_DRIVE) provider = new GoogleDriveProvider()
+    if (provider?.forget) await provider.forget()
+  } catch { /* ignore */ }
+}
+
 export async function syncNow(targetId = null) {
   return getFolderSync().syncNow(LOCAL_FOLDER_ID, targetId)
 }
