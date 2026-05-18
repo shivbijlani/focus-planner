@@ -1044,7 +1044,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
 }
 
 // Collapsible section component
-function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource }) {
+function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource, onDeferBelow }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const { headers, rows, rawLines } = parseMarkdownTable(tableLines)
   const [contextMenu, setContextMenu] = useState(null)
@@ -1146,6 +1146,19 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
         icon: '📅',
         action: () => onTaskAction('defer', rawLine, 'Today', 'Deferred')
       })
+      // "Defer all below" cut-line action — only when a handler is provided
+      // (single-source view) and there are tasks below the clicked row.
+      if (onDeferBelow) {
+        const idx = sortedRawLines.indexOf(rawLine)
+        if (idx >= 0 && idx < sortedRawLines.length - 1) {
+          const below = sortedRawLines.slice(idx + 1)
+          options.push({
+            label: `Defer ${below.length} below`,
+            icon: '✂️',
+            action: () => onDeferBelow(below)
+          })
+        }
+      }
     } else if (title === 'Deferred') {
       options.push({
         label: 'Move to Today',
@@ -1853,6 +1866,14 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
       await onContentUpdate(newContent)
     }
   }
+
+  // Cut-line "Defer all below" — batch move multiple rows from Today to
+  // Deferred in a single content update.
+  const handleDeferBelow = async (rawLines) => {
+    if (!Array.isArray(rawLines) || rawLines.length === 0) return
+    const newContent = ops.opMoveLinesBetweenSections(content, rawLines, 'Today', 'Deferred')
+    if (newContent !== content) await onContentUpdate(newContent)
+  }
   
   const handleChangePriority = async (rawLine, oldPriority, newPriority) => {
     // Replace the priority in the raw line
@@ -2526,6 +2547,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
           managerPriorities={managerPriorities}
           onScrollToPriorities={scrollToPriorities}
           onTaskAction={handleTaskAction}
+          onDeferBelow={handleDeferBelow}
           onMoveToCompleted={handleMoveToCompleted}
           onAddTask={handleAddTask}
           onCreateJournal={handleCreateJournal}

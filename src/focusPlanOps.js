@@ -42,6 +42,60 @@ export function opMoveBetweenSections(content, rawLine, fromSection, toSection) 
   return lines.join('\n')
 }
 
+/**
+ * Move multiple rows from one section to another in a single pass.
+ *
+ * Used by the "Defer all below" cut-line action: the caller supplies the
+ * ordered list of raw lines (top-to-bottom as shown to the user) that should
+ * move. Lines that aren't found in `fromSection` are silently skipped.
+ * The moved rows are appended to the destination section in the supplied
+ * order, immediately after the table separator row.
+ */
+export function opMoveLinesBetweenSections(content, rawLines, fromSection, toSection) {
+  if (!Array.isArray(rawLines) || rawLines.length === 0) return content
+  const targets = new Set(rawLines.map(l => l.trim()).filter(Boolean))
+  if (targets.size === 0) return content
+
+  const lines = content.split('\n')
+  let currentSection = null
+  let toSectionInsertIndex = -1
+  const removeIndices = []
+  const removedByLine = new Map()
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (line.startsWith('## ')) {
+      currentSection = line.replace('## ', '').trim()
+    }
+    if (currentSection === toSection && toSectionInsertIndex === -1
+        && line.trim().startsWith('|') && line.includes('---')) {
+      toSectionInsertIndex = i + 1
+    }
+    if (currentSection === fromSection) {
+      const trimmed = line.trim()
+      if (targets.has(trimmed) && !removedByLine.has(trimmed)) {
+        removeIndices.push(i)
+        removedByLine.set(trimmed, line)
+      }
+    }
+  }
+  if (toSectionInsertIndex === -1 || removeIndices.length === 0) return content
+
+  // Remove from highest index downward so earlier indices remain valid.
+  removeIndices.sort((a, b) => b - a)
+  for (const idx of removeIndices) {
+    lines.splice(idx, 1)
+    if (idx < toSectionInsertIndex) toSectionInsertIndex--
+  }
+
+  // Insert in the caller-provided order (top-to-bottom as displayed).
+  const orderedRemoved = rawLines
+    .map(l => removedByLine.get(l.trim()))
+    .filter(v => v !== undefined)
+  lines.splice(toSectionInsertIndex, 0, ...orderedRemoved)
+  return lines.join('\n')
+}
+
 export function opChangePriority(content, rawLine, oldPriority, newPriority) {
   const newLine = rawLine.replace(oldPriority, newPriority)
   const lines = content.split('\n')
