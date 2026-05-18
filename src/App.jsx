@@ -54,6 +54,87 @@ function prefixTreePaths(items, sourceId) {
 }
 
 // Context Menu component
+function LinkPickerModal({ currentLinkedId, taskLookup, allTaskIds, onSelect, onCancel }) {
+  const [query, setQuery] = useState('')
+  const inputRef = useRef(null)
+
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') onCancel() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onCancel])
+
+  const q = query.trim().toLowerCase()
+  const matches = allTaskIds
+    .map(tid => ({ tid, name: (taskLookup && taskLookup[tid]) || '' }))
+    .filter(({ tid, name }) => !q || tid.toLowerCase().includes(q) || name.toLowerCase().includes(q))
+    .slice(0, 50)
+
+  const handleBackdrop = (e) => {
+    if (e.target === e.currentTarget) onCancel()
+  }
+
+  const handleSubmit = (e) => {
+    e.preventDefault()
+    if (/^\d+$/.test(q)) { onSelect(q); return }
+    if (matches.length > 0) onSelect(matches[0].tid)
+  }
+
+  return (
+    <div className="link-picker-overlay" onMouseDown={handleBackdrop}>
+      <div className="link-picker" onMouseDown={e => e.stopPropagation()}>
+        <div className="link-picker-header">
+          <h3>{currentLinkedId ? 'Edit linked task' : 'Link to task'}</h3>
+          <button type="button" className="link-picker-close" onClick={onCancel} aria-label="Close">✕</button>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <input
+            ref={inputRef}
+            className="link-picker-input"
+            type="text"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Search by ID or task name…"
+            autoComplete="off"
+            inputMode="search"
+          />
+        </form>
+        <div className="link-picker-list">
+          {matches.length === 0 ? (
+            <div className="link-picker-empty">
+              {q ? `No tasks match "${query}"` : 'No tasks available'}
+            </div>
+          ) : (
+            matches.map(({ tid, name }) => (
+              <button
+                key={tid}
+                type="button"
+                className={`link-picker-item${tid === currentLinkedId ? ' is-current' : ''}`}
+                onClick={() => onSelect(tid)}
+              >
+                <span className="link-picker-item-id">{tid}</span>
+                <span className="link-picker-item-name">{name || '(no name)'}</span>
+              </button>
+            ))
+          )}
+        </div>
+        <div className="link-picker-actions">
+          {currentLinkedId && (
+            <button type="button" className="link-picker-remove" onClick={() => onSelect('')}>
+              Remove link
+            </button>
+          )}
+          <button type="button" className="link-picker-cancel" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ContextMenu({ x, y, options, onClose }) {
   const menuRef = useRef(null)
   
@@ -705,7 +786,6 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   const [isEditing, setIsEditing] = useState(false)
   const [editText, setEditText] = useState('')
   const [isEditingLinkedId, setIsEditingLinkedId] = useState(false)
-  const [linkedIdText, setLinkedIdText] = useState('')
   
   const taskId = extractTaskId(row)
   
@@ -780,17 +860,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
 
             const startEditingLinkedId = (e) => {
               e.stopPropagation()
-              setLinkedIdText(linkedId || '')
               setIsEditingLinkedId(true)
-            }
-
-            const saveLinkedId = () => {
-              const trimmed = linkedIdText.trim()
-              const oldLinkedId = linkedId || ''
-              setIsEditingLinkedId(false)
-              if (trimmed !== oldLinkedId) {
-                onChangeLinkedId(rawLine, trimmed)
-              }
             }
 
             const navigateToLinkedId = (e) => {
@@ -837,30 +907,20 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                     {adoLink.id}
                   </a>
                 )}
-                {isEditingLinkedId ? (
-                  <span className="linked-id-edit-wrapper">
-                    <span className="arrow">→</span>
-                    <input
-                      className="linked-id-input"
-                      type="text"
-                      list={`linked-ids-${id}`}
-                      value={linkedIdText}
-                      onChange={e => setLinkedIdText(e.target.value)}
-                      onBlur={saveLinkedId}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter') saveLinkedId()
-                        if (e.key === 'Escape') setIsEditingLinkedId(false)
-                      }}
-                      autoFocus
-                      placeholder="ID"
-                    />
-                    <datalist id={`linked-ids-${id}`}>
-                      {allTaskIds.filter(tid => tid !== String(id).replace(/\D/g, '')).map(tid => (
-                        <option key={tid} value={tid}>{taskLookup[tid]}</option>
-                      ))}
-                    </datalist>
-                  </span>
-                ) : linkedId ? (
+                {isEditingLinkedId && (
+                  <LinkPickerModal
+                    currentLinkedId={linkedId || ''}
+                    taskLookup={taskLookup}
+                    allTaskIds={allTaskIds.filter(tid => tid !== String(id).replace(/\D/g, ''))}
+                    onSelect={(tid) => {
+                      const oldLinkedId = linkedId || ''
+                      setIsEditingLinkedId(false)
+                      if (tid !== oldLinkedId) onChangeLinkedId(rawLine, tid)
+                    }}
+                    onCancel={() => setIsEditingLinkedId(false)}
+                  />
+                )}
+                {linkedId ? (
                   <span className="linked-id-wrapper">
                     <span className="arrow linked-id-edit-arrow" onClick={startEditingLinkedId} title="Edit link">→</span>
                     {(() => {
