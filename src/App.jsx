@@ -362,6 +362,7 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
   const [priority, setPriority] = useState('🟡')
   const [linkedTask, setLinkedTask] = useState('')
   const [sourceId, setSourceId] = useState(defaultSourceId || (sources && sources[0]?.id) || '')
+  const [showLinkPicker, setShowLinkPicker] = useState(false)
   const dialogRef = useRef(null)
   const inputRef = useRef(null)
 
@@ -419,6 +420,11 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
             <input
               ref={inputRef}
               type="text"
+              name="task-description"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="sentences"
+              spellCheck={false}
               value={task}
               onChange={(e) => setTask(e.target.value)}
               placeholder="Task description..."
@@ -438,18 +444,31 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
             </div>
             <div className="form-field">
               <label title="Works with Azure DevOps, Jira, GitHub Issues, Linear, Shortcut, and more — paste any ticket URL">External Ticket <span className="label-hint">ℹ</span></label>
-              <input
-                type="text"
-                list="add-task-linked-ids"
-                value={linkedTask}
-                onChange={(e) => setLinkedTask(e.target.value)}
-                placeholder="Paste a ticket URL or task ID…"
-              />
-              <datalist id="add-task-linked-ids">
-                {effectiveTaskIds.map(tid => (
-                  <option key={tid} value={tid}>{effectiveTaskLookup[tid]}</option>
-                ))}
-              </datalist>
+              <div className="linked-task-input-wrapper">
+                <input
+                  type="text"
+                  name="linked-task"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  inputMode="search"
+                  value={linkedTask}
+                  onChange={(e) => setLinkedTask(e.target.value)}
+                  placeholder="Paste URL or task ID…"
+                />
+                {effectiveTaskIds.length > 0 && (
+                  <button
+                    type="button"
+                    className="linked-task-pick-btn"
+                    onClick={() => setShowLinkPicker(true)}
+                    title="Pick from existing tasks"
+                    aria-label="Pick from existing tasks"
+                  >
+                    🔗
+                  </button>
+                )}
+              </div>
             </div>
           </div>
           <div className="form-actions">
@@ -457,6 +476,15 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
             <button type="submit" className="btn-add">Add Task</button>
           </div>
         </form>
+        {showLinkPicker && (
+          <LinkPickerModal
+            currentLinkedId={linkedTask}
+            taskLookup={effectiveTaskLookup}
+            allTaskIds={effectiveTaskIds}
+            onSelect={(tid) => { setLinkedTask(tid); setShowLinkPicker(false) }}
+            onCancel={() => setShowLinkPicker(false)}
+          />
+        )}
       </div>
     </div>
   )

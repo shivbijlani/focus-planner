@@ -1473,6 +1473,9 @@ tr.highlight-flash {
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  /* Allow dialog to scroll if keyboard reduces viewport */
+  overflow-y: auto;
+  padding: 1rem;
 }
 
 .add-task-dialog {
@@ -1482,6 +1485,11 @@ tr.highlight-flash {
   padding: 1.5rem;
   min-width: 400px;
   max-width: 500px;
+  /* Use dvh so the dialog tracks the visual viewport when the mobile
+     keyboard opens. Scroll internally instead of being pushed off-screen. */
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
@@ -1531,6 +1539,38 @@ tr.highlight-flash {
 
 .form-row .form-field {
   flex: 1;
+}
+
+/* External Ticket input + 🔗 pick-task button */
+.linked-task-input-wrapper {
+  display: flex;
+  gap: 0.4rem;
+  align-items: stretch;
+}
+
+.linked-task-input-wrapper input {
+  flex: 1;
+  min-width: 0;
+}
+
+.linked-task-pick-btn {
+  flex-shrink: 0;
+  background: #0f3460;
+  border: 1px solid #1e3a5f;
+  color: #e2e8f0;
+  padding: 0 0.7rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.linked-task-pick-btn:hover {
+  border-color: #3b82f6;
+  color: #93c5fd;
 }
 
 .form-actions {
@@ -2280,6 +2320,17 @@ tr.highlight-flash {
 
   .editor-header h1 {
     font-size: 1.15rem;
+  }
+
+  /* Tighter add-task dialog padding on narrow phones */
+  .add-task-dialog {
+    padding: 1rem;
+    min-width: 0;
+  }
+
+  .add-task-dialog h3 {
+    font-size: 1rem;
+    margin-bottom: 0.75rem;
   }
 }
 
