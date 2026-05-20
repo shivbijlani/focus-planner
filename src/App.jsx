@@ -231,6 +231,41 @@ function AdoLinkDialog({ onClose, onSave, currentUrl }) {
   )
 }
 
+// Confirmation dialog shown before deleting/completing a task that has incoming links.
+// Offers to bridge those links to the next task in the chain.
+function LinkBridgeDialog({ incomingLinks, removedTaskName, nextTaskId, nextTaskName, onClose, onConfirm }) {
+  return (
+    <div className="dialog-overlay" onClick={onClose}>
+      <div className="dialog" onClick={e => e.stopPropagation()}>
+        <h3>🔗 Bridge Task Links?</h3>
+        <p className="dialog-hint">
+          The following {incomingLinks.length === 1 ? 'task links' : 'tasks link'} to <strong>{removedTaskName}</strong> which you are removing.
+        </p>
+        <ul className="move-task-list">
+          {incomingLinks.map(link => (
+            <li key={link.fromId}>
+              <strong>#{link.fromId}</strong> {link.fromName}
+            </li>
+          ))}
+        </ul>
+        <p className="dialog-hint">
+          {nextTaskId ? (
+            <>Should these tasks now link to <strong>#{nextTaskId}</strong> ({nextTaskName}) instead?</>
+          ) : (
+            <>Since <strong>{removedTaskName}</strong> wasn't linked to anything else, these links will be removed.</>
+          )}
+        </p>
+        <div className="dialog-actions">
+          <button onClick={onClose}>Cancel</button>
+          <button className="dialog-save-btn" onClick={onConfirm}>
+            {nextTaskId ? 'Bridge Links' : 'Remove Links & Continue'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // Confirmation dialog shown before moving a task (and possibly its
 // dependency subtree) from the active source to another source.
 function MoveToSourceDialog({ targetName, movingTasks, brokenLinks, onClose, onConfirm }) {
@@ -1331,7 +1366,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
     options.push({
       label: 'Delete Task',
       icon: '🗑️',
-      action: () => onDeleteTask(rawLine, title, journalPath)
+      action: () => onDeleteTask(rawLine, title, journalPath, taskId, row)
     })
     
     if (options.length > 0) {
@@ -1849,6 +1884,7 @@ function buildLinkedIdMap(tableLines) {
 // Focus Plan View component
 function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
+  const [bridgeDialog, setBridgeDialog] = useState(null)
   const sections = parseFocusPlan(content)
   
   // Find sections
@@ -1998,15 +2034,39 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
     }
   }
   
-  const handleDeleteTask = async (rawLine, fromSection, journalPath) => {
-    // Delete the task from focus plan
-    const lines = content.split('\n')
-    const lineIndex = lines.findIndex(line => line.trim() === rawLine)
-    if (lineIndex !== -1) {
-      lines.splice(lineIndex, 1)
-      const newContent = lines.join('\n')
-      await onContentUpdate(newContent)
+  const handleDeleteTask = async (rawLine, fromSection, journalPath, taskId, row) => {
+    // Check for incoming links to bridge
+    if (taskId && linkedIdMap) {
+      const incoming = []
+      for (const [fId, tId] of Object.entries(linkedIdMap)) {
+        if (tId === String(taskId)) {
+          incoming.push({ fromId: fId, fromName: taskLookup[fId] || '' })
+        }
+      }
+      if (incoming.length > 0) {
+        const idCol = row['ID']
+        const nextIdRawValue = (typeof idCol === 'object' && idCol.linkedId) ? idCol.linkedId : ''
+        const nextIdNum = nextIdRawValue.match(/(\d+)/)?.[1]
+        setBridgeDialog({
+          incomingLinks: incoming,
+          removedTaskName: row['Task'] || `Task ${taskId}`,
+          nextTaskId: nextIdNum,
+          nextTaskName: nextIdNum ? taskLookup[nextIdNum] : '',
+          onConfirm: async () => {
+            const bridged = ops.opBridgeLinks(content, taskId, nextIdRawValue)
+            const final = ops.opDeleteTask(bridged, rawLine)
+            await onContentUpdate(final)
+            if (journalPath) await storage.remove(journalPath).catch(() => {})
+            setBridgeDialog(null)
+          }
+        })
+        return
+      }
     }
+
+    // Delete the task from focus plan
+    const newContent = ops.opDeleteTask(content, rawLine)
+    await onContentUpdate(newContent)
     
     // Also delete journal if it exists
     if (journalPath) {
@@ -2020,6 +2080,38 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
   
   const handleMoveToCompleted = async (rawLine, row, fromSection) => {
     // Extract task info from row
+    const taskId = extractTaskId(row)
+
+    // Check for incoming links to bridge
+    if (taskId && linkedIdMap) {
+      const incoming = []
+      for (const [fId, tId] of Object.entries(linkedIdMap)) {
+        if (tId === String(taskId)) {
+          incoming.push({ fromId: fId, fromName: taskLookup[fId] || '' })
+        }
+      }
+      if (incoming.length > 0) {
+        const idCol = row['ID']
+        const nextIdRawValue = (typeof idCol === 'object' && idCol.linkedId) ? idCol.linkedId : ''
+        const nextIdNum = nextIdRawValue.match(/(\d+)/)?.[1]
+        setBridgeDialog({
+          incomingLinks: incoming,
+          removedTaskName: row['Task'] || `Task ${taskId}`,
+          nextTaskId: nextIdNum,
+          nextTaskName: nextIdNum ? taskLookup[nextIdNum] : '',
+          onConfirm: async () => {
+            const bridged = ops.opBridgeLinks(content, taskId, nextIdRawValue)
+            setBridgeDialog(null)
+            await performMoveToCompleted(rawLine, row, fromSection, bridged)
+          }
+        })
+        return
+      }
+    }
+    await performMoveToCompleted(rawLine, row, fromSection, content)
+  }
+
+  const performMoveToCompleted = async (rawLine, row, fromSection, currentContent) => {
     const taskId = extractTaskId(row)
     const taskName = row['Task'] || ''
     const mngrPriority = row['Work Priority'] || row['Mngr Priority'] || '-'
@@ -2071,7 +2163,13 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
     
     if (lineToRemoveIndex !== -1) {
       focusLines.splice(lineToRemoveIndex, 1)
-      await onContentUpdate(focusLines.join('\n'))
+      // Use the potentially bridged content as the base
+      const finalFocusLines = currentContent.split('\n')
+      const finalLineToRemoveIndex = finalFocusLines.findIndex(l => l.trim() === rawLine)
+      if (finalLineToRemoveIndex !== -1) {
+        finalFocusLines.splice(finalLineToRemoveIndex, 1)
+      }
+      await onContentUpdate(finalFocusLines.join('\n'))
     }
     
     // Add to focus-plan-completed.md under the current week
@@ -2692,6 +2790,17 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
           sectionId="priorities"
           otherSources={otherSources}
           onMoveToSource={handleMoveToSource}
+        />
+      )}
+
+      {bridgeDialog && (
+        <LinkBridgeDialog
+          incomingLinks={bridgeDialog.incomingLinks}
+          removedTaskName={bridgeDialog.removedTaskName}
+          nextTaskId={bridgeDialog.nextTaskId}
+          nextTaskName={bridgeDialog.nextTaskName}
+          onClose={() => setBridgeDialog(null)}
+          onConfirm={bridgeDialog.onConfirm}
         />
       )}
 
@@ -3572,6 +3681,7 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
 function CombinedFocusPlanView({ sources, onNavigate }) {
   const [perSource, setPerSource] = useState(null) // [{ source, content, sections }]
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
+  const [bridgeDialog, setBridgeDialog] = useState(null)
   const [error, setError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
   const [addDialog, setAddDialog] = useState(null) // { section }
@@ -3732,9 +3842,46 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
   const handleLinkToAdoBugDb = (rawLine, adoLink) =>
     applyOp(sourceForLine(rawLine), c => ops.opLinkToAdoBugDb(c, rawLine, adoLink))
 
-  const handleDeleteTask = async (rawLine, fromSection, journalPath) => {
+  const handleDeleteTask = async (rawLine, fromSection, journalPath, taskId, row) => {
     const sid = sourceForLine(rawLine)
     if (!sid) return
+
+    // Check for incoming links across ALL sources to bridge
+    if (taskId && linkedIdMap) {
+      const incoming = []
+      for (const [fId, tId] of Object.entries(linkedIdMap)) {
+        if (tId === String(taskId)) {
+          incoming.push({ fromId: fId, fromName: taskLookup[fId] || '' })
+        }
+      }
+      if (incoming.length > 0) {
+        const idCol = row['ID']
+        const nextIdRawValue = (typeof idCol === 'object' && idCol.linkedId) ? idCol.linkedId : ''
+        const nextIdNum = nextIdRawValue.match(/(\d+)/)?.[1]
+        setBridgeDialog({
+          incomingLinks: incoming,
+          removedTaskName: row['Task'] || `Task ${taskId}`,
+          nextTaskId: nextIdNum,
+          nextTaskName: nextIdNum ? taskLookup[nextIdNum] : '',
+          onConfirm: async () => {
+            // Apply bridge to ALL sources because linkers could be anywhere
+            await Promise.all(sources.map(async (src) => {
+              const text = await storage.readFromSource(src.id, PLAN_FILE)
+              const bridged = ops.opBridgeLinks(text, taskId, nextIdRawValue)
+              if (bridged !== text) {
+                await storage.writeToSource(src.id, PLAN_FILE, bridged)
+              }
+            }))
+            await applyOp(sid, c => ops.opDeleteTask(c, rawLine))
+            if (journalPath) await storage.removeFromSource(sid, journalPath).catch(() => {})
+            setBridgeDialog(null)
+            setReloadKey(k => k + 1)
+          }
+        })
+        return
+      }
+    }
+
     await applyOp(sid, c => ops.opDeleteTask(c, rawLine))
     if (journalPath) {
       try { await storage.removeFromSource(sid, journalPath) } catch (e) { console.error('Failed to delete journal:', e) }
@@ -3771,6 +3918,45 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
   const handleMoveToCompleted = async (rawLine, row, fromSection) => {
     const sid = sourceForLine(rawLine)
     if (!sid) return
+    const taskId = extractTaskId(row)
+
+    // Check for incoming links across ALL sources to bridge
+    if (taskId && linkedIdMap) {
+      const incoming = []
+      for (const [fId, tId] of Object.entries(linkedIdMap)) {
+        if (tId === String(taskId)) {
+          incoming.push({ fromId: fId, fromName: taskLookup[fId] || '' })
+        }
+      }
+      if (incoming.length > 0) {
+        const idCol = row['ID']
+        const nextIdRawValue = (typeof idCol === 'object' && idCol.linkedId) ? idCol.linkedId : ''
+        const nextIdNum = nextIdRawValue.match(/(\d+)/)?.[1]
+        setBridgeDialog({
+          incomingLinks: incoming,
+          removedTaskName: row['Task'] || `Task ${taskId}`,
+          nextTaskId: nextIdNum,
+          nextTaskName: nextIdNum ? taskLookup[nextIdNum] : '',
+          onConfirm: async () => {
+            // Apply bridge to ALL sources because linkers could be anywhere
+            await Promise.all(sources.map(async (src) => {
+              const text = await storage.readFromSource(src.id, PLAN_FILE)
+              const bridged = ops.opBridgeLinks(text, taskId, nextIdRawValue)
+              if (bridged !== text) {
+                await storage.writeToSource(src.id, PLAN_FILE, bridged)
+              }
+            }))
+            setBridgeDialog(null)
+            await performMoveToCompletedCombined(rawLine, row, fromSection, sid)
+          }
+        })
+        return
+      }
+    }
+    await performMoveToCompletedCombined(rawLine, row, fromSection, sid)
+  }
+
+  const performMoveToCompletedCombined = async (rawLine, row, fromSection, sid) => {
     const taskId = extractTaskId(row)
     const taskName = row['Task'] || ''
     const priority = row['Work Priority'] || row['Mngr Priority'] || row['Priority'] || '-'
@@ -4121,6 +4307,17 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
           />
         )
       })}
+
+      {bridgeDialog && (
+        <LinkBridgeDialog
+          incomingLinks={bridgeDialog.incomingLinks}
+          removedTaskName={bridgeDialog.removedTaskName}
+          nextTaskId={bridgeDialog.nextTaskId}
+          nextTaskName={bridgeDialog.nextTaskName}
+          onClose={() => setBridgeDialog(null)}
+          onConfirm={bridgeDialog.onConfirm}
+        />
+      )}
 
       {addDialog && (
         <AddTaskDialog

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { opMoveLinesBetweenSections } from './focusPlanOps.js'
+import { opMoveLinesBetweenSections, opBridgeLinks } from './focusPlanOps.js'
 
 const plan = [
   '# Focus Plan',
@@ -58,5 +58,33 @@ describe('opMoveLinesBetweenSections', () => {
     )
     expect(out).toContain('| 3 | 🟡 | C |')
     expect(out).not.toContain('ghost')
+  })
+})
+
+describe('opBridgeLinks', () => {
+  const table = [
+    '| ID | 🎯 | Task | Priority | Added | Linked ID |',
+    '|---|---|------|----------|-------|-----------|',
+    '| 1 | 🟡 | A | - | 2023-01-01 | 2 |',
+    '| 2 | 🟡 | B | - | 2023-01-01 | 3 |',
+    '| 3 | 🟡 | C | - | 2023-01-01 | |',
+  ].join('\n')
+
+  it('updates single numeric ID in Linked ID column', () => {
+    const out = opBridgeLinks(table, '2', '3')
+    expect(out).toContain('| 1 | 🟡 | A | - | 2023-01-01 | 3 |')
+    // Task 2 itself (the removed one) is untouched by this op — that's opDeleteTask's job.
+    expect(out).toContain('| 2 | 🟡 | B | - | 2023-01-01 | 3 |')
+  })
+
+  it('removes Linked ID when nextIdRawValue is empty', () => {
+    const out = opBridgeLinks(table, '2', '')
+    // The implementation adds spaces around the value, so empty becomes "  "
+    expect(out).toContain('| 1 | 🟡 | A | - | 2023-01-01 |  |')
+  })
+
+  it('handles non-existent removedId gracefully', () => {
+    const out = opBridgeLinks(table, '99', '100')
+    expect(out).toBe(table)
   })
 })
