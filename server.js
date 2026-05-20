@@ -156,7 +156,8 @@ app.get('/api/todos', async (req, res) => {
     }
 
     const content = await fs.readFile(fullPath, 'utf-8');
-    const lines = content.split(/\r?\n/);
+    const normalized = content.replace(/^\uFEFF/, '');
+    const lines = normalized.split(/\r?\n/);
     
     // Find todos - look for:
     // 1. Checkbox items: - [ ] text or - [x] text

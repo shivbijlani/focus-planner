@@ -101,7 +101,8 @@ export async function journalExists(dirHandle, taskId) {
 }
 
 export function parseTodos(content) {
-  const lines = content.split(/\r?\n/)
+  const normalized = content.replace(/^\uFEFF/, '')
+  const lines = normalized.split(/\r?\n/)
   const todos = []
   for (const line of lines) {
     const checkboxMatch = line.match(/^-\s*\[([ x])\]\s*(.+)/i)
