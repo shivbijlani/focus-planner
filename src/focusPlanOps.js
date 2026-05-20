@@ -318,6 +318,31 @@ export function opPromoteToManagerPriority(content, taskId) {
   return lines.join('\n')
 }
 
+/**
+ * Bridge links when a task is deleted or completed.
+ * If task A links to task B, and task B is being removed,
+ * task A should now link to whatever task B was linked to (task C).
+ */
+export function opBridgeLinks(content, removedId, nextIdRawValue) {
+  const lines = content.split('\n')
+  const newLines = lines.map(line => {
+    if (!line.trim().startsWith('|')) return line
+    const parts = line.split('|')
+    if (parts.length < 7) return line
+
+    // Skip header and separator
+    if (parts[1].trim() === 'ID' || parts[1].trim().startsWith('---')) return line
+
+    const currentLinkedId = parts[6].trim()
+    if (currentLinkedId === String(removedId)) {
+      parts[6] = ` ${nextIdRawValue || ''} `
+      return parts.join('|')
+    }
+    return line
+  })
+  return newLines.join('\n')
+}
+
 export function opRemoveFromManagerPriority(content, taskId) {
   const lines = content.split('\n')
   const { start, end } = findPrioritiesRange(lines)
