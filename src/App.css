@@ -2603,3 +2603,11 @@ tr.highlight-flash {
   color: #64748b;
 }
 
+
+.missing-link-badge {
+  color: #ef4444;
+  font-weight: bold;
+  margin-left: 0.2rem;
+  cursor: help;
+  font-size: 0.85em;
+}

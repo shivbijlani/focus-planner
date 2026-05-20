@@ -887,6 +887,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
             const taskName = row['Task'] || ''
             const linkedTaskName = linkedId && taskLookup ? taskLookup[linkedId] : null
             const allTaskIds = activeTaskIds || (taskLookup ? Object.keys(taskLookup) : [])
+            const isLinkedTaskMissing = linkedId && activeTaskIds && /^\d+$/.test(String(linkedId).trim()) && !activeTaskIds.includes(String(linkedId).trim());
 
             const startEditingLinkedId = (e) => {
               e.stopPropagation()
@@ -966,6 +967,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                       }
                       return <span className="linked-id-link" onClick={navigateToLinkedId} title={linkedTaskName || `Go to task ${linkedId.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')}`}>{parseLinks(linkedId, onNavigate)}</span>
                     })()}
+                    {isLinkedTaskMissing && <span className="missing-link-badge" title="Linked task is missing (deleted or completed)">(!)</span>}
                     {linkedTaskName && (
                       <span className="linked-id-tooltip">{linkedTaskName}</span>
                     )}
