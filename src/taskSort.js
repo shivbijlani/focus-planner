@@ -36,6 +36,19 @@ export function getChainDepthToManagerPriority(taskId, linkedIdMap, managerPrior
   return null
 }
 
+export function isNeededForUrgentTask(taskId, linkedIdMap, taskPriorityLookup, maxDepth = 20) {
+  let current = linkedIdMap[taskId] // Start from the task it links TO
+  const visited = new Set([taskId])
+  for (let depth = 0; depth < maxDepth; depth++) {
+    if (!current || visited.has(current)) return false
+    const priority = taskPriorityLookup[current]
+    if (priority && priority.includes('🔴')) return true
+    visited.add(current)
+    current = linkedIdMap[current] || null
+  }
+  return false
+}
+
 export function extractTaskId(row) {
   const idValue = row.ID
   if (typeof idValue === 'object') {

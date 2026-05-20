@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { sortTasksByPriority } from './taskSort.js'
+import { sortTasksByPriority, isNeededForUrgentTask } from './taskSort.js'
 
 function makeTask(id, priority = '🟡', linkedId = null) {
   return {
@@ -86,5 +86,42 @@ describe('sortTasksByPriority', () => {
     const { sortedRows } = sortTasksByPriority(rows, rawLines, headers, linkedIdMap, {})
 
     expect(sortedRows.map(row => row.ID.id)).toEqual(['1', '2', '3'])
+  })
+})
+
+describe('isNeededForUrgentTask', () => {
+  it('returns true if a task links directly to an urgent task', () => {
+    const linkedIdMap = { '1': '2' }
+    const taskPriorityLookup = { '2': '🔴' }
+    expect(isNeededForUrgentTask('1', linkedIdMap, taskPriorityLookup)).toBe(true)
+  })
+
+  it('returns true if a task links indirectly to an urgent task', () => {
+    const linkedIdMap = { '1': '2', '2': '3' }
+    const taskPriorityLookup = { '3': '🔴' }
+    expect(isNeededForUrgentTask('1', linkedIdMap, taskPriorityLookup)).toBe(true)
+  })
+
+  it('returns false if no task in the chain is urgent', () => {
+    const linkedIdMap = { '1': '2', '2': '3' }
+    const taskPriorityLookup = { '2': '🟡', '3': '🟡' }
+    expect(isNeededForUrgentTask('1', linkedIdMap, taskPriorityLookup)).toBe(false)
+  })
+
+  it('returns false if the current task is urgent but links to non-urgent', () => {
+    const linkedIdMap = { '1': '2' }
+    const taskPriorityLookup = { '1': '🔴', '2': '🟡' }
+    // Note: isNeededForUrgentTask starts from linkedIdMap['1'] = '2'
+    expect(isNeededForUrgentTask('1', linkedIdMap, taskPriorityLookup)).toBe(false)
+  })
+
+  it('handles cycles without infinite looping', () => {
+    const linkedIdMap = { '1': '2', '2': '1' }
+    const taskPriorityLookup = { '1': '🟡', '2': '🟡' }
+    expect(isNeededForUrgentTask('1', linkedIdMap, taskPriorityLookup)).toBe(false)
+  })
+
+  it('returns false for tasks with no links', () => {
+    expect(isNeededForUrgentTask('1', {}, {})).toBe(false)
   })
 })

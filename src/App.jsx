@@ -9,7 +9,7 @@ import {
   addSource, removeSource, renameSource, getProvider, restoreSource,
   consumePendingAdd, consumePendingReauth,
 } from './storage/sources.js'
-import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority } from './taskSort.js'
+import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority, isNeededForUrgentTask } from './taskSort.js'
 import { computeMoveSet, computeBrokenLinks } from './moveTask.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
@@ -299,7 +299,7 @@ function MoveToSourceDialog({ targetName, movingTasks, brokenLinks, onClose, onC
 }
 
 // Priority Dropdown component
-function PriorityDropdown({ currentPriority, onChangePriority }) {
+function PriorityDropdown({ currentPriority, isNeededForUrgent, onChangePriority }) {
   const [isOpen, setIsOpen] = useState(false)
   const dropdownRef = useRef(null)
   
@@ -334,9 +334,10 @@ function PriorityDropdown({ currentPriority, onChangePriority }) {
       <span 
         className="priority-icon-btn"
         onClick={() => setIsOpen(!isOpen)}
-        title="Click to change priority"
+        title={isNeededForUrgent ? "Needed for an urgent task — consider changing to urgent" : "Click to change priority"}
       >
         {currentPriority}
+        {isNeededForUrgent && <span className="urgent-needed-marker" aria-hidden="true">!</span>}
       </span>
       {isOpen && (
         <div className="priority-dropdown-menu">
@@ -805,7 +806,7 @@ function renderIconsWithTooltips(text, keyOffset = 0) {
 }
 
 // Task row component with expandable todos
-function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, activeTaskIds, linkedIdMap, adoLookup }) {
+function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup }) {
   const [todosExpanded, setTodosExpanded] = useState(false)
   const [todos, setTodos] = useState(null)
   const [todosLoading, setTodosLoading] = useState(false)
@@ -857,6 +858,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   }
   
   const priorityCol = headers.find(h => h.includes('🎯')) || '🎯'
+  const currentPriority = row[priorityCol] || '⚪'
   const mngrPriorityCol = headers.find(h => h.includes('Mngr') || h.includes('Work') || h.includes('Priority')) || 'Work Priority'
   
   const handleContextMenu = (e) => {
@@ -1086,10 +1088,12 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
           
           // Special handling for Priority column - clickable dropdown
           if (h === priorityCol) {
+            const isNeededForUrgent = !currentPriority.includes('🔴') && taskId && isNeededForUrgentTask(taskId, linkedIdMap || {}, taskPriorityLookup || {})
             return (
               <td key={i}>
                 <PriorityDropdown 
                   currentPriority={cellValue || '⚪'} 
+                  isNeededForUrgent={isNeededForUrgent}
                   onChangePriority={(newPriority) => onChangePriority(rawLine, cellValue, newPriority)}
                 />
               </td>
@@ -1132,7 +1136,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
 }
 
 // Collapsible section component
-function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource, onDeferBelow }) {
+function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource, onDeferBelow }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const { headers, rows, rawLines } = parseMarkdownTable(tableLines)
   const [contextMenu, setContextMenu] = useState(null)
@@ -1386,6 +1390,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
                   onRenameTask={onRenameTask}
                   onChangeLinkedId={onChangeLinkedId}
                   taskLookup={taskLookup}
+                  taskPriorityLookup={taskPriorityLookup}
                   activeTaskIds={activeTaskIds}
                   linkedIdMap={linkedIdMap}
                   adoLookup={adoLookup}/>
@@ -1790,6 +1795,19 @@ function buildTaskIdLookup(tableLines) {
   return lookup
 }
 
+function buildTaskPriorityLookup(tableLines) {
+  const lookup = {}
+  const { headers, rows } = parseMarkdownTable(tableLines)
+  const priorityCol = headers.find(h => h.includes('🎯')) || '🎯'
+  for (const row of rows) {
+    const id = extractTaskId(row)
+    if (id) {
+      lookup[id] = row[priorityCol] || ''
+    }
+  }
+  return lookup
+}
+
 // Build ADO lookup: localTaskId -> { id, url } for tasks that have ADO links
 function buildAdoLookup(tableLines) {
   const lookup = {}
@@ -1844,10 +1862,12 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
 
   // Build lookup from current focus plan tasks + linked ID map + ADO lookup for chain walking
   const currentTaskLookup = {}
+  const taskPriorityLookup = {}
   const linkedIdMap = {}
   const adoLookup = {}
   for (const section of taskSections) {
     Object.assign(currentTaskLookup, buildTaskIdLookup(section.lines))
+    Object.assign(taskPriorityLookup, buildTaskPriorityLookup(section.lines))
     Object.assign(linkedIdMap, buildLinkedIdMap(section.lines))
     Object.assign(adoLookup, buildAdoLookup(section.lines))
   }
@@ -2646,6 +2666,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
           onChangeLinkedId={handleChangeLinkedId}
           onLinkToAdoBugDb={handleLinkToAdoBugDb}
           taskLookup={taskLookup}
+          taskPriorityLookup={taskPriorityLookup}
           activeTaskIds={activeTaskIds}
           linkedIdMap={linkedIdMap}
           adoLookup={adoLookup}
@@ -3653,6 +3674,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
   // first source's entry — combined view doesn't try to disambiguate
   // identical IDs across sources (vanishingly rare in practice).
   const currentTaskLookup = {}
+  const taskPriorityLookup = {}
   const linkedIdMap = {}
   const adoLookup = {}
   // Per-source task lookups for the Add Task dialog's linked-task search.
@@ -3662,6 +3684,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
     for (const sec of sections) {
       if (sec.title !== 'Today' && sec.title !== 'Deferred') continue
       Object.assign(currentTaskLookup, buildTaskIdLookup(sec.lines))
+      Object.assign(taskPriorityLookup, buildTaskPriorityLookup(sec.lines))
       Object.assign(srcLookup, buildTaskIdLookup(sec.lines))
       Object.assign(linkedIdMap, buildLinkedIdMap(sec.lines))
       Object.assign(adoLookup, buildAdoLookup(sec.lines))
@@ -4008,6 +4031,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
         onChangeLinkedId={handleChangeLinkedId}
         onLinkToAdoBugDb={handleLinkToAdoBugDb}
         taskLookup={taskLookup}
+        taskPriorityLookup={taskPriorityLookup}
         activeTaskIds={activeTaskIds}
         linkedIdMap={linkedIdMap}
         adoLookup={adoLookup}
@@ -4035,6 +4059,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
         onChangeLinkedId={handleChangeLinkedId}
         onLinkToAdoBugDb={handleLinkToAdoBugDb}
         taskLookup={taskLookup}
+        taskPriorityLookup={taskPriorityLookup}
         activeTaskIds={activeTaskIds}
         linkedIdMap={linkedIdMap}
         adoLookup={adoLookup}

@@ -1275,6 +1275,28 @@ tr.highlight-flash {
   padding: 2px 4px;
   border-radius: 4px;
   transition: background 0.15s;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.urgent-needed-marker {
+  position: absolute;
+  top: -4px;
+  right: -2px;
+  background: #ef4444;
+  color: white;
+  font-size: 0.65rem;
+  font-weight: bold;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #1a1a2e;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
 }
 
 .priority-icon-btn:hover {
