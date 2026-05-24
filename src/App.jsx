@@ -14,6 +14,7 @@ import { computeMoveSet, computeBrokenLinks } from './moveTask.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
+import { parseTaskWithAI } from './utils/ai.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import {
   InstallButton, InstallModal, InstallNudge,
@@ -396,7 +397,10 @@ function PriorityDropdown({ currentPriority, isNeededForUrgent, onChangePriority
 function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sources, defaultSourceId, perSourceTaskLookup }) {
   const [task, setTask] = useState('')
   const [priority, setPriority] = useState('🟡')
+  const [sectionValue, setSectionValue] = useState(section)
   const [linkedTask, setLinkedTask] = useState('')
+  const [magicPrompt, setMagicPrompt] = useState('')
+  const [isMagicLoading, setIsMagicLoading] = useState(false)
   const [sourceId, setSourceId] = useState(defaultSourceId || (sources && sources[0]?.id) || '')
   const [showLinkPicker, setShowLinkPicker] = useState(false)
   const dialogRef = useRef(null)
@@ -428,10 +432,34 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
     }
   }, [onClose])
   
+  const handleMagicAdd = async () => {
+    const prompt = magicPrompt.trim()
+    if (!prompt) return
+
+    const apiKey = localStorage.getItem('fp-openrouter-api-key')
+    if (!apiKey) {
+      alert('Please set your OpenRouter API key in Settings first.')
+      return
+    }
+
+    setIsMagicLoading(true)
+    try {
+      const parsed = await parseTaskWithAI(prompt, apiKey)
+      if (parsed.task) setTask(parsed.task)
+      if (parsed.priority) setPriority(parsed.priority)
+      if (parsed.section) setSectionValue(parsed.section)
+      setMagicPrompt('')
+    } catch (err) {
+      alert('AI parsing failed: ' + (err.message || String(err)))
+    } finally {
+      setIsMagicLoading(false)
+    }
+  }
+
   const handleSubmit = (e) => {
     e.preventDefault()
     if (task.trim()) {
-      onAdd({ task: task.trim(), priority, linkedTask: linkedTask.trim(), section, sourceId })
+      onAdd({ task: task.trim(), priority, linkedTask: linkedTask.trim(), section: sectionValue, sourceId })
       onClose()
     }
   }
@@ -439,7 +467,32 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
   return (
     <div className="dialog-overlay">
       <div ref={dialogRef} className="add-task-dialog">
-        <h3>Add Task to {section}</h3>
+        <h3>Add Task</h3>
+        <div className="form-field magic-add-field">
+          <label>✨ Smart Add (AI)</label>
+          <div className="linked-task-input-wrapper">
+            <input
+              type="text"
+              value={magicPrompt}
+              onChange={(e) => setMagicPrompt(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleMagicAdd() } }}
+              placeholder="e.g., Call boss tomorrow morning high priority"
+              disabled={isMagicLoading}
+            />
+            <button
+              type="button"
+              className="linked-task-pick-btn"
+              onClick={handleMagicAdd}
+              disabled={isMagicLoading || !magicPrompt.trim()}
+              title="Parse with AI"
+            >
+              {isMagicLoading ? <span className="spinner" style={{ width: '12px', height: '12px' }} /> : '🪄'}
+            </button>
+          </div>
+        </div>
+
+        <div className="magic-divider"><span>OR FILL MANUALLY</span></div>
+
         <form onSubmit={handleSubmit}>
           {sources && sources.length > 0 && (
             <div className="form-field">
@@ -467,6 +520,13 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
             />
           </div>
           <div className="form-row">
+            <div className="form-field">
+              <label>Section</label>
+              <select value={sectionValue} onChange={(e) => setSectionValue(e.target.value)}>
+                <option value="Today">Today</option>
+                <option value="Deferred">Deferred</option>
+              </select>
+            </div>
             <div className="form-field">
               <label>Priority</label>
               <select value={priority} onChange={(e) => setPriority(e.target.value)}>
@@ -3168,9 +3228,16 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
   const [error, setError] = useState('')
   const [emptySources, setEmptySources] = useState({}) // sourceId -> boolean
   const [removeConfirm, setRemoveConfirm] = useState(null) // { sourceId, name }
+  const [openRouterKey, setOpenRouterKey] = useState(localStorage.getItem('fp-openrouter-api-key') || '')
   const oneDrive = targetStatus(syncStatus, PROVIDERS.ONEDRIVE)
   const aggregate = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
   const syncClass = aggregate.replace(/[^a-z-]/g, '')
+
+  const handleOpenRouterKeyChange = (e) => {
+    const val = e.target.value
+    setOpenRouterKey(val)
+    localStorage.setItem('fp-openrouter-api-key', val)
+  }
 
   const sources = getSources()
   const activeId = getActiveSourceId()
@@ -3568,6 +3635,24 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
                   </div>
                 </details>
               )}
+            </div>
+
+            <div className="settings-dialog-section">
+              <div className="settings-dialog-section-title">AI assistant</div>
+              <div className="form-field" style={{ marginBottom: '0.5rem' }}>
+                <label style={{ fontSize: '0.72rem', color: '#64748b' }}>OpenRouter API Key</label>
+                <input
+                  type="password"
+                  className="storage-footer-input"
+                  value={openRouterKey}
+                  onChange={handleOpenRouterKeyChange}
+                  placeholder="sk-or-..."
+                  autoComplete="off"
+                />
+              </div>
+              <div className="storage-footer-note">
+                Enter your <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" style={{ color: '#93c5fd' }}>OpenRouter key</a> to enable "Smart Add" features.
+              </div>
             </div>
 
             <div className="settings-dialog-section">
