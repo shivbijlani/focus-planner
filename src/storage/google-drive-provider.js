@@ -108,7 +108,7 @@ export class GoogleDriveProvider {
       ? `${UPLOAD_API}/files/${existingId}?uploadType=multipart`
       : `${UPLOAD_API}/files?uploadType=multipart`
 
-    const res = await fetch(url, {
+    const res = await fetch(`${url}&fields=id,etag,modifiedTime`, {
       method: existingId ? 'PATCH' : 'POST',
       headers: this._authHeader(),
       body: form,
@@ -116,6 +116,7 @@ export class GoogleDriveProvider {
     if (!res.ok) throw new Error(`Drive write failed: ${res.status}`)
     const data = await res.json()
     this._fileIndex[path] = data.id
+    return { etag: data.etag, mtime: data.modifiedTime }
   }
 
   async remove(path) {
@@ -150,7 +151,7 @@ export class GoogleDriveProvider {
         const children = await this._listFlatRecursive(item.id, path)
         entries.push(...children)
       } else if (item.name.endsWith('.md')) {
-        entries.push({ path, mtime: item.modifiedTime ?? null, etag: item.id })
+        entries.push({ path, mtime: item.modifiedTime ?? null, etag: item.etag })
       }
     }
     return entries
@@ -263,7 +264,7 @@ export class GoogleDriveProvider {
 
   async _listFolder(folderId) {
     const res = await fetch(
-      `${DRIVE_API}/files?q=${encodeURIComponent(`'${folderId}' in parents and trashed=false`)}&fields=files(id,name,mimeType)`,
+      `${DRIVE_API}/files?q=${encodeURIComponent(`'${folderId}' in parents and trashed=false`)}&fields=files(id,name,mimeType,etag,modifiedTime)`,
       { headers: this._authHeader() }
     )
     const data = await res.json()

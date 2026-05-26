@@ -198,7 +198,11 @@ export function createFolderSync(options) {
             await target.remove(path)
           } else {
             const content = await folder.store.read(path)
-            await target.write(path, content)
+            const result = await target.write(path, content)
+            if (result) {
+              if (result.etag) meta.remoteEtags = { ...(meta.remoteEtags ?? {}), [target.id]: result.etag }
+              if (result.mtime) meta.localMtime = Date.parse(result.mtime)
+            }
           }
           synced += 1
           meta.dirtyTargets[target.id] = false

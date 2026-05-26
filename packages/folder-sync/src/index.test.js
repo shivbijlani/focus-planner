@@ -148,4 +148,59 @@ describe('folder sync', () => {
     // And we do NOT push the scaffold back up over the real backup.
     expect(oneDrive.write).not.toHaveBeenCalledWith('focus-plan.md', 'scaffold template')
   })
+
+  it('updates local metadata with ETag and mtime from remote after successful push', async () => {
+    const storage = memoryStorage()
+    const store = memoryStore({ 'focus-plan.md': 'content v1' })
+    const oneDrive = target()
+    const now = '2026-05-10T12:00:00Z'
+    oneDrive.write.mockResolvedValue({ etag: 'new-etag', mtime: now })
+
+    const sync = createFolderSync({
+      storage,
+      configKey: 'config',
+      metaPrefix: 'meta:',
+      pendingKey: 'pending',
+      localFolders: [{ id: 'browser', name: 'Browser Storage', store, targets: [oneDrive] }],
+    })
+
+    await sync.connectTarget('browser', 'onedrive')
+
+    // Verify metadata in storage
+    const metaKey = 'meta:browser:focus-plan.md'
+    const meta = JSON.parse(storage.getItem(metaKey))
+    expect(meta.remoteEtags.onedrive).toBe('new-etag')
+    expect(meta.localMtime).toBe(Date.parse(now))
+    expect(meta.dirtyTargets.onedrive).toBe(false)
+  })
+
+  it('does not pull back the file just pushed because metadata matches', async () => {
+    const storage = memoryStorage()
+    const store = memoryStore({ 'focus-plan.md': 'content v1' })
+    const oneDrive = target()
+    const mtime = '2026-05-10T12:00:00Z'
+    oneDrive.write.mockResolvedValue({ etag: 'etag-1', mtime })
+
+    const sync = createFolderSync({
+      storage,
+      configKey: 'config',
+      metaPrefix: 'meta:',
+      pendingKey: 'pending',
+      localFolders: [{ id: 'browser', name: 'Browser Storage', store, targets: [oneDrive] }],
+    })
+
+    // Initial push
+    await sync.connectTarget('browser', 'onedrive')
+    expect(oneDrive.write).toHaveBeenCalledWith('focus-plan.md', 'content v1')
+
+    // Remote still has the same etag/mtime
+    oneDrive.list.mockResolvedValue([
+      { path: 'focus-plan.md', mtime, etag: 'etag-1' }
+    ])
+    oneDrive.read.mockResolvedValue('remote content which should NOT be pulled')
+
+    const result = await sync.pullNow('browser', 'onedrive')
+    expect(result.changed).toHaveLength(0)
+    expect(store.get('focus-plan.md')).toBe('content v1')
+  })
 })

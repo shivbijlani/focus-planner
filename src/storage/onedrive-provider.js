@@ -99,6 +99,8 @@ export class OneDriveProvider {
       body: content,
     })
     if (!res.ok) throw new Error(`OneDrive write failed: ${res.status}`)
+    const data = await res.json()
+    return { etag: data.eTag, mtime: data.lastModifiedDateTime }
   }
 
   async remove(path) {
