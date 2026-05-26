@@ -85,7 +85,7 @@ export class OneDriveProvider {
     return res.text()
   }
 
-  async write(path, content) {
+  async write(path, content, opts = {}) {
     await this._ensureToken()
     // For subdirectory paths (e.g. journal/task-1.md), ensure the subdir exists
     const parts = path.split('/')
@@ -93,12 +93,25 @@ export class OneDriveProvider {
       await this._ensureSubfolder(parts.slice(0, -1).join('/'))
     }
     const url = `${APPROOT}:/${path}:/content`
-    const res = await fetch(url, {
-      method: 'PUT',
-      headers: { ...this._authHeader(), 'Content-Type': 'text/plain; charset=utf-8' },
-      body: content,
-    })
+    const headers = { ...this._authHeader(), 'Content-Type': 'text/plain; charset=utf-8' }
+    // Optimistic-concurrency preconditions — stop stale devices from
+    // overwriting newer cloud content. Graph honors If-Match (update)
+    // and If-None-Match (create-only) on driveItem content PUTs.
+    if (opts.ifMatch) headers['If-Match'] = opts.ifMatch
+    if (opts.ifNoneMatch) headers['If-None-Match'] = opts.ifNoneMatch
+    const res = await fetch(url, { method: 'PUT', headers, body: content })
+    if (res.status === 412 || res.status === 409) {
+      const err = new Error(`OneDrive write conflict: ${res.status}`)
+      err.conflict = true
+      throw err
+    }
     if (!res.ok) throw new Error(`OneDrive write failed: ${res.status}`)
+    try {
+      const data = await res.json()
+      return { etag: data.eTag ?? data.cTag ?? null, mtime: data.lastModifiedDateTime ?? null }
+    } catch {
+      return {}
+    }
   }
 
   async remove(path) {
