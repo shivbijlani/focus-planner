@@ -92,10 +92,46 @@ export class GoogleDriveProvider {
     return res.text()
   }
 
-  async write(path, content) {
+  async write(path, content, opts = {}) {
     await this._ensureToken()
     const folderId = await this._ensureParentFolder(path)
     const existingId = await this._resolveFileId(path)
+
+    // Optimistic-concurrency precondition. Drive v3 has no native If-Match
+    // on multipart uploads, so do a best-effort pre-flight: fetch the
+    // current headRevisionId and compare. Not atomic (a writer could slip
+    // in between this check and the PATCH) but catches the common case
+    // where another device pushed an update we don't know about yet.
+    if (existingId && opts.ifMatch) {
+      try {
+        const head = await fetch(
+          `${DRIVE_API}/files/${existingId}?fields=headRevisionId`,
+          { headers: this._authHeader() }
+        )
+        if (head.ok) {
+          const { headRevisionId } = await head.json()
+          if (headRevisionId && headRevisionId !== opts.ifMatch) {
+            const err = new Error('Drive write conflict: headRevisionId mismatch')
+            err.conflict = true
+            throw err
+          }
+        }
+      } catch (err) {
+        if (err.conflict) throw err
+        // Network / parse failures here are non-fatal — fall through and
+        // let the actual PATCH surface any real problem.
+      }
+    }
+    if (!existingId && opts.ifNoneMatch === '*') {
+      // Caller said "create only" but if we found a fileId, that's a conflict.
+      // Re-check by name to avoid stale cache.
+      const stillExists = await this._resolveFileId(path)
+      if (stillExists) {
+        const err = new Error('Drive write conflict: file already exists')
+        err.conflict = true
+        throw err
+      }
+    }
 
     const metadata = { name: _basename(path), mimeType: 'text/plain' }
     if (!existingId) metadata.parents = [folderId]
@@ -104,9 +140,10 @@ export class GoogleDriveProvider {
     form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }))
     form.append('file', new Blob([content], { type: 'text/plain' }))
 
-    const url = existingId
+    const baseUrl = existingId
       ? `${UPLOAD_API}/files/${existingId}?uploadType=multipart`
       : `${UPLOAD_API}/files?uploadType=multipart`
+    const url = `${baseUrl}&fields=id,headRevisionId,modifiedTime`
 
     const res = await fetch(url, {
       method: existingId ? 'PATCH' : 'POST',
@@ -116,6 +153,7 @@ export class GoogleDriveProvider {
     if (!res.ok) throw new Error(`Drive write failed: ${res.status}`)
     const data = await res.json()
     this._fileIndex[path] = data.id
+    return { etag: data.headRevisionId ?? null, mtime: data.modifiedTime ?? null }
   }
 
   async remove(path) {
@@ -150,7 +188,7 @@ export class GoogleDriveProvider {
         const children = await this._listFlatRecursive(item.id, path)
         entries.push(...children)
       } else if (item.name.endsWith('.md')) {
-        entries.push({ path, mtime: item.modifiedTime ?? null, etag: item.id })
+        entries.push({ path, mtime: item.modifiedTime ?? null, etag: item.headRevisionId ?? null })
       }
     }
     return entries
@@ -263,7 +301,7 @@ export class GoogleDriveProvider {
 
   async _listFolder(folderId) {
     const res = await fetch(
-      `${DRIVE_API}/files?q=${encodeURIComponent(`'${folderId}' in parents and trashed=false`)}&fields=files(id,name,mimeType)`,
+      `${DRIVE_API}/files?q=${encodeURIComponent(`'${folderId}' in parents and trashed=false`)}&fields=files(id,name,mimeType,modifiedTime,headRevisionId)`,
       { headers: this._authHeader() }
     )
     const data = await res.json()

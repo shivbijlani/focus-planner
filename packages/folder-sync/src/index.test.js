@@ -57,7 +57,7 @@ describe('folder sync', () => {
 
     await sync.connectTarget('browser', 'onedrive')
 
-    expect(oneDrive.write).toHaveBeenCalledWith('focus-plan.md', 'local plan')
+    expect(oneDrive.write).toHaveBeenCalledWith('focus-plan.md', 'local plan', { ifNoneMatch: '*' })
     expect(sync.getStatus().folders.browser.targets.onedrive.status).toBe(TARGET_STATUS.SYNCED)
   })
 
@@ -84,7 +84,7 @@ describe('folder sync', () => {
     await vi.runOnlyPendingTimersAsync()
 
     expect(oneDrive.write).toHaveBeenCalledTimes(1)
-    expect(oneDrive.write).toHaveBeenCalledWith('focus-plan.md', 'v3')
+    expect(oneDrive.write).toHaveBeenCalledWith('focus-plan.md', 'v3', { ifNoneMatch: '*' })
   })
 
   it('pulls remote files into local store on connect when local is empty', async () => {
@@ -147,5 +147,106 @@ describe('folder sync', () => {
     expect(store.get('focus-plan.md')).toBe('real backup content')
     // And we do NOT push the scaffold back up over the real backup.
     expect(oneDrive.write).not.toHaveBeenCalledWith('focus-plan.md', 'scaffold template')
+  })
+
+  it('stores etag and mtime returned by target.write so the next pull does not echo it back', async () => {
+    const storage = memoryStorage()
+    const store = memoryStore({ 'focus-plan.md': 'local v1' })
+    const oneDrive = target()
+    const remoteMtime = '2026-05-10T12:00:00Z'
+    oneDrive.write.mockResolvedValue({ etag: 'etag-1', mtime: remoteMtime })
+
+    const sync = createFolderSync({
+      storage,
+      configKey: 'config',
+      metaPrefix: 'meta:',
+      pendingKey: 'pending',
+      localFolders: [{ id: 'browser', name: 'Browser Storage', store, targets: [oneDrive] }],
+    })
+    await sync.connectTarget('browser', 'onedrive')
+
+    // Remote list now reports the file we just pushed. Same etag+mtime
+    // → mergeFromTarget must NOT pull anything (no echo).
+    oneDrive.list.mockResolvedValue([
+      { path: 'focus-plan.md', mtime: remoteMtime, etag: 'etag-1' },
+    ])
+    oneDrive.read.mockResolvedValue('SHOULD NOT BE PULLED')
+
+    const { changed } = await sync.pullNow('browser', 'onedrive')
+    expect(changed).toEqual([])
+    expect(store.get('focus-plan.md')).toBe('local v1')
+  })
+
+  it('passes If-None-Match * for brand-new files and If-Match <etag> for known files', async () => {
+    const storage = memoryStorage()
+    const store = memoryStore({ 'focus-plan.md': 'v1' })
+    const oneDrive = target()
+    oneDrive.write.mockResolvedValue({ etag: 'etag-1', mtime: '2026-05-10T12:00:00Z' })
+
+    const sync = createFolderSync({
+      storage,
+      configKey: 'config',
+      metaPrefix: 'meta:',
+      pendingKey: 'pending',
+      syncDelay: 10,
+      localFolders: [{ id: 'browser', name: 'Browser Storage', store, targets: [oneDrive] }],
+    })
+
+    await sync.connectTarget('browser', 'onedrive')
+    // First push: no etag known → ifNoneMatch:'*' precondition (create-only)
+    expect(oneDrive.write).toHaveBeenLastCalledWith(
+      'focus-plan.md', 'v1', { ifNoneMatch: '*' },
+    )
+
+    oneDrive.write.mockClear()
+    oneDrive.write.mockResolvedValue({ etag: 'etag-2', mtime: '2026-05-10T13:00:00Z' })
+    store.set('focus-plan.md', 'v2')
+    await sync.markDirty('focus-plan.md', 'write', 'browser')
+    await vi.runOnlyPendingTimersAsync()
+
+    // Second push: etag known → ifMatch precondition guards against overwrite.
+    expect(oneDrive.write).toHaveBeenLastCalledWith(
+      'focus-plan.md', 'v2', { ifMatch: 'etag-1' },
+    )
+  })
+
+  it('on push conflict, stashes local edit, pulls remote, and surfaces conflict status', async () => {
+    const storage = memoryStorage()
+    const store = memoryStore({ 'focus-plan.md': 'first' })
+    const oneDrive = target()
+    oneDrive.write.mockResolvedValueOnce({ etag: 'etag-1', mtime: '2026-05-10T12:00:00Z' })
+
+    const sync = createFolderSync({
+      storage,
+      configKey: 'config',
+      metaPrefix: 'meta:',
+      pendingKey: 'pending',
+      syncDelay: 10,
+      localFolders: [{ id: 'browser', name: 'Browser Storage', store, targets: [oneDrive] }],
+    })
+    await sync.connectTarget('browser', 'onedrive')
+
+    // Now a stale write attempt: local has new edit but remote moved on.
+    store.set('focus-plan.md', 'my local edit (about to conflict)')
+    await sync.markDirty('focus-plan.md', 'write', 'browser')
+
+    const conflictErr = Object.assign(new Error('precondition failed'), { conflict: true })
+    oneDrive.write.mockRejectedValueOnce(conflictErr)
+    oneDrive.list.mockResolvedValue([
+      { path: 'focus-plan.md', mtime: '2026-05-10T14:00:00Z', etag: 'etag-2' },
+    ])
+    oneDrive.read.mockResolvedValue('REMOTE WINS — newer copy from other device')
+
+    await vi.runOnlyPendingTimersAsync()
+
+    // 1) Remote was pulled into the canonical path.
+    expect(store.get('focus-plan.md')).toBe('REMOTE WINS — newer copy from other device')
+    // 2) Local edit was stashed under a sibling conflict path, not lost.
+    const stashed = (await store.listPaths()).find(p => p.startsWith('focus-plan.md.conflict-'))
+    expect(stashed).toBeTruthy()
+    expect(store.get(stashed)).toBe('my local edit (about to conflict)')
+    // 3) Status reflects the conflict so the UI can warn the user.
+    expect(sync.getStatus().folders.browser.targets.onedrive.status).toBe(TARGET_STATUS.ERROR)
+    expect(sync.getStatus().folders.browser.targets.onedrive.message).toMatch(/conflict/i)
   })
 })

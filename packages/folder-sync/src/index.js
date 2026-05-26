@@ -192,25 +192,66 @@ export function createFolderSync(options) {
       }
 
       setTargetStatus(folder.id, target.id, TARGET_STATUS.SYNCING)
+      let hadConflict = false
       for (const { path, meta } of targetDirtyMetas) {
         try {
           if (meta.operation === 'delete') {
             await target.remove(path)
+            meta.dirtyTargets[target.id] = false
+            meta.lastSyncedAt = Date.now()
+            writeMeta(storage, metaPrefix, folder.id, path, meta)
+            synced += 1
           } else {
             const content = await folder.store.read(path)
-            await target.write(path, content)
+            const knownEtag = meta.remoteEtags?.[target.id]
+            const writeOpts = knownEtag
+              ? { ifMatch: knownEtag }
+              : { ifNoneMatch: '*' }
+            let result
+            try {
+              result = await target.write(path, content, writeOpts) ?? {}
+            } catch (err) {
+              if (err?.conflict) {
+                // Remote moved ahead of us. Stash our local edit so the user
+                // doesn't lose work, then pull the remote into the canonical
+                // path. Clear the dirty flag since we've reconciled.
+                await stashConflict(folder, path, content)
+                await pullSinglePath(folder, target, path)
+                meta.dirtyTargets[target.id] = false
+                writeMeta(storage, metaPrefix, folder.id, path, meta)
+                hadConflict = true
+                setTargetStatus(
+                  folder.id,
+                  target.id,
+                  TARGET_STATUS.ERROR,
+                  `Conflict on ${path} — your edit was kept as a .conflict copy and remote was pulled.`,
+                )
+                continue
+              }
+              throw err
+            }
+            // Capture server-returned etag/mtime so the next push uses an
+            // up-to-date precondition AND so the next pull recognizes
+            // the file we just sent isn't a "remote change" to echo back.
+            if (result.etag) {
+              meta.remoteEtags = { ...(meta.remoteEtags ?? {}), [target.id]: result.etag }
+            }
+            if (result.mtime) {
+              const parsed = Date.parse(result.mtime)
+              if (!Number.isNaN(parsed)) meta.localMtime = parsed
+            }
+            meta.dirtyTargets[target.id] = false
+            meta.lastSyncedAt = Date.now()
+            writeMeta(storage, metaPrefix, folder.id, path, meta)
+            synced += 1
           }
-          synced += 1
-          meta.dirtyTargets[target.id] = false
-          meta.lastSyncedAt = Date.now()
-          writeMeta(storage, metaPrefix, folder.id, path, meta)
         } catch (error) {
           setTargetStatus(folder.id, target.id, TARGET_STATUS.ERROR, error.message || 'Backup failed.')
           break
         }
       }
 
-      if (!hasDirtyForTarget(storage, metaPrefix, folder.id, target.id)) {
+      if (!hadConflict && !hasDirtyForTarget(storage, metaPrefix, folder.id, target.id)) {
         setTargetStatus(folder.id, target.id, TARGET_STATUS.SYNCED)
       }
     }
@@ -246,6 +287,42 @@ export function createFolderSync(options) {
     }
     emitChanges(changed)
     return { changed }
+  }
+
+  async function stashConflict(folder, path, content) {
+    // Write a sibling copy so the user can recover their unpushed edit.
+    // Naming: <path>.conflict-<ISO>.local — keeps the .md off so it doesn't
+    // confuse the planner's parsers but stays adjacent for easy discovery.
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const conflictPath = `${path}.conflict-${stamp}.local`
+    try {
+      await folder.store.write(conflictPath, content)
+      emitChanges([conflictPath])
+    } catch {
+      // Best-effort — if we can't stash, we still prefer pulling the
+      // remote over losing the user's edit silently, so swallow and move on.
+    }
+  }
+
+  async function pullSinglePath(folder, target, path) {
+    if (!target.list || !target.read || !folder.store.write) return
+    try {
+      const entries = await target.list().catch(() => [])
+      const entry = entries.find(e => e.path === path)
+      if (!entry) return
+      const content = await target.read(path)
+      await folder.store.write(path, content)
+      const meta = readMeta(storage, metaPrefix, folder.id, path)
+      meta.localMtime = entry.mtime ? Date.parse(entry.mtime) : Date.now()
+      meta.lastSyncedAt = Date.now()
+      meta.remoteEtags = { ...(meta.remoteEtags ?? {}), [target.id]: entry.etag ?? null }
+      meta.dirtyTargets = meta.dirtyTargets ?? {}
+      meta.dirtyTargets[target.id] = false
+      writeMeta(storage, metaPrefix, folder.id, path, meta)
+      emitChanges([path])
+    } catch {
+      // Ignore — caller already set ERROR status for the conflict.
+    }
   }
 
   async function mergeFromTarget(folder, target) {
