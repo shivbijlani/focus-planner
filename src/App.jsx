@@ -414,7 +414,8 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
   const effectiveTaskLookup = (perSourceTaskLookup && sourceId && perSourceTaskLookup[sourceId])
     ? perSourceTaskLookup[sourceId]
     : (taskLookup || {})
-  const effectiveTaskIds = Object.keys(effectiveTaskLookup)
+  // Use activeTaskIds when available (single source view), otherwise fall back to keys of current lookup
+  const effectiveTaskIds = activeTaskIds || Object.keys(effectiveTaskLookup)
   
   useEffect(() => {
     inputRef.current?.focus()
@@ -927,7 +928,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
             const { id, linkedId, adoLink } = cellValue
             const taskName = row['Task'] || ''
             const linkedTaskName = linkedId && taskLookup ? taskLookup[linkedId] : null
-            const allTaskIds = activeTaskIds || (taskLookup ? Object.keys(taskLookup) : [])
+            const allTaskIds = activeTaskIds || []
             const linkedNum = linkedId && String(linkedId).match(/(\d+)/)?.[1];
             const isLinkedTaskMissing = linkedNum && activeTaskIds && !activeTaskIds.includes(linkedNum);
 
