@@ -7,6 +7,8 @@ export const TARGET_STATUS = {
   ERROR: 'error',
 }
 
+import { reconcileRecordsFile, isSidecarPath } from './records.js'
+
 const DEFAULT_CONFIG_KEY = 'folder-sync:config'
 const DEFAULT_META_PREFIX = 'folder-sync:meta:'
 const DEFAULT_PENDING_KEY = 'folder-sync:pending-target'
@@ -21,6 +23,13 @@ export function createFolderSync(options) {
   const pendingKey = options.pendingKey ?? DEFAULT_PENDING_KEY
   const syncDelay = options.syncDelay ?? DEFAULT_SYNC_DELAY
   const folders = new Map(options.localFolders.map(folder => [folder.id, normalizeFolder(folder)]))
+  // Map of `path -> codec` for files that should sync at the record level
+  // (per-row merge with tombstones) instead of as opaque whole-file blobs.
+  // Any path not listed here keeps the legacy whole-file last-write-wins path.
+  const recordCodecs = options.recordCodecs ?? {}
+  // Logical clock for record stamping. Injectable so tests can simulate
+  // real temporal ordering, and so the app could supply a monotonic clock.
+  const clock = options.clock ?? (() => Date.now())
   const listeners = new Set()
   const changeListeners = new Set()
   const timers = new Map()
@@ -141,6 +150,7 @@ export function createFolderSync(options) {
     const folder = getFolder(folderId)
     const paths = await folder.store.listPaths()
     for (const path of paths) {
+      if (isSidecarPath(path)) continue
       const meta = readMeta(storage, metaPrefix, folder.id, path)
       meta.operation = 'write'
       meta.localMtime = Date.now()
@@ -156,6 +166,36 @@ export function createFolderSync(options) {
       }
       writeMeta(storage, metaPrefix, folder.id, path, meta)
     }
+  }
+
+  function codecFor(path) {
+    return recordCodecs[path] ?? null
+  }
+
+  // Record-level reconcile for a single file, shared by push (syncNow) and
+  // pull (mergeFromTarget). It parses both sides into records, merges per-row
+  // with tombstones via the merge core, and writes the merged result + sidecar
+  // back to whichever side changed. This is what prevents a stale replica from
+  // resurrecting a row another device deleted.
+  async function reconcileRecord(folder, target, path, codec, now = clock()) {
+    const safe = async (fn) => { try { return await fn() } catch { return null } }
+    return reconcileRecordsFile({
+      path,
+      codec,
+      now,
+      local: {
+        readContent: p => safe(() => folder.store.read(p)),
+        writeContent: (p, content) => folder.store.write(p, content),
+        readSidecar: p => safe(() => folder.store.read(p)),
+        writeSidecar: (p, content) => folder.store.write(p, content),
+      },
+      remote: {
+        readContent: p => safe(() => target.read(p)),
+        writeContent: (p, content) => target.write(p, content),
+        readSidecar: p => safe(() => target.read(p)),
+        writeSidecar: (p, content) => target.write(p, content),
+      },
+    })
   }
 
   async function syncNow(folderId = config.defaultFolderId, onlyTargetId = null) {
@@ -195,7 +235,20 @@ export function createFolderSync(options) {
       let hadConflict = false
       for (const { path, meta } of targetDirtyMetas) {
         try {
-          if (meta.operation === 'delete') {
+          const codec = codecFor(path)
+          if (codec && meta.operation !== 'delete') {
+            // Record-level merge: deletions are carried as tombstones in the
+            // sidecar, so pushing never resurrects rows removed elsewhere.
+            // reconcileRecord writes both sides (incl. etag-free), so we just
+            // clear the dirty flag and record a fresh local mtime here.
+            const res = await reconcileRecord(folder, target, path, codec)
+            if (res.changedLocal) emitChanges([path])
+            meta.localMtime = Date.now()
+            meta.dirtyTargets[target.id] = false
+            meta.lastSyncedAt = Date.now()
+            writeMeta(storage, metaPrefix, folder.id, path, meta)
+            synced += 1
+          } else if (meta.operation === 'delete') {
             await target.remove(path)
             meta.dirtyTargets[target.id] = false
             meta.lastSyncedAt = Date.now()
@@ -261,13 +314,22 @@ export function createFolderSync(options) {
   }
 
   function startAutoSync() {
-    const trigger = () => scheduleAll()
+    // Pull-before-push on every nudge so remote deletes/edits land locally
+    // before we push — the planner previously only pushed here, which let a
+    // stale local copy re-upload and resurrect rows deleted on another device.
+    const trigger = () => {
+      for (const folderId of folders.keys()) {
+        pullNow(folderId)
+          .catch(() => {})
+          .finally(() => schedule(folderId))
+      }
+    }
     globalThis.addEventListener?.('online', trigger)
     globalThis.addEventListener?.('focus', trigger)
     globalThis.document?.addEventListener?.('visibilitychange', () => {
       if (globalThis.document.visibilityState === 'visible') trigger()
     })
-    scheduleAll()
+    trigger()
   }
 
   async function pullNow(folderId = config.defaultFolderId, onlyTargetId = null) {
@@ -330,7 +392,29 @@ export function createFolderSync(options) {
     const remoteEntries = await target.list().catch(() => [])
     const changedPaths = []
     for (const entry of remoteEntries) {
+      // Sidecars are sync metadata, not user data — never LWW them.
+      if (isSidecarPath(entry.path)) continue
       const meta = readMeta(storage, metaPrefix, folder.id, entry.path)
+
+      const codec = codecFor(entry.path)
+      if (codec) {
+        // Symmetric record-level merge: pulls remote, merges with local
+        // (honoring local edits and tombstones), writes back both sides.
+        try {
+          const res = await reconcileRecord(folder, target, entry.path, codec)
+          meta.localMtime = Date.now()
+          meta.lastSyncedAt = Date.now()
+          meta.remoteEtags = { ...(meta.remoteEtags ?? {}), [target.id]: entry.etag }
+          meta.dirtyTargets = meta.dirtyTargets ?? {}
+          meta.dirtyTargets[target.id] = false
+          writeMeta(storage, metaPrefix, folder.id, entry.path, meta)
+          if (res.changedLocal) changedPaths.push(entry.path)
+        } catch (error) {
+          setTargetStatus(folder.id, target.id, TARGET_STATUS.ERROR, error.message || 'Pull failed.')
+        }
+        continue
+      }
+
       // Skip files that are dirty locally — local wins
       if (meta.dirtyTargets?.[target.id]) continue
       const remoteMtime = entry.mtime ? Date.parse(entry.mtime) : 0
@@ -357,6 +441,7 @@ export function createFolderSync(options) {
   async function markLocalOnlyDirty(folder, target) {
     const localPaths = await folder.store.listPaths()
     for (const path of localPaths) {
+      if (isSidecarPath(path)) continue
       const meta = readMeta(storage, metaPrefix, folder.id, path)
       // If we already know this file on the remote, skip
       if (meta.remoteEtags?.[target.id]) continue

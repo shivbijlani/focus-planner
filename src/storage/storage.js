@@ -3,6 +3,7 @@
  * Supports: FSA (local), OneDrive, Google Drive.
  */
 import { createFolderSync, TARGET_STATUS } from '../../packages/folder-sync/src/index.js'
+import { mdTableCodec } from '../../packages/folder-sync/src/codecs/mdTable.js'
 import { LocalStorageProvider } from './localstorage-provider.js'
 import { OneDriveProvider } from './onedrive-provider.js'
 import { GoogleDriveProvider } from './google-drive-provider.js'
@@ -51,6 +52,12 @@ function getFolderSync() {
     configKey: 'fp-folder-sync-config-v1',
     metaPrefix: 'fp-folder-sync-meta:',
     pendingKey: 'fp-folder-sync-pending-target',
+    // These files sync at the record (row) level with tombstones, so a delete
+    // on one device is never resurrected by a stale push from another.
+    recordCodecs: {
+      'focus-plan.md': mdTableCodec,
+      'focus-plan-completed.md': mdTableCodec,
+    },
     localFolders: [{
       id: LOCAL_FOLDER_ID,
       name: 'Browser Storage',

@@ -4464,7 +4464,14 @@ function App() {
   }
 
   const initWithProvider = async (providerId) => {
-    await storage.scaffold()
+    // Only seed the starter template on a genuinely fresh, local-only install.
+    // If a backup target is already configured, the remote is authoritative —
+    // seeding here would let template rows merge into the real synced data
+    // (the spirit of food-tracker fix #36). We pull from the remote instead.
+    const hasBackup = storage.getSyncStatus().aggregate !== TARGET_STATUS.DISCONNECTED
+    if (!hasBackup) {
+      await storage.scaffold()
+    }
     // Ensure we have a sources registry. If first run on legacy install,
     // the legacy → registry migration was already attempted; otherwise
     // create the canonical single-source entry now.
