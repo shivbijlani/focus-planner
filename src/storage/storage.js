@@ -2,11 +2,11 @@
  * Storage abstraction layer for focus-planner.
  * Supports: FSA (local), OneDrive, Google Drive.
  */
-import { createFolderSync, TARGET_STATUS } from '../../packages/folder-sync/src/index.js'
-import { mdTableCodec } from '../../packages/folder-sync/src/codecs/mdTable.js'
+import { TARGET_STATUS } from '../../packages/folder-sync/src/index.js'
+import { createSyncEngine, registerServiceWorker } from '../../packages/folder-sync/src/engine.js'
+import { oneDriveProvider } from '../../packages/folder-sync/src/providers/oneDrive.js'
+import { googleDriveProvider } from '../../packages/folder-sync/src/providers/googleDrive.js'
 import { LocalStorageProvider } from './localstorage-provider.js'
-import { OneDriveProvider } from './onedrive-provider.js'
-import { GoogleDriveProvider } from './google-drive-provider.js'
 
 export { parseTodos } from './fsa.js'
 export { TARGET_STATUS }
@@ -40,67 +40,92 @@ export function getAvailableProviders() {
 // ── Active provider singleton ──────────────────────────
 
 let _provider = null
-let _folderSync = null
+let _engine = null
 
 const LOCAL_FOLDER_ID = 'browser-storage'
 
-function getFolderSync() {
-  if (_folderSync) return _folderSync
+// OAuth client IDs — the same Microsoft/Google app registrations the planner
+// has always used (redirect URI = origin + pathname, AppFolder scope), so the
+// service-worker providers authenticate identically to the old main-thread ones.
+const ONEDRIVE_CLIENT_ID = import.meta.env?.VITE_ONEDRIVE_CLIENT_ID
+  || '4f22242f-c9a7-4a61-9208-8ca0e5ef8697'
+const GOOGLE_CLIENT_ID = import.meta.env?.VITE_GOOGLE_CLIENT_ID
+  || '1019840819252-jcrbpshgai7ror14pmimsv413qcuce17.apps.googleusercontent.com'
 
-  const localStore = new LocalStorageProvider()
-  _folderSync = createFolderSync({
-    configKey: 'fp-folder-sync-config-v1',
-    metaPrefix: 'fp-folder-sync-meta:',
-    pendingKey: 'fp-folder-sync-pending-target',
-    // These files sync at the record (row) level with tombstones, so a delete
-    // on one device is never resurrected by a stale push from another.
-    recordCodecs: {
-      'focus-plan.md': mdTableCodec,
-      'focus-plan-completed.md': mdTableCodec,
-    },
-    localFolders: [{
-      id: LOCAL_FOLDER_ID,
-      name: 'Browser Storage',
-      store: {
-        read: path => localStore.read(path),
-        write: (path, content) => localStore.write(path, content),
-        listPaths: () => localStore.listAllPaths(),
-      },
-      targets: [
-        oneDriveTarget(),
-        googleDriveTarget(),
-      ],
-    }],
-  })
-  return _folderSync
+// Flat local adapter for the service-worker sync engine. It always delegates to
+// the *current* active provider, so the engine's writes/reads, the IndexedDB
+// mirror the SW pulls from, and the app's own reads all hit one source of truth.
+const localAdapter = {
+  id: 'planner-local',
+  async init() { return true },
+  async isReady() { return _provider != null },
+  async getFolderName() {
+    try { return _provider?.folderName?.() ?? 'Browser Storage' } catch { return 'Browser Storage' }
+  },
+  async readFile(name) {
+    if (!_provider) return ''
+    const v = await _provider.read(name)
+    return v ?? ''
+  },
+  async writeFile(name, content) {
+    if (!_provider) throw new Error('No provider set')
+    await _provider.write(name, content)
+    return { mtime: Date.now() }
+  },
+  async deleteFile(name) {
+    if (!_provider) return
+    await _provider.remove(name)
+  },
+  async listFiles() {
+    if (!_provider) return []
+    if (typeof _provider.listAllPaths === 'function') return _provider.listAllPaths()
+    return []
+  },
 }
 
-function oneDriveTarget() {
-  const provider = new OneDriveProvider()
-  return {
-    id: PROVIDERS.ONEDRIVE,
-    label: 'OneDrive',
-    restore: () => provider.restore(),
-    connect: () => provider.pick(),
-    write: (path, content) => provider.write(path, content),
-    remove: path => provider.remove(path),
-    read: path => provider.read(path),
-    list: () => provider.listFlat(),
-  }
+function getEngine() {
+  if (_engine) return _engine
+  const providers = [oneDriveProvider({ clientId: ONEDRIVE_CLIENT_ID })]
+  if (GOOGLE_CLIENT_ID) providers.push(googleDriveProvider({ clientId: GOOGLE_CLIENT_ID }))
+  // Constructing the engine kicks off connected-flag refresh and OAuth-redirect
+  // completion, and wires online/visibility nudges to the service worker.
+  _engine = createSyncEngine({ localAdapter, providers })
+  return _engine
 }
 
-function googleDriveTarget() {
-  const provider = new GoogleDriveProvider()
-  return {
-    id: PROVIDERS.GOOGLE_DRIVE,
-    label: 'Google Drive',
-    restore: () => provider.restore(),
-    connect: () => provider.pick(),
-    write: (path, content) => provider.write(path, content),
-    remove: path => provider.remove(path),
-    read: path => provider.read(path),
-    list: () => provider.listFlat(),
+// ── Status shim ────────────────────────────────────────
+// Map the SW engine's status `{ state, providers:{id:{connected,state,error}} }`
+// onto the legacy shape App.jsx consumes:
+// `{ aggregate, folders:{ [LOCAL_FOLDER_ID]:{ targets:{ id:{ status, message } } } } }`.
+
+function mapTargetStatus(p, overall) {
+  if (!p) return TARGET_STATUS.DISCONNECTED
+  if (p.state === 'reconnect-required') return TARGET_STATUS.RECONNECT_NEEDED
+  if (!p.connected) return TARGET_STATUS.DISCONNECTED
+  if (p.state === 'error') return TARGET_STATUS.ERROR
+  if (overall === 'syncing' || p.state === 'syncing') return TARGET_STATUS.SYNCING
+  return TARGET_STATUS.SYNCED // connected & (synced | idle)
+}
+
+function mapEngineStatus(s) {
+  const provStates = s?.providers || {}
+  const targets = {}
+  for (const id of [PROVIDERS.ONEDRIVE, PROVIDERS.GOOGLE_DRIVE]) {
+    const p = provStates[id]
+    targets[id] = { status: mapTargetStatus(p, s?.state), message: p?.error || '' }
   }
+  const statuses = Object.values(targets).map(t => t.status)
+  let aggregate = TARGET_STATUS.DISCONNECTED
+  if (s?.state === 'syncing' || statuses.includes(TARGET_STATUS.SYNCING)) {
+    aggregate = TARGET_STATUS.SYNCING
+  } else if (statuses.includes(TARGET_STATUS.RECONNECT_NEEDED)) {
+    aggregate = TARGET_STATUS.RECONNECT_NEEDED
+  } else if (statuses.includes(TARGET_STATUS.ERROR)) {
+    aggregate = TARGET_STATUS.ERROR
+  } else if (statuses.includes(TARGET_STATUS.SYNCED)) {
+    aggregate = TARGET_STATUS.SYNCED
+  }
+  return { aggregate, folders: { [LOCAL_FOLDER_ID]: { targets } } }
 }
 
 export function setActiveProvider(p) { _provider = p }
@@ -119,48 +144,63 @@ export function getLocalFolderId() {
 }
 
 export function getSyncStatus() {
-  return getFolderSync().getStatus()
+  return mapEngineStatus(getEngine().status)
 }
 
 export function subscribeSyncStatus(listener) {
-  return getFolderSync().subscribe(listener)
+  return getEngine().subscribe(s => {
+    try { listener(mapEngineStatus(s)) } catch { /* ignore */ }
+  })
 }
 
 export async function restoreSyncTargets() {
-  return getFolderSync().restoreTargets()
+  // Merely constructing the engine refreshes connected-provider flags and
+  // completes any in-flight OAuth redirect; the SW handles push+pull from there.
+  getEngine()
 }
 
 export function startAutoSync() {
-  return getFolderSync().startAutoSync()
+  // No-op: the service worker drives sync via Background/Periodic Sync plus
+  // online/visibility/write nudges. Kept for API compatibility with App.jsx.
+  getEngine()
 }
 
 export async function connectSyncTarget(targetId) {
-  return getFolderSync().connectTarget(LOCAL_FOLDER_ID, targetId)
+  // Redirects to the provider's sign-in; the flow resumes after redirect back.
+  return getEngine().connect(targetId)
 }
 
 export async function disconnectSyncTarget(targetId) {
-  // Clear the target's enabled flag in folder-sync config and forget cached
-  // tokens / handles so the next "Sign in" starts a fresh OAuth flow.
-  const fs = getFolderSync()
-  fs.disconnectTarget(LOCAL_FOLDER_ID, targetId)
-  try {
-    let provider = null
-    if (targetId === PROVIDERS.ONEDRIVE) provider = new OneDriveProvider()
-    else if (targetId === PROVIDERS.GOOGLE_DRIVE) provider = new GoogleDriveProvider()
-    if (provider?.forget) await provider.forget()
-  } catch { /* ignore */ }
+  return getEngine().disconnect(targetId)
 }
 
-export async function syncNow(targetId = null) {
-  return getFolderSync().syncNow(LOCAL_FOLDER_ID, targetId)
+export async function syncNow() {
+  return getEngine().syncNow()
 }
 
-export async function pullNow(targetId = null) {
-  return getFolderSync().pullNow(LOCAL_FOLDER_ID, targetId)
+export async function pullNow() {
+  // The SW pulls on every cycle, so a manual pull is just a manual sync nudge.
+  return getEngine().syncNow()
 }
 
 export function onLocalChange(listener) {
-  return getFolderSync().onLocalChange(listener)
+  let lastAt = 0
+  return getEngine().subscribe(s => {
+    const ru = s?.lastRemoteUpdate
+    if (ru && ru.at && ru.at !== lastAt) {
+      lastAt = ru.at
+      try { listener(ru.name) } catch { /* ignore */ }
+    }
+  })
+}
+
+/**
+ * Register the folder-sync service worker (served from the app origin at
+ * /folder-sync/ by the copy-sw build step). Call once on app start.
+ */
+export async function registerSyncWorker() {
+  const base = (import.meta.env?.BASE_URL || '/').replace(/\/$/, '')
+  return registerServiceWorker(`${base}/folder-sync/sw.js`, { type: 'module', scope: `${base}/folder-sync/` })
 }
 
 // ── Delegating API (unchanged surface for App.jsx) ─────
@@ -196,14 +236,14 @@ export async function read(path) {
 
 export async function write(path, content) {
   if (!_provider) throw new Error('No provider set')
-  await _provider.write(path, content)
-  await getFolderSync().markDirty(path, 'write', LOCAL_FOLDER_ID)
+  // Route through the engine: writes the active provider, mirrors to IndexedDB,
+  // enqueues the file, and nudges the service worker to sync.
+  await getEngine().writeFile(path, content)
 }
 
 export async function remove(path) {
   if (!_provider) throw new Error('No provider set')
-  await _provider.remove(path)
-  await getFolderSync().markDirty(path, 'delete', LOCAL_FOLDER_ID)
+  await getEngine().deleteFile(path)
 }
 
 export async function getFiles() {

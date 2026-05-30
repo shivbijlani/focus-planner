@@ -4,12 +4,23 @@
 import { peekAll, dequeue } from './queue.js'
 import { getTokens } from './auth/tokenStore.js'
 import { idbGet, idbSet } from './idb.js'
+import { reconcileRecordsFile, isSidecarPath } from './records.js'
+import { mdTableCodec } from './codecs/mdTable.js'
 import { oneDriveProvider } from './providers/oneDrive.js'
 import { googleDriveProvider } from './providers/googleDrive.js'
 import { mockProvider } from './providers/mock.js'
 
 const CHANNEL = 'folder-sync'
 const META_STORE = 'meta'
+
+// Files that sync at the record (row) level — per-row merge with tombstones —
+// instead of as opaque whole-file blobs, keyed by file name -> codec. This is
+// what prevents a stale push on one device from resurrecting a row deleted on
+// another. Files without a codec keep the legacy whole-file last-write-wins path.
+const RECORD_CODECS = {
+  'focus-plan.md': mdTableCodec,
+  'focus-plan-completed.md': mdTableCodec,
+}
 
 const PROVIDER_FACTORIES = {
   'onedrive': oneDriveProvider,
@@ -92,6 +103,16 @@ async function syncOneProvider(provider) {
   // 1) Push: drain queue.
   const dirty = await peekAll()
   for (const name of dirty) {
+    // Sidecars are sync metadata, not user data — never push them directly.
+    if (isSidecarPath(name)) { await dequeue(name); continue }
+    const codec = RECORD_CODECS[name]
+    if (codec) {
+      // Record-level merge: deletions are carried as tombstones, so pushing
+      // can never resurrect a row another device deleted.
+      await reconcileRecord(provider, name, codec)
+      await dequeue(name)
+      continue
+    }
     const localContent = await readLocal(name)
     if (localContent === null) {
       // local was deleted
@@ -106,6 +127,13 @@ async function syncOneProvider(provider) {
   // 2) Pull: list remote, compare mtimes, download newer.
   const remoteList = await provider.listRemote(provider)
   for (const item of remoteList) {
+    if (isSidecarPath(item.name)) continue
+    const codec = RECORD_CODECS[item.name]
+    if (codec) {
+      await reconcileRecord(provider, item.name, codec)
+      await setRemoteMtime(provider.id, item.name, item.mtime)
+      continue
+    }
     const lastSeen = await getRemoteMtime(provider.id, item.name)
     if (lastSeen && lastSeen >= item.mtime) continue
     const remoteContent = await provider.readRemote(provider, item.name)
@@ -114,6 +142,29 @@ async function syncOneProvider(provider) {
       await setRemoteMtime(provider.id, item.name, item.mtime)
     }
   }
+}
+
+// Record-level reconcile for one file, symmetric across push and pull: parses
+// both sides into records, merges per-row with tombstones, writes the merged
+// result + sidecar back to whichever side changed.
+async function reconcileRecord(provider, name, codec) {
+  const safe = async (fn) => { try { return await fn() } catch { return null } }
+  return reconcileRecordsFile({
+    path: name,
+    codec,
+    local: {
+      readContent: p => readLocal(p),
+      writeContent: (p, content) => writeLocal(p, content),
+      readSidecar: p => readLocal(p),
+      writeSidecar: (p, content) => writeLocal(p, content),
+    },
+    remote: {
+      readContent: p => safe(() => provider.readRemote(provider, p)),
+      writeContent: (p, content) => provider.writeRemote(provider, p, content),
+      readSidecar: p => safe(() => provider.readRemote(provider, p)),
+      writeSidecar: (p, content) => provider.writeRemote(provider, p, content),
+    },
+  })
 }
 
 // ---- local I/O from SW context ----

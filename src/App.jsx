@@ -4503,6 +4503,10 @@ function App() {
           return
         }
 
+        // Register the folder-sync service worker (served from /folder-sync/)
+        // so push+pull runs off the main thread, then restore sync targets.
+        await storage.registerSyncWorker()
+
         // Always restore sync targets and start background sync after the
         // storage provider is ready. This is what consumes the OAuth ?code=
         // query param after a Sign-in redirect (via the pending-target marker

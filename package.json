@@ -4,10 +4,13 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/copy-sw.mjs",
     "dev": "vite",
     "server": "node server.js",
     "start": "concurrently \"npm run server\" \"npm run dev\"",
+    "prebuild": "node scripts/copy-sw.mjs",
     "build": "vite build",
+    "copy:sw": "node scripts/copy-sw.mjs",
     "lint": "eslint .",
     "test": "vitest run",
     "preview": "vite preview"
