@@ -2,14 +2,27 @@
  * Storage abstraction layer for focus-planner.
  * Supports: FSA (local), OneDrive, Google Drive.
  */
-import { TARGET_STATUS } from '../../packages/folder-sync/src/index.js'
-import { createSyncEngine, registerServiceWorker } from '../../packages/folder-sync/src/engine.js'
-import { oneDriveProvider } from '../../packages/folder-sync/src/providers/oneDrive.js'
-import { googleDriveProvider } from '../../packages/folder-sync/src/providers/googleDrive.js'
+import {
+  createSyncEngine,
+  registerServiceWorker,
+  oneDriveProvider,
+  googleDriveProvider,
+} from '../../packages/folder-sync/src/index.js'
 import { LocalStorageProvider } from './localstorage-provider.js'
 
 export { parseTodos } from './fsa.js'
-export { TARGET_STATUS }
+
+// Sync-target status vocabulary used by the planner UI. The service-worker
+// engine reports lower-level states ({ connected, state }); the status shim
+// below maps those onto these app-level values.
+export const TARGET_STATUS = {
+  DISCONNECTED: 'disconnected',
+  PENDING: 'pending',
+  SYNCING: 'syncing',
+  SYNCED: 'synced',
+  RECONNECT_NEEDED: 'reconnect-needed',
+  ERROR: 'error',
+}
 
 export const PROVIDERS = {
   LOCAL_STORAGE: 'local-storage',
@@ -175,11 +188,6 @@ export async function disconnectSyncTarget(targetId) {
 }
 
 export async function syncNow() {
-  return getEngine().syncNow()
-}
-
-export async function pullNow() {
-  // The SW pulls on every cycle, so a manual pull is just a manual sync nudge.
   return getEngine().syncNow()
 }
 
