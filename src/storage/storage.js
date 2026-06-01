@@ -7,6 +7,8 @@ import {
   registerServiceWorker,
   oneDriveProvider,
   googleDriveProvider,
+  getTokens,
+  setTokens,
 } from '../../packages/folder-sync/src/index.js'
 import { LocalStorageProvider } from './localstorage-provider.js'
 
@@ -103,7 +105,51 @@ function getEngine() {
   // Constructing the engine kicks off connected-flag refresh and OAuth-redirect
   // completion, and wires online/visibility nudges to the service worker.
   _engine = createSyncEngine({ localAdapter, providers })
+  // One-time: import tokens from the legacy main-thread providers (localStorage)
+  // into the service-worker engine's IndexedDB token store. A OneDrive/Drive
+  // connection made before the SW migration would otherwise be invisible to the
+  // new engine (different storage), so it would appear never-connected and the
+  // on-load reconnect would not fire. After importing we re-read connected flags
+  // (which also backfills the intended-providers set) and nudge a sync so the SW
+  // either silently refreshes the session or surfaces a reconnect round trip.
+  migrateLegacyTokens()
+    .then(() => _engine.refreshConnected())
+    .then(() => _engine.syncNow())
+    .catch(() => {})
   return _engine
+}
+
+// One-time migration of OAuth tokens persisted by the legacy main-thread
+// providers (localStorage `od_*` / `gd_*`) into the SW engine's IndexedDB token
+// store. The legacy keys are left in place — the multi-source primary-storage
+// providers (sources.js) still read them — and a done-flag makes this run once.
+const LEGACY_TOKEN_MAP = [
+  { id: PROVIDERS.ONEDRIVE, access: 'od_token', refresh: 'od_refresh', expires: 'od_expires' },
+  { id: PROVIDERS.GOOGLE_DRIVE, access: 'gd_token', refresh: 'gd_refresh', expires: 'gd_expires' },
+]
+let _legacyMigration = null
+function migrateLegacyTokens() {
+  if (_legacyMigration) return _legacyMigration
+  _legacyMigration = (async () => {
+    if (typeof localStorage === 'undefined') return
+    const DONE_KEY = 'fp-legacy-sync-token-migration-v1'
+    if (localStorage.getItem(DONE_KEY)) return
+    for (const { id, access, refresh, expires } of LEGACY_TOKEN_MAP) {
+      try {
+        if (await getTokens(id)) continue // new engine already has tokens; don't clobber
+        const accessToken = localStorage.getItem(access) || ''
+        const refreshToken = localStorage.getItem(refresh) || ''
+        if (!accessToken && !refreshToken) continue
+        const expRaw = localStorage.getItem(expires)
+        const expiresAt = expRaw ? parseInt(expRaw, 10) : 0
+        await setTokens(id, { accessToken, refreshToken: refreshToken || undefined, expiresAt })
+      } catch (e) {
+        console.warn('[storage] legacy token migration failed for', id, e)
+      }
+    }
+    try { localStorage.setItem(DONE_KEY, '1') } catch { /* ignore */ }
+  })()
+  return _legacyMigration
 }
 
 // ── Status shim ────────────────────────────────────────

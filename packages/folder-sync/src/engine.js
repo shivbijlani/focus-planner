@@ -260,6 +260,11 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
 
     // ---- status ----
     get status() { return status },
+    // Re-read persisted tokens and re-emit connected flags. Useful after
+    // importing tokens out-of-band (e.g. a one-time migration from a previous
+    // engine) so the intended-providers backfill and status reflect them
+    // without waiting for the next service-worker broadcast.
+    async refreshConnected() { await refreshConnectedFlags() },
     subscribe(fn) {
       listeners.add(fn)
       fn(status)
