@@ -106,7 +106,10 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     if (!reg) return
     const sw = reg.active || reg.waiting || reg.installing
     if (!sw) return
-    const providerConfigs = providers.map(p => ({ id: p.id, clientId: p.clientId }))
+    const intended = readIntended()
+    const providerConfigs = providers
+      .filter(p => intended.has(p.id))
+      .map(p => ({ id: p.id, clientId: p.clientId }))
     sw.postMessage({ type: 'sync', reason, providers: providerConfigs })
   }
 
@@ -247,6 +250,7 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
       try { sessionStorage.removeItem(`${AUTO_RECONNECT_FLAG}:${providerId}`) } catch { /* ignore */ }
       await clearTokens(providerId)
       await refreshConnectedFlags()
+      await nudgeSW('disconnect')
     },
     async isConnected(providerId) {
       return !!(await getTokens(providerId))
