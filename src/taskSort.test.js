@@ -87,6 +87,33 @@ describe('sortTasksByPriority', () => {
 
     expect(sortedRows.map(row => row.ID.id)).toEqual(['1', '2', '3'])
   })
+
+  it('resolves manager priority across chains longer than 5 hops', () => {
+    // Regression: 323 → 321 → 316 → 313 → 219 → 208 (where 208 is the
+    // manager priority). With the old maxDepth=5 cap, 323 would fail to
+    // resolve and sort below tasks whose chains were short enough to reach
+    // their manager priority. Both urgent tasks should now sort together
+    // by manager priority, with the prerequisite chain order preserved.
+    const rows = [
+      makeTask('323', '🔴', '321'),
+      makeTask('321', '🔴', '316'),
+      makeTask('316', '🔴', '313'),
+      makeTask('313', '🔴', '219'),
+      makeTask('219', '🔴', '208'),
+      makeTask('999', '🔴'),
+    ]
+    const rawLines = rows.map((_, index) => `raw-${index}`)
+    const headers = ['ID', '🎯', 'Task']
+    const linkedIdMap = { '323': '321', '321': '316', '316': '313', '313': '219', '219': '208' }
+    const managerPriorities = { '208': 1 }
+
+    const { sortedRows } = sortTasksByPriority(rows, rawLines, headers, linkedIdMap, managerPriorities)
+
+    // All chain members resolve to the same manager priority and order by
+    // dependency depth (deepest first); 999 has no manager priority so it
+    // sorts after the resolved chain.
+    expect(sortedRows.map(row => row.ID.id)).toEqual(['323', '321', '316', '313', '219', '999'])
+  })
 })
 
 describe('isNeededForUrgentTask', () => {

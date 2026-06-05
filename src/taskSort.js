@@ -12,13 +12,15 @@ export function parseManagerPriorities(lines) {
   return priorities
 }
 
-export function resolveManagerPriority(taskId, linkedIdMap, managerPriorities, maxDepth = 5) {
+export function resolveManagerPriority(taskId, linkedIdMap, managerPriorities, maxDepth = 20) {
   let current = taskId
+  const visited = new Set()
   for (let i = 0; i < maxDepth; i++) {
-    if (!current) return null
+    if (!current || visited.has(current)) return null
     if (managerPriorities[current]) {
       return { id: current, order: managerPriorities[current] }
     }
+    visited.add(current)
     current = linkedIdMap[current] || null
   }
   return null
