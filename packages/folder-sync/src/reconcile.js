@@ -84,6 +84,34 @@ export function planPlainPush({ localContent, tracked, remoteHas }) {
 }
 
 /**
+ * Decide whether the pull step should download a remote file into the local
+ * store. The mtime comparison is only an optimization to skip re-downloading a
+ * file we already hold; it must not suppress a genuinely missing local copy.
+ *
+ * The bug this fixes: after the earlier "phantom journal" cleanup, a device can
+ * carry a stale `mtime:<provider>:<file>` entry from a previous sync session
+ * while no longer holding the file locally (e.g. journals that were never
+ * materialised into the active store, or were cleared). On reconnect the remote
+ * still lists the file, but `lastSeen >= remoteMtime` made the pull skip it
+ * forever, so journals "never come down". Here we re-pull whenever the local
+ * copy is absent, since the remote listing is authoritative — a file that was
+ * truly deleted remotely won't appear in the listing at all.
+ *
+ * @param {object} args
+ * @param {number|null|undefined} args.lastSeen    Last remote mtime we recorded
+ *   for this (provider,file), or falsy if we've never synced it.
+ * @param {number} args.remoteMtime                 Mtime from the current listing.
+ * @param {boolean} args.localPresent               Whether a local copy exists.
+ * @returns {boolean} true if the file should be downloaded.
+ */
+export function shouldPullRemote({ lastSeen, remoteMtime, localPresent }) {
+  if (!lastSeen) return true               // never synced → pull
+  if (remoteMtime > lastSeen) return true  // remote changed → pull
+  if (!localPresent) return true           // local copy missing → restore it
+  return false                             // up to date and present → skip
+}
+
+/**
  * Select the IndexedDB meta keys that hold a provider's remote-mtime tracking
  * (`mtime:<providerId>:<file>`), so they can be purged when that provider is
  * disconnected. Pure helper to keep the filtering testable. Only the matching

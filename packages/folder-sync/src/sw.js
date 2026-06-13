@@ -5,7 +5,7 @@ import { peekAll, dequeue } from './queue.js'
 import { getTokens } from './auth/tokenStore.js'
 import { idbGet, idbSet, idbKeys, idbDel } from './idb.js'
 import { reconcileRecordsFile, isSidecarPath } from './records.js'
-import { filesToDeleteLocally, planPlainPush } from './reconcile.js'
+import { filesToDeleteLocally, planPlainPush, shouldPullRemote } from './reconcile.js'
 import { mdTableCodec } from './codecs/mdTable.js'
 import { oneDriveProvider } from './providers/oneDrive.js'
 import { googleDriveProvider } from './providers/googleDrive.js'
@@ -155,7 +155,13 @@ async function syncOneProvider(provider, reconcileDeletes = false) {
       continue
     }
     const lastSeen = await getRemoteMtime(provider.id, item.name)
-    if (lastSeen && lastSeen >= item.mtime) continue
+    // Pull when the remote is newer OR when we have no local copy (a stale
+    // mtime must not strand a file that isn't actually present locally — the
+    // "journals don't come down on reconnect" bug). readRemote returning null
+    // (file vanished between list and read) still guards against resurrecting a
+    // remote deletion.
+    const localPresent = (await readLocal(item.name)) != null
+    if (!shouldPullRemote({ lastSeen, remoteMtime: item.mtime, localPresent })) continue
     const remoteContent = await provider.readRemote(provider, item.name)
     if (remoteContent != null) {
       await writeLocal(item.name, remoteContent)

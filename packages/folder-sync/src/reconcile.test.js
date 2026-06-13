@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { filesToDeleteLocally, mtimeKeysForProvider, planPlainPush } from './reconcile.js'
+import { filesToDeleteLocally, mtimeKeysForProvider, planPlainPush, shouldPullRemote } from './reconcile.js'
 
 const isSidecar = (n) => n.endsWith('.sync.json')
 const isRecord = (n) => n === 'focus-plan.md' || n === 'focus-plan-completed.md'
@@ -103,6 +103,32 @@ describe('planPlainPush', () => {
   it('writes an empty-string file (empty is content, not a deletion)', () => {
     expect(planPlainPush({ localContent: '', tracked: false, remoteHas: false }))
       .toBe('write')
+  })
+})
+
+describe('shouldPullRemote', () => {
+  it('pulls a file we have never synced (no lastSeen)', () => {
+    expect(shouldPullRemote({ lastSeen: null, remoteMtime: 100, localPresent: false }))
+      .toBe(true)
+  })
+
+  it('pulls when the remote is newer than last seen', () => {
+    expect(shouldPullRemote({ lastSeen: 100, remoteMtime: 200, localPresent: true }))
+      .toBe(true)
+  })
+
+  it('pulls when up-to-date by mtime but the local copy is missing (reconnect journal bug)', () => {
+    // Stale mtime left from a prior session, but the journal isn't present
+    // locally — it must still be restored from the authoritative remote.
+    expect(shouldPullRemote({ lastSeen: 200, remoteMtime: 200, localPresent: false }))
+      .toBe(true)
+  })
+
+  it('skips when up-to-date and the local copy is present', () => {
+    expect(shouldPullRemote({ lastSeen: 200, remoteMtime: 200, localPresent: true }))
+      .toBe(false)
+    expect(shouldPullRemote({ lastSeen: 300, remoteMtime: 200, localPresent: true }))
+      .toBe(false)
   })
 })
 
