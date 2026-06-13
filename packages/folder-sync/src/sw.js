@@ -3,8 +3,9 @@
 
 import { peekAll, dequeue } from './queue.js'
 import { getTokens } from './auth/tokenStore.js'
-import { idbGet, idbSet } from './idb.js'
+import { idbGet, idbSet, idbKeys, idbDel } from './idb.js'
 import { reconcileRecordsFile, isSidecarPath } from './records.js'
+import { filesToDeleteLocally } from './reconcile.js'
 import { mdTableCodec } from './codecs/mdTable.js'
 import { oneDriveProvider } from './providers/oneDrive.js'
 import { googleDriveProvider } from './providers/googleDrive.js'
@@ -68,9 +69,13 @@ async function runSync(reason) {
         return
       }
       const providerStatuses = {}
+      // Only reconcile remote deletions when exactly one provider is syncing.
+      // With multiple targets a file may legitimately live on one and not the
+      // other, so auto-deleting on absence could destroy data.
+      const reconcileDeletes = currentProviders.length === 1
       for (const p of currentProviders) {
         try {
-          await syncOneProvider(p)
+          await syncOneProvider(p, reconcileDeletes)
           providerStatuses[p.id] = { connected: true, state: 'synced', error: null }
         } catch (e) {
           const msg = (e && e.message) || String(e)
@@ -96,7 +101,7 @@ async function runSync(reason) {
   return inFlight
 }
 
-async function syncOneProvider(provider) {
+async function syncOneProvider(provider, reconcileDeletes = false) {
   const tok = await getTokens(provider.id)
   if (!tok) throw new Error('reconnect-required')
 
@@ -117,6 +122,7 @@ async function syncOneProvider(provider) {
     if (localContent === null) {
       // local was deleted
       await provider.deleteRemote(provider, name)
+      await clearRemoteMtime(provider.id, name)
     } else {
       const res = await provider.writeRemote(provider, name, localContent)
       await setRemoteMtime(provider.id, name, res.mtime)
@@ -126,6 +132,7 @@ async function syncOneProvider(provider) {
 
   // 2) Pull: list remote, compare mtimes, download newer.
   const remoteList = await provider.listRemote(provider)
+  const remoteNames = new Set(remoteList.map(i => i.name))
   for (const item of remoteList) {
     if (isSidecarPath(item.name)) continue
     const codec = RECORD_CODECS[item.name]
@@ -140,6 +147,30 @@ async function syncOneProvider(provider) {
     if (remoteContent != null) {
       await writeLocal(item.name, remoteContent)
       await setRemoteMtime(provider.id, item.name, item.mtime)
+    }
+  }
+
+  // 3) Reconcile remote deletions: a file we previously synced with this
+  // provider that has now vanished remotely was deleted on another device.
+  // Remove our local copy so it doesn't reappear as a ghost on next launch.
+  // Guarded to single-provider syncs by the caller; the empty-list check below
+  // prevents a transient empty response from wiping everything.
+  if (reconcileDeletes && remoteList.length > 0) {
+    const pending = new Set(await peekAll())
+    const candidates = new Set([
+      ...await trackedRemoteNames(provider.id), // files we've synced before
+      ...await localMirrorNames(),               // files the SW mirror holds
+    ])
+    const toDelete = filesToDeleteLocally({
+      candidates,
+      remoteNames,
+      pending,
+      isSidecar: isSidecarPath,
+      isRecordFile: (name) => !!RECORD_CODECS[name],
+    })
+    for (const name of toDelete) {
+      await deleteLocal(name)
+      await clearRemoteMtime(provider.id, name)
     }
   }
 }
@@ -194,11 +225,47 @@ async function writeLocal(name, content) {
   const clients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' })
   for (const c of clients) c.postMessage({ type: 'remote-update', name })
 }
+async function deleteLocal(name) {
+  // Tombstone the mirror entry and tell clients to drop the file from the
+  // active store. The engine's `remote-update` handler sees the tombstone
+  // (mirror reads null) and calls the local adapter's deleteFile.
+  await idbSet(META_STORE, `local:${name}`, { deleted: true, mtime: Date.now() })
+  const clients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' })
+  for (const c of clients) c.postMessage({ type: 'remote-update', name })
+}
 async function getRemoteMtime(providerId, name) {
   return (await idbGet(META_STORE, `mtime:${providerId}:${name}`)) || null
 }
 async function setRemoteMtime(providerId, name, mtime) {
   await idbSet(META_STORE, `mtime:${providerId}:${name}`, mtime)
+}
+async function clearRemoteMtime(providerId, name) {
+  await idbDel(META_STORE, `mtime:${providerId}:${name}`)
+}
+
+// Names of files we've previously synced with a provider (have a stored remote
+// mtime). Used to scope deletion reconciliation to sync-managed files only.
+async function trackedRemoteNames(providerId) {
+  const prefix = `mtime:${providerId}:`
+  const keys = await idbKeys(META_STORE)
+  const names = []
+  for (const k of keys) {
+    if (typeof k === 'string' && k.startsWith(prefix)) names.push(k.slice(prefix.length))
+  }
+  return names
+}
+
+// Names of files currently present in the SW's local mirror (not tombstoned).
+async function localMirrorNames() {
+  const prefix = 'local:'
+  const keys = await idbKeys(META_STORE)
+  const names = []
+  for (const k of keys) {
+    if (typeof k !== 'string' || !k.startsWith(prefix)) continue
+    const rec = await idbGet(META_STORE, k)
+    if (rec && !rec.deleted) names.push(k.slice(prefix.length))
+  }
+  return names
 }
 
 async function broadcast(partial) {

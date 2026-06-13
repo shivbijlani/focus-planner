@@ -137,21 +137,40 @@ async function ensureToken(providerConfig) {
 
 async function listRemote(providerConfig) {
   const token = await ensureToken(providerConfig)
-  const res = await fetch(`${APPROOT}/children?$select=name,lastModifiedDateTime,file`, {
+  return listFolderRecursive(token, '')
+}
+
+// Recursively enumerate every file under the app folder, returning paths
+// relative to approot (e.g. `journal/task-1.md`). The previous implementation
+// only listed the app-folder root, so files in subfolders (journals) were
+// invisible to sync — they were never pulled and their remote deletions were
+// never reconciled, which let stale local copies resurrect like ghosts.
+async function listFolderRecursive(token, prefix) {
+  const childrenUrl = prefix
+    ? `${APPROOT}:/${encodePath(prefix)}:/children?$select=name,lastModifiedDateTime,file,folder`
+    : `${APPROOT}/children?$select=name,lastModifiedDateTime,file,folder`
+  const res = await fetch(childrenUrl, {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (res.status === 404) return []
   if (!res.ok) throw new Error(`OneDrive list failed: ${res.status}`)
   const data = await res.json()
-  return data.value.filter(i => i.file).map(i => ({
-    name: i.name,
-    mtime: new Date(i.lastModifiedDateTime).getTime(),
-  }))
+  const out = []
+  for (const item of data.value || []) {
+    const rel = prefix ? `${prefix}/${item.name}` : item.name
+    if (item.folder) {
+      const children = await listFolderRecursive(token, rel)
+      for (const c of children) out.push(c)
+    } else if (item.file) {
+      out.push({ name: rel, mtime: new Date(item.lastModifiedDateTime).getTime() })
+    }
+  }
+  return out
 }
 
 async function readRemote(providerConfig, filename) {
   const token = await ensureToken(providerConfig)
-  const res = await fetch(`${APPROOT}:/${encodeURIComponent(filename)}:/content`, {
+  const res = await fetch(`${APPROOT}:/${encodePath(filename)}:/content`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (res.status === 404) return null
@@ -161,7 +180,7 @@ async function readRemote(providerConfig, filename) {
 
 async function writeRemote(providerConfig, filename, contents) {
   const token = await ensureToken(providerConfig)
-  const res = await fetch(`${APPROOT}:/${encodeURIComponent(filename)}:/content`, {
+  const res = await fetch(`${APPROOT}:/${encodePath(filename)}:/content`, {
     method: 'PUT',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
     body: contents,
@@ -173,11 +192,18 @@ async function writeRemote(providerConfig, filename, contents) {
 
 async function deleteRemote(providerConfig, filename) {
   const token = await ensureToken(providerConfig)
-  const res = await fetch(`${APPROOT}:/${encodeURIComponent(filename)}`, {
+  const res = await fetch(`${APPROOT}:/${encodePath(filename)}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
   })
   if (res.status !== 204 && res.status !== 404) {
     throw new Error(`OneDrive delete failed: ${res.status}`)
   }
+}
+
+// Encode each path segment for use in a Graph drive-item path while preserving
+// the `/` separators (encodeURIComponent would turn them into %2F and break
+// subfolder addressing).
+function encodePath(path) {
+  return String(path).split('/').map(encodeURIComponent).join('/')
 }
