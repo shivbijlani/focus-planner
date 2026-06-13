@@ -195,9 +195,13 @@ export class GoogleDriveProvider {
   }
 
   async checkJournal(taskId) {
+    await this._ensureToken()
     const path = `journal/task-${taskId}.md`
-    const content = await this.read(path)
-    if (!content) return { exists: false }
+    // Resolve the file id rather than reading content: a journal that exists
+    // but is empty must still be reported as present (read() returns '' for
+    // both a missing file and an empty one).
+    const fileId = await this._resolveFileId(path)
+    if (!fileId) return { exists: false }
     return { exists: true, path }
   }
 
