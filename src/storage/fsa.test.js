@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseTodos } from './fsa.js'
+import { parseTodos, listFiles } from './fsa.js'
 
 describe('parseTodos', () => {
   it('parses checkbox todos at the start of a journal', () => {
@@ -17,5 +17,14 @@ describe('parseTodos', () => {
       { done: false, text: 'First item' },
       { done: false, text: 'Second item' },
     ])
+  })
+})
+
+describe('listFiles', () => {
+  it('returns an empty list when the directory handle is null', async () => {
+    // Regression: the Settings file manager crashed with
+    // "Cannot read properties of null (reading 'entries')" when an FSA source's
+    // handle was not restored. listFiles must tolerate a null handle.
+    await expect(listFiles(null)).resolves.toEqual([])
   })
 })

@@ -3409,9 +3409,11 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
     setFilesBusy(true)
     setFilesError('')
     try {
-      const tree = activeId
-        ? await storage.getFilesFromSource(activeId)
-        : await storage.getFiles()
+      // Browse via the active-provider singleton (storage.getFiles), which is
+      // the restored instance the rest of the app uses. Going through
+      // getFilesFromSource(activeId) could hand back a fresh, unrestored
+      // provider whose folder handle is null (crashes on `.entries()`).
+      const tree = await storage.getFiles()
       const flat = flattenTree(tree).sort((a, b) => a.path.localeCompare(b.path))
       setFileList(flat)
     } catch (e) {

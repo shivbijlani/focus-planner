@@ -48,6 +48,10 @@ export class FSAProvider {
   }
 
   async getFiles() {
+    // The directory handle may be null if this instance hasn't been restored
+    // yet (e.g. a freshly lazy-created provider). Restore on demand so listing
+    // never crashes on a null handle.
+    if (!this._handle) await this.restore().catch(() => null)
     return listFiles(this._handle)
   }
 

@@ -139,6 +139,7 @@ async function listRecursive(dirHandle, prefix = '') {
 }
 
 export async function listFiles(dirHandle) {
+  if (!dirHandle) return []
   return listRecursive(dirHandle)
 }
 
