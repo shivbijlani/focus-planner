@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { filesToDeleteLocally } from './reconcile.js'
+import { filesToDeleteLocally, mtimeKeysForProvider } from './reconcile.js'
 
 const isSidecar = (n) => n.endsWith('.sync.json')
 const isRecord = (n) => n === 'focus-plan.md' || n === 'focus-plan-completed.md'
@@ -56,5 +56,34 @@ describe('filesToDeleteLocally', () => {
       pending: ['b.md'],
     })
     expect(out).toEqual([])
+  })
+})
+
+describe('mtimeKeysForProvider', () => {
+  const keys = [
+    'mtime:onedrive:focus-plan.md',
+    'mtime:onedrive:journal/task-1.md',
+    'mtime:google-drive:focus-plan.md',
+    'local:focus-plan.md',
+    'local:journal/task-1.md',
+  ]
+
+  it('selects only the target provider\'s mtime keys', () => {
+    expect(mtimeKeysForProvider(keys, 'onedrive')).toEqual([
+      'mtime:onedrive:focus-plan.md',
+      'mtime:onedrive:journal/task-1.md',
+    ])
+  })
+
+  it('leaves other providers and non-mtime keys untouched', () => {
+    expect(mtimeKeysForProvider(keys, 'google-drive')).toEqual([
+      'mtime:google-drive:focus-plan.md',
+    ])
+  })
+
+  it('returns empty for an unknown provider or empty input', () => {
+    expect(mtimeKeysForProvider(keys, 'dropbox')).toEqual([])
+    expect(mtimeKeysForProvider([], 'onedrive')).toEqual([])
+    expect(mtimeKeysForProvider(undefined, 'onedrive')).toEqual([])
   })
 })

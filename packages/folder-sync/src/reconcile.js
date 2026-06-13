@@ -41,3 +41,23 @@ export function filesToDeleteLocally({
   }
   return out
 }
+
+/**
+ * Select the IndexedDB meta keys that hold a provider's remote-mtime tracking
+ * (`mtime:<providerId>:<file>`), so they can be purged when that provider is
+ * disconnected. Pure helper to keep the filtering testable. Only the matching
+ * provider's keys are returned — other providers' tracking and unrelated meta
+ * keys (e.g. `local:*`) are left untouched.
+ *
+ * @param {Iterable<string>} keys       All keys present in the meta store.
+ * @param {string} providerId           Provider being disconnected.
+ * @returns {string[]} keys to delete.
+ */
+export function mtimeKeysForProvider(keys, providerId) {
+  const prefix = `mtime:${providerId}:`
+  const out = []
+  for (const k of keys || []) {
+    if (typeof k === 'string' && k.startsWith(prefix)) out.push(k)
+  }
+  return out
+}

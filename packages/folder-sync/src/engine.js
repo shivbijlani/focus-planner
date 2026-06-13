@@ -6,7 +6,8 @@
 
 import { enqueue, peekAll } from './queue.js'
 import { getTokens, clearTokens } from './auth/tokenStore.js'
-import { idbSet, idbGet } from './idb.js'
+import { idbSet, idbGet, idbKeys, idbDel } from './idb.js'
+import { mtimeKeysForProvider } from './reconcile.js'
 
 const CHANNEL = 'folder-sync'
 const META_STORE = 'meta'
@@ -40,6 +41,18 @@ async function mirrorDelete(name) {
 async function mirrorRead(name) {
   const r = await idbGet(META_STORE, `local:${name}`)
   return r && !r.deleted ? r.content : null
+}
+
+// Clear a provider's per-file remote-mtime tracking (keys `mtime:<id>:<name>`).
+// Called on disconnect so a later reconnect re-compares against the remote from
+// scratch instead of trusting stale mtimes left over from the previous session.
+async function clearProviderSyncMeta(providerId) {
+  try {
+    const keys = await idbKeys(META_STORE)
+    for (const k of mtimeKeysForProvider(keys, providerId)) {
+      await idbDel(META_STORE, k)
+    }
+  } catch { /* ignore */ }
 }
 
 export function createSyncEngine({ localAdapter, providers = [], redirectUri = (typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '') }) {
@@ -249,6 +262,7 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
       removeIntended(providerId)
       try { sessionStorage.removeItem(`${AUTO_RECONNECT_FLAG}:${providerId}`) } catch { /* ignore */ }
       await clearTokens(providerId)
+      await clearProviderSyncMeta(providerId)
       await refreshConnectedFlags()
       await nudgeSW('disconnect')
     },
