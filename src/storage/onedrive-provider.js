@@ -114,9 +114,14 @@ export class OneDriveProvider {
   }
 
   async checkJournal(taskId) {
+    await this._ensureToken()
     const path = `journal/task-${taskId}.md`
-    const content = await this.read(path)
-    if (!content) return { exists: false }
+    // Check item metadata rather than content: a journal that exists but is
+    // empty must still be reported as present (read() returns '' for both a
+    // 404 and an empty file, so it can't distinguish them).
+    const url = `${APPROOT}:/${path}`
+    const res = await fetch(url, { headers: this._authHeader() })
+    if (!res.ok) return { exists: false }
     return { exists: true, path }
   }
 
