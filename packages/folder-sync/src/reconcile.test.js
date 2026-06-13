@@ -57,6 +57,32 @@ describe('filesToDeleteLocally', () => {
     })
     expect(out).toEqual([])
   })
+
+  it('never deletes a local-only file on a fresh connect (candidates are tracked files only)', () => {
+    // Regression for "connecting OneDrive blew away my files": the SW must pass
+    // ONLY files it has actually synced with this provider (tracked remote
+    // mtimes) as candidates — never the whole local mirror. A local-only
+    // journal that was never pushed is simply absent from `candidates`, so even
+    // though the freshly-connected remote (which has some other file) doesn't
+    // list it, it is not deleted.
+    const trackedCandidates = ['focus-plan.md'] // the only file synced so far
+    const out = filesToDeleteLocally({
+      candidates: trackedCandidates,
+      remoteNames: new Set(['focus-plan.md']), // remote still has the tracked file
+      // 'journal/task-1.md' exists locally but isn't a candidate → safe
+    })
+    expect(out).toEqual([])
+  })
+
+  it('still deletes a tracked file that genuinely vanished from the remote', () => {
+    // The phantom-journal fix must keep working: a file we synced before
+    // (tracked) and which is now gone from the remote listing is deleted.
+    const out = filesToDeleteLocally({
+      candidates: ['journal/task-426550.md'], // tracked (we synced it before)
+      remoteNames: new Set([]),               // gone from remote now
+    })
+    expect(out).toEqual(['journal/task-426550.md'])
+  })
 })
 
 describe('planPlainPush', () => {

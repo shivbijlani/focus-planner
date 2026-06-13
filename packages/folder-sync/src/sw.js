@@ -169,17 +169,20 @@ async function syncOneProvider(provider, reconcileDeletes = false) {
     }
   }
 
-  // 3) Reconcile remote deletions: a file we previously synced with this
-  // provider that has now vanished remotely was deleted on another device.
-  // Remove our local copy so it doesn't reappear as a ghost on next launch.
-  // Guarded to single-provider syncs by the caller; the empty-list check below
-  // prevents a transient empty response from wiping everything.
+  // 3) Reconcile remote deletions: a file we PREVIOUSLY SYNCED with this
+  // provider (proven by a tracked remote mtime) that has now vanished from the
+  // remote listing was deleted on another device — remove our local copy so it
+  // doesn't reappear as a ghost on next launch.
+  //
+  // CRITICAL: only files we've actually synced (tracked mtime) are eligible.
+  // We must NOT consider the whole local mirror here: on a freshly-connected
+  // provider that already holds a file or two, every local-only file (e.g.
+  // journals never pushed yet) is absent from the remote listing and would be
+  // wiped — which is exactly the "connecting OneDrive blew away my files" bug.
+  // Untracked local files are pushed up by the push step instead, never deleted.
   if (reconcileDeletes && remoteList.length > 0) {
     const pending = new Set(await peekAll())
-    const candidates = new Set([
-      ...await trackedRemoteNames(provider.id), // files we've synced before
-      ...await localMirrorNames(),               // files the SW mirror holds
-    ])
+    const candidates = new Set(await trackedRemoteNames(provider.id))
     const toDelete = filesToDeleteLocally({
       candidates,
       remoteNames,
@@ -270,19 +273,6 @@ async function trackedRemoteNames(providerId) {
   const names = []
   for (const k of keys) {
     if (typeof k === 'string' && k.startsWith(prefix)) names.push(k.slice(prefix.length))
-  }
-  return names
-}
-
-// Names of files currently present in the SW's local mirror (not tombstoned).
-async function localMirrorNames() {
-  const prefix = 'local:'
-  const keys = await idbKeys(META_STORE)
-  const names = []
-  for (const k of keys) {
-    if (typeof k !== 'string' || !k.startsWith(prefix)) continue
-    const rec = await idbGet(META_STORE, k)
-    if (rec && !rec.deleted) names.push(k.slice(prefix.length))
   }
   return names
 }
