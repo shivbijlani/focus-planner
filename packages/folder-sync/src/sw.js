@@ -18,9 +18,18 @@ const META_STORE = 'meta'
 // instead of as opaque whole-file blobs, keyed by file name -> codec. This is
 // what prevents a stale push on one device from resurrecting a row deleted on
 // another. Files without a codec keep the legacy whole-file last-write-wins path.
+// NOTE: these MUST match the actual top-level file names the app uses
+// (see src/config/branding.js: PLAN_FILE / COMPLETED_FILE). The app was
+// rebranded from `focus-plan*.md` to `planner*.md`; the old key names left the
+// real files (planner.md / planner-completed.md) WITHOUT record-level merge,
+// so they were synced as opaque blobs and were vulnerable to being clobbered or
+// wiped. Map both the current and legacy names so per-row tombstone merge
+// applies regardless of which naming a given store still uses.
 const RECORD_CODECS = {
-  'focus-plan.md': mdTableCodec,
-  'focus-plan-completed.md': mdTableCodec,
+  'planner.md': mdTableCodec,
+  'planner-completed.md': mdTableCodec,
+  'focus-plan.md': mdTableCodec,            // legacy (pre-rebrand)
+  'focus-plan-completed.md': mdTableCodec,  // legacy (pre-rebrand)
 }
 
 const PROVIDER_FACTORIES = {
