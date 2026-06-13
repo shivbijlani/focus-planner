@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { filesToDeleteLocally, mtimeKeysForProvider, planPlainPush, shouldPullRemote } from './reconcile.js'
+import { filesToDeleteLocally, mtimeKeysForProvider, planPlainPush, shouldPullRemote, isMassDeletion } from './reconcile.js'
 
 const isSidecar = (n) => n.endsWith('.sync.json')
 const isRecord = (n) => n === 'focus-plan.md' || n === 'focus-plan-completed.md'
@@ -129,6 +129,28 @@ describe('planPlainPush', () => {
   it('writes an empty-string file (empty is content, not a deletion)', () => {
     expect(planPlainPush({ localContent: '', tracked: false, remoteHas: false }))
       .toBe('write')
+  })
+})
+
+describe('isMassDeletion', () => {
+  it('flags a full wipe (every deletable file vanished)', () => {
+    expect(isMassDeletion({ deletableCount: 12, toDeleteCount: 12 })).toBe(true)
+  })
+
+  it('does not flag a normal single deletion', () => {
+    expect(isMassDeletion({ deletableCount: 12, toDeleteCount: 1 })).toBe(false)
+  })
+
+  it('does not flag when nothing is tracked yet (no baseline)', () => {
+    expect(isMassDeletion({ deletableCount: 0, toDeleteCount: 0 })).toBe(false)
+  })
+
+  it('flags when the proposed deletions meet or exceed the tracked set', () => {
+    expect(isMassDeletion({ deletableCount: 3, toDeleteCount: 4 })).toBe(true)
+  })
+
+  it('allows deleting all-but-one (still a per-file pattern, not a wipe)', () => {
+    expect(isMassDeletion({ deletableCount: 5, toDeleteCount: 4 })).toBe(false)
   })
 })
 

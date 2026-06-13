@@ -22,6 +22,30 @@
  *   files (handled by tombstones, never blob-deleted here).
  * @returns {string[]} names that should be deleted locally.
  */
+/**
+ * Mass-deletion circuit breaker. Returns true when a proposed local-delete set
+ * looks like the remote was wiped or returned a partial/empty listing rather
+ * than the user genuinely deleting files one-by-one on another device.
+ *
+ * Deleting local files because they're "absent from the remote" is inherently a
+ * heuristic (plain files carry no remote tombstone). When *every* file we've
+ * synced with a provider suddenly appears absent, the far more likely
+ * explanations are a wiped/disconnected remote or a transient/partial listing —
+ * not that the user deleted everything. In that case we must NOT propagate the
+ * "deletion" locally; the push step will re-upload instead. Erring toward
+ * keeping files means the worst case is a harmless ghost file, never data loss.
+ *
+ * @param {object} args
+ * @param {number} args.deletableCount  How many sync-managed plain files were
+ *   eligible for deletion (tracked candidates minus records/sidecars/pending).
+ * @param {number} args.toDeleteCount   How many of those are absent from remote.
+ * @returns {boolean} true ⇒ treat as anomaly and skip deletion entirely.
+ */
+export function isMassDeletion({ deletableCount, toDeleteCount }) {
+  if (!deletableCount) return false              // no baseline → nothing to guard
+  return toDeleteCount >= deletableCount         // the entire set vanished → wipe
+}
+
 export function filesToDeleteLocally({
   candidates,
   remoteNames,

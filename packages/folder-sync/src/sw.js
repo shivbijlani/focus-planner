@@ -5,7 +5,7 @@ import { peekAll, dequeue } from './queue.js'
 import { getTokens } from './auth/tokenStore.js'
 import { idbGet, idbSet, idbKeys, idbDel } from './idb.js'
 import { reconcileRecordsFile, isSidecarPath } from './records.js'
-import { filesToDeleteLocally, planPlainPush, shouldPullRemote } from './reconcile.js'
+import { filesToDeleteLocally, planPlainPush, shouldPullRemote, isMassDeletion } from './reconcile.js'
 import { mdTableCodec } from './codecs/mdTable.js'
 import { oneDriveProvider } from './providers/oneDrive.js'
 import { googleDriveProvider } from './providers/googleDrive.js'
@@ -190,9 +190,20 @@ async function syncOneProvider(provider, reconcileDeletes = false) {
       isSidecar: isSidecarPath,
       isRecordFile: (name) => !!RECORD_CODECS[name],
     })
-    for (const name of toDelete) {
-      await deleteLocal(name)
-      await clearRemoteMtime(provider.id, name)
+    // Mass-deletion circuit breaker: if EVERY sync-managed plain file we track
+    // is suddenly absent from the remote, that's almost certainly a wiped or
+    // partial remote listing — not the user deleting everything. Skip deletion
+    // and let the push step re-upload. Worst case is a harmless ghost file.
+    const deletableCount = [...candidates].filter(
+      (name) => !isSidecarPath(name) && !RECORD_CODECS[name] && !pending.has(name),
+    ).length
+    if (!isMassDeletion({ deletableCount, toDeleteCount: toDelete.length })) {
+      for (const name of toDelete) {
+        await deleteLocal(name)
+        await clearRemoteMtime(provider.id, name)
+      }
+    } else {
+      console.warn(`[folder-sync sw] ${provider.id}: skipping mass deletion of ${toDelete.length} file(s) — remote looks wiped/partial`)
     }
   }
 }
