@@ -5,7 +5,7 @@ import { peekAll, dequeue } from './queue.js'
 import { getTokens } from './auth/tokenStore.js'
 import { idbGet, idbSet, idbKeys, idbDel } from './idb.js'
 import { reconcileRecordsFile, isSidecarPath } from './records.js'
-import { filesToDeleteLocally } from './reconcile.js'
+import { filesToDeleteLocally, planPlainPush } from './reconcile.js'
 import { mdTableCodec } from './codecs/mdTable.js'
 import { oneDriveProvider } from './providers/oneDrive.js'
 import { googleDriveProvider } from './providers/googleDrive.js'
@@ -105,6 +105,13 @@ async function syncOneProvider(provider, reconcileDeletes = false) {
   const tok = await getTokens(provider.id)
   if (!tok) throw new Error('reconnect-required')
 
+  // List the remote up front. Knowing what already exists in the cloud lets the
+  // push step avoid clobbering pre-existing remote data on the FIRST sync after
+  // a provider is connected (the data-loss-on-connect bug): queued local
+  // deletes/overwrites must never destroy files we've never seen on this remote.
+  const remoteList = await provider.listRemote(provider)
+  const remoteNames = new Set(remoteList.map(i => i.name))
+
   // 1) Push: drain queue.
   const dirty = await peekAll()
   for (const name of dirty) {
@@ -119,20 +126,26 @@ async function syncOneProvider(provider, reconcileDeletes = false) {
       continue
     }
     const localContent = await readLocal(name)
-    if (localContent === null) {
-      // local was deleted
+    const tracked = !!(await getRemoteMtime(provider.id, name))
+    const action = planPlainPush({ localContent, tracked, remoteHas: remoteNames.has(name) })
+    if (action === 'delete') {
       await provider.deleteRemote(provider, name)
       await clearRemoteMtime(provider.id, name)
-    } else {
+      remoteNames.delete(name)
+    } else if (action === 'write') {
       const res = await provider.writeRemote(provider, name, localContent)
       await setRemoteMtime(provider.id, name, res.mtime)
+      remoteNames.add(name)
     }
+    // action === 'skip': first contact with pre-existing remote data — leave the
+    // cloud copy intact; the pull step below downloads it (cloud wins).
     await dequeue(name)
   }
 
-  // 2) Pull: list remote, compare mtimes, download newer.
-  const remoteList = await provider.listRemote(provider)
-  const remoteNames = new Set(remoteList.map(i => i.name))
+  // 2) Pull: compare mtimes against the up-front listing, download newer. Files
+  // we just created/updated in the push step are now tracked with an mtime >=
+  // the listed one, so they're skipped; files we 'skip'-ped are untracked and
+  // get pulled here so the cloud copy is preserved locally.
   for (const item of remoteList) {
     if (isSidecarPath(item.name)) continue
     const codec = RECORD_CODECS[item.name]

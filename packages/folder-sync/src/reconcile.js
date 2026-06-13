@@ -43,6 +43,47 @@ export function filesToDeleteLocally({
 }
 
 /**
+ * Decide what a single queued plain (non-record) file should do to the remote
+ * during the push step, in a way that NEVER destroys pre-existing remote data
+ * on the first sync after a provider is connected.
+ *
+ * The danger this guards against: when a provider is freshly connected, the
+ * local device's queued changes (deletions and overwrites accumulated while no
+ * provider was connected, or on a brand-new/empty device) would otherwise be
+ * pushed blindly over whatever already lives in the cloud — wiping a user's
+ * pre-existing OneDrive/Drive data. We only allow a destructive push (delete,
+ * or overwrite of a file the remote already has) once we've *seen* that file on
+ * this remote before, proven by a tracked remote mtime. Until then the pull
+ * step is authoritative: the cloud copy is downloaded rather than clobbered.
+ *
+ * @param {object} args
+ * @param {string|null|undefined} args.localContent  Local file content, or null
+ *   when the local file was deleted/absent.
+ * @param {boolean} args.tracked   True if we have a stored remote mtime for this
+ *   (provider, file) — i.e. we have synced it with this provider before.
+ * @param {boolean} args.remoteHas True if the file currently exists on the remote.
+ * @returns {'delete'|'write'|'skip'}
+ *   - 'delete': remove the file from the remote (a genuine local deletion of a
+ *     file we previously synced).
+ *   - 'write':  upload local content (a new file, or an update to a tracked file).
+ *   - 'skip':   do nothing destructive this pass; let the pull step reconcile
+ *     (first contact with pre-existing remote data).
+ */
+export function planPlainPush({ localContent, tracked, remoteHas }) {
+  const localDeleted = localContent === null || localContent === undefined
+  if (localDeleted) {
+    // Only delete remote files we've synced before. An untracked local deletion
+    // on first contact must not wipe pre-existing cloud data.
+    return tracked ? 'delete' : 'skip'
+  }
+  // Local has content. Creating a brand-new remote file is always safe.
+  // Overwriting a file the remote already has, when we've never synced it, would
+  // clobber pre-existing cloud data — defer to the pull/merge step instead.
+  if (!tracked && remoteHas) return 'skip'
+  return 'write'
+}
+
+/**
  * Select the IndexedDB meta keys that hold a provider's remote-mtime tracking
  * (`mtime:<providerId>:<file>`), so they can be purged when that provider is
  * disconnected. Pure helper to keep the filtering testable. Only the matching

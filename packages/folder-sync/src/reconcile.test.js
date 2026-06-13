@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { filesToDeleteLocally, mtimeKeysForProvider } from './reconcile.js'
+import { filesToDeleteLocally, mtimeKeysForProvider, planPlainPush } from './reconcile.js'
 
 const isSidecar = (n) => n.endsWith('.sync.json')
 const isRecord = (n) => n === 'focus-plan.md' || n === 'focus-plan-completed.md'
@@ -56,6 +56,53 @@ describe('filesToDeleteLocally', () => {
       pending: ['b.md'],
     })
     expect(out).toEqual([])
+  })
+})
+
+describe('planPlainPush', () => {
+  it('writes a brand-new local file (untracked, not on remote)', () => {
+    expect(planPlainPush({ localContent: 'hi', tracked: false, remoteHas: false }))
+      .toBe('write')
+  })
+
+  it('skips overwriting a pre-existing remote file on first contact (untracked, remote has it)', () => {
+    // This is the data-loss-on-connect guard: a queued local write must not
+    // clobber cloud data we have never synced.
+    expect(planPlainPush({ localContent: 'local', tracked: false, remoteHas: true }))
+      .toBe('skip')
+  })
+
+  it('writes an update to a file we have synced before (tracked)', () => {
+    expect(planPlainPush({ localContent: 'edit', tracked: true, remoteHas: true }))
+      .toBe('write')
+  })
+
+  it('deletes remote only for a file we have synced before (tracked deletion)', () => {
+    expect(planPlainPush({ localContent: null, tracked: true, remoteHas: true }))
+      .toBe('delete')
+  })
+
+  it('skips deleting a remote file we have never synced (untracked deletion)', () => {
+    // Prevents a stale/empty local device from wiping pre-existing cloud data.
+    expect(planPlainPush({ localContent: null, tracked: false, remoteHas: true }))
+      .toBe('skip')
+  })
+
+  it('skips a local deletion that was never on this remote (nothing to do)', () => {
+    expect(planPlainPush({ localContent: null, tracked: false, remoteHas: false }))
+      .toBe('skip')
+  })
+
+  it('treats undefined local content as a deletion', () => {
+    expect(planPlainPush({ localContent: undefined, tracked: true, remoteHas: true }))
+      .toBe('delete')
+    expect(planPlainPush({ localContent: undefined, tracked: false, remoteHas: true }))
+      .toBe('skip')
+  })
+
+  it('writes an empty-string file (empty is content, not a deletion)', () => {
+    expect(planPlainPush({ localContent: '', tracked: false, remoteHas: false }))
+      .toBe('write')
   })
 })
 
