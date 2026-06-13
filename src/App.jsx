@@ -3155,13 +3155,26 @@ function treeHasJournals(items) {
   return false
 }
 
+// Flatten a provider file tree ({name,type,path,children}) into a sorted list
+// of plain file entries ({ path, name }) for the Settings file manager.
+function flattenTree(items, acc = []) {
+  for (const item of items || []) {
+    if (item.type === 'directory') {
+      flattenTree(item.children, acc)
+    } else if (item.type === 'file') {
+      acc.push({ path: item.path, name: item.name })
+    }
+  }
+  return acc
+}
+
 function backupActionLabel(providerStatus, disconnectedLabel = 'Sign in') {
   if (providerStatus === TARGET_STATUS.RECONNECT_NEEDED) return 'Sign in again'
   if (providerStatus === TARGET_STATUS.DISCONNECTED) return disconnectedLabel
   return 'Sync now'
 }
 
-function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) {
+function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), onDataChanged }) {
   const [open, setOpen] = useState(false)
   const [tourOpen, setTourOpen] = useState(false)
   const [installOpen, setInstallOpen] = useState(false)
@@ -3169,6 +3182,12 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
   const [error, setError] = useState('')
   const [emptySources, setEmptySources] = useState({}) // sourceId -> boolean
   const [removeConfirm, setRemoveConfirm] = useState(null) // { sourceId, name }
+  // File manager (Settings → Files): browse + delete files in the active source.
+  const [filesOpen, setFilesOpen] = useState(false)
+  const [fileList, setFileList] = useState(null) // null = not loaded yet; [] = empty
+  const [filesBusy, setFilesBusy] = useState(false)
+  const [filesError, setFilesError] = useState('')
+  const [deletingPath, setDeletingPath] = useState(null)
   const oneDrive = targetStatus(syncStatus, PROVIDERS.ONEDRIVE)
   const aggregate = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
   const syncClass = aggregate.replace(/[^a-z-]/g, '')
@@ -3381,6 +3400,78 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
 
   const googleDrive = targetStatus(syncStatus, PROVIDERS.GOOGLE_DRIVE)
 
+  // ── Settings → Files: list + delete files in the active source ──────────
+  const activeSourceName = getActiveSource()?.name
+    || getProviderName(activePrimary)
+    || 'this source'
+
+  const loadFileList = async () => {
+    setFilesBusy(true)
+    setFilesError('')
+    try {
+      const tree = activeId
+        ? await storage.getFilesFromSource(activeId)
+        : await storage.getFiles()
+      const flat = flattenTree(tree).sort((a, b) => a.path.localeCompare(b.path))
+      setFileList(flat)
+    } catch (e) {
+      setFilesError(e.message || 'Could not list files')
+      setFileList([])
+    } finally {
+      setFilesBusy(false)
+    }
+  }
+
+  // Load the file list the first time the Files section is expanded.
+  useEffect(() => {
+    if (open && filesOpen && fileList === null && !filesBusy) {
+      loadFileList()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, filesOpen])
+
+  const deleteOneFile = async (path) => {
+    setDeletingPath(path)
+    setFilesError('')
+    try {
+      // Route through the active provider (storage.remove → engine) so the
+      // deletion is mirrored and the service worker syncs it to any connected
+      // cloud backup (OneDrive / Google Drive).
+      await storage.remove(path)
+      setFileList(prev => (prev || []).filter(f => f.path !== path))
+      onDataChanged?.()
+    } catch (e) {
+      setFilesError(e.message || `Could not delete ${path}`)
+    } finally {
+      setDeletingPath(null)
+    }
+  }
+
+  const deleteAllFiles = async () => {
+    const all = fileList || []
+    if (all.length === 0) return
+    if (!window.confirm(
+      `Delete all ${all.length} file(s) in ${activeSourceName}? This clears your tasks and journals here and syncs the deletions to connected backups. This cannot be undone.`
+    )) return
+    setFilesBusy(true)
+    setFilesError('')
+    try {
+      for (const f of all) {
+        setDeletingPath(f.path)
+        try {
+          await storage.remove(f.path)
+          setFileList(prev => (prev || []).filter(x => x.path !== f.path))
+        } catch (e) {
+          setFilesError(e.message || `Could not delete ${f.path}`)
+        }
+      }
+      onDataChanged?.()
+    } finally {
+      setDeletingPath(null)
+      setFilesBusy(false)
+    }
+  }
+
   return (
     <>
       <div className="sidebar-storage-footer">
@@ -3568,6 +3659,79 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set() }) 
                     </ul>
                   </div>
                 </details>
+              )}
+            </div>
+
+            <div className="settings-dialog-section">
+              <div
+                className="settings-dialog-section-title settings-files-title"
+                onClick={() => setFilesOpen(o => !o)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFilesOpen(o => !o) } }}
+                title="Browse and delete the files stored in the active source"
+              >
+                <span className={`settings-files-caret${filesOpen ? ' open' : ''}`}>▸</span>
+                Files in {activeSourceName}
+                {fileList && <span className="settings-files-count">({fileList.length})</span>}
+              </div>
+
+              {filesOpen && (
+                <div className="settings-files-body">
+                  <div className="settings-files-hint">
+                    Remove individual files with ✕. Delete everything to fully clear this source.
+                    Deletions sync to your connected backups.
+                  </div>
+
+                  <div className="settings-files-actions">
+                    <button
+                      className="storage-footer-btn sync-target-action"
+                      onClick={loadFileList}
+                      disabled={filesBusy}
+                      title="Refresh the file list"
+                    >
+                      {filesBusy ? 'Loading…' : 'Refresh'}
+                    </button>
+                    {fileList && fileList.length > 0 && (
+                      <button
+                        className="storage-footer-btn settings-files-clear"
+                        onClick={deleteAllFiles}
+                        disabled={filesBusy}
+                        title="Delete every file in this source"
+                      >
+                        Delete all
+                      </button>
+                    )}
+                  </div>
+
+                  {filesError && <div className="storage-footer-error">⚠️ {filesError}</div>}
+
+                  {fileList === null && !filesBusy && (
+                    <div className="settings-files-empty">Expand to load files…</div>
+                  )}
+                  {fileList && fileList.length === 0 && !filesBusy && (
+                    <div className="settings-files-empty">No files in this source.</div>
+                  )}
+
+                  {fileList && fileList.length > 0 && (
+                    <ul className="settings-files-list">
+                      {fileList.map(f => (
+                        <li key={f.path} className="settings-files-row">
+                          <span className="settings-files-path" title={f.path}>{f.path}</span>
+                          <button
+                            className="settings-files-x"
+                            onClick={() => deleteOneFile(f.path)}
+                            disabled={deletingPath === f.path || filesBusy}
+                            title={`Delete ${f.path}`}
+                            aria-label={`Delete ${f.path}`}
+                          >
+                            {deletingPath === f.path ? '…' : '✕'}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               )}
             </div>
 
@@ -4742,6 +4906,7 @@ function App() {
           folderName={folderName}
           syncStatus={syncStatus}
           failedSourceIds={failedSourceIds}
+          onDataChanged={loadFiles}
         />
       </aside>
       <main className="content">
