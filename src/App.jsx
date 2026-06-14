@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import './App.css'
 import * as storage from './storage/storage.js'
 import { setActiveProvider, getActiveProvider, PROVIDERS, TARGET_STATUS, getProviderName } from './storage/storage.js'
@@ -15,6 +15,7 @@ import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
+import { parseJournalChat, formatChatDay, appendJournalMessage } from './journalChat.js'
 import {
   InstallButton, InstallModal, InstallNudge,
   InstallSettingsSection, InstallSuccessToast,
@@ -2922,8 +2923,288 @@ function CompletedWeekSection({ title, headers, rows, getPriorityClass, onNaviga
   )
 }
 
+// ---- Journal chat rendering ----------------------------------------------
+
+// Render inline markdown (bold, italic, code) plus links to React nodes.
+function renderInlineFormatting(text, keyBase) {
+  const nodes = []
+  const re = /(\*\*([^*]+)\*\*|__([^_]+)__|`([^`]+)`|\*([^*]+)\*|(?<![A-Za-z0-9])_([^_]+)_(?![A-Za-z0-9]))/g
+  let last = 0
+  let m
+  let idx = 0
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) nodes.push(text.slice(last, m.index))
+    if (m[2] != null) nodes.push(<strong key={`${keyBase}-b${idx}`}>{m[2]}</strong>)
+    else if (m[3] != null) nodes.push(<strong key={`${keyBase}-b${idx}`}>{m[3]}</strong>)
+    else if (m[4] != null) nodes.push(<code className="jc-code" key={`${keyBase}-c${idx}`}>{m[4]}</code>)
+    else if (m[5] != null) nodes.push(<em key={`${keyBase}-i${idx}`}>{m[5]}</em>)
+    else if (m[6] != null) nodes.push(<em key={`${keyBase}-i${idx}`}>{m[6]}</em>)
+    last = m.index + m[0].length
+    idx++
+  }
+  if (last < text.length) nodes.push(text.slice(last))
+  return nodes
+}
+
+// Render text with links first, then inline formatting on the plain segments.
+function renderInline(text, onNavigate, keyBase = 'k') {
+  const linkRe = /\[([^\]]+)\]\(([^)]+)\)/g
+  const out = []
+  let last = 0
+  let m
+  let idx = 0
+  while ((m = linkRe.exec(text)) !== null) {
+    if (m.index > last) out.push(...renderInlineFormatting(text.slice(last, m.index), `${keyBase}-t${idx}`))
+    const href = m[2]
+    if (href.startsWith('journal/') || href.endsWith('.md')) {
+      out.push(
+        <a key={`${keyBase}-l${idx}`} href="#" className="internal-link" onClick={(e) => { e.preventDefault(); onNavigate(href) }}>{m[1]}</a>
+      )
+    } else {
+      out.push(
+        <a key={`${keyBase}-l${idx}`} href={href} target="_blank" rel="noopener noreferrer" className="external-link">{m[1]}</a>
+      )
+    }
+    last = m.index + m[0].length
+    idx++
+  }
+  if (last < text.length) out.push(...renderInlineFormatting(text.slice(last), `${keyBase}-t${idx}`))
+  return out
+}
+
+// Render a block of journal lines into chat content (lists, todos, headings,
+// tables, blockquotes, text). Uses an index loop so block elements (tables,
+// blockquotes) can consume multiple consecutive lines.
+function renderJournalLines(lines, onNavigate) {
+  const out = []
+  let list = null
+  const flush = () => {
+    if (list) { out.push(<ul className="jc-list" key={`ul-${out.length}`}>{list}</ul>); list = null }
+  }
+
+  const isTableRow = (s) => /^\|.*\|\s*$/.test(s.trim())
+  const isTableSep = (s) => /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(s.trim())
+  const splitCells = (s) => s.trim().replace(/^\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim())
+
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim()
+    if (!t) { flush(); continue }
+    let m
+
+    // Markdown table: header row, separator row, then body rows.
+    if (isTableRow(t) && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      flush()
+      const header = splitCells(t)
+      const rows = []
+      let j = i + 2
+      while (j < lines.length && isTableRow(lines[j])) { rows.push(splitCells(lines[j])); j++ }
+      out.push(
+        <table className="jc-table" key={`tbl-${i}`}>
+          <thead><tr>{header.map((h, hi) => <th key={hi}>{renderInline(h, onNavigate, `th${i}-${hi}`)}</th>)}</tr></thead>
+          <tbody>{rows.map((r, ri) => (
+            <tr key={ri}>{header.map((_, ci) => <td key={ci}>{renderInline(r[ci] || '', onNavigate, `td${i}-${ri}-${ci}`)}</td>)}</tr>
+          ))}</tbody>
+        </table>
+      )
+      i = j - 1
+      continue
+    }
+
+    // Blockquote: one or more consecutive `>` lines.
+    if (/^>\s?/.test(t)) {
+      flush()
+      const quote = [t.replace(/^>\s?/, '')]
+      let j = i + 1
+      while (j < lines.length && /^>\s?/.test(lines[j].trim())) { quote.push(lines[j].trim().replace(/^>\s?/, '')); j++ }
+      out.push(<blockquote className="jc-quote" key={`q-${i}`}>{renderJournalLines(quote, onNavigate)}</blockquote>)
+      i = j - 1
+      continue
+    }
+
+    // Checkbox items (bulleted or numbered): - [ ] / 1. [ ] / 1) [x]
+    if ((m = t.match(/^(?:[-*+]|\d+[.)])\s*\[([ xX])\]\s*(.+)/))) {
+      const done = m[1].toLowerCase() === 'x'
+      list = list || []
+      list.push(<li key={i}><span className={`jc-chip ${done ? 'done' : 'open'}`}>{done ? 'DONE' : 'TODO'}</span>{renderInline(m[2], onNavigate, `c${i}`)}</li>)
+      continue
+    }
+    if ((m = t.match(/^-\s*TODO:\s*(.+)/i))) {
+      list = list || []
+      list.push(<li key={i}><span className="jc-chip open">TODO</span>{renderInline(m[1], onNavigate, `c${i}`)}</li>)
+      continue
+    }
+    if ((m = t.match(/^-\s*DONE:\s*(.+)/i))) {
+      list = list || []
+      list.push(<li key={i}><span className="jc-chip done">DONE</span>{renderInline(m[1], onNavigate, `c${i}`)}</li>)
+      continue
+    }
+    if ((m = t.match(/^[-*+]\s+(.+)/)) || (m = t.match(/^(\d+[.)])\s+(.+)/))) {
+      const itemText = m[2] != null ? `${m[1]} ${m[2]}` : m[1]
+      list = list || []
+      list.push(<li key={i}>{renderInline(itemText, onNavigate, `c${i}`)}</li>)
+      continue
+    }
+
+    flush()
+    if (/^([-*_])\1{2,}$/.test(t)) {
+      out.push(<hr className="jc-hr" key={i} />)
+      continue
+    }
+    if ((m = t.match(/^#{2,6}\s+(.+)/))) {
+      out.push(<div className="jc-subhead" key={i}>{renderInline(m[1], onNavigate, `h${i}`)}</div>)
+      continue
+    }
+    out.push(<p className="jc-p" key={i}>{renderInline(t, onNavigate, `p${i}`)}</p>)
+  }
+  flush()
+  return out
+}
+
+// Append a new "me" message to journal markdown, merging into today's bubble.
+function JournalChatView({ content, filePath, onContentUpdate, onNavigate }) {
+  const [showRaw, setShowRaw] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const threadRef = useRef(null)
+  const inputRef = useRef(null)
+  const parsed = useMemo(() => parseJournalChat(content), [content])
+
+  useEffect(() => {
+    if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight
+  }, [parsed, showRaw])
+
+  // On mobile, the soft keyboard shrinks the visual viewport. Once it has
+  // settled, pull the latest messages and the composer back into view so the
+  // user never types behind the keyboard.
+  const handleComposerFocus = () => {
+    setTimeout(() => {
+      if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight
+      inputRef.current?.scrollIntoView({ block: 'nearest' })
+    }, 300)
+  }
+
+  const handleSend = async () => {
+    const text = draft.trim()
+    if (!text || sending) return
+    setSending(true)
+    try {
+      await onContentUpdate(appendJournalMessage(content, text))
+      setDraft('')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSend()
+    }
+  }
+
+  if (showRaw) {
+    return (
+      <MarkdownView
+        content={content}
+        filePath={filePath}
+        onContentUpdate={onContentUpdate}
+        onNavigate={onNavigate}
+        headerExtra={<button className="jc-toggle-btn" onClick={() => setShowRaw(false)}>💬 Chat</button>}
+      />
+    )
+  }
+
+  const fileName = filePath.split(/[/\\]/).pop()
+  const title = parsed.title || fileName
+  const initials = (title.match(/\b\w/g) || ['S']).slice(0, 2).join('').toUpperCase()
+
+  // When a journal has dated/authored chat below, undated leading content is
+  // shown as a pinned "Earlier notes" card. But when the whole file is undated
+  // (the common legacy case), render that content as a normal "me" bubble so it
+  // still reads like a chat instead of a lone grey card.
+  const hasChat = parsed.groups.length > 0
+  const showPinnedCard = hasChat && parsed.pinned.length > 0
+  const undatedAsBubble = !hasChat && parsed.pinned.length > 0
+
+  const items = []
+  let lastDay = null
+  let lastAuthor = null
+  parsed.groups.forEach((g, gi) => {
+    if (g.day !== lastDay) {
+      if (g.day) items.push(<div className="jc-day-divider" key={`d-${gi}`}><span>{formatChatDay(g.day)}</span></div>)
+      lastDay = g.day
+      lastAuthor = null
+    }
+    if (g.author === 'agent' && lastAuthor !== 'agent') {
+      items.push(
+        <div className="jc-agent-banner" key={`ab-${gi}`}><span>🤖 {g.agent || 'agent'}</span></div>
+      )
+    }
+    const side = g.author === 'me' ? 'me' : 'agent'
+    items.push(
+      <div className={`jc-row ${side}`} key={`b-${gi}`}>
+        <div className="jc-bubble">{renderJournalLines(g.lines, onNavigate)}</div>
+      </div>
+    )
+    lastAuthor = g.author
+  })
+
+  return (
+    <div className="journal-chat-view">
+      <div className="editor-header">
+        <button className="back-to-focus-btn" onClick={() => onNavigate(PLAN_FILE)} title="Back to Focus Plan">← Focus Plan</button>
+        <h1>{title}</h1>
+        <button className="jc-toggle-btn" onClick={() => setShowRaw(true)} title="Edit raw markdown">✎ Raw</button>
+      </div>
+
+      <div className="jc-thread" ref={threadRef}>
+        <div className="jc-chat-head">
+          <div className="jc-avatar">{initials}</div>
+          <div className="jc-name">{title}</div>
+          <div className="jc-sub">Notes to self</div>
+        </div>
+
+        {showPinnedCard && (
+          <div className="jc-pinned">
+            <div className="jc-pinned-label">📌 Earlier notes</div>
+            {renderJournalLines(parsed.pinned, onNavigate)}
+          </div>
+        )}
+
+        {undatedAsBubble && (
+          <div className="jc-row me">
+            <div className="jc-bubble jc-bubble-wide">{renderJournalLines(parsed.pinned, onNavigate)}</div>
+          </div>
+        )}
+
+        {items.length === 0 && parsed.pinned.length === 0 && (
+          <div className="jc-empty">No messages yet. Say something below 👇</div>
+        )}
+
+        {items}
+      </div>
+
+      <div className="jc-composer">
+        <textarea
+          ref={inputRef}
+          className="jc-composer-input"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onFocus={handleComposerFocus}
+          placeholder="Message yourself…  (Enter to send, Shift+Enter for newline)"
+          rows={1}
+        />
+        <button className="jc-send-btn" onClick={handleSend} disabled={!draft.trim() || sending}>
+          {sending ? '…' : 'Send'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // Markdown Editor View component
-function MarkdownView({ content, filePath, onContentUpdate, onNavigate }) {
+function MarkdownView({ content, filePath, onContentUpdate, onNavigate, headerExtra }) {
   const [editedContent, setEditedContent] = useState(content)
   const [isDirty, setIsDirty] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -2975,6 +3256,7 @@ function MarkdownView({ content, filePath, onContentUpdate, onNavigate }) {
         </button>
         <h1>{filePath.split(/[/\\]/).pop()}</h1>
         <div className="editor-status">
+          {headerExtra}
           {saving && <span className="saving">Saving...</span>}
           {isDirty && !saving && <span className="unsaved">Unsaved changes</span>}
           {!isDirty && !saving && <span className="saved">✓ Saved</span>}
@@ -4848,6 +5130,26 @@ function App() {
     return storage.subscribeSyncStatus((status) => setSyncStatus(status))
   }, [])
 
+  // Track the visual viewport height so the app shell (and the chat composer at
+  // its bottom) stays above the on-screen keyboard on mobile. visualViewport
+  // shrinks when the keyboard opens; we mirror its height into a CSS variable
+  // consumed by `.app`. Pairs with `interactive-widget=resizes-content` (the
+  // Android path) for full coverage including iOS Safari.
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const root = document.documentElement
+    const apply = () => root.style.setProperty('--app-height', `${Math.round(vv.height)}px`)
+    apply()
+    vv.addEventListener('resize', apply)
+    vv.addEventListener('scroll', apply)
+    return () => {
+      vv.removeEventListener('resize', apply)
+      vv.removeEventListener('scroll', apply)
+      root.style.removeProperty('--app-height')
+    }
+  }, [])
+
   // Re-read current file when local storage changes (e.g. after sync pull),
   // and refresh the file tree so newly pulled files (e.g. journals) appear.
   useEffect(() => {
@@ -4930,6 +5232,8 @@ function App() {
   const localPath = selPath || selectedFile
   const isFocusPlan = !isCombinedFocusPlan && localPath === PLAN_FILE
   const isCompletedPlan = !isCombinedFocusPlan && localPath === COMPLETED_FILE
+  const isJournal = !isCombinedFocusPlan && !isFocusPlan && !isCompletedPlan &&
+    /(^|\/)journal\//.test(localPath) && localPath.endsWith('.md')
 
   return (
     <div className={`app${sidebarOpen ? ' sidebar-open' : ''}`}>
@@ -4959,7 +5263,7 @@ function App() {
           onDataChanged={loadFiles}
         />
       </aside>
-      <main className="content">
+      <main className={`content${isJournal ? ' content-chat' : ''}`}>
         <div className="mobile-nav-bar">
           <button
             className="mobile-menu-btn"
@@ -4989,6 +5293,13 @@ function App() {
           ) : isCompletedPlan ? (
             <CompletedPlanView
               content={content}
+              onNavigate={handleNavigate}
+            />
+          ) : isJournal ? (
+            <JournalChatView
+              content={content}
+              filePath={localPath}
+              onContentUpdate={handleContentUpdate}
               onNavigate={handleNavigate}
             />
           ) : (

@@ -57,23 +57,40 @@ Add a row to the Today table in focus-plan.md:
 | 70 | 🟡 | New task description | Sydney rollout | 2026-01-27 | |
 ```
 
-### Creating a journal for a task:
-Create `journal/task-XX.md` with a **simple format** - just title and bullet points:
+### Creating / updating a journal for a task:
+Journals render as a **chat thread** (messaging yourself). Plain markdown works
+out of the box — an agent that knows nothing still produces a valid bubble. The
+renderer understands bold/italic/code, links, lists, tables, blockquotes,
+`- [ ]`/`- [x]` checkboxes, and `TODO:`/`DONE:` prefixes.
+
+Minimal journal (renders as one "me" bubble):
 ```markdown
 # Task XX: Title
 
 - First note
 - TODO: Something to do
 - DONE: Completed item
-- More notes as needed
 ```
 
-**Journal guidelines:**
-- Keep journals super simple - just a title and bullet points
-- No metadata headers, no sections, no date headers
-- No checkbox syntax ([ ] or [x]) - use TODO: and DONE: prefixes instead
-- Top-down flow (add new items at bottom)
-- Mix todos and notes freely
+**Chat schema (for grouping into dated bubbles + agent attribution):**
+- `# Task XX: Title` — thread title (first line).
+- `## YYYY-MM-DD` — starts a new day group. Consecutive same-day "me" notes
+  merge into one bubble. **Append new entries at the bottom under today's date.**
+- `<!-- from: agent-name -->` — marks following content as an AI agent message
+  (renders left-side under a 🤖 banner). `<!-- from: me -->` switches back.
+- A marker comment containing `AUTO` (e.g. `<!-- DANCE-CHURCH-AUTO -->`) also
+  flags an auto-generated agent block.
+- Multi-line HTML comments (e.g. `<!-- dc-meta ... -->`) are hidden from the
+  chat — safe for machine metadata.
+- Content before the first `##`/agent marker is "earlier notes" (undated).
+
+See `journal/README.md` (in the planner data folder) for the full spec — it is
+the single source of truth; do **not** embed schema docs in individual journals.
+
+**Guidelines:**
+- Plain markdown is fine; you only need the markers above for dated/agent bubbles.
+- Top-down flow: add new items at the bottom.
+- Mix todos and notes freely.
 
 ### Completing a task:
 1. Remove from focus-plan.md
