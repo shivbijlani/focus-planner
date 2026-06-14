@@ -6,6 +6,7 @@
  */
 import { parseTodos } from './fsa.js'
 import { PLAN_FILE, COMPLETED_FILE } from '../config/branding.js'
+import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
 
 const PREFIX = 'fp-file:'
 
@@ -48,6 +49,7 @@ export class LocalStorageProvider {
     if (localStorage.getItem(PREFIX + COMPLETED_FILE) === null) {
       localStorage.setItem(PREFIX + COMPLETED_FILE, SCAFFOLD_COMPLETED)
     }
+    await scaffoldAgentsDoc((p) => this.read(p), (p, c) => this.write(p, c))
   }
 
   async read(path) {

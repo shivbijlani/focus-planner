@@ -4963,6 +4963,9 @@ function App() {
     if (!hasBackup) {
       await storage.scaffold()
     }
+    // Make the folder self-documenting for external agents. Version-gated and
+    // idempotent, so this is safe to run on every init (new and existing users).
+    storage.ensureAgentsDoc().catch(() => {})
     // Ensure we have a sources registry. If first run on legacy install,
     // the legacy → registry migration was already attempted; otherwise
     // create the canonical single-source entry now.

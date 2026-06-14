@@ -84,8 +84,12 @@ Minimal journal (renders as one "me" bubble):
   chat — safe for machine metadata.
 - Content before the first `##`/agent marker is "earlier notes" (undated).
 
-See `journal/README.md` (in the planner data folder) for the full spec — it is
-the single source of truth; do **not** embed schema docs in individual journals.
+See **`AGENTS.md` at the data-folder root** for the full spec. The app scaffolds
+that file into every connected folder (local / OneDrive / Google Drive) and keeps
+it version-updated, so the folder is self-documenting for any external agent. It
+is the single source of truth (generated from `src/config/agentsDoc.js`, which
+mirrors the renderer in `src/journalChat.js`). Do **not** embed schema docs in
+individual journals.
 
 **Guidelines:**
 - Plain markdown is fine; you only need the markers above for dated/agent bubbles.

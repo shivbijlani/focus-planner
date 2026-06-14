@@ -4,6 +4,7 @@
  * is sandboxed to /Apps/<AAD app display name>/ with no broad file permissions.
  */
 import { PLAN_FILE, COMPLETED_FILE } from '../config/branding.js'
+import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
 const AUTH_ENDPOINT = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize'
@@ -74,6 +75,7 @@ export class OneDriveProvider {
       const existing = await this.read(name)
       if (!existing) await this.write(name, content)
     }
+    await scaffoldAgentsDoc((p) => this.read(p), (p, c) => this.write(p, c))
   }
 
   async read(path) {

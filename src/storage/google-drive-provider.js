@@ -5,6 +5,7 @@
  */
 import { parseTodos } from './fsa.js'
 import { PLAN_FILE, COMPLETED_FILE, CLOUD_FOLDER_NAME } from '../config/branding.js'
+import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
 
 const DRIVE_API = 'https://www.googleapis.com/drive/v3'
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3'
@@ -78,6 +79,7 @@ export class GoogleDriveProvider {
       const existing = await this.read(name)
       if (!existing) await this.write(name, content)
     }
+    await scaffoldAgentsDoc((p) => this.read(p), (p, c) => this.write(p, c))
   }
 
   async read(path) {

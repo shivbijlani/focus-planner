@@ -9,6 +9,7 @@ import {
   googleDriveProvider,
 } from '../../packages/folder-sync/src/index.js'
 import { LocalStorageProvider } from './localstorage-provider.js'
+import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
 
 export { parseTodos } from './fsa.js'
 
@@ -275,6 +276,14 @@ export async function restore() {
 export async function scaffold() {
   if (!_provider) throw new Error('No provider set')
   return _provider.scaffold()
+}
+
+// Ensure the active source has an up-to-date AGENTS.md describing the data
+// schema, so the folder is self-documenting for any external agent. Version-
+// gated and idempotent: writes only when the file is missing or outdated.
+export async function ensureAgentsDoc() {
+  if (!_provider) return
+  await scaffoldAgentsDoc((p) => _provider.read(p), (p, c) => _provider.write(p, c))
 }
 
 export async function read(path) {
