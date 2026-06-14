@@ -7,7 +7,7 @@
 import { enqueue, peekAll } from './queue.js'
 import { getTokens, clearTokens } from './auth/tokenStore.js'
 import { idbSet, idbGet, idbKeys, idbDel } from './idb.js'
-import { mtimeKeysForProvider } from './reconcile.js'
+import { mtimeKeysForProvider, planMirrorSync } from './reconcile.js'
 
 const CHANNEL = 'folder-sync'
 const META_STORE = 'meta'
@@ -72,9 +72,19 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     const bc = new BroadcastChannel(CHANNEL)
     bc.onmessage = (evt) => {
       if (!evt.data || evt.data.type !== 'status') return
+      const prev = status
       status = { ...status, ...evt.data.status }
       emit()
       maybeAutoReconnect()
+      // A sync cycle just reported back (it carries a lastSync timestamp). The
+      // SW pulls remote changes into the IDB mirror and relies on a live
+      // `remote-update` message to copy them into the active store — but that
+      // message is easily missed on mobile/background. Replay the mirror into
+      // the active store so pulled files (e.g. journals) actually surface.
+      const newStatus = evt.data.status || {}
+      if (newStatus.lastSync && newStatus.lastSync !== prev.lastSync) {
+        reconcileMirrorToLocal().catch(() => {})
+      }
     }
   }
 
@@ -100,6 +110,51 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
   function emit() {
     for (const fn of listeners) {
       try { fn(status) } catch { /* ignore */ }
+    }
+  }
+
+  // Replay the SW's IDB mirror into the consumer-visible active store. This
+  // repairs the case where the SW pulled remote files into the mirror but the
+  // live `remote-update` message never reached a window (background sync, no
+  // controlled client) — the classic "journals synced but I don't see them"
+  // bug. Safe: only rehydrates/updates diverged files and propagates missed
+  // deletions; it never clobbers an up-to-date file (see planMirrorSync).
+  let reconcilingMirror = false
+  async function reconcileMirrorToLocal() {
+    if (reconcilingMirror) return
+    reconcilingMirror = true
+    try {
+      const keys = await idbKeys(META_STORE)
+      const changed = []
+      for (const k of keys) {
+        if (typeof k !== 'string' || !k.startsWith('local:')) continue
+        const name = k.slice('local:'.length)
+        const rec = await idbGet(META_STORE, k)
+        if (!rec) continue
+        let activeContent = ''
+        try { activeContent = await localAdapter.readFile(name) } catch { activeContent = '' }
+        const action = planMirrorSync({
+          mirrorDeleted: !!rec.deleted,
+          mirrorContent: rec.content,
+          activeContent,
+        })
+        try {
+          if (action === 'write') { await localAdapter.writeFile(name, rec.content); changed.push(name) }
+          else if (action === 'delete') { await localAdapter.deleteFile(name); changed.push(name) }
+        } catch { /* ignore a single file failure */ }
+      }
+      // Notify listeners so the UI re-reads affected files and refreshes the
+      // tree. Use a strictly increasing timestamp so per-file dedupe downstream
+      // (storage.onLocalChange tracks the last `at`) fires for every change.
+      let at = Date.now()
+      for (const name of changed) {
+        const snapshot = { ...status, lastRemoteUpdate: { name, at: at++ } }
+        for (const fn of listeners) {
+          try { fn(snapshot) } catch { /* ignore */ }
+        }
+      }
+    } catch { /* ignore */ } finally {
+      reconcilingMirror = false
     }
   }
 
@@ -213,6 +268,9 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
   // Drain any queued writes from a previous session (e.g. the user reloaded
   // before sync finished). Wait one tick so the SW has time to register.
   setTimeout(() => { nudgeSW('init').catch(() => {}) }, 500)
+  // Rehydrate the active store from the mirror on load, in case a prior
+  // session pulled files (e.g. journals) that never reached a window.
+  setTimeout(() => { reconcileMirrorToLocal().catch(() => {}) }, 800)
 
   return {
     // ---- local I/O (always immediate) ----

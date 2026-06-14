@@ -46,6 +46,39 @@ export function isMassDeletion({ deletableCount, toDeleteCount }) {
   return toDeleteCount >= deletableCount         // the entire set vanished → wipe
 }
 
+/**
+ * Decide how to reconcile ONE service-worker mirror entry into the app's active
+ * local store. The SW pulls remote changes into an IndexedDB "mirror" and then
+ * relies on a live `remote-update` postMessage to copy them into the active
+ * store the UI actually reads. That message is easily missed (background sync,
+ * or no controlled window on mobile), which strands pulled files — e.g.
+ * journals — in the mirror while the UI shows nothing. Replaying the mirror into
+ * the active store on load repairs that divergence.
+ *
+ * Safe by construction:
+ *  - a mirror tombstone (deleted) only removes a file the active store still has
+ *    (propagates a missed remote deletion); it never deletes what's already gone.
+ *  - content is only written when the active copy differs, so it can't clobber an
+ *    up-to-date file, and an absent active copy (read as '') gets rehydrated.
+ *  Local edits mirror synchronously, so the mirror is never staler than the
+ *  active store — making "mirror wins" the correct repair direction.
+ *
+ * @param {object} args
+ * @param {boolean} args.mirrorDeleted   Mirror entry is a tombstone.
+ * @param {string|null|undefined} args.mirrorContent  Mirror file content.
+ * @param {string|null|undefined} args.activeContent  Active-store content
+ *   (the adapter returns '' for a missing file).
+ * @returns {'write'|'delete'|'skip'}
+ */
+export function planMirrorSync({ mirrorDeleted, mirrorContent, activeContent }) {
+  const active = activeContent ?? ''
+  if (mirrorDeleted) {
+    return active !== '' ? 'delete' : 'skip'   // remove only if still present
+  }
+  const mirror = mirrorContent ?? ''
+  return active !== mirror ? 'write' : 'skip'  // rehydrate / update when diverged
+}
+
 export function filesToDeleteLocally({
   candidates,
   remoteNames,

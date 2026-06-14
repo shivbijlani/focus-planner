@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { filesToDeleteLocally, mtimeKeysForProvider, planPlainPush, shouldPullRemote, isMassDeletion } from './reconcile.js'
+import { filesToDeleteLocally, mtimeKeysForProvider, planPlainPush, shouldPullRemote, isMassDeletion, planMirrorSync } from './reconcile.js'
 
 const isSidecar = (n) => n.endsWith('.sync.json')
 const isRecord = (n) => n === 'focus-plan.md' || n === 'focus-plan-completed.md'
@@ -151,6 +151,45 @@ describe('isMassDeletion', () => {
 
   it('allows deleting all-but-one (still a per-file pattern, not a wipe)', () => {
     expect(isMassDeletion({ deletableCount: 5, toDeleteCount: 4 })).toBe(false)
+  })
+})
+
+describe('planMirrorSync', () => {
+  it('rehydrates a file missing from the active store (the stranded-journal bug)', () => {
+    expect(planMirrorSync({ mirrorDeleted: false, mirrorContent: '# journal', activeContent: '' }))
+      .toBe('write')
+  })
+
+  it('updates the active store when content diverged', () => {
+    expect(planMirrorSync({ mirrorDeleted: false, mirrorContent: 'new', activeContent: 'old' }))
+      .toBe('write')
+  })
+
+  it('skips when active store already matches the mirror', () => {
+    expect(planMirrorSync({ mirrorDeleted: false, mirrorContent: 'same', activeContent: 'same' }))
+      .toBe('skip')
+  })
+
+  it('propagates a missed remote deletion (tombstone, file still present)', () => {
+    expect(planMirrorSync({ mirrorDeleted: true, mirrorContent: undefined, activeContent: 'stale' }))
+      .toBe('delete')
+  })
+
+  it('skips a tombstone when the file is already gone locally', () => {
+    expect(planMirrorSync({ mirrorDeleted: true, mirrorContent: undefined, activeContent: '' }))
+      .toBe('skip')
+  })
+
+  it('treats null/undefined active content as absent and rehydrates', () => {
+    expect(planMirrorSync({ mirrorDeleted: false, mirrorContent: 'x', activeContent: null }))
+      .toBe('write')
+    expect(planMirrorSync({ mirrorDeleted: false, mirrorContent: 'x', activeContent: undefined }))
+      .toBe('write')
+  })
+
+  it('skips an empty mirror file that the active store also lacks', () => {
+    expect(planMirrorSync({ mirrorDeleted: false, mirrorContent: '', activeContent: '' }))
+      .toBe('skip')
   })
 })
 

@@ -4806,9 +4806,11 @@ function App() {
     return storage.subscribeSyncStatus((status) => setSyncStatus(status))
   }, [])
 
-  // Re-read current file when local storage changes (e.g. after sync pull)
+  // Re-read current file when local storage changes (e.g. after sync pull),
+  // and refresh the file tree so newly pulled files (e.g. journals) appear.
   useEffect(() => {
-    return storage.onLocalChange(async (changedPath) => {
+    let treeTimer = null
+    const unsub = storage.onLocalChange(async (changedPath) => {
       const current = selectedFileRef.current
       if (current && changedPath === current) {
         try {
@@ -4816,7 +4818,11 @@ function App() {
           setContent(text)
         } catch { /* ignore */ }
       }
+      // Debounced tree refresh — a single sync may touch many files.
+      clearTimeout(treeTimer)
+      treeTimer = setTimeout(() => { loadFiles().catch(() => {}) }, 400)
     })
+    return () => { clearTimeout(treeTimer); unsub() }
   }, [])
 
   const handleStorageReady = async (providerId) => {
