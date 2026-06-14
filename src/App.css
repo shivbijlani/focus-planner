@@ -2411,6 +2411,33 @@ tr.highlight-flash {
   font-family: monospace;
 }
 
+.settings-update-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+.settings-update-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.settings-update-build {
+  font-size: 0.8rem;
+  color: #cbd5e1;
+  font-family: monospace;
+}
+.settings-update-hint {
+  font-size: 0.72rem;
+  color: #64748b;
+}
+.settings-update-msg {
+  margin-top: 0.4rem;
+  font-size: 0.75rem;
+  color: #34d399;
+}
+
 .settings-dialog-subtle {
   color: #64748b;
   font-size: 0.72rem;

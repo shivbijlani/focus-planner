@@ -3188,6 +3188,9 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
   const [filesBusy, setFilesBusy] = useState(false)
   const [filesError, setFilesError] = useState('')
   const [deletingPath, setDeletingPath] = useState(null)
+  // App update (force latest service worker — fixes "stale build on mobile").
+  const [updating, setUpdating] = useState(false)
+  const [updateMsg, setUpdateMsg] = useState('')
   const oneDrive = targetStatus(syncStatus, PROVIDERS.ONEDRIVE)
   const aggregate = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
   const syncClass = aggregate.replace(/[^a-z-]/g, '')
@@ -3474,6 +3477,24 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
     }
   }
 
+  // Force the latest service worker (and assets), then reload. This is the
+  // reliable cure for an installed PWA stuck on a stale build.
+  const handleUpdateApp = async () => {
+    setUpdating(true)
+    setUpdateMsg('Checking for updates…')
+    try {
+      const { updated } = await storage.updateApp()
+      setUpdateMsg(updated ? 'Update found — reloading…' : 'Reloading with the latest…')
+    } catch {
+      setUpdateMsg('Reloading…')
+    }
+    // Reload regardless: network-first assets refresh when online, and any
+    // freshly-activated worker takes control on the new page load.
+    setTimeout(() => {
+      try { window.location.reload() } catch { /* ignore */ }
+    }, 800)
+  }
+
   return (
     <>
       <div className="sidebar-storage-footer">
@@ -3515,6 +3536,27 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
             <div className="settings-dialog-header">
               <h3>Settings</h3>
               <button className="settings-dialog-close" onClick={close}>✕</button>
+            </div>
+
+            <div className="settings-dialog-section">
+              <div className="settings-dialog-section-title">App version</div>
+              <div className="settings-update-row">
+                <div className="settings-update-info">
+                  <span className="settings-update-build">Build {storage.getBuildId()}</span>
+                  <span className="settings-update-hint">
+                    On a phone seeing stale data? Update to load the latest sync fixes.
+                  </span>
+                </div>
+                <button
+                  className="storage-footer-btn sync-target-action"
+                  onClick={handleUpdateApp}
+                  disabled={updating}
+                  title="Check for a new version and reload"
+                >
+                  {updating ? 'Updating…' : 'Update app'}
+                </button>
+              </div>
+              {updateMsg && <div className="settings-update-msg">{updateMsg}</div>}
             </div>
 
             <InstallSettingsSection onOpen={() => setInstallOpen(true)} appName={APP_NAME} />

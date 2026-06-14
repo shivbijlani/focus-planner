@@ -211,6 +211,46 @@ export async function registerSyncWorker() {
   return registerServiceWorker(`${base}/folder-sync/sw.js`, { type: 'module', scope: `${base}/folder-sync/` })
 }
 
+/** Build identifier injected at build time (see vite.config.js). */
+export function getBuildId() {
+  /* global __APP_BUILD__ */
+  try { return typeof __APP_BUILD__ !== 'undefined' ? __APP_BUILD__ : 'dev' } catch { return 'dev' }
+}
+
+/**
+ * Force every registered service worker to check for a new version and take
+ * over immediately, then resolve. The caller should reload the page afterwards
+ * so the freshly-activated workers (and freshly-fetched assets) are in control.
+ *
+ * This is the user-facing fix for "my phone is on a stale build": installed
+ * PWAs don't reliably check for SW updates on their own, so a manual nudge is
+ * the most dependable way to pull the latest sync logic.
+ *
+ * @returns {Promise<{updated:boolean}>} updated=true if a new worker was found.
+ */
+export async function updateApp() {
+  if (typeof navigator === 'undefined' || !navigator.serviceWorker) {
+    return { updated: false }
+  }
+  let updated = false
+  try {
+    const regs = await navigator.serviceWorker.getRegistrations()
+    await Promise.all(regs.map(async (reg) => {
+      try {
+        await reg.update()
+        // A waiting/installing worker means a newer version was fetched. Both
+        // our SWs call skipWaiting() on install, but nudge any waiting one too.
+        const next = reg.waiting || reg.installing
+        if (next) {
+          updated = true
+          try { next.postMessage?.({ type: 'skip-waiting' }) } catch { /* ignore */ }
+        }
+      } catch { /* ignore a single registration failure */ }
+    }))
+  } catch { /* ignore */ }
+  return { updated }
+}
+
 // ── Delegating API (unchanged surface for App.jsx) ─────
 
 export function isSupported() {
