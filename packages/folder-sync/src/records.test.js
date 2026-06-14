@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { reconcileRecordsFile, sidecarPath } from './records.js'
+import { reconcileRecordsFile, sidecarPath, frameHasStructure, preferStructuredFrame } from './records.js'
 import { mdTableCodec } from './codecs/mdTable.js'
 
 // In-memory store with content + sidecar maps, exposing the closure shape that
@@ -113,5 +113,58 @@ describe('reconcileRecordsFile — end-to-end record sync', () => {
     const res = await syncOnce(local, remote, 2000)
     expect(res.changedLocal).toBe(false)
     expect(res.changedRemote).toBe(false)
+  })
+
+  it('BLANK-PLANNER BUG: an empty local file must not strip the remote section headings', async () => {
+    // Repro of the live plannermd.com corruption: a freshly connected/empty
+    // device has an empty planner.md while the cloud holds the real, structured
+    // file. The FRAME (section headings) merges by LWW and the empty local frame
+    // (stamped `now`) would otherwise beat the remote frame (stamped 0),
+    // dropping every `## ` heading and orphaning all rows → blank planner.
+    const remoteContent = plan(row(245, 'Amy xfinity'), row(246, 'Amy wifi'))
+    const localEmpty = store({ [PATH]: '' })
+    const remote = store({ [PATH]: remoteContent })
+
+    await syncOnce(localEmpty, remote, 5000)
+
+    // Local must receive the full structured file, headings intact.
+    const got = localEmpty.get(PATH)
+    expect(got).toContain('## Today')
+    expect(got).toContain('Amy xfinity')
+    expect(got).toContain('Amy wifi')
+    // Remote must keep its structure (not get clobbered with a headerless blob).
+    expect(remote.get(PATH)).toContain('## Today')
+
+    // And it must stay fixed on a follow-up sync (no flip-flop).
+    await syncOnce(localEmpty, remote, 6000)
+    expect(localEmpty.get(PATH)).toContain('## Today')
+  })
+})
+
+describe('frameHasStructure', () => {
+  it('is true when a ## heading is present', () => {
+    expect(frameHasStructure('## Today\n\n| ID |')).toBe(true)
+    expect(frameHasStructure('\n\n## Deferred')).toBe(true)
+  })
+  it('is false for empty / headerless frames', () => {
+    expect(frameHasStructure('')).toBe(false)
+    expect(frameHasStructure('\n\n')).toBe(false)
+    expect(frameHasStructure('| 1 | row only |')).toBe(false)
+    expect(frameHasStructure(null)).toBe(false)
+    expect(frameHasStructure(undefined)).toBe(false)
+  })
+})
+
+describe('preferStructuredFrame', () => {
+  it('returns the structured side when the other is empty', () => {
+    expect(preferStructuredFrame('', '## Today')).toBe('## Today')
+    expect(preferStructuredFrame('## Today', '')).toBe('## Today')
+  })
+  it('returns null when both are structured (let the merge stand)', () => {
+    expect(preferStructuredFrame('## A', '## B')).toBeNull()
+  })
+  it('returns null when neither is structured', () => {
+    expect(preferStructuredFrame('', '')).toBeNull()
+    expect(preferStructuredFrame('rows', 'rows')).toBeNull()
   })
 })

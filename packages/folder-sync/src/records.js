@@ -24,6 +24,32 @@ import {
 } from './merge.js'
 import { FRAME_ID } from './codecs/mdTable.js'
 
+/** True if a codec frame carries real structure (at least one `## ` heading). */
+export function frameHasStructure(frame) {
+  return typeof frame === 'string' && /(^|\n)\s*##\s/.test(frame)
+}
+
+/**
+ * Guard against an empty/structureless frame winning the merge. The codec stores
+ * all section headings (## Today / ## Deferred / ## Priorities, table headers,
+ * separators, the Priorities list, prose) in a single FRAME record that merges
+ * by last-write-wins like any row. On the first sync a brand-new/empty local
+ * file's empty frame is stamped `now` and beats the remote's good frame stamped
+ * `0`, stripping every heading and leaving the rows orphaned — which renders as
+ * a blank planner (title only). A frame with no `## ` heading carries no
+ * structure and must never overwrite one that does.
+ *
+ * @returns {string|null} the structured frame to use instead, or null to keep
+ *   the merged frame as-is (both sides structured, or both empty).
+ */
+export function preferStructuredFrame(localFrame, remoteFrame) {
+  const l = frameHasStructure(localFrame)
+  const r = frameHasStructure(remoteFrame)
+  if (l && !r) return localFrame
+  if (r && !l) return remoteFrame
+  return null
+}
+
 /** Convention: a file's sidecar lives next to it as `<path>.sync.json`. */
 export function sidecarPath(path) {
   return `${path}.sync.json`
@@ -87,6 +113,23 @@ export async function reconcileRecordsFile({ path, codec, local, remote, now = D
     { records: localRecords, meta: localMeta },
     { records: remoteRecords, meta: remoteMeta },
   )
+
+  // Guard: never let an empty/structureless frame win. The FRAME record merges
+  // by LWW; on a first sync a brand-new/empty local file (frame '') stamped
+  // `now` beats the remote's structured frame stamped `0`, which would strip
+  // every `## ` heading and orphan all the rows (blank-planner corruption).
+  const localFrame = localRecords[FRAME_ID]?.frame ?? ''
+  const remoteFrame = remoteRecords[FRAME_ID]?.frame ?? ''
+  const mergedFrame = merged.records[FRAME_ID]?.frame ?? ''
+  if (!frameHasStructure(mergedFrame)) {
+    const better = preferStructuredFrame(localFrame, remoteFrame)
+    if (better != null) {
+      merged.records[FRAME_ID] = { frame: better }
+      // Ensure the restored frame is treated as the live value going forward.
+      if (merged.meta[FRAME_ID]) merged.meta[FRAME_ID].deleted = false
+      else merged.meta[FRAME_ID] = { clock: now, deleted: false }
+    }
+  }
 
   gcTombstones(merged.meta, now)
   // The merge core drops the change-detection fingerprint from winning entries;
