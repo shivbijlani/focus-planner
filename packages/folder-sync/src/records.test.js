@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { reconcileRecordsFile, sidecarPath, frameHasStructure, preferStructuredFrame } from './records.js'
 import { mdTableCodec } from './codecs/mdTable.js'
+import { serializeSidecar } from './merge.js'
 
 // In-memory store with content + sidecar maps, exposing the closure shape that
 // reconcileRecordsFile expects.
@@ -71,6 +72,32 @@ describe('reconcileRecordsFile — end-to-end record sync', () => {
     expect(remote.get(PATH)).not.toContain('B')
     expect(desktop.get(PATH)).not.toContain('B')
     expect(remote.get(PATH)).toContain('A')
+  })
+
+  it('ONEDRIVE CRASH repro: a remote sidecar marking a missing row alive must not crash sync', async () => {
+    // Real-world OneDrive failure ("Cannot read properties of undefined (reading
+    // 'length')"): the remote sidecar lists a row as alive, but the remote
+    // content file no longer contains that row (an inconsistent backup). The
+    // merge used to produce an alive record with `undefined` content, which
+    // crashed fingerprint() and failed the entire backup.
+    const remote = store({
+      [PATH]: plan(row(1, 'A')), // row 2 is absent from the content...
+      [sidecarPath(PATH)]: serializeSidecar(
+        {
+          1: { clock: 1000, deleted: false },
+          2: { clock: 9000, deleted: false }, // ...but the sidecar says it's alive
+          __frame__: { clock: 1000, deleted: false },
+        },
+        1000,
+      ),
+    })
+    const local = store({ [PATH]: plan(row(1, 'A'), row(2, 'B')) })
+
+    // Must not throw.
+    const res = await syncOnce(local, remote, 5000)
+    expect(res.content).toContain('A')
+    // Local's real row 2 content is preserved rather than wiped by the phantom.
+    expect(local.get(PATH)).toContain('B')
   })
 
   it('concurrent edits to different rows both survive', async () => {

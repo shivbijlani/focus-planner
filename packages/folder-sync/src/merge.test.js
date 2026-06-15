@@ -42,6 +42,38 @@ describe('mergeCollections — per-record LWW with tombstones', () => {
     expect(m.remoteChanged).toBe(false)            // remote already correct
   })
 
+  it('THE ONEDRIVE CRASH: an alive sidecar entry with no record must not win as undefined content', () => {
+    // A stale/inconsistent sidecar marks "r2" alive (newer clock) but the parsed
+    // content has no such record — e.g. a row was removed from the file on the
+    // remote without its meta being tombstoned. Previously this produced a
+    // "winning" alive record whose content was `undefined`, which then crashed
+    // fingerprint()/serialize on `undefined.length` and failed the whole sync
+    // ("Cannot read properties of undefined (reading 'length')").
+    const remote = snap(
+      { r1: 'one' },                                   // r2 has NO content
+      { r1: { clock: 10, deleted: false }, r2: { clock: 99, deleted: false } },
+    )
+    const local = snap(
+      { r1: 'one', r2: 'two' },
+      { r1: { clock: 10, deleted: false }, r2: { clock: 5, deleted: false } },
+    )
+    // Must not throw, and must keep local's real r2 content rather than a phantom.
+    const m = mergeCollections(local, remote)
+    expect(m.records.r1).toBe('one')
+    expect(m.records.r2).toBe('two')
+    // The fingerprint pass downstream must survive too.
+    for (const id of Object.keys(m.records)) {
+      expect(() => fingerprint(m.records[id])).not.toThrow()
+    }
+  })
+
+  it('drops an alive-but-contentless entry when neither side has the record', () => {
+    const remote = snap({}, { ghost: { clock: 99, deleted: false } })
+    const local = snap({}, {})
+    const m = mergeCollections(local, remote)
+    expect('ghost' in m.records).toBe(false)
+  })
+
   it('intentional re-add after delete wins when newer than the tombstone', () => {
     const remote = snap({}, { r: { clock: 5, deleted: true } })
     const local = snap({ r: 'back' }, { r: { clock: 9, deleted: false } })

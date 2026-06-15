@@ -23,7 +23,12 @@
 const SIDECAR_VERSION = 1
 
 function serialize(content) {
-  return typeof content === 'string' ? content : JSON.stringify(content)
+  if (typeof content === 'string') return content
+  // JSON.stringify(undefined) returns the value `undefined` (not a string), so
+  // guard against it — otherwise downstream `.length`/charCodeAt access throws
+  // "Cannot read properties of undefined (reading 'length')".
+  const s = JSON.stringify(content)
+  return typeof s === 'string' ? s : ''
 }
 
 // Resolve one side of the merge for a given id into a normalized entry:
@@ -34,11 +39,20 @@ function sideEntry(snapshot, id) {
   if (!meta && !hasRecord) return { present: false }
   if (meta) {
     if (meta.deleted) return { present: true, clock: meta.clock ?? 0, deleted: true }
+    // Alive per the sidecar, but the parsed content carries no such record — a
+    // stale/inconsistent sidecar (e.g. a row removed from the file without its
+    // meta being tombstoned, which happens with externally-edited cloud copies).
+    // Treat this side as having no usable record so a phantom, content-less entry
+    // can never win the merge. Previously it won as an "alive" record with
+    // `undefined` content, crashing fingerprint() on `undefined.length` and
+    // failing the whole sync ("Cannot read properties of undefined (reading
+    // 'length')"). The other side's real record or tombstone wins instead.
+    if (!hasRecord) return { present: false }
     return {
       present: true,
       clock: meta.clock ?? 0,
       deleted: false,
-      content: hasRecord ? snapshot.records[id] : undefined,
+      content: snapshot.records[id],
     }
   }
   // Record exists with no meta — legacy/external write, oldest possible clock.
