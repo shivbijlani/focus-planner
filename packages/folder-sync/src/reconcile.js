@@ -179,6 +179,35 @@ export function shouldPullRemote({ lastSeen, remoteMtime, localPresent }) {
  * @param {string} providerId           Provider being disconnected.
  * @returns {string[]} keys to delete.
  */
+/**
+ * Whether a queued file name can legally exist as a path on a cloud provider.
+ *
+ * Cloud providers (OneDrive/Microsoft Graph in particular) reject a fixed set of
+ * characters in path segments — notably `:` — so a name like `s2:focus-plan.md`
+ * (a *source-scoped* key that leaked into the provider-agnostic sync queue) makes
+ * every push 400. Because the push step aborts on the first error, a single such
+ * poison entry wedges backup permanently behind a "Backup failed" state. The SW
+ * uses this guard to skip + drop unsyncable names instead of pushing them.
+ *
+ * `/` is intentionally allowed: it is our path separator between segments. Each
+ * segment, however, must be non-empty, free of illegal characters, not `.`/`..`,
+ * and free of leading/trailing whitespace (also rejected by most providers).
+ *
+ * @param {string} name  Candidate file name (may contain `/` separators).
+ * @returns {boolean} true when the name is safe to push to a remote provider.
+ */
+const ILLEGAL_REMOTE_CHARS = /[:*?"<>|\\]/
+export function isValidRemotePath(name) {
+  if (typeof name !== 'string' || name.length === 0) return false
+  if (ILLEGAL_REMOTE_CHARS.test(name)) return false
+  for (const seg of name.split('/')) {
+    if (seg.length === 0) return false        // empty segment (//, leading/trailing /)
+    if (seg === '.' || seg === '..') return false
+    if (seg !== seg.trim()) return false       // leading/trailing whitespace
+  }
+  return true
+}
+
 export function mtimeKeysForProvider(keys, providerId) {
   const prefix = `mtime:${providerId}:`
   const out = []

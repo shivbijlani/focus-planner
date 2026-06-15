@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { filesToDeleteLocally, mtimeKeysForProvider, planPlainPush, shouldPullRemote, isMassDeletion, planMirrorSync } from './reconcile.js'
+import { filesToDeleteLocally, mtimeKeysForProvider, planPlainPush, shouldPullRemote, isMassDeletion, planMirrorSync, isValidRemotePath } from './reconcile.js'
 
 const isSidecar = (n) => n.endsWith('.sync.json')
 const isRecord = (n) => n === 'focus-plan.md' || n === 'focus-plan-completed.md'
@@ -245,5 +245,48 @@ describe('mtimeKeysForProvider', () => {
     expect(mtimeKeysForProvider(keys, 'dropbox')).toEqual([])
     expect(mtimeKeysForProvider([], 'onedrive')).toEqual([])
     expect(mtimeKeysForProvider(undefined, 'onedrive')).toEqual([])
+  })
+})
+
+describe('isValidRemotePath', () => {
+  it('accepts ordinary file names', () => {
+    expect(isValidRemotePath('planner.md')).toBe(true)
+    expect(isValidRemotePath('suggestions.csv')).toBe(true)
+    expect(isValidRemotePath('focus-plan.md.sync.json')).toBe(true)
+  })
+
+  it('accepts nested journal paths (slash is the segment separator)', () => {
+    expect(isValidRemotePath('journal/task-426550.md')).toBe(true)
+    expect(isValidRemotePath('a/b/c.md')).toBe(true)
+  })
+
+  it('rejects a source-scoped key that leaked into the queue (the OneDrive 400 bug)', () => {
+    // `s2:focus-plan.md` is a `${sourceId}:${path}` key; the colon is illegal on
+    // OneDrive/Graph and 400s every push, wedging backup. It must be skipped.
+    expect(isValidRemotePath('s2:focus-plan.md')).toBe(false)
+    expect(isValidRemotePath('s10::planner.md')).toBe(false)
+  })
+
+  it('rejects every character providers forbid in path segments', () => {
+    for (const bad of [':', '*', '?', '"', '<', '>', '|', '\\']) {
+      expect(isValidRemotePath(`file${bad}.md`)).toBe(false)
+    }
+  })
+
+  it('rejects empty, dot, and whitespace-padded segments', () => {
+    expect(isValidRemotePath('')).toBe(false)
+    expect(isValidRemotePath('/leading.md')).toBe(false)
+    expect(isValidRemotePath('trailing/')).toBe(false)
+    expect(isValidRemotePath('a//b.md')).toBe(false)
+    expect(isValidRemotePath('a/../b.md')).toBe(false)
+    expect(isValidRemotePath(' spaced.md')).toBe(false)
+    expect(isValidRemotePath('spaced.md ')).toBe(false)
+    expect(isValidRemotePath('dir/ inner.md')).toBe(false)
+  })
+
+  it('rejects non-string input', () => {
+    expect(isValidRemotePath(null)).toBe(false)
+    expect(isValidRemotePath(undefined)).toBe(false)
+    expect(isValidRemotePath(42)).toBe(false)
   })
 })

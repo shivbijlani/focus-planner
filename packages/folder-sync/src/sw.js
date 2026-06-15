@@ -5,7 +5,7 @@ import { peekAll, dequeue } from './queue.js'
 import { getTokens } from './auth/tokenStore.js'
 import { idbGet, idbSet, idbKeys, idbDel } from './idb.js'
 import { reconcileRecordsFile, isSidecarPath } from './records.js'
-import { filesToDeleteLocally, planPlainPush, shouldPullRemote, isMassDeletion } from './reconcile.js'
+import { filesToDeleteLocally, planPlainPush, shouldPullRemote, isMassDeletion, isValidRemotePath } from './reconcile.js'
 import { mdTableCodec } from './codecs/mdTable.js'
 import { oneDriveProvider } from './providers/oneDrive.js'
 import { googleDriveProvider } from './providers/googleDrive.js'
@@ -126,6 +126,15 @@ async function syncOneProvider(provider, reconcileDeletes = false) {
   for (const name of dirty) {
     // Sidecars are sync metadata, not user data — never push them directly.
     if (isSidecarPath(name)) { await dequeue(name); continue }
+    // Drop names that can't legally exist on a remote (e.g. a source-scoped key
+    // like `s2:focus-plan.md` that leaked into the queue). Pushing one would 400
+    // on every sync and wedge backup behind a permanent "Backup failed" state.
+    // Dequeue so a single poison entry can't block syncing of everything else.
+    if (!isValidRemotePath(name)) {
+      console.warn(`[folder-sync sw] skipping unsyncable filename: ${JSON.stringify(name)}`)
+      await dequeue(name)
+      continue
+    }
     const codec = RECORD_CODECS[name]
     if (codec) {
       // Record-level merge: deletions are carried as tombstones, so pushing
