@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { reconcileRecordsFile, sidecarPath, frameHasStructure, preferStructuredFrame } from './records.js'
+import { reconcileRecordsFile, sidecarPath, frameHasStructure, preferStructuredFrame, framePriorityCount, preferPopulatedPriorityFrame } from './records.js'
 import { mdTableCodec } from './codecs/mdTable.js'
 import { serializeSidecar } from './merge.js'
 
@@ -24,6 +24,11 @@ const HEADER = `## Today
 `
 const row = (id, task) => `| ${id} | 🟡 | ${task} | - | 2026-01-27 | |`
 const plan = (...rows) => HEADER + rows.join('\n') + '\n'
+// Like `plan`, but appends a `## Priorities` section with the given ordered-list
+// items (e.g. '1. 191'). An empty array yields a scaffolded, item-less section.
+const planP = (priItems, ...rows) =>
+  HEADER + rows.join('\n') + '\n\n## Priorities\n\n' +
+  (priItems.length ? priItems.join('\n') + '\n' : '')
 
 const PATH = 'focus-plan.md'
 
@@ -166,6 +171,37 @@ describe('reconcileRecordsFile — end-to-end record sync', () => {
     await syncOnce(localEmpty, remote, 6000)
     expect(localEmpty.get(PATH)).toContain('## Today')
   })
+
+  it('PRIORITIES-WIPE BUG: a structured-but-empty-priorities frame must not wipe the list', async () => {
+    // Repro of the live plannermd.com data loss: the whole `## Priorities`
+    // ordered list lives in the FRAME record. A device whose frame still has all
+    // `## ` headings but an EMPTY Priorities section (a freshly-scaffolded source
+    // whose plan template is `## Priorities\n\n`, or an external edit that dropped
+    // the list) syncs with a newer clock. Its frame passes the structure guard
+    // (headings present) yet would erase the user's priorities via LWW.
+    const withPriorities = planP(['1. 191', '2. 200', '3. 204'], row(1, 'A'))
+    const emptyPriorities = planP([], row(1, 'A')) // same row, scaffolded empty list
+    const remote = store({})
+
+    // Device 1 establishes the real priorities on the remote.
+    const d1 = store({ [PATH]: withPriorities })
+    await syncOnce(d1, remote, 1000)
+    expect(remote.get(PATH)).toContain('1. 191')
+
+    // Device 2 (scaffold/empty list) syncs LATER, so its frame wins LWW.
+    const d2 = store({ [PATH]: emptyPriorities })
+    await syncOnce(d2, remote, 5000)
+
+    // The populated list must survive on the remote and propagate back to d2.
+    expect(remote.get(PATH)).toContain('1. 191')
+    expect(remote.get(PATH)).toContain('2. 200')
+    expect(remote.get(PATH)).toContain('3. 204')
+    expect(d2.get(PATH)).toContain('1. 191')
+
+    // Stays fixed on a follow-up sync (no flip-flop back to empty).
+    await syncOnce(d2, remote, 6000)
+    expect(remote.get(PATH)).toContain('3. 204')
+  })
 })
 
 describe('frameHasStructure', () => {
@@ -193,5 +229,48 @@ describe('preferStructuredFrame', () => {
   it('returns null when neither is structured', () => {
     expect(preferStructuredFrame('', '')).toBeNull()
     expect(preferStructuredFrame('rows', 'rows')).toBeNull()
+  })
+})
+
+describe('framePriorityCount', () => {
+  const frame = (body) => `## Today\n\n| ID |\n\n## Priorities\n\n${body}`
+  it('counts ordered-list items in the Priorities section', () => {
+    expect(framePriorityCount(frame('1. 191\n2. 200\n3. 204\n'))).toBe(3)
+  })
+  it('is 0 for an empty Priorities section', () => {
+    expect(framePriorityCount(frame(''))).toBe(0)
+    expect(framePriorityCount('## Today\n\n| ID |\n')).toBe(0)
+  })
+  it('ignores numbered lines outside the Priorities section', () => {
+    expect(framePriorityCount('## Today\n\n1. not a priority\n')).toBe(0)
+  })
+  it('recognizes the legacy Work/Manager Priorities headings', () => {
+    expect(framePriorityCount('## Work Priorities\n\n1. 191\n')).toBe(1)
+    expect(framePriorityCount('## Manager Priorities\n\n1. 191\n2. 200\n')).toBe(2)
+  })
+  it('handles non-string input', () => {
+    expect(framePriorityCount(null)).toBe(0)
+    expect(framePriorityCount(undefined)).toBe(0)
+  })
+})
+
+describe('preferPopulatedPriorityFrame', () => {
+  const withList = '## Priorities\n\n1. 191\n2. 200\n'
+  const emptyList = '## Priorities\n\n'
+  it('restores the side that still has priorities when the merge emptied them', () => {
+    expect(preferPopulatedPriorityFrame(emptyList, withList, emptyList)).toBe(withList)
+    expect(preferPopulatedPriorityFrame(withList, emptyList, emptyList)).toBe(withList)
+  })
+  it('leaves the merge alone when it already kept a populated list', () => {
+    expect(preferPopulatedPriorityFrame(emptyList, withList, withList)).toBeNull()
+  })
+  it('does nothing when neither side has priorities', () => {
+    expect(preferPopulatedPriorityFrame(emptyList, emptyList, emptyList)).toBeNull()
+  })
+  it('keeps the richer list if the merge dropped both sides somehow', () => {
+    const longer = '## Priorities\n\n1. 1\n2. 2\n3. 3\n'
+    const shorter = '## Priorities\n\n1. 1\n'
+    expect(preferPopulatedPriorityFrame(longer, shorter, emptyList)).toBe(longer)
+    expect(preferPopulatedPriorityFrame(shorter, longer, emptyList)).toBe(longer)
   })
 })

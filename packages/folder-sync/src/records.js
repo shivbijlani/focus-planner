@@ -50,6 +50,58 @@ export function preferStructuredFrame(localFrame, remoteFrame) {
   return null
 }
 
+// Section titles the app treats as the manager/work Priorities list. Kept in
+// sync with src/focusPlanShared.js:isPrioritiesSection. The codec folds this
+// ordered list into the FRAME record, so it merges by last-write-wins.
+const PRIORITIES_TITLES = new Set(['Priorities', 'Work Priorities', 'Manager Priorities'])
+
+/**
+ * Count the ordered-list items (`1. ...`, `2. ...`) inside a frame's Priorities
+ * section. Used to detect when a merge has emptied the list.
+ */
+export function framePriorityCount(frame) {
+  if (typeof frame !== 'string') return 0
+  let inPriorities = false
+  let count = 0
+  for (const line of frame.split('\n')) {
+    const heading = line.match(/^##\s+(.+?)\s*$/)
+    if (heading) {
+      inPriorities = PRIORITIES_TITLES.has(heading[1].trim())
+      continue
+    }
+    if (inPriorities && /^\s*\d+\.\s+\S/.test(line)) count++
+  }
+  return count
+}
+
+/**
+ * Guard against a populated Priorities list being silently wiped by the frame's
+ * last-write-wins merge. The whole `## Priorities` ordered list lives inside the
+ * single FRAME record, so a side whose frame still HAS every `## ` heading but an
+ * EMPTY Priorities section (e.g. a freshly-scaffolded source whose plan template
+ * is `## Priorities\n\n`, or an external editor that dropped the list) can win on
+ * a newer clock and erase the user's priorities — without tripping
+ * `preferStructuredFrame`, which only catches a frame missing headings entirely.
+ *
+ * When the merged frame ended up with no Priorities items but exactly one side
+ * still carried them, prefer that side's frame so the list survives. Mirrors the
+ * structure guard's bias: the worst case is a harmless resurrected list (user-
+ * fixable), never silent data loss. If both sides have items, the LWW winner is
+ * already non-empty and we leave it alone.
+ *
+ * @returns {string|null} the frame to use instead, or null to keep the merged
+ *   frame as-is.
+ */
+export function preferPopulatedPriorityFrame(localFrame, remoteFrame, mergedFrame) {
+  if (framePriorityCount(mergedFrame) > 0) return null
+  const l = framePriorityCount(localFrame)
+  const r = framePriorityCount(remoteFrame)
+  if (l > 0 && r === 0) return localFrame
+  if (r > 0 && l === 0) return remoteFrame
+  if (l > 0 && r > 0) return l >= r ? localFrame : remoteFrame
+  return null
+}
+
 /** Convention: a file's sidecar lives next to it as `<path>.sync.json`. */
 export function sidecarPath(path) {
   return `${path}.sync.json`
@@ -126,6 +178,22 @@ export async function reconcileRecordsFile({ path, codec, local, remote, now = D
     if (better != null) {
       merged.records[FRAME_ID] = { frame: better }
       // Ensure the restored frame is treated as the live value going forward.
+      if (merged.meta[FRAME_ID]) merged.meta[FRAME_ID].deleted = false
+      else merged.meta[FRAME_ID] = { clock: now, deleted: false }
+    }
+  }
+
+  // Guard: never let a populated Priorities list be wiped by the frame's LWW
+  // merge. The whole `## Priorities` ordered list lives in the FRAME record, so a
+  // structured-but-empty frame (e.g. a freshly-scaffolded source, or an external
+  // edit that dropped the list) can win on a newer clock and erase the user's
+  // priorities while still passing the structure guard above. Re-apply the side
+  // that still has the list. Re-read the (possibly structure-restored) frame.
+  {
+    const curMergedFrame = merged.records[FRAME_ID]?.frame ?? ''
+    const better = preferPopulatedPriorityFrame(localFrame, remoteFrame, curMergedFrame)
+    if (better != null) {
+      merged.records[FRAME_ID] = { frame: better }
       if (merged.meta[FRAME_ID]) merged.meta[FRAME_ID].deleted = false
       else merged.meta[FRAME_ID] = { clock: now, deleted: false }
     }
