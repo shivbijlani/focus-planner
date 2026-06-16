@@ -12,6 +12,7 @@ import {
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority, isNeededForUrgentTask } from './taskSort.js'
 import { computeMoveSet, computeBrokenLinks, renumberMovedRows, maxTaskIdInRows, retitleJournal } from './moveTask.js'
 import { scrollToAndFlashTask } from './scrollToTask.js'
+import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery } from './boardSearch.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
@@ -1177,7 +1178,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
 
 // Collapsible section component
 // Collapsible section component
-function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource, onDeferBelow }) {
+function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource, onDeferBelow, searchQuery = '' }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const { headers, rows, rawLines } = parseMarkdownTable(tableLines)
   const [contextMenu, setContextMenu] = useState(null)
@@ -1186,6 +1187,13 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
   
   // Sort rows: urgent first, then manager priority, then dependency depth, then eisenhower icon
   const { sortedRows, sortedRawLines } = sortTasksByPriority(rows, rawLines, headers, linkedIdMap, managerPriorities)
+
+  // Board search (#271): filter to matching rows. An empty query is a no-op.
+  const isSearching = normalizeQuery(searchQuery).length > 0
+  const { rows: visibleRows, rawLines: visibleRawLines, matchCount } =
+    filterRowsAndRawLines(sortedRows, sortedRawLines, searchQuery)
+  // While searching, force the section open so matches are visible.
+  const effectiveOpen = isSearching ? true : isOpen
   
   const isTaskSection = title === 'Today' || title === 'Deferred'
   if (sortedRows.length === 0 && !showAddDialog && !isTaskSection) return null
@@ -1383,9 +1391,11 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
         className="section-header"
         onClick={() => setIsOpen(!isOpen)}
       >
-        <span className="collapse-icon">{isOpen ? '▼' : '▶'}</span>
+        <span className="collapse-icon">{effectiveOpen ? '▼' : '▶'}</span>
         {title}
-        <span className="task-count">({sortedRows.length})</span>
+        <span className="task-count">
+          {isSearching ? `(${matchCount} of ${sortedRows.length})` : `(${sortedRows.length})`}
+        </span>
         <span className="sort-info-wrapper" onClick={(e) => e.stopPropagation()}>
           <span className="sort-info-icon" title="Sort order">ⓘ</span>
           <span className="sort-info-tooltip">
@@ -1407,7 +1417,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
           +
         </button>
       </h2>
-      {isOpen && (
+      {effectiveOpen && (
         <div className="task-table-container">
           <table className="task-table">
             <thead>
@@ -1416,7 +1426,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
               </tr>
             </thead>
             <tbody>
-              {sortedRows.map((row, i) => (
+              {visibleRows.map((row, i) => (
                 <TaskRow 
                   key={`${extractTaskId(row) || 'row'}-${i}`} 
                   row={row} 
@@ -1425,7 +1435,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
                   managerPriorities={managerPriorities}
                   onScrollToPriorities={onScrollToPriorities}
                   onContextMenu={handleContextMenu}
-                  rawLine={sortedRawLines[i]}
+                  rawLine={visibleRawLines[i]}
                   onChangePriority={onChangePriority}
                   onPromoteTodo={onPromoteTodo}
                   onRenameTask={onRenameTask}
@@ -1436,6 +1446,11 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
                   linkedIdMap={linkedIdMap}
                   adoLookup={adoLookup}/>
               ))}
+              {isSearching && matchCount === 0 && (
+                <tr className="search-no-match-row">
+                  <td colSpan={headers.length}>No matches in {title}</td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -1869,6 +1884,8 @@ function scrollToNewTaskAfterRender(taskId) {
 function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
+  const [search, setSearch] = useState('')
+  const searchInputRef = useRef(null)
   const sections = parseFocusPlan(content)
   
   // Find sections
@@ -1937,6 +1954,34 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
       })
       .catch(() => {})
   }, [])
+
+  // Board search (#271): `/` focuses the search box, `Esc` clears it.
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      const el = e.target
+      const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+      if (e.key === '/' && !typing) {
+        e.preventDefault()
+        searchInputRef.current?.focus()
+      } else if (e.key === 'Escape' && el === searchInputRef.current) {
+        setSearch('')
+        searchInputRef.current?.blur()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  // Total matches across the searchable board (Today + Deferred).
+  let searchTotal = 0
+  let searchMatches = 0
+  if (normalizeQuery(search)) {
+    for (const section of taskSections) {
+      const { rows } = parseMarkdownTable(section.lines)
+      searchTotal += rows.length
+      for (const row of rows) if (taskRowMatchesSearch(row, search)) searchMatches++
+    }
+  }
   
   // Merge lookups: current tasks take priority (full lookup for display, active-only for dropdowns)
   const taskLookup = { ...completedTaskLookup, ...currentTaskLookup }
@@ -2741,12 +2786,41 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
   return (
     <div className="focus-plan-view">
       <h1>📋 {APP_NAME}</h1>
-      
+
+      <div className="board-search">
+        <span className="board-search-icon" aria-hidden="true">🔍</span>
+        <input
+          ref={searchInputRef}
+          type="text"
+          className="board-search-input"
+          placeholder="Search tasks…  ( / to focus )"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
+          aria-label="Search tasks"
+        />
+        {search && (
+          <>
+            <span className="board-search-count">{searchMatches} of {searchTotal}</span>
+            <button
+              type="button"
+              className="board-search-clear"
+              onClick={() => { setSearch(''); searchInputRef.current?.focus() }}
+              title="Clear search (Esc)"
+              aria-label="Clear search"
+            >
+              ✕
+            </button>
+          </>
+        )}
+      </div>
+
       {taskSections.map((section, i) => (
         <TaskSection
           key={i}
           title={section.title}
           tableLines={section.lines}
+          searchQuery={search}
           onNavigate={onNavigate}
           defaultOpen={section.title === 'Today'}
           managerPriorities={managerPriorities}
