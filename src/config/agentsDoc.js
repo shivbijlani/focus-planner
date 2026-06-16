@@ -8,7 +8,7 @@
  * used to refresh stale copies that were scaffolded by an older app build.
  */
 
-export const AGENTS_DOC_VERSION = 1
+export const AGENTS_DOC_VERSION = 2
 
 export const AGENTS_FILE = 'AGENTS.md'
 
@@ -68,7 +68,7 @@ Found the cleaning code: **W-S**.                     <- agent bubble (shown und
 | \`## YYYY-MM-DD\` | Starts a new day group. Same-day consecutive user notes merge into one bubble. |
 | \`<!-- from: name -->\` | Following content is from AI agent \`name\` (renders left, under a 🤖 banner). |
 | \`<!-- from: me -->\` | Switch attribution back to the user. |
-| \`<!-- ...AUTO... -->\` | Any comment containing \`AUTO\` also flags an auto-generated agent block. |
+| \`<!-- ...AUTO... -->\` or \`<!-- ...AGENT... -->\` | A sentinel comment containing \`AUTO\` or \`AGENT\` flags an auto-generated / agent-managed block (e.g. \`DANCE-CHURCH-AUTO\`, \`OVERNIGHT-AGENT\`). |
 | \`<!-- ... -->\` (may span lines) | Hidden from the chat. Use for machine metadata. |
 
 Content before the first \`##\`/agent marker is treated as undated "earlier

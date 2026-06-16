@@ -26,9 +26,18 @@ export function trimBlankEnds(arr) {
 //   "# Task XX: Title"          -> thread title
 //   "## YYYY-MM-DD [label]"     -> starts a new day (author resets to me)
 //   "<!-- from: NAME -->"       -> switches author (NAME === me returns to me)
-//   "<!-- ...AUTO... -->"       -> agent block (legacy auto-generated content)
+//   "<!-- ...AUTO/AGENT... -->" -> agent block (auto-generated/agent-managed)
 // Content before the first day/agent marker is "pinned" (undated header notes).
 // Multi-line HTML comments (e.g. <!-- dc-meta ... -->) are stripped entirely.
+
+// Shared agent-sentinel detector. Agent skills mark their managed region with a
+// sentinel HTML comment; both "...-AUTO" (e.g. DANCE-CHURCH-AUTO) and "...-AGENT"
+// (e.g. OVERNIGHT-AGENT) styles are recognized. Parser and append both use this
+// so they can never disagree about where an agent block begins.
+export const AGENT_SENTINEL_RE = /^<!--.*\b(?:AUTO|AGENT)\b.*-->/i
+const FROM_RE = /^<!--\s*from:\s*([^\s>]+)\s*-->/i
+const DATE_RE = /^##\s+(\d{4}-\d{2}-\d{2})\b/
+
 export function parseJournalChat(content) {
   const text = (content || '').replace(/^\uFEFF/, '')
   const lines = text.split(/\r?\n/)
@@ -41,9 +50,9 @@ export function parseJournalChat(content) {
   let curAgent = null
   let inComment = false
 
-  const dateRe = /^##\s+(\d{4}-\d{2}-\d{2})\b/
-  const fromRe = /^<!--\s*from:\s*([^\s>]+)\s*-->/i
-  const autoRe = /^<!--.*\bAUTO\b.*-->/i
+  const dateRe = DATE_RE
+  const fromRe = FROM_RE
+  const autoRe = AGENT_SENTINEL_RE
 
   const pushLine = (line) => {
     let g = groups[groups.length - 1]
@@ -126,9 +135,9 @@ export function appendJournalMessage(content, text, today = localISODate()) {
   let endAuthor = 'me'
   for (let i = lastDateIdx < 0 ? 0 : lastDateIdx; i < lines.length; i++) {
     const t = lines[i].trim()
-    const fm = t.match(/^<!--\s*from:\s*([^\s>]+)\s*-->/i)
+    const fm = t.match(FROM_RE)
     if (fm) endAuthor = fm[1].toLowerCase() === 'me' ? 'me' : 'agent'
-    if (/^<!--.*\bAUTO\b.*-->/i.test(t)) endAuthor = 'agent'
+    if (AGENT_SENTINEL_RE.test(t)) endAuthor = 'agent'
   }
   let addition
   if (lastDate !== today) addition = `\n\n## ${today}\n\n${text}`

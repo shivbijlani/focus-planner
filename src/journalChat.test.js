@@ -91,4 +91,54 @@ describe('appendJournalMessage', () => {
     expect(out).toContain('## 2026-06-13')
     expect(out).toContain('hello')
   })
+
+  // Regression: an agent block marked with an "-AGENT" sentinel (not "AUTO"),
+  // on today's date, must still be detected so the user's reply is attributed
+  // to them instead of merging into the agent's bubble.
+  it('adds a from:me marker after an -AGENT sentinel block on the same day', () => {
+    const base = [
+      '# Task 9: Plan',
+      '',
+      '## 2026-06-15',
+      '',
+      'Look it up',
+      '',
+      '---',
+      '<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->',
+      '',
+      '## 🌙 Overnight Agent',
+      'Here is the plan.',
+    ].join('\n')
+    const out = appendJournalMessage(base, 'my reply', '2026-06-15')
+    expect(out).toContain('<!-- from: me -->\nmy reply')
+    expect(out).not.toMatch(/Here is the plan\.\nmy reply/)
+  })
+})
+
+describe('agent sentinel detection (parse)', () => {
+  it('treats an -AGENT sentinel block as an agent bubble, not the user', () => {
+    const md = [
+      '# Task 9: Plan',
+      '',
+      '## 2026-06-15',
+      '',
+      'My note',
+      '',
+      '---',
+      '<!-- OVERNIGHT-AGENT do not edit this line -->',
+      '',
+      'Agent content here',
+      '',
+      '<!-- from: me -->',
+      'My reply below',
+    ].join('\n')
+    const r = parseJournalChat(md)
+    const agent = r.groups.find((g) => g.author === 'agent')
+    const meReply = r.groups.find((g) => g.author === 'me' && g.lines.join('\n').includes('My reply below'))
+    expect(agent).toBeTruthy()
+    expect(agent.lines.join('\n')).toContain('Agent content here')
+    expect(meReply).toBeTruthy()
+    // The user's reply must NOT be lumped into the agent bubble.
+    expect(agent.lines.join('\n')).not.toContain('My reply below')
+  })
 })
