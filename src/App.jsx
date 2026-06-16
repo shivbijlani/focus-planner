@@ -10,7 +10,7 @@ import {
   consumePendingAdd, consumePendingReauth,
 } from './storage/sources.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority, isNeededForUrgentTask } from './taskSort.js'
-import { computeMoveSet, computeBrokenLinks } from './moveTask.js'
+import { computeMoveSet, computeBrokenLinks, renumberMovedRows, maxTaskIdInRows, retitleJournal } from './moveTask.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
@@ -2231,10 +2231,10 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
     let inTargetSection = false
     let insertIndex = -1
     let maxId = 0
-    
-    // Get max ID from journal files
-    const maxJournalId = await getMaxJournalId()
-    maxId = Math.max(maxId, maxJournalId)
+
+    // Existing journal IDs are only a collision-skip set — numbering is driven
+    // by the planner's own rows so a stray/foreign high journal ID can't inflate it.
+    const journalIds = await getJournalIds()
     
     // Check if linkedTask is a URL with an extractable ticket/incident ID
     const extractTicketId = (url) => {
@@ -2274,7 +2274,8 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
     }
     
     if (insertIndex !== -1) {
-      const newId = maxId + 1
+      let newId = maxId + 1
+      while (journalIds.has(newId)) newId++
       const today = new Date().toISOString().split('T')[0]
       if (adoUrlMatch && adoUrlMatch.id) {
         const adoId = adoUrlMatch.id
@@ -2291,7 +2292,8 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
   
   const handleAddAndPrioritize = async (taskName, prioritySectionTitle) => {
     const lines = content.split('\n')
-    let maxId = await getMaxJournalId()
+    const journalIds = await getJournalIds()
+    let maxId = 0
     let todayInsertIndex = -1
     let inToday = false
 
@@ -2309,7 +2311,8 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
     }
 
     if (todayInsertIndex === -1) return
-    const newId = maxId + 1
+    let newId = maxId + 1
+    while (journalIds.has(newId)) newId++
     const today = new Date().toISOString().split('T')[0]
     const newRow = `| ${newId} | 🟡 | ${taskName} | - | ${today} | |`
     lines.splice(todayInsertIndex, 0, newRow)
@@ -2350,9 +2353,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
     let insertIndex = -1
     let maxId = 0
     
-    // Get max ID from journal files first
-    const maxJournalId = await getMaxJournalId()
-    maxId = Math.max(maxId, maxJournalId)
+    const journalIds = await getJournalIds()
     
     // Find max ID and the Today section to insert the new task
     for (let i = 0; i < lines.length; i++) {
@@ -2381,7 +2382,8 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
     }
     
     if (insertIndex !== -1) {
-      const newId = maxId + 1
+      let newId = maxId + 1
+      while (journalIds.has(newId)) newId++
       const today = new Date().toISOString().split('T')[0]
       // Clean the todo text (remove TODO: prefix if present)
       const cleanTodoText = todoText.replace(/^TODO:\s*/i, '').trim()
@@ -2664,6 +2666,11 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
     }
 
     const tLines = targetContent.split('\n')
+    // Renumber moving tasks into the target's own sequence so a foreign ID
+    // never crosses folders (which would inflate the target's numbering).
+    const targetBase = maxTaskIdInRows(targetContent)
+    const targetJournalIds = await storage.journalIdsFromSource(target.id)
+    const { idMap, rows: renumberedRows } = renumberMovedRows(movingRows, targetBase, targetJournalIds)
     // Find Today section's insertion point (right after the separator row).
     let inToday = false
     let todayInsertIdx = -1
@@ -2689,11 +2696,11 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
       )
       todayInsertIdx = tLines.length
     }
-    const rowsToInsert = movingRows.map(r => r.rawLine)
+    const rowsToInsert = renumberedRows.map(r => r.newRawLine)
     tLines.splice(todayInsertIdx, 0, ...rowsToInsert)
 
     // Append any moving Priorities entries to the target's Priorities section.
-    const priorityIdsMoving = movingTasks.filter(t => t.isPriority).map(t => t.id)
+    const priorityIdsMoving = movingTasks.filter(t => t.isPriority).map(t => idMap.get(String(t.id)) || String(t.id))
     if (priorityIdsMoving.length > 0) {
       let pStart = -1
       let pEnd = tLines.length
@@ -2724,14 +2731,16 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
     }
 
     // 3. Move journals (best effort — silently skip those that don't exist).
+    //    Renumber the journal filename + title to the task's new target ID.
     const activeProvider = getActiveProvider()
-    for (const t of movingTasks) {
-      const journalPath = `journal/task-${t.id}.md`
+    for (const r of renumberedRows) {
+      const fromPath = `journal/task-${r.oldId}.md`
+      const toPath = `journal/task-${r.newId}.md`
       try {
-        const journalContent = await activeProvider.read(journalPath)
+        const journalContent = await activeProvider.read(fromPath)
         if (typeof journalContent === 'string') {
-          await targetProvider.write(journalPath, journalContent)
-          await activeProvider.remove(journalPath)
+          await targetProvider.write(toPath, retitleJournal(journalContent, r.newId))
+          await activeProvider.remove(fromPath)
         }
       } catch {
         // No journal for this task — fine.
@@ -3331,11 +3340,11 @@ function MarkdownView({ content, filePath, onContentUpdate, onNavigate, headerEx
 
 // Auto-assign unique IDs to tasks without IDs
 // Get max task ID from journal filenames
-async function getMaxJournalId() {
+async function getJournalIds() {
   try {
-    return await storage.maxJournalId()
+    return await storage.journalIds()
   } catch {
-    return 0
+    return new Set()
   }
 }
 
@@ -3344,9 +3353,10 @@ async function ensureUniqueIds(content, updateFile) {
   let maxId = 0
   const linesToUpdate = []
   
-  // Get max ID from existing journal files
-  const maxJournalId = await getMaxJournalId()
-  maxId = Math.max(maxId, maxJournalId)
+  // Existing journal IDs are only a collision-skip set (see allocateNextId);
+  // numbering is driven by the planner's own rows, so a stray/foreign high
+  // journal ID can't inflate it.
+  const journalIds = await getJournalIds()
   
   // First pass: find max ID in content and lines needing IDs
   for (let i = 0; i < lines.length; i++) {
@@ -3378,6 +3388,7 @@ async function ensureUniqueIds(content, updateFile) {
   if (linesToUpdate.length > 0) {
     for (const lineIndex of linesToUpdate) {
       maxId++
+      while (journalIds.has(maxId)) maxId++
       const line = lines[lineIndex]
       // Replace the ID cell (first cell after initial |)
       const parts = line.split('|')
@@ -4437,14 +4448,14 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
     // Promote into the same source as the parent task.
     const sid = sourceForTask(parentTaskId) || sources[0]?.id
     if (!sid) return
-    const max = await storage.maxJournalIdFromSource(sid)
-    await applyOp(sid, c => ops.opPromoteTodoToTask(c, todoText, parentTaskId, max))
+    const journalIds = await storage.journalIdsFromSource(sid)
+    await applyOp(sid, c => ops.opPromoteTodoToTask(c, todoText, parentTaskId, journalIds))
   }
 
   const handleAdd = async ({ task, priority, linkedTask, section, sourceId }) => {
     if (!sourceId) return
-    const max = await storage.maxJournalIdFromSource(sourceId)
-    await applyOp(sourceId, c => ops.opAddTask(c, { task, priority, linkedTask, section }, max))
+    const journalIds = await storage.journalIdsFromSource(sourceId)
+    await applyOp(sourceId, c => ops.opAddTask(c, { task, priority, linkedTask, section }, journalIds))
   }
 
   const handleCreateJournal = async (taskId, taskName) => {
@@ -4635,6 +4646,10 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
       targetContent = '# Focus Plan\n\n## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|-----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|-----------|\n'
     }
     const tLines = targetContent.split('\n')
+    // Renumber moving tasks into the target's own sequence (no foreign IDs).
+    const targetBase = maxTaskIdInRows(targetContent)
+    const targetJournalIds = await storage.journalIdsFromSource(target.id)
+    const { idMap, rows: renumberedRows } = renumberMovedRows(movingRows, targetBase, targetJournalIds)
     let inToday = false
     let todayInsertIdx = -1
     for (let i = 0; i < tLines.length; i++) {
@@ -4652,9 +4667,9 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
       tLines.push('', '## Today', '', '| ID | 🎯 | Task | Priority | Added | Linked ID |', '|---|---|------|----------|-------|-----------|')
       todayInsertIdx = tLines.length
     }
-    tLines.splice(todayInsertIdx, 0, ...movingRows.map(r => r.rawLine))
+    tLines.splice(todayInsertIdx, 0, ...renumberedRows.map(r => r.newRawLine))
 
-    const priorityIdsMoving = movingTasks.filter(t => t.isPriority).map(t => t.id)
+    const priorityIdsMoving = movingTasks.filter(t => t.isPriority).map(t => idMap.get(String(t.id)) || String(t.id))
     if (priorityIdsMoving.length > 0) {
       let pStart = -1
       let pEnd = tLines.length
@@ -4679,14 +4694,15 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
       tLines.splice(insertAt, 0, ...newEntries)
     }
 
-    // Move journals
-    for (const t of movingTasks) {
-      const journalPath = `journal/task-${t.id}.md`
+    // Move journals — renumber filename + title to the new target ID.
+    for (const r of renumberedRows) {
+      const fromPath = `journal/task-${r.oldId}.md`
+      const toPath = `journal/task-${r.newId}.md`
       try {
-        const journalContent = await storage.readFromSource(fromSourceId, journalPath)
+        const journalContent = await storage.readFromSource(fromSourceId, fromPath)
         if (typeof journalContent === 'string' && journalContent.length > 0) {
-          await storage.writeToSource(target.id, journalPath, journalContent)
-          await storage.removeFromSource(fromSourceId, journalPath)
+          await storage.writeToSource(target.id, toPath, retitleJournal(journalContent, r.newId))
+          await storage.removeFromSource(fromSourceId, fromPath)
         }
       } catch { /* no journal — skip */ }
     }
@@ -4705,8 +4721,8 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
     onUpdate: (newLines) =>
       applyOp(sourceId, c => ops.opUpdateManagerPriorities(c, newLines)),
     onAddAndPrioritize: async (taskName, prioritySectionTitle) => {
-      const max = await storage.maxJournalIdFromSource(sourceId)
-      await applyOp(sourceId, c => ops.opAddAndPrioritize(c, taskName, prioritySectionTitle, max))
+      const journalIds = await storage.journalIdsFromSource(sourceId)
+      await applyOp(sourceId, c => ops.opAddAndPrioritize(c, taskName, prioritySectionTitle, journalIds))
     },
     onPromoteToManagerPriority: (taskId) =>
       applyOp(sourceId, c => ops.opPromoteToManagerPriority(c, taskId)),

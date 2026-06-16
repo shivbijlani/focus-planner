@@ -222,6 +222,21 @@ export class GoogleDriveProvider {
     } catch { return 0 }
   }
 
+  async journalIds() {
+    await this._ensureToken()
+    const ids = new Set()
+    try {
+      const journalFolderId = await this._resolveFolderId('journal')
+      if (!journalFolderId) return ids
+      const items = await this._listFolder(journalFolderId)
+      for (const item of items) {
+        const m = item.name.match(/^task-(\d+)\.md$/)
+        if (m) ids.add(parseInt(m[1], 10))
+      }
+    } catch { /* ignore */ }
+    return ids
+  }
+
   // ── Private helpers ──────────────────────────────────
 
   async _ensureFolder() {

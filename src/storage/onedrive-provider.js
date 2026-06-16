@@ -184,6 +184,22 @@ export class OneDriveProvider {
     } catch { return 0 }
   }
 
+  async journalIds() {
+    await this._ensureToken()
+    const ids = new Set()
+    try {
+      const url = `${APPROOT}:/journal:/children`
+      const res = await fetch(url, { headers: this._authHeader() })
+      if (!res.ok) return ids
+      const data = await res.json()
+      for (const item of data.value ?? []) {
+        const m = item.name.match(/^task-(\d+)\.md$/)
+        if (m) ids.add(parseInt(m[1], 10))
+      }
+    } catch { /* ignore */ }
+    return ids
+  }
+
   // ── Private helpers ──────────────────────────────────
 
   async _listRecursive(subPath, prefix = '') {

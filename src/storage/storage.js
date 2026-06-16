@@ -324,6 +324,11 @@ export async function maxJournalId() {
   return _provider.maxJournalId()
 }
 
+export async function journalIds() {
+  if (!_provider) throw new Error('No provider set')
+  return _provider.journalIds ? _provider.journalIds() : new Set()
+}
+
 // ── Cross-source read helpers (for Combined view) ─────
 // These bypass the active-provider singleton so the Combined view can
 // pull data from every registered source in parallel.
@@ -347,6 +352,13 @@ export async function maxJournalIdFromSource(sourceId) {
   const p = getProvider(sourceId)
   if (!p) return 0
   try { return await p.maxJournalId() } catch { return 0 }
+}
+
+export async function journalIdsFromSource(sourceId) {
+  const { getProvider } = await import('./sources.js')
+  const p = getProvider(sourceId)
+  if (!p || !p.journalIds) return new Set()
+  try { return await p.journalIds() } catch { return new Set() }
 }
 
 export async function getFilesFromSource(sourceId) {
