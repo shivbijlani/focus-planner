@@ -2975,9 +2975,17 @@ function renderInline(text, onNavigate, keyBase = 'k') {
 // Render a block of journal lines into chat content (lists, todos, headings,
 // tables, blockquotes, text). Uses an index loop so block elements (tables,
 // blockquotes) can consume multiple consecutive lines.
-function renderJournalLines(lines, onNavigate) {
+function renderJournalLines(lines, onNavigate, onToggle, ctx) {
   const out = []
   let list = null
+  const toggleProps = (idx) => (onToggle && ctx ? {
+    className: 'jc-todo-toggle',
+    role: 'button',
+    tabIndex: 0,
+    title: 'Click to toggle',
+    onClick: () => onToggle(idx),
+    onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(idx) } },
+  } : {})
   const flush = () => {
     if (list) { out.push(<ul className="jc-list" key={`ul-${out.length}`}>{list}</ul>); list = null }
   }
@@ -3024,18 +3032,21 @@ function renderJournalLines(lines, onNavigate) {
     // Checkbox items (bulleted or numbered): - [ ] / 1. [ ] / 1) [x]
     if ((m = t.match(/^(?:[-*+]|\d+[.)])\s*\[([ xX])\]\s*(.+)/))) {
       const done = m[1].toLowerCase() === 'x'
+      const idx = ctx ? ctx.n++ : null
       list = list || []
-      list.push(<li key={i}><span className={`jc-chip ${done ? 'done' : 'open'}`}>{done ? 'DONE' : 'TODO'}</span>{renderInline(m[2], onNavigate, `c${i}`)}</li>)
+      list.push(<li key={i} {...toggleProps(idx)}><span className={`jc-chip ${done ? 'done' : 'open'}`}>{done ? 'DONE' : 'TODO'}</span>{renderInline(m[2], onNavigate, `c${i}`)}</li>)
       continue
     }
     if ((m = t.match(/^-\s*TODO:\s*(.+)/i))) {
+      const idx = ctx ? ctx.n++ : null
       list = list || []
-      list.push(<li key={i}><span className="jc-chip open">TODO</span>{renderInline(m[1], onNavigate, `c${i}`)}</li>)
+      list.push(<li key={i} {...toggleProps(idx)}><span className="jc-chip open">TODO</span>{renderInline(m[1], onNavigate, `c${i}`)}</li>)
       continue
     }
     if ((m = t.match(/^-\s*DONE:\s*(.+)/i))) {
+      const idx = ctx ? ctx.n++ : null
       list = list || []
-      list.push(<li key={i}><span className="jc-chip done">DONE</span>{renderInline(m[1], onNavigate, `c${i}`)}</li>)
+      list.push(<li key={i} {...toggleProps(idx)}><span className="jc-chip done">DONE</span>{renderInline(m[1], onNavigate, `c${i}`)}</li>)
       continue
     }
     if ((m = t.match(/^[-*+]\s+(.+)/)) || (m = t.match(/^(\d+[.)])\s+(.+)/))) {
@@ -3102,6 +3113,42 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
     }
   }
 
+  // Toggle the Nth checkbox / TODO / DONE line in the raw markdown. The index
+  // matches the order in which toggleable items are rendered (top to bottom),
+  // which mirrors the file order since quoted (`>`) items are excluded both
+  // here and in the renderer.
+  const handleToggleTodo = async (index) => {
+    if (index == null || sending) return
+    const lines = content.split(/\r?\n/)
+    let count = -1
+    for (let i = 0; i < lines.length; i++) {
+      const raw = lines[i]
+      const t = raw.trim()
+      if (/^>/.test(t)) continue
+      let next = null
+      if (/^(?:[-*+]|\d+[.)])\s*\[([ xX])\]\s*(.+)/.test(t)) {
+        next = raw.replace(/\[([ xX])\]/, (_, c) => (c === ' ' ? '[x]' : '[ ]'))
+      } else if (/^-\s*TODO:\s*(.+)/i.test(t)) {
+        next = raw.replace(/(-\s*)TODO(\s*:)/i, '$1DONE$2')
+      } else if (/^-\s*DONE:\s*(.+)/i.test(t)) {
+        next = raw.replace(/(-\s*)DONE(\s*:)/i, '$1TODO$2')
+      } else {
+        continue
+      }
+      count++
+      if (count === index) {
+        lines[i] = next
+        setSending(true)
+        try {
+          await onContentUpdate(lines.join('\n'))
+        } finally {
+          setSending(false)
+        }
+        return
+      }
+    }
+  }
+
   if (showRaw) {
     return (
       <MarkdownView
@@ -3125,6 +3172,13 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
   const showPinnedCard = hasChat && parsed.pinned.length > 0
   const undatedAsBubble = !hasChat && parsed.pinned.length > 0
 
+  // Shared counter so each toggleable item gets a file-order index. Pinned
+  // content sits before the dated groups in the file, so render it first.
+  const toggleCtx = { n: 0 }
+  const pinnedRendered = parsed.pinned.length
+    ? renderJournalLines(parsed.pinned, onNavigate, handleToggleTodo, toggleCtx)
+    : null
+
   const items = []
   let lastDay = null
   let lastAuthor = null
@@ -3142,7 +3196,7 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
     const side = g.author === 'me' ? 'me' : 'agent'
     items.push(
       <div className={`jc-row ${side}`} key={`b-${gi}`}>
-        <div className="jc-bubble">{renderJournalLines(g.lines, onNavigate)}</div>
+        <div className="jc-bubble">{renderJournalLines(g.lines, onNavigate, handleToggleTodo, toggleCtx)}</div>
       </div>
     )
     lastAuthor = g.author
@@ -3167,13 +3221,13 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
         {showPinnedCard && (
           <div className="jc-pin">
             <span className="jc-pin-label">📌 Pinned</span>
-            <div className="jc-pin-body">{renderJournalLines(parsed.pinned, onNavigate)}</div>
+            <div className="jc-pin-body">{pinnedRendered}</div>
           </div>
         )}
 
         {undatedAsBubble && (
           <div className="jc-row me">
-            <div className="jc-bubble jc-bubble-wide">{renderJournalLines(parsed.pinned, onNavigate)}</div>
+            <div className="jc-bubble jc-bubble-wide">{pinnedRendered}</div>
           </div>
         )}
 

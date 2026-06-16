@@ -1660,6 +1660,18 @@ tr.highlight-flash {
 .jc-chip.open { background: #ffcf33; color: #5a4500; }
 .jc-chip.done { background: #34c759; color: #0a3d18; }
 
+.jc-list li.jc-todo-toggle {
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 0.1rem 0.3rem;
+  margin-left: -0.3rem;
+  transition: background 0.12s ease;
+  user-select: none;
+}
+.jc-list li.jc-todo-toggle:hover { background: rgba(255, 255, 255, 0.08); }
+.jc-list li.jc-todo-toggle:active { background: rgba(255, 255, 255, 0.14); }
+.jc-list li.jc-todo-toggle:focus-visible { outline: 2px solid #ffcf33; outline-offset: 1px; }
+
 .jc-code {
   background: rgba(255, 255, 255, 0.12);
   padding: 0.05rem 0.3rem;
