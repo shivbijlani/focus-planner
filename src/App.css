@@ -343,7 +343,7 @@ body {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  padding: 1rem 1.5rem;
+  padding: 0;
   scrollbar-gutter: auto;
 }
 .content.content-chat .journal-chat-view {
@@ -351,8 +351,11 @@ body {
   min-height: 0;
   height: auto;
 }
+/* The mobile nav bar is redundant with the chat app bar (which has its own
+   back button + title) — hide it so the chat starts at the very top. */
 @media (max-width: 768px) {
-  .content.content-chat { padding: 0.5rem 0.5rem 0; }
+  .content.content-chat .mobile-nav-bar { display: none; }
+  .jc-appbar .jc-appbar-menu { display: flex; align-items: center; }
 }
 
 .content h1 {
@@ -1479,53 +1482,99 @@ tr.highlight-flash {
 }
 .jc-toggle-btn:hover { background: #1e3a5f; color: #fff; }
 
+/* Unified app bar: back · avatar · title/sub · Raw — one compact row that
+   replaces the old big editor-header + centered identity block. */
+.jc-appbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.5rem;
+  border-bottom: 1px solid var(--line, #0f3460);
+  background: #141426;
+}
+.jc-appbar-back {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #e94560;
+  font-size: 1.6rem;
+  line-height: 1;
+  padding: 0 0.35rem;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.jc-appbar-back:hover { background: rgba(233, 69, 96, 0.12); }
+.jc-appbar-menu {
+  display: none;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #cbd5e1;
+  font-size: 1.2rem;
+  line-height: 1;
+  padding: 0 0.25rem;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.jc-appbar-menu:hover { background: rgba(255, 255, 255, 0.08); }
+.jc-appbar-id { flex: 1; min-width: 0; }
+.jc-appbar-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #e8e8ed;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jc-appbar-sub { font-size: 0.72rem; color: #8a8a92; line-height: 1.2; }
+
 .jc-thread {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 0.5rem 1rem;
+  padding: 0.5rem 0.5rem 1rem;
   display: flex;
   flex-direction: column;
 }
 
-.jc-chat-head {
-  text-align: center;
-  padding: 1rem 0 1.25rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  margin-bottom: 1rem;
-}
 .jc-avatar {
-  width: 48px;
-  height: 48px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  margin: 0 auto 0.5rem;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  font-size: 1.1rem;
+  font-size: 0.8rem;
   color: #fff;
   background: linear-gradient(135deg, #0b84ff, #64d2ff);
 }
-.jc-name { font-weight: 600; font-size: 1rem; color: #e8e8ed; }
-.jc-sub { font-size: 0.78rem; color: #8a8a92; margin-top: 0.15rem; }
 
-.jc-pinned {
-  background: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 10px;
-  padding: 0.75rem 1rem;
-  margin: 0 0.25rem 1rem;
-  color: #dfe3ec;
+/* Earlier notes → thin inline "pinned" strip (no big boxed card). */
+.jc-pin {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0.4rem 0.25rem 0.6rem;
+  padding: 0.4rem 0.7rem;
+  background: rgba(255, 255, 255, 0.04);
+  border-left: 2px solid #e94560;
+  border-radius: 0 8px 8px 0;
+  color: #cdd2dc;
 }
-.jc-pinned-label {
-  font-size: 0.72rem;
+.jc-pin-label {
+  flex-shrink: 0;
+  font-size: 0.64rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: #8a8a92;
-  margin-bottom: 0.4rem;
 }
+.jc-pin-body { min-width: 0; font-size: 0.9rem; }
+.jc-pin-body .jc-p:first-child { margin-top: 0; }
+.jc-pin-body .jc-p:last-child { margin-bottom: 0; }
 
 .jc-empty {
   text-align: center;

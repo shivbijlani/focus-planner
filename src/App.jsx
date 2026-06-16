@@ -3061,7 +3061,7 @@ function renderJournalLines(lines, onNavigate) {
 }
 
 // Append a new "me" message to journal markdown, merging into today's bubble.
-function JournalChatView({ content, filePath, onContentUpdate, onNavigate }) {
+function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpenSidebar }) {
   const [showRaw, setShowRaw] = useState(false)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -3151,23 +3151,24 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate }) {
 
   return (
     <div className="journal-chat-view">
-      <div className="editor-header">
-        <button className="back-to-focus-btn" onClick={() => onNavigate(PLAN_FILE)} title="Back to Focus Plan">← Focus Plan</button>
-        <h1>{title}</h1>
+      <div className="jc-appbar">
+        {onOpenSidebar && (
+          <button className="jc-appbar-menu" onClick={onOpenSidebar} title="Open file menu" aria-label="Open file menu">☰</button>
+        )}
+        <button className="jc-appbar-back" onClick={() => onNavigate(PLAN_FILE)} title="Back to Focus Plan" aria-label="Back to Focus Plan">‹</button>
+        <div className="jc-avatar">{initials}</div>
+        <div className="jc-appbar-id">
+          <div className="jc-appbar-title" title={title}>{title}</div>
+          <div className="jc-appbar-sub">Notes to self</div>
+        </div>
         <button className="jc-toggle-btn" onClick={() => setShowRaw(true)} title="Edit raw markdown">✎ Raw</button>
       </div>
 
       <div className="jc-thread" ref={threadRef}>
-        <div className="jc-chat-head">
-          <div className="jc-avatar">{initials}</div>
-          <div className="jc-name">{title}</div>
-          <div className="jc-sub">Notes to self</div>
-        </div>
-
         {showPinnedCard && (
-          <div className="jc-pinned">
-            <div className="jc-pinned-label">📌 Earlier notes</div>
-            {renderJournalLines(parsed.pinned, onNavigate)}
+          <div className="jc-pin">
+            <span className="jc-pin-label">📌 Pinned</span>
+            <div className="jc-pin-body">{renderJournalLines(parsed.pinned, onNavigate)}</div>
           </div>
         )}
 
@@ -5304,6 +5305,7 @@ function App() {
               filePath={localPath}
               onContentUpdate={handleContentUpdate}
               onNavigate={handleNavigate}
+              onOpenSidebar={() => setSidebarOpen(true)}
             />
           ) : (
             <MarkdownView
