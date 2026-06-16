@@ -1546,10 +1546,10 @@ tr.highlight-flash {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 700;
-  font-size: 0.8rem;
-  color: #fff;
-  background: linear-gradient(135deg, #0b84ff, #64d2ff);
+  font-size: 1rem;
+  line-height: 1;
+  background: #1e2a44;
+  border: 1px solid #2c3a5c;
 }
 
 /* Earlier notes → thin inline "pinned" strip (no big boxed card). */

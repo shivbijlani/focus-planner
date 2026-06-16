@@ -3116,7 +3116,6 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
 
   const fileName = filePath.split(/[/\\]/).pop()
   const title = parsed.title || fileName
-  const initials = (title.match(/\b\w/g) || ['S']).slice(0, 2).join('').toUpperCase()
 
   // When a journal has dated/authored chat below, undated leading content is
   // shown as a pinned "Earlier notes" card. But when the whole file is undated
@@ -3156,7 +3155,7 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
           <button className="jc-appbar-menu" onClick={onOpenSidebar} title="Open file menu" aria-label="Open file menu">☰</button>
         )}
         <button className="jc-appbar-back" onClick={() => onNavigate(PLAN_FILE)} title="Back to Focus Plan" aria-label="Back to Focus Plan">‹</button>
-        <div className="jc-avatar">{initials}</div>
+        <div className="jc-avatar" aria-hidden="true">📔</div>
         <div className="jc-appbar-id">
           <div className="jc-appbar-title" title={title}>{title}</div>
           <div className="jc-appbar-sub">Notes to self</div>
