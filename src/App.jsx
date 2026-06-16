@@ -1184,6 +1184,10 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
   const [contextMenu, setContextMenu] = useState(null)
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [adoLinkDialog, setAdoLinkDialog] = useState(null)
+  // #274: default-scroll the board to the right on mobile so Task/priority land
+  // first and the least-useful ID column sits one swipe to the left.
+  const tableContainerRef = useRef(null)
+  const didInitialScrollRef = useRef(false)
   
   // Sort rows: urgent first, then manager priority, then dependency depth, then eisenhower icon
   const { sortedRows, sortedRawLines } = sortTasksByPriority(rows, rawLines, headers, linkedIdMap, managerPriorities)
@@ -1194,7 +1198,20 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
     filterRowsAndRawLines(sortedRows, sortedRawLines, searchQuery)
   // While searching, force the section open so matches are visible.
   const effectiveOpen = isSearching ? true : isOpen
-  
+
+  // On narrow (mobile) viewports, land the board scrolled to the right so the
+  // Task/priority columns are visible first (#274). Runs once per mount so it
+  // never fights the user after they manually scroll back to the ID column.
+  useEffect(() => {
+    if (!effectiveOpen || didInitialScrollRef.current) return
+    const el = tableContainerRef.current
+    if (!el) return
+    if (window.matchMedia && window.matchMedia('(max-width: 640px)').matches) {
+      el.scrollLeft = el.scrollWidth
+    }
+    didInitialScrollRef.current = true
+  }, [effectiveOpen, visibleRows.length])
+
   const isTaskSection = title === 'Today' || title === 'Deferred'
   if (sortedRows.length === 0 && !showAddDialog && !isTaskSection) return null
   
@@ -1418,7 +1435,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
         </button>
       </h2>
       {effectiveOpen && (
-        <div className="task-table-container">
+        <div className="task-table-container" ref={tableContainerRef}>
           <table className="task-table">
             <thead>
               <tr>
