@@ -581,6 +581,15 @@ tr.highlight-flash {
   animation: flash-highlight 1.5s ease-out;
 }
 
+/* Respect reduced-motion: no animated fade — show a brief static highlight that
+   the JS removes after ~1.5s instead. */
+@media (prefers-reduced-motion: reduce) {
+  tr.highlight-flash {
+    animation: none;
+    background-color: rgba(59, 130, 246, 0.25);
+  }
+}
+
 /* Hover-reveal arrow button for adding a link */
 .linked-id-add-btn {
   margin-left: 0.15rem;
