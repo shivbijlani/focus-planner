@@ -11,6 +11,7 @@ import {
 } from './storage/sources.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority, isNeededForUrgentTask } from './taskSort.js'
 import { computeMoveSet, computeBrokenLinks, renumberMovedRows, maxTaskIdInRows, retitleJournal } from './moveTask.js'
+import { scrollToAndFlashTask } from './scrollToTask.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
@@ -1497,33 +1498,7 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
   }
   
   const scrollToTask = (taskId) => {
-    if (!taskId) return
-    let targetRow = document.querySelector(`tr[data-task-id="${taskId}"]`)
-    if (targetRow) {
-      targetRow.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      targetRow.classList.add('highlight-flash')
-      setTimeout(() => targetRow.classList.remove('highlight-flash'), 1500)
-      return
-    }
-    // Expand collapsed sections and retry
-    const collapsedHeaders = document.querySelectorAll('.task-section:not(.manager-priorities-section) .section-header .collapse-icon, .task-section:not(.personal-priorities-section) .section-header .collapse-icon')
-    let expanded = false
-    collapsedHeaders.forEach(icon => {
-      if (icon.textContent.trim() === '▶') {
-        icon.closest('.section-header').click()
-        expanded = true
-      }
-    })
-    if (expanded) {
-      setTimeout(() => {
-        targetRow = document.querySelector(`tr[data-task-id="${taskId}"]`)
-        if (targetRow) {
-          targetRow.scrollIntoView({ behavior: 'smooth', block: 'center' })
-          targetRow.classList.add('highlight-flash')
-          setTimeout(() => targetRow.classList.remove('highlight-flash'), 1500)
-        }
-      }, 150)
-    }
+    scrollToAndFlashTask(taskId)
   }
   
   const handleAdd = () => {
@@ -1884,6 +1859,13 @@ function buildLinkedIdMap(tableLines) {
 }
 
 // Focus Plan View component
+// After adding a task we wait a tick for React to commit the new row to the DOM,
+// then scroll to it and flash it so the user can see where it landed (#268).
+const SCROLL_AFTER_ADD_MS = 120
+function scrollToNewTaskAfterRender(taskId) {
+  setTimeout(() => scrollToAndFlashTask(taskId), SCROLL_AFTER_ADD_MS)
+}
+
 function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
@@ -2287,6 +2269,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
         lines.splice(insertIndex, 0, newRow)
       }
       await onContentUpdate(lines.join('\n'))
+      scrollToNewTaskAfterRender(newId)
     }
   }
   
@@ -2345,6 +2328,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
     }
 
     await onContentUpdate(lines.join('\n'))
+    scrollToNewTaskAfterRender(newId)
   }
 
   const handlePromoteTodo = async (todoText, parentTaskId, parentRow) => {
@@ -2391,6 +2375,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
       const newRow = `| ${newId} | 🟡 | ${cleanTodoText} | - | ${today} | ${parentTaskId} |`
       lines.splice(insertIndex, 0, newRow)
       await onContentUpdate(lines.join('\n'))
+      scrollToNewTaskAfterRender(newId)
     }
   }
   
