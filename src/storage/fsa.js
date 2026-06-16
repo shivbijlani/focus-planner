@@ -158,6 +158,23 @@ export async function getMaxJournalId(dirHandle) {
   }
 }
 
+/**
+ * The set of task IDs that have a journal file. Used as a collision-skip set
+ * when allocating a new task ID so we never reuse an ID whose journal still
+ * exists — without letting a stray high ID inflate the numbering.
+ */
+export async function getJournalIds(dirHandle) {
+  const ids = new Set()
+  try {
+    const journalDir = await dirHandle.getDirectoryHandle('journal')
+    for await (const [name] of journalDir.entries()) {
+      const m = name.match(/^task-(\d+)\.md$/)
+      if (m) ids.add(parseInt(m[1], 10))
+    }
+  } catch { /* no journal dir yet */ }
+  return ids
+}
+
 const SCAFFOLD_PLAN = `## Today
 
 | ID | 🎯 | Task | Work Priority | Added | Linked ID |

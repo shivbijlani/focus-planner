@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { computeMoveSet, computeBrokenLinks } from './moveTask.js'
+import {
+  computeMoveSet, computeBrokenLinks,
+  renumberMovedRows, maxTaskIdInRows, rewriteRowId, parseLocalId, retitleJournal,
+} from './moveTask.js'
 
 describe('computeMoveSet', () => {
   it('returns just the task itself when it is not a manager priority', () => {
@@ -48,5 +51,71 @@ describe('computeBrokenLinks', () => {
     const linkedIdMap = { '1': '99' }
     const broken = computeBrokenLinks(new Set(['5']), linkedIdMap, {})
     expect(broken).toEqual([])
+  })
+})
+
+describe('parseLocalId / maxTaskIdInRows', () => {
+  it('parses a plain and an ADO-suffixed ID cell', () => {
+    expect(parseLocalId('271')).toBe('271')
+    expect(parseLocalId('426576,[419965](https://x/419965)')).toBe('426576')
+  })
+
+  it('finds the max local task ID across rows, ignoring header/separator', () => {
+    const content = [
+      '## Today',
+      '| ID | 🎯 | Task | P | Added | Linked ID |',
+      '|---|---|---|---|---|---|',
+      '| 5 | 🟡 | A | - | d | |',
+      '| 12,[999](u) | 🟡 | B | - | d | |',
+      '| 9 | 🟡 | C | - | d | |',
+    ].join('\n')
+    expect(maxTaskIdInRows(content)).toBe(12)
+  })
+})
+
+describe('rewriteRowId', () => {
+  it('replaces the local ID and preserves an ADO suffix', () => {
+    const row = '| 426576,[419965](https://x/419965) | 🟡 | Task | - | 2026-06-16 | 192 |'
+    const out = rewriteRowId(row, '262', new Map())
+    expect(out).toContain('| 262,[419965](https://x/419965) |')
+    expect(out).toContain('| 192 |') // linked id untouched (not in map)
+  })
+
+  it('remaps a linked ID that points at another moving task', () => {
+    const row = '| 426588 | 🟡 | Task | - | 2026-06-16 | 426587 |'
+    const idMap = new Map([['426587', '272'], ['426588', '273']])
+    const out = rewriteRowId(row, '273', idMap)
+    expect(out).toContain('| 273 |')
+    expect(out).toContain('| 272 |')
+  })
+})
+
+describe('renumberMovedRows', () => {
+  it('renumbers moved rows into the target sequence (no foreign IDs cross)', () => {
+    const movingRows = [
+      { taskId: '426587', rawLine: '| 426587 | 🟡 | Food tracker | - | 2026-06-16 | |' },
+      { taskId: '426588', rawLine: '| 426588 | 🟡 | Llm | - | 2026-06-16 | 426587 |' },
+    ]
+    // Target folder's own max is 271.
+    const { idMap, rows } = renumberMovedRows(movingRows, 271)
+    expect(idMap.get('426587')).toBe('272')
+    expect(idMap.get('426588')).toBe('273')
+    expect(rows[0].newRawLine).toContain('| 272 |')
+    // Within-set link remapped 426587 -> 272.
+    expect(rows[1].newRawLine).toContain('| 273 |')
+    expect(rows[1].newRawLine).toContain('| 272 |')
+  })
+
+  it('skips target IDs already taken by an existing journal', () => {
+    const movingRows = [{ taskId: '900', rawLine: '| 900 | 🟡 | X | - | d | |' }]
+    const { idMap } = renumberMovedRows(movingRows, 271, new Set([272, 273]))
+    expect(idMap.get('900')).toBe('274')
+  })
+})
+
+describe('retitleJournal', () => {
+  it('rewrites the task heading to the new ID', () => {
+    expect(retitleJournal('# Task 426580: Parade\n\nbody', '266'))
+      .toBe('# Task 266: Parade\n\nbody')
   })
 })

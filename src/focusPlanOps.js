@@ -186,11 +186,33 @@ function findInsertAndMaxId(lines, section) {
   return { insertIndex, maxId }
 }
 
-export function opAddTask(content, { task, priority, linkedTask, section }, baselineMaxId = 0) {
+/**
+ * Allocate the next task ID.
+ *
+ * Numbering is driven by the planner's own task rows (`contentMaxId`), NOT by
+ * the journal folder. Existing journal IDs are only used as a collision-skip
+ * set so we never reuse an ID whose journal still exists. This means a stray
+ * or foreign high-numbered journal (e.g. one copied in from another folder)
+ * can no longer inflate the numbering — it simply isn't contiguous with
+ * `contentMaxId + 1`, so the skip loop never reaches it.
+ *
+ * `existingJournalIds` may be a Set<number>; any other value (including the
+ * legacy numeric `baselineMaxId`) is ignored so old callers stay correct.
+ */
+export function allocateNextId(contentMaxId, existingJournalIds) {
+  const ids = existingJournalIds instanceof Set ? existingJournalIds : null
+  let id = (contentMaxId || 0) + 1
+  if (ids) {
+    while (ids.has(id)) id++
+  }
+  return id
+}
+
+export function opAddTask(content, { task, priority, linkedTask, section }, existingJournalIds = new Set()) {
   const lines = content.split('\n')
   const { insertIndex, maxId } = findInsertAndMaxId(lines, section)
   if (insertIndex === -1) return content
-  const newId = Math.max(maxId, baselineMaxId) + 1
+  const newId = allocateNextId(maxId, existingJournalIds)
   const today = new Date().toISOString().split('T')[0]
   const trimmedLinked = linkedTask ? linkedTask.trim() : ''
   const isUrl = /^https?:\/\//.test(trimmedLinked)
@@ -209,11 +231,11 @@ export function opAddTask(content, { task, priority, linkedTask, section }, base
   return { content: lines.join('\n'), newId }
 }
 
-export function opPromoteTodoToTask(content, todoText, parentTaskId, baselineMaxId = 0) {
+export function opPromoteTodoToTask(content, todoText, parentTaskId, existingJournalIds = new Set()) {
   const lines = content.split('\n')
   const { insertIndex, maxId } = findInsertAndMaxId(lines, 'Today')
   if (insertIndex === -1) return content
-  const newId = Math.max(maxId, baselineMaxId) + 1
+  const newId = allocateNextId(maxId, existingJournalIds)
   const today = new Date().toISOString().split('T')[0]
   const cleanText = todoText.replace(/^TODO:\s*/i, '').trim()
   const row = `| ${newId} | 🟡 | ${cleanText} | - | ${today} | ${parentTaskId} |`
@@ -221,11 +243,11 @@ export function opPromoteTodoToTask(content, todoText, parentTaskId, baselineMax
   return { content: lines.join('\n'), newId }
 }
 
-export function opAddAndPrioritize(content, taskName, prioritySectionTitle, baselineMaxId = 0) {
+export function opAddAndPrioritize(content, taskName, prioritySectionTitle, existingJournalIds = new Set()) {
   const lines = content.split('\n')
   const { insertIndex, maxId } = findInsertAndMaxId(lines, 'Today')
   if (insertIndex === -1) return content
-  const newId = Math.max(maxId, baselineMaxId) + 1
+  const newId = allocateNextId(maxId, existingJournalIds)
   const today = new Date().toISOString().split('T')[0]
   lines.splice(insertIndex, 0, `| ${newId} | 🟡 | ${taskName} | - | ${today} | |`)
 

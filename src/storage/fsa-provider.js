@@ -5,7 +5,7 @@ import {
   pickFolder, restoreFolder, forgetFolder,
   readFile, writeFile, deleteFile,
   journalExists, listFiles,
-  getMaxJournalId, scaffoldIfEmpty,
+  getMaxJournalId, getJournalIds, scaffoldIfEmpty,
 } from './fsa.js'
 
 export class FSAProvider {
@@ -61,5 +61,9 @@ export class FSAProvider {
 
   async maxJournalId() {
     return getMaxJournalId(this._handle)
+  }
+
+  async journalIds() {
+    return getJournalIds(this._handle)
   }
 }

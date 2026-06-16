@@ -87,6 +87,15 @@ export class LocalStorageProvider {
     return max
   }
 
+  async journalIds() {
+    const ids = new Set()
+    for (const k of allKeys()) {
+      const m = k.slice(PREFIX.length).match(/^journal\/task-(\d+)\.md$/)
+      if (m) ids.add(parseInt(m[1], 10))
+    }
+    return ids
+  }
+
   /** Flat list of all stored paths (for migration). */
   listAllPaths() {
     return allKeys().map(k => k.slice(PREFIX.length))
