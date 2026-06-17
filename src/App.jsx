@@ -11,6 +11,9 @@ import {
 } from './storage/sources.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority, isNeededForUrgentTask } from './taskSort.js'
 import { computeMoveSet, computeBrokenLinks, renumberMovedRows, maxTaskIdInRows, retitleJournal } from './moveTask.js'
+// SELF_HEAL_IDS (temporary): renumber runaway/foreign task IDs on load. Safe to
+// delete this import + selfHealIds.js + its call site once all devices healed.
+import { selfHealOutlierIds } from './selfHealIds.js'
 import { scrollToAndFlashTask } from './scrollToTask.js'
 import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery } from './boardSearch.js'
 import { StoragePicker } from './StoragePicker.jsx'
@@ -3469,6 +3472,37 @@ async function ensureUniqueIds(content, updateFile) {
   return content
 }
 
+/**
+ * SELF_HEAL_IDS (temporary defence-in-depth).
+ *
+ * After load, renumber any "runaway" outlier task IDs (e.g. a stray 426xxx
+ * cluster that arrived via sync) back into the planner's own sequence, and
+ * rename the matching journal files. Idempotent and a no-op for a healthy
+ * planner. Delete this function, its import, selfHealIds.js, and the call site
+ * once every device has loaded once.
+ */
+async function selfHealRunawayIds(content, updateFile) {
+  const journalIds = await getJournalIds()
+  const { content: healed, idMap, changed } = selfHealOutlierIds(content, { journalIds })
+  if (!changed) return content
+
+  await updateFile(healed)
+
+  // Rename + retitle each renamed task's journal (best-effort).
+  for (const [oldId, newId] of idMap) {
+    const fromPath = `journal/task-${oldId}.md`
+    const toPath = `journal/task-${newId}.md`
+    try {
+      const jc = await storage.read(fromPath)
+      if (typeof jc === 'string') {
+        await storage.write(toPath, jc.replace(/^# Task \d+:/, `# Task ${newId}:`))
+        await storage.remove(fromPath)
+      }
+    } catch { /* no journal for this task — fine */ }
+  }
+  return healed
+}
+
 const PROVIDER_ICONS = {
   [PROVIDERS.LOCAL_STORAGE]: '🗂️',
   [PROVIDERS.FSA]: '💾',
@@ -4311,7 +4345,28 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
           try {
             const text = await storage.readFromSource(s.id, PLAN_FILE)
             const migrated = migratePrioritiesSections(text) ?? text
-            return { source: s, content: migrated, sections: parseFocusPlan(migrated) }
+            // SELF_HEAL_IDS (temporary): renumber runaway/foreign outlier IDs
+            // for this source, writing back + renaming journals if anything changed.
+            let healed = migrated
+            try {
+              const journalIds = await storage.journalIdsFromSource(s.id)
+              const res = selfHealOutlierIds(migrated, { journalIds })
+              if (res.changed) {
+                await storage.writeToSource(s.id, PLAN_FILE, res.content)
+                for (const [oldId, newId] of res.idMap) {
+                  const fromPath = `journal/task-${oldId}.md`
+                  try {
+                    const jc = await storage.readFromSource(s.id, fromPath)
+                    if (typeof jc === 'string') {
+                      await storage.writeToSource(s.id, `journal/task-${newId}.md`, jc.replace(/^# Task \d+:/, `# Task ${newId}:`))
+                      await storage.removeFromSource(s.id, fromPath)
+                    }
+                  } catch { /* no journal — fine */ }
+                }
+                healed = res.content
+              }
+            } catch { /* healing is best-effort */ }
+            return { source: s, content: healed, sections: parseFocusPlan(healed) }
           } catch {
             return { source: s, content: '', sections: [] }
           }
@@ -5074,7 +5129,11 @@ function App() {
         const updatedContent = await ensureUniqueIds(startContent, async (newContent) => {
           await storage.write(target, newContent)
         })
-        setContent(updatedContent)
+        // SELF_HEAL_IDS (temporary): fix any runaway/foreign outlier IDs.
+        const healedContent = await selfHealRunawayIds(updatedContent, async (newContent) => {
+          await storage.write(target, newContent)
+        })
+        setContent(healedContent)
       } else {
         setContent(text)
       }
