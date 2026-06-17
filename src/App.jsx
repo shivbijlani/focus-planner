@@ -1396,9 +1396,6 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
       >
         <span className="collapse-icon">{effectiveOpen ? '▼' : '▶'}</span>
         {title}
-        <span className="task-count">
-          {isSearching ? `(${matchCount} of ${sortedRows.length})` : `(${sortedRows.length})`}
-        </span>
         <span className="sort-info-wrapper" onClick={(e) => e.stopPropagation()}>
           <span className="sort-info-icon" title="Sort order">ⓘ</span>
           <span className="sort-info-tooltip">
@@ -1582,7 +1579,6 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
       >
         <span className="collapse-icon">{isOpen ? '▼' : '▶'}</span>
         {title}
-        <span className="task-count">({priorityList.length})</span>
         <button 
           className="add-task-btn"
           onClick={(e) => { e.stopPropagation(); setIsOpen(true); setIsAdding(true); }}
@@ -1615,9 +1611,6 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
                     <span className="priority-name priority-name-clickable" onClick={() => scrollToTask(id)} title={taskName}>
                       {taskName}
                     </span>
-                    {tasks.length > 0 && (
-                      <span className="priority-task-count">({tasks.length})</span>
-                    )}
                     <span className="priority-actions">
                       <button 
                         className="priority-move-btn" 
@@ -2021,17 +2014,8 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
       .catch(() => {})
   }, [])
 
-  // Total matches across the searchable board (Today + Deferred).
-  let searchTotal = 0
-  let searchMatches = 0
+  // Whether a search query is currently active.
   const hasQuery = !!normalizeQuery(search)
-  if (hasQuery) {
-    for (const section of taskSections) {
-      const { rows } = parseMarkdownTable(section.lines)
-      searchTotal += rows.length
-      for (const row of rows) if (taskRowMatchesSearch(row, search)) searchMatches++
-    }
-  }
 
   // Auto-hide the search box when the whole board already fits the viewport.
   // It stays visible while a query is active or while `/`-summoned (searchForced).
@@ -2865,8 +2849,6 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
 
   return (
     <div className="focus-plan-view" ref={viewRootRef}>
-      <h1>📋 {APP_NAME}</h1>
-
       {showSearch && (
         <div className="board-search" ref={searchBarRef}>
           <span className="board-search-icon" aria-hidden="true">🔍</span>
@@ -2882,7 +2864,6 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
           />
           {search && (
             <>
-              <span className="board-search-count">{searchMatches} of {searchTotal}</span>
               <button
                 type="button"
                 className="board-search-clear"
@@ -3030,7 +3011,6 @@ function CompletedWeekSection({ title, headers, rows, getPriorityClass, onNaviga
       <h2 className="section-header" onClick={() => setIsOpen(!isOpen)}>
         <span className="collapse-icon">{isOpen ? '▼' : '▶'}</span>
         {title}
-        <span className="task-count">({rows.length})</span>
       </h2>
       {isOpen && (
         <div className="task-table-container">
