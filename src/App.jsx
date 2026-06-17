@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useLayoutEffect } from 'react'
 import './App.css'
 import * as storage from './storage/storage.js'
 import { setActiveProvider, getActiveProvider, PROVIDERS, TARGET_STATUS, getProviderName } from './storage/storage.js'
@@ -1884,11 +1884,74 @@ function scrollToNewTaskAfterRender(taskId) {
   setTimeout(() => scrollToAndFlashTask(taskId), SCROLL_AFTER_ADD_MS)
 }
 
+/**
+ * Decides whether the board search box is worth showing. It is only useful when
+ * the task list is long enough to scroll/filter, so we hide it when everything
+ * already fits the viewport and reclaim that vertical space (#auto-hide-search).
+ *
+ * The decision is measured against the scrollable container's content height
+ * *excluding* the search bar itself — so toggling the bar can't change the
+ * outcome and cause a show/hide flicker loop. A small dead-band adds hysteresis
+ * against sub-pixel / scrollbar jitter.
+ *
+ * @param rootRef    ref to the view root (its parent is the scroll container)
+ * @param searchRef  ref to the search bar element (null when not rendered)
+ * @param forceShow  keep visible regardless (active query, or `/` summon)
+ * @returns boolean — whether the search box is needed
+ */
+const SEARCH_BAR_MARGIN_PX = 16 // .board-search margin-bottom (1rem)
+const OVERFLOW_DEADBAND_PX = 6
+function useSearchNeeded(rootRef, searchRef, forceShow) {
+  // Default to visible so a long list (the common case) never flashes hidden.
+  const [needed, setNeeded] = useState(true)
+
+  useLayoutEffect(() => {
+    const root = rootRef.current
+    const scrollEl = root?.parentElement
+    if (!scrollEl) return
+
+    let raf = 0
+    const measure = () => {
+      raf = 0
+      const searchEl = searchRef.current
+      const searchSpace = searchEl ? searchEl.offsetHeight + SEARCH_BAR_MARGIN_PX : 0
+      // Height of the content if the search bar were not present.
+      const contentAlone = scrollEl.scrollHeight - (searchEl ? searchSpace : 0)
+      const overflow = contentAlone - scrollEl.clientHeight
+
+      setNeeded((prev) => {
+        if (forceShow) return true
+        if (prev && overflow < -OVERFLOW_DEADBAND_PX) return false // clearly fits → hide
+        if (!prev && overflow > OVERFLOW_DEADBAND_PX) return true  // clearly overflows → show
+        return prev
+      })
+    }
+    const schedule = () => { if (!raf) raf = requestAnimationFrame(measure) }
+
+    const ro = new ResizeObserver(schedule)
+    ro.observe(scrollEl)
+    ro.observe(root) // catches task add/remove, section/journal expand-collapse
+    window.addEventListener('resize', schedule)
+    schedule()
+
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', schedule)
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [rootRef, searchRef, forceShow])
+
+  return forceShow ? true : needed
+}
+
 function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
   const [search, setSearch] = useState('')
+  const [searchForced, setSearchForced] = useState(false)
   const searchInputRef = useRef(null)
+  const viewRootRef = useRef(null)
+  const searchBarRef = useRef(null)
   const sections = parseFocusPlan(content)
   
   // Find sections
@@ -1958,16 +2021,41 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
       .catch(() => {})
   }, [])
 
-  // Board search (#271): `/` focuses the search box, `Esc` clears it.
+  // Total matches across the searchable board (Today + Deferred).
+  let searchTotal = 0
+  let searchMatches = 0
+  const hasQuery = !!normalizeQuery(search)
+  if (hasQuery) {
+    for (const section of taskSections) {
+      const { rows } = parseMarkdownTable(section.lines)
+      searchTotal += rows.length
+      for (const row of rows) if (taskRowMatchesSearch(row, search)) searchMatches++
+    }
+  }
+
+  // Auto-hide the search box when the whole board already fits the viewport.
+  // It stays visible while a query is active or while `/`-summoned (searchForced).
+  const searchNeeded = useSearchNeeded(viewRootRef, searchBarRef, hasQuery || searchForced)
+  const showSearch = searchNeeded
+
+  // When the box is summoned via `/`, focus it once it actually renders.
+  useEffect(() => {
+    if (searchForced && showSearch) searchInputRef.current?.focus()
+  }, [searchForced, showSearch])
+
+  // Board search (#271): `/` focuses the search box (revealing it if hidden),
+  // `Esc` clears it and lets it auto-hide again.
   useEffect(() => {
     const onKeyDown = (e) => {
       const el = e.target
       const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
       if (e.key === '/' && !typing) {
         e.preventDefault()
+        setSearchForced(true)
         searchInputRef.current?.focus()
       } else if (e.key === 'Escape' && el === searchInputRef.current) {
         setSearch('')
+        setSearchForced(false)
         searchInputRef.current?.blur()
       }
     }
@@ -1975,17 +2063,6 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  // Total matches across the searchable board (Today + Deferred).
-  let searchTotal = 0
-  let searchMatches = 0
-  if (normalizeQuery(search)) {
-    for (const section of taskSections) {
-      const { rows } = parseMarkdownTable(section.lines)
-      searchTotal += rows.length
-      for (const row of rows) if (taskRowMatchesSearch(row, search)) searchMatches++
-    }
-  }
-  
   // Merge lookups: current tasks take priority (full lookup for display, active-only for dropdowns)
   const taskLookup = { ...completedTaskLookup, ...currentTaskLookup }
   const activeTaskIds = Object.keys(currentTaskLookup)
@@ -2787,36 +2864,38 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
   }
 
   return (
-    <div className="focus-plan-view">
+    <div className="focus-plan-view" ref={viewRootRef}>
       <h1>📋 {APP_NAME}</h1>
 
-      <div className="board-search">
-        <span className="board-search-icon" aria-hidden="true">🔍</span>
-        <input
-          ref={searchInputRef}
-          type="text"
-          className="board-search-input"
-          placeholder="Search tasks…  ( / to focus )"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
-          aria-label="Search tasks"
-        />
-        {search && (
-          <>
-            <span className="board-search-count">{searchMatches} of {searchTotal}</span>
-            <button
-              type="button"
-              className="board-search-clear"
-              onClick={() => { setSearch(''); searchInputRef.current?.focus() }}
-              title="Clear search (Esc)"
-              aria-label="Clear search"
-            >
-              ✕
-            </button>
-          </>
-        )}
-      </div>
+      {showSearch && (
+        <div className="board-search" ref={searchBarRef}>
+          <span className="board-search-icon" aria-hidden="true">🔍</span>
+          <input
+            ref={searchInputRef}
+            type="text"
+            className="board-search-input"
+            placeholder="Search tasks…  ( / to focus )"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') { setSearch(''); setSearchForced(false); e.currentTarget.blur() } }}
+            aria-label="Search tasks"
+          />
+          {search && (
+            <>
+              <span className="board-search-count">{searchMatches} of {searchTotal}</span>
+              <button
+                type="button"
+                className="board-search-clear"
+                onClick={() => { setSearch(''); searchInputRef.current?.focus() }}
+                title="Clear search (Esc)"
+                aria-label="Clear search"
+              >
+                ✕
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {taskSections.map((section, i) => (
         <TaskSection
