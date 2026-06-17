@@ -18,6 +18,7 @@ import { scrollToAndFlashTask } from './scrollToTask.js'
 import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery } from './boardSearch.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
+import { filterPlannerTree } from './fileTreeFilter.js'
 import * as ops from './focusPlanOps.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage } from './journalChat.js'
@@ -5060,7 +5061,7 @@ function App() {
       const liveSources = getSources()
       if (liveSources.length <= 1) {
         const data = await storage.getFiles()
-        setFiles(data)
+        setFiles(filterPlannerTree(data))
         return
       }
       const perSource = await Promise.all(
@@ -5085,7 +5086,7 @@ function App() {
         name: source.name,
         type: 'directory',
         path: `${source.id}::`,
-        children: prefixTreePaths(tree, source.id),
+        children: prefixTreePaths(filterPlannerTree(tree), source.id),
       }))
       setFiles([combinedFolder, ...sourceFolders])
     } catch (err) {
