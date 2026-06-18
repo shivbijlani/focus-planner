@@ -2142,6 +2142,10 @@ tr.highlight-flash {
 
 .mobile-sync-badge { display: none; }
 
+/* Search field hosted in the mobile header (#284). Hidden on desktop, where the
+   standalone .board-search row is used instead. */
+.mobile-board-search { display: none; }
+
 /* ── Link Picker Modal (used by ID column linking) ─────── */
 .link-picker-overlay {
   position: fixed;
@@ -2646,6 +2650,53 @@ tr.highlight-flash {
   .mobile-sync-badge .sync-dot {
     width: 10px;
     height: 10px;
+  }
+
+  /* Board search lives in the header on mobile instead of its own row (#284). */
+  .mobile-board-search {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex: 1;
+    min-width: 0;
+    background: #0d1b35;
+    border: 1px solid #1a4a7a;
+    border-radius: 6px;
+    padding: 0.1rem 0.5rem;
+  }
+
+  .mobile-board-search .board-search-icon {
+    font-size: 0.85rem;
+    opacity: 0.8;
+  }
+
+  .mobile-board-search .board-search-input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: none;
+    color: #e2e8f0;
+    font-size: 0.95rem;
+    padding: 0.4rem 0;
+    outline: none;
+  }
+
+  .mobile-board-search .board-search-input:focus {
+    box-shadow: none;
+  }
+
+  .mobile-board-search .board-search-clear {
+    flex-shrink: 0;
+  }
+
+  /* On the board the header hosts the search, so drop the redundant file name. */
+  .mobile-nav-bar:has(.mobile-board-search) .mobile-file-name {
+    display: none;
+  }
+
+  /* The standalone board-search row is replaced by the header search on mobile. */
+  .board-search {
+    display: none;
   }
 
   .task-table {

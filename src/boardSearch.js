@@ -7,6 +7,15 @@ export function normalizeQuery(query) {
 }
 
 /**
+ * Placeholder text for the board search input. On touch / coarse-pointer
+ * devices there is no physical keyboard, so the "/ to focus" hint (and the
+ * shortcut behind it) is dead weight — drop it. Desktop keeps the hint.
+ */
+export function boardSearchPlaceholder(isCoarsePointer) {
+  return isCoarsePointer ? 'Search tasks…' : 'Search tasks…  ( / to focus )'
+}
+
+/**
  * A task row matches the search if the (normalized) query is a substring of its
  * ID or its Task text. An empty query matches everything.
  */
