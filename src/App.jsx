@@ -11,6 +11,7 @@ import {
 } from './storage/sources.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority, isNeededForUrgentTask } from './taskSort.js'
 import { computeMoveSet, computeBrokenLinks, renumberMovedRows, maxTaskIdInRows, retitleJournal } from './moveTask.js'
+import { tagMergedRows, resolveRowSourceId } from './combinedRouting.js'
 // SELF_HEAL_IDS (temporary): renumber runaway/foreign task IDs on load. Safe to
 // delete this import + selfHealIds.js + its call site once all devices healed.
 import { selfHealOutlierIds } from './selfHealIds.js'
@@ -989,7 +990,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                     onSelect={(tid) => {
                       const oldLinkedId = linkedId || ''
                       setIsEditingLinkedId(false)
-                      if (tid !== oldLinkedId) onChangeLinkedId(rawLine, tid)
+                      if (tid !== oldLinkedId) onChangeLinkedId(rawLine, tid, row.__sourceId)
                     }}
                     onCancel={() => setIsEditingLinkedId(false)}
                   />
@@ -1033,7 +1034,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
             
             const saveEdit = () => {
               if (editText.trim() && editText !== cellValue) {
-                onRenameTask(rawLine, editText.trim())
+                onRenameTask(rawLine, editText.trim(), row.__sourceId)
               }
               setIsEditing(false)
             }
@@ -1139,7 +1140,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                 <PriorityDropdown 
                   currentPriority={cellValue || '⚪'} 
                   isNeededForUrgent={isNeededForUrgent}
-                  onChangePriority={(newPriority) => onChangePriority(rawLine, cellValue, newPriority)}
+                  onChangePriority={(newPriority) => onChangePriority(rawLine, cellValue, newPriority, row.__sourceId)}
                 />
               </td>
             )
@@ -1182,9 +1183,13 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
 
 // Collapsible section component
 // Collapsible section component
-function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource, onDeferBelow, searchQuery = '' }) {
+function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource, onDeferBelow, searchQuery = '' }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const { headers, rows, rawLines } = parseMarkdownTable(tableLines)
+  // Combined view (#39): tag each row with its owning source so destructive
+  // ops route back to the correct source even when two sources share an
+  // identical row text / id. `lineSourceIds` is parallel to the data rows.
+  if (lineSourceIds) tagMergedRows(rows, lineSourceIds)
   const [contextMenu, setContextMenu] = useState(null)
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [adoLinkDialog, setAdoLinkDialog] = useState(null)
@@ -1289,7 +1294,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
       options.push({
         label: 'Defer',
         icon: '📅',
-        action: () => onTaskAction('defer', rawLine, 'Today', 'Deferred')
+        action: () => onTaskAction('defer', rawLine, 'Today', 'Deferred', row.__sourceId)
       })
       // "Defer all below" cut-line action — only when a handler is provided
       // (single-source view) and there are tasks below the clicked row.
@@ -1308,7 +1313,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
       options.push({
         label: 'Move to Today',
         icon: '⬆️',
-        action: () => onTaskAction('move', rawLine, 'Deferred', 'Today')
+        action: () => onTaskAction('move', rawLine, 'Deferred', 'Today', row.__sourceId)
       })
     }
     
@@ -1363,7 +1368,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
     options.push({
       label: currentAdoLink ? 'Edit external link' : 'External link',
       icon: '🔗',
-      action: () => setAdoLinkDialog({ rawLine, currentUrl: currentAdoLink ? currentAdoLink.url : '' })
+      action: () => setAdoLinkDialog({ rawLine, currentUrl: currentAdoLink ? currentAdoLink.url : '', sourceId: row.__sourceId })
     })
     
     // Add "Move to {source}" options when there are multiple sources.
@@ -1477,7 +1482,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
         <AdoLinkDialog
           currentUrl={adoLinkDialog.currentUrl}
           onClose={() => setAdoLinkDialog(null)}
-          onSave={(adoLink) => onLinkToAdoBugDb(adoLinkDialog.rawLine, adoLink)}
+          onSave={(adoLink) => onLinkToAdoBugDb(adoLinkDialog.rawLine, adoLink, adoLinkDialog.sourceId)}
         />
       )}
     </div>
@@ -4479,6 +4484,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
     let header = null
     let separator = null
     const dataLines = []
+    const dataSourceIds = []
     for (const { source, sections } of perSource) {
       const sec = sections.find(s => s.title === title)
       if (!sec) continue
@@ -4496,6 +4502,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
           continue
         }
         dataLines.push(line)
+        dataSourceIds.push(source.id)
         lineToSource.set(trimmed, source.id)
         const idCell = cells[0]
         const localId = idCell.indexOf(',[') !== -1
@@ -4506,11 +4513,17 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
     }
     if (!header) header = '| ID | 🎯 | Task | Priority | Added | Linked ID |'
     if (!separator) separator = '|---|---|------|----------|-------|-----------|'
-    return [header, separator, ...dataLines]
+    // `sourceIds` is parallel to the data rows (not the header/separator) so the
+    // combined view can tag each rendered row with its owning source (#39).
+    return { lines: [header, separator, ...dataLines], sourceIds: dataSourceIds }
   }
 
-  const todaySectionLines = buildMergedSection('Today')
-  const deferredSectionLines = buildMergedSection('Deferred')
+  const todayMerged = buildMergedSection('Today')
+  const deferredMerged = buildMergedSection('Deferred')
+  const todaySectionLines = todayMerged.lines
+  const todaySourceIds = todayMerged.sourceIds
+  const deferredSectionLines = deferredMerged.lines
+  const deferredSourceIds = deferredMerged.sourceIds
 
   // Build merged lookups for resolveManagerPriority / linked tasks.
   // taskLookup is many-to-one (taskId → name). On collision we keep the
@@ -4544,6 +4557,9 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
 
   const sourceForLine = (rawLine) => lineToSource.get(rawLine.trim())
   const sourceForTask = (taskId) => taskIdToSource.get(String(taskId))
+  // #39: prefer the row's own source tag over the ambiguous text/id lookup so
+  // destructive ops route to the correct source when two folders collide.
+  const sourceForRow = (row, rawLine) => resolveRowSourceId(row, rawLine, lineToSource)
 
   const applyOp = async (sourceId, opFn) => {
     if (!sourceId) return
@@ -4557,23 +4573,23 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
 
   // ── Today / Deferred handlers ──────────────────────────────────────
 
-  const handleTaskAction = (action, rawLine, fromSection, toSection) =>
-    applyOp(sourceForLine(rawLine), c => ops.opMoveBetweenSections(c, rawLine, fromSection, toSection))
+  const handleTaskAction = (action, rawLine, fromSection, toSection, sourceIdHint) =>
+    applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opMoveBetweenSections(c, rawLine, fromSection, toSection))
 
-  const handleChangePriority = (rawLine, oldPriority, newPriority) =>
-    applyOp(sourceForLine(rawLine), c => ops.opChangePriority(c, rawLine, oldPriority, newPriority))
+  const handleChangePriority = (rawLine, oldPriority, newPriority, sourceIdHint) =>
+    applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opChangePriority(c, rawLine, oldPriority, newPriority))
 
-  const handleRenameTask = (rawLine, newTaskName) =>
-    applyOp(sourceForLine(rawLine), c => ops.opRenameTask(c, rawLine, newTaskName))
+  const handleRenameTask = (rawLine, newTaskName, sourceIdHint) =>
+    applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opRenameTask(c, rawLine, newTaskName))
 
-  const handleChangeLinkedId = (rawLine, newLinkedId) =>
-    applyOp(sourceForLine(rawLine), c => ops.opChangeLinkedId(c, rawLine, newLinkedId))
+  const handleChangeLinkedId = (rawLine, newLinkedId, sourceIdHint) =>
+    applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opChangeLinkedId(c, rawLine, newLinkedId))
 
-  const handleLinkToAdoBugDb = (rawLine, adoLink) =>
-    applyOp(sourceForLine(rawLine), c => ops.opLinkToAdoBugDb(c, rawLine, adoLink))
+  const handleLinkToAdoBugDb = (rawLine, adoLink, sourceIdHint) =>
+    applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opLinkToAdoBugDb(c, rawLine, adoLink))
 
   const handleDeleteTask = async (rawLine, fromSection, journalPath, taskId, row) => {
-    const sid = sourceForLine(rawLine)
+    const sid = sourceForRow(row, rawLine)
     if (!sid) return
 
     // Check for incoming links across ALL sources to bridge
@@ -4646,7 +4662,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
   }
 
   const handleMoveToCompleted = async (rawLine, row, fromSection) => {
-    const sid = sourceForLine(rawLine)
+    const sid = sourceForRow(row, rawLine)
     if (!sid) return
     const taskId = extractTaskId(row)
 
@@ -4738,7 +4754,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
 
   const handleMoveToSource = (rawLine, row, taskId, targetSourceId, explicitFromSourceId = null) => {
     if (!targetSourceId || !taskId) return
-    const fromSourceId = explicitFromSourceId || sourceForLine(rawLine)
+    const fromSourceId = explicitFromSourceId || sourceForRow(row, rawLine)
     if (!fromSourceId || fromSourceId === targetSourceId) return
     const target = sources.find(s => s.id === targetSourceId)
     if (!target) return
@@ -4940,6 +4956,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
       <TaskSection
         title="Today"
         tableLines={todaySectionLines}
+        lineSourceIds={todaySourceIds}
         onNavigate={onNavigate}
         defaultOpen={true}
         managerPriorities={managerPriorities}
@@ -4968,6 +4985,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
       <TaskSection
         title="Deferred"
         tableLines={deferredSectionLines}
+        lineSourceIds={deferredSourceIds}
         onNavigate={onNavigate}
         defaultOpen={false}
         managerPriorities={managerPriorities}
