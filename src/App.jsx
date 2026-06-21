@@ -22,6 +22,7 @@ import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage } from './journalChat.js'
+import { saveScrollPosition, getSavedScrollPosition, clampScrollTop } from './boardScroll.js'
 import {
   InstallButton, InstallModal, InstallNudge,
   InstallSettingsSection, InstallSuccessToast,
@@ -5113,7 +5114,10 @@ function App() {
   const [selectedFile, setSelectedFile] = useState(PLAN_FILE)
   const [content, setContent] = useState('')
   const selectedFileRef = useRef(PLAN_FILE)
+  const contentRef = useRef(null)
   const [pendingScrollToTaskId, setPendingScrollToTaskId] = useState(null)
+  // Saved board scroll offset to reapply after returning from a journal (#278).
+  const [pendingScrollRestore, setPendingScrollRestore] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   // Re-render trigger for the source list when Settings mutates it.
   const [sourcesVersion, setSourcesVersion] = useState(0)
@@ -5172,7 +5176,22 @@ function App() {
   }
 
   const handleSelectFile = async (qualifiedPath) => {
+    // Remember where we were on the board before leaving it, so coming back
+    // from a journal lands at the same spot instead of the top (#278). Only the
+    // board view scrolls the `.content` container; the journal scrolls
+    // internally, so its scrollTop is irrelevant here. Key by local path so the
+    // bare PLAN_FILE used by the journal's Back button matches a board that was
+    // qualified (`source::planner.md`).
+    const { path: curLocal } = splitSourcePath(selectedFile)
+    if (contentRef.current) {
+      saveScrollPosition(curLocal || selectedFile, contentRef.current.scrollTop)
+    }
     const { sourceId, path } = splitSourcePath(qualifiedPath)
+    const destLocal = path || qualifiedPath
+    if (destLocal === PLAN_FILE) {
+      const saved = getSavedScrollPosition(destLocal)
+      setPendingScrollRestore(saved != null ? { top: saved } : null)
+    }
     setSelectedFile(qualifiedPath)
     selectedFileRef.current = path
     setSidebarOpen(false)
@@ -5477,6 +5496,44 @@ function App() {
     }, 200)
   }, [content, pendingScrollToTaskId])
 
+  // Restore the board's scroll position after returning from a journal (#278).
+  // The board can re-render a few frames after we return (a one-time id
+  // migration, an ensureUniqueIds rewrite, or a sync pull), and each re-render
+  // resets scrollTop to 0 — so a single restore loses the position. We reapply
+  // the saved offset across a short settle window, clamped to the board's
+  // current height, and cancel the moment the user scrolls so we never fight
+  // them.
+  useEffect(() => {
+    if (!pendingScrollRestore) return
+    const el = contentRef.current
+    if (!el) { setPendingScrollRestore(null); return }
+    const { top } = pendingScrollRestore
+    let cancelled = false
+    const apply = () => {
+      if (cancelled || !contentRef.current) return
+      const c = contentRef.current
+      c.scrollTop = clampScrollTop(top, c.scrollHeight, c.clientHeight)
+    }
+    const stop = () => { cancelled = true }
+    const gestureOpts = { passive: true, once: true }
+    el.addEventListener('wheel', stop, gestureOpts)
+    el.addEventListener('touchstart', stop, gestureOpts)
+    el.addEventListener('pointerdown', stop, gestureOpts)
+    apply()
+    const raf = requestAnimationFrame(apply)
+    const timers = [60, 150, 300, 500].map(ms => setTimeout(apply, ms))
+    const done = setTimeout(() => setPendingScrollRestore(null), 650)
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf)
+      timers.forEach(clearTimeout)
+      clearTimeout(done)
+      el.removeEventListener('wheel', stop, gestureOpts)
+      el.removeEventListener('touchstart', stop, gestureOpts)
+      el.removeEventListener('pointerdown', stop, gestureOpts)
+    }
+  }, [pendingScrollRestore])
+
   const handleContentUpdate = async (newContent) => {
     const { path, sourceId } = splitSourcePath(selectedFile)
     if (sourceId === COMBINED_ID) return // Combined view is read-only
@@ -5532,7 +5589,7 @@ function App() {
           onDataChanged={loadFiles}
         />
       </aside>
-      <main className={`content${isJournal ? ' content-chat' : ''}`}>
+      <main ref={contentRef} className={`content${isJournal ? ' content-chat' : ''}`}>
         <div className="mobile-nav-bar">
           <button
             className="mobile-menu-btn"
