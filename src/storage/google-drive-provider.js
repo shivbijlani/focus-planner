@@ -3,7 +3,6 @@
  * Files are stored under a named folder (default: "Planner") in the user's
  * Drive root so they're easy to find. Folder name is overridable per-source.
  */
-import { parseTodos } from './fsa.js'
 import { PLAN_FILE, COMPLETED_FILE, CLOUD_FOLDER_NAME } from '../config/branding.js'
 import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
 

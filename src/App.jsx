@@ -16,12 +16,18 @@ import { tagMergedRows, resolveRowSourceId } from './combinedRouting.js'
 // delete this import + selfHealIds.js + its call site once all devices healed.
 import { selfHealOutlierIds } from './selfHealIds.js'
 import { scrollToAndFlashTask } from './scrollToTask.js'
-import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery } from './boardSearch.js'
+import { filterRowsAndRawLines, normalizeQuery } from './boardSearch.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage } from './journalChat.js'
+import {
+  attachmentFolderPath,
+  formatAttachmentFolderMarkdown,
+  formatAttachmentMarkdown,
+  taskIdFromJournalPath,
+} from './journalAttachments.js'
 import {
   InstallButton, InstallModal, InstallNudge,
   InstallSettingsSection, InstallSuccessToast,
@@ -232,6 +238,85 @@ function AdoLinkDialog({ onClose, onSave, currentUrl }) {
           {currentUrl && <button className="dialog-remove-btn" onClick={() => { onSave(null); onClose() }}>Remove Link</button>}
           <button onClick={onClose}>Cancel</button>
           <button className="dialog-save-btn" onClick={handleSave}>Save</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AttachmentDialog({ taskId, onInsert, onClose }) {
+  const [url, setUrl] = useState('')
+  const [label, setLabel] = useState('')
+  const [kind, setKind] = useState('auto')
+  const fileInputRef = useRef(null)
+  const folderPath = attachmentFolderPath(taskId)
+
+  const insertMarkdown = (markdown) => {
+    if (!markdown) return
+    onInsert(markdown)
+    onClose()
+  }
+
+  const handleInsertLink = () => {
+    const markdown = kind === 'folder'
+      ? formatAttachmentFolderMarkdown({ taskId, url, label })
+      : formatAttachmentMarkdown({ url, name: label, kind })
+    insertMarkdown(markdown)
+  }
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => insertMarkdown(formatAttachmentMarkdown({
+      url: reader.result,
+      name: file.name,
+      mimeType: file.type,
+      kind: 'auto',
+    }))
+    reader.readAsDataURL(file)
+  }
+
+  return (
+    <div className="dialog-overlay" onClick={onClose}>
+      <div className="dialog attachment-dialog" onClick={e => e.stopPropagation()}>
+        <h3>📎 Attach file or link</h3>
+        <p className="dialog-hint">
+          Paste a Google Drive, OneDrive, or web share link. Images are inserted inline; documents become clickable links.
+        </p>
+        <input
+          type="text"
+          value={url}
+          onChange={e => setUrl(e.target.value)}
+          placeholder="https://drive.google.com/... or https://1drv.ms/..."
+          autoFocus
+          onKeyDown={e => {
+            if (e.key === 'Enter') handleInsertLink()
+            if (e.key === 'Escape') onClose()
+          }}
+        />
+        <input
+          type="text"
+          value={label}
+          onChange={e => setLabel(e.target.value)}
+          placeholder={kind === 'folder' ? `Task ${taskId || ''} attachments folder` : 'Optional label / file name'}
+        />
+        <select className="attachment-kind" value={kind} onChange={e => setKind(e.target.value)}>
+          <option value="auto">Auto-detect image vs document</option>
+          <option value="image">Image (inline)</option>
+          <option value="file">Document/link</option>
+          <option value="folder">Folder link</option>
+        </select>
+        {folderPath && (
+          <p className="attachment-folder-hint">
+            Suggested per-task folder name: <code>{folderPath}</code>
+          </p>
+        )}
+        <input ref={fileInputRef} type="file" className="attachment-file-input" onChange={handleFile} />
+        <div className="dialog-actions">
+          <button onClick={onClose}>Cancel</button>
+          <button onClick={() => fileInputRef.current?.click()}>Choose local file…</button>
+          <button className="dialog-save-btn" onClick={handleInsertLink} disabled={!url.trim()}>Insert link</button>
         </div>
       </div>
     </div>
@@ -833,7 +918,7 @@ function renderCellWithTooltips(content, onNavigate) {
 
 // Helper to wrap icons with tooltips
 function renderIconsWithTooltips(text, keyOffset = 0) {
-  const iconPattern = /([🔴🟡🔵⚪✅🐸📖])/g
+  const iconPattern = /([🔴🟡🔵⚪✅🐸📖])/gu
   if (!iconPattern.test(text)) {
     return [text]
   }
@@ -873,23 +958,30 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
         })
         .catch(() => setJournalChecked(true))
     }
-  }, [taskId])
+  }, [taskId, journalChecked])
   
   // Fetch todos when journal path is known
   useEffect(() => {
     if (journalPath && todos === null) {
-      setTodosLoading(true)
-      storage.getTodos(journalPath)
-        .then(todos => {
-          setTodos(todos || [])
-          setTodosLoading(false)
-        })
-        .catch(() => {
-          setTodos([])
-          setTodosLoading(false)
-        })
+      let cancelled = false
+      queueMicrotask(() => {
+        if (cancelled) return
+        setTodosLoading(true)
+        storage.getTodos(journalPath)
+          .then(todos => {
+            if (cancelled) return
+            setTodos(todos || [])
+            setTodosLoading(false)
+          })
+          .catch(() => {
+            if (cancelled) return
+            setTodos([])
+            setTodosLoading(false)
+          })
+      })
+      return () => { cancelled = true }
     }
-  }, [journalPath])
+  }, [journalPath, todos])
   
   const getPriorityClass = (priority) => {
     if (priority?.includes('🔴')) return 'priority-urgent'
@@ -2446,7 +2538,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
     scrollToNewTaskAfterRender(newId)
   }
 
-  const handlePromoteTodo = async (todoText, parentTaskId, parentRow) => {
+  const handlePromoteTodo = async (todoText, parentTaskId) => {
     const lines = content.split('\n')
     let inTodaySection = false
     let insertIndex = -1
@@ -2989,7 +3081,7 @@ function CompletedPlanView({ content, onNavigate }) {
 
       {sections.map((section, si) => {
         if (section.title === 'Completed Tasks') return null
-        const { headers, rows, rawLines } = parseMarkdownTable(section.lines)
+        const { headers, rows } = parseMarkdownTable(section.lines)
         if (rows.length === 0) return null
 
         return (
@@ -3084,21 +3176,29 @@ function renderInlineFormatting(text, keyBase) {
 
 // Render text with links first, then inline formatting on the plain segments.
 function renderInline(text, onNavigate, keyBase = 'k') {
-  const linkRe = /\[([^\]]+)\]\(([^)]+)\)/g
+  const linkRe = /(!?)\[([^\]]+)\]\(([^)]+)\)/g
   const out = []
   let last = 0
   let m
   let idx = 0
   while ((m = linkRe.exec(text)) !== null) {
     if (m.index > last) out.push(...renderInlineFormatting(text.slice(last, m.index), `${keyBase}-t${idx}`))
-    const href = m[2]
-    if (href.startsWith('journal/') || href.endsWith('.md')) {
+    const isImage = m[1] === '!'
+    const label = m[2]
+    const href = m[3]
+    if (isImage) {
       out.push(
-        <a key={`${keyBase}-l${idx}`} href="#" className="internal-link" onClick={(e) => { e.preventDefault(); onNavigate(href) }}>{m[1]}</a>
+        <a key={`${keyBase}-imgl${idx}`} href={href} target="_blank" rel="noopener noreferrer" className="jc-image-link">
+          <img src={href} alt={label} className="jc-image" loading="lazy" />
+        </a>
+      )
+    } else if (href.startsWith('journal/') || href.endsWith('.md')) {
+      out.push(
+        <a key={`${keyBase}-l${idx}`} href="#" className="internal-link" onClick={(e) => { e.preventDefault(); onNavigate(href) }}>{label}</a>
       )
     } else {
       out.push(
-        <a key={`${keyBase}-l${idx}`} href={href} target="_blank" rel="noopener noreferrer" className="external-link">{m[1]}</a>
+        <a key={`${keyBase}-l${idx}`} href={href} target="_blank" rel="noopener noreferrer" className="external-link">{label}</a>
       )
     }
     last = m.index + m[0].length
@@ -3212,9 +3312,11 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
   const [showRaw, setShowRaw] = useState(false)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
+  const [showAttachmentDialog, setShowAttachmentDialog] = useState(false)
   const threadRef = useRef(null)
   const inputRef = useRef(null)
   const parsed = useMemo(() => parseJournalChat(content), [content])
+  const taskId = taskIdFromJournalPath(filePath)
 
   useEffect(() => {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight
@@ -3247,6 +3349,12 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
       e.preventDefault()
       handleSend()
     }
+  }
+
+  const insertIntoDraft = (markdown) => {
+    const addition = draft && !/\s$/.test(draft) ? ` ${markdown}` : markdown
+    setDraft(draft + addition)
+    requestAnimationFrame(() => inputRef.current?.focus())
   }
 
   // Toggle the Nth checkbox / TODO / DONE line in the raw markdown. The index
@@ -3375,6 +3483,15 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
       </div>
 
       <div className="jc-composer">
+        <button
+          type="button"
+          className="jc-attach-btn"
+          onClick={() => setShowAttachmentDialog(true)}
+          title="Attach file or link"
+          aria-label="Attach file or link"
+        >
+          📎
+        </button>
         <textarea
           ref={inputRef}
           className="jc-composer-input"
@@ -3389,6 +3506,13 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
           {sending ? '…' : 'Send'}
         </button>
       </div>
+      {showAttachmentDialog && (
+        <AttachmentDialog
+          taskId={taskId}
+          onInsert={insertIntoDraft}
+          onClose={() => setShowAttachmentDialog(false)}
+        />
+      )}
     </div>
   )
 }
@@ -3402,8 +3526,13 @@ function MarkdownView({ content, filePath, onContentUpdate, onNavigate, headerEx
   
   // Update local state when content prop changes
   useEffect(() => {
-    setEditedContent(content)
-    setIsDirty(false)
+    let cancelled = false
+    queueMicrotask(() => {
+      if (cancelled) return
+      setEditedContent(content)
+      setIsDirty(false)
+    })
+    return () => { cancelled = true }
   }, [content])
   
   const handleChange = (e) => {
@@ -3679,7 +3808,7 @@ function backupActionLabel(providerStatus, disconnectedLabel = 'Sign in') {
   return 'Sync now'
 }
 
-function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), onDataChanged }) {
+function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged }) {
   const [open, setOpen] = useState(false)
   const [tourOpen, setTourOpen] = useState(false)
   const [installOpen, setInstallOpen] = useState(false)
@@ -3804,7 +3933,7 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
     }
   }
 
-  const useLocalFolder = async (sourceId) => {
+  const selectLocalFolder = async (sourceId) => {
     setBusy(true)
     setError('')
     try {
@@ -4145,7 +4274,7 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
                     <div className="sync-target-actions">
                       {isActive
                         ? <span className="sync-active-badge">● Active</span>
-                        : <button className="storage-footer-btn sync-target-action" onClick={() => useLocalFolder(s.id)} disabled={busy}>Use this</button>
+                        : <button className="storage-footer-btn sync-target-action" onClick={() => selectLocalFolder(s.id)} disabled={busy}>Use this</button>
                       }
                       <button
                         className="storage-footer-btn sync-target-action"
@@ -5123,7 +5252,6 @@ function App() {
   // sourcesVersion is the explicit reactivity trigger.
   void sourcesVersion
   const sources = getSources()
-  const isMulti = sources.length > 1
 
   /**
    * Build the sidebar tree.

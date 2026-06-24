@@ -1792,6 +1792,19 @@ tr.highlight-flash {
 
 .jc-bubble a { color: inherit; text-decoration: underline; }
 .jc-row.agent .jc-bubble a { color: #64d2ff; }
+.jc-image-link {
+  display: block;
+  max-width: min(360px, 100%);
+  margin: 0.25rem 0;
+}
+.jc-image {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  border-radius: 12px;
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.18);
+}
 
 .jc-composer {
   display: flex;
@@ -1820,6 +1833,18 @@ tr.highlight-flash {
   border-color: #0b84ff;
   box-shadow: 0 0 0 2px rgba(11, 132, 255, 0.2);
 }
+.jc-attach-btn {
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid #1e3a5f;
+  background: #0f3460;
+  color: #cbd5e1;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.jc-attach-btn:hover { background: #1e3a5f; color: #fff; }
 .jc-send-btn {
   background: #0b84ff;
   color: #fff;
@@ -1833,6 +1858,31 @@ tr.highlight-flash {
 }
 .jc-send-btn:hover:not(:disabled) { background: #0a76e6; }
 .jc-send-btn:disabled { opacity: 0.45; cursor: default; }
+
+.attachment-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+.attachment-kind {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  background: #16213e;
+  color: #eee;
+  font-size: 1rem;
+}
+.attachment-folder-hint {
+  color: #94a3b8;
+  font-size: 0.82rem;
+}
+.attachment-folder-hint code {
+  background: #0f3460;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.attachment-file-input { display: none; }
 
 .placeholder {
   display: flex;
