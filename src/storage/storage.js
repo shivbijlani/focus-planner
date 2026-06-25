@@ -10,6 +10,15 @@ import {
 } from '../../packages/folder-sync/src/index.js'
 import { LocalStorageProvider } from './localstorage-provider.js'
 import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
+import { getActiveTombstoneIds } from '../idTombstones.js'
+
+// Merge recently-deleted task IDs (tombstones) into a journal-ID skip set so a
+// freed ID is not reused while it could still be resurrected by sync (#314).
+function withTombstones(journalIds) {
+  const out = new Set(journalIds || [])
+  for (const id of getActiveTombstoneIds()) out.add(id)
+  return out
+}
 
 export { parseTodos } from './fsa.js'
 
@@ -326,7 +335,8 @@ export async function maxJournalId() {
 
 export async function journalIds() {
   if (!_provider) throw new Error('No provider set')
-  return _provider.journalIds ? _provider.journalIds() : new Set()
+  const ids = _provider.journalIds ? await _provider.journalIds() : new Set()
+  return withTombstones(ids)
 }
 
 // ── Cross-source read helpers (for Combined view) ─────
@@ -357,8 +367,8 @@ export async function maxJournalIdFromSource(sourceId) {
 export async function journalIdsFromSource(sourceId) {
   const { getProvider } = await import('./sources.js')
   const p = getProvider(sourceId)
-  if (!p || !p.journalIds) return new Set()
-  try { return await p.journalIds() } catch { return new Set() }
+  if (!p || !p.journalIds) return withTombstones(new Set())
+  try { return withTombstones(await p.journalIds()) } catch { return withTombstones(new Set()) }
 }
 
 export async function getFilesFromSource(sourceId) {
