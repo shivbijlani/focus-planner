@@ -15,6 +15,7 @@ import { tagMergedRows, resolveRowSourceId } from './combinedRouting.js'
 // SELF_HEAL_IDS (temporary): renumber runaway/foreign task IDs on load. Safe to
 // delete this import + selfHealIds.js + its call site once all devices healed.
 import { selfHealOutlierIds } from './selfHealIds.js'
+import { recordDeletedId } from './idTombstones.js'
 import { scrollToAndFlashTask } from './scrollToTask.js'
 import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery } from './boardSearch.js'
 import { StoragePicker } from './StoragePicker.jsx'
@@ -2155,6 +2156,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
             const bridged = ops.opBridgeLinks(content, taskId, nextIdRawValue)
             const final = ops.opDeleteTask(bridged, rawLine)
             await onContentUpdate(final)
+            if (taskId) recordDeletedId(taskId)
             if (journalPath) await storage.remove(journalPath).catch(() => {})
             setBridgeDialog(null)
           }
@@ -2166,6 +2168,9 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
     // Delete the task from focus plan
     const newContent = ops.opDeleteTask(content, rawLine)
     await onContentUpdate(newContent)
+    // Tombstone the freed ID so it isn't reused while a synced replica could
+    // still resurrect this task's journal (#314).
+    if (taskId) recordDeletedId(taskId)
     
     // Also delete journal if it exists
     if (journalPath) {
@@ -4619,6 +4624,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
               }
             }))
             await applyOp(sid, c => ops.opDeleteTask(c, rawLine))
+            if (taskId) recordDeletedId(taskId)
             if (journalPath) await storage.removeFromSource(sid, journalPath).catch(() => {})
             setBridgeDialog(null)
             setReloadKey(k => k + 1)
@@ -4629,6 +4635,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
     }
 
     await applyOp(sid, c => ops.opDeleteTask(c, rawLine))
+    if (taskId) recordDeletedId(taskId)
     if (journalPath) {
       try { await storage.removeFromSource(sid, journalPath) } catch (e) { console.error('Failed to delete journal:', e) }
     }
