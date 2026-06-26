@@ -915,6 +915,35 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   const uncompletedTodos = todos ? todos.filter(t => !t.done) : []
   const hasUncompletedTodos = uncompletedTodos.length > 0
   const nextTodo = hasUncompletedTodos ? uncompletedTodos[0] : null
+
+  // "Lead-up" list: the child tasks that point at THIS task via their Linked ID
+  // (i.e. the work that leads up to it), merged with this task's own journal
+  // todos. Rendered together in the row's collapsible, mirroring the Priorities
+  // section's expandable list.
+  //
+  // Ordering rule (documented): child tasks come first, sorted by priority/
+  // urgency (🐸 → 🔴 → 🟡 → 🔵 → ⚪ → 📖 → ✅) and then by ascending numeric ID;
+  // the task's own journal todos follow, in journal/file order.
+  const LEAD_UP_PRIORITY_ORDER = { '🐸': 0, '🔴': 1, '🟡': 2, '🔵': 3, '⚪': 4, '📖': 5, '✅': 6 }
+  const childTasks = (taskId && linkedIdMap)
+    ? Object.entries(linkedIdMap)
+        .filter(([fromId, toId]) => toId === taskId && fromId !== taskId)
+        .map(([fromId]) => ({
+          id: fromId,
+          name: (taskLookup && taskLookup[fromId]) || `Task ${fromId}`,
+          priority: (taskPriorityLookup && taskPriorityLookup[fromId]) || '⚪',
+        }))
+        .sort((a, b) => {
+          const pa = Object.keys(LEAD_UP_PRIORITY_ORDER).find(ic => (a.priority || '').includes(ic)) || '⚪'
+          const pb = Object.keys(LEAD_UP_PRIORITY_ORDER).find(ic => (b.priority || '').includes(ic)) || '⚪'
+          const d = (LEAD_UP_PRIORITY_ORDER[pa] ?? 4) - (LEAD_UP_PRIORITY_ORDER[pb] ?? 4)
+          if (d !== 0) return d
+          return (parseInt(a.id, 10) || 0) - (parseInt(b.id, 10) || 0)
+        })
+    : []
+  const hasChildTasks = childTasks.length > 0
+  const hasLeadUp = hasChildTasks || hasUncompletedTodos
+  const firstChild = hasChildTasks ? childTasks[0] : null
   
   return (
     <>
@@ -1080,10 +1109,15 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                       )}
                     </span>
                   )}
-                  {hasUncompletedTodos && !isEditing && (
+                  {hasLeadUp && !isEditing && (
                     <div className="todo-preview" onClick={() => setTodosExpanded(!todosExpanded)}>
                       <span className="todo-expander">{todosExpanded ? '▼' : '▶'}</span>
-                      {!todosExpanded && nextTodo && (
+                      {!todosExpanded && firstChild && (
+                        <span className="todo-first">
+                          {firstChild.priority} {firstChild.name}
+                        </span>
+                      )}
+                      {!todosExpanded && !firstChild && nextTodo && (
                         <span className="todo-first">
                           {nextTodo.text}
                         </span>
@@ -1157,24 +1191,46 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
           return <td key={i}>{renderCellWithTooltips(cellValue, onNavigate)}</td>
         })}
       </tr>
-      {todosExpanded && hasUncompletedTodos && (
+      {todosExpanded && hasLeadUp && (
         <tr className="todo-row">
           <td></td>
           <td></td>
           <td colSpan={headers.length - 2}>
-            <div className="todo-list">
-              {uncompletedTodos.map((todo, i) => (
-                <div key={i} className="todo-item">
-                  <span className="todo-text">{todo.text}</span>
-                  <button 
-                    className="promote-todo-btn"
-                    title="Promote to task"
-                    onClick={() => onPromoteTodo(todo.text, taskId, row)}
-                  >
-                    ↗
-                  </button>
-                </div>
-              ))}
+            <div className="todo-list lead-up-list">
+              {hasChildTasks && (
+                <>
+                  {hasUncompletedTodos && <div className="lead-up-group-label">Lead-up tasks</div>}
+                  {childTasks.map((c) => (
+                    <div
+                      key={`child-${c.id}`}
+                      className="priority-task-item lead-up-task-item"
+                      onClick={() => scrollToAndFlashTask(c.id)}
+                      title={`Go to task ${c.id}: ${c.name}`}
+                    >
+                      <span className="priority-task-icon">{c.priority}</span>
+                      <span className="priority-task-name">{c.name}</span>
+                      <span className="priority-task-section">#{c.id}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+              {hasUncompletedTodos && (
+                <>
+                  {hasChildTasks && <div className="lead-up-group-label">To-dos</div>}
+                  {uncompletedTodos.map((todo, i) => (
+                    <div key={`todo-${i}`} className="todo-item">
+                      <span className="todo-text">{todo.text}</span>
+                      <button
+                        className="promote-todo-btn"
+                        title="Promote to task"
+                        onClick={() => onPromoteTodo(todo.text, taskId, row)}
+                      >
+                        ↗
+                      </button>
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
           </td>
         </tr>

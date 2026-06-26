@@ -1074,6 +1074,24 @@ tr.highlight-flash {
   padding: 0;
 }
 
+/* Merged "lead-up" list: child tasks (linked to this task) + journal todos,
+   shown together in the task row's collapsible. */
+.lead-up-group-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  margin: 0.35rem 0 0.1rem;
+}
+
+.lead-up-group-label:first-child {
+  margin-top: 0;
+}
+
+.lead-up-task-item {
+  font-size: 0.9rem;
+}
+
 .todo-item {
   padding: 0.1rem 0;
   font-size: 0.9rem;
