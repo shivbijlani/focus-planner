@@ -334,6 +334,43 @@ body {
   scrollbar-gutter: stable;
 }
 
+/* Mission statement: a tasteful "north star" banner pinned at the top of the
+   board (task #322). Quiet by default, legible on the dark shell, and it wraps
+   gracefully on small screens. */
+.mission-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0 0 1.5rem;
+  padding: 0.85rem 1.1rem;
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.16), rgba(139, 92, 246, 0.08));
+}
+.mission-banner-icon {
+  color: #a5b4fc;
+  font-size: 1rem;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+.mission-banner-text {
+  margin: 0;
+  font-size: 0.98rem;
+  line-height: 1.45;
+  font-style: italic;
+  color: #e2e8f0;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 768px) {
+  .mission-banner {
+    margin-bottom: 1rem;
+    padding: 0.7rem 0.9rem;
+    border-radius: 10px;
+  }
+  .mission-banner-text { font-size: 0.9rem; }
+}
+
 /* Journal chat: the content area becomes a non-scrolling flex column so the
    thread scrolls internally and the composer stays pinned at the bottom of the
    visible viewport (above the mobile keyboard). Higher specificity than the
@@ -2829,6 +2866,29 @@ tr.highlight-flash {
   font-size: 0.72rem;
   color: #64748b;
 }
+.settings-mission-hint {
+  font-size: 0.72rem;
+  color: #64748b;
+  margin-bottom: 0.1rem;
+}
+.settings-mission-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid #334155;
+  border-radius: 8px;
+}
+.settings-mission-input:focus {
+  outline: none;
+  border-color: #818cf8;
+}
+.settings-mission-input::placeholder { color: #64748b; }
 .settings-update-msg {
   margin-top: 0.4rem;
   font-size: 0.75rem;

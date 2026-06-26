@@ -23,6 +23,7 @@ import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage } from './journalChat.js'
+import { getMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
 import {
   InstallButton, InstallModal, InstallNudge,
   InstallSettingsSection, InstallSuccessToast,
@@ -3698,6 +3699,8 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
   const [filesBusy, setFilesBusy] = useState(false)
   const [filesError, setFilesError] = useState('')
   const [deletingPath, setDeletingPath] = useState(null)
+  // Mission statement editor (Settings → Mission).
+  const [mission, setMissionInput] = useState(getMissionStatement())
   // App update (force latest service worker — fixes "stale build on mobile").
   const [updating, setUpdating] = useState(false)
   const [updateMsg, setUpdateMsg] = useState('')
@@ -4070,6 +4073,24 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
             </div>
 
             <InstallSettingsSection onOpen={() => setInstallOpen(true)} appName={APP_NAME} />
+
+            <div className="settings-dialog-section">
+              <div className="settings-dialog-section-title">Mission</div>
+              <div className="settings-mission-hint">
+                A short north star, pinned to the top of your board.
+              </div>
+              <textarea
+                className="settings-mission-input"
+                rows={2}
+                maxLength={200}
+                placeholder="e.g. Build calm tools and be present with the people I love."
+                value={mission}
+                onChange={(e) => {
+                  setMissionInput(e.target.value)
+                  setMissionStatement(e.target.value)
+                }}
+              />
+            </div>
 
             {isMulti && (
               <div className="settings-dialog-section">
@@ -5122,6 +5143,10 @@ function App() {
   const selectedFileRef = useRef(PLAN_FILE)
   const [pendingScrollToTaskId, setPendingScrollToTaskId] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  // Mission statement: the user's north star, set in Settings and pinned at the
+  // top of the board. Subscribe so a change in Settings updates the banner live.
+  const [mission, setMission] = useState(getMissionStatement())
+  useEffect(() => subscribeMissionStatement(setMission), [])
   // Re-render trigger for the source list when Settings mutates it.
   const [sourcesVersion, setSourcesVersion] = useState(0)
   // Sources that failed to restore on init (cloud sources needing re-authentication).
@@ -5556,6 +5581,12 @@ function App() {
             <span className={`sync-dot ${(syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED).replace(/[^a-z-]/g, '')}`} />
           </button>
         </div>
+        {mission && (
+          <div className="mission-banner" role="note" aria-label="Mission statement">
+            <span className="mission-banner-icon" aria-hidden="true">✦</span>
+            <p className="mission-banner-text">{mission}</p>
+          </div>
+        )}
         {isCombinedFocusPlan ? (
           <CombinedFocusPlanView sources={sources} onNavigate={handleNavigate} />
         ) : content ? (
