@@ -2240,6 +2240,9 @@ tr.highlight-flash {
    standalone .board-search row is used instead. */
 .mobile-board-search { display: none; }
 
+/* Collapsed 🔍 button that expands the mobile header search (#274). Desktop hides it. */
+.mobile-search-toggle { display: none; }
+
 /* Mission shown in the mobile header (#322); desktop uses the standalone row. */
 .mobile-board-mission { display: none; }
 
@@ -2749,17 +2752,36 @@ tr.highlight-flash {
     height: 10px;
   }
 
-  /* Board search lives in the header on mobile instead of its own row (#284). */
+  /* Board search lives in the header on mobile instead of its own row (#284).
+     Skinny screens collapse it to a 🔍 toggle (.mobile-search-toggle); tapping
+     expands this input to fill the whole header row (#274). */
   .mobile-board-search {
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    flex: 1;
+    flex: 1 0 100%;
     min-width: 0;
     background: #0d1b35;
     border: 1px solid #1a4a7a;
     border-radius: 6px;
     padding: 0.1rem 0.5rem;
+  }
+
+  /* Collapsed search trigger: a compact icon button that doesn't steal the row,
+     leaving space for everything else on a single line (#274). */
+  .mobile-search-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: #0d1b35;
+    border: 1px solid #1a4a7a;
+    border-radius: 6px;
+    color: #e2e8f0;
+    font-size: 0.95rem;
+    line-height: 1;
+    padding: 0.4rem 0.55rem;
+    cursor: pointer;
   }
 
   .mobile-board-search .board-search-icon {
@@ -2787,7 +2809,8 @@ tr.highlight-flash {
   }
 
   /* On the board the header hosts the search, so drop the redundant file name. */
-  .mobile-nav-bar:has(.mobile-board-search) .mobile-file-name {
+  .mobile-nav-bar:has(.mobile-board-search) .mobile-file-name,
+  .mobile-nav-bar:has(.mobile-search-toggle) .mobile-file-name {
     display: none;
   }
 
@@ -2796,17 +2819,20 @@ tr.highlight-flash {
     display: none;
   }
 
-  /* Keep the mission visible on mobile by wrapping it to a compact line inside
-     the header, sharing the header with search instead of its own band (#322). */
-  .mobile-nav-bar:has(.mobile-board-mission) { flex-wrap: wrap; }
+  /* Keep the mission visible on mobile, sharing the header row with the collapsed
+     search instead of its own band (#322). It flexes to take the spare width and
+     may wrap to two lines when long, so the whole header stays one row (#274). */
+  .mobile-nav-bar:has(.mobile-board-mission),
+  .mobile-nav-bar:has(.mobile-board-search) { flex-wrap: wrap; }
   .mobile-board-mission {
-    display: block;
-    flex: 1 0 100%;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    flex: 1;
     min-width: 0;
-    margin-top: 0.25rem;
     font-size: 0.78rem;
+    line-height: 1.25;
     color: #94a3b8;
-    white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }

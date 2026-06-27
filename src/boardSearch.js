@@ -16,6 +16,17 @@ export function boardSearchPlaceholder(isCoarsePointer) {
 }
 
 /**
+ * Whether the mobile header search should be shown expanded (full input) rather
+ * than collapsed to its icon button (#274). It is expanded when the user has
+ * tapped to open it (`manualExpanded`) OR while a query is active — a non-empty
+ * query must stay visible so the user can see/clear what they're filtering by,
+ * even if the toggle state was reset.
+ */
+export function isSearchExpanded(query, manualExpanded) {
+  return !!manualExpanded || normalizeQuery(query).length > 0
+}
+
+/**
  * A task row matches the search if the (normalized) query is a substring of its
  * ID or its Task text. An empty query matches everything.
  */

@@ -17,7 +17,7 @@ import { tagMergedRows, resolveRowSourceId } from './combinedRouting.js'
 import { selfHealOutlierIds } from './selfHealIds.js'
 import { recordDeletedId } from './idTombstones.js'
 import { scrollToAndFlashTask } from './scrollToTask.js'
-import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery, boardSearchPlaceholder } from './boardSearch.js'
+import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery, boardSearchPlaceholder, isSearchExpanded } from './boardSearch.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
@@ -5240,6 +5240,9 @@ function App() {
   // Board search query, lifted so the mobile header can host the search input
   // (#284) while FocusPlanView still owns the filtering logic.
   const [boardSearch, setBoardSearch] = useState('')
+  // Mobile header search collapses to a 🔍 button when skinny so the nav row fits
+  // everything in one line; tapping expands it to fill the row (#274).
+  const [boardSearchExpanded, setBoardSearchExpanded] = useState(false)
   // Mission statement: the user's north star, set in Settings and pinned at the
   // top of the board. Subscribe so a change in Settings updates the banner live.
   const [mission, setMission] = useState(getMissionStatement())
@@ -5670,27 +5673,43 @@ function App() {
           >☰ Files</button>
           {selectedFile && <span className="mobile-file-name">{(selPath || selectedFile).replace(/.*\//, '')}</span>}
           {isFocusPlan && (
-            <div className="mobile-board-search">
-              <span className="board-search-icon" aria-hidden="true">🔍</span>
-              <input
-                type="text"
-                className="board-search-input"
-                placeholder="Search tasks…"
-                value={boardSearch}
-                onChange={(e) => setBoardSearch(e.target.value)}
-                aria-label="Search tasks"
-                inputMode="search"
-              />
-              {boardSearch && (
+            isSearchExpanded(boardSearch, boardSearchExpanded) ? (
+              <div className="mobile-board-search is-expanded">
+                <span className="board-search-icon" aria-hidden="true">🔍</span>
+                <input
+                  type="text"
+                  className="board-search-input"
+                  placeholder="Search tasks…"
+                  value={boardSearch}
+                  onChange={(e) => setBoardSearch(e.target.value)}
+                  aria-label="Search tasks"
+                  inputMode="search"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      setBoardSearch('')
+                      setBoardSearchExpanded(false)
+                      e.currentTarget.blur()
+                    }
+                  }}
+                />
                 <button
                   type="button"
                   className="board-search-clear"
-                  onClick={() => setBoardSearch('')}
-                  title="Clear search"
-                  aria-label="Clear search"
+                  onClick={() => { setBoardSearch(''); setBoardSearchExpanded(false) }}
+                  title="Close search"
+                  aria-label="Close search"
                 >✕</button>
-              )}
-            </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="mobile-search-toggle"
+                onClick={() => setBoardSearchExpanded(true)}
+                aria-label="Search tasks"
+                aria-expanded="false"
+              >🔍</button>
+            )
           )}
           <button
             className="mobile-sync-badge"
