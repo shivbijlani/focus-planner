@@ -3107,6 +3107,38 @@ tr.highlight-flash {
   50% { opacity: 0.4; transform: scale(0.65); }
 }
 
+/* #333: recognizable glyphs replace the ambiguous pulsing dot on the mobile
+   Files button — a spinning ↻ while backing up, a red exclamation badge when
+   backup needs attention. */
+.files-sync-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.files-sync-icon.syncing {
+  color: #f59e0b;
+  font-size: 0.95rem;
+  animation: spin 0.9s linear infinite;
+}
+
+.files-sync-icon.error {
+  width: 15px;
+  height: 15px;
+  border-radius: 999px;
+  background: #e94560;
+  color: #fff;
+  font-size: 0.72rem;
+  box-shadow: 0 0 0 2px rgba(233, 69, 96, 0.2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .files-sync-icon.syncing { animation: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .files-sync-dot.syncing,
   .files-sync-dot.pending { animation: none; }
