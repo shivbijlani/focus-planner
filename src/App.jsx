@@ -2024,7 +2024,7 @@ function useCoarsePointer() {
   return coarse
 }
 
-function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, search: searchProp, onSearchChange, mission }) {
+function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, search: searchProp, onSearchChange, mission, syncStatus }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
   const [searchLocal, setSearchLocal] = useState('')
@@ -2947,7 +2947,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
 
   return (
     <div className="focus-plan-view" ref={viewRootRef}>
-      {(showSearch || mission) && (
+      {(showSearch || mission || syncStatus) && (
         <div className="board-search" ref={searchBarRef}>
           {showSearch && (
             <>
@@ -2981,6 +2981,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
               <span className="board-mission-text">{mission}</span>
             </div>
           )}
+          <SyncIndicator syncStatus={syncStatus} />
         </div>
       )}
 
@@ -3682,6 +3683,37 @@ const SYNC_LABELS = {
   [TARGET_STATUS.SYNCED]: 'Backed up just now',
   [TARGET_STATUS.RECONNECT_NEEDED]: 'Sign in again to continue backup',
   [TARGET_STATUS.ERROR]: 'Backup failed - try again',
+}
+
+// Compact labels for the always-visible board-header sync pill (#333). The
+// mobile ☰ Files button (#274) folds sync state in and hides the synced case
+// ("no news is good news"); the board pill instead shows every state — including
+// a calm green "Backed up" — so desktop users get an at-a-glance backup status
+// without opening Settings.
+const SYNC_SHORT = {
+  [TARGET_STATUS.DISCONNECTED]: 'Not backed up',
+  [TARGET_STATUS.PENDING]: 'Pending',
+  [TARGET_STATUS.SYNCING]: 'Backing up…',
+  [TARGET_STATUS.SYNCED]: 'Backed up',
+  [TARGET_STATUS.RECONNECT_NEEDED]: 'Reconnect',
+  [TARGET_STATUS.ERROR]: 'Sync error',
+}
+
+function SyncIndicator({ syncStatus }) {
+  const aggregate = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
+  const syncClass = aggregate.replace(/[^a-z-]/g, '')
+  const fullLabel = SYNC_LABELS[aggregate] || 'Sync status'
+  return (
+    <div
+      className={`board-sync sync-${syncClass}`}
+      role="status"
+      aria-label={fullLabel}
+      title={fullLabel}
+    >
+      <span className={`sync-dot ${syncClass}`} aria-hidden="true" />
+      <span className="board-sync-text">{SYNC_SHORT[aggregate] || 'Sync'}</span>
+    </div>
+  )
 }
 
 function TourModal({ onClose }) {
@@ -5754,6 +5786,7 @@ function App() {
               search={boardSearch}
               onSearchChange={setBoardSearch}
               mission={mission}
+              syncStatus={syncStatus}
             />
           ) : isCompletedPlan ? (
             <CompletedPlanView
