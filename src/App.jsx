@@ -5666,11 +5666,30 @@ function App() {
       </aside>
       <main className={`content${isJournal ? ' content-chat' : ''}`}>
         <div className="mobile-nav-bar">
-          <button
-            className="mobile-menu-btn"
-            onClick={() => setSidebarOpen(true)}
-            aria-label="Open file menu"
-          >☰ Files</button>
+          {(() => {
+            // Sync status is folded into the Files button (#274): the button owns
+            // the backup state, since files + sync are the same concern. Synced is
+            // the assumed default and shows no dot ("no news is good news"); only
+            // attention-worthy states render a dot — yellow + pulsing while backing
+            // up, red on error/reconnect, muted when not backed up.
+            const aggStatus = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
+            const syncClass = aggStatus.replace(/[^a-z-]/g, '')
+            const syncLabel = SYNC_LABELS[aggStatus] || 'Sync status'
+            const showSyncDot = aggStatus !== TARGET_STATUS.SYNCED
+            return (
+              <button
+                className={`mobile-menu-btn sync-${syncClass}`}
+                onClick={() => setSidebarOpen(true)}
+                aria-label={`Open file menu — ${syncLabel}`}
+                title={syncLabel}
+              >
+                <span className="mobile-menu-btn-label">☰ Files</span>
+                {showSyncDot && (
+                  <span className={`files-sync-dot ${syncClass}`} aria-hidden="true" />
+                )}
+              </button>
+            )
+          })()}
           {selectedFile && <span className="mobile-file-name">{(selPath || selectedFile).replace(/.*\//, '')}</span>}
           {isFocusPlan && (
             isSearchExpanded(boardSearch, boardSearchExpanded) ? (
@@ -5711,14 +5730,6 @@ function App() {
               >🔍</button>
             )
           )}
-          <button
-            className="mobile-sync-badge"
-            onClick={() => setSidebarOpen(true)}
-            aria-label={SYNC_LABELS[syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED] || 'Sync status'}
-            title={SYNC_LABELS[syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED] || 'Sync status'}
-          >
-            <span className={`sync-dot ${(syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED).replace(/[^a-z-]/g, '')}`} />
-          </button>
           {isFocusPlan && mission && (
             <span className="mobile-board-mission" role="note" aria-label="Mission statement" title={mission}>
               <span aria-hidden="true">✦</span> {mission}
