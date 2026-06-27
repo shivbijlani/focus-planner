@@ -469,6 +469,45 @@ body {
   color: #fff;
 }
 
+/* Mission "north star" merged into the board header row (#322). It shares the
+   sticky search bar instead of taking its own full-width band, so on mobile it
+   sits beside search rather than stealing a row. Truncates with an ellipsis;
+   the full text stays available via the title tooltip. */
+.board-mission {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  margin-left: auto;
+  max-width: 55%;
+  padding-left: 0.6rem;
+}
+.board-mission-icon {
+  color: #a5b4fc;
+  font-size: 0.95rem;
+  flex-shrink: 0;
+}
+.board-mission-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-style: italic;
+  font-weight: 500;
+  font-size: 0.9rem;
+  color: #cbd5e1;
+}
+/* When the mission is the only thing in the header (short lists, no search),
+   let it span the row left-aligned. */
+.board-search > .board-mission:only-child {
+  margin-left: 0;
+  max-width: 100%;
+}
+@media (max-width: 768px) {
+  .board-mission { max-width: 50%; }
+  .board-mission-text { font-size: 0.82rem; }
+}
+
 .search-no-match-row td {
   color: #64748b;
   font-style: italic;

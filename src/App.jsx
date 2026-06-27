@@ -2001,7 +2001,7 @@ function useSearchNeeded(rootRef, searchRef, forceShow) {
   return forceShow ? true : needed
 }
 
-function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
+function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, mission }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
   const [search, setSearch] = useState('')
@@ -2917,31 +2917,39 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources }) {
 
   return (
     <div className="focus-plan-view" ref={viewRootRef}>
-      {showSearch && (
+      {(showSearch || mission) && (
         <div className="board-search" ref={searchBarRef}>
-          <span className="board-search-icon" aria-hidden="true">🔍</span>
-          <input
-            ref={searchInputRef}
-            type="text"
-            className="board-search-input"
-            placeholder="Search tasks…  ( / to focus )"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Escape') { setSearch(''); setSearchForced(false); e.currentTarget.blur() } }}
-            aria-label="Search tasks"
-          />
-          {search && (
+          {showSearch && (
             <>
-              <button
-                type="button"
-                className="board-search-clear"
-                onClick={() => { setSearch(''); searchInputRef.current?.focus() }}
-                title="Clear search (Esc)"
-                aria-label="Clear search"
-              >
-                ✕
-              </button>
+              <span className="board-search-icon" aria-hidden="true">🔍</span>
+              <input
+                ref={searchInputRef}
+                type="text"
+                className="board-search-input"
+                placeholder="Search tasks…  ( / to focus )"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Escape') { setSearch(''); setSearchForced(false); e.currentTarget.blur() } }}
+                aria-label="Search tasks"
+              />
+              {search && (
+                <button
+                  type="button"
+                  className="board-search-clear"
+                  onClick={() => { setSearch(''); searchInputRef.current?.focus() }}
+                  title="Clear search (Esc)"
+                  aria-label="Clear search"
+                >
+                  ✕
+                </button>
+              )}
             </>
+          )}
+          {mission && (
+            <div className="board-mission" role="note" aria-label="Mission statement" title={mission}>
+              <span className="board-mission-icon" aria-hidden="true">✦</span>
+              <span className="board-mission-text">{mission}</span>
+            </div>
           )}
         </div>
       )}
@@ -5637,7 +5645,7 @@ function App() {
             <span className={`sync-dot ${(syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED).replace(/[^a-z-]/g, '')}`} />
           </button>
         </div>
-        {mission && (
+        {mission && !isJournal && !isFocusPlan && (
           <div className="mission-banner" role="note" aria-label="Mission statement">
             <span className="mission-banner-icon" aria-hidden="true">✦</span>
             <p className="mission-banner-text">{mission}</p>
@@ -5652,6 +5660,7 @@ function App() {
               onNavigate={handleNavigate}
               onContentUpdate={handleContentUpdate}
               otherSources={sources.filter(s => s.id !== getActiveSourceId())}
+              mission={mission}
             />
           ) : isCompletedPlan ? (
             <CompletedPlanView
