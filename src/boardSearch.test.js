@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeQuery, taskRowMatchesSearch, filterRowsAndRawLines } from './boardSearch.js'
+import { normalizeQuery, taskRowMatchesSearch, filterRowsAndRawLines, boardSearchPlaceholder } from './boardSearch.js'
 
 const rows = [
   { ID: '70', Task: 'Write the design doc' },
@@ -16,6 +16,16 @@ describe('normalizeQuery', () => {
   it('trims and lowercases', () => {
     expect(normalizeQuery('  HeAtEr  ')).toBe('heater')
     expect(normalizeQuery(undefined)).toBe('')
+  })
+})
+
+describe('boardSearchPlaceholder', () => {
+  it('hides the "/ to focus" hint on coarse-pointer (touch) devices', () => {
+    expect(boardSearchPlaceholder(true)).toBe('Search tasks…')
+    expect(boardSearchPlaceholder(true)).not.toContain('/')
+  })
+  it('keeps the shortcut hint on desktop (fine pointer)', () => {
+    expect(boardSearchPlaceholder(false)).toContain('/ to focus')
   })
 })
 

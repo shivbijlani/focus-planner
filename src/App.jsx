@@ -17,7 +17,7 @@ import { tagMergedRows, resolveRowSourceId } from './combinedRouting.js'
 import { selfHealOutlierIds } from './selfHealIds.js'
 import { recordDeletedId } from './idTombstones.js'
 import { scrollToAndFlashTask } from './scrollToTask.js'
-import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery } from './boardSearch.js'
+import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery, boardSearchPlaceholder } from './boardSearch.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
@@ -2001,11 +2001,39 @@ function useSearchNeeded(rootRef, searchRef, forceShow) {
   return forceShow ? true : needed
 }
 
-function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, mission }) {
+/**
+ * Tracks whether the primary pointer is "coarse" (touch). Used to drop the
+ * keyboard-only "/ to focus" affordance on phones/tablets where there is no
+ * physical keyboard (#284). Re-evaluates if the pointer capability changes
+ * (e.g. a tablet docked with a keyboard).
+ */
+function useCoarsePointer() {
+  const query = '(pointer: coarse)'
+  const get = () =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(query).matches
+      : false
+  const [coarse, setCoarse] = useState(get)
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const mql = window.matchMedia(query)
+    const onChange = () => setCoarse(mql.matches)
+    mql.addEventListener?.('change', onChange)
+    return () => mql.removeEventListener?.('change', onChange)
+  }, [])
+  return coarse
+}
+
+function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, search: searchProp, onSearchChange, mission }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
-  const [search, setSearch] = useState('')
+  const [searchLocal, setSearchLocal] = useState('')
+  // Search can be driven by a parent (e.g. the mobile header input) via props,
+  // or owned locally (desktop). Props win when supplied.
+  const search = searchProp !== undefined ? searchProp : searchLocal
+  const setSearch = onSearchChange || setSearchLocal
   const [searchForced, setSearchForced] = useState(false)
+  const coarsePointer = useCoarsePointer()
   const searchInputRef = useRef(null)
   const viewRootRef = useRef(null)
   const searchBarRef = useRef(null)
@@ -2092,8 +2120,10 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, mis
   }, [searchForced, showSearch])
 
   // Board search (#271): `/` focuses the search box (revealing it if hidden),
-  // `Esc` clears it and lets it auto-hide again.
+  // `Esc` clears it and lets it auto-hide again. Skipped on touch/coarse-pointer
+  // devices where there is no physical keyboard (#284).
   useEffect(() => {
+    if (coarsePointer) return
     const onKeyDown = (e) => {
       const el = e.target
       const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
@@ -2109,7 +2139,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, mis
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+  }, [coarsePointer])
 
   // Merge lookups: current tasks take priority (full lookup for display, active-only for dropdowns)
   const taskLookup = { ...completedTaskLookup, ...currentTaskLookup }
@@ -2926,7 +2956,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, mis
                 ref={searchInputRef}
                 type="text"
                 className="board-search-input"
-                placeholder="Search tasks…  ( / to focus )"
+                placeholder={boardSearchPlaceholder(coarsePointer)}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Escape') { setSearch(''); setSearchForced(false); e.currentTarget.blur() } }}
@@ -5207,6 +5237,9 @@ function App() {
   const selectedFileRef = useRef(PLAN_FILE)
   const [pendingScrollToTaskId, setPendingScrollToTaskId] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  // Board search query, lifted so the mobile header can host the search input
+  // (#284) while FocusPlanView still owns the filtering logic.
+  const [boardSearch, setBoardSearch] = useState('')
   // Mission statement: the user's north star, set in Settings and pinned at the
   // top of the board. Subscribe so a change in Settings updates the banner live.
   const [mission, setMission] = useState(getMissionStatement())
@@ -5636,6 +5669,29 @@ function App() {
             aria-label="Open file menu"
           >☰ Files</button>
           {selectedFile && <span className="mobile-file-name">{(selPath || selectedFile).replace(/.*\//, '')}</span>}
+          {isFocusPlan && (
+            <div className="mobile-board-search">
+              <span className="board-search-icon" aria-hidden="true">🔍</span>
+              <input
+                type="text"
+                className="board-search-input"
+                placeholder="Search tasks…"
+                value={boardSearch}
+                onChange={(e) => setBoardSearch(e.target.value)}
+                aria-label="Search tasks"
+                inputMode="search"
+              />
+              {boardSearch && (
+                <button
+                  type="button"
+                  className="board-search-clear"
+                  onClick={() => setBoardSearch('')}
+                  title="Clear search"
+                  aria-label="Clear search"
+                >✕</button>
+              )}
+            </div>
+          )}
           <button
             className="mobile-sync-badge"
             onClick={() => setSidebarOpen(true)}
@@ -5644,6 +5700,11 @@ function App() {
           >
             <span className={`sync-dot ${(syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED).replace(/[^a-z-]/g, '')}`} />
           </button>
+          {isFocusPlan && mission && (
+            <span className="mobile-board-mission" role="note" aria-label="Mission statement" title={mission}>
+              <span aria-hidden="true">✦</span> {mission}
+            </span>
+          )}
         </div>
         {mission && !isJournal && !isFocusPlan && (
           <div className="mission-banner" role="note" aria-label="Mission statement">
@@ -5660,6 +5721,8 @@ function App() {
               onNavigate={handleNavigate}
               onContentUpdate={handleContentUpdate}
               otherSources={sources.filter(s => s.id !== getActiveSourceId())}
+              search={boardSearch}
+              onSearchChange={setBoardSearch}
               mission={mission}
             />
           ) : isCompletedPlan ? (
