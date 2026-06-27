@@ -447,6 +447,15 @@ body {
   color: #64748b;
 }
 
+/* When the placeholder is the mission statement (#322), dress the zero-state up
+   as a quiet quote: italic and a touch brighter so it reads as a north star
+   rather than a generic hint. */
+.board-search-input.has-mission::placeholder {
+  color: #a9b6c9;
+  font-style: italic;
+  opacity: 1;
+}
+
 .board-search-count {
   font-size: 0.85rem;
   color: #94a3b8;
