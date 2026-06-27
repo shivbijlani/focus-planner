@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeQuery, taskRowMatchesSearch, filterRowsAndRawLines, boardSearchPlaceholder } from './boardSearch.js'
+import { normalizeQuery, taskRowMatchesSearch, filterRowsAndRawLines, boardSearchPlaceholder, isSearchExpanded } from './boardSearch.js'
 
 const rows = [
   { ID: '70', Task: 'Write the design doc' },
@@ -26,6 +26,21 @@ describe('boardSearchPlaceholder', () => {
   })
   it('keeps the shortcut hint on desktop (fine pointer)', () => {
     expect(boardSearchPlaceholder(false)).toContain('/ to focus')
+  })
+})
+
+describe('isSearchExpanded', () => {
+  it('is expanded when the user manually opened it', () => {
+    expect(isSearchExpanded('', true)).toBe(true)
+  })
+  it('stays expanded while a query is active, even if not manually open', () => {
+    expect(isSearchExpanded('heater', false)).toBe(true)
+    expect(isSearchExpanded('  heater  ', false)).toBe(true)
+  })
+  it('is collapsed with no query and not manually open', () => {
+    expect(isSearchExpanded('', false)).toBe(false)
+    expect(isSearchExpanded('   ', false)).toBe(false)
+    expect(isSearchExpanded(undefined, false)).toBe(false)
   })
 })
 
