@@ -5701,12 +5701,16 @@ function App() {
           {(() => {
             // Sync status is folded into the Files button (#274): the button owns
             // the backup state, since files + sync are the same concern. Synced is
-            // the assumed default and shows no dot ("no news is good news"); only
-            // attention-worthy states render a dot — yellow + pulsing while backing
-            // up, red on error/reconnect, muted when not backed up.
+            // the assumed default and shows nothing ("no news is good news"); only
+            // attention-worthy states render a glyph (#333). A bare pulsing dot read
+            // as ambiguous, so we now use recognizable icons: a spinning ↻ while
+            // backing up and an exclamation when backup needs attention (error /
+            // reconnect). "Not backed up" stays a quiet muted dot.
             const aggStatus = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
             const syncClass = aggStatus.replace(/[^a-z-]/g, '')
             const syncLabel = SYNC_LABELS[aggStatus] || 'Sync status'
+            const isSyncing = aggStatus === TARGET_STATUS.SYNCING || aggStatus === TARGET_STATUS.PENDING
+            const isError = aggStatus === TARGET_STATUS.ERROR || aggStatus === TARGET_STATUS.RECONNECT_NEEDED
             const showSyncDot = aggStatus !== TARGET_STATUS.SYNCED
             return (
               <button
@@ -5716,7 +5720,13 @@ function App() {
                 title={syncLabel}
               >
                 <span className="mobile-menu-btn-label">☰ Files</span>
-                {showSyncDot && (
+                {isSyncing && (
+                  <span className="files-sync-icon syncing" aria-hidden="true">↻</span>
+                )}
+                {isError && (
+                  <span className="files-sync-icon error" aria-hidden="true">!</span>
+                )}
+                {showSyncDot && !isSyncing && !isError && (
                   <span className={`files-sync-dot ${syncClass}`} aria-hidden="true" />
                 )}
               </button>
