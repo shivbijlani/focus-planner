@@ -508,6 +508,30 @@ body {
   .board-mission-text { font-size: 0.82rem; }
 }
 
+/* Always-visible board-header sync pill (#333). Reuses the aggregate sync
+   state + .sync-dot colors. On mobile the whole .board-search row is hidden
+   and sync state lives on the ☰ Files button (#274), so this pill is desktop-only. */
+.board-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 0.16rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.78rem;
+  line-height: 1.2;
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+.board-sync-text { font-weight: 500; }
+.board-sync.sync-synced .board-sync-text { color: #22c55e; }
+.board-sync.sync-syncing .board-sync-text,
+.board-sync.sync-pending .board-sync-text { color: #f59e0b; }
+.board-sync.sync-error .board-sync-text,
+.board-sync.sync-reconnect-needed .board-sync-text { color: #e94560; }
+
 .search-no-match-row td {
   color: #64748b;
   font-style: italic;
