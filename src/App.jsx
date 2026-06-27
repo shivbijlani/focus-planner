@@ -5267,6 +5267,11 @@ function App() {
   const [selectedFile, setSelectedFile] = useState(PLAN_FILE)
   const [content, setContent] = useState('')
   const selectedFileRef = useRef(PLAN_FILE)
+  const contentRef = useRef(null)
+  // Remember where the board was scrolled so returning from a journal lands you
+  // back at the same viewpoint instead of jumping to the top (task #334).
+  const boardScrollRef = useRef(0)
+  const [pendingBoardScrollRestore, setPendingBoardScrollRestore] = useState(false)
   const [pendingScrollToTaskId, setPendingScrollToTaskId] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   // Board search query, lifted so the mobile header can host the search input
@@ -5337,6 +5342,17 @@ function App() {
 
   const handleSelectFile = async (qualifiedPath) => {
     const { sourceId, path } = splitSourcePath(qualifiedPath)
+    // Capture the board's scroll position when leaving it, and arrange to
+    // restore it when returning (task #334). Skip restore when a specific task
+    // scroll is already pending — that takes precedence.
+    const leavingBoard = selectedFileRef.current === PLAN_FILE
+    if (leavingBoard && contentRef.current) {
+      boardScrollRef.current = contentRef.current.scrollTop
+    }
+    const returningToBoard = !leavingBoard && (path || qualifiedPath) === PLAN_FILE
+    if (returningToBoard && !pendingScrollToTaskId) {
+      setPendingBoardScrollRestore(true)
+    }
     setSelectedFile(qualifiedPath)
     selectedFileRef.current = path
     setSidebarOpen(false)
@@ -5641,6 +5657,18 @@ function App() {
     }, 200)
   }, [content, pendingScrollToTaskId])
 
+  // Restore the saved board scroll position after returning from a journal so
+  // "back" lands on the same viewpoint (task #334). Runs once content for the
+  // board has rendered; rAF waits for layout/paint before setting scrollTop.
+  useEffect(() => {
+    if (!pendingBoardScrollRestore) return
+    if (selectedFileRef.current !== PLAN_FILE || !content) return
+    setPendingBoardScrollRestore(false)
+    requestAnimationFrame(() => {
+      if (contentRef.current) contentRef.current.scrollTop = boardScrollRef.current
+    })
+  }, [content, pendingBoardScrollRestore])
+
   const handleContentUpdate = async (newContent) => {
     const { path, sourceId } = splitSourcePath(selectedFile)
     if (sourceId === COMBINED_ID) return // Combined view is read-only
@@ -5696,7 +5724,7 @@ function App() {
           onDataChanged={loadFiles}
         />
       </aside>
-      <main className={`content${isJournal ? ' content-chat' : ''}`}>
+      <main ref={contentRef} className={`content${isJournal ? ' content-chat' : ''}`}>
         <div className="mobile-nav-bar">
           {(() => {
             // Sync status is folded into the Files button (#274): the button owns
