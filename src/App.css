@@ -2219,6 +2219,9 @@ tr.highlight-flash {
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .mobile-menu-btn:hover {
@@ -2233,8 +2236,6 @@ tr.highlight-flash {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.mobile-sync-badge { display: none; }
 
 /* Search field hosted in the mobile header (#284). Hidden on desktop, where the
    standalone .board-search row is used instead. */
@@ -2735,23 +2736,6 @@ tr.highlight-flash {
     min-width: 0;
   }
 
-  .mobile-sync-badge {
-    background: transparent;
-    border: none;
-    padding: 0.35rem;
-    margin: 0;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
-
-  .mobile-sync-badge .sync-dot {
-    width: 10px;
-    height: 10px;
-  }
-
   /* Board search lives in the header on mobile instead of its own row (#284).
      Skinny screens collapse it to a 🔍 toggle (.mobile-search-toggle); tapping
      expands this input to fill the whole header row (#274). */
@@ -3067,6 +3051,42 @@ tr.highlight-flash {
 .sync-dot.pending { background: #f59e0b; box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.15); }
 .sync-dot.reconnect-needed,
 .sync-dot.error { background: #e94560; box-shadow: 0 0 0 2px rgba(233, 69, 96, 0.15); }
+
+/* Sync status folded into the mobile Files button (#274). Synced renders no dot
+   (green is the assumed default — "no news"); other states surface a small dot:
+   yellow + pulsing while backing up, red on error/reconnect, muted when not
+   backed up. */
+.files-sync-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: #64748b;
+  box-shadow: 0 0 0 2px rgba(100, 116, 139, 0.18);
+}
+
+.files-sync-dot.syncing,
+.files-sync-dot.pending {
+  background: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.22);
+  animation: files-sync-pulse 1s ease-in-out infinite;
+}
+
+.files-sync-dot.reconnect-needed,
+.files-sync-dot.error {
+  background: #e94560;
+  box-shadow: 0 0 0 2px rgba(233, 69, 96, 0.2);
+}
+
+@keyframes files-sync-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.65); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .files-sync-dot.syncing,
+  .files-sync-dot.pending { animation: none; }
+}
 
 .sync-target-card {
   display: flex;
