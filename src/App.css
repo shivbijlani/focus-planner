@@ -334,6 +334,43 @@ body {
   scrollbar-gutter: stable;
 }
 
+/* Mission statement: a tasteful "north star" banner pinned at the top of the
+   board (task #322). Quiet by default, legible on the dark shell, and it wraps
+   gracefully on small screens. */
+.mission-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0 0 1.5rem;
+  padding: 0.85rem 1.1rem;
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.16), rgba(139, 92, 246, 0.08));
+}
+.mission-banner-icon {
+  color: #a5b4fc;
+  font-size: 1rem;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+.mission-banner-text {
+  margin: 0;
+  font-size: 0.98rem;
+  line-height: 1.45;
+  font-style: italic;
+  color: #e2e8f0;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 768px) {
+  .mission-banner {
+    margin-bottom: 1rem;
+    padding: 0.7rem 0.9rem;
+    border-radius: 10px;
+  }
+  .mission-banner-text { font-size: 0.9rem; }
+}
+
 /* Journal chat: the content area becomes a non-scrolling flex column so the
    thread scrolls internally and the composer stays pinned at the bottom of the
    visible viewport (above the mobile keyboard). Higher specificity than the
@@ -430,6 +467,45 @@ body {
 .board-search-clear:hover {
   background: #1a4a7a;
   color: #fff;
+}
+
+/* Mission "north star" merged into the board header row (#322). It shares the
+   sticky search bar instead of taking its own full-width band, so on mobile it
+   sits beside search rather than stealing a row. Truncates with an ellipsis;
+   the full text stays available via the title tooltip. */
+.board-mission {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  margin-left: auto;
+  max-width: 55%;
+  padding-left: 0.6rem;
+}
+.board-mission-icon {
+  color: #a5b4fc;
+  font-size: 0.95rem;
+  flex-shrink: 0;
+}
+.board-mission-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-style: italic;
+  font-weight: 500;
+  font-size: 0.9rem;
+  color: #cbd5e1;
+}
+/* When the mission is the only thing in the header (short lists, no search),
+   let it span the row left-aligned. */
+.board-search > .board-mission:only-child {
+  margin-left: 0;
+  max-width: 100%;
+}
+@media (max-width: 768px) {
+  .board-mission { max-width: 50%; }
+  .board-mission-text { font-size: 0.82rem; }
 }
 
 .search-no-match-row td {
@@ -1035,6 +1111,24 @@ tr.highlight-flash {
 
 .todo-list {
   padding: 0;
+}
+
+/* Merged "lead-up" list: child tasks (linked to this task) + journal todos,
+   shown together in the task row's collapsible. */
+.lead-up-group-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  margin: 0.35rem 0 0.1rem;
+}
+
+.lead-up-group-label:first-child {
+  margin-top: 0;
+}
+
+.lead-up-task-item {
+  font-size: 0.9rem;
 }
 
 .todo-item {
@@ -2146,6 +2240,9 @@ tr.highlight-flash {
    standalone .board-search row is used instead. */
 .mobile-board-search { display: none; }
 
+/* Mission shown in the mobile header (#322); desktop uses the standalone row. */
+.mobile-board-mission { display: none; }
+
 /* ── Link Picker Modal (used by ID column linking) ─────── */
 .link-picker-overlay {
   position: fixed;
@@ -2699,6 +2796,22 @@ tr.highlight-flash {
     display: none;
   }
 
+  /* Keep the mission visible on mobile by wrapping it to a compact line inside
+     the header, sharing the header with search instead of its own band (#322). */
+  .mobile-nav-bar:has(.mobile-board-mission) { flex-wrap: wrap; }
+  .mobile-board-mission {
+    display: block;
+    flex: 1 0 100%;
+    min-width: 0;
+    margin-top: 0.25rem;
+    font-size: 0.78rem;
+    color: #94a3b8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mobile-board-mission > span { opacity: 0.85; }
+
   .task-table {
     font-size: 0.8rem;
   }
@@ -2880,6 +2993,29 @@ tr.highlight-flash {
   font-size: 0.72rem;
   color: #64748b;
 }
+.settings-mission-hint {
+  font-size: 0.72rem;
+  color: #64748b;
+  margin-bottom: 0.1rem;
+}
+.settings-mission-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid #334155;
+  border-radius: 8px;
+}
+.settings-mission-input:focus {
+  outline: none;
+  border-color: #818cf8;
+}
+.settings-mission-input::placeholder { color: #64748b; }
 .settings-update-msg {
   margin-top: 0.4rem;
   font-size: 0.75rem;
