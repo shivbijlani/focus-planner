@@ -9,15 +9,10 @@ export function normalizeQuery(query) {
 /**
  * Placeholder text for the board search input.
  *
- * When a mission statement is set it becomes the input's zero-state, rendered
- * as a quote (#322) — the box obviously searches, so there's no need to say so.
- * Otherwise we fall back to the "Search tasks…" hint; on touch / coarse-pointer
- * devices there is no physical keyboard, so the "/ to focus" shortcut hint is
- * dead weight and gets dropped. Desktop keeps the hint.
+ * Touch / coarse-pointer devices have no physical keyboard, so the "/ to focus"
+ * shortcut hint is dead weight and gets dropped. Desktop keeps the hint.
  */
-export function boardSearchPlaceholder(isCoarsePointer, mission) {
-  const m = (mission || '').trim()
-  if (m) return `\u201C${m}\u201D`
+export function boardSearchPlaceholder(isCoarsePointer) {
   return isCoarsePointer ? 'Search tasks…' : 'Search tasks…  ( / to focus )'
 }
 

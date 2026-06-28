@@ -27,6 +27,9 @@ describe('boardSearchPlaceholder', () => {
   it('keeps the shortcut hint on desktop (fine pointer)', () => {
     expect(boardSearchPlaceholder(false)).toContain('/ to focus')
   })
+  it('does not replace the search affordance with the mission statement', () => {
+    expect(boardSearchPlaceholder(false, 'Build calm tools.')).toContain('Search tasks')
+  })
 })
 
 describe('isSearchExpanded', () => {

@@ -2227,10 +2227,8 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       .catch(() => {})
   }, [])
 
-  // The board search is always shown now: it carries the mission statement as
-  // its quote-styled zero-state placeholder (#322), so there's no separate
-  // mission band to hide/show. `forceShow` keeps the bar pinned regardless of
-  // list height; `searchForced` is still honored for the `/`-summon focus.
+  // The board search is always shown now. `forceShow` keeps the bar pinned
+  // regardless of list height; `searchForced` is still honored for `/` focus.
   const showSearch = useSearchNeeded(viewRootRef, searchBarRef, true)
 
   // When the box is summoned via `/`, focus it once it actually renders.
@@ -3074,8 +3072,8 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
               <input
                 ref={searchInputRef}
                 type="text"
-                className={`board-search-input${mission ? ' has-mission' : ''}`}
-                placeholder={boardSearchPlaceholder(coarsePointer, mission)}
+                className="board-search-input"
+                placeholder={boardSearchPlaceholder(coarsePointer)}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Escape') { setSearch(''); setSearchForced(false); e.currentTarget.blur() } }}
@@ -5402,8 +5400,8 @@ function App() {
   // Board search query, lifted so the mobile header can host the search input
   // (#284) while FocusPlanView still owns the filtering logic.
   const [boardSearch, setBoardSearch] = useState('')
-  // Mission statement: the user's north star, set in Settings and pinned at the
-  // top of the board. Subscribe so a change in Settings updates the banner live.
+  // Mission statement: the user's north star, set in Settings and pinned near
+  // the top of the main surface. Subscribe so Settings updates the banner live.
   const [mission, setMission] = useState(getMissionStatement())
   useEffect(() => subscribeMissionStatement(setMission), [])
   // Re-render trigger for the source list when Settings mutates it.
@@ -5889,8 +5887,8 @@ function App() {
               <span className="board-search-icon" aria-hidden="true">🔍</span>
               <input
                 type="text"
-                className={`board-search-input${mission ? ' has-mission' : ''}`}
-                placeholder={boardSearchPlaceholder(true, mission)}
+                className="board-search-input"
+                placeholder={boardSearchPlaceholder(true)}
                 value={boardSearch}
                 onChange={(e) => setBoardSearch(e.target.value)}
                 aria-label="Search tasks"
@@ -5914,7 +5912,7 @@ function App() {
             </div>
           )}
         </div>
-        {mission && !isJournal && !isFocusPlan && (
+        {mission && !isJournal && (
           <div className="mission-banner" role="note" aria-label="Mission statement">
             <span className="mission-banner-icon" aria-hidden="true">✦</span>
             <p className="mission-banner-text">{mission}</p>
