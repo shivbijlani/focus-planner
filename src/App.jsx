@@ -3814,6 +3814,9 @@ const SYNC_SHORT = {
 
 function SyncIndicator({ syncStatus }) {
   const aggregate = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
+  // "Not backed up" (disconnected) is not actionable, so we show nothing for it
+  // — same "no news is good news" rule as the synced state (task #336).
+  if (aggregate === TARGET_STATUS.DISCONNECTED) return null
   const syncClass = aggregate.replace(/[^a-z-]/g, '')
   const fullLabel = SYNC_LABELS[aggregate] || 'Sync status'
   return (
@@ -4273,7 +4276,9 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
         >
           <span className="storage-footer-icon">⚙</span>
           <span className="storage-footer-label">Settings</span>
-          <span className={`sync-dot ${syncClass}`} title={SYNC_LABELS[aggregate] || 'Not backed up'} />
+          {aggregate !== TARGET_STATUS.DISCONNECTED && (
+            <span className={`sync-dot ${syncClass}`} title={SYNC_LABELS[aggregate] || 'Sync status'} />
+          )}
         </button>
       </div>
 
@@ -5843,13 +5848,14 @@ function App() {
             // attention-worthy states render a glyph (#333). A bare pulsing dot read
             // as ambiguous, so we now use recognizable icons: a spinning ↻ while
             // backing up and an exclamation when backup needs attention (error /
-            // reconnect). "Not backed up" stays a quiet muted dot.
+            // reconnect). "Not backed up" (disconnected) also shows nothing now —
+            // it isn't actionable, so we treat it like synced (task #336).
             const aggStatus = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
             const syncClass = aggStatus.replace(/[^a-z-]/g, '')
             const syncLabel = SYNC_LABELS[aggStatus] || 'Sync status'
             const isSyncing = aggStatus === TARGET_STATUS.SYNCING || aggStatus === TARGET_STATUS.PENDING
             const isError = aggStatus === TARGET_STATUS.ERROR || aggStatus === TARGET_STATUS.RECONNECT_NEEDED
-            const showSyncDot = aggStatus !== TARGET_STATUS.SYNCED
+            const showSyncDot = aggStatus !== TARGET_STATUS.SYNCED && aggStatus !== TARGET_STATUS.DISCONNECTED
             return (
               <button
                 className={`mobile-menu-btn sync-${syncClass}`}
