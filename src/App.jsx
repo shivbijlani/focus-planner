@@ -3693,7 +3693,10 @@ const SYNC_SHORT = {
 }
 
 function SyncIndicator({ syncStatus }) {
+  return null
   const aggregate = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
+  if (aggregate === TARGET_STATUS.DISCONNECTED) return null
+
   const syncClass = aggregate.replace(/[^a-z-]/g, '')
   const fullLabel = SYNC_LABELS[aggregate] || 'Sync status'
   return (
@@ -4153,7 +4156,6 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
         >
           <span className="storage-footer-icon">⚙</span>
           <span className="storage-footer-label">Settings</span>
-          <span className={`sync-dot ${syncClass}`} title={SYNC_LABELS[aggregate] || 'Not backed up'} />
         </button>
       </div>
 
@@ -5723,29 +5725,14 @@ function App() {
             // as ambiguous, so we now use recognizable icons: a spinning ↻ while
             // backing up and an exclamation when backup needs attention (error /
             // reconnect). "Not backed up" stays a quiet muted dot.
-            const aggStatus = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
-            const syncClass = aggStatus.replace(/[^a-z-]/g, '')
-            const syncLabel = SYNC_LABELS[aggStatus] || 'Sync status'
-            const isSyncing = aggStatus === TARGET_STATUS.SYNCING || aggStatus === TARGET_STATUS.PENDING
-            const isError = aggStatus === TARGET_STATUS.ERROR || aggStatus === TARGET_STATUS.RECONNECT_NEEDED
-            const showSyncDot = aggStatus !== TARGET_STATUS.SYNCED
             return (
               <button
-                className={`mobile-menu-btn sync-${syncClass}`}
+                className="mobile-menu-btn"
                 onClick={() => setSidebarOpen(true)}
-                aria-label={`Open file menu — ${syncLabel}`}
-                title={syncLabel}
+                aria-label="Open file menu"
+                title="Files"
               >
                 <span className="mobile-menu-btn-label">☰ Files</span>
-                {isSyncing && (
-                  <span className="files-sync-icon syncing" aria-hidden="true">↻</span>
-                )}
-                {isError && (
-                  <span className="files-sync-icon error" aria-hidden="true">!</span>
-                )}
-                {showSyncDot && !isSyncing && !isError && (
-                  <span className={`files-sync-dot ${syncClass}`} aria-hidden="true" />
-                )}
               </button>
             )
           })()}
