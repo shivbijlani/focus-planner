@@ -1066,6 +1066,7 @@ tr.highlight-flash {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  position: relative;
 }
 
 .task-text {
@@ -1493,7 +1494,162 @@ tr.highlight-flash {
   font-size: 1rem;
 }
 
-/* Priority Dropdown */
+/* --- Mobile bottom sheet (#335) ------------------------------------------ */
+.bottom-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 2000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: sheet-fade-in 0.15s ease-out;
+}
+
+.bottom-sheet {
+  width: 100%;
+  max-width: 640px;
+  background: #1a2744;
+  border: 1px solid #0f3460;
+  border-bottom: none;
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.5);
+  padding: 0.5rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
+  max-height: 80vh;
+  overflow-y: auto;
+  animation: sheet-slide-up 0.2s ease-out;
+}
+
+.bottom-sheet-handle {
+  width: 40px;
+  height: 4px;
+  border-radius: 2px;
+  background: #3a4a6a;
+  margin: 0.5rem auto 0.75rem;
+}
+
+.bottom-sheet-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #9fb3d1;
+  text-align: center;
+  margin-bottom: 0.75rem;
+}
+
+.bottom-sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+@keyframes sheet-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes sheet-slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+/* Row action list inside a sheet */
+.action-sheet-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.action-sheet-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.9rem 0.75rem;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  color: #eee;
+  font-size: 1rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.action-sheet-item:active {
+  background: #0f3460;
+}
+
+.action-sheet-icon {
+  font-size: 1.15rem;
+  width: 1.5rem;
+  text-align: center;
+}
+
+.action-sheet-label {
+  flex: 1;
+}
+
+/* Priority swatch grid inside a sheet */
+.priority-sheet-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.priority-sheet-option {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.85rem 0.75rem;
+  background: #12203c;
+  border: 1px solid #0f3460;
+  border-radius: 10px;
+  color: #eee;
+  font-size: 0.95rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.priority-sheet-option.selected {
+  border-color: #4a90d9;
+  background: #163055;
+}
+
+.priority-sheet-option:active {
+  background: #0f3460;
+}
+
+.priority-sheet-icon {
+  font-size: 1.35rem;
+}
+
+.priority-sheet-label {
+  flex: 1;
+  line-height: 1.2;
+}
+
+/* Per-row kebab trigger (mobile) */
+.row-kebab-btn {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: #9fb3d1;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.row-kebab-btn:active {
+  background: #0f3460;
+}
+
 .priority-dropdown {
   position: relative;
   display: inline-block;

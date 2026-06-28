@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useLayoutEffect } from 'react'
+import { createPortal } from 'react-dom'
 import './App.css'
 import * as storage from './storage/storage.js'
 import { setActiveProvider, getActiveProvider, PROVIDERS, TARGET_STATUS, getProviderName } from './storage/storage.js'
@@ -144,10 +145,62 @@ function LinkPickerModal({ currentLinkedId, taskLookup, allTaskIds, onSelect, on
   )
 }
 
-function ContextMenu({ x, y, options, onClose }) {
-  const menuRef = useRef(null)
-  
+// --- Mobile bottom-sheet primitives (#335) ---------------------------------
+// The legacy row context-menu and the priority-orb menu were positioned boxes
+// rendered *inside* the table's scroll container. After filtering to one row
+// that container is short, so the menu landed outside it and got clipped /
+// lost the stacking fight with the sticky header. A bottom sheet portaled to
+// <body> removes the positioning math entirely — it can't be clipped.
+
+// True on phone-width viewports / coarse-pointer (touch) devices.
+function useIsMobile() {
+  const query = '(max-width: 768px), (pointer: coarse)'
+  const get = () => typeof window !== 'undefined'
+    && window.matchMedia && window.matchMedia(query).matches
+  const [isMobile, setIsMobile] = useState(get)
   useEffect(() => {
+    if (!window.matchMedia) return
+    const mqls = ['(max-width: 768px)', '(pointer: coarse)'].map(q => window.matchMedia(q))
+    const update = () => setIsMobile(mqls.some(m => m.matches))
+    mqls.forEach(m => m.addEventListener('change', update))
+    update()
+    return () => mqls.forEach(m => m.removeEventListener('change', update))
+  }, [])
+  return isMobile
+}
+
+// A full-width sheet that slides up from the bottom, drawn on document.body so
+// nothing can clip it. Tap the backdrop or Esc to dismiss.
+function BottomSheet({ title, onClose, children }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return createPortal(
+    <div className="bottom-sheet-backdrop" onMouseDown={onClose}>
+      <div
+        className="bottom-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title || 'Actions'}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="bottom-sheet-handle" aria-hidden="true" />
+        {title && <div className="bottom-sheet-title">{title}</div>}
+        <div className="bottom-sheet-body">{children}</div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+function ContextMenu({ x, y, options, onClose, title = 'Actions', sheet = false }) {
+  const menuRef = useRef(null)
+
+  useEffect(() => {
+    if (sheet) return
     const handleClickOutside = (e) => {
       if (menuRef.current && !menuRef.current.contains(e.target)) {
         onClose()
@@ -155,10 +208,31 @@ function ContextMenu({ x, y, options, onClose }) {
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [onClose])
-  
+  }, [onClose, sheet])
+
+  // Mobile: render the options inside a bottom sheet (portaled, unclippable).
+  if (sheet) {
+    return (
+      <BottomSheet title={title} onClose={onClose}>
+        <div className="action-sheet-list">
+          {options.map((option, i) => (
+            <button
+              key={i}
+              className="action-sheet-item"
+              onClick={() => { option.action(); onClose() }}
+            >
+              {option.icon && <span className="action-sheet-icon">{option.icon}</span>}
+              <span className="action-sheet-label">{option.label}</span>
+            </button>
+          ))}
+        </div>
+      </BottomSheet>
+    )
+  }
+
+  // Desktop: the existing positioned menu.
   return (
-    <div 
+    <div
       ref={menuRef}
       className="context-menu"
       style={{ top: y, left: x }}
@@ -346,6 +420,7 @@ function MoveToSourceDialog({ targetName, movingTasks, brokenLinks, onClose, onC
 function PriorityDropdown({ currentPriority, isNeededForUrgent, onChangePriority }) {
   const [isOpen, setIsOpen] = useState(false)
   const dropdownRef = useRef(null)
+  const isMobile = useIsMobile()
   
   const priorities = [
     { icon: '🔴', label: 'Urgent & Important' },
@@ -357,6 +432,9 @@ function PriorityDropdown({ currentPriority, isNeededForUrgent, onChangePriority
   ]
   
   useEffect(() => {
+    // On mobile the menu is a portaled bottom sheet with its own backdrop,
+    // so the click-outside-to-close handler only applies to the desktop popover.
+    if (isMobile) return
     const handleClickOutside = (e) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
         setIsOpen(false)
@@ -366,7 +444,7 @@ function PriorityDropdown({ currentPriority, isNeededForUrgent, onChangePriority
       document.addEventListener('mousedown', handleClickOutside)
       return () => document.removeEventListener('mousedown', handleClickOutside)
     }
-  }, [isOpen])
+  }, [isOpen, isMobile])
   
   const handleSelect = (icon) => {
     onChangePriority(icon)
@@ -383,7 +461,24 @@ function PriorityDropdown({ currentPriority, isNeededForUrgent, onChangePriority
         {currentPriority}
         {isNeededForUrgent && <span className="urgent-needed-marker" aria-hidden="true">!</span>}
       </span>
-      {isOpen && (
+      {/* Mobile (#335): priority picker as an unclippable bottom sheet of big swatches. */}
+      {isOpen && isMobile && (
+        <BottomSheet title="Set priority" onClose={() => setIsOpen(false)}>
+          <div className="priority-sheet-grid">
+            {priorities.map(({ icon, label }) => (
+              <button
+                key={icon}
+                className={`priority-sheet-option ${icon === currentPriority ? 'selected' : ''}`}
+                onClick={() => handleSelect(icon)}
+              >
+                <span className="priority-sheet-icon">{icon}</span>
+                <span className="priority-sheet-label">{label}</span>
+              </button>
+            ))}
+          </div>
+        </BottomSheet>
+      )}
+      {isOpen && !isMobile && (
         <div className="priority-dropdown-menu">
           {priorities.map(({ icon, label }) => (
             <button
@@ -860,6 +955,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   const [isEditing, setIsEditing] = useState(false)
   const [editText, setEditText] = useState('')
   const [isEditingLinkedId, setIsEditingLinkedId] = useState(false)
+  const isMobile = useIsMobile()
   
   const taskId = extractTaskId(row)
   
@@ -908,6 +1004,14 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   
   const handleContextMenu = (e) => {
     e.preventDefault()
+    onContextMenu(e, rawLine, row, journalPath, taskId)
+  }
+
+  // Mobile (#335): visible kebab opens the same row-action sheet — no hidden
+  // right-click / press-and-hold gesture required.
+  const handleKebab = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
     onContextMenu(e, rawLine, row, journalPath, taskId)
   }
   
@@ -1125,6 +1229,17 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                     </div>
                   )}
                   {todosLoading && <span className="todo-loading">...</span>}
+                  {isMobile && !isEditing && (
+                    <button
+                      type="button"
+                      className="row-kebab-btn"
+                      aria-label="Task actions"
+                      title="Task actions"
+                      onClick={handleKebab}
+                    >
+                      ⋯
+                    </button>
+                  )}
                 </div>
               </td>
             )
@@ -1249,6 +1364,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
   // identical row text / id. `lineSourceIds` is parallel to the data rows.
   if (lineSourceIds) tagMergedRows(rows, lineSourceIds)
   const [contextMenu, setContextMenu] = useState(null)
+  const isMobile = useIsMobile()
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [adoLinkDialog, setAdoLinkDialog] = useState(null)
   
@@ -1524,6 +1640,8 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
           x={contextMenu.x}
           y={contextMenu.y}
           options={contextMenu.options}
+          title="Task actions"
+          sheet={isMobile}
           onClose={() => setContextMenu(null)}
         />
       )}
@@ -1554,6 +1672,7 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
   const [newPriority, setNewPriority] = useState('')
   const [expandedPriorities, setExpandedPriorities] = useState({})
   const [contextMenu, setContextMenu] = useState(null)
+  const isMobile = useIsMobile()
 
   const handlePriorityContextMenu = (e, id, taskName) => {
     e.preventDefault()
@@ -1751,6 +1870,8 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
           x={contextMenu.x}
           y={contextMenu.y}
           options={contextMenu.options}
+          title="Priority actions"
+          sheet={isMobile}
           onClose={() => setContextMenu(null)}
         />
       )}
