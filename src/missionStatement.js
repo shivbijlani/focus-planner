@@ -1,40 +1,61 @@
-// Mission statement: a short personal "north star" the user can set in Settings
-// and see tastefully pinned near the top of the main surface.
-//
-// Design (per task #322 + the read-state philosophy in #311): the UI carries no
-// business logic. It reads the current value and fires a change event; this module
-// is the single place that knows the value lives in localStorage. Swapping the
-// backing store later (e.g. a synced provider) means changing only this file.
+import { readSettings, readSettingsMetadata, writeSettings } from './storage/settings.js'
 
-const STORAGE_KEY = 'fp-mission-statement'
+const LEGACY_STORAGE_KEY = 'fp-mission-statement'
 const CHANGE_EVENT = 'fp-mission-changed'
 
-// Read the saved mission statement. Returns '' when unset or unavailable.
-export function getMissionStatement() {
+let missionCache = ''
+
+function readLegacyMissionStatement() {
   try {
-    return localStorage.getItem(STORAGE_KEY) || ''
+    return localStorage.getItem(LEGACY_STORAGE_KEY) || ''
   } catch {
     return ''
   }
+}
+
+function emitMissionChanged(value) {
+  try {
+    window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: value }))
+  } catch {
+    // No window (tests/SSR) — nothing to notify.
+  }
+}
+
+// Read the cached mission statement. Call loadMissionStatement() after the
+// planner storage provider is ready to hydrate this from settings.json.
+export function getMissionStatement() {
+  return missionCache
+}
+
+export async function loadMissionStatement() {
+  try {
+    const { settings, hasMissionStatement } = await readSettingsMetadata()
+    let next = settings.missionStatement || ''
+    if (!hasMissionStatement) {
+      const legacy = readLegacyMissionStatement().trim()
+      if (legacy) {
+        next = legacy
+        await writeSettings({ ...settings, missionStatement: next })
+      }
+    }
+    missionCache = next
+  } catch {
+    missionCache = readLegacyMissionStatement().trim()
+  }
+  emitMissionChanged(missionCache)
+  return missionCache
 }
 
 // Persist the mission statement and notify listeners. Trims surrounding
 // whitespace; an empty/whitespace-only value clears it.
 export function setMissionStatement(value) {
   const next = (value || '').trim()
-  try {
-    if (next) localStorage.setItem(STORAGE_KEY, next)
-    else localStorage.removeItem(STORAGE_KEY)
-  } catch {
-    // Storage may be unavailable (private mode, quota). Still fire the event so
-    // the in-memory UI stays in sync for this session.
-  }
-  try {
-    window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: next }))
-  } catch {
-    // No window (tests/SSR) — nothing to notify.
-  }
-  return next
+  missionCache = next
+  emitMissionChanged(next)
+  return readSettings()
+    .then(settings => writeSettings({ ...settings, missionStatement: next }))
+    .then(() => next)
+    .catch(() => next)
 }
 
 // Subscribe to mission-statement changes. Fires the listener with the new value.
@@ -49,4 +70,8 @@ export function subscribeMissionStatement(listener) {
   }
 }
 
-export const __testing = { STORAGE_KEY, CHANGE_EVENT }
+export const __testing = {
+  LEGACY_STORAGE_KEY,
+  CHANGE_EVENT,
+  resetCache() { missionCache = '' },
+}
