@@ -5892,10 +5892,10 @@ function App() {
               <button
                 className={`mobile-menu-btn sync-${syncClass}`}
                 onClick={() => setSidebarOpen(true)}
-                aria-label={`Open file menu — ${syncLabel}`}
+                aria-label={`Open ${APP_NAME} menu — ${syncLabel}`}
                 title={syncLabel}
               >
-                <span className="mobile-menu-btn-label">☰ Files</span>
+                <span className="mobile-menu-btn-label">☰ {APP_NAME}</span>
                 {isSyncing && (
                   <span className="files-sync-icon syncing" aria-hidden="true">↻</span>
                 )}
