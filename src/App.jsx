@@ -24,7 +24,8 @@ import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage } from './journalChat.js'
-import { getMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
+import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
+import { SETTINGS_FILE } from './storage/settings.js'
 import {
   InstallButton, InstallModal, InstallNudge,
   InstallSettingsSection, InstallSuccessToast,
@@ -3948,6 +3949,7 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
   const [deletingPath, setDeletingPath] = useState(null)
   // Mission statement editor (Settings → Mission).
   const [mission, setMissionInput] = useState(getMissionStatement())
+  useEffect(() => subscribeMissionStatement(setMissionInput), [])
   // App update (force latest service worker — fixes "stale build on mobile").
   const [updating, setUpdating] = useState(false)
   const [updateMsg, setUpdateMsg] = useState('')
@@ -5529,6 +5531,7 @@ function App() {
     if (!hasBackup) {
       await storage.scaffold()
     }
+    await loadMissionStatement()
     // Make the folder self-documenting for external agents. Version-gated and
     // idempotent, so this is safe to run on every init (new and existing users).
     storage.ensureAgentsDoc().catch(() => {})
@@ -5730,6 +5733,9 @@ function App() {
           const text = await storage.read(current)
           setContent(text)
         } catch { /* ignore */ }
+      }
+      if (changedPath === SETTINGS_FILE) {
+        await loadMissionStatement()
       }
       // Debounced tree refresh — a single sync may touch many files.
       clearTimeout(treeTimer)

@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   getMissionStatement,
+  loadMissionStatement,
   setMissionStatement,
   subscribeMissionStatement,
   __testing,
 } from './missionStatement.js'
+import { SETTINGS_FILE, __testing as settingsTesting } from './storage/settings.js'
 
-// The module talks to localStorage + window events. The default vitest env is
-// node, so we install minimal in-memory stubs to exercise the real code paths.
+// The module talks to settings storage + window events. The default vitest env
+// is node, so we install minimal in-memory stubs to exercise the real code paths.
 function installDom() {
   const store = new Map()
   globalThis.localStorage = {
@@ -30,43 +32,73 @@ function installDom() {
 }
 
 describe('mission statement', () => {
-  beforeEach(() => installDom())
+  let files
+
+  beforeEach(() => {
+    installDom()
+    __testing.resetCache()
+    files = new Map()
+    settingsTesting.setStorageAdapter({
+      read: async (path) => files.get(path) ?? '',
+      write: async (path, content) => files.set(path, content),
+    })
+  })
   afterEach(() => {
     delete globalThis.localStorage
     delete globalThis.window
     delete globalThis.CustomEvent
+    settingsTesting.setStorageAdapter(null)
+    __testing.resetCache()
   })
 
   it('returns empty string when unset', () => {
     expect(getMissionStatement()).toBe('')
   })
 
-  it('persists and reads back a value', () => {
-    setMissionStatement('Be present with family.')
+  it('persists and reads back a value from settings.json', async () => {
+    await setMissionStatement('Be present with family.')
     expect(getMissionStatement()).toBe('Be present with family.')
-    expect(localStorage.getItem(__testing.STORAGE_KEY)).toBe('Be present with family.')
+    expect(JSON.parse(files.get(SETTINGS_FILE)).missionStatement).toBe('Be present with family.')
   })
 
-  it('trims whitespace and clears on empty', () => {
-    setMissionStatement('   Ship calm software.  ')
+  it('trims whitespace and clears on empty', async () => {
+    await setMissionStatement('   Ship calm software.  ')
     expect(getMissionStatement()).toBe('Ship calm software.')
-    setMissionStatement('   ')
+    await setMissionStatement('   ')
     expect(getMissionStatement()).toBe('')
+    expect(JSON.parse(files.get(SETTINGS_FILE)).missionStatement).toBe('')
   })
 
-  it('notifies subscribers with the new value', () => {
+  it('notifies subscribers with the new value', async () => {
     const seen = vi.fn()
     const unsub = subscribeMissionStatement(seen)
-    setMissionStatement('North star')
+    await setMissionStatement('North star')
     expect(seen).toHaveBeenCalledWith('North star')
     unsub()
-    setMissionStatement('changed again')
+    await setMissionStatement('changed again')
     expect(seen).toHaveBeenCalledTimes(1)
   })
 
-  it('survives missing storage without throwing', () => {
-    delete globalThis.localStorage
-    expect(() => setMissionStatement('x')).not.toThrow()
+  it('migrates the legacy localStorage value when settings has no mission', async () => {
+    localStorage.setItem(__testing.LEGACY_STORAGE_KEY, 'Legacy north star')
+    await loadMissionStatement()
+    expect(getMissionStatement()).toBe('Legacy north star')
+    expect(JSON.parse(files.get(SETTINGS_FILE)).missionStatement).toBe('Legacy north star')
+  })
+
+  it('does not overwrite an intentionally empty settings mission with legacy storage', async () => {
+    files.set(SETTINGS_FILE, '{ "version": 1, "missionStatement": "" }')
+    localStorage.setItem(__testing.LEGACY_STORAGE_KEY, 'Legacy north star')
+    await loadMissionStatement()
     expect(getMissionStatement()).toBe('')
+  })
+
+  it('survives unavailable settings storage without throwing', async () => {
+    settingsTesting.setStorageAdapter({
+      read: async () => { throw new Error('no storage') },
+      write: async () => { throw new Error('no storage') },
+    })
+    await expect(setMissionStatement('x')).resolves.toBe('x')
+    expect(getMissionStatement()).toBe('x')
   })
 })
