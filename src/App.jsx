@@ -1215,36 +1215,6 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                         )}
                       </span>
                     )}
-                    {/* Mobile (#335): journal + kebab get a dedicated trailing actions
-                        column with real 40px tap targets, so neither overlaps the task
-                        text and the journal icon is reliably clickable. */}
-                    {isMobile && !isEditing && (
-                      <div className="row-actions">
-                        {journalPath && (
-                          <a
-                            href="#"
-                            className="row-action-btn journal-action"
-                            aria-label="Open journal"
-                            title="Open journal"
-                            onClick={(e) => {
-                              e.preventDefault()
-                              onNavigate(journalPath)
-                            }}
-                          >
-                            📓
-                          </a>
-                        )}
-                        <button
-                          type="button"
-                          className="row-action-btn row-kebab-btn"
-                          aria-label="Task actions"
-                          title="Task actions"
-                          onClick={handleKebab}
-                        >
-                          ⋯
-                        </button>
-                      </div>
-                    )}
                   </div>
                   {hasLeadUp && !isEditing && (
                     <div className="todo-preview" onClick={() => setTodosExpanded(!todosExpanded)}>
@@ -1327,6 +1297,40 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
           
           return <td key={i}>{renderCellWithTooltips(cellValue, onNavigate)}</td>
         })}
+        {/* Mobile (#335): journal + kebab get their own trailing column at the
+            row's right edge — kebab all the way right, journal just before it —
+            with real 40px tap targets that never overlap the task text. */}
+        {isMobile && (
+          <td className="row-actions-cell">
+            {!isEditing && (
+              <div className="row-actions">
+                {journalPath && (
+                  <a
+                    href="#"
+                    className="row-action-btn journal-action"
+                    aria-label="Open journal"
+                    title="Open journal"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      onNavigate(journalPath)
+                    }}
+                  >
+                    📓
+                  </a>
+                )}
+                <button
+                  type="button"
+                  className="row-action-btn row-kebab-btn"
+                  aria-label="Task actions"
+                  title="Task actions"
+                  onClick={handleKebab}
+                >
+                  ⋯
+                </button>
+              </div>
+            )}
+          </td>
+        )}
       </tr>
       {todosExpanded && hasLeadUp && (
         <tr className="todo-row">
@@ -1370,6 +1374,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
               )}
             </div>
           </td>
+          {isMobile && <td className="row-actions-cell"></td>}
         </tr>
       )}
     </>
@@ -1625,6 +1630,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
             <thead>
               <tr>
                 {headers.map((h, i) => <th key={i}>{displayHeader(h)}</th>)}
+                {isMobile && <th key="__actions" className="row-actions-header" aria-label="Actions"></th>}
               </tr>
             </thead>
             <tbody>
@@ -1650,7 +1656,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
               ))}
               {isSearching && matchCount === 0 && (
                 <tr className="search-no-match-row">
-                  <td colSpan={headers.length}>No matches in {title}</td>
+                  <td colSpan={headers.length + (isMobile ? 1 : 0)}>No matches in {title}</td>
                 </tr>
               )}
             </tbody>

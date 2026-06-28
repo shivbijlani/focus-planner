@@ -1036,15 +1036,27 @@ tr.highlight-flash {
   min-width: 0;
 }
 
-/* Mobile row actions (#335): journal + kebab as a dedicated trailing column of
-   real 40px tap targets, pinned to the cell's right edge. Replaces the old
-   absolutely-positioned kebab that overlapped (and blocked) the journal icon. */
+/* Mobile row actions (#335): journal + kebab live in their own trailing table
+   column at the row's right edge — the kebab sits all the way right and the
+   journal just before it — as real 40px tap targets. Replaces the old in-cell
+   group (and the even older absolutely-positioned kebab that overlapped the
+   journal icon). */
+.row-actions-cell {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+  vertical-align: middle;
+  padding-left: 0;
+}
+.row-actions-header {
+  width: 1%;
+}
 .row-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 0.15rem;
   flex-shrink: 0;
-  margin-left: auto;
 }
 .row-action-btn {
   width: 40px;
