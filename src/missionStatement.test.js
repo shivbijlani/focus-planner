@@ -79,18 +79,10 @@ describe('mission statement', () => {
     expect(seen).toHaveBeenCalledTimes(1)
   })
 
-  it('migrates the legacy localStorage value when settings has no mission', async () => {
-    localStorage.setItem(__testing.LEGACY_STORAGE_KEY, 'Legacy north star')
+  it('loads the mission from settings.json', async () => {
+    files.set(SETTINGS_FILE, '{ "version": 1, "missionStatement": "Loaded north star" }')
     await loadMissionStatement()
-    expect(getMissionStatement()).toBe('Legacy north star')
-    expect(JSON.parse(files.get(SETTINGS_FILE)).missionStatement).toBe('Legacy north star')
-  })
-
-  it('does not overwrite an intentionally empty settings mission with legacy storage', async () => {
-    files.set(SETTINGS_FILE, '{ "version": 1, "missionStatement": "" }')
-    localStorage.setItem(__testing.LEGACY_STORAGE_KEY, 'Legacy north star')
-    await loadMissionStatement()
-    expect(getMissionStatement()).toBe('')
+    expect(getMissionStatement()).toBe('Loaded north star')
   })
 
   it('survives unavailable settings storage without throwing', async () => {
