@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   SETTINGS_FILE,
   readSettings,
-  readSettingsMetadata,
   writeSettings,
   __testing,
 } from './settings.js'
@@ -36,20 +35,6 @@ describe('settings storage', () => {
     await expect(readSettings()).resolves.toEqual({
       version: 1,
       missionStatement: 'Build calm tools.',
-    })
-  })
-
-  it('reports whether the mission key was present for one-shot migration', async () => {
-    await expect(readSettingsMetadata()).resolves.toMatchObject({
-      exists: false,
-      hasMissionStatement: false,
-    })
-
-    files.set(SETTINGS_FILE, '{ "version": 1, "missionStatement": "" }')
-    await expect(readSettingsMetadata()).resolves.toMatchObject({
-      exists: true,
-      hasMissionStatement: true,
-      settings: { version: 1, missionStatement: '' },
     })
   })
 })

@@ -1,17 +1,8 @@
-import { readSettings, readSettingsMetadata, writeSettings } from './storage/settings.js'
+import { readSettings, writeSettings } from './storage/settings.js'
 
-const LEGACY_STORAGE_KEY = 'fp-mission-statement'
 const CHANGE_EVENT = 'fp-mission-changed'
 
 let missionCache = ''
-
-function readLegacyMissionStatement() {
-  try {
-    return localStorage.getItem(LEGACY_STORAGE_KEY) || ''
-  } catch {
-    return ''
-  }
-}
 
 function emitMissionChanged(value) {
   try {
@@ -29,18 +20,10 @@ export function getMissionStatement() {
 
 export async function loadMissionStatement() {
   try {
-    const { settings, hasMissionStatement } = await readSettingsMetadata()
-    let next = settings.missionStatement || ''
-    if (!hasMissionStatement) {
-      const legacy = readLegacyMissionStatement().trim()
-      if (legacy) {
-        next = legacy
-        await writeSettings({ ...settings, missionStatement: next })
-      }
-    }
-    missionCache = next
+    const settings = await readSettings()
+    missionCache = settings.missionStatement || ''
   } catch {
-    missionCache = readLegacyMissionStatement().trim()
+    missionCache = ''
   }
   emitMissionChanged(missionCache)
   return missionCache
@@ -71,7 +54,6 @@ export function subscribeMissionStatement(listener) {
 }
 
 export const __testing = {
-  LEGACY_STORAGE_KEY,
   CHANGE_EVENT,
   resetCache() { missionCache = '' },
 }

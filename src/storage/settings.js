@@ -23,36 +23,23 @@ function normalizeSettings(value) {
 
 async function readRawSettings() {
   const raw = await storageAdapter.read(SETTINGS_FILE)
-  if (!raw) return { raw: {}, exists: false }
+  if (!raw) return {}
   try {
     const parsed = JSON.parse(raw)
-    return {
-      raw: parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {},
-      exists: true,
-    }
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
   } catch {
-    return { raw: {}, exists: true }
+    return {}
   }
 }
 
 export async function readSettings() {
-  const { raw } = await readRawSettings()
-  return normalizeSettings(raw)
+  return normalizeSettings(await readRawSettings())
 }
 
 export async function writeSettings(settings) {
   const next = normalizeSettings(settings)
   await storageAdapter.write(SETTINGS_FILE, `${JSON.stringify(next, null, 2)}\n`)
   return next
-}
-
-export async function readSettingsMetadata() {
-  const { raw, exists } = await readRawSettings()
-  return {
-    settings: normalizeSettings(raw),
-    exists,
-    hasMissionStatement: Object.prototype.hasOwnProperty.call(raw, 'missionStatement'),
-  }
 }
 
 export const __testing = {
