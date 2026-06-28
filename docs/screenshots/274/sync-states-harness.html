@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=375, initial-scale=1" />
+<title>Task 274 — Files button sync states</title>
+<style>
+  /* --- copied verbatim from focus-planner src/App.css (the merged #274/#333/#336 build) --- */
+  body { margin: 0; background: #1a1a2e; color: #eee;
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .app { background: #16213e; }
+
+  .mobile-menu-btn {
+    background: #0f3460;
+    border: 1px solid #1e3a5f;
+    color: #94a3b8;
+    padding: 0.4rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .files-sync-dot {
+    width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0;
+    background: #64748b; box-shadow: 0 0 0 2px rgba(100,116,139,0.18);
+  }
+  .files-sync-dot.syncing, .files-sync-dot.pending {
+    background: #f59e0b; box-shadow: 0 0 0 2px rgba(245,158,11,0.22);
+    animation: files-sync-pulse 1s ease-in-out infinite;
+  }
+  .files-sync-dot.reconnect-needed, .files-sync-dot.error {
+    background: #e94560; box-shadow: 0 0 0 2px rgba(233,69,96,0.2);
+  }
+  @keyframes files-sync-pulse {
+    0%,100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.65); }
+  }
+  .files-sync-icon {
+    display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0; line-height: 1; font-weight: 700;
+  }
+  .files-sync-icon.syncing {
+    color: #f59e0b; font-size: 0.95rem; animation: spin 0.9s linear infinite;
+  }
+  .files-sync-icon.error {
+    width: 15px; height: 15px; border-radius: 999px;
+    background: #e94560; color: #fff; font-size: 0.72rem;
+    box-shadow: 0 0 0 2px rgba(233,69,96,0.2);
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* harness-only layout (not part of the app) */
+  .wrap { width: 375px; padding: 18px 14px; box-sizing: border-box; }
+  .row { display: flex; align-items: center; gap: 14px; padding: 14px 4px;
+         border-bottom: 1px solid #243456; }
+  .row:last-child { border-bottom: none; }
+  .meta { font-size: 0.82rem; color: #cbd5e1; }
+  .meta b { color: #fff; font-weight: 600; }
+  .meta .lbl { color: #94a3b8; }
+  .hdr { font-size: 0.95rem; color: #fff; font-weight: 600; padding: 4px 4px 10px; }
+  .sub { font-size: 0.74rem; color: #8aa0c0; padding: 0 4px 8px; }
+  /* the freeze versions stop animation so a still PNG shows the glyph clearly */
+  .freeze .files-sync-icon.syncing { animation: none; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="wrap freeze">
+    <div class="hdr">☰ Files button — backup/sync states (375px)</div>
+    <div class="sub">Synced is the assumed default and shows nothing ("no news is good news").
+      Per #336, "Not backed up" also shows nothing. Only attention-worthy states render a glyph.</div>
+
+    <div class="row" id="row-synced">
+      <button class="mobile-menu-btn sync-synced" title="Backed up just now">
+        <span class="mobile-menu-btn-label">☰ Files</span>
+      </button>
+      <div class="meta"><b>Synced / default</b><br><span class="lbl">"Backed up just now" — no glyph</span></div>
+    </div>
+
+    <div class="row" id="row-disconnected">
+      <button class="mobile-menu-btn sync-disconnected" title="Not backed up">
+        <span class="mobile-menu-btn-label">☰ Files</span>
+      </button>
+      <div class="meta"><b>Not backed up</b><br><span class="lbl">disconnected — also no glyph (#336)</span></div>
+    </div>
+
+    <div class="row" id="row-syncing">
+      <button class="mobile-menu-btn sync-syncing" title="Backing up...">
+        <span class="mobile-menu-btn-label">☰ Files</span>
+        <span class="files-sync-icon syncing" aria-hidden="true">↻</span>
+      </button>
+      <div class="meta"><b>Backing up</b><br><span class="lbl">syncing/pending — spinning amber ↻</span></div>
+    </div>
+
+    <div class="row" id="row-error">
+      <button class="mobile-menu-btn sync-error" title="Backup failed - try again">
+        <span class="mobile-menu-btn-label">☰ Files</span>
+        <span class="files-sync-icon error" aria-hidden="true">!</span>
+      </button>
+      <div class="meta"><b>Needs attention</b><br><span class="lbl">error/reconnect — red ! badge</span></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
