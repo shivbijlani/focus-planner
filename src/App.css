@@ -2769,14 +2769,15 @@ tr.highlight-flash {
     min-width: 0;
   }
 
-  /* Board search lives in the header on mobile instead of its own row (#284).
-     Skinny screens collapse it to a 🔍 toggle (.mobile-search-toggle); tapping
-     expands this input to fill the whole header row (#274). */
+  /* Board search lives in the header on mobile, sharing the row with the ☰ Files
+     button instead of wrapping to its own line (#271, #284). `flex: 1 1 auto` lets
+     it take the remaining width next to Files and stay put on focus/typing — the
+     header is a single, stable row. */
   .mobile-board-search {
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    flex: 1 0 100%;
+    flex: 1 1 auto;
     min-width: 0;
     background: #0d1b35;
     border: 1px solid #1a4a7a;
@@ -2836,11 +2837,11 @@ tr.highlight-flash {
     display: none;
   }
 
-  /* Keep the mission visible on mobile, sharing the header row with the collapsed
-     search instead of its own band (#322). It flexes to take the spare width and
-     may wrap to two lines when long, so the whole header stays one row (#274). */
-  .mobile-nav-bar:has(.mobile-board-mission),
-  .mobile-nav-bar:has(.mobile-board-search) { flex-wrap: wrap; }
+  /* The mobile header stays a single non-wrapping row: ☰ Files + the search box
+     sit side by side, so the search never drops to its own line — including after
+     you tap/type in it (#271). (The legacy mission band could wrap to two lines;
+     mission is now folded into the search placeholder per #322.) */
+  .mobile-nav-bar:has(.mobile-board-mission) { flex-wrap: wrap; }
   .mobile-board-mission {
     display: -webkit-box;
     -webkit-line-clamp: 2;
