@@ -17,6 +17,7 @@ import { tagMergedRows, resolveRowSourceId } from './combinedRouting.js'
 import { selfHealOutlierIds } from './selfHealIds.js'
 import { recordDeletedId } from './idTombstones.js'
 import { scrollToAndFlashTask } from './scrollToTask.js'
+import { filterPlannerTree } from './fileTreeFilter.js'
 import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery, boardSearchPlaceholder } from './boardSearch.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
@@ -3669,7 +3670,7 @@ const PROVIDER_ICONS = {
 }
 
 const SYNC_LABELS = {
-  [TARGET_STATUS.DISCONNECTED]: 'Not backed up',
+  [TARGET_STATUS.DISCONNECTED]: '',
   [TARGET_STATUS.PENDING]: 'Waiting to back up',
   [TARGET_STATUS.SYNCING]: 'Backing up...',
   [TARGET_STATUS.SYNCED]: 'Backed up just now',
@@ -3683,7 +3684,7 @@ const SYNC_LABELS = {
 // a calm green "Backed up" — so desktop users get an at-a-glance backup status
 // without opening Settings.
 const SYNC_SHORT = {
-  [TARGET_STATUS.DISCONNECTED]: 'Not backed up',
+  [TARGET_STATUS.DISCONNECTED]: '',
   [TARGET_STATUS.PENDING]: 'Pending',
   [TARGET_STATUS.SYNCING]: 'Backing up…',
   [TARGET_STATUS.SYNCED]: 'Backed up',
@@ -3703,7 +3704,7 @@ function SyncIndicator({ syncStatus }) {
       title={fullLabel}
     >
       <span className={`sync-dot ${syncClass}`} aria-hidden="true" />
-      <span className="board-sync-text">{SYNC_SHORT[aggregate] || 'Sync'}</span>
+      {SYNC_SHORT[aggregate] && <span className="board-sync-text">{SYNC_SHORT[aggregate]}</span>}
     </div>
   )
 }
@@ -5296,14 +5297,14 @@ function App() {
       const liveSources = getSources()
       if (liveSources.length <= 1) {
         const data = await storage.getFiles()
-        setFiles(data)
+        setFiles(filterPlannerTree(data))
         return
       }
       const perSource = await Promise.all(
         liveSources.map(async (s) => {
           try {
             const tree = await storage.getFilesFromSource(s.id)
-            return { source: s, tree }
+            return { source: s, tree: filterPlannerTree(tree) }
           } catch {
             return { source: s, tree: [] }
           }
@@ -5692,7 +5693,6 @@ function App() {
       )}
       <aside className="sidebar">
         <div className="sidebar-header">
-          <h2>📋 Planner</h2>
           <button
             className="sidebar-close-btn"
             onClick={() => setSidebarOpen(false)}

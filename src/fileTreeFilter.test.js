@@ -54,7 +54,7 @@ describe('filterPlannerTree', () => {
     const names = filterPlannerTree(sampleTree)
       .filter((i) => i.type === 'file')
       .map((i) => i.name)
-    expect(names.sort()).toEqual(['AGENTS.md', 'planner-completed.md', 'planner.md'])
+    expect(names.sort()).toEqual(['planner-completed.md', 'planner.md'])
   })
 
   it('hides legacy and stray loose .md files', () => {
@@ -73,7 +73,7 @@ describe('filterPlannerTree', () => {
     expect(names).not.toContain('dist')
     expect(names).not.toContain('outputs')
     // Only the journal directory plus root core files survive.
-    expect(names.sort()).toEqual(['AGENTS.md', 'journal', 'planner-completed.md', 'planner.md'])
+    expect(names.sort()).toEqual(['journal', 'planner-completed.md', 'planner.md'])
   })
 
   it('keeps the journal directory but only its task-<n>.md files', () => {
