@@ -334,21 +334,22 @@ body {
   scrollbar-gutter: stable;
 }
 
-/* Mission statement: a tasteful "north star" banner pinned at the top of the
-   board (task #322). Quiet by default, legible on the dark shell, and it wraps
-   gracefully on small screens. */
+/* Mission statement: a quiet "north star" banner pinned near the top of the
+   main surface. It stays below mobile header controls and wraps gracefully. */
 .mission-banner {
   display: flex;
   align-items: flex-start;
-  gap: 0.6rem;
-  margin: 0 0 1.5rem;
-  padding: 0.85rem 1.1rem;
-  border: 1px solid rgba(129, 140, 248, 0.35);
+  gap: 0.7rem;
+  max-width: 1200px;
+  margin: 0 0 1.25rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #1a4a7a;
   border-radius: 12px;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.16), rgba(139, 92, 246, 0.08));
+  background: linear-gradient(135deg, rgba(15, 52, 96, 0.72), rgba(22, 33, 62, 0.62));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .mission-banner-icon {
-  color: #a5b4fc;
+  color: #93c5fd;
   font-size: 1rem;
   line-height: 1.5;
   flex-shrink: 0;
@@ -360,15 +361,16 @@ body {
   font-style: italic;
   color: #e2e8f0;
   font-weight: 500;
+  text-wrap: pretty;
   overflow-wrap: anywhere;
 }
 @media (max-width: 768px) {
   .mission-banner {
-    margin-bottom: 1rem;
-    padding: 0.7rem 0.9rem;
+    margin-bottom: 0.85rem;
+    padding: 0.72rem 0.85rem;
     border-radius: 10px;
   }
-  .mission-banner-text { font-size: 0.9rem; }
+  .mission-banner-text { font-size: 0.9rem; line-height: 1.42; }
 }
 
 /* Journal chat: the content area becomes a non-scrolling flex column so the
@@ -447,15 +449,6 @@ body {
   color: #64748b;
 }
 
-/* When the placeholder is the mission statement (#322), dress the zero-state up
-   as a quiet quote: italic and a touch brighter so it reads as a north star
-   rather than a generic hint. */
-.board-search-input.has-mission::placeholder {
-  color: #a9b6c9;
-  font-style: italic;
-  opacity: 1;
-}
-
 .board-search-count {
   font-size: 0.85rem;
   color: #94a3b8;
@@ -476,45 +469,6 @@ body {
 .board-search-clear:hover {
   background: #1a4a7a;
   color: #fff;
-}
-
-/* Mission "north star" merged into the board header row (#322). It shares the
-   sticky search bar instead of taking its own full-width band, so on mobile it
-   sits beside search rather than stealing a row. Truncates with an ellipsis;
-   the full text stays available via the title tooltip. */
-.board-mission {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  min-width: 0;
-  margin-left: auto;
-  max-width: 55%;
-  padding-left: 0.6rem;
-}
-.board-mission-icon {
-  color: #a5b4fc;
-  font-size: 0.95rem;
-  flex-shrink: 0;
-}
-.board-mission-text {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-style: italic;
-  font-weight: 500;
-  font-size: 0.9rem;
-  color: #cbd5e1;
-}
-/* When the mission is the only thing in the header (short lists, no search),
-   let it span the row left-aligned. */
-.board-search > .board-mission:only-child {
-  margin-left: 0;
-  max-width: 100%;
-}
-@media (max-width: 768px) {
-  .board-mission { max-width: 50%; }
-  .board-mission-text { font-size: 0.82rem; }
 }
 
 /* Always-visible board-header sync pill (#333). Reuses the aggregate sync
@@ -2992,25 +2946,6 @@ tr.highlight-flash {
   .board-search {
     display: none;
   }
-
-  /* The mobile header stays a single non-wrapping row: ☰ Files + the search box
-     sit side by side, so the search never drops to its own line — including after
-     you tap/type in it (#271). (The legacy mission band could wrap to two lines;
-     mission is now folded into the search placeholder per #322.) */
-  .mobile-nav-bar:has(.mobile-board-mission) { flex-wrap: wrap; }
-  .mobile-board-mission {
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    flex: 1;
-    min-width: 0;
-    font-size: 0.78rem;
-    line-height: 1.25;
-    color: #94a3b8;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .mobile-board-mission > span { opacity: 0.85; }
 
   .task-table {
     font-size: 0.8rem;

@@ -1,5 +1,5 @@
 // Mission statement: a short personal "north star" the user can set in Settings
-// and see tastefully pinned at the top of the board.
+// and see tastefully pinned near the top of the main surface.
 //
 // Design (per task #322 + the read-state philosophy in #311): the UI carries no
 // business logic. It reads the current value and fires a change event; this module
