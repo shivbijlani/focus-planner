@@ -4,8 +4,8 @@
  * build output, stray notes, legacy focus-plan.md duplicates, etc.).
  *
  * Kept (per source root):
- *  - The curated core files, by basename: planner.md, planner-completed.md,
- *    AGENTS.md (see CARED_ABOUT_FILES).
+ *  - The curated core files, by basename: planner.md, planner-completed.md
+ *    (see CARED_ABOUT_FILES).
  *  - The `journal/` directory and its per-task journals (task-<n>.md).
  *
  * Dropped:
@@ -21,9 +21,8 @@
  * applied before any multi-source `sourceId::` path prefixing.
  */
 import { PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
-import { AGENTS_FILE } from './config/agentsDoc.js'
 
-export const CARED_ABOUT_FILES = new Set([PLAN_FILE, COMPLETED_FILE, AGENTS_FILE])
+export const CARED_ABOUT_FILES = new Set([PLAN_FILE, COMPLETED_FILE])
 
 const JOURNAL_DIR = 'journal'
 const JOURNAL_FILE_RE = /^task-\d+\.md$/i

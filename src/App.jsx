@@ -18,6 +18,7 @@ import { tagMergedRows, resolveRowSourceId } from './combinedRouting.js'
 import { selfHealOutlierIds } from './selfHealIds.js'
 import { recordDeletedId } from './idTombstones.js'
 import { scrollToAndFlashTask } from './scrollToTask.js'
+import { filterPlannerTree } from './fileTreeFilter.js'
 import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery, boardSearchPlaceholder } from './boardSearch.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
@@ -1201,7 +1202,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                       {journalPath && (
                         <a
                           href="#"
-                          className="journal-link"
+                          className="journal-link desktop-only"
                           title="Open journal"
                           onClick={(e) => {
                             e.preventDefault()
@@ -1212,6 +1213,29 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                         </a>
                       )}
                     </span>
+                  )}
+                  {journalPath && (
+                    <div className="mobile-task-actions">
+                      <button
+                        className="journal-mobile-btn"
+                        onClick={(e) => { e.preventDefault(); onNavigate(journalPath) }}
+                        title="Open journal"
+                      >📓</button>
+                      <button
+                        className="mobile-context-trigger"
+                        onClick={handleContextMenu}
+                        title="Task actions"
+                      >...</button>
+                    </div>
+                  )}
+                  {!journalPath && taskId && (
+                    <div className="mobile-task-actions">
+                      <button
+                        className="mobile-context-trigger"
+                        onClick={handleContextMenu}
+                        title="Task actions"
+                      >...</button>
+                    </div>
                   )}
                   {hasLeadUp && !isEditing && (
                     <div className="todo-preview" onClick={() => setTodosExpanded(!todosExpanded)}>
@@ -3790,7 +3814,7 @@ const PROVIDER_ICONS = {
 }
 
 const SYNC_LABELS = {
-  [TARGET_STATUS.DISCONNECTED]: 'Not backed up',
+  [TARGET_STATUS.DISCONNECTED]: '',
   [TARGET_STATUS.PENDING]: 'Waiting to back up',
   [TARGET_STATUS.SYNCING]: 'Backing up...',
   [TARGET_STATUS.SYNCED]: 'Backed up just now',
@@ -3804,7 +3828,7 @@ const SYNC_LABELS = {
 // a calm green "Backed up" — so desktop users get an at-a-glance backup status
 // without opening Settings.
 const SYNC_SHORT = {
-  [TARGET_STATUS.DISCONNECTED]: 'Not backed up',
+  [TARGET_STATUS.DISCONNECTED]: '',
   [TARGET_STATUS.PENDING]: 'Pending',
   [TARGET_STATUS.SYNCING]: 'Backing up…',
   [TARGET_STATUS.SYNCED]: 'Backed up',
@@ -3813,7 +3837,10 @@ const SYNC_SHORT = {
 }
 
 function SyncIndicator({ syncStatus }) {
+  return null
   const aggregate = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
+  if (aggregate === TARGET_STATUS.DISCONNECTED) return null
+
   const syncClass = aggregate.replace(/[^a-z-]/g, '')
   const fullLabel = SYNC_LABELS[aggregate] || 'Sync status'
   return (
@@ -3824,7 +3851,7 @@ function SyncIndicator({ syncStatus }) {
       title={fullLabel}
     >
       <span className={`sync-dot ${syncClass}`} aria-hidden="true" />
-      <span className="board-sync-text">{SYNC_SHORT[aggregate] || 'Sync'}</span>
+      {SYNC_SHORT[aggregate] && <span className="board-sync-text">{SYNC_SHORT[aggregate]}</span>}
     </div>
   )
 }
@@ -4273,7 +4300,6 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
         >
           <span className="storage-footer-icon">⚙</span>
           <span className="storage-footer-label">Settings</span>
-          <span className={`sync-dot ${syncClass}`} title={SYNC_LABELS[aggregate] || 'Not backed up'} />
         </button>
       </div>
 
@@ -5417,14 +5443,14 @@ function App() {
       const liveSources = getSources()
       if (liveSources.length <= 1) {
         const data = await storage.getFiles()
-        setFiles(data)
+        setFiles(filterPlannerTree(data))
         return
       }
       const perSource = await Promise.all(
         liveSources.map(async (s) => {
           try {
             const tree = await storage.getFilesFromSource(s.id)
-            return { source: s, tree }
+            return { source: s, tree: filterPlannerTree(tree) }
           } catch {
             return { source: s, tree: [] }
           }
@@ -5813,7 +5839,6 @@ function App() {
       )}
       <aside className="sidebar">
         <div className="sidebar-header">
-          <h2>📋 Planner</h2>
           <button
             className="sidebar-close-btn"
             onClick={() => setSidebarOpen(false)}
@@ -5844,29 +5869,14 @@ function App() {
             // as ambiguous, so we now use recognizable icons: a spinning ↻ while
             // backing up and an exclamation when backup needs attention (error /
             // reconnect). "Not backed up" stays a quiet muted dot.
-            const aggStatus = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
-            const syncClass = aggStatus.replace(/[^a-z-]/g, '')
-            const syncLabel = SYNC_LABELS[aggStatus] || 'Sync status'
-            const isSyncing = aggStatus === TARGET_STATUS.SYNCING || aggStatus === TARGET_STATUS.PENDING
-            const isError = aggStatus === TARGET_STATUS.ERROR || aggStatus === TARGET_STATUS.RECONNECT_NEEDED
-            const showSyncDot = aggStatus !== TARGET_STATUS.SYNCED
             return (
               <button
-                className={`mobile-menu-btn sync-${syncClass}`}
+                className="mobile-menu-btn"
                 onClick={() => setSidebarOpen(true)}
-                aria-label={`Open file menu — ${syncLabel}`}
-                title={syncLabel}
+                aria-label="Open Planner menu"
+                title="Planner"
               >
-                <span className="mobile-menu-btn-label">☰ Files</span>
-                {isSyncing && (
-                  <span className="files-sync-icon syncing" aria-hidden="true">↻</span>
-                )}
-                {isError && (
-                  <span className="files-sync-icon error" aria-hidden="true">!</span>
-                )}
-                {showSyncDot && !isSyncing && !isError && (
-                  <span className={`files-sync-dot ${syncClass}`} aria-hidden="true" />
-                )}
+                <span className="mobile-menu-btn-label">☰ Planner</span>
               </button>
             )
           })()}
