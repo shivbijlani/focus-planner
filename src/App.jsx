@@ -1183,37 +1183,69 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
             return (
               <td key={i}>
                 <div className="task-with-todos">
-                  {isEditing ? (
-                    <input
-                      type="text"
-                      className="task-edit-input"
-                      value={editText}
-                      onChange={(e) => setEditText(e.target.value)}
-                      onBlur={saveEdit}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') saveEdit()
-                        if (e.key === 'Escape') cancelEdit()
-                      }}
-                      autoFocus
-                    />
-                  ) : (
-                    <span className="task-text" onDoubleClick={startEditing} title="Double-click to edit">
-                      {renderCellWithTooltips(cellValue, onNavigate)}
-                      {journalPath && (
-                        <a
-                          href="#"
-                          className="journal-link"
-                          title="Open journal"
-                          onClick={(e) => {
-                            e.preventDefault()
-                            onNavigate(journalPath)
-                          }}
+                  <div className="task-main-row">
+                    {isEditing ? (
+                      <input
+                        type="text"
+                        className="task-edit-input"
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        onBlur={saveEdit}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') saveEdit()
+                          if (e.key === 'Escape') cancelEdit()
+                        }}
+                        autoFocus
+                      />
+                    ) : (
+                      <span className="task-text" onDoubleClick={startEditing} title="Double-click to edit">
+                        {renderCellWithTooltips(cellValue, onNavigate)}
+                        {journalPath && !isMobile && (
+                          <a
+                            href="#"
+                            className="journal-link"
+                            title="Open journal"
+                            onClick={(e) => {
+                              e.preventDefault()
+                              onNavigate(journalPath)
+                            }}
+                          >
+                            📓
+                          </a>
+                        )}
+                      </span>
+                    )}
+                    {/* Mobile (#335): journal + kebab get a dedicated trailing actions
+                        column with real 40px tap targets, so neither overlaps the task
+                        text and the journal icon is reliably clickable. */}
+                    {isMobile && !isEditing && (
+                      <div className="row-actions">
+                        {journalPath && (
+                          <a
+                            href="#"
+                            className="row-action-btn journal-action"
+                            aria-label="Open journal"
+                            title="Open journal"
+                            onClick={(e) => {
+                              e.preventDefault()
+                              onNavigate(journalPath)
+                            }}
+                          >
+                            📓
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          className="row-action-btn row-kebab-btn"
+                          aria-label="Task actions"
+                          title="Task actions"
+                          onClick={handleKebab}
                         >
-                          📓
-                        </a>
-                      )}
-                    </span>
-                  )}
+                          ⋯
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   {hasLeadUp && !isEditing && (
                     <div className="todo-preview" onClick={() => setTodosExpanded(!todosExpanded)}>
                       <span className="todo-expander">{todosExpanded ? '▼' : '▶'}</span>
@@ -1230,17 +1262,6 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                     </div>
                   )}
                   {todosLoading && <span className="todo-loading">...</span>}
-                  {isMobile && !isEditing && (
-                    <button
-                      type="button"
-                      className="row-kebab-btn"
-                      aria-label="Task actions"
-                      title="Task actions"
-                      onClick={handleKebab}
-                    >
-                      ⋯
-                    </button>
-                  )}
                 </div>
               </td>
             )

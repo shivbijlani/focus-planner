@@ -1023,6 +1023,56 @@ tr.highlight-flash {
   position: relative;
 }
 
+/* Top line of a task cell: the task text and (on mobile) its trailing actions
+   column sit side by side, so the actions never overlap the text (#335). */
+.task-main-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.task-main-row > .task-text,
+.task-main-row > .task-edit-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Mobile row actions (#335): journal + kebab as a dedicated trailing column of
+   real 40px tap targets, pinned to the cell's right edge. Replaces the old
+   absolutely-positioned kebab that overlapped (and blocked) the journal icon. */
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.row-action-btn {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  color: #9fb3d1;
+  line-height: 1;
+  cursor: pointer;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.row-action-btn:active {
+  background: #0f3460;
+}
+.journal-action {
+  font-size: 1.2rem;
+  opacity: 0.85;
+}
+.journal-action:active {
+  opacity: 1;
+}
+
 .task-text {
   display: flex;
   align-items: center;
@@ -1580,28 +1630,10 @@ tr.highlight-flash {
   line-height: 1.2;
 }
 
-/* Per-row kebab trigger (mobile) */
+/* Per-row kebab trigger (mobile). Sizing/positioning come from .row-action-btn
+   (it lives in the .row-actions trailing column now); just tune the glyph. */
 .row-kebab-btn {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  border-radius: 6px;
-  color: #9fb3d1;
   font-size: 1.4rem;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.row-kebab-btn:active {
-  background: #0f3460;
 }
 
 .priority-dropdown {
