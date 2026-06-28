@@ -1098,7 +1098,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                       {journalPath && (
                         <a
                           href="#"
-                          className="journal-link"
+                          className="journal-link desktop-only"
                           title="Open journal"
                           onClick={(e) => {
                             e.preventDefault()
@@ -1109,6 +1109,29 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                         </a>
                       )}
                     </span>
+                  )}
+                  {journalPath && (
+                    <div className="mobile-task-actions">
+                      <button
+                        className="journal-mobile-btn"
+                        onClick={(e) => { e.preventDefault(); onNavigate(journalPath) }}
+                        title="Open journal"
+                      >📓</button>
+                      <button
+                        className="mobile-context-trigger"
+                        onClick={handleContextMenu}
+                        title="Task actions"
+                      >...</button>
+                    </div>
+                  )}
+                  {!journalPath && taskId && (
+                    <div className="mobile-task-actions">
+                      <button
+                        className="mobile-context-trigger"
+                        onClick={handleContextMenu}
+                        title="Task actions"
+                      >...</button>
+                    </div>
                   )}
                   {hasLeadUp && !isEditing && (
                     <div className="todo-preview" onClick={() => setTodosExpanded(!todosExpanded)}>
@@ -5729,10 +5752,10 @@ function App() {
               <button
                 className="mobile-menu-btn"
                 onClick={() => setSidebarOpen(true)}
-                aria-label="Open file menu"
-                title="Files"
+                aria-label="Open Planner menu"
+                title="Planner"
               >
-                <span className="mobile-menu-btn-label">☰ Files</span>
+                <span className="mobile-menu-btn-label">☰ Planner</span>
               </button>
             )
           })()}
