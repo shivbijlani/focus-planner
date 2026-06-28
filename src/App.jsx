@@ -16,7 +16,7 @@ import { tagMergedRows, resolveRowSourceId } from './combinedRouting.js'
 // SELF_HEAL_IDS (temporary): renumber runaway/foreign task IDs on load. Safe to
 // delete this import + selfHealIds.js + its call site once all devices healed.
 import { selfHealOutlierIds } from './selfHealIds.js'
-import { recordDeletedId } from './idTombstones.js'
+import { recordDeletedId, getActiveTombstoneIds } from './idTombstones.js'
 import { scrollToAndFlashTask } from './scrollToTask.js'
 import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery, boardSearchPlaceholder } from './boardSearch.js'
 import { StoragePicker } from './StoragePicker.jsx'
@@ -2980,7 +2980,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     // Renumber moving tasks into the target's own sequence so a foreign ID
     // never crosses folders (which would inflate the target's numbering).
     const targetBase = maxTaskIdInRows(targetContent)
-    const targetJournalIds = await storage.journalIdsFromSource(target.id)
+    const targetJournalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(target.id))
     const { idMap, rows: renumberedRows } = renumberMovedRows(movingRows, targetBase, targetJournalIds)
     // Find Today section's insertion point (right after the separator row).
     let inToday = false
@@ -3680,12 +3680,19 @@ function MarkdownView({ content, filePath, onContentUpdate, onNavigate, headerEx
 }
 
 // Auto-assign unique IDs to tasks without IDs
+function withDeletedIdTombstones(ids) {
+  return new Set([
+    ...(ids instanceof Set ? ids : []),
+    ...getActiveTombstoneIds(),
+  ])
+}
+
 // Get max task ID from journal filenames
 async function getJournalIds() {
   try {
-    return await storage.journalIds()
+    return withDeletedIdTombstones(await storage.journalIds())
   } catch {
-    return new Set()
+    return withDeletedIdTombstones(new Set())
   }
 }
 
@@ -4684,7 +4691,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
             // for this source, writing back + renaming journals if anything changed.
             let healed = migrated
             try {
-              const journalIds = await storage.journalIdsFromSource(s.id)
+              const journalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(s.id))
               const res = selfHealOutlierIds(migrated, { journalIds })
               if (res.changed) {
                 await storage.writeToSource(s.id, PLAN_FILE, res.content)
@@ -4910,13 +4917,13 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
     // Promote into the same source as the parent task.
     const sid = sourceForTask(parentTaskId) || sources[0]?.id
     if (!sid) return
-    const journalIds = await storage.journalIdsFromSource(sid)
+    const journalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(sid))
     await applyOp(sid, c => ops.opPromoteTodoToTask(c, todoText, parentTaskId, journalIds))
   }
 
   const handleAdd = async ({ task, priority, linkedTask, section, sourceId }) => {
     if (!sourceId) return
-    const journalIds = await storage.journalIdsFromSource(sourceId)
+    const journalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(sourceId))
     await applyOp(sourceId, c => ops.opAddTask(c, { task, priority, linkedTask, section }, journalIds))
   }
 
@@ -5110,7 +5117,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
     const tLines = targetContent.split('\n')
     // Renumber moving tasks into the target's own sequence (no foreign IDs).
     const targetBase = maxTaskIdInRows(targetContent)
-    const targetJournalIds = await storage.journalIdsFromSource(target.id)
+    const targetJournalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(target.id))
     const { idMap, rows: renumberedRows } = renumberMovedRows(movingRows, targetBase, targetJournalIds)
     let inToday = false
     let todayInsertIdx = -1
@@ -5183,7 +5190,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
     onUpdate: (newLines) =>
       applyOp(sourceId, c => ops.opUpdateManagerPriorities(c, newLines)),
     onAddAndPrioritize: async (taskName, prioritySectionTitle) => {
-      const journalIds = await storage.journalIdsFromSource(sourceId)
+      const journalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(sourceId))
       await applyOp(sourceId, c => ops.opAddAndPrioritize(c, taskName, prioritySectionTitle, journalIds))
     },
     onPromoteToManagerPriority: (taskId) =>
