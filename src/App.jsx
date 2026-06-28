@@ -3715,24 +3715,8 @@ const SYNC_SHORT = {
   [TARGET_STATUS.ERROR]: 'Sync error',
 }
 
-function SyncIndicator({ syncStatus }) {
+function SyncIndicator() {
   return null
-  const aggregate = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
-  if (aggregate === TARGET_STATUS.DISCONNECTED) return null
-
-  const syncClass = aggregate.replace(/[^a-z-]/g, '')
-  const fullLabel = SYNC_LABELS[aggregate] || 'Sync status'
-  return (
-    <div
-      className={`board-sync sync-${syncClass}`}
-      role="status"
-      aria-label={fullLabel}
-      title={fullLabel}
-    >
-      <span className={`sync-dot ${syncClass}`} aria-hidden="true" />
-      {SYNC_SHORT[aggregate] && <span className="board-sync-text">{SYNC_SHORT[aggregate]}</span>}
-    </div>
-  )
 }
 
 function TourModal({ onClose }) {
