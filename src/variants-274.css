@@ -1,0 +1,121 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   #274 — mobile-first board layout variants (design exploration)
+
+   These are OFF by default. They only activate when the URL carries
+   `?variant=A|B|C`, which adds a `v274-A|B|C` class to <body> (see App.jsx).
+   Production rendering is completely unaffected without that param.
+
+   Goal: kill the right-edge horizontal-scroll overflow on phones (~360–390px)
+   by reflowing the wide task table into a mobile-first single-column layout,
+   while still showing everything (ID + link, 🎯 priority, task name, lead-up
+   preview, Work Priority, Age, 📓 journal, ⋯ kebab).
+
+   Column order in the real table (mobile adds the trailing actions cell):
+     1 = ID (+ linked-id arrow/chip)
+     2 = 🎯 priority dropdown
+     3 = Task (name + 📓 + lead-up ▶ preview)
+     4 = Work Priority
+     5 = Age
+     last (.row-actions-cell) = 📓 journal + ⋯ kebab  (mobile only)
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* ── Shared base: turn the table into a stacked, single-column list ───────── */
+body[class*="v274-"] .task-table {
+  font-size: 0.9rem;
+  border-collapse: collapse;
+  width: 100%;
+}
+body[class*="v274-"] .task-table thead { display: none; }
+body[class*="v274-"] .task-table,
+body[class*="v274-"] .task-table tbody { display: block; width: 100%; }
+
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  position: relative;
+  padding: 10px 84px 10px 12px; /* right pad reserves room for the actions rail */
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  width: 100%;
+  box-sizing: border-box;
+}
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) > td {
+  border: none;
+  padding: 0;
+}
+
+/* Line 1: the task name (+ its lead-up ▶ preview) takes the full first row. */
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) > td:nth-child(3) {
+  order: -1;
+  flex: 1 1 100%;
+  min-width: 0;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+/* Line 2: the small muted meta strip — #ID → · 🎯 · Work Priority · Age. */
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) > td:nth-child(1),
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) > td:nth-child(2),
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) > td:nth-child(4),
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) > td:nth-child(5) {
+  flex: 0 0 auto;
+  font-size: 0.76rem;
+  color: var(--text-muted, #6b7280);
+  white-space: nowrap;
+}
+
+/* The journal + kebab actions become a compact rail pinned to the right edge. */
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) > td.row-actions-cell {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Keep the expanded lead-up list aligned to the left in stacked mode. */
+body[class*="v274-"] .task-table tbody tr.todo-row > td:first-child,
+body[class*="v274-"] .task-table tbody tr.todo-row > td:nth-child(2) { display: none; }
+body[class*="v274-"] .task-table tbody tr.todo-row { display: block; padding: 0 12px 10px; }
+
+/* ── Variant A — “Dense two-line” (default pick) ──────────────────────────── */
+/* Flat list, tight rows; everything visible, zero horizontal scroll. */
+body.v274-A .task-table tbody tr:not(.todo-row) { padding-top: 8px; padding-bottom: 8px; }
+
+/* ── Variant B — “Cards” (most native-app feel) ───────────────────────────── */
+body.v274-B .task-table tbody tr:not(.todo-row) {
+  margin: 8px 10px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 12px;
+  background: var(--card-bg, #ffffff);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(3) { font-size: 0.95rem; }
+/* Tiny labels so the meta chips read clearly inside a card. */
+body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(4):not(:empty)::before {
+  content: "Priority: ";
+  color: var(--text-muted, #9ca3af);
+}
+body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(5):not(:empty)::before {
+  content: "Age: ";
+  color: var(--text-muted, #9ca3af);
+}
+
+/* ── Variant C — “Title-primary + right rail” ─────────────────────────────── */
+/* Big title, meta beneath, journal/kebab in a bordered vertical rail. */
+body.v274-C .task-table tbody tr:not(.todo-row) { padding-right: 56px; }
+body.v274-C .task-table tbody tr:not(.todo-row) > td:nth-child(3) { font-size: 1rem; }
+body.v274-C .task-table tbody tr:not(.todo-row) > td.row-actions-cell {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-left: 1px solid var(--border-color, #eee);
+  background: var(--rail-bg, #fafafa);
+}

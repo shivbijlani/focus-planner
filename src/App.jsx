@@ -31,6 +31,7 @@ import {
   InstallSettingsSection, InstallSuccessToast,
 } from '../packages/install-prompt/src/index.js'
 import '../packages/install-prompt/src/styles/install-prompt.css'
+import './variants-274.css'
 
 // ── Multi-source path helpers ───────────────────────────────────────
 // In single-source mode all paths are plain ("focus-plan.md").
@@ -5435,6 +5436,16 @@ function App() {
   // top of the board. Subscribe so a change in Settings updates the banner live.
   const [mission, setMission] = useState(getMissionStatement())
   useEffect(() => subscribeMissionStatement(setMission), [])
+  // #274 mobile-layout exploration: when the URL carries ?variant=A|B|C, tag
+  // <body> so the scoped variant stylesheet activates. Inert without the param,
+  // so production rendering is untouched.
+  useEffect(() => {
+    const v = new URLSearchParams(window.location.search).get('variant')
+    if (!v) return
+    const cls = 'v274-' + v.trim().toUpperCase()
+    document.body.classList.add(cls)
+    return () => document.body.classList.remove(cls)
+  }, [])
   // Re-render trigger for the source list when Settings mutates it.
   const [sourcesVersion, setSourcesVersion] = useState(0)
   // Sources that failed to restore on init (cloud sources needing re-authentication).
