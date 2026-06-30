@@ -70,6 +70,8 @@ body[class*="v274-"] .task-table tbody tr:not(.todo-row) > td.row-actions-cell {
   position: absolute;
   top: 8px;
   right: 10px;
+  width: max-content;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -93,29 +95,38 @@ body.v274-B .task-table tbody tr:not(.todo-row) {
   background: var(--card-bg, #ffffff);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
-body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(3) { font-size: 0.95rem; }
+/* Dark text on the light card (the dark-theme defaults are unreadable here). */
+body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(3),
+body.v274-B .task-table tbody tr:not(.todo-row) .task-text {
+  color: #111827;
+  font-size: 0.95rem;
+}
+body.v274-B .task-table tbody tr:not(.todo-row) .todo-preview { color: #4b5563; }
+body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(1),
+body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(5) { color: #6b7280; }
 /* Tiny labels so the meta chips read clearly inside a card. */
 body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(4):not(:empty)::before {
   content: "Priority: ";
-  color: var(--text-muted, #9ca3af);
+  color: #9ca3af;
 }
 body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(5):not(:empty)::before {
   content: "Age: ";
-  color: var(--text-muted, #9ca3af);
+  color: #9ca3af;
 }
 
 /* ── Variant C — “Title-primary + right rail” ─────────────────────────────── */
-/* Big title, meta beneath, journal/kebab in a bordered vertical rail. */
-body.v274-C .task-table tbody tr:not(.todo-row) { padding-right: 56px; }
+/* Big title, meta beneath, journal/kebab in a slim bordered vertical rail. */
+body.v274-C .task-table tbody tr:not(.todo-row) { padding-right: 64px; }
 body.v274-C .task-table tbody tr:not(.todo-row) > td:nth-child(3) { font-size: 1rem; }
 body.v274-C .task-table tbody tr:not(.todo-row) > td.row-actions-cell {
   top: 0;
   right: 0;
   bottom: 0;
+  width: 44px;
   flex-direction: column;
   justify-content: center;
-  gap: 8px;
-  padding: 0 10px;
-  border-left: 1px solid var(--border-color, #eee);
-  background: var(--rail-bg, #fafafa);
+  gap: 10px;
+  padding: 0 6px;
+  border-left: 1px solid var(--border-color, #2a3a4d);
+  background: var(--rail-bg, rgba(255, 255, 255, 0.04));
 }
