@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=390, initial-scale=1">
+<title>#274 — long-name + journal list variants (iPhone 13)</title>
+<style>
+  :root{
+    --bg:#1a1a2e; --panel:#16213e; --header:#0f3460; --rowline:#23314f;
+    --th:#1a2744; --text:#eee; --muted:#8aa0c6; --accent:#e94560; --blue:#93c5fd;
+    --chip:rgba(255,255,255,.06); --chipbd:rgba(255,255,255,.12);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#0b1020;color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;}
+  .wrap{display:flex;flex-direction:column;align-items:center;gap:34px;padding:26px 0 60px;}
+  .label{width:390px;font-size:13px;font-weight:600;color:#cfe0ff;letter-spacing:.2px;}
+  .label small{display:block;font-weight:400;color:#7d92ba;margin-top:3px;font-size:11.5px;line-height:1.35;}
+  /* iPhone 13 frame: 390 CSS px wide */
+  .phone{width:390px;background:var(--bg);border:1px solid #2a3a5e;border-radius:22px;
+    overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.45);}
+  .nav{height:44px;display:flex;align-items:center;justify-content:space-between;
+    padding:0 14px;background:var(--header);font-size:13px;color:#cfe0ff;}
+  .nav .dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;margin-right:6px;}
+  .sec{background:var(--panel);}
+  .sec-h{background:var(--header);padding:9px 14px;font-size:12px;font-weight:700;color:#cfe0ff;
+    text-transform:uppercase;letter-spacing:.6px;}
+  /* priority colors */
+  .p-red{color:#ff6b81}.p-yel{color:#ffd54a}.p-wht{color:#cbd5e1}.p-blu{color:#7dd3fc}
+  .barred{border-left:3px solid #e94560}.baryel{border-left:3px solid #f1c40f}
+  .barblu{border-left:3px solid #3b82f6}.barwht{border-left:3px solid #64748b}
+
+  /* ---------- Panel 0: BASELINE (today) ---------- */
+  table.b{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;}
+  table.b td{padding:11px 8px;border-bottom:1px solid var(--rowline);vertical-align:middle;}
+  .b .pri{width:26px;text-align:center}
+  .b .name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .b .act{width:74px;text-align:right;white-space:nowrap;color:var(--muted)}
+  .b .act a{font-size:17px;text-decoration:none;margin-left:6px}
+
+  /* ---------- Variant A: two-line stacked ---------- */
+  .A .row{padding:11px 12px;border-bottom:1px solid var(--rowline);}
+  .A .l1{display:flex;gap:8px;align-items:flex-start;}
+  .A .l1 .pri{font-size:14px;line-height:1.45;flex:0 0 auto}
+  .A .l1 .nm{font-size:14.5px;line-height:1.45;font-weight:600;}
+  .A .meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px;padding-left:22px;}
+  .chip{display:inline-flex;align-items:center;gap:4px;font-size:11px;line-height:1;
+    padding:5px 9px;border-radius:999px;background:var(--chip);border:1px solid var(--chipbd);
+    color:#cdd9f0;text-decoration:none;}
+  .chip.j{background:rgba(59,130,246,.16);border-color:rgba(59,130,246,.4);color:#bfdbfe;font-weight:600}
+  .chip.lnk{color:#93c5fd}
+  .chip .mut{color:#7d92ba}
+
+  /* ---------- Variant B: cards ---------- */
+  .B{padding:10px;display:flex;flex-direction:column;gap:10px;}
+  .B .card{background:#1b2949;border:1px solid #2a3a5e;border-radius:12px;padding:12px 13px;}
+  .B .ti{font-size:15px;line-height:1.4;font-weight:650;}
+  .B .foot{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
+
+  /* ---------- Variant C: title-primary + right rail ---------- */
+  .C .row{display:flex;border-bottom:1px solid var(--rowline);}
+  .C .body{flex:1 1 auto;padding:11px 6px 11px 11px;min-width:0;}
+  .C .ti{font-size:14.5px;line-height:1.45;font-weight:600;display:flex;gap:8px;}
+  .C .links{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px;padding-left:22px;}
+  .C .links a{font-size:12px;color:#93c5fd;text-decoration:none;border-bottom:1px solid rgba(147,197,253,.4);padding-bottom:1px;}
+  .C .sub{font-size:11px;color:var(--muted);margin-top:6px;padding-left:22px;}
+  .C .rail{flex:0 0 48px;display:flex;flex-direction:column;align-items:center;
+    border-left:1px solid var(--rowline);}
+  .C .rail a,.C .rail button{width:48px;height:46px;display:flex;align-items:center;justify-content:center;
+    background:none;border:none;color:#cdd9f0;font-size:19px;text-decoration:none;cursor:pointer;}
+  .C .rail a{border-bottom:1px solid var(--rowline)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- BASELINE -->
+  <div class="label">0 · Today (the problem)
+    <small>Single-line table rows — long task names truncate with “…”, journal is a tiny icon, other links are invisible.</small></div>
+  <div class="phone">
+    <div class="nav"><span><span class="dot"></span>Planner</span><span>Today · 64</span></div>
+    <div class="sec"><div class="sec-h">Today</div>
+      <table class="b">
+        <tr><td class="pri p-red">🔴</td><td class="name">Bug: Journal for 305 belongs to a different task that should be…</td><td class="act">📓 ⋯</td></tr>
+        <tr><td class="pri p-yel">🟡</td><td class="name">I'm not sure why I'm seeing focus-plan.md in the app… the folder…</td><td class="act">📓 ⋯</td></tr>
+        <tr><td class="pri p-yel">🟡</td><td class="name">Fidelity plan from payal, check asset mix</td><td class="act">📓 ⋯</td></tr>
+        <tr><td class="pri p-red">🔴</td><td class="name">home security: longer recorded videos, faster ai, front door…</td><td class="act">📓 ⋯</td></tr>
+        <tr><td class="pri p-yel">🟡</td><td class="name">Mustafa's hiring</td><td class="act">📓 ⋯</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- VARIANT A -->
+  <div class="label">A · Two-line stacked rows  (recommended)
+    <small>Full task name wraps — never cut off. Line 2 = #ID · age + a labelled 📓 Journal pill and every link as its own tappable chip. Densest option that still shows everything.</small></div>
+  <div class="phone">
+    <div class="nav"><span><span class="dot"></span>Planner</span><span>Today · 64</span></div>
+    <div class="sec"><div class="sec-h">Today</div>
+      <div class="A">
+        <div class="row barred">
+          <div class="l1"><span class="pri p-red">🔴</span><span class="nm">Bug: Journal for 305 belongs to a different task that should be linked to optional home projects</span></div>
+          <div class="meta"><span class="chip"><span class="mut">#314</span></span><span class="chip"><span class="mut">5d</span></span><a class="chip j">📓 Journal</a><a class="chip lnk">🔗 #305</a><a class="chip lnk">🔗 #192</a></div>
+        </div>
+        <div class="row baryel">
+          <div class="l1"><span class="pri p-yel">🟡</span><span class="nm">I'm not sure why I'm seeing focus-plan.md in the app — the folder name should match the branding name, so it shouldn't be “focus planner”</span></div>
+          <div class="meta"><span class="chip"><span class="mut">#262</span></span><span class="chip"><span class="mut">15d</span></span><a class="chip j">📓 Journal</a><a class="chip lnk">🔗 focus-plan.md</a></div>
+        </div>
+        <div class="row baryel">
+          <div class="l1"><span class="pri p-yel">🟡</span><span class="nm">Fidelity plan from payal, check asset mix</span></div>
+          <div class="meta"><span class="chip"><span class="mut">#312</span></span><span class="chip"><span class="mut">5d</span></span><a class="chip j">📓 Journal</a><a class="chip lnk">🔗 fidelity.com</a></div>
+        </div>
+        <div class="row barred">
+          <div class="l1"><span class="pri p-red">🔴</span><span class="nm">home security: longer recorded videos, faster ai, front door cam</span></div>
+          <div class="meta"><span class="chip"><span class="mut">#219</span></span><span class="chip"><span class="mut">45d</span></span><a class="chip j">📓 Journal</a></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VARIANT B -->
+  <div class="label">B · Cards
+    <small>Each task is a card — biggest, most “native app” feel. Title wraps freely; a footer chip row carries 🎯 priority, age, 📓 Journal and link chips. Best when journals/links matter most; uses the most vertical space.</small></div>
+  <div class="phone">
+    <div class="nav"><span><span class="dot"></span>Planner</span><span>Today · 64</span></div>
+    <div class="sec"><div class="sec-h">Today</div>
+      <div class="B">
+        <div class="card">
+          <div class="ti">Bug: Journal for 305 belongs to a different task that should be linked to optional home projects</div>
+          <div class="foot"><span class="chip">🔴 Urgent</span><span class="chip"><span class="mut">#314 · 5d</span></span><a class="chip j">📓 Journal</a><a class="chip lnk">🔗 #305</a><a class="chip lnk">🔗 #192</a></div>
+        </div>
+        <div class="card">
+          <div class="ti">I'm not sure why I'm seeing focus-plan.md in the app — the folder name should match the branding name, so it shouldn't be “focus planner”</div>
+          <div class="foot"><span class="chip">🟡 Normal</span><span class="chip"><span class="mut">#262 · 15d</span></span><a class="chip j">📓 Journal</a><a class="chip lnk">🔗 focus-plan.md</a></div>
+        </div>
+        <div class="card">
+          <div class="ti">Mustafa's hiring</div>
+          <div class="foot"><span class="chip">🔴 Urgent</span><span class="chip"><span class="mut">#326 · 3d</span></span><a class="chip j">📓 Journal</a><a class="chip lnk">🔗 microsoft.ai/careers</a></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VARIANT C -->
+  <div class="label">C · Title-primary + right journal rail
+    <small>Title gets the full width and wraps; a fixed 48px 📓 / ⋯ tap rail sits on the right so actions never fight the text. Links render as underlined inline chips. A middle ground between A and B.</small></div>
+  <div class="phone">
+    <div class="nav"><span><span class="dot"></span>Planner</span><span>Today · 64</span></div>
+    <div class="sec"><div class="sec-h">Today</div>
+      <div class="C">
+        <div class="row">
+          <div class="body barred" style="padding-left:11px">
+            <div class="ti"><span class="p-red">🔴</span><span>Bug: Journal for 305 belongs to a different task that should be linked to optional home projects</span></div>
+            <div class="links"><a>#305</a><a>#192</a></div>
+            <div class="sub">#314 · added 5d ago</div>
+          </div>
+          <div class="rail"><a>📓</a><button>⋯</button></div>
+        </div>
+        <div class="row">
+          <div class="body baryel" style="padding-left:11px">
+            <div class="ti"><span class="p-yel">🟡</span><span>I'm not sure why I'm seeing focus-plan.md — the folder name should match the branding, not “focus planner”</span></div>
+            <div class="links"><a>focus-plan.md</a></div>
+            <div class="sub">#262 · added 15d ago</div>
+          </div>
+          <div class="rail"><a>📓</a><button>⋯</button></div>
+        </div>
+        <div class="row">
+          <div class="body baryel" style="padding-left:11px">
+            <div class="ti"><span class="p-yel">🟡</span><span>Fidelity plan from payal, check asset mix</span></div>
+            <div class="links"><a>fidelity.com</a></div>
+            <div class="sub">#312 · added 5d ago</div>
+          </div>
+          <div class="rail"><a>📓</a><button>⋯</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
