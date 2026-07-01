@@ -188,30 +188,31 @@ body.v274-D .task-table tbody tr:not(.todo-row) .todo-first {
   white-space: nowrap;
 }
 
-/* Slim, subtle right rail (journal + ⋯ kebab) — NOT a card, dark-theme friendly.
-   The rail is wide enough for a full 40px tap target and STACKS the journal +
-   kebab vertically, so the kebab is never clipped when the 📓 icon is also present
-   (each .row-action-btn is 40px wide — a horizontal pair overflowed the slim rail;
-   Shiv, 2026-07-01). */
+/* Slim, subtle right rail (📓 journal + ⋯ kebab) — NOT a card, dark-theme friendly.
+   Laid out HORIZONTALLY with the journal icon to the LEFT of the kebab (Shiv,
+   2026-07-01). The rail is widened to hold two full ~34px tap targets side-by-side
+   so the kebab is never clipped when the 📓 icon is also present. DOM order is
+   journal-then-kebab, so flex-direction:row places journal on the left. */
 body.v274-D .task-table tbody tr:not(.todo-row) > td.row-actions-cell {
   top: 0;
   right: 0;
   bottom: 0;
-  width: 40px;
-  flex-direction: column;
+  width: 74px;
+  flex-direction: row;
+  align-items: center;
   justify-content: center;
-  gap: 0;
-  padding: 0;
+  gap: 2px;
+  padding: 0 3px;
   border-left: 1px solid rgba(255, 255, 255, 0.08);
 }
 body.v274-D .task-table tbody tr:not(.todo-row) > td.row-actions-cell .row-actions {
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
   gap: 2px;
   width: 100%;
 }
 body.v274-D .task-table tbody tr:not(.todo-row) > td.row-actions-cell .row-action-btn {
-  width: 40px;
-  height: 32px;
+  width: 34px;
+  height: 36px;
 }
