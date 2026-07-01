@@ -1,0 +1,155 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   #274 — mobile-first board layout (default on phones ≤ 768px)
+
+   On narrow screens the wide task table used to overflow the right edge, so
+   the most useful columns (Task, priority, journal, ⋯ kebab) were hidden off-
+   screen behind a horizontal scroll. This reflows the board into a stacked,
+   single-column "Variant D" layout: title-primary rows, a compact linkage pill
+   (ID → linked-id → Work Priority), Age pushed right, and a slim right rail for
+   the 📓 journal + ⋯ kebab actions — everything visible, zero horizontal scroll.
+
+   Scope:
+     • Only the ACTIVE board — `.task-table:not(.completed-table)` — so the
+       completed board keeps its own rendering.
+     • Only ≤ 768px (matches `useIsMobile`, which also gates the trailing
+       `.row-actions-cell` actions column in the DOM). Desktop is untouched.
+
+   Rendered column order (mobile adds the trailing actions cell):
+     1 = ID (+ linked-id arrow/chip)
+     2 = 🎯 priority dropdown        (hidden here — see below)
+     3 = Task (name + 📓 + lead-up ▶ preview)
+     4 = Work Priority
+     5 = Age
+     last (.row-actions-cell) = 📓 journal + ⋯ kebab  (mobile only)
+   ────────────────────────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  /* ── Base: turn the table into a stacked, single-column list ───────────── */
+  .task-table:not(.completed-table) {
+    font-size: 0.9rem;
+    border-collapse: collapse;
+    width: 100%;
+  }
+  .task-table:not(.completed-table) thead { display: none; }
+  .task-table:not(.completed-table),
+  .task-table:not(.completed-table) tbody { display: block; width: 100%; }
+
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 8px;
+    position: relative;
+    padding: 8px 56px 8px 12px; /* right pad reserves room for the actions rail */
+    border-bottom: 1px solid var(--border-color, #e5e7eb);
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) > td {
+    border: none;
+    padding: 0;
+  }
+
+  /* Line 1: the task name (+ its lead-up ▶ preview) takes the full first row. */
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) > td:nth-child(3) {
+    order: -1;
+    flex: 1 1 100%;
+    min-width: 0;
+    font-weight: 600;
+    line-height: 1.3;
+    font-size: 1rem;
+    color: var(--text-primary, #e5edf5);
+  }
+
+  /* Line 2: the small muted meta strip — #ID → · Work Priority · Age. */
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) > td:nth-child(1),
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) > td:nth-child(4),
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) > td:nth-child(5) {
+    flex: 0 0 auto;
+    font-size: 0.76rem;
+    color: var(--text-muted, #6b7280);
+    white-space: nowrap;
+  }
+
+  /* Drop the 🎯 orb cell — redundant with the left-margin urgency stripe
+     (.priority-* border-left already conveys urgency). */
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) > td:nth-child(2) {
+    display: none;
+  }
+
+  /* The linkage cluster: ID(→link) + Work Priority sit together as one indigo-
+     tinted group, joined by a → so it reads “ID → link → priority”. */
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) > td:nth-child(1),
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) > td:nth-child(4):not(:empty) {
+    order: 1;
+    background: rgba(129, 140, 248, 0.14); /* indigo tint = “linkage” */
+    color: #c7d2fe;
+    padding: 2px 7px;
+    border-radius: 999px;
+  }
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) > td:nth-child(4):not(:empty) {
+    margin-left: -2px; /* butt up against the ID pill so they read as one group */
+  }
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) > td:nth-child(4):not(:empty)::before {
+    content: "\2192  "; /* → connector into the priority */
+    color: #818cf8;
+    font-weight: 600;
+  }
+
+  /* Age drifts to the far right of line 2, plainly muted — outside the cluster. */
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) > td:nth-child(5) {
+    order: 2;
+    margin-left: auto;
+    opacity: 0.75;
+  }
+
+  /* Lead-up preview stays ONE line until the ▶ chevron is used: the collapsed
+     sub-todo text truncates with an ellipsis instead of wrapping; expanding via
+     the chevron still shows the full lead-up list below. */
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) .todo-preview { min-width: 0; }
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) .todo-first {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The journal + kebab actions become a slim rail pinned to the right edge,
+     laid out HORIZONTALLY with the 📓 journal icon to the LEFT of the ⋯ kebab.
+     The rail is 74px wide so both fit as full ~34px tap targets side-by-side
+     without clipping the kebab. DOM order is journal-then-kebab, so
+     flex-direction:row places journal on the left. */
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) > td.row-actions-cell {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 74px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 0 3px;
+    border-left: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) > td.row-actions-cell .row-actions {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    width: 100%;
+  }
+  .task-table:not(.completed-table) tbody tr:not(.todo-row) > td.row-actions-cell .row-action-btn {
+    width: 34px;
+    height: 36px;
+  }
+
+  /* Keep the expanded lead-up list aligned to the left in stacked mode. */
+  .task-table:not(.completed-table) tbody tr.todo-row > td:first-child,
+  .task-table:not(.completed-table) tbody tr.todo-row > td:nth-child(2) { display: none; }
+  .task-table:not(.completed-table) tbody tr.todo-row {
+    display: block;
+    padding: 0 12px 10px;
+  }
+}

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import './App.css'
+import './mobile-board.css'
 import * as storage from './storage/storage.js'
 import { setActiveProvider, getActiveProvider, PROVIDERS, TARGET_STATUS, getProviderName } from './storage/storage.js'
 import { LocalStorageProvider } from './storage/localstorage-provider.js'
