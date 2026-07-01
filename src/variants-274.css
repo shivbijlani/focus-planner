@@ -177,7 +177,22 @@ body.v274-D .task-table tbody tr:not(.todo-row) > td:nth-child(5) {
   opacity: 0.75;
 }
 
-/* Slim, subtle right rail (journal + ⋯ kebab) — NOT a card, dark-theme friendly. */
+/* Lead-up preview stays ONE line until the ▶ chevron is used (Shiv, 2026-07-01).
+   The collapsed sub-todo text truncates with an ellipsis instead of wrapping to a
+   second line; expanding via the chevron still shows the full lead-up list below. */
+body.v274-D .task-table tbody tr:not(.todo-row) .todo-preview { min-width: 0; }
+body.v274-D .task-table tbody tr:not(.todo-row) .todo-first {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Slim, subtle right rail (journal + ⋯ kebab) — NOT a card, dark-theme friendly.
+   The rail is wide enough for a full 40px tap target and STACKS the journal +
+   kebab vertically, so the kebab is never clipped when the 📓 icon is also present
+   (each .row-action-btn is 40px wide — a horizontal pair overflowed the slim rail;
+   Shiv, 2026-07-01). */
 body.v274-D .task-table tbody tr:not(.todo-row) > td.row-actions-cell {
   top: 0;
   right: 0;
@@ -185,7 +200,18 @@ body.v274-D .task-table tbody tr:not(.todo-row) > td.row-actions-cell {
   width: 40px;
   flex-direction: column;
   justify-content: center;
-  gap: 10px;
-  padding: 0 6px;
+  gap: 0;
+  padding: 0;
   border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+body.v274-D .task-table tbody tr:not(.todo-row) > td.row-actions-cell .row-actions {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+}
+body.v274-D .task-table tbody tr:not(.todo-row) > td.row-actions-cell .row-action-btn {
+  width: 40px;
+  height: 32px;
 }
