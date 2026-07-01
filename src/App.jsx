@@ -418,20 +418,24 @@ function MoveToSourceDialog({ targetName, movingTasks, brokenLinks, onClose, onC
   )
 }
 
+// The set of priority choices, shared by the inline priority dropdown and the
+// kebab "Change priority" submenu (#346).
+const PRIORITY_CHOICES = [
+  { icon: '🔴', label: 'Urgent & Important' },
+  { icon: '🟡', label: 'Important' },
+  { icon: '🔵', label: 'Urgent, Not Important' },
+  { icon: '⚪', label: 'Low Priority' },
+  { icon: '🐸', label: 'Frog (eat first)' },
+  { icon: '📖', label: 'Learning' },
+]
+
 // Priority Dropdown component
 function PriorityDropdown({ currentPriority, isNeededForUrgent, onChangePriority }) {
   const [isOpen, setIsOpen] = useState(false)
   const dropdownRef = useRef(null)
   const isMobile = useIsMobile()
   
-  const priorities = [
-    { icon: '🔴', label: 'Urgent & Important' },
-    { icon: '🟡', label: 'Important' },
-    { icon: '🔵', label: 'Urgent, Not Important' },
-    { icon: '⚪', label: 'Low Priority' },
-    { icon: '🐸', label: 'Frog (eat first)' },
-    { icon: '📖', label: 'Learning' },
-  ]
+  const priorities = PRIORITY_CHOICES
   
   useEffect(() => {
     // On mobile the menu is a portaled bottom sheet with its own backdrop,
@@ -1406,6 +1410,8 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
   // identical row text / id. `lineSourceIds` is parallel to the data rows.
   if (lineSourceIds) tagMergedRows(rows, lineSourceIds)
   const [contextMenu, setContextMenu] = useState(null)
+  // #346: separate state for the kebab's "Change priority" submenu.
+  const [priorityMenu, setPriorityMenu] = useState(null)
   const isMobile = useIsMobile()
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [adoLinkDialog, setAdoLinkDialog] = useState(null)
@@ -1598,6 +1604,23 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       }
     }
 
+    // #346: change priority straight from the kebab (mobile users complained the
+    // slim left tap-bar wasn't discoverable). Opens a second menu/sheet of the
+    // same priority choices; picking one applies it to this row.
+    if (taskId || row['ID']) {
+      options.push({
+        label: 'Change priority',
+        icon: '🎯',
+        action: () => setPriorityMenu({
+          x: e.clientX,
+          y: e.clientY,
+          rawLine,
+          idCell: row['ID'],
+          sourceId: row.__sourceId,
+        }),
+      })
+    }
+
     // Add "Delete Task" option (also deletes journal if exists)
     options.push({
       label: 'Delete Task',
@@ -1686,6 +1709,21 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
           title="Task actions"
           sheet={isMobile}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+      {/* #346: the "Change priority" submenu opened from the kebab. */}
+      {priorityMenu && (
+        <ContextMenu
+          x={priorityMenu.x}
+          y={priorityMenu.y}
+          title="Change priority"
+          sheet={isMobile}
+          options={PRIORITY_CHOICES.map(({ icon, label }) => ({
+            icon,
+            label,
+            action: () => onChangePriority(priorityMenu.rawLine, priorityMenu.idCell, icon, priorityMenu.sourceId),
+          }))}
+          onClose={() => setPriorityMenu(null)}
         />
       )}
       {showAddDialog && (
