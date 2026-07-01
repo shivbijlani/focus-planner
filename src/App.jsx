@@ -1050,7 +1050,23 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   const hasChildTasks = childTasks.length > 0
   const hasLeadUp = hasChildTasks || hasUncompletedTodos
   const firstChild = hasChildTasks ? childTasks[0] : null
-  
+
+  // Collapsible "lead-up" preview (▶ chevron + first item). Rendered inside the
+  // Task cell on desktop; on mobile (#346) it moves to its own full-width cell
+  // below the linkage pills so the trigger + expanded list read *below* the
+  // links instead of jumping over them.
+  const leadUpPreview = hasLeadUp ? (
+    <div className="todo-preview" onClick={() => setTodosExpanded(!todosExpanded)}>
+      <span className="todo-expander">{todosExpanded ? '▼' : '▶'}</span>
+      {!todosExpanded && firstChild && (
+        <span className="todo-first">{firstChild.priority} {firstChild.name}</span>
+      )}
+      {!todosExpanded && !firstChild && nextTodo && (
+        <span className="todo-first">{nextTodo.text}</span>
+      )}
+    </div>
+  ) : null
+
   return (
     <>
       <tr 
@@ -1217,21 +1233,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                       </span>
                     )}
                   </div>
-                  {hasLeadUp && !isEditing && (
-                    <div className="todo-preview" onClick={() => setTodosExpanded(!todosExpanded)}>
-                      <span className="todo-expander">{todosExpanded ? '▼' : '▶'}</span>
-                      {!todosExpanded && firstChild && (
-                        <span className="todo-first">
-                          {firstChild.priority} {firstChild.name}
-                        </span>
-                      )}
-                      {!todosExpanded && !firstChild && nextTodo && (
-                        <span className="todo-first">
-                          {nextTodo.text}
-                        </span>
-                      )}
-                    </div>
-                  )}
+                  {!isMobile && !isEditing && leadUpPreview}
                   {todosLoading && <span className="todo-loading">...</span>}
                 </div>
               </td>
@@ -1304,33 +1306,45 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
         {isMobile && (
           <td className="row-actions-cell">
             {!isEditing && (
-              <div className="row-actions">
-                {journalPath && (
-                  <a
-                    href="#"
-                    className="row-action-btn journal-action"
-                    aria-label="Open journal"
-                    title="Open journal"
-                    onClick={(e) => {
-                      e.preventDefault()
-                      onNavigate(journalPath)
-                    }}
+              <>
+                <div className="row-actions">
+                  {journalPath && (
+                    <a
+                      href="#"
+                      className="row-action-btn journal-action"
+                      aria-label="Open journal"
+                      title="Open journal"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        onNavigate(journalPath)
+                      }}
+                    >
+                      📓
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    className="row-action-btn row-kebab-btn"
+                    aria-label="Task actions"
+                    title="Task actions"
+                    onClick={handleKebab}
                   >
-                    📓
-                  </a>
+                    ⋯
+                  </button>
+                </div>
+                {/* #346: the day-count ("Age") moves under the journal/kebab as a
+                    small label instead of floating right and overlapping the rail. */}
+                {row['Age'] && (
+                  <span className="row-age-label" title={row['Added'] ? `Added: ${row['Added']}` : ''}>{row['Age']}</span>
                 )}
-                <button
-                  type="button"
-                  className="row-action-btn row-kebab-btn"
-                  aria-label="Task actions"
-                  title="Task actions"
-                  onClick={handleKebab}
-                >
-                  ⋯
-                </button>
-              </div>
+              </>
             )}
           </td>
+        )}
+        {/* #346: on mobile the lead-up preview gets its own full-width cell below
+            the linkage pills so it no longer jumps over the links. */}
+        {isMobile && hasLeadUp && !isEditing && (
+          <td className="todo-preview-cell">{leadUpPreview}</td>
         )}
       </tr>
       {todosExpanded && hasLeadUp && (
