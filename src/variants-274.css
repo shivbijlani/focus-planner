@@ -86,24 +86,19 @@ body[class*="v274-"] .task-table tbody tr.todo-row { display: block; padding: 0 
 /* Flat list, tight rows; everything visible, zero horizontal scroll. */
 body.v274-A .task-table tbody tr:not(.todo-row) { padding-top: 8px; padding-bottom: 8px; }
 
-/* ── Variant B — “Cards” (most native-app feel) ───────────────────────────── */
+/* ── Variant B — “Dark cards” ─────────────────────────────────────────────── */
+/* (Was white cards — dropped per feedback: white cards read badly on the dark
+   board background. Now a subtle dark-tinted card that keeps the theme.) */
 body.v274-B .task-table tbody tr:not(.todo-row) {
   margin: 8px 10px;
-  border: 1px solid var(--border-color, #e5e7eb);
-  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
   border-radius: 12px;
-  background: var(--card-bg, #ffffff);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
-/* Dark text on the light card (the dark-theme defaults are unreadable here). */
 body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(3),
-body.v274-B .task-table tbody tr:not(.todo-row) .task-text {
-  color: #111827;
-  font-size: 0.95rem;
-}
-body.v274-B .task-table tbody tr:not(.todo-row) .todo-preview { color: #4b5563; }
-body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(1),
-body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(5) { color: #6b7280; }
+body.v274-B .task-table tbody tr:not(.todo-row) .task-text { font-size: 0.95rem; }
 /* Tiny labels so the meta chips read clearly inside a card. */
 body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(4):not(:empty)::before {
   content: "Priority: ";
@@ -129,4 +124,68 @@ body.v274-C .task-table tbody tr:not(.todo-row) > td.row-actions-cell {
   padding: 0 6px;
   border-left: 1px solid var(--border-color, #2a3a4d);
   background: var(--rail-bg, rgba(255, 255, 255, 0.04));
+}
+
+/* ── Variant D — “A+C blend” (the pick to iterate on) ─────────────────────────
+   Requested direction (Shiv, 2026-06-30):
+     • Blend A (dense, flat, no cards) with C (title-primary + right rail).
+     • GROUP the three linkage things — this task's ID → the linked task → the
+       (link-derived) Work Priority — into one cluster: “ID → link → priority”.
+     • DROP the 🎯 orb from the row body: urgency is already shown by the row's
+       left-margin colour stripe (.priority-* border-left). (It could instead
+       live in the ⋯ kebab — a JS follow-up.)
+     • No white cards — dark theme throughout.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* Flat + dense like A (no card chrome inherited), title-primary like C. */
+body.v274-D .task-table tbody tr:not(.todo-row) {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-right: 56px; /* room for the slim right rail */
+}
+body.v274-D .task-table tbody tr:not(.todo-row) > td:nth-child(3) {
+  font-size: 1rem;
+  color: var(--text-primary, #e5edf5);
+}
+
+/* Drop the 🎯 orb cell — redundant with the left-margin urgency stripe. */
+body.v274-D .task-table tbody tr:not(.todo-row) > td:nth-child(2) { display: none; }
+
+/* The linkage cluster: ID(→link) + Work Priority sit together as one tinted
+   group, joined by a → so it reads “ID → link → priority”. */
+body.v274-D .task-table tbody tr:not(.todo-row) > td:nth-child(1),
+body.v274-D .task-table tbody tr:not(.todo-row) > td:nth-child(4):not(:empty) {
+  order: 1;
+  background: rgba(129, 140, 248, 0.14); /* indigo tint = “linkage” */
+  color: #c7d2fe;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+body.v274-D .task-table tbody tr:not(.todo-row) > td:nth-child(4):not(:empty) {
+  margin-left: -2px; /* butt up against the ID pill so they read as one group */
+}
+body.v274-D .task-table tbody tr:not(.todo-row) > td:nth-child(4):not(:empty)::before {
+  content: "\2192  "; /* → connector into the priority */
+  color: #818cf8;
+  font-weight: 600;
+}
+
+/* Age drifts to the far right of line 2, plainly muted — outside the cluster. */
+body.v274-D .task-table tbody tr:not(.todo-row) > td:nth-child(5) {
+  order: 2;
+  margin-left: auto;
+  opacity: 0.75;
+}
+
+/* Slim, subtle right rail (journal + ⋯ kebab) — NOT a card, dark-theme friendly. */
+body.v274-D .task-table tbody tr:not(.todo-row) > td.row-actions-cell {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 40px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 6px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
 }

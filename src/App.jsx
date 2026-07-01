@@ -5436,7 +5436,7 @@ function App() {
   // top of the board. Subscribe so a change in Settings updates the banner live.
   const [mission, setMission] = useState(getMissionStatement())
   useEffect(() => subscribeMissionStatement(setMission), [])
-  // #274 mobile-layout exploration: when the URL carries ?variant=A|B|C, tag
+  // #274 mobile-layout exploration: when the URL carries ?variant=A|B|C|D, tag
   // <body> so the scoped variant stylesheet activates. Inert without the param,
   // so production rendering is untouched.
   useEffect(() => {
