@@ -40,7 +40,7 @@
     align-items: center;
     gap: 2px 8px;
     position: relative;
-    padding: 8px 82px 8px 30px; /* L: room for the priority tap-bar (#346); R: the actions rail */
+    padding: 8px 82px 8px 16px; /* L: slim priority tap-bar (#346); R: the actions rail */
     border-bottom: 1px solid var(--border-color, #e5e7eb);
     width: 100%;
     box-sizing: border-box;
@@ -82,7 +82,7 @@
     left: 0;
     top: 0;
     bottom: 0;
-    width: 26px;
+    width: 12px; /* #346: just a slim stripe — the kebab now also has "Change priority" */
     padding: 0;
     margin: 0;
     z-index: 2;
@@ -158,13 +158,20 @@
     padding: 0 3px;
     border-left: 1px solid rgba(255, 255, 255, 0.08);
   }
-  /* #346: day-count label sits directly under the 📓/⋯ actions, like a caption. */
+  /* #346: day-count is pinned to the bottom-right of the actions rail and taken
+     OUT of the flex flow (position:absolute), so it costs zero layout space —
+     it just fills the empty area under the ⋯ kebab. The 📓/⋯ icons stay
+     vertically centered in the full row height. */
   .task-table:not(.completed-table) tbody tr:not(.todo-row) .row-age-label {
-    font-size: 0.68rem;
+    position: absolute;
+    bottom: 2px;
+    right: 5px;
+    font-size: 0.62rem;
     line-height: 1;
     color: var(--text-muted, #6b7280);
-    opacity: 0.85;
+    opacity: 0.7;
     white-space: nowrap;
+    pointer-events: none;
   }
   .task-table:not(.completed-table) tbody tr:not(.todo-row) > td.row-actions-cell .row-actions {
     flex-direction: row;
