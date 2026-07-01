@@ -1,0 +1,218 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   #274 — mobile-first board layout variants (design exploration)
+
+   These are OFF by default. They only activate when the URL carries
+   `?variant=A|B|C`, which adds a `v274-A|B|C` class to <body> (see App.jsx).
+   Production rendering is completely unaffected without that param.
+
+   Goal: kill the right-edge horizontal-scroll overflow on phones (~360–390px)
+   by reflowing the wide task table into a mobile-first single-column layout,
+   while still showing everything (ID + link, 🎯 priority, task name, lead-up
+   preview, Work Priority, Age, 📓 journal, ⋯ kebab).
+
+   Column order in the real table (mobile adds the trailing actions cell):
+     1 = ID (+ linked-id arrow/chip)
+     2 = 🎯 priority dropdown
+     3 = Task (name + 📓 + lead-up ▶ preview)
+     4 = Work Priority
+     5 = Age
+     last (.row-actions-cell) = 📓 journal + ⋯ kebab  (mobile only)
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* ── Shared base: turn the table into a stacked, single-column list ───────── */
+body[class*="v274-"] .task-table {
+  font-size: 0.9rem;
+  border-collapse: collapse;
+  width: 100%;
+}
+body[class*="v274-"] .task-table thead { display: none; }
+body[class*="v274-"] .task-table,
+body[class*="v274-"] .task-table tbody { display: block; width: 100%; }
+
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  position: relative;
+  padding: 10px 84px 10px 12px; /* right pad reserves room for the actions rail */
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  width: 100%;
+  box-sizing: border-box;
+}
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) > td {
+  border: none;
+  padding: 0;
+}
+
+/* Line 1: the task name (+ its lead-up ▶ preview) takes the full first row. */
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) > td:nth-child(3) {
+  order: -1;
+  flex: 1 1 100%;
+  min-width: 0;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+/* Line 2: the small muted meta strip — #ID → · 🎯 · Work Priority · Age. */
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) > td:nth-child(1),
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) > td:nth-child(2),
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) > td:nth-child(4),
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) > td:nth-child(5) {
+  flex: 0 0 auto;
+  font-size: 0.76rem;
+  color: var(--text-muted, #6b7280);
+  white-space: nowrap;
+}
+
+/* The journal + kebab actions become a compact rail pinned to the right edge. */
+body[class*="v274-"] .task-table tbody tr:not(.todo-row) > td.row-actions-cell {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  width: max-content;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Keep the expanded lead-up list aligned to the left in stacked mode. */
+body[class*="v274-"] .task-table tbody tr.todo-row > td:first-child,
+body[class*="v274-"] .task-table tbody tr.todo-row > td:nth-child(2) { display: none; }
+body[class*="v274-"] .task-table tbody tr.todo-row { display: block; padding: 0 12px 10px; }
+
+/* ── Variant A — “Dense two-line” (default pick) ──────────────────────────── */
+/* Flat list, tight rows; everything visible, zero horizontal scroll. */
+body.v274-A .task-table tbody tr:not(.todo-row) { padding-top: 8px; padding-bottom: 8px; }
+
+/* ── Variant B — “Dark cards” ─────────────────────────────────────────────── */
+/* (Was white cards — dropped per feedback: white cards read badly on the dark
+   board background. Now a subtle dark-tinted card that keeps the theme.) */
+body.v274-B .task-table tbody tr:not(.todo-row) {
+  margin: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(3),
+body.v274-B .task-table tbody tr:not(.todo-row) .task-text { font-size: 0.95rem; }
+/* Tiny labels so the meta chips read clearly inside a card. */
+body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(4):not(:empty)::before {
+  content: "Priority: ";
+  color: #9ca3af;
+}
+body.v274-B .task-table tbody tr:not(.todo-row) > td:nth-child(5):not(:empty)::before {
+  content: "Age: ";
+  color: #9ca3af;
+}
+
+/* ── Variant C — “Title-primary + right rail” ─────────────────────────────── */
+/* Big title, meta beneath, journal/kebab in a slim bordered vertical rail. */
+body.v274-C .task-table tbody tr:not(.todo-row) { padding-right: 64px; }
+body.v274-C .task-table tbody tr:not(.todo-row) > td:nth-child(3) { font-size: 1rem; }
+body.v274-C .task-table tbody tr:not(.todo-row) > td.row-actions-cell {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 44px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 6px;
+  border-left: 1px solid var(--border-color, #2a3a4d);
+  background: var(--rail-bg, rgba(255, 255, 255, 0.04));
+}
+
+/* ── Variant D — “A+C blend” (the pick to iterate on) ─────────────────────────
+   Requested direction (Shiv, 2026-06-30):
+     • Blend A (dense, flat, no cards) with C (title-primary + right rail).
+     • GROUP the three linkage things — this task's ID → the linked task → the
+       (link-derived) Work Priority — into one cluster: “ID → link → priority”.
+     • DROP the 🎯 orb from the row body: urgency is already shown by the row's
+       left-margin colour stripe (.priority-* border-left). (It could instead
+       live in the ⋯ kebab — a JS follow-up.)
+     • No white cards — dark theme throughout.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* Flat + dense like A (no card chrome inherited), title-primary like C. */
+body.v274-D .task-table tbody tr:not(.todo-row) {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-right: 56px; /* room for the slim right rail */
+}
+body.v274-D .task-table tbody tr:not(.todo-row) > td:nth-child(3) {
+  font-size: 1rem;
+  color: var(--text-primary, #e5edf5);
+}
+
+/* Drop the 🎯 orb cell — redundant with the left-margin urgency stripe. */
+body.v274-D .task-table tbody tr:not(.todo-row) > td:nth-child(2) { display: none; }
+
+/* The linkage cluster: ID(→link) + Work Priority sit together as one tinted
+   group, joined by a → so it reads “ID → link → priority”. */
+body.v274-D .task-table tbody tr:not(.todo-row) > td:nth-child(1),
+body.v274-D .task-table tbody tr:not(.todo-row) > td:nth-child(4):not(:empty) {
+  order: 1;
+  background: rgba(129, 140, 248, 0.14); /* indigo tint = “linkage” */
+  color: #c7d2fe;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+body.v274-D .task-table tbody tr:not(.todo-row) > td:nth-child(4):not(:empty) {
+  margin-left: -2px; /* butt up against the ID pill so they read as one group */
+}
+body.v274-D .task-table tbody tr:not(.todo-row) > td:nth-child(4):not(:empty)::before {
+  content: "\2192  "; /* → connector into the priority */
+  color: #818cf8;
+  font-weight: 600;
+}
+
+/* Age drifts to the far right of line 2, plainly muted — outside the cluster. */
+body.v274-D .task-table tbody tr:not(.todo-row) > td:nth-child(5) {
+  order: 2;
+  margin-left: auto;
+  opacity: 0.75;
+}
+
+/* Lead-up preview stays ONE line until the ▶ chevron is used (Shiv, 2026-07-01).
+   The collapsed sub-todo text truncates with an ellipsis instead of wrapping to a
+   second line; expanding via the chevron still shows the full lead-up list below. */
+body.v274-D .task-table tbody tr:not(.todo-row) .todo-preview { min-width: 0; }
+body.v274-D .task-table tbody tr:not(.todo-row) .todo-first {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Slim, subtle right rail (📓 journal + ⋯ kebab) — NOT a card, dark-theme friendly.
+   Laid out HORIZONTALLY with the journal icon to the LEFT of the kebab (Shiv,
+   2026-07-01). The rail is widened to hold two full ~34px tap targets side-by-side
+   so the kebab is never clipped when the 📓 icon is also present. DOM order is
+   journal-then-kebab, so flex-direction:row places journal on the left. */
+body.v274-D .task-table tbody tr:not(.todo-row) > td.row-actions-cell {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 74px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0 3px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+body.v274-D .task-table tbody tr:not(.todo-row) > td.row-actions-cell .row-actions {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+}
+body.v274-D .task-table tbody tr:not(.todo-row) > td.row-actions-cell .row-action-btn {
+  width: 34px;
+  height: 36px;
+}
