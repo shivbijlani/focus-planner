@@ -68,9 +68,52 @@ describe('sortTasksByPriority', () => {
     const rawLines = rows.map((_, index) => `raw-${index}`)
     const headers = ['ID', '🎯', 'Task']
 
-    const { sortedRows } = sortTasksByPriority(rows, rawLines, headers, {}, {})
+    const { sortedRows } = sortTasksByPriority(rows, rawLines, headers, {}, {}, '2026-07-03')
 
     expect(sortedRows.map(row => row.ID.id)).toEqual(['2', '3', '1'])
+  })
+
+  it('sorts actively snoozed tasks below non-snoozed tasks', () => {
+    const rows = [
+      { ...makeTask('1', '🔴'), snoozeUntil: '2026-07-06' },
+      makeTask('2', '🟡'),
+      makeTask('3', '⚪'),
+    ]
+    const rawLines = rows.map((_, index) => `raw-${index}`)
+    const headers = ['ID', '🎯', 'Task']
+
+    const { sortedRows } = sortTasksByPriority(rows, rawLines, headers, {}, {}, '2026-07-03')
+
+    expect(sortedRows.map(row => row.ID.id)).toEqual(['2', '3', '1'])
+  })
+
+  it('reads snooze markers from raw task rows during sorting', () => {
+    const rows = [
+      makeTask('1', '🔴'),
+      makeTask('2', '🟡'),
+    ]
+    const rawLines = [
+      '| 1 | 🔴 | Task 1 | - | 2026-07-03 | | <!-- snooze:2026-07-06 -->',
+      '| 2 | 🟡 | Task 2 | - | 2026-07-03 | |',
+    ]
+    const headers = ['ID', '🎯', 'Task']
+
+    const { sortedRows } = sortTasksByPriority(rows, rawLines, headers, {}, {}, '2026-07-03')
+
+    expect(sortedRows.map(row => row.ID.id)).toEqual(['2', '1'])
+  })
+
+  it('treats expired snoozes as normal tasks', () => {
+    const rows = [
+      { ...makeTask('1', '🔴'), snoozeUntil: '2020-01-01' },
+      makeTask('2', '🟡'),
+    ]
+    const rawLines = rows.map((_, index) => `raw-${index}`)
+    const headers = ['ID', '🎯', 'Task']
+
+    const { sortedRows } = sortTasksByPriority(rows, rawLines, headers, {}, {})
+
+    expect(sortedRows.map(row => row.ID.id)).toEqual(['1', '2'])
   })
 
   it('handles cyclic links without crashing and preserves a stable order when ties remain', () => {

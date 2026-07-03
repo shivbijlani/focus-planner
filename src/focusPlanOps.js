@@ -10,6 +10,7 @@
  * each operation routes to whichever source the rawLine belongs to).
  */
 import { isPrioritiesSection } from './focusPlanShared.js'
+import { setSnoozeUntilOnLine } from './snooze.js'
 
 const PRIORITY_HEADING = '## Priorities'
 
@@ -102,6 +103,14 @@ export function opChangePriority(content, rawLine, oldPriority, newPriority) {
   const lineIndex = lines.findIndex(line => line.trim() === rawLine)
   if (lineIndex === -1) return content
   lines[lineIndex] = newLine
+  return lines.join('\n')
+}
+
+export function opSetTaskSnooze(content, rawLine, snoozeUntil) {
+  const lines = content.split('\n')
+  const lineIndex = lines.findIndex(line => line.trim() === rawLine)
+  if (lineIndex === -1) return content
+  lines[lineIndex] = setSnoozeUntilOnLine(lines[lineIndex], snoozeUntil)
   return lines.join('\n')
 }
 
