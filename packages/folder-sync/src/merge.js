@@ -38,7 +38,10 @@ function sideEntry(snapshot, id) {
   const hasRecord = Object.prototype.hasOwnProperty.call(snapshot.records ?? {}, id)
   if (!meta && !hasRecord) return { present: false }
   if (meta) {
-    if (meta.deleted) return { present: true, clock: meta.clock ?? 0, deleted: true }
+    // Carry the deleted content's fingerprint (when recorded) so it survives the
+    // merge and lets a later reappearance be classified as a stale-file ghost
+    // (identical fp → keep tombstone) vs a genuine re-add (different fp → revive).
+    if (meta.deleted) return { present: true, clock: meta.clock ?? 0, deleted: true, fp: meta.fp }
     // Alive per the sidecar, but the parsed content carries no such record — a
     // stale/inconsistent sidecar (e.g. a row removed from the file without its
     // meta being tombstoned, which happens with externally-edited cloud copies).
@@ -104,7 +107,9 @@ export function mergeCollections(local = {}, remote = {}) {
     const winner = pickWinner(sideEntry(localSnap, id), sideEntry(remoteSnap, id))
     if (!winner.present) continue
     if (winner.deleted) {
-      mergedMeta[id] = { clock: winner.clock, deleted: true }
+      mergedMeta[id] = winner.fp !== undefined
+        ? { clock: winner.clock, deleted: true, fp: winner.fp }
+        : { clock: winner.clock, deleted: true }
     } else {
       mergedMeta[id] = { clock: winner.clock, deleted: false }
       mergedRecords[id] = winner.content
@@ -146,9 +151,16 @@ export function stampWrite(meta, id, clock = Date.now()) {
   return meta
 }
 
-/** Record a local delete of `id` at `clock` (default now) as a tombstone. */
+/**
+ * Record a local delete of `id` at `clock` (default now) as a tombstone,
+ * preserving the last-known content fingerprint so a later stale-file
+ * reappearance can be told apart from a genuine re-add.
+ */
 export function stampDelete(meta, id, clock = Date.now()) {
-  meta[id] = { clock, deleted: true }
+  const prevFp = meta[id]?.fp
+  meta[id] = prevFp !== undefined
+    ? { clock, deleted: true, fp: prevFp }
+    : { clock, deleted: true }
   return meta
 }
 
@@ -187,18 +199,46 @@ export function fingerprint(content) {
  * anything that changed. Works regardless of whether the edit came from our own
  * UI or an external editor, so it is the single entry point for "the local file
  * changed". Mutates and returns meta.
+ *
+ * Resurrection guard (#280): a row that is present in the file but tombstoned in
+ * meta is NOT blindly re-stamped alive. On a device whose file is stale (e.g.
+ * OneDrive delivered an old copy that still contains a row another device
+ * deleted), re-stamping it alive with a fresh `now` clock would beat the remote
+ * tombstone and resurrect the deleted row — then push it back to everyone. We
+ * only revive a tombstoned row when the tombstone recorded the deleted content's
+ * fingerprint AND it differs now (a genuine local re-add). An identical
+ * reappearance, or a legacy tombstone with no recorded fingerprint, is treated
+ * as a stale-file ghost: the tombstone is kept so the merge strips the row.
+ * Deletes preserve the last-known fingerprint so this comparison is possible.
  */
 export function stampLocalChanges(records, meta, clock = Date.now()) {
   for (const id of Object.keys(records)) {
     const fp = fingerprint(records[id])
     const m = meta[id]
-    if (!m || m.deleted || m.fp !== fp) {
+    if (!m) {
+      meta[id] = { clock, deleted: false, fp }
+      continue
+    }
+    if (m.deleted) {
+      // Only a proven content change (recorded fp differs) counts as a genuine
+      // re-add; otherwise honor the tombstone and let the ghost row be dropped.
+      if (m.fp !== undefined && m.fp !== fp) {
+        meta[id] = { clock, deleted: false, fp }
+      }
+      continue
+    }
+    if (m.fp !== fp) {
       meta[id] = { clock, deleted: false, fp }
     }
   }
   for (const id of Object.keys(meta)) {
     if (!meta[id].deleted && !(id in records)) {
-      meta[id] = { clock, deleted: true }
+      // Tombstone the removed row, keeping its fingerprint so a later stale-file
+      // reappearance can be classified (ghost vs genuine re-add) above.
+      const prevFp = meta[id].fp
+      meta[id] = prevFp !== undefined
+        ? { clock, deleted: true, fp: prevFp }
+        : { clock, deleted: true }
     }
   }
   return meta
