@@ -109,6 +109,13 @@ describe('mergeCollections — per-record LWW with tombstones', () => {
     expect(mergeCollections(local, remote).records).toEqual({ t1: { task: 'a', pri: 9 } })
   })
 
+  it('carries a deleted winner fingerprint through the merge', () => {
+    const local = snap({ r: 'v' }, { r: { clock: 5, deleted: false, fp: fingerprint('v') } })
+    const remote = snap({}, { r: { clock: 9, deleted: true, fp: fingerprint('v') } })
+    const m = mergeCollections(local, remote)
+    expect(m.meta.r).toEqual({ clock: 9, deleted: true, fp: fingerprint('v') })
+  })
+
   it('reports no change when both sides already agree', () => {
     const a = snap({ r: 'same' }, { r: { clock: 1, deleted: false } })
     const b = snap({ r: 'same' }, { r: { clock: 1, deleted: false } })
@@ -160,7 +167,37 @@ describe('stampLocalChanges — detect adds/edits/deletes via fingerprint', () =
     // Edit a, delete b at t=300.
     stampLocalChanges({ a: 'A2' }, meta, 300)
     expect(meta.a.clock).toBe(300)
-    expect(meta.b).toEqual({ clock: 300, deleted: true })
+    expect(meta.b.clock).toBe(300)
+    expect(meta.b.deleted).toBe(true)
+  })
+
+  it('does NOT resurrect a tombstoned row that reappears in a stale file (ghost)', () => {
+    // Another device deleted "r"; this device's file is stale and still holds it.
+    const meta = { r: { clock: 100, deleted: true, fp: fingerprint('two') } }
+    stampLocalChanges({ r: 'two' }, meta, 999)
+    // Tombstone survives untouched — no fresh clock that would beat the remote.
+    expect(meta.r).toEqual({ clock: 100, deleted: true, fp: fingerprint('two') })
+  })
+
+  it('does NOT resurrect under a legacy tombstone with no recorded fingerprint', () => {
+    const meta = { r: { clock: 100, deleted: true } }
+    stampLocalChanges({ r: 'two' }, meta, 999)
+    expect(meta.r).toEqual({ clock: 100, deleted: true })
+  })
+
+  it('DOES revive a tombstoned row when its content genuinely changed', () => {
+    const meta = { r: { clock: 100, deleted: true, fp: fingerprint('old') } }
+    stampLocalChanges({ r: 'new' }, meta, 999)
+    expect(meta.r).toEqual({ clock: 999, deleted: false, fp: fingerprint('new') })
+  })
+
+  it('tombstones preserve the deleted row fingerprint for later classification', () => {
+    const meta = {}
+    stampLocalChanges({ r: 'v' }, meta, 100)
+    expect(meta.r).toEqual({ clock: 100, deleted: false, fp: fingerprint('v') })
+    // Row removed from the file → tombstoned, but keeps its fingerprint.
+    stampLocalChanges({}, meta, 200)
+    expect(meta.r).toEqual({ clock: 200, deleted: true, fp: fingerprint('v') })
   })
 
   it('fingerprint is stable and content-sensitive', () => {
