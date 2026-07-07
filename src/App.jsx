@@ -4075,9 +4075,9 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
 
   const close = () => { setOpen(false); setError(''); setRemoveConfirm(null) }
 
-  const askRemoveSource = (sourceId, name, isCloud = false) => {
+  const askRemoveSource = (sourceId, name, isCloud = false, isFolder = false) => {
     setError('')
-    setRemoveConfirm({ sourceId, name, isCloud })
+    setRemoveConfirm({ sourceId, name, isCloud, isFolder })
   }
 
   const confirmRemoveSource = async () => {
@@ -4514,6 +4514,16 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
                       >
                         Change
                       </button>
+                      {isActive && (
+                        <button
+                          className="storage-footer-btn sync-target-action"
+                          onClick={() => askRemoveSource(s.id, displayName, false, true)}
+                          disabled={busy}
+                          title="Disconnect this folder — your files stay on disk"
+                        >
+                          Close folder
+                        </button>
+                      )}
                       {!isActive && (
                         <button
                           className="sync-target-remove"
@@ -4721,19 +4731,23 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
         <div className="dialog-overlay" onClick={() => !busy && setRemoveConfirm(null)}>
           <div className="settings-dialog" onClick={e => e.stopPropagation()} style={{ maxWidth: '420px' }}>
             <div className="settings-dialog-header">
-              <h3>Remove {removeConfirm.name}?</h3>
+              <h3>{removeConfirm.isFolder ? `Close ${removeConfirm.name}?` : `Remove ${removeConfirm.name}?`}</h3>
               <button className="settings-dialog-close" onClick={() => !busy && setRemoveConfirm(null)} disabled={busy}>✕</button>
             </div>
             <div className="settings-dialog-section">
               <div className="storage-footer-note">
                 {removeConfirm.isCloud
                   ? 'Your local data is safe. This removes the cloud connection; you can reconnect any time by signing in again.'
+                  : removeConfirm.isFolder
+                  ? 'Your files stay on disk — nothing is deleted. The planner disconnects this folder and resets to empty browser storage, like a fresh start. You can re-open the folder any time.'
                   : 'This storage is empty — there are no tasks or journals to lose. You can add it again later.'}
               </div>
               <div className="storage-footer-actions">
                 <button className="storage-footer-btn secondary" onClick={() => setRemoveConfirm(null)} disabled={busy}>Cancel</button>
                 <button className="storage-footer-btn danger" onClick={confirmRemoveSource} disabled={busy}>
-                  {busy ? 'Removing...' : 'Remove'}
+                  {busy
+                    ? (removeConfirm.isFolder ? 'Closing…' : 'Removing...')
+                    : (removeConfirm.isFolder ? 'Close folder' : 'Remove')}
                 </button>
               </div>
             </div>
