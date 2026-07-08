@@ -18,6 +18,7 @@ import {
   setOffset,
   findTaskByTopic,
 } from './state.js'
+import { upsertTgMetaMarker } from './deepLink.js'
 
 const TELEGRAM_MAX = 4096
 
@@ -69,6 +70,15 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       const title = parseTitle(content)
       const topicId = await ensureTopic(taskId, title)
       if (!hadTopic) created.push(taskId)
+
+      // Stamp a hidden tg-meta marker into the journal so the planner web app
+      // can build a deep link to this topic (the topic id lives only in our
+      // local state.json otherwise). Only write when it actually changes so we
+      // don't rewrite the file on every sync.
+      const withMeta = upsertTgMetaMarker(content, { chatId, threadId: topicId })
+      if (withMeta !== content) {
+        await io.writeJournal(taskId, withMeta)
+      }
 
       if (task && task.lastPostedHash === hash) continue
 

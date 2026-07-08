@@ -91,6 +91,21 @@ describe('syncUp', () => {
     expect(h.sent).toHaveLength(1)
   })
 
+  it('stamps a tg-meta marker into the journal for deep-linking', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(h.store['42']).toContain('<!-- tg-meta')
+    expect(h.store['42']).toContain('chatId=-100')
+    expect(h.store['42']).toContain('threadId=1')
+
+    // Idempotent: a second sync with no change doesn't add a duplicate marker.
+    await bridge.syncUp()
+    expect(h.store['42'].match(/tg-meta/g)).toHaveLength(1)
+  })
+
   it('skips journals without an agent block', async () => {
     const h = makeHarness({ 99: '# Task 99: bare\njust notes' })
     const state = emptyState()

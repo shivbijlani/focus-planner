@@ -59,6 +59,27 @@ node bin/telegram-bridge.js watch [secs]  # loop `once` every N seconds (min 10,
 State (topic map, last-posted hashes, update offset) is persisted after every run, so the CLI
 is safe to run on a schedule.
 
+## 🔗 Per-task deep links (`tg-meta` marker)
+
+Once a task's forum topic exists, `syncUp` stamps a hidden marker into that task's
+journal so the planner web app can link straight to the thread:
+
+```markdown
+<!-- tg-meta chatId=-1004310604015 threadId=17 -->
+```
+
+The topic's `message_thread_id` is assigned by Telegram at `createForumTopic` time —
+it can't be derived from the task id — so persisting it in the journal is what lets
+the mapping travel with the synced markdown (the CLI's `state.json` lives only on
+this machine). The pure helpers in `src/deepLink.js` (`telegramDeepLink`,
+`parseTgLink`, `upsertTgMetaMarker`) build the link:
+
+- Private supergroup: strip the leading `-100` → `https://t.me/c/<internalId>/<threadId>`
+- Public supergroup: `https://t.me/<username>/<threadId>`
+
+The web app parses the marker from the same journal read it already does for todos
+and shows an ✈️ "Open in Telegram" link on each task row — no extra config needed.
+
 ## ⚠️ Bot privacy mode
 
 @shivb_nemo_bot currently has **privacy mode ON** in BotFather. In that mode a group bot only
