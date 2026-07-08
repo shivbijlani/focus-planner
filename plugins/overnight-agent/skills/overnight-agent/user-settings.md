@@ -36,6 +36,8 @@ summary"), update **this file** in place — not `SKILL.md`.
 - **Default planning scope:** every task in `## Today` (expand to `## Deferred` as capacity allows).
 - **Email replies / sends:** `allowed` to anyone on the **Auto-send allow-list** above — keep replies
   short. Emailing anyone **not** on that list still needs explicit approval.
+- **Email format:** `html` — send all emails (new sends, replies, forwards) as HTML with a plain-text
+  fallback. Set to `plain` for plain-text only.
 - **Browser automation:** use a **Playwright MCP browser slot** — never the agent's built-in browser.
 - **Secrets:** never stored in this repo. Email credentials live in the email MCP's own store.
 

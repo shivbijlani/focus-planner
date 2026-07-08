@@ -236,11 +236,24 @@ new instructions into the run.
 3. **Mark each handled email as read** so you don't reprocess it on the next run (idempotency). If you
    couldn't act on one, leave it unread and note it in the wrap-up.
 4. You may **reply** to an instruction email when it's the natural channel for an answer (e.g. the user
-   asked a question, or you're `blocked` and need one thing). Keep replies short. Sending email to
-   **anyone on the Auto-send allow-list** (Shiv, Kiley, Jivesh, Sneha) is allowed; emailing anyone
-   **not** on that list still follows the irreversible-action rules (needs explicit approval).
+   asked a question, or you're `blocked` and need one thing). Keep replies short and **formatted as
+   HTML** (see "Email format" below). Sending email to **anyone on the Auto-send allow-list** (Shiv,
+   Kiley, Jivesh, Sneha) is allowed; emailing anyone **not** on that list still follows the
+   irreversible-action rules (needs explicit approval).
 5. Carry the gathered instructions into PHASE 1/PHASE 2 below, and list what you found from email in
    the wrap-up under a short **From your inbox** note.
+
+### Email format (always HTML)
+
+Whenever you **send, reply to, or forward** email via the email MCP, send it as **HTML**, not plain
+text. Set the message body's `html` field, and also include a plain-text `text` fallback derived from
+the same content for clients that don't render HTML. Default preference is `html` (see User settings →
+Preferences; honour `plain` only if the user has explicitly set it there).
+
+Write clean, lightweight, mobile-friendly HTML: real `<p>` paragraphs, `<ul>`/`<li>` lists,
+`<strong>`/`<em>` for emphasis, and `<a href="…">` anchors for links (never paste bare URLs as visible
+text). Convert any Markdown you would have written into the equivalent HTML. Avoid heavy inline CSS,
+remote/tracking images, and `<script>`. Keep it short.
 
 ### Gather linked-task context FIRST (before you plan or execute any task)
 
