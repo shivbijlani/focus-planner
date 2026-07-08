@@ -1,0 +1,26 @@
+{
+  "name": "focus-planner",
+  "owner": {
+    "name": "Shiv Bijlani",
+    "email": "shivbijlani@users.noreply.github.com"
+  },
+  "metadata": {
+    "description": "Plugins that pair with the Focus Planner app — agents and skills for working your planner tasks.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "overnight-agent",
+      "description": "Autonomously makes progress on your planner tasks overnight using a per-task plan -> approve -> execute loop.",
+      "version": "1.0.0",
+      "source": "./plugins/overnight-agent",
+      "author": {
+        "name": "Shiv Bijlani",
+        "url": "https://github.com/shivbijlani"
+      },
+      "license": "MIT",
+      "keywords": ["planner", "agent", "overnight", "automation"],
+      "category": "productivity"
+    }
+  ]
+}

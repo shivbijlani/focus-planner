@@ -35,3 +35,19 @@ Then open http://localhost:5173
 - **Data**: Markdown files in `../planner`
 
 See `.github/copilot-instructions.md` for full Copilot integration details.
+
+## Copilot CLI plugin marketplace
+
+This repo is also a **GitHub Copilot CLI plugin marketplace**. It publishes
+plugins that pair with the planner workflow — starting with the
+[`overnight-agent`](./plugins/overnight-agent) plugin.
+
+```shell
+# Register the marketplace, then install the overnight-agent plugin
+copilot plugin marketplace add shivbijlani/focus-planner
+copilot plugin install overnight-agent@focus-planner
+```
+
+The marketplace registry is [`.github/plugin/marketplace.json`](./.github/plugin/marketplace.json)
+and plugins live under [`plugins/`](./plugins). See [`plugins/README.md`](./plugins/README.md)
+for details and instructions on adding new plugins.

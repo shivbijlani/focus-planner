@@ -1,0 +1,15 @@
+{
+  "name": "overnight-agent",
+  "description": "Autonomously makes progress on your planner tasks overnight using a per-task plan -> approve -> execute loop. Proposes plans inside each task's journal, waits for your approval, then executes only what was approved.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Shiv Bijlani",
+    "url": "https://github.com/shivbijlani"
+  },
+  "homepage": "https://github.com/shivbijlani/focus-planner/tree/main/plugins/overnight-agent",
+  "repository": "https://github.com/shivbijlani/focus-planner",
+  "license": "MIT",
+  "keywords": ["planner", "agent", "overnight", "automation", "focus-planner"],
+  "category": "productivity",
+  "skills": "skills/"
+}
