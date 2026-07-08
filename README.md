@@ -35,3 +35,13 @@ Then open http://localhost:5173
 - **Data**: Markdown files in `../planner`
 
 See `.github/copilot-instructions.md` for full Copilot integration details.
+
+## Packages
+
+Vendored (private, not published) packages under `packages/`:
+
+- **`@focus/mcp-cred-vault`** — Portable Windows launcher that keeps Copilot CLI
+  MCP secrets in Credential Manager (DPAPI) instead of plaintext config, with a
+  `npm run setup` bootstrap to reproduce it on any machine. See
+  [`packages/mcp-cred-vault/README.md`](packages/mcp-cred-vault/README.md).
+
