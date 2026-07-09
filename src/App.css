@@ -1073,7 +1073,7 @@ tr.highlight-flash {
    column sit side by side, so the actions never overlap the text (#335). */
 .task-main-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.5rem;
 }
 .task-main-row > .task-text,
@@ -1105,8 +1105,8 @@ tr.highlight-flash {
   flex-shrink: 0;
 }
 .row-action-btn {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   display: inline-flex;
   align-items: center;
