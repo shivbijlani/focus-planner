@@ -21,7 +21,7 @@
 #>
 [CmdletBinding()]
 param(
-  [string]$CredPath = "C:\Users\shiv\.google_workspace_mcp\credentials\shiv@bijlanis.com.json"
+  [string]$CredPath = "$env:USERPROFILE\.google_workspace_mcp\credentials\<your-google-account>.json"
 )
 
 $ErrorActionPreference = 'Stop'

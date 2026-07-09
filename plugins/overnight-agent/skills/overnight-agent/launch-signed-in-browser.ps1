@@ -4,7 +4,7 @@
 # WHY THIS (not a fresh profile): the MCP cdp slots only ATTACH to a browser you
 # launch here -- they never launch one themselves, so they can never open an
 # un-signed-in profile. We point them at your REAL profile (the one that already
-# has LastPass + all your logins), so nothing needs reinstalling.
+# has your password manager + all your logins), so nothing needs reinstalling.
 #
 # THE v149 GOTCHA WE WORKED AROUND: Chromium v136+ ignores --remote-debugging-port
 # only when --user-data-dir is OMITTED. By passing --user-data-dir explicitly (even
@@ -14,8 +14,8 @@
 # Chrome just hands the command off to the already-running instance and the debug
 # port never binds. The script detects that and tells you.
 #
-# ONE-TIME PER SESSION (only if locked): after launch, unlock LastPass (master
-# password; tick "remember"). Your site logins (Google, Prime, etc.) are already
+# ONE-TIME PER SESSION (only if locked): after launch, unlock your password manager (master
+# password; tick "remember"). Your site logins (Google, etc.) are already
 # in this profile.
 #
 # USAGE:
