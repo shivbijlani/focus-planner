@@ -35,22 +35,23 @@ Throughout the rest of this skill, references to "User settings", "Preferences",
 
 ## Where everything lives
 
-- Planner board: `C:\Users\shiv\OneDrive\Apps\Focus Planner\planner.md`
+- Planner board: `<planner folder>\planner.md` (from `user-settings.md` → "Planner board")
   (sections `## Today`, `## Deferred`, `## Priorities`; columns: \`ID | 🎯 | Task | Work Priority |
   Added | Linked ID\`).
-- Completed board: `C:\Users\shiv\OneDrive\Apps\Focus Planner\planner-completed.md`.
-- Per-task journals: `C:\Users\shiv\OneDrive\Apps\Focus Planner\journal\task-<ID>.md`.
+- Completed board: `<planner folder>\planner-completed.md` (from `user-settings.md` → "Completed board").
+- Per-task journals: `<planner folder>\journal\task-<ID>.md` (from `user-settings.md` → "Journals folder").
   The user keeps their own notes at the **top** of each journal, but the app also appends
   **journal-chat** — the user's `## <date>` / `<!-- from: me -->` messages and your replies — to the
   **bottom** of the file, so new user input can land *after* your block too. Always check there (see
   "Reopened after close (a new user message below your block)"). You manage only the block below the
   sentinel (see below). If a task has no journal file yet, create one with an H1:
   `# Task <ID>: <task title>` and then add your block.
-- **Dev drive (code tasks): `V:\repos\`** — the user's git repositories live here (e.g.
-  `V:\repos\focus-planner`, `V:\repos\food-tracker`, `V:\repos\lifetime`), each a GitHub repo under
-  `github.com/shivbijlani`. Worktrees live alongside as `V:\repos\<name>.worktrees\`. When a task is a
-  code task, find the relevant repo here first. Shared package cache is `V:\packages\`.
-- **Agent email inbox: `shivbijlani@zohomail.com`** (the **Overnight Agent** account in the email
+- **Dev drive (code tasks): `<your repos root>\`** (from `user-settings.md` → "Dev drive") — the user's
+  git repositories live here (e.g. `<your repos root>\focus-planner`), each a GitHub repo under
+  `github.com/<your-github-username>`. Worktrees live alongside as `<your repos root>\<name>.worktrees\`.
+  When a task is a code task, find the relevant repo here first. Shared package cache is `<your repos root>\packages\`.
+- **Agent email inbox: `<agent-inbox@example.com>`** (from `user-settings.md` → "Agent email account";
+  the **Overnight Agent** account in the email
   MCP). This is how the user drops you new instructions out-of-band. Check it at the \*\*start of every
   run\*\* (see "PHASE 0 — Check the agent inbox"). Credentials live in the email MCP's own store, not in
   this repo.
@@ -209,7 +210,7 @@ Do the phases **in this order** every time.
 ### PHASE 0 — Check the agent inbox (do this before everything)
 
 The user can leave you new instructions by emailing the agent account
-(`shivbijlani@zohomail.com`). At the start of each run, read the inbox via the email MCP and fold any
+(`<agent-inbox@example.com>`, from `user-settings.md`). At the start of each run, read the inbox via the email MCP and fold any
 new instructions into the run.
 
 1. Search the **Overnight Agent** account's INBOX for **unread** messages (use the email MCP's search
@@ -237,8 +238,8 @@ new instructions into the run.
    couldn't act on one, leave it unread and note it in the wrap-up.
 4. You may **reply** to an instruction email when it's the natural channel for an answer (e.g. the user
    asked a question, or you're `blocked` and need one thing). Keep replies short and **formatted as
-   HTML** (see "Email format" below). Sending email to **anyone on the Auto-send allow-list** (Shiv,
-   Kiley, Jivesh, Sneha) is allowed; emailing anyone **not** on that list still follows the
+   HTML** (see "Email format" below). Sending email to **anyone on the Auto-send allow-list**
+   (from `user-settings.md`) is allowed; emailing anyone **not** on that list still follows the
    irreversible-action rules (needs explicit approval).
 5. Carry the gathered instructions into PHASE 1/PHASE 2 below, and list what you found from email in
    the wrap-up under a short **From your inbox** note.
@@ -273,7 +274,7 @@ that already exist upstream, and will redo or contradict them.
      constraints, "we already chose X", "don't do Y") **and** your agent block's **Run log /
      deliverables** (what already got done, what's still open).
    - The **files and links it produced** — deliverable files (`task-<linkedID>-<slug>.md`), PRs,
-     docs, repos under `V:\repos\`, calendar entries, etc. Open the ones that bear on A.
+     docs, repos under `<your repos root>\`, calendar entries, etc. Open the ones that bear on A.
 3. **Distil, don't dump.** Extract only what affects A: prior decisions to honor, constraints, naming
    conventions, partial work to build on, and links A should reference. A few tight bullets, with the
    source task ID, beat pasting whole journals.
@@ -387,7 +388,7 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
    - For tasks you can't fully finish autonomously (physical-world, purchases, anything needing the
      user), plan the part you *can* do — research, comparisons, drafts, links, a decision-ready
      recommendation — and call out the human step.
-   - **Code tasks:** find the repo under `V:\repos\`, and do the easily-reversible work *now* as part
+   - **Code tasks:** find the repo under `<your repos root>\`, and do the easily-reversible work *now* as part
      of the proposal — branch, commit, push, and open a **draft PR** — then link that PR as the
      deliverable for the user to review. Leave the irreversible finish (**merging**) for the approved
      EXECUTE run.
@@ -432,7 +433,7 @@ out?\* If yes, do it now and link it. If no, plan it and gate it.
 
 **✅ Easily reversible — OK to do during the plan step (no approval needed):**
 
-- Reading/researching: web fetch, browsing, reading the user's repos under `V:\repos\`, inspecting
+- Reading/researching: web fetch, browsing, reading the user's repos under `<your repos root>\`, inspecting
   files, calendars, issues.
 - Writing to the journal/agent block and scratch/deliverable files you own.
 - Code work in a repo on a **new branch**: create the branch, commit, `git push` the branch.
@@ -463,7 +464,7 @@ present the reversible draft and stop short of the committing action.
 - **No surprise irreversible actions.** Sending email **to anyone not on the Auto-send allow-list**,
   submitting forms/applications, making purchases, posting publicly, merging/deploying, or anything
   with money or external side effects is only allowed when the **approved plan explicitly says so**.
-  (Short emails/replies to people **on** the Auto-send allow-list — Shiv, Kiley, Jivesh, Sneha — are
+  (Short emails/replies to people **on** the Auto-send allow-list (from `user-settings.md`) are
   fine without extra approval.) If a plan is vague about a risky step, set `blocked` and ask before
   doing it. When in doubt, prefer producing a ready-to-send draft (or an open PR) over the committing
   action.
@@ -515,8 +516,8 @@ present the reversible draft and stop short of the committing action.
 
 - **Sign-ins / credentials:** if a step needs the user's account and the Playwright browser isn't
   signed in, set `blocked` with that ask. Never store credentials. The agent has its own email account
-  (`shivbijlani@zohomail.com`) via the email MCP for inbound instructions and for sending/replying to
-  anyone on the **Auto-send allow-list** (Shiv, Kiley, Jivesh, Sneha); emailing anyone **not** on that
+  (`<agent-inbox@example.com>`, from `user-settings.md`) via the email MCP for inbound instructions and for sending/replying to
+  anyone on the **Auto-send allow-list**; emailing anyone **not** on that
   list still follows the irreversible-action rules (needs explicit approval).
 
 ## Notes
