@@ -23,6 +23,7 @@ import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery, boardSearc
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
+import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage } from './journalChat.js'
 import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
@@ -961,6 +962,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   const [isEditing, setIsEditing] = useState(false)
   const [editText, setEditText] = useState('')
   const [isEditingLinkedId, setIsEditingLinkedId] = useState(false)
+  const [telegram, setTelegram] = useState(null)
   const isMobile = useIsMobile()
   
   const taskId = extractTaskId(row)
@@ -979,13 +981,16 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
     }
   }, [taskId])
   
-  // Fetch todos when journal path is known
+  // Fetch todos when journal path is known. We read the journal once and derive
+  // BOTH the todo list and the Telegram deep link (if the journal carries a
+  // tg-meta marker) from the same content — no extra round-trips.
   useEffect(() => {
     if (journalPath && todos === null) {
       setTodosLoading(true)
-      storage.getTodos(journalPath)
-        .then(todos => {
-          setTodos(todos || [])
+      storage.read(journalPath)
+        .then(content => {
+          setTodos(storage.parseTodos(content) || [])
+          setTelegram(parseTgLink(content))
           setTodosLoading(false)
         })
         .catch(() => {
@@ -1234,6 +1239,18 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                             📓
                           </a>
                         )}
+                        {telegram?.url && !isMobile && (
+                          <a
+                            href={telegram.url}
+                            className="telegram-link"
+                            title="Open Telegram thread"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            ✈️
+                          </a>
+                        )}
                       </span>
                     )}
                   </div>
@@ -1324,6 +1341,19 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                       }}
                     >
                       📓
+                    </a>
+                  )}
+                  {telegram?.url && (
+                    <a
+                      href={telegram.url}
+                      className="row-action-btn telegram-action"
+                      aria-label="Open Telegram thread"
+                      title="Open Telegram thread"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      ✈️
                     </a>
                   )}
                   <button

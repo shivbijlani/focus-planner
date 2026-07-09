@@ -51,3 +51,13 @@ copilot plugin install overnight-agent@focus-planner
 The marketplace registry is [`.github/plugin/marketplace.json`](./.github/plugin/marketplace.json)
 and plugins live under [`plugins/`](./plugins). See [`plugins/README.md`](./plugins/README.md)
 for details and instructions on adding new plugins.
+
+## Packages
+
+Vendored (private, not published) packages under `packages/`:
+
+- **`@focus/mcp-cred-vault`** — Portable Windows launcher that keeps Copilot CLI
+  MCP secrets in Credential Manager (DPAPI) instead of plaintext config, with a
+  `npm run setup` bootstrap to reproduce it on any machine. See
+  [`packages/mcp-cred-vault/README.md`](packages/mcp-cred-vault/README.md).
+
