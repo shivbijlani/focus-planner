@@ -37,6 +37,7 @@ import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage } from './journalChat.js'
 import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
 import { SETTINGS_FILE } from './storage/settings.js'
+import { AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE } from './config/aiSettings.js'
 import {
   InstallButton, InstallModal, InstallNudge,
   InstallSettingsSection, InstallSuccessToast,
@@ -4132,6 +4133,13 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
   // Mission statement editor (Settings → Mission).
   const [mission, setMissionInput] = useState(getMissionStatement())
   useEffect(() => subscribeMissionStatement(setMissionInput), [])
+  // AI agent settings editor (Settings → AI). Reads/writes user-settings.md in
+  // the active source — the same file the overnight-agent plugin reads.
+  const [aiText, setAiText] = useState(null)      // null = not loaded; string = file content ('' if empty)
+  const [aiLoaded, setAiLoaded] = useState(false)
+  const [aiExists, setAiExists] = useState(false)
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiMsg, setAiMsg] = useState('')
   // App update (force latest service worker — fixes "stale build on mobile").
   const [updating, setUpdating] = useState(false)
   const [updateMsg, setUpdateMsg] = useState('')
@@ -4174,6 +4182,59 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
   }, [open, activeId, sources.length])
 
   const close = () => { setOpen(false); setError(''); setRemoveConfirm(null) }
+
+  // Load user-settings.md from the active source when the dialog opens or the
+  // active source changes. null content -> file doesn't exist yet.
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setAiLoaded(false)
+    setAiMsg('')
+    ;(async () => {
+      try {
+        const raw = await storage.read(AI_SETTINGS_FILE)
+        if (cancelled) return
+        setAiExists(raw != null)
+        setAiText(raw != null ? raw : '')
+      } catch {
+        if (cancelled) return
+        setAiExists(false)
+        setAiText('')
+      } finally {
+        if (!cancelled) setAiLoaded(true)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [open, activeId])
+
+  const seedAiSettings = async () => {
+    setAiBusy(true)
+    setAiMsg('')
+    try {
+      await storage.write(AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE)
+      setAiText(AI_SETTINGS_TEMPLATE)
+      setAiExists(true)
+      setAiMsg('Created — fill in your values and save.')
+    } catch (e) {
+      setAiMsg(`Couldn't create the file: ${e?.message || e}`)
+    } finally {
+      setAiBusy(false)
+    }
+  }
+
+  const saveAiSettings = async () => {
+    setAiBusy(true)
+    setAiMsg('')
+    try {
+      await storage.write(AI_SETTINGS_FILE, aiText ?? '')
+      setAiExists(true)
+      setAiMsg('Saved.')
+    } catch (e) {
+      setAiMsg(`Couldn't save: ${e?.message || e}`)
+    } finally {
+      setAiBusy(false)
+    }
+  }
 
   const askRemoveSource = (sourceId, name, isCloud = false, isFolder = false) => {
     setError('')
@@ -4523,6 +4584,61 @@ function StorageFooter({ folderName, syncStatus, failedSourceIds = new Set(), on
                   setMissionStatement(e.target.value)
                 }}
               />
+            </div>
+
+            <div className="settings-dialog-section">
+              <div className="settings-dialog-section-title">AI agent settings</div>
+              <div className="settings-mission-hint">
+                Config for the overnight agent, saved as <code>{AI_SETTINGS_FILE}</code> in
+                your active source (next to <code>{PLAN_FILE}</code>). The agent reads this
+                file on every run.
+              </div>
+              {!aiLoaded ? (
+                <div className="settings-update-msg">Loading…</div>
+              ) : !aiExists && (aiText === '' || aiText == null) ? (
+                <div className="settings-update-row">
+                  <div className="settings-update-info">
+                    <span className="settings-update-hint">
+                      No settings file yet. Create one from a starter template, then fill in your values.
+                    </span>
+                  </div>
+                  <button
+                    className="storage-footer-btn sync-target-action"
+                    onClick={seedAiSettings}
+                    disabled={aiBusy}
+                    title={`Create ${AI_SETTINGS_FILE} from a template`}
+                  >
+                    {aiBusy ? 'Creating…' : 'Create from template'}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <textarea
+                    className="settings-ai-input"
+                    rows={12}
+                    spellCheck={false}
+                    placeholder={`# Overnight Agent — user settings\n\nFill in your paths, accounts and preferences…`}
+                    value={aiText ?? ''}
+                    onChange={(e) => { setAiText(e.target.value); if (aiMsg) setAiMsg('') }}
+                  />
+                  <div className="settings-update-row">
+                    <div className="settings-update-info">
+                      <span className="settings-update-hint">
+                        Keep real paths and email addresses out of any public repo.
+                      </span>
+                    </div>
+                    <button
+                      className="storage-footer-btn sync-target-action"
+                      onClick={saveAiSettings}
+                      disabled={aiBusy}
+                      title={`Save ${AI_SETTINGS_FILE}`}
+                    >
+                      {aiBusy ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                </>
+              )}
+              {aiMsg && <div className="settings-update-msg">{aiMsg}</div>}
             </div>
 
             {isMulti && (

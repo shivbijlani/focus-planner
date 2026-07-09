@@ -3296,6 +3296,26 @@ tr.highlight-flash {
   border-color: #818cf8;
 }
 .settings-mission-input::placeholder { color: #64748b; }
+.settings-ai-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 0.5rem 0.6rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid #334155;
+  border-radius: 8px;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+.settings-ai-input:focus {
+  outline: none;
+  border-color: #818cf8;
+}
+.settings-ai-input::placeholder { color: #64748b; }
 .settings-update-msg {
   margin-top: 0.4rem;
   font-size: 0.75rem;
