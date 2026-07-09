@@ -23,15 +23,35 @@ task's journal, they *approve* it (or ask for revisions), and only an **approved
 
 ## User settings
 
-All user-configurable values — paths, accounts, the email allow-lists, and preferences — live in
-a separate file: [`user-settings.md`](./user-settings.md) (next to this skill). Read it at the
-start of every run (before PHASE 0); it is the source of truth and may contain personal data, so it's
-kept out of `SKILL.md` to keep the skill shareable. When the user asks to change any setting (e.g. "use
-a different drive", "stop opening draft PRs", "add someone to the email allow-list"), edit
-`user-settings.md` in place — not this file.
+All user-configurable values — paths, accounts, the email allow-lists, and preferences — live in a
+`user-settings.md` file. **This file lives OUTSIDE the installed plugin**, so updating the plugin never
+overwrites your personal data. At the **start of every run** (before PHASE 0), resolve the settings file
+by checking these locations in order and using the **first one that exists**:
+
+1. The path in the `OVERNIGHT_AGENT_SETTINGS` environment variable, if set (explicit override).
+2. `<project folder>\user-settings.md` — the folder the agent is running in (its cwd), if present
+   (agent-local override).
+3. **`%OneDrive%\Apps\Focus Planner\user-settings.md`** — the canonical, cloud-synced home. It sits next
+   to `planner.md` and is editable by the planner web app. *(If `%OneDrive%` is unset, try
+   `%OneDriveConsumer%` then `%OneDriveCommercial%`. The `Apps\Focus Planner` folder is the planner data
+   folder — the same one the "Planner board" path points into.)*
+4. `%LOCALAPPDATA%\overnight-agent\user-settings.md` — non-cloud fallback.
+5. The template shipped next to this skill (`./user-settings.md`) — **template only**; it contains `<...>`
+   placeholders and is overwritten on every plugin update. Never treat it as real settings.
+
+**First run / no external file found:** if none of #1–#4 exist, create the canonical file at #3 by copying
+the bundled template (#5) to `%OneDrive%\Apps\Focus Planner\user-settings.md`, then tell the user where it
+is and that they must replace the `<...>` placeholders before the agent can act. **Do not do real work
+while settings still contain placeholders.**
+
+The resolved external file is the **source of truth**. Read it at the start of every run and use its values
+everywhere. When the user asks to change any setting (e.g. "use a different drive", "stop opening draft
+PRs", "add someone to the email allow-list"), edit the **resolved external file** in place — never the
+bundled template inside the plugin (edits there are wiped on the next update) and never `SKILL.md`.
 
 Throughout the rest of this skill, references to "User settings", "Preferences", the
-"Authorized sender addresses", and the "Auto-send allow-list" all mean the values in `user-settings.md`.
+"Authorized sender addresses", and the "Auto-send allow-list" all mean the values in the resolved
+`user-settings.md`.
 
 ## Where everything lives
 
