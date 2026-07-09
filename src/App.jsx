@@ -20,6 +20,15 @@ import { selfHealOutlierIds } from './selfHealIds.js'
 import { recordDeletedId, getActiveTombstoneIds } from './idTombstones.js'
 import { scrollToAndFlashTask } from './scrollToTask.js'
 import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery, boardSearchPlaceholder } from './boardSearch.js'
+import {
+  addDaysToDateString,
+  formatSnoozeDate,
+  getNextSaturdayDateString,
+  getTodayDateString,
+  isSnoozeActive,
+  normalizeDateOnly,
+  parseSnoozeUntil,
+} from './snooze.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
@@ -746,6 +755,7 @@ function parseMarkdownTable(lines) {
     if (cells.every(c => /^[-:]+$/.test(c))) continue
     
     const row = {}
+    const snoozeUntil = parseSnoozeUntil(trimmed)
     let cellIndex = 0
     const linkedIdValue = linkedIdIndex !== -1 ? cells[linkedIdIndex] : ''
     
@@ -795,6 +805,7 @@ function parseMarkdownTable(lines) {
         cellIndex++
       }
     }
+    row.snoozeUntil = snoozeUntil
     rows.push(row)
     rawLines.push(trimmed)
   }
@@ -1012,6 +1023,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   const priorityCol = headers.find(h => h.includes('🎯')) || '🎯'
   const currentPriority = row[priorityCol] || '⚪'
   const mngrPriorityCol = headers.find(h => h.includes('Mngr') || h.includes('Work') || h.includes('Priority')) || 'Work Priority'
+  const activeSnoozeUntil = isSnoozeActive(row.snoozeUntil) ? row.snoozeUntil : null
   
   const handleContextMenu = (e) => {
     e.preventDefault()
@@ -1079,7 +1091,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   return (
     <>
       <tr 
-        className={getPriorityClass(row[priorityCol])}
+        className={[getPriorityClass(row[priorityCol]), activeSnoozeUntil ? 'task-row-snoozed' : ''].filter(Boolean).join(' ')}
         onContextMenu={handleContextMenu}
         data-task-id={taskId || undefined}
       >
@@ -1226,6 +1238,11 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                     ) : (
                       <span className="task-text" onDoubleClick={startEditing} title="Double-click to edit">
                         {renderCellWithTooltips(cellValue, onNavigate)}
+                        {activeSnoozeUntil && (
+                          <span className="snooze-badge" title={`Snoozed until ${activeSnoozeUntil}`}>
+                            💤 Snoozed until {formatSnoozeDate(activeSnoozeUntil)}
+                          </span>
+                        )}
                         {journalPath && !isMobile && (
                           <a
                             href="#"
@@ -1432,7 +1449,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
 
 // Collapsible section component
 // Collapsible section component
-function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource, onDeferBelow, searchQuery = '' }) {
+function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onSnoozeTask, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource, onDeferBelow, searchQuery = '' }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const { headers, rows, rawLines } = parseMarkdownTable(tableLines)
   // Combined view (#39): tag each row with its owning source so destructive
@@ -1541,6 +1558,11 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
 
   const handleContextMenu = (e, rawLine, row, journalPath, taskId) => {
     const options = []
+    const today = getTodayDateString()
+    const tomorrow = addDaysToDateString(today, 1)
+    const weekend = getNextSaturdayDateString(today)
+    const nextWeek = addDaysToDateString(today, 7)
+    const currentSnoozeUntil = row.snoozeUntil || parseSnoozeUntil(rawLine)
     
     if (title === 'Today') {
       options.push({
@@ -1567,6 +1589,47 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
         icon: '⬆️',
         action: () => onTaskAction('move', rawLine, 'Deferred', 'Today', row.__sourceId)
       })
+    }
+
+    if (onSnoozeTask) {
+      options.push(
+        {
+          label: `Snooze until tomorrow (${formatSnoozeDate(tomorrow)})`,
+          icon: '💤',
+          action: () => onSnoozeTask(rawLine, tomorrow, row.__sourceId),
+        },
+        {
+          label: `Snooze until this weekend (${formatSnoozeDate(weekend)})`,
+          icon: '💤',
+          action: () => onSnoozeTask(rawLine, weekend, row.__sourceId),
+        },
+        {
+          label: `Snooze for next week (${formatSnoozeDate(nextWeek)})`,
+          icon: '💤',
+          action: () => onSnoozeTask(rawLine, nextWeek, row.__sourceId),
+        },
+        {
+          label: 'Snooze until custom date…',
+          icon: '📆',
+          action: () => {
+            const value = window.prompt('Snooze until date (YYYY-MM-DD)', currentSnoozeUntil || tomorrow)
+            if (value === null) return
+            const date = normalizeDateOnly(value)
+            if (!date || date <= today) {
+              window.alert('Enter a future date as YYYY-MM-DD.')
+              return
+            }
+            onSnoozeTask(rawLine, date, row.__sourceId)
+          },
+        },
+      )
+      if (currentSnoozeUntil) {
+        options.push({
+          label: 'Un-snooze',
+          icon: '☀️',
+          action: () => onSnoozeTask(rawLine, null, row.__sourceId),
+        })
+      }
     }
     
     // Add "Move to Completed" option for both Today and Deferred
@@ -1675,9 +1738,10 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
           <span className="sort-info-icon" title="Sort order">ⓘ</span>
           <span className="sort-info-tooltip">
             <strong>Sort Order</strong><br/>
-            1. 🔴 Urgent — always on top<br/>
-            2. Work Priority (🐸 first within each)<br/>
-            3. Priority icon: 🐸 → 🟡 → 🔵 → 📖 → ⚪ → ✅
+            1. Active snoozes stay at the bottom until their date<br/>
+            2. 🔴 Urgent — always on top<br/>
+            3. Work Priority (🐸 first within each)<br/>
+            4. Priority icon: 🐸 → 🟡 → 🔵 → 📖 → ⚪ → ✅
           </span>
         </span>
         <button 
@@ -2450,7 +2514,12 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       await onContentUpdate(newContent)
     }
   }
-  
+
+  const handleSnoozeTask = async (rawLine, snoozeUntil) => {
+    const newContent = ops.opSetTaskSnooze(content, rawLine, snoozeUntil)
+    if (newContent !== content) await onContentUpdate(newContent)
+  }
+   
   const handleDeleteTask = async (rawLine, fromSection, journalPath, taskId, row) => {
     // Check for incoming links to bridge
     if (taskId && linkedIdMap) {
@@ -3225,6 +3294,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
           onAddTask={handleAddTask}
           onCreateJournal={handleCreateJournal}
           onChangePriority={handleChangePriority}
+          onSnoozeTask={handleSnoozeTask}
           onDeleteTask={handleDeleteTask}
           onPromoteTodo={handlePromoteTodo}
           onRenameTask={handleRenameTask}
@@ -4982,6 +5052,9 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
   const handleChangePriority = (rawLine, oldPriority, newPriority, sourceIdHint) =>
     applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opChangePriority(c, rawLine, oldPriority, newPriority))
 
+  const handleSnoozeTask = (rawLine, snoozeUntil, sourceIdHint) =>
+    applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opSetTaskSnooze(c, rawLine, snoozeUntil))
+
   const handleRenameTask = (rawLine, newTaskName, sourceIdHint) =>
     applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opRenameTask(c, rawLine, newTaskName))
 
@@ -5371,6 +5444,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
         onAddClick={() => setAddDialog({ section: 'Today' })}
         onCreateJournal={handleCreateJournal}
         onChangePriority={handleChangePriority}
+        onSnoozeTask={handleSnoozeTask}
         onDeleteTask={handleDeleteTask}
         onPromoteTodo={handlePromoteTodo}
         onRenameTask={handleRenameTask}
@@ -5400,6 +5474,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
         onAddClick={() => setAddDialog({ section: 'Deferred' })}
         onCreateJournal={handleCreateJournal}
         onChangePriority={handleChangePriority}
+        onSnoozeTask={handleSnoozeTask}
         onDeleteTask={handleDeleteTask}
         onPromoteTodo={handlePromoteTodo}
         onRenameTask={handleRenameTask}

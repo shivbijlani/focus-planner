@@ -634,6 +634,31 @@ body {
   opacity: 0.6;
 }
 
+.task-table tr.task-row-snoozed {
+  opacity: 0.62;
+}
+
+.task-table tr.task-row-snoozed:hover {
+  opacity: 0.82;
+}
+
+.snooze-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+  margin-left: 0.25rem;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid rgba(147, 197, 253, 0.24);
+  border-radius: 999px;
+  background: rgba(96, 165, 250, 0.12);
+  color: #bfdbfe;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
 /* In completed view, done is the expected state */
 .completed-table tr.priority-done {
   opacity: 0.85;

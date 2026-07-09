@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { opMoveLinesBetweenSections, opBridgeLinks } from './focusPlanOps.js'
+import { opMoveLinesBetweenSections, opBridgeLinks, opSetTaskSnooze } from './focusPlanOps.js'
 
 const plan = [
   '# Focus Plan',
@@ -75,6 +75,18 @@ describe('opBridgeLinks', () => {
     expect(out).toContain('| 1 | 🟡 | A | - | 2023-01-01 | 3 |')
     // Task 2 itself (the removed one) is untouched by this op — that's opDeleteTask's job.
     expect(out).toContain('| 2 | 🟡 | B | - | 2023-01-01 | 3 |')
+  })
+
+  describe('opSetTaskSnooze', () => {
+    it('adds, updates, and clears a snooze marker without changing columns', () => {
+      const rawLine = '| 2 | 🟡 | B |'
+      const snoozed = opSetTaskSnooze(plan, rawLine, '2026-07-06')
+
+      expect(snoozed).toContain('| 2 | 🟡 | B | <!-- snooze:2026-07-06 -->')
+      const updated = opSetTaskSnooze(snoozed, '| 2 | 🟡 | B | <!-- snooze:2026-07-06 -->', '2026-07-10')
+      expect(updated).toContain('| 2 | 🟡 | B | <!-- snooze:2026-07-10 -->')
+      expect(opSetTaskSnooze(updated, '| 2 | 🟡 | B | <!-- snooze:2026-07-10 -->', null)).toBe(plan)
+    })
   })
 
   it('removes Linked ID when nextIdRawValue is empty', () => {
