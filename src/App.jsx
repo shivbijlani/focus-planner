@@ -35,6 +35,7 @@ import * as ops from './focusPlanOps.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage } from './journalChat.js'
+import * as readStateService from './readState/readStateService.js'
 import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
 import { SETTINGS_FILE } from './storage/settings.js'
 import {
@@ -1010,6 +1011,27 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
         })
     }
   }, [journalPath])
+
+  // Journal read/unread indicator (task #311). The row holds NO business logic:
+  // it hands the raw journal content to the read-state service (which computes
+  // the signature + decides unread), renders the boolean, and fires an "opened"
+  // event when the user opens the journal. localStorage is one provider behind
+  // the service; the UI never touches it directly.
+  const [isJournalUnread, setIsJournalUnread] = useState(false)
+  useEffect(() => {
+    if (!journalPath || !taskId) return
+    let cancelled = false
+    storage.read(journalPath)
+      .then(content => { if (!cancelled) readStateService.track(taskId, content) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [journalPath, taskId])
+  useEffect(() => {
+    if (!taskId) return
+    const update = () => setIsJournalUnread(readStateService.isUnread(taskId))
+    update()
+    return readStateService.subscribe(update)
+  }, [taskId])
   
   const getPriorityClass = (priority) => {
     if (priority?.includes('🔴')) return 'priority-urgent'
@@ -1250,10 +1272,18 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                             title="Open journal"
                             onClick={(e) => {
                               e.preventDefault()
+                              readStateService.emitJournalOpened(taskId)
                               onNavigate(journalPath)
                             }}
                           >
                             📓
+                            {isJournalUnread && (
+                              <span
+                                className="journal-unread-dot"
+                                aria-label="New journal entries since you last opened this"
+                                title="New entries since you last opened this"
+                              >★</span>
+                            )}
                           </a>
                         )}
                         {telegram?.url && !isMobile && (
@@ -1354,10 +1384,18 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                       title="Open journal"
                       onClick={(e) => {
                         e.preventDefault()
+                        readStateService.emitJournalOpened(taskId)
                         onNavigate(journalPath)
                       }}
                     >
                       📓
+                      {isJournalUnread && (
+                        <span
+                          className="journal-unread-dot"
+                          aria-label="New journal entries since you last opened this"
+                          title="New entries since you last opened this"
+                        >★</span>
+                      )}
                     </a>
                   )}
                   {telegram?.url && (
@@ -5751,6 +5789,11 @@ function App() {
     const liveSources = getSources()
     const defaultFile = liveSources.length > 1 ? `${COMBINED_ID}::${PLAN_FILE}` : PLAN_FILE
     handleSelectFile(defaultFile)
+    // Journal read/unread (task #311): once the board's initial journals have
+    // had a chance to be tracked, close the seeding window so pre-existing
+    // journals are treated as already-seen (no day-one "wall of stars") while
+    // journals that gain new content afterward will flag as unread.
+    setTimeout(() => readStateService.completeInitialSeeding(), 3000)
   }
 
   useEffect(() => {
