@@ -274,6 +274,68 @@ function ContextMenu({ x, y, options, onClose, title = 'Actions', sheet = false 
   )
 }
 
+function SnoozePickerModal({ currentSnoozeUntil, onClose, onSave }) {
+  const today = getTodayDateString()
+  const defaultDate = currentSnoozeUntil && currentSnoozeUntil > today
+    ? currentSnoozeUntil
+    : addDaysToDateString(today, 3)
+  const [customDate, setCustomDate] = useState(defaultDate || '')
+  const presets = [
+    { label: 'This weekend', hint: 'Saturday', date: getNextSaturdayDateString(today) },
+    { label: 'Next week', hint: '7 days', date: addDaysToDateString(today, 7) },
+    { label: 'In 3 days', hint: 'Soon', date: addDaysToDateString(today, 3) },
+  ].filter(p => p.date && p.date > today)
+
+  const saveDate = (value) => {
+    const date = normalizeDateOnly(value)
+    if (!date || date <= today) {
+      window.alert('Choose a future date.')
+      return
+    }
+    onSave(date)
+    onClose()
+  }
+
+  return (
+    <div className="dialog-overlay" onClick={onClose}>
+      <div className="dialog snooze-picker-dialog" onClick={e => e.stopPropagation()}>
+        <h3>💤 Snooze task</h3>
+        <p className="dialog-hint">Move this task to Deferred until it should return to Today.</p>
+        <div className="snooze-preset-list">
+          {presets.map(preset => (
+            <button
+              key={preset.label}
+              type="button"
+              className="snooze-preset-btn"
+              onClick={() => saveDate(preset.date)}
+            >
+              <span>{preset.label}</span>
+              <small>{formatSnoozeDate(preset.date)} · {preset.hint}</small>
+            </button>
+          ))}
+        </div>
+        <label className="snooze-date-label">
+          Custom date
+          <input
+            type="date"
+            value={customDate}
+            min={addDaysToDateString(today, 1) || today}
+            onChange={e => setCustomDate(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') saveDate(customDate)
+              if (e.key === 'Escape') onClose()
+            }}
+          />
+        </label>
+        <div className="dialog-actions">
+          <button onClick={onClose}>Cancel</button>
+          <button className="dialog-save-btn" onClick={() => saveDate(customDate)}>Snooze</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ADO Link Dialog component
 function AdoLinkDialog({ onClose, onSave, currentUrl }) {
   const [url, setUrl] = useState(currentUrl || '')
@@ -1583,6 +1645,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
   const [contextMenu, setContextMenu] = useState(null)
   // #346: separate state for the kebab's "Change priority" submenu.
   const [priorityMenu, setPriorityMenu] = useState(null)
+  const [snoozePicker, setSnoozePicker] = useState(null)
   const isMobile = useIsMobile()
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [adoLinkDialog, setAdoLinkDialog] = useState(null)
@@ -1682,10 +1745,6 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
 
   const handleContextMenu = (e, rawLine, row, journalPath, taskId) => {
     const options = []
-    const today = getTodayDateString()
-    const tomorrow = addDaysToDateString(today, 1)
-    const weekend = getNextSaturdayDateString(today)
-    const nextWeek = addDaysToDateString(today, 7)
     const currentSnoozeUntil = row.snoozeUntil || parseSnoozeUntil(rawLine)
     
     if (title === 'Today') {
@@ -1707,7 +1766,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
           })
         }
       }
-    } else if (title === 'Deferred') {
+    } else if (title === 'Deferred' && !currentSnoozeUntil) {
       options.push({
         label: 'Move to Today',
         icon: '⬆️',
@@ -1716,37 +1775,15 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     }
 
     if (onSnoozeTask) {
-      options.push(
-        {
-          label: `Snooze until tomorrow (${formatSnoozeDate(tomorrow)})`,
-          icon: '💤',
-          action: () => onSnoozeTask(rawLine, tomorrow, row.__sourceId),
-        },
-        {
-          label: `Snooze until this weekend (${formatSnoozeDate(weekend)})`,
-          icon: '💤',
-          action: () => onSnoozeTask(rawLine, weekend, row.__sourceId),
-        },
-        {
-          label: `Snooze for next week (${formatSnoozeDate(nextWeek)})`,
-          icon: '💤',
-          action: () => onSnoozeTask(rawLine, nextWeek, row.__sourceId),
-        },
-        {
-          label: 'Snooze until custom date…',
-          icon: '📆',
-          action: () => {
-            const value = window.prompt('Snooze until date (YYYY-MM-DD)', currentSnoozeUntil || tomorrow)
-            if (value === null) return
-            const date = normalizeDateOnly(value)
-            if (!date || date <= today) {
-              window.alert('Enter a future date as YYYY-MM-DD.')
-              return
-            }
-            onSnoozeTask(rawLine, date, row.__sourceId)
-          },
-        },
-      )
+      options.push({
+        label: currentSnoozeUntil ? 'Reschedule snooze…' : 'Snooze…',
+        icon: '💤',
+        action: () => setSnoozePicker({
+          rawLine,
+          sourceId: row.__sourceId,
+          currentSnoozeUntil,
+        }),
+      })
       if (currentSnoozeUntil) {
         options.push({
           label: 'Un-snooze',
@@ -1862,7 +1899,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
           <span className="sort-info-icon" title="Sort order">ⓘ</span>
           <span className="sort-info-tooltip">
             <strong>Sort Order</strong><br/>
-            1. Active snoozes stay at the bottom until their date<br/>
+            1. Snoozed tasks live in Deferred until their return date<br/>
             2. 🔴 Urgent — always on top<br/>
             3. Work Priority (🐸 first within each)<br/>
             4. Priority icon: 🐸 → 🟡 → 🔵 → 📖 → ⚪ → ✅
@@ -1942,6 +1979,13 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
             action: () => onChangePriority(priorityMenu.rawLine, priorityMenu.idCell, icon, priorityMenu.sourceId),
           }))}
           onClose={() => setPriorityMenu(null)}
+        />
+      )}
+      {snoozePicker && (
+        <SnoozePickerModal
+          currentSnoozeUntil={snoozePicker.currentSnoozeUntil}
+          onClose={() => setSnoozePicker(null)}
+          onSave={(date) => onSnoozeTask(snoozePicker.rawLine, date, snoozePicker.sourceId)}
         />
       )}
       {showAddDialog && (
@@ -2640,7 +2684,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
   }
 
   const handleSnoozeTask = async (rawLine, snoozeUntil) => {
-    const newContent = ops.opSetTaskSnooze(content, rawLine, snoozeUntil)
+    const newContent = ops.opSnoozeTask(content, rawLine, snoozeUntil)
     if (newContent !== content) await onContentUpdate(newContent)
   }
    
@@ -5180,7 +5224,11 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
                 healed = res.content
               }
             } catch { /* healing is best-effort */ }
-            return { source: s, content: healed, sections: parseFocusPlan(healed) }
+            const snoozeContent = ops.opApplySnoozeTransitions(healed, getTodayDateString())
+            if (snoozeContent !== healed) {
+              await storage.writeToSource(s.id, PLAN_FILE, snoozeContent)
+            }
+            return { source: s, content: snoozeContent, sections: parseFocusPlan(snoozeContent) }
           } catch {
             return { source: s, content: '', sections: [] }
           }
@@ -5329,7 +5377,7 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
     applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opChangePriority(c, rawLine, oldPriority, newPriority))
 
   const handleSnoozeTask = (rawLine, snoozeUntil, sourceIdHint) =>
-    applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opSetTaskSnooze(c, rawLine, snoozeUntil))
+    applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opSnoozeTask(c, rawLine, snoozeUntil))
 
   const handleRenameTask = (rawLine, newTaskName, sourceIdHint) =>
     applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opRenameTask(c, rawLine, newTaskName))
@@ -5989,7 +6037,11 @@ function App() {
         const healedContent = await selfHealRunawayIds(updatedContent, async (newContent) => {
           await storage.write(target, newContent)
         })
-        setContent(healedContent)
+        const snoozeContent = ops.opApplySnoozeTransitions(healedContent, getTodayDateString())
+        if (snoozeContent !== healedContent) {
+          await storage.write(target, snoozeContent)
+        }
+        setContent(snoozeContent)
       } else {
         setContent(text)
       }

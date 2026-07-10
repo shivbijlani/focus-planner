@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { opMoveLinesBetweenSections, opBridgeLinks, opSetTaskSnooze } from './focusPlanOps.js'
+import {
+  opApplySnoozeTransitions,
+  opBridgeLinks,
+  opMoveLinesBetweenSections,
+  opSetTaskSnooze,
+  opSnoozeTask,
+} from './focusPlanOps.js'
 
 const plan = [
   '# Focus Plan',
@@ -58,6 +64,83 @@ describe('opMoveLinesBetweenSections', () => {
     )
     expect(out).toContain('| 3 | 🟡 | C |')
     expect(out).not.toContain('ghost')
+  })
+})
+
+describe('snooze section moves', () => {
+  const snoozePlan = [
+    '# Focus Plan',
+    '',
+    '## Today',
+    '',
+    '| ID | 🎯 | Task | Work Priority | Added | Linked ID |',
+    '|---|---|------|---------------|-------|-----------|',
+    '| 1 | 🟡 | Active | - | 2026-07-01 | |',
+    '| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 |',
+    '',
+    '## Deferred',
+    '',
+    '| ID | 🎯 | Task | Work Priority | Added | Linked ID |',
+    '|---|---|------|---------------|-------|-----------|',
+    '| 9 | ⚪ | Later | - | 2026-06-30 | |',
+    '',
+  ].join('\n')
+
+  it('snoozes by adding a marker and moving Today to Deferred', () => {
+    const out = opSnoozeTask(
+      snoozePlan,
+      '| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 |',
+      '2026-07-11',
+    )
+    const lines = out.split('\n')
+    const todayBlock = lines.slice(lines.indexOf('## Today'), lines.indexOf('## Deferred')).join('\n')
+    const deferredBlock = lines.slice(lines.indexOf('## Deferred')).join('\n')
+
+    expect(todayBlock).not.toContain('Weekend blocker')
+    expect(deferredBlock).toContain('| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 | <!-- snooze:2026-07-11 -->')
+    expect(deferredBlock.indexOf('Weekend blocker')).toBeLessThan(deferredBlock.indexOf('Later'))
+  })
+
+  it('auto-returns expired Deferred snoozes to Today and clears the marker', () => {
+    const planWithExpired = opSnoozeTask(
+      snoozePlan,
+      '| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 |',
+      '2026-07-09',
+    )
+    const out = opApplySnoozeTransitions(planWithExpired, '2026-07-10')
+    const lines = out.split('\n')
+    const todayBlock = lines.slice(lines.indexOf('## Today'), lines.indexOf('## Deferred')).join('\n')
+    const deferredBlock = lines.slice(lines.indexOf('## Deferred')).join('\n')
+
+    expect(todayBlock).toContain('| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 |')
+    expect(todayBlock).not.toContain('snooze:')
+    expect(deferredBlock).not.toContain('Weekend blocker')
+  })
+
+  it('leaves marker-less Deferred tasks untouched during auto-return', () => {
+    const out = opApplySnoozeTransitions(snoozePlan, '2026-07-10')
+
+    expect(out).toBe(snoozePlan)
+  })
+
+  it('un-snoozes by clearing the marker and moving Deferred back to Today', () => {
+    const planWithSnooze = opSnoozeTask(
+      snoozePlan,
+      '| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 |',
+      '2026-07-11',
+    )
+    const out = opSnoozeTask(
+      planWithSnooze,
+      '| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 | <!-- snooze:2026-07-11 -->',
+      null,
+    )
+    const lines = out.split('\n')
+    const todayBlock = lines.slice(lines.indexOf('## Today'), lines.indexOf('## Deferred')).join('\n')
+    const deferredBlock = lines.slice(lines.indexOf('## Deferred')).join('\n')
+
+    expect(todayBlock).toContain('| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 |')
+    expect(todayBlock).not.toContain('snooze:')
+    expect(deferredBlock).not.toContain('Weekend blocker')
   })
 })
 

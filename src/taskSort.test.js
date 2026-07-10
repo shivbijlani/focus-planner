@@ -73,7 +73,7 @@ describe('sortTasksByPriority', () => {
     expect(sortedRows.map(row => row.ID.id)).toEqual(['2', '3', '1'])
   })
 
-  it('sorts actively snoozed tasks below non-snoozed tasks', () => {
+  it('does not bottom-sort snoozed rows within a section', () => {
     const rows = [
       { ...makeTask('1', '🔴'), snoozeUntil: '2026-07-06' },
       makeTask('2', '🟡'),
@@ -84,10 +84,10 @@ describe('sortTasksByPriority', () => {
 
     const { sortedRows } = sortTasksByPriority(rows, rawLines, headers, {}, {}, '2026-07-03')
 
-    expect(sortedRows.map(row => row.ID.id)).toEqual(['2', '3', '1'])
+    expect(sortedRows.map(row => row.ID.id)).toEqual(['1', '2', '3'])
   })
 
-  it('reads snooze markers from raw task rows during sorting', () => {
+  it('ignores snooze markers from raw task rows during sorting', () => {
     const rows = [
       makeTask('1', '🔴'),
       makeTask('2', '🟡'),
@@ -99,19 +99,6 @@ describe('sortTasksByPriority', () => {
     const headers = ['ID', '🎯', 'Task']
 
     const { sortedRows } = sortTasksByPriority(rows, rawLines, headers, {}, {}, '2026-07-03')
-
-    expect(sortedRows.map(row => row.ID.id)).toEqual(['2', '1'])
-  })
-
-  it('treats expired snoozes as normal tasks', () => {
-    const rows = [
-      { ...makeTask('1', '🔴'), snoozeUntil: '2020-01-01' },
-      makeTask('2', '🟡'),
-    ]
-    const rawLines = rows.map((_, index) => `raw-${index}`)
-    const headers = ['ID', '🎯', 'Task']
-
-    const { sortedRows } = sortTasksByPriority(rows, rawLines, headers, {}, {})
 
     expect(sortedRows.map(row => row.ID.id)).toEqual(['1', '2'])
   })

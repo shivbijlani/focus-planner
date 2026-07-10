@@ -1,5 +1,3 @@
-import { isSnoozeActive, parseSnoozeUntil } from './snooze.js'
-
 export function parseManagerPriorities(lines) {
   const priorities = {}
   let order = 1
@@ -65,7 +63,7 @@ export function extractTaskId(row) {
   return match ? match[1] : null
 }
 
-export function sortTasksByPriority(rows, rawLines, headers, linkedIdMap, managerPriorities, today) {
+export function sortTasksByPriority(rows, rawLines, headers, linkedIdMap, managerPriorities) {
   const priorityOrder = { '🔴': 0, '🐸': 1, '🟡': 2, '🔵': 3, '📖': 4, '⚪': 5, '✅': 6 }
   const priorityCol = headers.find(h => h.includes('🎯')) || '🎯'
 
@@ -77,17 +75,9 @@ export function sortTasksByPriority(rows, rawLines, headers, linkedIdMap, manage
   const paired = rows.map((row, i) => ({
     row,
     rawLine: rawLines[i],
-    snoozeUntil: row.snoozeUntil || parseSnoozeUntil(rawLines[i]),
   }))
 
   paired.sort((a, b) => {
-    const aSnoozed = isSnoozeActive(a.snoozeUntil, today)
-    const bSnoozed = isSnoozeActive(b.snoozeUntil, today)
-    if (aSnoozed !== bSnoozed) return aSnoozed ? 1 : -1
-    if (aSnoozed && bSnoozed && a.snoozeUntil !== b.snoozeUntil) {
-      return a.snoozeUntil.localeCompare(b.snoozeUntil)
-    }
-
     const aIcon = getIcon(a.row)
     const bIcon = getIcon(b.row)
     const aUrgent = aIcon === '🔴'

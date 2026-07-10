@@ -979,7 +979,8 @@ tr.highlight-flash {
   margin-bottom: 0.75rem;
 }
 
-.dialog input[type="text"] {
+.dialog input[type="text"],
+.dialog input[type="date"] {
   width: 100%;
   padding: 0.5rem;
   background: #1e293b;
@@ -991,8 +992,50 @@ tr.highlight-flash {
   box-sizing: border-box;
 }
 
-.dialog input[type="text"]:focus {
+.dialog input[type="text"]:focus,
+.dialog input[type="date"]:focus {
   border-color: #3b82f6;
+}
+
+.snooze-picker-dialog {
+  min-width: 360px;
+}
+
+.snooze-preset-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.snooze-preset-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  background: #1e293b;
+  color: #e2e8f0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.snooze-preset-btn:hover {
+  border-color: #3b82f6;
+  background: #24334f;
+}
+
+.snooze-preset-btn small {
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+.snooze-date-label {
+  display: grid;
+  gap: 0.35rem;
+  color: #cbd5e1;
+  font-size: 0.85rem;
 }
 
 .dialog-actions {
