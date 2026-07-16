@@ -3527,6 +3527,59 @@ function CompletedPlanView({ content, onNavigate }) {
   )
 }
 
+// A single completed-task row. Checks whether the task still has a journal and,
+// if so, renders a 📓 link to open it — mirroring the active task rows so a
+// completed task's history stays one click away (#366).
+function CompletedTaskRow({ row, headers, priorityCol, getPriorityClass, onNavigate }) {
+  const idValue = row['#'] || row['ID']
+  const taskId = typeof idValue === 'object'
+    ? idValue.id?.match(/\d+/)?.[0]
+    : String(idValue).match(/\d+/)?.[0]
+
+  const [journalPath, setJournalPath] = useState(null)
+  useEffect(() => {
+    if (!taskId) return
+    let cancelled = false
+    storage.checkJournal(taskId)
+      .then(data => { if (!cancelled && data.exists) setJournalPath(data.path) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [taskId])
+
+  return (
+    <tr className={getPriorityClass(row[priorityCol])} data-task-id={taskId || undefined}>
+      {headers.map((h, ci) => {
+        const val = row[h]
+        if ((h === '#' || h === 'ID') && typeof val === 'object') {
+          return <td key={ci}>{parseLinks(val.id, onNavigate)}</td>
+        }
+        if (h === 'Task') {
+          return (
+            <td key={ci}>
+              {renderCellWithTooltips(val, onNavigate)}
+              {journalPath && (
+                <a
+                  href="#"
+                  className="journal-link"
+                  title="Open journal"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    readStateService.emitJournalOpened(taskId)
+                    onNavigate(journalPath)
+                  }}
+                >
+                  📓
+                </a>
+              )}
+            </td>
+          )
+        }
+        return <td key={ci}>{renderCellWithTooltips(val, onNavigate)}</td>
+      })}
+    </tr>
+  )
+}
+
 function CompletedWeekSection({ title, headers, rows, getPriorityClass, onNavigate, defaultOpen }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const priorityCol = headers.find(h => h.includes('🎯')) || '🎯'
@@ -3552,24 +3605,16 @@ function CompletedWeekSection({ title, headers, rows, getPriorityClass, onNaviga
               </tr>
             </thead>
             <tbody>
-              {rows.map((row, ri) => {
-                const idValue = row['#'] || row['ID']
-                const taskId = typeof idValue === 'object' ? idValue.id?.match(/\d+/)?.[0] : String(idValue).match(/\d+/)?.[0]
-                return (
-                  <tr key={ri} className={getPriorityClass(row[priorityCol])} data-task-id={taskId || undefined}>
-                    {headers.map((h, ci) => {
-                      const val = row[h]
-                      if ((h === '#' || h === 'ID') && typeof val === 'object') {
-                        return <td key={ci}>{parseLinks(val.id, onNavigate)}</td>
-                      }
-                      if (h === 'Task') {
-                        return <td key={ci}>{renderCellWithTooltips(val, onNavigate)}</td>
-                      }
-                      return <td key={ci}>{renderCellWithTooltips(val, onNavigate)}</td>
-                    })}
-                  </tr>
-                )
-              })}
+              {rows.map((row, ri) => (
+                <CompletedTaskRow
+                  key={ri}
+                  row={row}
+                  headers={headers}
+                  priorityCol={priorityCol}
+                  getPriorityClass={getPriorityClass}
+                  onNavigate={onNavigate}
+                />
+              ))}
             </tbody>
           </table>
         </div>
