@@ -96,8 +96,16 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
 
       const hash = hashTurn(turn)
       const task = getTask(state, taskId)
-      const hadTopic = task && task.topicId != null
 
+      // Natural, incremental mirroring: only act when there's a NEW agent turn
+      // since we last posted for this task. If nothing changed, skip the task
+      // ENTIRELY — no topic is created — so the bridge never mass-backfills
+      // historical tasks the moment it starts running. Existing tasks are marked
+      // as already-seen up front by `baseline` (run once), so their first topic
+      // is created only when the agent next writes to them.
+      if (task && task.lastPostedHash === hash) continue
+
+      const hadTopic = task && task.topicId != null
       const title = parseTitle(content)
       const topicId = await ensureTopic(taskId, title)
       if (!hadTopic) created.push(taskId)
@@ -110,8 +118,6 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       if (withMeta !== content) {
         await io.writeJournal(taskId, withMeta)
       }
-
-      if (task && task.lastPostedHash === hash) continue
 
       try {
         await client.sendMessage({
@@ -178,5 +184,35 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     return { up, down }
   }
 
-  return { ensureTopic, syncUp, syncDown, syncOnce }
+  // One-time (idempotent) setup: record each existing agent-block journal's
+  // current latest-turn hash as "already posted" WITHOUT creating a topic or
+  // sending anything. After this, syncUp only mirrors tasks whose agent turn
+  // changes afterwards — so the bridge starts fresh from "now" instead of
+  // backfilling the whole history. Tasks that already have a posted history are
+  // left untouched.
+  async function baseline() {
+    const seen = []
+    const skipped = []
+    const journals = await io.listJournals()
+
+    for (const { taskId } of journals) {
+      if (!isAllowed(taskId)) continue
+      const content = await io.readJournal(taskId)
+      if (!hasAgentBlock(content)) continue
+      const turn = latestAgentTurn(content)
+      if (!turn) continue
+
+      const task = getTask(state, taskId)
+      if (task && task.lastPostedHash) {
+        skipped.push(taskId) // already tracked/posted — don't clobber
+        continue
+      }
+      setLastPosted(state, taskId, hashTurn(turn))
+      seen.push(taskId)
+    }
+
+    return { seen, skipped }
+  }
+
+  return { ensureTopic, syncUp, syncDown, syncOnce, baseline }
 }
