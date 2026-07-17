@@ -185,6 +185,27 @@ describe('baseline (natural, no backfill)', () => {
   })
 })
 
+describe('duplicate-topic prevention', () => {
+  it('reuses the topic id from the journal tg-meta marker when state forgot it', async () => {
+    // Journal already points at topic 41, but local state has no topicId for it
+    // (e.g. state.json was reset). A new agent turn must reuse 41, not create a
+    // duplicate topic.
+    const journal =
+      '# Task 206: Demo\n<!-- tg-meta chatId=-100 threadId=41 -->\n' +
+      '---\n<!-- OVERNIGHT-AGENT do not edit this line -->\n\n## \u{1F319} Overnight Agent\n\nfresh turn today\n'
+    const h = makeHarness({ 206: journal })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const up = await bridge.syncUp()
+    expect(h.created).toHaveLength(0) // no new forum topic created
+    expect(up.created).toEqual([]) // adopted, not created
+    expect(up.posted).toEqual(['206'])
+    expect(h.sent[0].messageThreadId).toBe(41) // posted to the existing topic
+    expect(state.tasks['206'].topicId).toBe(41)
+  })
+})
+
 describe('syncDown', () => {
   it('folds a topic reply into the journal and advances the offset', async () => {
     const h = makeHarness({ 42: AGENT_JOURNAL })
