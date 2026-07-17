@@ -75,6 +75,12 @@ Throughout the rest of this skill, references to "User settings", "Preferences",
   MCP). This is how the user drops you new instructions out-of-band. Check it at the \*\*start of every
   run\*\* (see "PHASE 0 — Check the agent inbox"). Credentials live in the email MCP's own store, not in
   this repo.
+- **Telegram mirror (optional): `<dev drive>\focus-planner\packages\telegram-bridge\`** — a small,
+  dependency-free Node CLI that mirrors each task journal into its own **Telegram forum topic**
+  (1 task = 1 topic) and folds phone replies back into the journals. It's enabled and configured in
+  `user-settings.md` → "Telegram". You run it at the **end of every run** so the work you just wrote into
+  journals also lands in Telegram (see "PHASE 3 — Mirror to Telegram"). The bot token is **never** stored
+  in a file — it's read from the OS credential vault at run time.
 
 ## The agent's memory (skill-owned state — invisible to the user)
 
@@ -221,6 +227,9 @@ user has spoken after your last turn:
 ## A run, end to end
 
 Do the phases **in this order** every time.
+
+> **Telegram mirror runs last.** PHASE 3 mirrors the journals to Telegram *after* PHASE 1/2 have written
+> your turns, so a task's thread reflects the work you just did. It's gated on `user-settings.md → Telegram`.
 
 > **Scan first (applies to PHASE 1 *and* PHASE 2):** before judging any task, run
 > `oa-state.ps1 scan` once and use its JSON as your worklist. Each row tells you what changed and
@@ -416,6 +425,38 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
 5. After writing a plan, record it: `oa-state.ps1 mark -Id <ID> -Status proposed -Version <n> -PlanId
    t<ID>-v<n>`. No checkboxes, no notes field — the user just replies in plain English under your block.
 
+### PHASE 3 — Mirror to Telegram (do this after you've finished writing journals)
+
+If **Telegram** is enabled in `user-settings.md` (→ "Telegram", `Enabled = on`), then **as the last step of
+every run** — after PHASE 1 and PHASE 2 have written all your journal turns — mirror those journals into
+Telegram. This is what gives every worked task its own phone-readable thread; skipping it means the user
+sees nothing new in Telegram even though the journals updated.
+
+Run the bundled bridge **once** (it posts new agent turns to each task's forum topic, creates the topic +
+stamps a `<!-- tg-meta … -->` deep-link marker into the journal the first time it sees a task, and folds any
+phone replies back into the journals):
+
+```powershell
+# Token from the OS credential vault — never from a file.
+$env:TELEGRAM_BOT_TOKEN = & "$env:LOCALAPPDATA\overnight-agent\secrets\telegram-secret.ps1" get
+$env:TELEGRAM_CHAT_ID   = '<Telegram chat id from user-settings.md>'
+$env:PLANNER_PATH       = '<planner folder>'   # same folder planner.md lives in
+node "<dev drive>\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js" once
+```
+
+Rules:
+
+- **Gate on the setting.** If `Telegram → Enabled` is `off` (or the section is absent), skip this phase
+  entirely and don't mention Telegram.
+- **It's idempotent and safe to re-run.** The bridge dedupes by a hash of each turn and persists its
+  topic-map/offset in `%LOCALAPPDATA%\overnight-agent\telegram-bridge\state.json`, so re-runs never repost
+  unchanged content or make duplicate topics. A task only gets a topic once it has an agent block — which,
+  after PHASE 1/2, every task you touched now has.
+- **Respect the allowlist.** If `Telegram → Tasks` names specific IDs, set
+  `$env:TELEGRAM_BRIDGE_TASKS = '<comma-separated ids>'` before the call so only those are mirrored.
+- **Never print the token** in your summary. If the vault lookup or the CLI fails (e.g. no token, network),
+  note it briefly in the wrap-up and carry on — a failed mirror must never abort the run.
+
 ### Wrap up
 
 Report back to the user a short summary:
@@ -427,6 +468,8 @@ Report back to the user a short summary:
 - **Waiting on you:** which tasks now have a plan to approve (and any that are `blocked` with a
   specific question).
 - **Skipped:** anything intentionally left.
+- **Mirrored to Telegram:** if Telegram is enabled, how many topics were created/updated (or a one-line
+  note if the mirror was skipped or failed). Omit this line entirely when Telegram is `off`.
 
 ---
 
