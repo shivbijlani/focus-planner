@@ -125,6 +125,66 @@ describe('syncUp', () => {
   })
 })
 
+describe('baseline (natural, no backfill)', () => {
+  it('marks existing tasks as already-seen without creating topics or posting', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL, 43: AGENT_JOURNAL.replace('42', '43') })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.baseline()
+    expect(res.seen.sort()).toEqual(['42', '43'])
+    // No side effects: no topics, no messages, no journal writes.
+    expect(h.created).toHaveLength(0)
+    expect(h.sent).toHaveLength(0)
+    expect(h.store['42']).toBe(AGENT_JOURNAL)
+    expect(state.tasks['42'].lastPostedHash).toBeTruthy()
+    expect(state.tasks['42'].topicId).toBeUndefined()
+  })
+
+  it('after baseline, an unchanged task creates no topic on syncUp', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.baseline()
+    const up = await bridge.syncUp()
+    expect(up.created).toEqual([])
+    expect(up.posted).toEqual([])
+    expect(h.created).toHaveLength(0)
+    expect(h.sent).toHaveLength(0)
+    // No topic means no deep-link marker is stamped either.
+    expect(h.store['42']).not.toContain('tg-meta')
+  })
+
+  it('after baseline, a NEW agent turn does create the topic and post', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.baseline()
+    // The agent writes a fresh turn.
+    h.store['42'] = AGENT_JOURNAL + '\n<!-- from: overnight-agent -->\nnew progress today\n'
+    const up = await bridge.syncUp()
+    expect(up.created).toEqual(['42'])
+    expect(up.posted).toEqual(['42'])
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).toContain('new progress today')
+    expect(h.store['42']).toContain('<!-- tg-meta')
+  })
+
+  it('does not clobber a task that already has posted history', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 9, name: '#42', lastPostedHash: 'existing' }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.baseline()
+    expect(res.seen).toEqual([])
+    expect(res.skipped).toEqual(['42'])
+    expect(state.tasks['42'].lastPostedHash).toBe('existing')
+  })
+})
+
 describe('syncDown', () => {
   it('folds a topic reply into the journal and advances the offset', async () => {
     const h = makeHarness({ 42: AGENT_JOURNAL })

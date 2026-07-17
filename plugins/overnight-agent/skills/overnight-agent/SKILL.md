@@ -441,17 +441,28 @@ phone replies back into the journals):
 $env:TELEGRAM_BOT_TOKEN = & "$env:LOCALAPPDATA\overnight-agent\secrets\telegram-secret.ps1" get
 $env:TELEGRAM_CHAT_ID   = '<Telegram chat id from user-settings.md>'
 $env:PLANNER_PATH       = '<planner folder>'   # same folder planner.md lives in
-node "<dev drive>\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js" once
+$bridge = "<dev drive>\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js"
+
+# FIRST-TIME SETUP ONLY: if the bridge has never run (no state.json yet), baseline
+# so it starts from "now" and does NOT backfill a topic for every historical task.
+if (-not (Test-Path "$env:LOCALAPPDATA\overnight-agent\telegram-bridge\state.json")) {
+  node "$bridge" baseline
+}
+
+node "$bridge" once
 ```
 
 Rules:
 
 - **Gate on the setting.** If `Telegram → Enabled` is `off` (or the section is absent), skip this phase
   entirely and don't mention Telegram.
+- **Natural, not bulk.** A task gets its topic **only when you write a new turn to it** — the bridge skips
+  tasks whose latest agent turn is unchanged, so it never mass-creates topics for old tasks. The one-time
+  `baseline` above marks the existing backlog as already-seen; from then on topics appear incrementally as
+  you work each task.
 - **It's idempotent and safe to re-run.** The bridge dedupes by a hash of each turn and persists its
   topic-map/offset in `%LOCALAPPDATA%\overnight-agent\telegram-bridge\state.json`, so re-runs never repost
-  unchanged content or make duplicate topics. A task only gets a topic once it has an agent block — which,
-  after PHASE 1/2, every task you touched now has.
+  unchanged content or make duplicate topics.
 - **Respect the allowlist.** If `Telegram → Tasks` names specific IDs, set
   `$env:TELEGRAM_BRIDGE_TASKS = '<comma-separated ids>'` before the call so only those are mirrored.
 - **Never print the token** in your summary. If the vault lookup or the CLI fails (e.g. no token, network),

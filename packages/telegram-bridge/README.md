@@ -50,11 +50,18 @@ node packages/telegram-bridge/bin/telegram-bridge.js once
 
 ```bash
 node bin/telegram-bridge.js whoami        # verify the token / print bot info
-node bin/telegram-bridge.js sync-up       # post agent turns -> topics
+node bin/telegram-bridge.js baseline      # mark existing tasks already-seen (no posts) — run once
+node bin/telegram-bridge.js sync-up       # post NEW agent turns -> topics
 node bin/telegram-bridge.js sync-down     # fold replies -> journals
 node bin/telegram-bridge.js once          # sync-up then sync-down (default)
 node bin/telegram-bridge.js watch [secs]  # loop `once` every N seconds (min 10, default 60)
 ```
+
+**Natural (incremental) mirroring — no backfill.** `sync-up` only mirrors a task when its *latest agent
+turn changes*; unchanged tasks are skipped entirely, so no topic is created for them. Run `baseline` **once**
+on first setup to record the current backlog as already-seen — after that, a task gets its topic the first
+time the agent writes a new turn to it, not in a bulk dump. Messages are sent as **Telegram HTML** (bold,
+italics, code, links), so journal markdown renders as formatting instead of raw `**stars**`.
 
 State (topic map, last-posted hashes, update offset) is persisted after every run, so the CLI
 is safe to run on a schedule.

@@ -2,6 +2,7 @@
 // CLI for the Focus Planner <-> Telegram bridge.
 //
 //   node bin/telegram-bridge.js whoami       # verify the token / print bot info
+//   node bin/telegram-bridge.js baseline     # mark existing tasks already-seen (no posts)
 //   node bin/telegram-bridge.js sync-up      # post agent turns -> topics
 //   node bin/telegram-bridge.js sync-down    # fold replies -> journals
 //   node bin/telegram-bridge.js once         # sync-up then sync-down (default)
@@ -59,6 +60,16 @@ async function main() {
       const up = await bridge.syncUp()
       await saveState(config.stateDir, state)
       log(`posted ${up.posted.length}, new topics ${up.created.length}`)
+      break
+    }
+    case 'baseline': {
+      const { config, state, bridge } = await build()
+      const res = await bridge.baseline()
+      await saveState(config.stateDir, state)
+      log(
+        `baselined ${res.seen.length} task(s) as already-seen (no topics created); ` +
+          `left ${res.skipped.length} already-tracked task(s) untouched`,
+      )
       break
     }
     case 'sync-down': {
