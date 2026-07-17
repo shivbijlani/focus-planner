@@ -10,7 +10,12 @@
  * each operation routes to whichever source the rawLine belongs to).
  */
 import { isPrioritiesSection } from './focusPlanShared.js'
-import { setSnoozeUntilOnLine } from './snooze.js'
+import {
+  clearSnoozeUntilFromLine,
+  isSnoozeActive,
+  parseSnoozeUntil,
+  setSnoozeUntilOnLine,
+} from './snooze.js'
 
 const PRIORITY_HEADING = '## Priorities'
 
@@ -112,6 +117,76 @@ export function opSetTaskSnooze(content, rawLine, snoozeUntil) {
   if (lineIndex === -1) return content
   lines[lineIndex] = setSnoozeUntilOnLine(lines[lineIndex], snoozeUntil)
   return lines.join('\n')
+}
+
+function findTaskRow(content, rawLine) {
+  const lines = content.split('\n')
+  let section = null
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (line.startsWith('## ')) {
+      section = line.replace('## ', '').trim()
+    }
+    if (line.trim() === rawLine) {
+      return { lines, lineIndex: i, section }
+    }
+  }
+  return { lines, lineIndex: -1, section: null }
+}
+
+export function opSnoozeTask(content, rawLine, snoozeUntil) {
+  const { lines, lineIndex, section } = findTaskRow(content, rawLine)
+  if (lineIndex === -1) return content
+
+  const nextLine = snoozeUntil
+    ? setSnoozeUntilOnLine(lines[lineIndex], snoozeUntil)
+    : clearSnoozeUntilFromLine(lines[lineIndex])
+  lines[lineIndex] = nextLine
+  let updated = lines.join('\n')
+
+  if (snoozeUntil && section === 'Today') {
+    updated = opMoveBetweenSections(updated, nextLine.trim(), 'Today', 'Deferred')
+  } else if (!snoozeUntil && section === 'Deferred') {
+    updated = opMoveBetweenSections(updated, nextLine.trim(), 'Deferred', 'Today')
+  }
+
+  return updated
+}
+
+export function opApplySnoozeTransitions(content, today) {
+  let updated = content
+  const lines = content.split('\n')
+  let section = null
+  const activeToday = []
+  const expiredDeferred = []
+
+  for (const line of lines) {
+    if (line.startsWith('## ')) {
+      section = line.replace('## ', '').trim()
+      continue
+    }
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('|')) continue
+    const cells = trimmed.split('|').slice(1, -1).map(c => c.trim())
+    if (cells[0] === 'ID' || cells.every(c => /^[-:]+$/.test(c))) continue
+    const snoozeUntil = parseSnoozeUntil(trimmed)
+    if (!snoozeUntil) continue
+    if (section === 'Deferred' && !isSnoozeActive(snoozeUntil, today)) {
+      expiredDeferred.push(trimmed)
+    } else if (section === 'Today' && isSnoozeActive(snoozeUntil, today)) {
+      activeToday.push(trimmed)
+    }
+  }
+
+  for (const rawLine of expiredDeferred) {
+    updated = opSnoozeTask(updated, rawLine, null)
+  }
+  for (const rawLine of activeToday) {
+    const snoozeUntil = parseSnoozeUntil(rawLine)
+    updated = opSnoozeTask(updated, rawLine, snoozeUntil)
+  }
+
+  return updated
 }
 
 export function opDeleteTask(content, rawLine) {
