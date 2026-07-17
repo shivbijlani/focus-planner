@@ -1232,15 +1232,17 @@ tr.highlight-flash {
   opacity: 1;
 }
 
-.telegram-link {
-  text-decoration: none;
-  opacity: 0.7;
-  cursor: pointer;
-  margin-left: 0.25rem;
-}
-
-.telegram-link:hover {
-  opacity: 1;
+/* Telegram-active indicator (task #352): a small paper-plane overlay on the
+   journal icon, shown when the task is mirrored to Telegram. In that state the
+   journal icon opens the Telegram thread instead of the journal. Positioned at
+   the bottom-right so it doesn't collide with the unread star (top-right). */
+.journal-tg-dot {
+  font-size: 0.6em;
+  line-height: 1;
+  margin-left: -0.4em;
+  vertical-align: sub;
+  pointer-events: none;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.35);
 }
 
 /* Unread indicator (task #311): a small star overlay on the journal icon,
