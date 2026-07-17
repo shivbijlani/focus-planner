@@ -18,7 +18,7 @@ import {
   setOffset,
   findTaskByTopic,
 } from './state.js'
-import { upsertTgMetaMarker } from './deepLink.js'
+import { upsertTgMetaMarker, parseTgMeta } from './deepLink.js'
 import { mdToTelegramHtml, escapeHtml } from './telegramFormat.js'
 
 const TELEGRAM_MAX = 4096
@@ -105,7 +105,21 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       // is created only when the agent next writes to them.
       if (task && task.lastPostedHash === hash) continue
 
-      const hadTopic = task && task.topicId != null
+      // Adopt an existing topic id from the journal's own tg-meta marker when our
+      // local state has forgotten it. state.json is machine-local and can be lost
+      // or reset, but the marker travels with the cloud-synced journal and is the
+      // durable record of "this task already has topic N". Reusing it here is what
+      // prevents creating a DUPLICATE forum topic after a state reset.
+      if (!task || task.topicId == null) {
+        const meta = parseTgMeta(content)
+        const existingThread = meta && `${meta.threadId}`.trim() !== '' ? Number(meta.threadId) : null
+        if (existingThread != null && !Number.isNaN(existingThread)) {
+          setTopic(state, taskId, existingThread, topicName(taskId, parseTitle(content)))
+        }
+      }
+
+      const current = getTask(state, taskId)
+      const hadTopic = current && current.topicId != null
       const title = parseTitle(content)
       const topicId = await ensureTopic(taskId, title)
       if (!hadTopic) created.push(taskId)
