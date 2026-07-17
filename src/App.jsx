@@ -32,6 +32,7 @@ import {
   InstallSettingsSection, InstallSuccessToast,
 } from '../packages/install-prompt/src/index.js'
 import '../packages/install-prompt/src/styles/install-prompt.css'
+import FirstRunTour from './tutorial/FirstRunTour.jsx'
 
 // ── Multi-source path helpers ───────────────────────────────────────
 // In single-source mode all paths are plain ("focus-plan.md").
@@ -5900,6 +5901,13 @@ function App() {
     } catch (err) {
       console.error('Failed to update file:', err)
     }
+  }
+
+  // First-run tutorial (prototype): forced via ?tour=1 so the walkthrough is
+  // deterministic and doesn't require a storage source. The shipped version
+  // will instead auto-show on an empty board and persist to settings.json.
+  if (typeof window !== 'undefined' && /[?&]tour=1\b/.test(window.location.search)) {
+    return <FirstRunTour onExit={() => { window.location.href = window.location.pathname }} />
   }
 
   if (appState === 'loading') {
