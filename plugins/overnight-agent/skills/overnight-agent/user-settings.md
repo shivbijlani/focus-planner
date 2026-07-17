@@ -25,6 +25,19 @@ preferences.
 | Authorized sender addresses | `<addr1@example.com>`, `<addr2@example.com>` (only act on instruction emails **from** these) |
 | Auto-send (email) allow-list | `<addr1@example.com>`, `<addr2@example.com>` — you may **send/reply** email to these without extra approval. Emailing anyone **not** on this list still needs explicit approval. |
 
+## Telegram (optional — mirror journals to a Telegram forum group)
+
+Enable this to have each task journal mirrored into its own **Telegram forum topic** (1 task = 1 topic) at
+the end of every run (SKILL.md → "PHASE 3 — Mirror to Telegram"). Leave `Enabled = off` to skip it entirely.
+
+| Setting | Value |
+| --- | --- |
+| Enabled | `off` (set to `on` to turn on the mirror) |
+| Chat id | `<forum supergroup id, e.g. -1004310604015>` (the group must have **Topics** enabled) |
+| Bot token | Stored in the OS credential vault, **never here** — read at run time via `%LOCALAPPDATA%\overnight-agent\secrets\telegram-secret.ps1 get`. |
+| Bridge CLI | `<dev drive>\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js` (dependency-free Node CLI). |
+| Tasks | *(optional)* comma-separated task IDs to mirror; empty = every task that has an agent block. |
+
 ## Preferences
 
 - **Inbox check:** `on` — check the agent email inbox at the start of every run (PHASE 0). Set to `off`
