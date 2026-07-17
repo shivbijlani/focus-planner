@@ -19,6 +19,7 @@ import {
   findTaskByTopic,
 } from './state.js'
 import { upsertTgMetaMarker } from './deepLink.js'
+import { mdToTelegramHtml, escapeHtml } from './telegramFormat.js'
 
 const TELEGRAM_MAX = 4096
 
@@ -26,8 +27,38 @@ export function hashTurn(text) {
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }
 
+// Truncate markdown at a line boundary so conversion never cuts through an
+// inline `**...**`/`` `...` `` pair (those don't span lines in our converter),
+// keeping the resulting HTML tag-balanced.
+function truncateMarkdown(md, budget) {
+  if (md.length <= budget) return md
+  const cut = md.slice(0, budget)
+  const nl = cut.lastIndexOf('\n')
+  const base = nl > 0 ? cut.slice(0, nl) : cut
+  return `${base}\n\u2026`
+}
+
+// Build the HTML message: a bold task header + the agent turn rendered as
+// Telegram HTML. Leaves headroom under the 4096 char cap for tag expansion.
 function formatForTelegram(taskId, title, turn) {
-  const header = title ? `\u{1F4CB} Task #${taskId} \u2014 ${title}` : `\u{1F4CB} Task #${taskId}`
+  const header = title
+    ? `\u{1F4CB} Task #${taskId} \u2014 ${title}`
+    : `\u{1F4CB} Task #${taskId}`
+  const headerHtml = `<b>${escapeHtml(header)}</b>`
+  // Reserve room for the header, the blank line, and tag expansion.
+  const budget = Math.max(0, TELEGRAM_MAX - headerHtml.length - 2 - 400)
+  const bodyHtml = mdToTelegramHtml(truncateMarkdown(turn, budget))
+  let msg = `${headerHtml}\n\n${bodyHtml}`
+  if (msg.length > TELEGRAM_MAX) msg = msg.slice(0, TELEGRAM_MAX - 1) + '\u2026'
+  return msg
+}
+
+// Plain-text fallback (no parse_mode) for the rare case Telegram rejects our
+// HTML — delivery of the content matters more than the formatting.
+function formatPlain(taskId, title, turn) {
+  const header = title
+    ? `\u{1F4CB} Task #${taskId} \u2014 ${title}`
+    : `\u{1F4CB} Task #${taskId}`
   const body = `${header}\n\n${turn}`
   return body.length > TELEGRAM_MAX ? body.slice(0, TELEGRAM_MAX - 1) + '\u2026' : body
 }
@@ -82,11 +113,23 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
 
       if (task && task.lastPostedHash === hash) continue
 
-      await client.sendMessage({
-        chatId,
-        text: formatForTelegram(taskId, title, turn),
-        messageThreadId: topicId,
-      })
+      try {
+        await client.sendMessage({
+          chatId,
+          text: formatForTelegram(taskId, title, turn),
+          messageThreadId: topicId,
+          parseMode: 'HTML',
+        })
+      } catch (err) {
+        // If Telegram rejects our HTML (e.g. an unexpected entity), don't lose
+        // the update — resend the same turn as plain text.
+        logger(`HTML send failed for task #${taskId} (${err.message}); retrying as plain text`)
+        await client.sendMessage({
+          chatId,
+          text: formatPlain(taskId, title, turn),
+          messageThreadId: topicId,
+        })
+      }
       setLastPosted(state, taskId, hash)
       posted.push(taskId)
       logger(`posted task #${taskId} to topic ${topicId}`)
