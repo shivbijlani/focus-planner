@@ -1429,20 +1429,22 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                             }}
                           >
                             📓
-                            {isJournalUnread && (
+                            {/* Task #352: a single presence-style badge. The
+                                Telegram/chat badge supersedes the unread badge,
+                                so only one is ever shown. */}
+                            {telegram?.url ? (
                               <span
-                                className="journal-unread-dot"
+                                className="journal-badge journal-badge-tg"
+                                aria-label="Mirrored to Telegram — opens the Telegram thread"
+                                title="Mirrored to Telegram — opens the Telegram thread"
+                              >💬</span>
+                            ) : isJournalUnread ? (
+                              <span
+                                className="journal-badge journal-badge-unread"
                                 aria-label="New journal entries since you last opened this"
                                 title="New entries since you last opened this"
                               >★</span>
-                            )}
-                            {telegram?.url && (
-                              <span
-                                className="journal-tg-dot"
-                                aria-label="Mirrored to Telegram — opens the Telegram thread"
-                                title="Mirrored to Telegram — opens the Telegram thread"
-                              >✈️</span>
-                            )}
+                            ) : null}
                           </a>
                         )}
                       </span>
@@ -1540,20 +1542,20 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                       }}
                     >
                       📓
-                      {isJournalUnread && (
+                      {/* Task #352: single presence-style badge; chat supersedes unread. */}
+                      {telegram?.url ? (
                         <span
-                          className="journal-unread-dot"
+                          className="journal-badge journal-badge-tg"
+                          aria-label="Mirrored to Telegram — opens the Telegram thread"
+                          title="Mirrored to Telegram — opens the Telegram thread"
+                        >💬</span>
+                      ) : isJournalUnread ? (
+                        <span
+                          className="journal-badge journal-badge-unread"
                           aria-label="New journal entries since you last opened this"
                           title="New entries since you last opened this"
                         >★</span>
-                      )}
-                      {telegram?.url && (
-                        <span
-                          className="journal-tg-dot"
-                          aria-label="Mirrored to Telegram — opens the Telegram thread"
-                          title="Mirrored to Telegram — opens the Telegram thread"
-                        >✈️</span>
-                      )}
+                      ) : null}
                     </a>
                   )}
                   <button

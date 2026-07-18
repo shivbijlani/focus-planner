@@ -1226,36 +1226,38 @@ tr.highlight-flash {
   text-decoration: none;
   opacity: 0.7;
   cursor: pointer;
+  position: relative; /* anchor for the presence badge (task #352) */
 }
 
 .journal-link:hover {
   opacity: 1;
 }
 
-/* Telegram-active indicator (task #352): a small paper-plane overlay on the
-   journal icon, shown when the task is mirrored to Telegram. In that state the
-   journal icon opens the Telegram thread instead of the journal. Positioned at
-   the bottom-right so it doesn't collide with the unread star (top-right). */
-.journal-tg-dot {
-  font-size: 0.6em;
-  line-height: 1;
-  margin-left: -0.4em;
-  vertical-align: sub;
-  pointer-events: none;
-  text-shadow: 0 0 2px rgba(0, 0, 0, 0.35);
+/* Task #352 (v3): a single Teams-style presence badge overlaid on the journal
+   icon's bottom-right corner. Only ONE badge is ever shown — the Telegram/chat
+   badge (💬) takes precedence over the unread "journal-new" badge (★). It sits
+   on the corner with a ring in the row background so it reads as a floating
+   presence indicator instead of overlapping the whole glyph. */
+.journal-action {
+  position: relative; /* anchor the badge on the mobile icon button too */
 }
 
-/* Unread indicator (task #311): a small star overlay on the journal icon,
-   shown when a journal has new entries since it was last opened. */
-.journal-unread-dot {
-  color: #f5a623;
-  font-size: 0.7em;
+.journal-badge {
+  position: absolute;
+  right: -0.2em;
+  bottom: -0.25em;
+  font-size: 0.6em;
   line-height: 1;
-  margin-left: -0.35em;
-  margin-top: -0.6em;
-  vertical-align: super;
   pointer-events: none;
-  text-shadow: 0 0 2px rgba(0, 0, 0, 0.25);
+  /* ring in the row background separates the badge from the icon (Teams look) */
+  text-shadow:
+    0 0 2px #0d1b35,
+    0 0 2px #0d1b35,
+    0 0 3px #0d1b35;
+}
+
+.journal-badge-unread {
+  color: #f5a623;
 }
 
 .todo-preview {
