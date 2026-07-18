@@ -1415,35 +1415,36 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                         )}
                         {journalPath && !isMobile && (
                           <a
-                            href="#"
-                            className="journal-link"
-                            title="Open journal"
+                            href={telegram?.url || '#'}
+                            className={`journal-link${telegram?.url ? ' journal-link-tg' : ''}`}
+                            title={telegram?.url ? 'Open Telegram thread' : 'Open journal'}
+                            {...(telegram?.url ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
                             onClick={(e) => {
+                              // Telegram-active tasks: the journal icon opens the
+                              // Telegram thread instead of the journal (task #352).
+                              if (telegram?.url) { e.stopPropagation(); return }
                               e.preventDefault()
                               readStateService.emitJournalOpened(taskId)
                               onNavigate(journalPath)
                             }}
                           >
                             📓
-                            {isJournalUnread && (
+                            {/* Task #352: a single presence-style badge. The
+                                Telegram/chat badge supersedes the unread badge,
+                                so only one is ever shown. */}
+                            {telegram?.url ? (
                               <span
-                                className="journal-unread-dot"
+                                className="journal-badge journal-badge-tg"
+                                aria-label="Mirrored to Telegram — opens the Telegram thread"
+                                title="Mirrored to Telegram — opens the Telegram thread"
+                              >💬</span>
+                            ) : isJournalUnread ? (
+                              <span
+                                className="journal-badge journal-badge-unread"
                                 aria-label="New journal entries since you last opened this"
                                 title="New entries since you last opened this"
                               >★</span>
-                            )}
-                          </a>
-                        )}
-                        {telegram?.url && !isMobile && (
-                          <a
-                            href={telegram.url}
-                            className="telegram-link"
-                            title="Open Telegram thread"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            ✈️
+                            ) : null}
                           </a>
                         )}
                       </span>
@@ -1526,37 +1527,35 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                 <div className="row-actions">
                   {journalPath && (
                     <a
-                      href="#"
-                      className="row-action-btn journal-action"
-                      aria-label="Open journal"
-                      title="Open journal"
+                      href={telegram?.url || '#'}
+                      className={`row-action-btn journal-action${telegram?.url ? ' journal-action-tg' : ''}`}
+                      aria-label={telegram?.url ? 'Open Telegram thread' : 'Open journal'}
+                      title={telegram?.url ? 'Open Telegram thread' : 'Open journal'}
+                      {...(telegram?.url ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
                       onClick={(e) => {
+                        // Telegram-active tasks: the journal icon opens the
+                        // Telegram thread instead of the journal (task #352).
+                        if (telegram?.url) { e.stopPropagation(); return }
                         e.preventDefault()
                         readStateService.emitJournalOpened(taskId)
                         onNavigate(journalPath)
                       }}
                     >
                       📓
-                      {isJournalUnread && (
+                      {/* Task #352: single presence-style badge; chat supersedes unread. */}
+                      {telegram?.url ? (
                         <span
-                          className="journal-unread-dot"
+                          className="journal-badge journal-badge-tg"
+                          aria-label="Mirrored to Telegram — opens the Telegram thread"
+                          title="Mirrored to Telegram — opens the Telegram thread"
+                        >💬</span>
+                      ) : isJournalUnread ? (
+                        <span
+                          className="journal-badge journal-badge-unread"
                           aria-label="New journal entries since you last opened this"
                           title="New entries since you last opened this"
                         >★</span>
-                      )}
-                    </a>
-                  )}
-                  {telegram?.url && (
-                    <a
-                      href={telegram.url}
-                      className="row-action-btn telegram-action"
-                      aria-label="Open Telegram thread"
-                      title="Open Telegram thread"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      ✈️
+                      ) : null}
                     </a>
                   )}
                   <button
