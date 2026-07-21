@@ -320,12 +320,28 @@ export class GoogleDriveProvider {
   }
 
   async _listFolder(folderId) {
-    const res = await fetch(
-      `${DRIVE_API}/files?q=${encodeURIComponent(`'${folderId}' in parents and trashed=false`)}&fields=files(id,name,mimeType,modifiedTime,headRevisionId)`,
-      { headers: this._authHeader() }
-    )
-    const data = await res.json()
-    return data.files ?? []
+    // Follow nextPageToken so folders with more than one page are fully
+    // enumerated. Drive defaults to 100 files per page; without paging,
+    // journals silently disappear from listings once a folder crosses that
+    // limit, and a reload never recovers them since it re-fetches page one.
+    const files = []
+    let pageToken = null
+    do {
+      const params = new URLSearchParams({
+        q: `'${folderId}' in parents and trashed=false`,
+        fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,headRevisionId)',
+        pageSize: '1000',
+      })
+      if (pageToken) params.set('pageToken', pageToken)
+      const res = await fetch(`${DRIVE_API}/files?${params.toString()}`, {
+        headers: this._authHeader(),
+      })
+      if (!res.ok) break
+      const data = await res.json()
+      for (const f of data.files ?? []) files.push(f)
+      pageToken = data.nextPageToken ?? null
+    } while (pageToken)
+    return files
   }
 
   async _listRecursive(folderId, prefix) {
