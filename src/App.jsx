@@ -796,6 +796,15 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
   )
 }
 
+// Count the .md files a tree node contains, recursing into subfolders. Used to
+// render a file-count badge next to each folder (task #371) so a folder like
+// journal/ shows how many files it actually holds — making any client-side
+// truncation immediately visible at a glance instead of silently short.
+function countTreeFiles(item) {
+  if (item.type === 'file') return 1
+  return (item.children || []).reduce((sum, child) => sum + countTreeFiles(child), 0)
+}
+
 function FileTree({ items, onSelect, selectedPath }) {
   // Track which folders are open. All folders start collapsed; clicking a
   // folder both expands it and (if it contains planner.md as a direct child)
@@ -834,6 +843,10 @@ function FileTree({ items, onSelect, selectedPath }) {
                 <span className="folder-caret">{openPaths.has(item.path) ? '▾' : '▸'}</span>
                 <span className="folder-icon">📁</span>
                 <span className="folder-name">{item.name}</span>
+                {(() => {
+                  const count = countTreeFiles(item)
+                  return count > 0 ? <span className="folder-count">{count}</span> : null
+                })()}
               </button>
               {openPaths.has(item.path) && item.children && (
                 <FileTree items={item.children} onSelect={onSelect} selectedPath={selectedPath} />

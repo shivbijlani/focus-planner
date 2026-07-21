@@ -305,6 +305,24 @@ body {
   opacity: 0.7;
 }
 
+/* File-count badge next to a folder (task #371) — shows how many files the
+   folder actually contains, so truncation is visible at a glance. */
+.folder-count {
+  margin-left: auto;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  background: #0f3460;
+  color: #cbd5e1;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.folder:hover .folder-count {
+  background: #1e4a7a;
+  color: #fff;
+}
+
 .file {
   background: none;
   border: none;
