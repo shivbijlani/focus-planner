@@ -139,11 +139,9 @@ export class OneDriveProvider {
     const url = subPath
       ? `${APPROOT}:/${subPath}:/children?$select=name,lastModifiedDateTime,eTag,folder`
       : `${APPROOT}/children?$select=name,lastModifiedDateTime,eTag,folder`
-    const res = await fetch(url, { headers: this._authHeader() })
-    if (!res.ok) return []
-    const data = await res.json()
+    const value = await this._listAllChildren(url)
     const entries = []
-    for (const item of data.value ?? []) {
+    for (const item of value) {
       const name = item.name
       const path = prefix ? `${prefix}/${name}` : name
       if (item.folder) {
@@ -171,12 +169,9 @@ export class OneDriveProvider {
   async maxJournalId() {
     await this._ensureToken()
     try {
-      const url = `${APPROOT}:/journal:/children`
-      const res = await fetch(url, { headers: this._authHeader() })
-      if (!res.ok) return 0
-      const data = await res.json()
+      const value = await this._listAllChildren(`${APPROOT}:/journal:/children`)
       let max = 0
-      for (const item of data.value ?? []) {
+      for (const item of value) {
         const m = item.name.match(/^task-(\d+)\.md$/)
         if (m) max = Math.max(max, parseInt(m[1], 10))
       }
@@ -188,11 +183,8 @@ export class OneDriveProvider {
     await this._ensureToken()
     const ids = new Set()
     try {
-      const url = `${APPROOT}:/journal:/children`
-      const res = await fetch(url, { headers: this._authHeader() })
-      if (!res.ok) return ids
-      const data = await res.json()
-      for (const item of data.value ?? []) {
+      const value = await this._listAllChildren(`${APPROOT}:/journal:/children`)
+      for (const item of value) {
         const m = item.name.match(/^task-(\d+)\.md$/)
         if (m) ids.add(parseInt(m[1], 10))
       }
@@ -202,15 +194,33 @@ export class OneDriveProvider {
 
   // ── Private helpers ──────────────────────────────────
 
+  /**
+   * List all children of a Graph folder URL, following @odata.nextLink so
+   * folders with more than one page are fully enumerated. Graph defaults to
+   * 200 items per page; without paging, journals silently disappear from
+   * listings once a folder crosses that limit — and a reload never recovers
+   * them, because every reload re-fetches only the first page.
+   */
+  async _listAllChildren(url) {
+    const items = []
+    let next = url
+    while (next) {
+      const res = await fetch(next, { headers: this._authHeader() })
+      if (!res.ok) break
+      const data = await res.json()
+      for (const item of data.value ?? []) items.push(item)
+      next = data['@odata.nextLink'] ?? null
+    }
+    return items
+  }
+
   async _listRecursive(subPath, prefix = '') {
     const url = subPath
       ? `${APPROOT}:/${subPath}:/children`
       : `${APPROOT}/children`
-    const res = await fetch(url, { headers: this._authHeader() })
-    if (!res.ok) return []
-    const data = await res.json()
+    const value = await this._listAllChildren(url)
     const items = []
-    for (const item of data.value ?? []) {
+    for (const item of value) {
       const name = item.name
       const path = prefix ? `${prefix}/${name}` : name
       if (item.folder) {
