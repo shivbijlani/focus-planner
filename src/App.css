@@ -3318,6 +3318,13 @@ tr.highlight-flash {
   display: flex;
   flex-direction: column;
   gap: 0;
+  /* Cap to the visual viewport and scroll internally so the dialog is never
+     taller than the screen. Without this, the many settings sections make the
+     dialog overflow the flex-centered .dialog-overlay, leaving the top and
+     bottom unreachable on mobile (#372). Mirrors .add-task-dialog. */
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .settings-dialog-header {
   display: flex;
