@@ -3462,6 +3462,89 @@ tr.highlight-flash {
   border-color: #818cf8;
 }
 .settings-ai-input::placeholder { color: #64748b; }
+
+/* Structured settings form (field-per-setting editor for user-settings.md). */
+.settings-ai-modes {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 0.6rem;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid #334155;
+  border-radius: 8px;
+}
+.settings-ai-mode-btn {
+  padding: 0.28rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #94a3b8;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.settings-ai-mode-btn:hover:not(:disabled) { color: #e2e8f0; }
+.settings-ai-mode-btn.is-active {
+  color: #e2e8f0;
+  background: rgba(129, 140, 248, 0.18);
+}
+.settings-ai-mode-btn:disabled { opacity: 0.4; cursor: default; }
+.settings-ai-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.settings-ai-form-group {
+  margin: 0;
+  padding: 0.6rem 0.7rem 0.7rem;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.4);
+}
+.settings-ai-form-legend {
+  padding: 0 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #818cf8;
+}
+.settings-ai-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-top: 0.5rem;
+}
+.settings-ai-field:first-of-type { margin-top: 0.2rem; }
+.settings-ai-field-label {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+.settings-ai-field-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.4rem 0.55rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid #334155;
+  border-radius: 6px;
+}
+.settings-ai-field-input:focus {
+  outline: none;
+  border-color: #818cf8;
+}
+.settings-ai-form-hint {
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: #64748b;
+}
+.settings-ai-form-hint code {
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
 .settings-update-msg {
   margin-top: 0.4rem;
   font-size: 0.75rem;
