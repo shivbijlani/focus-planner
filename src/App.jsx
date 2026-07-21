@@ -39,6 +39,7 @@ import * as readStateService from './readState/readStateService.js'
 import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
 import { SETTINGS_FILE } from './storage/settings.js'
 import { AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE } from './config/aiSettings.js'
+import { groupSettingsForm, serializeSettingsForm, hasSettingsForm } from './config/userSettingsForm.js'
 import {
   attachmentFolderPath,
   formatAttachmentFolderMarkdown,
@@ -4393,6 +4394,9 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
   const [aiExists, setAiExists] = useState(false)
   const [aiBusy, setAiBusy] = useState(false)
   const [aiMsg, setAiMsg] = useState('')
+  // 'form' = structured field-per-setting editor; 'raw' = markdown textarea.
+  // Both edit the same aiText, so switching never loses work.
+  const [aiMode, setAiMode] = useState('form')
   // App update (force latest service worker — fixes "stale build on mobile").
   const [updating, setUpdating] = useState(false)
   const [updateMsg, setUpdateMsg] = useState('')
@@ -4866,14 +4870,72 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
                 </div>
               ) : (
                 <>
-                  <textarea
-                    className="settings-ai-input"
-                    rows={12}
-                    spellCheck={false}
-                    placeholder={`# Overnight Agent — user settings\n\nFill in your paths, accounts and preferences…`}
-                    value={aiText ?? ''}
-                    onChange={(e) => { setAiText(e.target.value); if (aiMsg) setAiMsg('') }}
-                  />
+                  <div className="settings-ai-modes" role="tablist" aria-label="Settings editor mode">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={aiMode === 'form'}
+                      className={`settings-ai-mode-btn${aiMode === 'form' ? ' is-active' : ''}`}
+                      onClick={() => setAiMode('form')}
+                      disabled={!hasSettingsForm(aiText)}
+                      title={hasSettingsForm(aiText) ? 'Edit each setting in its own field' : 'No structured rows to edit — use Raw'}
+                    >
+                      Form
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={aiMode === 'raw'}
+                      className={`settings-ai-mode-btn${aiMode === 'raw' ? ' is-active' : ''}`}
+                      onClick={() => setAiMode('raw')}
+                      title="Edit the raw markdown"
+                    >
+                      Raw
+                    </button>
+                  </div>
+                  {aiMode === 'form' && hasSettingsForm(aiText) ? (
+                    <div className="settings-ai-form">
+                      {groupSettingsForm(aiText).map((group) => (
+                        <fieldset className="settings-ai-form-group" key={group.section || 'ungrouped'}>
+                          {group.section && (
+                            <legend className="settings-ai-form-legend">{group.section}</legend>
+                          )}
+                          {group.rows.map((row) => (
+                            <label className="settings-ai-field" key={row.index}>
+                              <span className="settings-ai-field-label">{row.label}</span>
+                              <input
+                                type="text"
+                                className="settings-ai-field-input"
+                                spellCheck={false}
+                                value={row.value}
+                                onChange={(e) => {
+                                  const values = groupSettingsForm(aiText)
+                                    .flatMap((g) => g.rows)
+                                    .sort((a, b) => a.index - b.index)
+                                    .map((r) => r.value)
+                                  values[row.index] = e.target.value
+                                  setAiText(serializeSettingsForm(aiText, values))
+                                  if (aiMsg) setAiMsg('')
+                                }}
+                              />
+                            </label>
+                          ))}
+                        </fieldset>
+                      ))}
+                      <div className="settings-ai-form-hint">
+                        Prose-only settings (the <code>## Preferences</code> notes) aren’t shown here — switch to <strong>Raw</strong> to edit those.
+                      </div>
+                    </div>
+                  ) : (
+                    <textarea
+                      className="settings-ai-input"
+                      rows={12}
+                      spellCheck={false}
+                      placeholder={`# Overnight Agent — user settings\n\nFill in your paths, accounts and preferences…`}
+                      value={aiText ?? ''}
+                      onChange={(e) => { setAiText(e.target.value); if (aiMsg) setAiMsg('') }}
+                    />
+                  )}
                   <div className="settings-update-row">
                     <div className="settings-update-info">
                       <span className="settings-update-hint">
