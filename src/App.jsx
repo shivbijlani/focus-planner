@@ -4383,6 +4383,27 @@ function backupActionLabel(providerStatus, disconnectedLabel = 'Sign in') {
   return 'Sync now'
 }
 
+// Collapsible Settings section header (#372/#4): a clickable, keyboard-accessible
+// title with a caret that toggles its section open/closed, mirroring the existing
+// Files section idiom. The section body is hidden via CSS when its parent
+// `.settings-dialog-section` carries the `collapsed` class.
+function SettingsSectionTitle({ id, label, collapsed, onToggle, className = '' }) {
+  return (
+    <div
+      className={`settings-dialog-section-title settings-section-toggle ${className}`.trim()}
+      role="button"
+      tabIndex={0}
+      aria-expanded={!collapsed}
+      onClick={() => onToggle(id)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(id) } }}
+      title={collapsed ? 'Expand section' : 'Collapse section'}
+    >
+      <span className={`settings-section-caret${collapsed ? '' : ' open'}`} aria-hidden="true">▸</span>
+      {label}
+    </div>
+  )
+}
+
 function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged }) {
   const [open, setOpen] = useState(false)
   const [tourOpen, setTourOpen] = useState(false)
@@ -4397,6 +4418,17 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
   const [filesBusy, setFilesBusy] = useState(false)
   const [filesError, setFilesError] = useState('')
   const [deletingPath, setDeletingPath] = useState(null)
+  // Collapsible Settings sections (#372/#4): per-section open/closed state,
+  // persisted to localStorage so choices stick across app opens. Absent = open.
+  const [sectionCollapsed, setSectionCollapsed] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('fp-settings-collapsed') || '{}') || {} }
+    catch { return {} }
+  })
+  const toggleSection = (id) => setSectionCollapsed(prev => {
+    const next = { ...prev, [id]: !prev[id] }
+    try { localStorage.setItem('fp-settings-collapsed', JSON.stringify(next)) } catch { /* ignore */ }
+    return next
+  })
   // Mission statement editor (Settings → Mission).
   const [mission, setMissionInput] = useState(getMissionStatement())
   useEffect(() => subscribeMissionStatement(setMissionInput), [])
@@ -4815,8 +4847,8 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
               <button className="settings-dialog-close" onClick={close}>✕</button>
             </div>
 
-            <div className="settings-dialog-section">
-              <div className="settings-dialog-section-title">App version</div>
+            <div className={`settings-dialog-section${sectionCollapsed.appVersion ? ' collapsed' : ''}`}>
+              <SettingsSectionTitle id="appVersion" label="App version" collapsed={!!sectionCollapsed.appVersion} onToggle={toggleSection} />
               <div className="settings-update-row">
                 <div className="settings-update-info">
                   <span className="settings-update-build">Build {storage.getBuildId()}</span>
@@ -4838,8 +4870,8 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
 
             <InstallSettingsSection onOpen={() => setInstallOpen(true)} appName={APP_NAME} />
 
-            <div className="settings-dialog-section">
-              <div className="settings-dialog-section-title">Mission</div>
+            <div className={`settings-dialog-section${sectionCollapsed.mission ? ' collapsed' : ''}`}>
+              <SettingsSectionTitle id="mission" label="Mission" collapsed={!!sectionCollapsed.mission} onToggle={toggleSection} />
               <div className="settings-mission-hint">
                 A short north star, pinned to the top of your board.
               </div>
@@ -4856,8 +4888,8 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
               />
             </div>
 
-            <div className="settings-dialog-section">
-              <div className="settings-dialog-section-title">AI agent settings</div>
+            <div className={`settings-dialog-section${sectionCollapsed.aiSettings ? ' collapsed' : ''}`}>
+              <SettingsSectionTitle id="aiSettings" label="AI agent settings" collapsed={!!sectionCollapsed.aiSettings} onToggle={toggleSection} />
               <div className="settings-mission-hint">
                 Config for the overnight agent, saved as <code>{AI_SETTINGS_FILE}</code> in
                 your active source (next to <code>{PLAN_FILE}</code>). The agent reads this
@@ -4970,8 +5002,8 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
             </div>
 
             {isMulti && (
-              <div className="settings-dialog-section">
-                <div className="settings-dialog-section-title">Sources</div>
+              <div className={`settings-dialog-section${sectionCollapsed.sources ? ' collapsed' : ''}`}>
+                <SettingsSectionTitle id="sources" label="Sources" collapsed={!!sectionCollapsed.sources} onToggle={toggleSection} />
                 {sources.map(s => {
                   const icon = PROVIDER_ICONS[s.providerType] || '📁'
                   const isActive = s.id === activeId
@@ -4997,8 +5029,8 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
               </div>
             )}
 
-            <div className="settings-dialog-section">
-              <div className="settings-dialog-section-title">Storage</div>
+            <div className={`settings-dialog-section${sectionCollapsed.storage ? ' collapsed' : ''}`}>
+              <SettingsSectionTitle id="storage" label="Storage" collapsed={!!sectionCollapsed.storage} onToggle={toggleSection} />
 
               {/* Browser Storage */}
               <div className={`sync-target-card${activePrimary === PROVIDERS.LOCAL_STORAGE ? ' active-source' : ''}`}>
@@ -5197,8 +5229,8 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
               )}
             </div>
 
-            <div className="settings-dialog-section">
-              <div className="settings-dialog-section-title">Backup & sync</div>
+            <div className={`settings-dialog-section${sectionCollapsed.backup ? ' collapsed' : ''}`}>
+              <SettingsSectionTitle id="backup" label="Backup & sync" collapsed={!!sectionCollapsed.backup} onToggle={toggleSection} />
               <div className="sync-target-card">
                 <div className="sync-target-main">
                   <span className="sync-target-icon">{PROVIDER_ICONS[PROVIDERS.GOOGLE_DRIVE]}</span>

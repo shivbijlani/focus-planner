@@ -3750,6 +3750,26 @@ tr.highlight-flash {
 .settings-files-caret.open {
   transform: rotate(90deg);
 }
+/* Collapsible Settings sections (#372/#4). */
+.settings-section-toggle {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  user-select: none;
+}
+.settings-section-caret {
+  display: inline-block;
+  transition: transform 0.15s;
+  color: #64748b;
+  font-size: 0.85em;
+}
+.settings-section-caret.open {
+  transform: rotate(90deg);
+}
+.settings-dialog-section.collapsed > :not(.settings-dialog-section-title) {
+  display: none;
+}
 .settings-files-count {
   color: #64748b;
   font-weight: 500;
