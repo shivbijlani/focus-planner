@@ -2360,7 +2360,9 @@ tr.highlight-flash {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(3, 7, 18, 0.72);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3311,10 +3313,13 @@ tr.highlight-flash {
 .settings-dialog {
   background: #0d1b35;
   border: 1px solid #1e3a5f;
-  border-radius: 10px;
-  padding: 1.25rem;
-  width: 360px;
-  max-width: 90vw;
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  width: min(560px, 92vw);
+  max-width: 92vw;
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -3349,12 +3354,12 @@ tr.highlight-flash {
 }
 .settings-dialog-section:first-of-type { border-top: none; padding-top: 0; }
 .settings-dialog-section-title {
-  font-size: 0.7rem;
-  color: #475569;
+  font-size: 0.72rem;
+  color: #9fb2cc;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 600;
-  margin-bottom: 0.25rem;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  margin-bottom: 0.3rem;
 }
 .settings-dialog-info {
   font-size: 0.8rem;
@@ -3381,11 +3386,11 @@ tr.highlight-flash {
 }
 .settings-update-hint {
   font-size: 0.72rem;
-  color: #64748b;
+  color: #94a3b8;
 }
 .settings-mission-hint {
   font-size: 0.72rem;
-  color: #64748b;
+  color: #94a3b8;
   margin-bottom: 0.1rem;
 }
 .settings-mission-input {
@@ -3410,16 +3415,17 @@ tr.highlight-flash {
   width: 100%;
   box-sizing: border-box;
   resize: vertical;
-  padding: 0.5rem 0.6rem;
+  min-height: 220px;
+  padding: 0.6rem 0.7rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.78rem;
-  line-height: 1.45;
+  line-height: 1.55;
   color: #e2e8f0;
   background: rgba(15, 23, 42, 0.6);
   border: 1px solid #334155;
   border-radius: 8px;
-  white-space: pre;
-  overflow-wrap: normal;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .settings-ai-input:focus {
   outline: none;
@@ -3524,7 +3530,8 @@ tr.highlight-flash {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.6rem 0.75rem;
   background: #101f3b;
   border: 1px solid #1e3a5f;
   border-radius: 8px;
@@ -3550,6 +3557,7 @@ tr.highlight-flash {
   align-items: center;
   gap: 0.6rem;
   min-width: 0;
+  flex: 1 1 200px;
 }
 
 .sync-target-icon {
@@ -3564,7 +3572,7 @@ tr.highlight-flash {
 }
 
 .sync-target-status {
-  color: #64748b;
+  color: #94a3b8;
   font-size: 0.74rem;
   margin-top: 2px;
 }
@@ -3587,6 +3595,8 @@ tr.highlight-flash {
   align-items: center;
   gap: 0.4rem;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .sync-target-remove {
@@ -3782,6 +3792,55 @@ tr.highlight-flash {
 
 .settings-ai-callout-body li {
   margin-bottom: 0.15rem;
+}
+
+/* ── Settings dialog: tablet & mobile ───────────────────── */
+@media (max-width: 768px) {
+  .dialog-overlay {
+    padding: 0;
+  }
+  .settings-dialog {
+    width: 100%;
+    max-width: 100%;
+    max-height: 100dvh;
+    height: 100dvh;
+    border-radius: 0;
+    border: none;
+    padding: 1rem 1.1rem calc(1rem + env(safe-area-inset-bottom));
+  }
+  .settings-dialog-header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    margin: -1rem -1.1rem 0.75rem;
+    padding: 0.9rem 1.1rem;
+    background: #0d1b35;
+    border-bottom: 1px solid #1e3a5f;
+  }
+  .settings-dialog-header h3 { font-size: 1.1rem; }
+  .settings-dialog-close { font-size: 1.25rem; padding: 4px 10px; }
+}
+
+@media (max-width: 480px) {
+  /* Stack each storage/backup card so buttons never squeeze the label. */
+  .sync-target-card {
+    align-items: stretch;
+  }
+  .sync-target-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .sync-target-action {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .settings-update-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .settings-update-row .storage-footer-btn {
+    width: 100%;
+  }
 }
 
 
