@@ -2487,7 +2487,7 @@ function useCoarsePointer() {
   return coarse
 }
 
-function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, search: searchProp, onSearchChange, mission, syncStatus }) {
+function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, search: searchProp, onSearchChange, mission, syncStatus, onDataChanged }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
   const [searchLocal, setSearchLocal] = useState('')
@@ -3060,6 +3060,11 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     
     try {
       await storage.write(journalPath, journalContent)
+      // Refresh the sidebar tree so the newly created journal appears in the
+      // hamburger pane immediately. Without this, the file is written to disk
+      // (and syncs to the cloud) but the cached file list never learns about
+      // it, so the journal looks "missing" until a full reload (task #371).
+      await onDataChanged?.()
       // Navigate to the new journal
       onNavigate(journalPath)
     } catch (e) {
@@ -5229,7 +5234,7 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
 // Per-source Priorities sections are rendered separately (so numbering
 // from different sources doesn't collide); each one is fully editable
 // and writes back to its source.
-function CombinedFocusPlanView({ sources, onNavigate }) {
+function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
   const [perSource, setPerSource] = useState(null) // [{ source, content, sections }]
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
@@ -5501,6 +5506,9 @@ function CombinedFocusPlanView({ sources, onNavigate }) {
     const journalPath = `journal/task-${taskId}.md`
     try {
       await storage.writeToSource(sid, journalPath, `# Task ${taskId}: ${cleanName}\n\n- TODO: \n`)
+      // Refresh the sidebar tree so the newly created journal appears in the
+      // hamburger pane immediately (task #371).
+      await onDataChanged?.()
       onNavigate(journalPath)
     } catch (e) {
       console.error('Failed to create journal:', e)
@@ -6502,7 +6510,7 @@ function App() {
           </div>
         )}
         {isCombinedFocusPlan ? (
-          <CombinedFocusPlanView sources={sources} onNavigate={handleNavigate} />
+          <CombinedFocusPlanView sources={sources} onNavigate={handleNavigate} onDataChanged={loadFiles} />
         ) : content ? (
           isFocusPlan ? (
             <FocusPlanView
@@ -6514,6 +6522,7 @@ function App() {
               onSearchChange={setBoardSearch}
               mission={mission}
               syncStatus={syncStatus}
+              onDataChanged={loadFiles}
             />
           ) : isCompletedPlan ? (
             <CompletedPlanView
