@@ -3330,7 +3330,18 @@ tr.highlight-flash {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 1rem;
+  /* Pin the header (with its ✕ close) to the top of the internally-scrolling
+     dialog. Without this the header scrolls out of reach on mobile, so the top
+     of the dialog is clipped and there's no visible way to close it except
+     tapping the backdrop (#372). Negative margins bleed the sticky bar to the
+     dialog's padding edges so content scrolls cleanly underneath it. */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #0d1b35;
+  margin: -1.25rem -1.25rem 1rem;
+  padding: 1.25rem 1.25rem 0.75rem;
+  border-bottom: 1px solid #1e3a5f;
 }
 .settings-dialog-header h3 {
   margin: 0;
