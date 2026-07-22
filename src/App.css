@@ -3329,6 +3329,17 @@ tr.highlight-flash {
     font-size: 1.15rem;
   }
 
+  /* All modal dialogs must fit narrow phones (iPhone 13 mini 375px) without
+     horizontal overflow — the base .dialog min-width is 420px, wider than the
+     viewport. Drop the floor and cap to the screen so e.g. the close-out dialog
+     renders fully on-screen. */
+  .dialog {
+    min-width: 0;
+    width: 100%;
+    max-width: calc(100vw - 1.5rem);
+    padding: 1.25rem;
+  }
+
   /* Tighter add-task dialog padding on narrow phones */
   .add-task-dialog {
     padding: 1rem;
