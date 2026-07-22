@@ -4,14 +4,14 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { PROVIDERS, getAvailableProviders, getProviderName, setActiveProvider } from './storage/storage.js'
-import { LocalStorageProvider } from './storage/localstorage-provider.js'
+import { makeBrowserStorageProvider } from './storage/indexeddb-provider.js'
 import { FSAProvider } from './storage/fsa-provider.js'
 import { OneDriveProvider } from './storage/onedrive-provider.js'
 import { GoogleDriveProvider } from './storage/google-drive-provider.js'
 
 function makeProvider(id) {
   switch (id) {
-    case PROVIDERS.LOCAL_STORAGE: return new LocalStorageProvider()
+    case PROVIDERS.LOCAL_STORAGE: return makeBrowserStorageProvider()
     case PROVIDERS.FSA: return new FSAProvider()
     case PROVIDERS.ONEDRIVE: return new OneDriveProvider()
     case PROVIDERS.GOOGLE_DRIVE: return new GoogleDriveProvider()

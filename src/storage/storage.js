@@ -8,7 +8,7 @@ import {
   oneDriveProvider,
   googleDriveProvider,
 } from '../../packages/folder-sync/src/index.js'
-import { LocalStorageProvider } from './localstorage-provider.js'
+import { makeBrowserStorageProvider } from './indexeddb-provider.js'
 import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
 import { getActiveTombstoneIds } from '../idTombstones.js'
 
@@ -156,7 +156,7 @@ export function getActiveProvider() { return _provider }
 export function hasProvider() { return _provider !== null }
 
 export function configureLocalFirstStorage() {
-  const provider = new LocalStorageProvider()
+  const provider = makeBrowserStorageProvider()
   setActiveProvider(provider)
   localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
   return provider

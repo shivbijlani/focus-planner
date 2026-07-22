@@ -4,7 +4,7 @@ import './App.css'
 import './mobile-board.css'
 import * as storage from './storage/storage.js'
 import { setActiveProvider, getActiveProvider, PROVIDERS, TARGET_STATUS, getProviderName } from './storage/storage.js'
-import { LocalStorageProvider } from './storage/localstorage-provider.js'
+import { makeBrowserStorageProvider } from './storage/indexeddb-provider.js'
 import { resumePendingMigration, hasPendingMigration, makeProvider } from './storage/migrate.js'
 import {
   loadSources, migrateLegacy, getSources, getActiveSourceId, getActiveSource, setActiveSource,
@@ -6366,8 +6366,8 @@ function App() {
     // there was no fp-storage-provider key either). Fresh install → pick storage.
     const savedId = localStorage.getItem('fp-storage-provider')
     if (!savedId) {
-      // Auto-bootstrap LocalStorage as the default first source.
-      const fallback = new LocalStorageProvider()
+      // Auto-bootstrap Browser Storage as the default first source.
+      const fallback = makeBrowserStorageProvider()
       await fallback.restore()
       setActiveProvider(fallback)
       localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
@@ -6380,7 +6380,7 @@ function App() {
       setActiveProvider(provider)
       await initWithProvider(savedId)
     } else {
-      const fallback = new LocalStorageProvider()
+      const fallback = makeBrowserStorageProvider()
       await fallback.restore()
       setActiveProvider(fallback)
       localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)

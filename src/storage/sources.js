@@ -15,7 +15,7 @@
  * check `getSources().length` to gate any multi-source affordances.
  */
 import { PROVIDERS, getProviderName, setActiveProvider } from './storage.js'
-import { LocalStorageProvider } from './localstorage-provider.js'
+import { makeBrowserStorageProvider } from './indexeddb-provider.js'
 import { FSAProvider } from './fsa-provider.js'
 import { OneDriveProvider } from './onedrive-provider.js'
 import { GoogleDriveProvider } from './google-drive-provider.js'
@@ -53,7 +53,7 @@ function nextId() {
 
 export function makeProviderFor(source) {
   switch (source.providerType) {
-    case PROVIDERS.LOCAL_STORAGE: return new LocalStorageProvider()
+    case PROVIDERS.LOCAL_STORAGE: return makeBrowserStorageProvider()
     case PROVIDERS.FSA: return new FSAProvider(source.id)
     case PROVIDERS.ONEDRIVE: return new OneDriveProvider()
     case PROVIDERS.GOOGLE_DRIVE: return new GoogleDriveProvider(source.config?.folderName || null)
