@@ -1096,6 +1096,40 @@ tr.highlight-flash {
   background: #7f1d1d44 !important;
 }
 
+/* Close-out (task completion) dialog */
+.closeout-dialog .closeout-label {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 0.85rem;
+  color: #cbd5e1;
+  font-size: 0.85rem;
+}
+
+.closeout-select,
+.closeout-textarea {
+  width: 100%;
+  padding: 0.5rem;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.closeout-textarea {
+  resize: vertical;
+  min-height: 4.5rem;
+  font-family: inherit;
+  line-height: 1.4;
+}
+
+.closeout-select:focus,
+.closeout-textarea:focus {
+  border-color: #3b82f6;
+}
+
 /* Move-to-source dialog list */
 .move-task-list {
   list-style: none;
@@ -3311,6 +3345,17 @@ tr.highlight-flash {
 
   .editor-header h1 {
     font-size: 1.15rem;
+  }
+
+  /* All modal dialogs must fit narrow phones (iPhone 13 mini 375px) without
+     horizontal overflow — the base .dialog min-width is 420px, wider than the
+     viewport. Drop the floor and cap to the screen so e.g. the close-out dialog
+     renders fully on-screen. */
+  .dialog {
+    min-width: 0;
+    width: 100%;
+    max-width: calc(100vw - 1.5rem);
+    padding: 1.25rem;
   }
 
   /* Tighter add-task dialog padding on narrow phones */

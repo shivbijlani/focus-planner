@@ -34,7 +34,7 @@ import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
-import { parseJournalChat, formatChatDay, appendJournalMessage } from './journalChat.js'
+import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment } from './journalChat.js'
 import * as readStateService from './readState/readStateService.js'
 import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
 import { SETTINGS_FILE } from './storage/settings.js'
@@ -505,6 +505,63 @@ function LinkBridgeDialog({ incomingLinks, removedTaskName, nextTaskId, nextTask
           <button className="dialog-save-btn" onClick={onConfirm}>
             {nextTaskId ? 'Bridge Links' : 'Remove Links & Continue'}
           </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Fixed set of close-out outcomes offered when completing a task. Kept short so
+// completion stays fast; free-text notes cover anything not listed here.
+const CLOSE_OUT_OUTCOMES = ['Done by me', 'Canceled', 'Done by someone else', 'No longer needed', 'Other']
+
+// Shown when a task is moved to Completed. Lets the user optionally record how
+// the task ended (outcome) and a closing comment, both of which are written to
+// the task journal. Completion stays one action away: "Skip & Complete" (or
+// Cmd/Ctrl+Enter) finishes immediately with no notes.
+function CloseOutDialog({ taskName, onClose, onConfirm }) {
+  const [outcome, setOutcome] = useState('')
+  const [comment, setComment] = useState('')
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault()
+      onConfirm(outcome, comment)
+    }
+  }
+  return (
+    <div className="dialog-overlay" onClick={onClose}>
+      <div className="dialog closeout-dialog" onClick={e => e.stopPropagation()}>
+        <h3>✅ Complete &ldquo;{taskName}&rdquo;</h3>
+        <p className="dialog-hint">
+          Optionally capture how this ended and any closing notes — handy later for
+          reviews &amp; postmortems. Both are optional.
+        </p>
+        <label className="closeout-label">
+          Outcome
+          <select
+            className="closeout-select"
+            value={outcome}
+            onChange={e => setOutcome(e.target.value)}
+            autoFocus
+          >
+            <option value="">— none —</option>
+            {CLOSE_OUT_OUTCOMES.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </label>
+        <label className="closeout-label">
+          Closing comment
+          <textarea
+            className="closeout-textarea"
+            rows={4}
+            value={comment}
+            onChange={e => setComment(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="What was the result? Why? Anything worth remembering…"
+          />
+        </label>
+        <div className="dialog-actions">
+          <button onClick={() => onConfirm('', '')}>Skip &amp; Complete</button>
+          <button className="dialog-save-btn" onClick={() => onConfirm(outcome, comment)}>Complete</button>
         </div>
       </div>
     </div>
@@ -2504,6 +2561,7 @@ function useCoarsePointer() {
 function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, search: searchProp, onSearchChange, mission, syncStatus, onDataChanged }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
+  const [closeOutDialog, setCloseOutDialog] = useState(null)
   const [searchLocal, setSearchLocal] = useState('')
   // Search can be driven by a parent (e.g. the mobile header input) via props,
   // or owned locally (desktop). Props win when supplied.
@@ -2750,9 +2808,20 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
   }
   
   const handleMoveToCompleted = async (rawLine, row, fromSection) => {
-    // Extract task info from row
     const taskId = extractTaskId(row)
+    // Show the close-out dialog first so the user can optionally record how the
+    // task ended. Completion proceeds (with the existing link-bridge check) only
+    // after they confirm; clicking the overlay cancels the whole action.
+    setCloseOutDialog({
+      taskName: row['Task'] || (taskId ? `Task ${taskId}` : 'this task'),
+      onConfirm: async (outcome, comment) => {
+        setCloseOutDialog(null)
+        await runCompletion(rawLine, row, fromSection, taskId, { outcome, comment })
+      }
+    })
+  }
 
+  const runCompletion = async (rawLine, row, fromSection, taskId, closeout) => {
     // Check for incoming links to bridge
     if (taskId && linkedIdMap) {
       const incoming = []
@@ -2773,16 +2842,16 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
           onConfirm: async () => {
             const bridged = ops.opBridgeLinks(content, taskId, nextIdRawValue)
             setBridgeDialog(null)
-            await performMoveToCompleted(rawLine, row, fromSection, bridged)
+            await performMoveToCompleted(rawLine, row, fromSection, bridged, closeout)
           }
         })
         return
       }
     }
-    await performMoveToCompleted(rawLine, row, fromSection, content)
+    await performMoveToCompleted(rawLine, row, fromSection, content, closeout)
   }
 
-  const performMoveToCompleted = async (rawLine, row, fromSection, currentContent) => {
+  const performMoveToCompleted = async (rawLine, row, fromSection, currentContent, closeout = {}) => {
     const taskId = extractTaskId(row)
     const taskName = row['Task'] || ''
     const mngrPriority = row['Work Priority'] || row['Mngr Priority'] || '-'
@@ -2808,6 +2877,11 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     let completedTaskName = taskName.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Remove markdown links
     if (todoItems.length > 0) {
       completedTaskName += ' - ' + todoItems.join(' - ')
+    }
+    // Stamp the optional close-out outcome inline so the completed board shows it.
+    const closeOutcome = (closeout.outcome || '').replace(/\|/g, '/').trim()
+    if (closeOutcome) {
+      completedTaskName += ` · _${closeOutcome}_`
     }
     
     // Extract ID for display (simple number or keep as-is)
@@ -2892,6 +2966,21 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       await storage.write(COMPLETED_FILE, completedLines.join('\n'))
     } catch (e) {
       console.error('Failed to update completed file:', e)
+    }
+
+    // Write the optional close-out comment into the task journal so it's kept
+    // with the task's history (useful for later reviews/postmortems).
+    const closeOutText = formatCloseOutComment(closeout.outcome, closeout.comment)
+    if (taskId && closeOutText) {
+      try {
+        const journalData = await storage.checkJournal(taskId)
+        if (journalData.exists) {
+          const journalContent = await storage.read(journalData.path)
+          await storage.write(journalData.path, appendJournalMessage(journalContent, closeOutText))
+        }
+      } catch (e) {
+        console.error('Failed to write close-out to journal:', e)
+      }
     }
   }
   
@@ -3521,6 +3610,14 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
           nextTaskName={bridgeDialog.nextTaskName}
           onClose={() => setBridgeDialog(null)}
           onConfirm={bridgeDialog.onConfirm}
+        />
+      )}
+
+      {closeOutDialog && (
+        <CloseOutDialog
+          taskName={closeOutDialog.taskName}
+          onClose={() => setCloseOutDialog(null)}
+          onConfirm={closeOutDialog.onConfirm}
         />
       )}
 
@@ -5345,6 +5442,7 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
   const [perSource, setPerSource] = useState(null) // [{ source, content, sections }]
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
+  const [closeOutDialog, setCloseOutDialog] = useState(null)
   const [error, setError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
   const [addDialog, setAddDialog] = useState(null) // { section }
@@ -5626,7 +5724,18 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     const sid = sourceForRow(row, rawLine)
     if (!sid) return
     const taskId = extractTaskId(row)
+    // Show the close-out dialog first; completion (and the link-bridge check)
+    // proceeds only after the user confirms.
+    setCloseOutDialog({
+      taskName: row['Task'] || (taskId ? `Task ${taskId}` : 'this task'),
+      onConfirm: async (outcome, comment) => {
+        setCloseOutDialog(null)
+        await runCompletionCombined(rawLine, row, fromSection, sid, taskId, { outcome, comment })
+      }
+    })
+  }
 
+  const runCompletionCombined = async (rawLine, row, fromSection, sid, taskId, closeout) => {
     // Check for incoming links across ALL sources to bridge
     if (taskId && linkedIdMap) {
       const incoming = []
@@ -5654,16 +5763,16 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
               }
             }))
             setBridgeDialog(null)
-            await performMoveToCompletedCombined(rawLine, row, fromSection, sid)
+            await performMoveToCompletedCombined(rawLine, row, fromSection, sid, closeout)
           }
         })
         return
       }
     }
-    await performMoveToCompletedCombined(rawLine, row, fromSection, sid)
+    await performMoveToCompletedCombined(rawLine, row, fromSection, sid, closeout)
   }
 
-  const performMoveToCompletedCombined = async (rawLine, row, fromSection, sid) => {
+  const performMoveToCompletedCombined = async (rawLine, row, fromSection, sid, closeout = {}) => {
     const taskId = extractTaskId(row)
     const taskName = row['Task'] || ''
     const priority = row['Work Priority'] || row['Mngr Priority'] || row['Priority'] || '-'
@@ -5677,7 +5786,7 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
         }
       } catch (e) { console.error('Failed to fetch journal todos:', e) }
     }
-    const completedRow = ops.buildCompletedRow({ taskId, taskName, priority, todoItems })
+    const completedRow = ops.buildCompletedRow({ taskId, taskName, priority, todoItems, outcome: closeout.outcome })
     // Write the focus-plan deletion and the completed-plan append in
     // sequence against the same source.
     const focusText = await storage.readFromSource(sid, PLAN_FILE)
@@ -5687,6 +5796,18 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     const newCompleted = ops.opAppendToCompleted(completedText, completedRow)
     await storage.writeToSource(sid, COMPLETED_FILE, newCompleted)
     await storage.writeToSource(sid, PLAN_FILE, newFocus)
+
+    // Write the optional close-out comment into the task journal.
+    const closeOutText = formatCloseOutComment(closeout.outcome, closeout.comment)
+    if (taskId && closeOutText) {
+      try {
+        const j = await storage.checkJournalFromSource(sid, taskId)
+        if (j.exists) {
+          const journalContent = await storage.readFromSource(sid, j.path)
+          await storage.writeToSource(sid, j.path, appendJournalMessage(journalContent, closeOutText))
+        }
+      } catch (e) { console.error('Failed to write close-out to journal:', e) }
+    }
     setReloadKey(k => k + 1)
   }
 
@@ -6032,6 +6153,14 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
           nextTaskName={bridgeDialog.nextTaskName}
           onClose={() => setBridgeDialog(null)}
           onConfirm={bridgeDialog.onConfirm}
+        />
+      )}
+
+      {closeOutDialog && (
+        <CloseOutDialog
+          taskName={closeOutDialog.taskName}
+          onClose={() => setCloseOutDialog(null)}
+          onConfirm={closeOutDialog.onConfirm}
         />
       )}
 

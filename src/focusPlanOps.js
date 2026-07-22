@@ -491,10 +491,14 @@ export function opRemoveTaskFromFocusPlan(content, rawLine, fromSection) {
   return content
 }
 
-export function buildCompletedRow({ taskId, taskName, priority, todoItems = [] }) {
+export function buildCompletedRow({ taskId, taskName, priority, todoItems = [], outcome = '' }) {
   const today = new Date().toISOString().split('T')[0]
   let displayName = (taskName || '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
   if (todoItems.length > 0) displayName += ' - ' + todoItems.join(' - ')
+  // Stamp the optional close-out outcome inline on the task cell so the
+  // completed board stays skimmable. Sanitize pipes so it can't break the row.
+  const cleanOutcome = (outcome || '').replace(/\|/g, '/').trim()
+  if (cleanOutcome) displayName += ` · _${cleanOutcome}_`
   return `| ${taskId || '-'} | ✅ | ${displayName} | ${priority || '-'} | ${today} |`
 }
 
