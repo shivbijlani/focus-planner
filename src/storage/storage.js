@@ -11,6 +11,7 @@ import {
 import { LocalStorageProvider } from './localstorage-provider.js'
 import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
 import { getActiveTombstoneIds } from '../idTombstones.js'
+import { recordDiagnosticEvent } from './diagnostics.js'
 
 // Merge recently-deleted task IDs (tombstones) into a journal-ID skip set so a
 // freed ID is not reused while it could still be resurrected by sync (#314).
@@ -92,7 +93,18 @@ const localAdapter = {
   },
   async writeFile(name, content) {
     if (!_provider) throw new Error('No provider set')
-    await _provider.write(name, content)
+    try {
+      await _provider.write(name, content)
+    } catch (e) {
+      // Surface quota/write failures in Diagnostics. QuotaExceededError here is
+      // the classic "journals silently dropped because localStorage is full".
+      const quota = e?.name === 'QuotaExceededError' || /quota/i.test(e?.message || '')
+      recordDiagnosticEvent(
+        quota ? 'quota' : 'write',
+        `write failed: ${name}${quota ? ' (quota exceeded)' : ''} — ${e?.name || ''} ${e?.message || e}`.trim(),
+      )
+      throw e
+    }
     return { mtime: Date.now() }
   },
   async deleteFile(name) {
@@ -113,6 +125,21 @@ function getEngine() {
   // Constructing the engine kicks off connected-flag refresh and OAuth-redirect
   // completion, and wires online/visibility nudges to the service worker.
   _engine = createSyncEngine({ localAdapter, providers })
+  // Record provider error transitions into Diagnostics (deduped per provider so
+  // a stuck error doesn't spam the buffer). No-op unless diagnostics are enabled.
+  try {
+    const lastError = {}
+    _engine.subscribe(s => {
+      const provs = s?.providers || {}
+      for (const [id, p] of Object.entries(provs)) {
+        const msg = p?.state === 'error' ? (p.error || 'error') : ''
+        if (msg && lastError[id] !== msg) {
+          recordDiagnosticEvent('sync', `sync error [${id}]: ${msg}`)
+        }
+        lastError[id] = msg
+      }
+    })
+  } catch { /* diagnostics must never break sync setup */ }
   return _engine
 }
 
