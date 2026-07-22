@@ -3551,6 +3551,51 @@ tr.highlight-flash {
   color: #34d399;
 }
 
+.settings-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.settings-diagnostics-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  color: #cbd5e1;
+  cursor: pointer;
+}
+
+.settings-diagnostics-toggle input {
+  cursor: pointer;
+}
+
+.settings-diagnostics-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.settings-diagnostics-msg {
+  font-size: 0.75rem;
+  color: #34d399;
+}
+
+.settings-diagnostics-output {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: #e2e8f0;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 0.5rem;
+  resize: vertical;
+}
+
 .settings-dialog-subtle {
   color: #64748b;
   font-size: 0.72rem;
