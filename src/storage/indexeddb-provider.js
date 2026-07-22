@@ -1,14 +1,27 @@
 /**
- * Browser localStorage provider — default for new visitors.
- * Stores all markdown files under `fp-file:<path>` keys. The `fp-` prefix
- * is historical (predates the rebrand) and kept for backwards compatibility
- * with existing user data; see src/config/branding.js for user-visible names.
+ * Browser IndexedDB provider — default for new visitors.
+ *
+ * Stores every markdown file as one IndexedDB record keyed by its path, in a
+ * dedicated object store (`focus-planner` DB, `files` store) so it never
+ * collides with the idb-keyval default store the FSA provider uses for
+ * directory handles.
+ *
+ * This replaces the older localStorage-backed provider: IndexedDB is
+ * asynchronous and has a far larger quota, so it comfortably holds hundreds of
+ * task journals that would strain localStorage's ~5MB synchronous cap. The
+ * user-facing name stays "Browser Storage" and the provider id stays
+ * `local-storage` (see src/storage/storage.js PROVIDERS) so existing source
+ * registries and the storage picker keep working unchanged.
  */
+import { get, set, del, keys, clear, createStore } from 'idb-keyval'
+
 import { parseTodos } from './fsa.js'
 import { PLAN_FILE, COMPLETED_FILE } from '../config/branding.js'
 import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
 
-const PREFIX = 'fp-file:'
+// Dedicated DB + store so file records don't mix with idb-keyval's default
+// keyval store (used elsewhere for FSA directory handles).
+const filesStore = createStore('focus-planner', 'files')
 
 const SCAFFOLD_PLAN = `## Today
 
@@ -27,61 +40,57 @@ const SCAFFOLD_PLAN = `## Today
 const SCAFFOLD_COMPLETED = `# Completed Tasks
 `
 
-function allKeys() {
-  const keys = []
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i)
-    if (k?.startsWith(PREFIX)) keys.push(k)
-  }
-  return keys
+async function allPaths() {
+  const ks = await keys(filesStore)
+  return ks.map(String)
 }
 
-export class LocalStorageProvider {
+export class IndexedDbProvider {
   folderName() { return 'Browser Storage' }
 
   async pick() { return true } // no-op
   async restore() { return true } // always ready
 
   async scaffold() {
-    if (localStorage.getItem(PREFIX + PLAN_FILE) === null) {
-      localStorage.setItem(PREFIX + PLAN_FILE, SCAFFOLD_PLAN)
+    if ((await get(PLAN_FILE, filesStore)) === undefined) {
+      await set(PLAN_FILE, SCAFFOLD_PLAN, filesStore)
     }
-    if (localStorage.getItem(PREFIX + COMPLETED_FILE) === null) {
-      localStorage.setItem(PREFIX + COMPLETED_FILE, SCAFFOLD_COMPLETED)
+    if ((await get(COMPLETED_FILE, filesStore)) === undefined) {
+      await set(COMPLETED_FILE, SCAFFOLD_COMPLETED, filesStore)
     }
     await scaffoldAgentsDoc((p) => this.read(p), (p, c) => this.write(p, c))
   }
 
   async read(path) {
-    return localStorage.getItem(PREFIX + path) ?? ''
+    return (await get(path, filesStore)) ?? ''
   }
 
   async write(path, content) {
-    localStorage.setItem(PREFIX + path, content)
+    await set(path, content, filesStore)
   }
 
   async remove(path) {
-    localStorage.removeItem(PREFIX + path)
+    await del(path, filesStore)
   }
 
   async getFiles() {
     // Build a tree from flat keys so the FileTree UI works
-    const paths = allKeys().map(k => k.slice(PREFIX.length)).sort()
+    const paths = (await allPaths()).sort()
     return buildTree(paths)
   }
 
   async checkJournal(taskId) {
     const path = `journal/task-${taskId}.md`
     return {
-      exists: localStorage.getItem(PREFIX + path) !== null,
+      exists: (await get(path, filesStore)) !== undefined,
       path,
     }
   }
 
   async maxJournalId() {
     let max = 0
-    for (const k of allKeys()) {
-      const m = k.slice(PREFIX.length).match(/^journal\/task-(\d+)\.md$/)
+    for (const path of await allPaths()) {
+      const m = path.match(/^journal\/task-(\d+)\.md$/)
       if (m) max = Math.max(max, parseInt(m[1], 10))
     }
     return max
@@ -89,26 +98,26 @@ export class LocalStorageProvider {
 
   async journalIds() {
     const ids = new Set()
-    for (const k of allKeys()) {
-      const m = k.slice(PREFIX.length).match(/^journal\/task-(\d+)\.md$/)
+    for (const path of await allPaths()) {
+      const m = path.match(/^journal\/task-(\d+)\.md$/)
       if (m) ids.add(parseInt(m[1], 10))
     }
     return ids
   }
 
   /** Flat list of all stored paths (for migration). */
-  listAllPaths() {
-    return allKeys().map(k => k.slice(PREFIX.length))
+  async listAllPaths() {
+    return await allPaths()
   }
 
   /** Wipe all stored files. */
-  clear() {
-    allKeys().forEach(k => localStorage.removeItem(k))
+  async clear() {
+    await clear(filesStore)
   }
 
   /** Called when this source is removed from the registry. */
   async forget() {
-    this.clear()
+    await this.clear()
   }
 }
 
