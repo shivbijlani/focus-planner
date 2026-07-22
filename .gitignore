@@ -32,3 +32,6 @@ region-dropdown.md
 *.njsproj
 *.sln
 *.sw?
+
+# impeccable skill cache
+.impeccable/
