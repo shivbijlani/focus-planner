@@ -22,6 +22,35 @@
 
 const SIDECAR_VERSION = 1
 
+// #371 collapse guard: the minimum number of alive meta rows that must be about
+// to be tombstoned in one pass — while the parsed record set is empty — for us
+// to treat it as a failed/empty load rather than a genuine full-board delete.
+const COLLAPSE_MIN_ALIVE = 2
+
+/**
+ * A "collapse" is the signature of a failed or empty load, NOT a user clearing
+ * their board: the parsed `records` came back empty while `meta` still holds
+ * COLLAPSE_MIN_ALIVE+ alive rows. This is exactly what the #113 IndexedDB switch
+ * triggered — a device read an empty store (`records = {}`), and the delete
+ * loops below then stamped every alive row deleted at one fresh clock, making
+ * the empty state win the last-write-wins merge and wipe the board on every
+ * device (#371). A real person deleting their whole board to zero is vanishingly
+ * rare next to a load failure, and is trivially recoverable, so we bias hard
+ * toward preserving data: when a collapse is detected, callers skip the
+ * delete-stamping pass and leave the alive rows intact.
+ *
+ * A single-row delete-to-empty (alive count 1) is left unguarded so ordinary
+ * "removed my last row" edits still tombstone normally.
+ */
+export function isCollapse(records, meta, minAlive = COLLAPSE_MIN_ALIVE) {
+  if (Object.keys(records).length > 0) return false
+  let alive = 0
+  for (const id of Object.keys(meta)) {
+    if (!meta[id].deleted && ++alive >= minAlive) return true
+  }
+  return false
+}
+
 function serialize(content) {
   if (typeof content === 'string') return content
   // JSON.stringify(undefined) returns the value `undefined` (not a string), so
@@ -174,10 +203,13 @@ export function stampDelete(meta, id, clock = Date.now()) {
  * Note: this only detects adds and deletes. Prefer `stampLocalChanges`, which
  * also detects in-place content edits via a stored fingerprint.
  */
-export function reconcileExternal(records, meta, clock = Date.now()) {
+export function reconcileExternal(records, meta, clock = Date.now(), opts = {}) {
   for (const id of Object.keys(records)) {
     if (!meta[id] || meta[id].deleted) meta[id] = { clock, deleted: false }
   }
+  // #371: don't tombstone everything when the record set collapsed to empty —
+  // that's a failed/empty load, not a full-board delete. Preserve the alive rows.
+  if (opts.guardCollapse !== false && isCollapse(records, meta)) return meta
   for (const id of Object.keys(meta)) {
     if (!meta[id].deleted && !(id in records)) meta[id] = { clock, deleted: true }
   }
@@ -211,7 +243,7 @@ export function fingerprint(content) {
  * as a stale-file ghost: the tombstone is kept so the merge strips the row.
  * Deletes preserve the last-known fingerprint so this comparison is possible.
  */
-export function stampLocalChanges(records, meta, clock = Date.now()) {
+export function stampLocalChanges(records, meta, clock = Date.now(), opts = {}) {
   for (const id of Object.keys(records)) {
     const fp = fingerprint(records[id])
     const m = meta[id]
@@ -231,6 +263,11 @@ export function stampLocalChanges(records, meta, clock = Date.now()) {
       meta[id] = { clock, deleted: false, fp }
     }
   }
+  // #371: when the parsed records collapsed to empty while meta still holds many
+  // alive rows, this is a load failure (e.g. empty IndexedDB after the #113
+  // migration), not the user deleting their whole board. Skip the delete pass so
+  // we don't tombstone the entire board and lose it across every device.
+  if (opts.guardCollapse !== false && isCollapse(records, meta)) return meta
   for (const id of Object.keys(meta)) {
     if (!meta[id].deleted && !(id in records)) {
       // Tombstone the removed row, keeping its fingerprint so a later stale-file

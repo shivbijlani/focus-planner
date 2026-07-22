@@ -10,6 +10,7 @@ import {
   gcTombstones,
   serializeSidecar,
   parseSidecar,
+  isCollapse,
 } from './merge.js'
 
 const snap = (records = {}, meta = {}) => ({ records, meta })
@@ -203,6 +204,65 @@ describe('stampLocalChanges — detect adds/edits/deletes via fingerprint', () =
   it('fingerprint is stable and content-sensitive', () => {
     expect(fingerprint('x')).toBe(fingerprint('x'))
     expect(fingerprint('x')).not.toBe(fingerprint('y'))
+  })
+})
+
+describe('#371 collapse guard — an empty record set must not wipe the board', () => {
+  const aliveMeta = () => ({
+    a: { clock: 100, deleted: false, fp: fingerprint('A') },
+    b: { clock: 100, deleted: false, fp: fingerprint('B') },
+    c: { clock: 100, deleted: false, fp: fingerprint('C') },
+  })
+
+  it('isCollapse: empty records + 2+ alive rows is a collapse', () => {
+    expect(isCollapse({}, aliveMeta())).toBe(true)
+    // Non-empty records is never a collapse.
+    expect(isCollapse({ a: 'A' }, aliveMeta())).toBe(false)
+    // A single alive row deleting to empty is an ordinary edit, not a collapse.
+    expect(isCollapse({}, { a: { clock: 1, deleted: false } })).toBe(false)
+    // Only tombstones alive → nothing to protect.
+    expect(isCollapse({}, { a: { clock: 1, deleted: true } })).toBe(false)
+  })
+
+  it('stampLocalChanges does NOT tombstone all rows when records collapse to empty', () => {
+    const meta = aliveMeta()
+    stampLocalChanges({}, meta, 1784733503532)
+    // Every row stays alive at its original clock — the wipe is refused.
+    expect(meta.a.deleted).toBe(false)
+    expect(meta.b.deleted).toBe(false)
+    expect(meta.c.deleted).toBe(false)
+    expect(meta.a.clock).toBe(100)
+  })
+
+  it('reconcileExternal does NOT tombstone all rows when records collapse to empty', () => {
+    const meta = aliveMeta()
+    reconcileExternal({}, meta, 1784733503532)
+    expect(meta.a.deleted).toBe(false)
+    expect(meta.b.deleted).toBe(false)
+    expect(meta.c.deleted).toBe(false)
+  })
+
+  it('the guard is opt-out so a genuine full clear can still be stamped', () => {
+    const meta = aliveMeta()
+    stampLocalChanges({}, meta, 300, { guardCollapse: false })
+    expect(meta.a.deleted).toBe(true)
+    expect(meta.b.deleted).toBe(true)
+    expect(meta.c.deleted).toBe(true)
+  })
+
+  it('still tombstones a normal single-row removal (not a collapse)', () => {
+    const meta = { a: { clock: 100, deleted: false, fp: fingerprint('A') } }
+    stampLocalChanges({}, meta, 300)
+    expect(meta.a).toEqual({ clock: 300, deleted: true, fp: fingerprint('A') })
+  })
+
+  it('still tombstones the one row that was actually removed from a multi-row board', () => {
+    const meta = aliveMeta()
+    // b and c remain; only a was removed → records is non-empty, so no collapse.
+    stampLocalChanges({ b: 'B', c: 'C' }, meta, 300)
+    expect(meta.a.deleted).toBe(true)
+    expect(meta.b.deleted).toBe(false)
+    expect(meta.c.deleted).toBe(false)
   })
 })
 
