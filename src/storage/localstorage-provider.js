@@ -116,7 +116,6 @@ function buildTree(paths) {
   const root = []
   const dirs = new Map() // path -> children array
   dirs.set('', root)
-
   for (const path of paths) {
     const parts = path.split('/')
     let parentPath = ''
@@ -138,4 +137,4 @@ function buildTree(paths) {
   return root
 }
 
-export { parseTodos }
+export { parseTodos, buildTree }
