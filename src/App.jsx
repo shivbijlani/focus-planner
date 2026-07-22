@@ -6436,6 +6436,33 @@ function App() {
     return () => { clearTimeout(treeTimer); unsub() }
   }, [])
 
+  // Refresh the sidebar tree when the tab regains focus/visibility. External
+  // processes (e.g. the overnight agent, or OneDrive/Drive sync from another
+  // device) can add journals to the folder while this tab is open. The browser
+  // cannot observe those filesystem writes — `onLocalChange` only fires for the
+  // app's own writes and sync pulls — so without this, externally-added files
+  // (e.g. an agent-created journal) stay invisible in the sidebar until a manual
+  // reload. Re-fetching the tree on focus/visibility picks them up as soon as
+  // the user returns to the tab. Debounced so a focus+visibility burst triggers
+  // only one reload. (task #371)
+  useEffect(() => {
+    let refreshTimer = null
+    const scheduleRefresh = () => {
+      clearTimeout(refreshTimer)
+      refreshTimer = setTimeout(() => { loadFiles().catch(() => {}) }, 300)
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') scheduleRefresh()
+    }
+    window.addEventListener('focus', scheduleRefresh)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      clearTimeout(refreshTimer)
+      window.removeEventListener('focus', scheduleRefresh)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [])
+
   const handleStorageReady = async (providerId) => {
     await initWithProvider(providerId)
   }
