@@ -10,9 +10,12 @@
  * SAFETY: the report NEVER includes secrets. For sync tokens it reports only the
  * provider id, expiry, and whether a refresh token exists — never the token
  * values themselves.
+ *
+ * NOTE: this module is imported by the low-level storage/write path
+ * (`storage.js`) to record events, so it must NOT statically import `storage.js`
+ * or `sources.js` (that would create an import cycle). It lazy-imports them
+ * inside `gatherDiagnostics()` instead.
  */
-import * as storage from './storage.js'
-import { getSources, getActiveSourceId, getActiveSource } from './sources.js'
 
 const PREFIX = 'fp-file:'
 const ENABLE_KEY = 'fp-diagnostics-enabled'
@@ -148,12 +151,18 @@ async function summarizeFolderSync() {
  */
 export async function gatherDiagnostics() {
   const d = { generatedAt: new Date().toISOString() }
-  try { d.build = storage.getBuildId() } catch (e) { d.buildError = String(e) }
+  // Lazy-imported here to avoid an import cycle with storage.js (which imports
+  // recordDiagnosticEvent from this module).
+  let storage = null
+  let sources = null
+  try { storage = await import('./storage.js') } catch { /* ignore */ }
+  try { sources = await import('./sources.js') } catch { /* ignore */ }
+  try { d.build = storage?.getBuildId?.() } catch (e) { d.buildError = String(e) }
   try { d.userAgent = navigator.userAgent } catch { /* ignore */ }
   try {
-    d.activeSourceId = getActiveSourceId()
-    d.activeProvider = getActiveSource()?.providerType ?? null
-    d.sources = getSources().map(s => ({ id: s.id, provider: s.providerType, name: s.name }))
+    d.activeSourceId = sources?.getActiveSourceId?.()
+    d.activeProvider = sources?.getActiveSource?.()?.providerType ?? null
+    d.sources = (sources?.getSources?.() ?? []).map(s => ({ id: s.id, provider: s.providerType, name: s.name }))
   } catch (e) { d.sourcesError = String(e) }
   try { d.localStorage = summarizeLocalStorage() } catch (e) { d.localStorageError = String(e) }
   try {
@@ -163,7 +172,7 @@ export async function gatherDiagnostics() {
     }
     if (navigator.storage?.persisted) d.storagePersisted = await navigator.storage.persisted()
   } catch (e) { d.estimateError = String(e) }
-  try { d.syncStatus = storage.getSyncStatus() } catch (e) { d.syncStatusError = String(e) }
+  try { d.syncStatus = storage?.getSyncStatus?.() } catch (e) { d.syncStatusError = String(e) }
   try { d.folderSync = await summarizeFolderSync() } catch (e) { d.folderSyncError = String(e) }
   d.diagnosticsEnabled = isDiagnosticsEnabled()
   d.recentEvents = getDiagnosticEvents()
