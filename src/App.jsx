@@ -4,7 +4,7 @@ import './App.css'
 import './mobile-board.css'
 import * as storage from './storage/storage.js'
 import { setActiveProvider, getActiveProvider, PROVIDERS, TARGET_STATUS, getProviderName } from './storage/storage.js'
-import { LocalStorageProvider } from './storage/localstorage-provider.js'
+import { IndexedDbProvider } from './storage/indexeddb-provider.js'
 import { resumePendingMigration, hasPendingMigration, makeProvider } from './storage/migrate.js'
 import {
   loadSources, migrateLegacy, getSources, getActiveSourceId, getActiveSource, setActiveSource,
@@ -6367,7 +6367,7 @@ function App() {
     const savedId = localStorage.getItem('fp-storage-provider')
     if (!savedId) {
       // Auto-bootstrap LocalStorage as the default first source.
-      const fallback = new LocalStorageProvider()
+      const fallback = new IndexedDbProvider()
       await fallback.restore()
       setActiveProvider(fallback)
       localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
@@ -6380,7 +6380,7 @@ function App() {
       setActiveProvider(provider)
       await initWithProvider(savedId)
     } else {
-      const fallback = new LocalStorageProvider()
+      const fallback = new IndexedDbProvider()
       await fallback.restore()
       setActiveProvider(fallback)
       localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
