@@ -2036,6 +2036,57 @@ tr.highlight-flash {
 }
 .jc-toggle-btn:hover { background: #1e3a5f; color: #fff; }
 
+/* Journal/Chat view switcher. Desktop: a two-button segmented control with both
+   buttons always visible (active highlighted). Mobile (<=768px or coarse
+   pointer): collapses to a single toggle showing only the inactive button —
+   the view you're NOT in — matching the original one-button behaviour. */
+.jc-view-switch {
+  display: inline-flex;
+  gap: 2px;
+  background: #0b2545;
+  border: 1px solid #1e3a5f;
+  border-radius: 8px;
+  padding: 2px;
+  flex-shrink: 0;
+}
+.jc-switch-btn {
+  background: transparent;
+  color: #cbd5e1;
+  border: none;
+  padding: 0.3rem 0.65rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  transition: background 0.2s, color 0.2s;
+}
+.jc-switch-btn:hover { color: #fff; }
+.jc-switch-btn.active {
+  background: #1e3a5f;
+  color: #fff;
+}
+
+@media (max-width: 768px), (pointer: coarse) {
+  /* Collapse the segmented control back to a single toggle: hide the active
+     button, keep only the one that switches you to the other view, and restore
+     the old single-button look. */
+  .jc-view-switch {
+    background: transparent;
+    border: none;
+    padding: 0;
+    gap: 0;
+  }
+  .jc-switch-btn.active { display: none; }
+  .jc-switch-btn {
+    background: #0f3460;
+    color: #cbd5e1;
+    border: 1px solid #1e3a5f;
+    padding: 0.35rem 0.7rem;
+    border-radius: 6px;
+  }
+  .jc-switch-btn:hover { background: #1e3a5f; color: #fff; }
+}
+
 /* Unified app bar: back · avatar · title/sub · Raw — one compact row that
    replaces the old big editor-header + centered identity block. */
 .jc-appbar {

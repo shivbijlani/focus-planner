@@ -3938,6 +3938,31 @@ function renderJournalLines(lines, onNavigate, onToggle, ctx) {
   return out
 }
 
+// View switcher between the Chat thread and the raw Journal (markdown source).
+// Desktop (>768px / fine pointer): a two-button segmented control with both
+// "Journal" and "Chat" always visible, active one highlighted. Mobile (<=768px
+// or coarse pointer): collapses via CSS to a single toggle showing only the
+// view you're NOT in — matching the original one-button behaviour. Both drive
+// off the same showRaw state (Journal = showRaw:true, Chat = showRaw:false).
+function JournalChatToggle({ showRaw, setShowRaw }) {
+  return (
+    <div className="jc-view-switch" role="group" aria-label="Switch between Journal and Chat views">
+      <button
+        className={`jc-switch-btn${showRaw ? ' active' : ''}`}
+        onClick={() => setShowRaw(true)}
+        title="Journal (raw markdown source)"
+        aria-pressed={showRaw}
+      >📔 Journal</button>
+      <button
+        className={`jc-switch-btn${!showRaw ? ' active' : ''}`}
+        onClick={() => setShowRaw(false)}
+        title="Chat thread"
+        aria-pressed={!showRaw}
+      >💬 Chat</button>
+    </div>
+  )
+}
+
 // Append a new "me" message to journal markdown, merging into today's bubble.
 function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpenSidebar }) {
   const [showRaw, setShowRaw] = useState(false)
@@ -4031,7 +4056,7 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
         filePath={filePath}
         onContentUpdate={onContentUpdate}
         onNavigate={onNavigate}
-        headerExtra={<button className="jc-toggle-btn" onClick={() => setShowRaw(false)}>💬 Chat</button>}
+        headerExtra={<JournalChatToggle showRaw={showRaw} setShowRaw={setShowRaw} />}
       />
     )
   }
@@ -4089,7 +4114,7 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
           <div className="jc-appbar-title" title={title}>{title}</div>
           <div className="jc-appbar-sub">Notes to self</div>
         </div>
-        <button className="jc-toggle-btn" onClick={() => setShowRaw(true)} title="Edit raw markdown">✎ Raw</button>
+        <JournalChatToggle showRaw={showRaw} setShowRaw={setShowRaw} />
       </div>
 
       <div className="jc-thread" ref={threadRef}>
