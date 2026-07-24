@@ -20,7 +20,7 @@
      3 = Task (name + 📓 + lead-up ▶ preview)
      4 = Work Priority
      5 = Age
-     last (.row-actions-cell) = 📓 journal + ⋯ kebab  (mobile only)
+     last (.row-actions-cell) = 📔 journal + 💬 chat + ⋯ kebab  (mobile only)
    ────────────────────────────────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
@@ -175,6 +175,7 @@
   }
   .task-table:not(.completed-table) tbody tr:not(.todo-row) > td.row-actions-cell .row-actions {
     flex-direction: row;
+    flex-wrap: wrap; /* #373: 3 icons (📔 💬 ⋯) — journal+chat sit on top, kebab wraps below */
     align-items: center;
     justify-content: center;
     gap: 2px;

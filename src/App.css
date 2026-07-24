@@ -1285,6 +1285,16 @@ tr.highlight-flash {
   opacity: 1;
 }
 
+/* #373: the task list row shows two entry-point icons side by side — a Journal
+   (notes) icon and a Chat icon. This wrapper keeps them snug and vertically
+   centred next to the task title. */
+.journal-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  margin-left: 0.35em;
+}
+
 /* Task #352 (v3): a single Teams-style presence badge overlaid on the journal
    icon's bottom-right corner. Only ONE badge is ever shown — the Telegram/chat
    badge (💬) takes precedence over the unread "journal-new" badge (★). It sits
