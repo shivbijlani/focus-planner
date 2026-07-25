@@ -1202,9 +1202,9 @@ tr.highlight-flash {
   min-width: 0;
 }
 
-/* Mobile row actions (#335): journal + kebab live in their own trailing table
+/* Mobile row actions (#335): chat + kebab live in their own trailing table
    column at the row's right edge — the kebab sits all the way right and the
-   journal just before it — as real 40px tap targets. Replaces the old in-cell
+   chat just before it — as real 40px tap targets. Replaces the old in-cell
    group (and the even older absolutely-positioned kebab that overlapped the
    journal icon). */
 .row-actions-cell {

@@ -1602,8 +1602,8 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
           
           return <td key={i}>{renderCellWithTooltips(cellValue, onNavigate)}</td>
         })}
-        {/* Mobile (#335): journal + kebab get their own trailing column at the
-            row's right edge — kebab all the way right, journal just before it —
+        {/* Mobile (#335): chat + kebab get their own trailing column at the
+            row's right edge — kebab all the way right, chat just before it —
             with real 40px tap targets that never overlap the task text. */}
         {isMobile && (
           <td className="row-actions-cell">
@@ -1611,52 +1611,37 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
               <>
                 <div className="row-actions">
                   {journalPath && (
-                    <>
-                      {/* #373: two entry points on the task list row — Journal
-                          (raw notes) and Chat. They wrap within the rail. */}
-                      <a
-                        href="#"
-                        className="row-action-btn journal-action"
-                        aria-label="Open Journal (notes)"
-                        title="Open Journal (notes)"
-                        onClick={(e) => {
-                          e.preventDefault()
-                          readStateService.emitJournalOpened(taskId)
-                          onNavigate(journalPath, null, 'journal')
-                        }}
-                      >📔</a>
-                      <a
-                        href={telegram?.url || '#'}
-                        className={`row-action-btn chat-action${telegram?.url ? ' journal-action-tg' : ''}`}
-                        aria-label={telegram?.url ? 'Open Telegram chat thread' : 'Open Chat'}
-                        title={telegram?.url ? 'Open Telegram chat thread' : 'Open Chat'}
-                        {...(telegram?.url ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-                        onClick={(e) => {
-                          // Telegram-active tasks: the Chat icon opens the
-                          // Telegram thread instead of the in-app chat (task #352).
-                          if (telegram?.url) { e.stopPropagation(); return }
-                          e.preventDefault()
-                          readStateService.emitJournalOpened(taskId)
-                          onNavigate(journalPath, null, 'chat')
-                        }}
-                      >
-                        💬
-                        {/* Task #352: single presence-style badge; Telegram supersedes unread. */}
-                        {telegram?.url ? (
-                          <span
-                            className="journal-badge journal-badge-tg"
-                            aria-label="Mirrored to Telegram — opens the Telegram thread"
-                            title="Mirrored to Telegram — opens the Telegram thread"
-                          >↗</span>
-                        ) : isJournalUnread ? (
-                          <span
-                            className="journal-badge journal-badge-unread"
-                            aria-label="New journal entries since you last opened this"
-                            title="New entries since you last opened this"
-                          >★</span>
-                        ) : null}
-                      </a>
-                    </>
+                    <a
+                      href={telegram?.url || '#'}
+                      className={`row-action-btn chat-action${telegram?.url ? ' journal-action-tg' : ''}`}
+                      aria-label={telegram?.url ? 'Open Telegram chat thread' : 'Open Chat'}
+                      title={telegram?.url ? 'Open Telegram chat thread' : 'Open Chat'}
+                      {...(telegram?.url ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+                      onClick={(e) => {
+                        // Telegram-active tasks: the Chat icon opens the
+                        // Telegram thread instead of the in-app chat (task #352).
+                        if (telegram?.url) { e.stopPropagation(); return }
+                        e.preventDefault()
+                        readStateService.emitJournalOpened(taskId)
+                        onNavigate(journalPath, null, 'chat')
+                      }}
+                    >
+                      💬
+                      {/* Task #352: single presence-style badge; Telegram supersedes unread. */}
+                      {telegram?.url ? (
+                        <span
+                          className="journal-badge journal-badge-tg"
+                          aria-label="Mirrored to Telegram — opens the Telegram thread"
+                          title="Mirrored to Telegram — opens the Telegram thread"
+                        >↗</span>
+                      ) : isJournalUnread ? (
+                        <span
+                          className="journal-badge journal-badge-unread"
+                          aria-label="New journal entries since you last opened this"
+                          title="New entries since you last opened this"
+                        >★</span>
+                      ) : null}
+                    </a>
                   )}
                   <button
                     type="button"
@@ -1898,6 +1883,19 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       icon: '✅',
       action: () => onMoveToCompleted(rawLine, row, title)
     })
+
+    // Mobile #373 revision: Journal stays available, but lives in the kebab
+    // sheet so the row rail only shows Chat + ⋯.
+    if (isMobile && journalPath && taskId) {
+      options.push({
+        label: 'Open journal',
+        icon: '📔',
+        action: () => {
+          readStateService.emitJournalOpened(taskId)
+          onNavigate(journalPath, null, 'journal')
+        }
+      })
+    }
     
     // Add "Create Journal" option if no journal exists and we have a task ID
     if (!journalPath && taskId) {
