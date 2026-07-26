@@ -1611,37 +1611,50 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
               <>
                 <div className="row-actions">
                   {journalPath && (
-                    <a
-                      href={telegram?.url || '#'}
-                      className={`row-action-btn chat-action${telegram?.url ? ' journal-action-tg' : ''}`}
-                      aria-label={telegram?.url ? 'Open Telegram chat thread' : 'Open Chat'}
-                      title={telegram?.url ? 'Open Telegram chat thread' : 'Open Chat'}
-                      {...(telegram?.url ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-                      onClick={(e) => {
-                        // Telegram-active tasks: the Chat icon opens the
-                        // Telegram thread instead of the in-app chat (task #352).
-                        if (telegram?.url) { e.stopPropagation(); return }
-                        e.preventDefault()
-                        readStateService.emitJournalOpened(taskId)
-                        onNavigate(journalPath, null, 'chat')
-                      }}
-                    >
-                      💬
-                      {/* Task #352: single presence-style badge; Telegram supersedes unread. */}
-                      {telegram?.url ? (
+                    telegram?.url ? (
+                      // #352: Telegram-active tasks show the 💬 Chat icon, which
+                      // opens the Telegram thread externally (↗ badge).
+                      <a
+                        href={telegram.url}
+                        className="row-action-btn chat-action journal-action-tg"
+                        aria-label="Open Telegram chat thread"
+                        title="Open Telegram chat thread"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => { e.stopPropagation() }}
+                      >
+                        💬
                         <span
                           className="journal-badge journal-badge-tg"
                           aria-label="Mirrored to Telegram — opens the Telegram thread"
                           title="Mirrored to Telegram — opens the Telegram thread"
                         >↗</span>
-                      ) : isJournalUnread ? (
-                        <span
-                          className="journal-badge journal-badge-unread"
-                          aria-label="New journal entries since you last opened this"
-                          title="New entries since you last opened this"
-                        >★</span>
-                      ) : null}
-                    </a>
+                      </a>
+                    ) : (
+                      // #373: with no Telegram, the single mobile rail icon falls
+                      // back to 📔 Journal (opens the raw notes view); in-app Chat
+                      // moves into the ⋯ kebab sheet.
+                      <a
+                        href="#"
+                        className="row-action-btn journal-action"
+                        aria-label="Open Journal"
+                        title="Open Journal"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          readStateService.emitJournalOpened(taskId)
+                          onNavigate(journalPath, null, 'journal')
+                        }}
+                      >
+                        📔
+                        {isJournalUnread ? (
+                          <span
+                            className="journal-badge journal-badge-unread"
+                            aria-label="New journal entries since you last opened this"
+                            title="New entries since you last opened this"
+                          >★</span>
+                        ) : null}
+                      </a>
+                    )
                   )}
                   <button
                     type="button"
@@ -1884,17 +1897,29 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       action: () => onMoveToCompleted(rawLine, row, title)
     })
 
-    // Mobile #373 revision: Journal stays available, but lives in the kebab
-    // sheet so the row rail only shows Chat + ⋯.
+    // Mobile #373: the rail shows ONE icon; its counterpart lives in the kebab.
+    // With Telegram the rail icon is 💬 Chat → Telegram, so 📔 Journal goes here.
+    // Without Telegram the rail falls back to 📔 Journal, so in-app 💬 Chat goes here.
     if (isMobile && journalPath && taskId) {
-      options.push({
-        label: 'Open journal',
-        icon: '📔',
-        action: () => {
-          readStateService.emitJournalOpened(taskId)
-          onNavigate(journalPath, null, 'journal')
-        }
-      })
+      if (telegram?.url) {
+        options.push({
+          label: 'Open journal',
+          icon: '📔',
+          action: () => {
+            readStateService.emitJournalOpened(taskId)
+            onNavigate(journalPath, null, 'journal')
+          }
+        })
+      } else {
+        options.push({
+          label: 'Open chat',
+          icon: '💬',
+          action: () => {
+            readStateService.emitJournalOpened(taskId)
+            onNavigate(journalPath, null, 'chat')
+          }
+        })
+      }
     }
     
     // Add "Create Journal" option if no journal exists and we have a task ID
