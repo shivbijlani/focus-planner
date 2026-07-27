@@ -63,19 +63,27 @@ describe('mdToTelegramHtml', () => {
     expect(mdToTelegramHtml('> quoted line')).toBe('<blockquote>quoted line</blockquote>')
   })
 
-  it('handles a realistic agent turn without leaving markdown asterisks', () => {
-    const md = [
-      '**Status:** Proposed · plan v1',
-      '',
-      '### Proposed plan (v1)',
-      '- read the **spec**',
-      'see [file](./x.md) and `code`',
-    ].join('\n')
+  it('renders a markdown table as an aligned monospace <pre> grid', () => {
+    const md = ['| Item | Source |', '|---|---|', '| Red loafers | **You** |', '| Slides | Agent |'].join(
+      '\n',
+    )
     const out = mdToTelegramHtml(md)
-    expect(out).toContain('<b>Status:</b>')
-    expect(out).toContain('<b>Proposed plan (v1)</b>')
-    expect(out).toContain('\u2022 read the <b>spec</b>')
-    expect(out).toContain('<code>code</code>')
-    expect(out).not.toMatch(/\*\*/)
+    expect(out).toBe(
+      '<pre>Item         Source\n-----------  ------\nRed loafers  You\nSlides       Agent</pre>',
+    )
+    // no literal markdown pipes/asterisks leak through
+    expect(out).not.toContain('|')
+    expect(out).not.toContain('**')
   })
+
+  it('handles tables without outer pipes and colon-aligned separators', () => {
+    const md = ['a | b', ':--- | ---:', '1 | 2'].join('\n')
+    const out = mdToTelegramHtml(md)
+    expect(out).toBe('<pre>a  b\n-  -\n1  2</pre>')
+  })
+
+  it('does not treat a lone piped line (no separator) as a table', () => {
+    expect(mdToTelegramHtml('a | b | c')).toBe('a | b | c')
+  })
+
 })
