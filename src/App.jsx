@@ -1498,7 +1498,19 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                                 readStateService.emitJournalOpened(taskId)
                                 onNavigate(journalPath, null, 'journal')
                               }}
-                            >📔</a>
+                            >
+                              📔
+                              {/* #373: the unread (★) presence badge belongs on the
+                                  Journal icon — that's the surface with new entries —
+                                  not on 💬 Chat. Teams-style corner overlay. */}
+                              {isJournalUnread ? (
+                                <span
+                                  className="journal-badge journal-badge-unread"
+                                  aria-label="New journal entries since you last opened this"
+                                  title="New entries since you last opened this"
+                                >★</span>
+                              ) : null}
+                            </a>
                             <a
                               href={telegram?.url || '#'}
                               className={`journal-link journal-link-chat${telegram?.url ? ' journal-link-tg' : ''}`}
@@ -1514,20 +1526,15 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                               }}
                             >
                               💬
-                              {/* Task #352: a single presence-style badge. The
-                                  Telegram badge supersedes the unread badge. */}
+                              {/* #373: on the Chat icon only the Telegram (↗) presence
+                                  badge is shown — it signals the chat opens the Telegram
+                                  thread. The unread ★ lives on the Journal icon instead. */}
                               {telegram?.url ? (
                                 <span
                                   className="journal-badge journal-badge-tg"
                                   aria-label="Mirrored to Telegram — opens the Telegram thread"
                                   title="Mirrored to Telegram — opens the Telegram thread"
                                 >↗</span>
-                              ) : isJournalUnread ? (
-                                <span
-                                  className="journal-badge journal-badge-unread"
-                                  aria-label="New journal entries since you last opened this"
-                                  title="New entries since you last opened this"
-                                >★</span>
                               ) : null}
                             </a>
                           </span>
