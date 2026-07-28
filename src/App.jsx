@@ -1526,16 +1526,10 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                               }}
                             >
                               💬
-                              {/* #373: on the Chat icon only the Telegram (↗) presence
-                                  badge is shown — it signals the chat opens the Telegram
-                                  thread. The unread ★ lives on the Journal icon instead. */}
-                              {telegram?.url ? (
-                                <span
-                                  className="journal-badge journal-badge-tg"
-                                  aria-label="Mirrored to Telegram — opens the Telegram thread"
-                                  title="Mirrored to Telegram — opens the Telegram thread"
-                                >↗</span>
-                              ) : null}
+                              {/* #373: the Chat icon carries no presence badge — the ↗
+                                  Telegram pip was removed per feedback. The icon still
+                                  opens the Telegram thread when one exists; the unread ★
+                                  lives on the Journal icon. */}
                             </a>
                           </span>
                         )}
@@ -1631,11 +1625,6 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                         onClick={(e) => { e.stopPropagation() }}
                       >
                         💬
-                        <span
-                          className="journal-badge journal-badge-tg"
-                          aria-label="Mirrored to Telegram — opens the Telegram thread"
-                          title="Mirrored to Telegram — opens the Telegram thread"
-                        >↗</span>
                       </a>
                     ) : (
                       // #373: with no Telegram, the single mobile rail icon falls
@@ -1652,14 +1641,18 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                           onNavigate(journalPath, null, 'journal')
                         }}
                       >
-                        📔
-                        {isJournalUnread ? (
-                          <span
-                            className="journal-badge journal-badge-unread"
-                            aria-label="New journal entries since you last opened this"
-                            title="New entries since you last opened this"
-                          >★</span>
-                        ) : null}
+                        {/* #373: wrap glyph + pip so the ★ hugs the emoji corner (like
+                            desktop) instead of floating in the 36px tap target. */}
+                        <span className="journal-glyph">
+                          📔
+                          {isJournalUnread ? (
+                            <span
+                              className="journal-badge journal-badge-unread"
+                              aria-label="New journal entries since you last opened this"
+                              title="New entries since you last opened this"
+                            >★</span>
+                          ) : null}
+                        </span>
                       </a>
                     )
                   )}

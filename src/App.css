@@ -1304,6 +1304,17 @@ tr.highlight-flash {
   position: relative; /* anchor the badge on the mobile icon button too */
 }
 
+/* #373: a glyph-sized wrapper so the presence pip anchors to the emoji's corner
+   even inside a larger tap target (mobile 36px button) — giving the same tight
+   overlap the desktop icon has. */
+.journal-glyph {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
 .journal-badge {
   position: absolute;
   bottom: -0.4em;
