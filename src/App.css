@@ -1306,7 +1306,7 @@ tr.highlight-flash {
 
 .journal-badge {
   position: absolute;
-  top: -0.4em;
+  bottom: -0.4em;
   right: -0.4em;
   min-width: 1.15em;
   height: 1.15em;
@@ -1319,9 +1319,9 @@ tr.highlight-flash {
   line-height: 1;
   border-radius: 999px;
   pointer-events: none;
-  /* #373: a filled circular pip pinned to the icon's top-right corner with a
-     ring in the row background — reads as a floating Teams-style presence
-     overlay on the icon rather than a glyph sitting beside it. */
+  /* #373: a filled circular pip pinned to the icon's BOTTOM-right corner (like a
+     Teams presence dot) with a ring in the row background — reads as a floating
+     Teams-style presence overlay on the icon rather than a glyph beside it. */
   box-shadow: 0 0 0 1.5px #0d1b35;
 }
 
