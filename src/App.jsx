@@ -1485,38 +1485,53 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                           </span>
                         )}
                         {journalPath && !isMobile && (
-                          <a
-                            href={telegram?.url || '#'}
-                            className={`journal-link${telegram?.url ? ' journal-link-tg' : ''}`}
-                            title={telegram?.url ? 'Open Telegram thread' : 'Open journal'}
-                            {...(telegram?.url ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-                            onClick={(e) => {
-                              // Telegram-active tasks: the journal icon opens the
-                              // Telegram thread instead of the journal (task #352).
-                              if (telegram?.url) { e.stopPropagation(); return }
-                              e.preventDefault()
-                              readStateService.emitJournalOpened(taskId)
-                              onNavigate(journalPath)
-                            }}
-                          >
-                            📓
-                            {/* Task #352: a single presence-style badge. The
-                                Telegram/chat badge supersedes the unread badge,
-                                so only one is ever shown. */}
-                            {telegram?.url ? (
-                              <span
-                                className="journal-badge journal-badge-tg"
-                                aria-label="Mirrored to Telegram — opens the Telegram thread"
-                                title="Mirrored to Telegram — opens the Telegram thread"
-                              >💬</span>
-                            ) : isJournalUnread ? (
-                              <span
-                                className="journal-badge journal-badge-unread"
-                                aria-label="New journal entries since you last opened this"
-                                title="New entries since you last opened this"
-                              >★</span>
-                            ) : null}
-                          </a>
+                          <span className="journal-icons">
+                            {/* #373: the task list row offers two entry points —
+                                a Journal (raw notes) icon and a Chat icon — so you
+                                can jump straight to either view of the task. */}
+                            <a
+                              href="#"
+                              className="journal-link journal-link-note"
+                              title="Open Journal (notes)"
+                              onClick={(e) => {
+                                e.preventDefault()
+                                readStateService.emitJournalOpened(taskId)
+                                onNavigate(journalPath, null, 'journal')
+                              }}
+                            >
+                              📔
+                              {/* #373: the unread (★) presence badge belongs on the
+                                  Journal icon — that's the surface with new entries —
+                                  not on 💬 Chat. Teams-style corner overlay. */}
+                              {isJournalUnread ? (
+                                <span
+                                  className="journal-badge journal-badge-unread"
+                                  aria-label="New journal entries since you last opened this"
+                                  title="New entries since you last opened this"
+                                >★</span>
+                              ) : null}
+                            </a>
+                            <a
+                              href={telegram?.url || '#'}
+                              className={`journal-link journal-link-chat${telegram?.url ? ' journal-link-tg' : ''}`}
+                              title={telegram?.url ? 'Open Telegram chat thread' : 'Open Chat'}
+                              {...(telegram?.url ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+                              onClick={(e) => {
+                                // Telegram-active tasks: the Chat icon opens the
+                                // Telegram thread instead of the in-app chat (task #352).
+                                if (telegram?.url) { e.stopPropagation(); return }
+                                e.preventDefault()
+                                readStateService.emitJournalOpened(taskId)
+                                onNavigate(journalPath, null, 'chat')
+                              }}
+                            >
+                              💬
+                              {/* #373: the Chat icon carries no presence badge — the ↗
+                                  Telegram pip was removed per feedback. The icon still
+                                  opens the Telegram thread when one exists; the unread ★
+                                  lives on the Journal icon. */}
+                            </a>
+                          </span>
                         )}
                       </span>
                     )}
@@ -1588,8 +1603,8 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
           
           return <td key={i}>{renderCellWithTooltips(cellValue, onNavigate)}</td>
         })}
-        {/* Mobile (#335): journal + kebab get their own trailing column at the
-            row's right edge — kebab all the way right, journal just before it —
+        {/* Mobile (#335): chat + kebab get their own trailing column at the
+            row's right edge — kebab all the way right, chat just before it —
             with real 40px tap targets that never overlap the task text. */}
         {isMobile && (
           <td className="row-actions-cell">
@@ -1597,37 +1612,49 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
               <>
                 <div className="row-actions">
                   {journalPath && (
-                    <a
-                      href={telegram?.url || '#'}
-                      className={`row-action-btn journal-action${telegram?.url ? ' journal-action-tg' : ''}`}
-                      aria-label={telegram?.url ? 'Open Telegram thread' : 'Open journal'}
-                      title={telegram?.url ? 'Open Telegram thread' : 'Open journal'}
-                      {...(telegram?.url ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-                      onClick={(e) => {
-                        // Telegram-active tasks: the journal icon opens the
-                        // Telegram thread instead of the journal (task #352).
-                        if (telegram?.url) { e.stopPropagation(); return }
-                        e.preventDefault()
-                        readStateService.emitJournalOpened(taskId)
-                        onNavigate(journalPath)
-                      }}
-                    >
-                      📓
-                      {/* Task #352: single presence-style badge; chat supersedes unread. */}
-                      {telegram?.url ? (
-                        <span
-                          className="journal-badge journal-badge-tg"
-                          aria-label="Mirrored to Telegram — opens the Telegram thread"
-                          title="Mirrored to Telegram — opens the Telegram thread"
-                        >💬</span>
-                      ) : isJournalUnread ? (
-                        <span
-                          className="journal-badge journal-badge-unread"
-                          aria-label="New journal entries since you last opened this"
-                          title="New entries since you last opened this"
-                        >★</span>
-                      ) : null}
-                    </a>
+                    telegram?.url ? (
+                      // #352: Telegram-active tasks show the 💬 Chat icon, which
+                      // opens the Telegram thread externally (↗ badge).
+                      <a
+                        href={telegram.url}
+                        className="row-action-btn chat-action journal-action-tg"
+                        aria-label="Open Telegram chat thread"
+                        title="Open Telegram chat thread"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => { e.stopPropagation() }}
+                      >
+                        💬
+                      </a>
+                    ) : (
+                      // #373: with no Telegram, the single mobile rail icon falls
+                      // back to 📔 Journal (opens the raw notes view); in-app Chat
+                      // moves into the ⋯ kebab sheet.
+                      <a
+                        href="#"
+                        className="row-action-btn journal-action"
+                        aria-label="Open Journal"
+                        title="Open Journal"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          readStateService.emitJournalOpened(taskId)
+                          onNavigate(journalPath, null, 'journal')
+                        }}
+                      >
+                        {/* #373: wrap glyph + pip so the ★ hugs the emoji corner (like
+                            desktop) instead of floating in the 36px tap target. */}
+                        <span className="journal-glyph">
+                          📔
+                          {isJournalUnread ? (
+                            <span
+                              className="journal-badge journal-badge-unread"
+                              aria-label="New journal entries since you last opened this"
+                              title="New entries since you last opened this"
+                            >★</span>
+                          ) : null}
+                        </span>
+                      </a>
+                    )
                   )}
                   <button
                     type="button"
@@ -1869,6 +1896,31 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       icon: '✅',
       action: () => onMoveToCompleted(rawLine, row, title)
     })
+
+    // Mobile #373: the rail shows ONE icon; its counterpart lives in the kebab.
+    // With Telegram the rail icon is 💬 Chat → Telegram, so 📔 Journal goes here.
+    // Without Telegram the rail falls back to 📔 Journal, so in-app 💬 Chat goes here.
+    if (isMobile && journalPath && taskId) {
+      if (telegram?.url) {
+        options.push({
+          label: 'Open journal',
+          icon: '📔',
+          action: () => {
+            readStateService.emitJournalOpened(taskId)
+            onNavigate(journalPath, null, 'journal')
+          }
+        })
+      } else {
+        options.push({
+          label: 'Open chat',
+          icon: '💬',
+          action: () => {
+            readStateService.emitJournalOpened(taskId)
+            onNavigate(journalPath, null, 'chat')
+          }
+        })
+      }
+    }
     
     // Add "Create Journal" option if no journal exists and we have a task ID
     if (!journalPath && taskId) {
@@ -3938,9 +3990,41 @@ function renderJournalLines(lines, onNavigate, onToggle, ctx) {
   return out
 }
 
+// View switcher between the Chat thread and the raw Journal (markdown source).
+// Desktop (>768px / fine pointer): a two-button segmented control with both
+// "Journal" and "Chat" always visible, active one highlighted. Mobile (<=768px
+// or coarse pointer): collapses via CSS to a single toggle showing only the
+// view you're NOT in — matching the original one-button behaviour. Both drive
+// off the same showRaw state (Journal = showRaw:true, Chat = showRaw:false).
+function JournalChatToggle({ showRaw, setShowRaw }) {
+  // #373: a single "switch to the other view" button. You never see a button
+  // for the view you're already on — on Chat you're offered Journal, and on
+  // Journal (raw) you're offered Chat. The two-icon picker lives on the task
+  // list page instead (see the board row icons).
+  return (
+    <div className="jc-view-switch" role="group" aria-label="Switch between Journal and Chat views">
+      {showRaw ? (
+        <button
+          className="jc-switch-btn"
+          onClick={() => setShowRaw(false)}
+          title="Switch to Chat thread"
+        >💬 Chat</button>
+      ) : (
+        <button
+          className="jc-switch-btn"
+          onClick={() => setShowRaw(true)}
+          title="Switch to Journal (raw markdown source)"
+        >📔 Journal</button>
+      )}
+    </div>
+  )
+}
+
 // Append a new "me" message to journal markdown, merging into today's bubble.
-function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpenSidebar }) {
-  const [showRaw, setShowRaw] = useState(false)
+function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpenSidebar, initialView = 'chat' }) {
+  // #373: the view the task list icons chose to open. 'journal' opens the raw
+  // markdown source; anything else opens the chat thread.
+  const [showRaw, setShowRaw] = useState(initialView === 'journal')
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [showAttachmentDialog, setShowAttachmentDialog] = useState(false)
@@ -3948,6 +4032,11 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
   const inputRef = useRef(null)
   const parsed = useMemo(() => parseJournalChat(content), [content])
   const taskId = taskIdFromJournalPath(filePath)
+
+  // Re-honour the requested view when the task or the caller's choice changes.
+  useEffect(() => {
+    setShowRaw(initialView === 'journal')
+  }, [filePath, initialView])
 
   useEffect(() => {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight
@@ -4031,7 +4120,7 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
         filePath={filePath}
         onContentUpdate={onContentUpdate}
         onNavigate={onNavigate}
-        headerExtra={<button className="jc-toggle-btn" onClick={() => setShowRaw(false)}>💬 Chat</button>}
+        headerExtra={<JournalChatToggle showRaw={showRaw} setShowRaw={setShowRaw} />}
       />
     )
   }
@@ -4089,7 +4178,7 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
           <div className="jc-appbar-title" title={title}>{title}</div>
           <div className="jc-appbar-sub">Notes to self</div>
         </div>
-        <button className="jc-toggle-btn" onClick={() => setShowRaw(true)} title="Edit raw markdown">✎ Raw</button>
+        <JournalChatToggle showRaw={showRaw} setShowRaw={setShowRaw} />
       </div>
 
       <div className="jc-thread" ref={threadRef}>
@@ -6211,6 +6300,8 @@ function App() {
   const boardScrollRef = useRef(0)
   const [pendingBoardScrollRestore, setPendingBoardScrollRestore] = useState(false)
   const [pendingScrollToTaskId, setPendingScrollToTaskId] = useState(null)
+  // #373: which view (chat|journal) the task list icons asked to open into.
+  const [journalInitialView, setJournalInitialView] = useState('chat')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   // Board search query, lifted so the mobile header can host the search input
   // (#284) while FocusPlanView still owns the filtering logic.
@@ -6569,8 +6660,10 @@ function App() {
     await initWithProvider(providerId)
   }
 
-  const handleNavigate = (path, scrollToTaskId) => {
+  const handleNavigate = (path, scrollToTaskId, initialView) => {
     if (scrollToTaskId) setPendingScrollToTaskId(scrollToTaskId)
+    // #373: honour the icon that was clicked (Journal vs Chat). Default to chat.
+    setJournalInitialView(initialView === 'journal' ? 'journal' : 'chat')
     handleSelectFile(path)
   }
 
@@ -6772,6 +6865,7 @@ function App() {
               onContentUpdate={handleContentUpdate}
               onNavigate={handleNavigate}
               onOpenSidebar={() => setSidebarOpen(true)}
+              initialView={journalInitialView}
             />
           ) : (
             <MarkdownView
