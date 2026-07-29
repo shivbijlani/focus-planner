@@ -1486,17 +1486,18 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                         )}
                         {journalPath && !isMobile && (
                           <span className="journal-icons">
-                            {/* #373: the task list row offers two entry points —
-                                a Journal (raw notes) icon and a Chat icon — so you
-                                can jump straight to either view of the task. */}
+                            {/* #373/#389: the task list row offers two entry points —
+                                a Journal icon and a Chat icon. #389: the 📔 Journal
+                                icon opens the readable journal (chat thread) — the raw
+                                markdown source is one tap away via the in-view toggle. */}
                             <a
                               href="#"
                               className="journal-link journal-link-note"
-                              title="Open Journal (notes)"
+                              title="Open Journal"
                               onClick={(e) => {
                                 e.preventDefault()
                                 readStateService.emitJournalOpened(taskId)
-                                onNavigate(journalPath, null, 'journal')
+                                onNavigate(journalPath, null, 'chat')
                               }}
                             >
                               📔
@@ -1628,8 +1629,8 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                       </a>
                     ) : (
                       // #373: with no Telegram, the single mobile rail icon falls
-                      // back to 📔 Journal (opens the raw notes view); in-app Chat
-                      // moves into the ⋯ kebab sheet.
+                      // back to 📔 Journal; #389: it opens the readable journal (chat
+                      // thread), with raw source a tap away via the in-view toggle.
                       <a
                         href="#"
                         className="row-action-btn journal-action"
@@ -1638,7 +1639,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                         onClick={(e) => {
                           e.preventDefault()
                           readStateService.emitJournalOpened(taskId)
-                          onNavigate(journalPath, null, 'journal')
+                          onNavigate(journalPath, null, 'chat')
                         }}
                       >
                         {/* #373: wrap glyph + pip so the ★ hugs the emoji corner (like
@@ -1907,7 +1908,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
           icon: '📔',
           action: () => {
             readStateService.emitJournalOpened(taskId)
-            onNavigate(journalPath, null, 'journal')
+            onNavigate(journalPath, null, 'chat')
           }
         })
       } else {
