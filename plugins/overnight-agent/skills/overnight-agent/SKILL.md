@@ -112,6 +112,11 @@ you last left it. On the next `scan`:
 - **`reopened: false` + `changed: false`** means you spoke last and nothing changed — leave it alone.
 - **`has_agent_block: false`** means there's no plan yet — a PHASE 2 propose candidate (subject to the
   board, below).
+- **`snoozed: true`** (with `snooze_until: YYYY-MM-DD`) means the user snoozed this task via the #353
+  snooze feature (a `<!-- snooze:DATE -->` marker on its board row) and its date hasn't passed yet.
+  **Leave it alone** — don't propose, execute, or re-plan it — until the snooze expires or the user
+  reopens it. The one override: if `reopened: true`, a fresh user reply beats the snooze — read the new
+  message and act. (This is the fix for #391: the agent must stop touching snoozed tasks.)
 
 You **do not** ask the user to tick a box or edit a marker. Approve / revise / skip are just things they
 **say** in plain English; you interpret intent (see "Reading the user's decision"). If `scan` and a
@@ -233,8 +238,10 @@ Do the phases **in this order** every time.
 
 > **Scan first (applies to PHASE 1 *and* PHASE 2):** before judging any task, run
 > `oa-state.ps1 scan` once and use its JSON as your worklist. Each row tells you what changed and
-> what's `reopened` (the user spoke after your last turn — active again, even if `done`/`skip`). Don't
-> reconstruct state by eyeballing 90+ journals; let the tool point you at the handful that need work.
+> what's `reopened` (the user spoke after your last turn — active again, even if `done`/`skip`), plus
+> `snoozed` (the user snoozed it via #353 and the date hasn't passed — skip it unless it's also
+> `reopened`). Don't reconstruct state by eyeballing 90+ journals; let the tool point you at the handful
+> that need work.
 
 ### PHASE 0 — Check the agent inbox (do this before everything)
 
@@ -323,7 +330,9 @@ If a linked journal is missing or empty, note it and proceed with what you have 
 1. From the `scan` worklist, collect tasks whose stored `status` is `approved` (also continue any
    `in-progress` whose next step is approved), **plus any `reopened` task whose newest user message is an
    approval** (e.g. "approve", "go ahead" appended at the bottom — interpret per "Reading the user's
-   decision"). Use `oa-state.ps1 get -Id <ID>` if you need a task's full state.
+   decision"). Use `oa-state.ps1 get -Id <ID>` if you need a task's full state. **Skip any task with
+   `snoozed: true` unless it's also `reopened: true`** — a snoozed task stays untouched until its date
+   passes, even if an old plan was `approved`; a fresh user reply is the only thing that overrides it.
 2. For each, **execute the approved plan**:
 
    - First, **gather linked-task context** per "Gather linked-task context FIRST" above — read the
@@ -376,6 +385,10 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
    capacity allows, preferring higher 🎯 urgency and set `Work Priority` (P0 > P1 > P2). Honor the
    `## Priorities` list at the bottom of planner.md.
 2. Use the `scan` worklist to triage:
+   - **`snoozed: true` (and not `reopened`)** → the user snoozed this task (#353) and its date hasn't
+     passed. **Skip it entirely** — no plan, no re-plan, no execution — until it expires or the user
+     reopens it. This check comes first: it overrides "propose every Today task" below. (A `reopened:
+     true` reply beats the snooze — handle it as fresh input.)
    - **`reopened: true`** → the user replied after your last turn; pick it up as new input (approval →
      PHASE 1; new ask → re-plan as a new version per "Revise → replace"). **Never skip a reopened task,
      even if its status is `done`/`skip`/`proposed`.**
@@ -542,6 +555,11 @@ present the reversible draft and stop short of the committing action.
   fine without extra approval.) If a plan is vague about a risky step, set `blocked` and ask before
   doing it. When in doubt, prefer producing a ready-to-send draft (or an open PR) over the committing
   action.
+- **Respect snooze.** If `oa-state.ps1 scan` reports a task `snoozed: true` (the user snoozed it via the
+  #353 `<!-- snooze:DATE -->` feature and the date hasn't passed), do **not** propose, execute, re-plan,
+  or otherwise touch it — leave its journal and board row alone until the snooze expires. The **only**
+  exception is a fresh user reply on that task (`reopened: true`), which you handle as new input. Never
+  surface a snoozed task in the wrap-up as anything but "skipped (snoozed until DATE)".
 - **Be idempotent.** Your memory is the **skill state store** (via `oa-state.ps1`) plus the **Run log**
   in the journal. On re-run, start from `oa-state.ps1 scan`; don't redo finished steps or create
   duplicate deliverables — check the journal first, and call `oa-state.ps1 mark` after each turn so the

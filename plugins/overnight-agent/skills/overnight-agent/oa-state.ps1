@@ -47,7 +47,11 @@ param(
 
   # Overridable so the skill stays shareable; defaults match user-settings.md.
   [string]$JournalDir = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\journal",
-  [string]$StateDir = "$env:LOCALAPPDATA\overnight-agent\state"
+  [string]$StateDir = "$env:LOCALAPPDATA\overnight-agent\state",
+  # The board, so `scan` can tell the agent which tasks are currently snoozed
+  # (<!-- snooze:YYYY-MM-DD --> markers, from the #353 snooze feature). Sits next to the
+  # journal dir by default; override to match a non-standard planner layout.
+  [string]$PlannerBoard = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\planner.md"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -153,7 +157,33 @@ function Cmd-Seed {
   Write-Output "seeded $n task state file(s) into $StateDir"
 }
 
+function Get-SnoozeMap {
+  # Build id -> snooze-until (yyyy-MM-dd) for tasks that are CURRENTLY snoozed on the board.
+  # The #353 snooze feature stamps a `<!-- snooze:YYYY-MM-DD -->` HTML comment onto a task's
+  # planner.md row and moves it to Deferred; it resurfaces once the date passes. A task is
+  # "snoozed" here while its date is today or later (snooze_until >= today) — so the agent
+  # holds off through the snooze date and only re-engages the day after, erring toward
+  # respecting the user's snooze rather than acting a day early. Expired markers are ignored.
+  $map = @{}
+  if (-not (Test-Path $PlannerBoard)) { return $map }
+  $today = (Get-Date).Date
+  foreach ($line in (Get-Content -Path $PlannerBoard)) {
+    # Board rows look like: | 327 | 🟡 | Task… | P1 | 2026-07-20 | 353 | <!-- snooze:2026-08-18 -->
+    if ($line -notmatch '^\s*\|\s*(\d+)\s*\|') { continue }
+    $tid = $Matches[1]
+    if ($line -match '<!--\s*snooze:(\d{4}-\d{2}-\d{2})\s*-->') {
+      $raw = $Matches[1]
+      $d = [datetime]::MinValue
+      if ([datetime]::TryParseExact($raw, 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$d)) {
+        if ($d.Date -ge $today) { $map[$tid] = $raw }
+      }
+    }
+  }
+  return $map
+}
+
 function Cmd-Scan {
+  $snooze = Get-SnoozeMap
   $journals = Get-ChildItem $JournalDir -Filter 'task-*.md' -File | Where-Object { $_.BaseName -match '^task-\d+$' } | Sort-Object Name
   $rows = foreach ($f in $journals) {
     $facts = Get-JournalFacts $f.FullName
@@ -170,6 +200,7 @@ function Cmd-Scan {
       $reopened = $facts.HasTrailingUser
       $status = if ($facts.HasAgentBlock) { 'unknown' } else { 'none' }
     }
+    $snoozeUntil = if ($snooze.ContainsKey($facts.Id)) { $snooze[$facts.Id] } else { $null }
     [pscustomobject]@{
       id            = $facts.Id
       status        = $status
@@ -177,6 +208,8 @@ function Cmd-Scan {
       reopened      = $reopened
       has_agent_block = $facts.HasAgentBlock
       tracked       = [bool]$st
+      snoozed       = [bool]$snoozeUntil
+      snooze_until  = $snoozeUntil
     }
   }
   $rows | ConvertTo-Json -Depth 4
