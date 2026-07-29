@@ -34,6 +34,7 @@ import { isPrioritiesSection } from './focusPlanShared.js'
 import * as ops from './focusPlanOps.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
+import { linkedNavFallbackFile } from './linkedNav.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment } from './journalChat.js'
 import * as readStateService from './readState/readStateService.js'
 import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
@@ -1184,7 +1185,7 @@ function renderIconsWithTooltips(text, keyOffset = 0) {
 }
 
 // Task row component with expandable todos
-function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup }) {
+function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, onClearSearch }) {
   const [todosExpanded, setTodosExpanded] = useState(false)
   const [todos, setTodos] = useState(null)
   const [todosLoading, setTodosLoading] = useState(false)
@@ -1353,18 +1354,27 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
               setIsEditingLinkedId(true)
             }
 
-            const navigateToLinkedId = (e) => {
-              e.stopPropagation()
-              if (!linkedId) return
-              // Try to scroll to the task on the current page
-              let targetRow = document.querySelector(`tr[data-task-id="${linkedId}"]`)
-              if (targetRow) {
-                targetRow.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                targetRow.classList.add('highlight-flash')
-                setTimeout(() => targetRow.classList.remove('highlight-flash'), 1500)
-                return
-              }
-              // Task might be in a collapsed section — expand collapsed ones and retry
+            // Scroll to the linked task's row if it's currently in the DOM.
+            // Returns true when it found and scrolled to the row.
+            const scrollToLinkedRow = () => {
+              const targetRow = document.querySelector(`tr[data-task-id="${linkedId}"]`)
+              if (!targetRow) return false
+              targetRow.scrollIntoView({ behavior: 'smooth', block: 'center' })
+              targetRow.classList.add('highlight-flash')
+              setTimeout(() => targetRow.classList.remove('highlight-flash'), 1500)
+              return true
+            }
+
+            // Only fall back to the completed board when the linked task is
+            // genuinely not among the active tasks (#394). A live task that is
+            // merely hidden (collapsed section / search filter) stays on the
+            // plan board and must never be routed to completed.md.
+            const navigateToFallbackBoard = () => {
+              onNavigate(linkedNavFallbackFile(linkedId, activeTaskIds, PLAN_FILE, COMPLETED_FILE), linkedId)
+            }
+
+            // Task might be in a collapsed section — expand collapsed ones and retry.
+            const expandCollapsedAndRetry = () => {
               const collapsedHeaders = document.querySelectorAll('.section-header .collapse-icon')
               let expanded = false
               collapsedHeaders.forEach(icon => {
@@ -1375,18 +1385,30 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
               })
               if (expanded) {
                 setTimeout(() => {
-                  targetRow = document.querySelector(`tr[data-task-id="${linkedId}"]`)
-                  if (targetRow) {
-                    targetRow.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                    targetRow.classList.add('highlight-flash')
-                    setTimeout(() => targetRow.classList.remove('highlight-flash'), 1500)
-                  } else {
-                    onNavigate(COMPLETED_FILE, linkedId)
-                  }
+                  if (!scrollToLinkedRow()) navigateToFallbackBoard()
                 }, 100)
               } else {
-                onNavigate(COMPLETED_FILE, linkedId)
+                navigateToFallbackBoard()
               }
+            }
+
+            const navigateToLinkedId = (e) => {
+              e.stopPropagation()
+              if (!linkedId) return
+              // Already on this page and visible?
+              if (scrollToLinkedRow()) return
+              // #394: a live task hidden by an active search filter must not be
+              // mistaken for a completed task. If the task is active (not
+              // missing), clear the search filter and retry the scroll before
+              // ever falling back to another board.
+              if (!isLinkedTaskMissing && onClearSearch) {
+                onClearSearch()
+                setTimeout(() => {
+                  if (!scrollToLinkedRow()) expandCollapsedAndRetry()
+                }, 150)
+                return
+              }
+              expandCollapsedAndRetry()
             }
 
             return (
@@ -1732,7 +1754,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
 
 // Collapsible section component
 // Collapsible section component
-function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onSnoozeTask, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource, onDeferBelow, searchQuery = '' }) {
+function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onSnoozeTask, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource, onDeferBelow, searchQuery = '', onClearSearch }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const { headers, rows, rawLines } = parseMarkdownTable(tableLines)
   // Combined view (#39): tag each row with its owning source so destructive
@@ -2067,7 +2089,8 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
                   taskPriorityLookup={taskPriorityLookup}
                   activeTaskIds={activeTaskIds}
                   linkedIdMap={linkedIdMap}
-                  adoLookup={adoLookup}/>
+                  adoLookup={adoLookup}
+                  onClearSearch={onClearSearch}/>
               ))}
               {isSearching && matchCount === 0 && (
                 <tr className="search-no-match-row">
@@ -3611,6 +3634,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
           title={section.title}
           tableLines={section.lines}
           searchQuery={search}
+          onClearSearch={() => { setSearch(''); setSearchForced(false) }}
           onNavigate={onNavigate}
           defaultOpen={section.title === 'Today'}
           managerPriorities={managerPriorities}
