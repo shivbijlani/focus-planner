@@ -1512,26 +1512,30 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                                 >★</span>
                               ) : null}
                             </a>
-                            <a
-                              href={telegram?.url || '#'}
-                              className={`journal-link journal-link-chat${telegram?.url ? ' journal-link-tg' : ''}`}
-                              title={telegram?.url ? 'Open Telegram chat thread' : 'Open Chat'}
-                              {...(telegram?.url ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-                              onClick={(e) => {
-                                // Telegram-active tasks: the Chat icon opens the
-                                // Telegram thread instead of the in-app chat (task #352).
-                                if (telegram?.url) { e.stopPropagation(); return }
-                                e.preventDefault()
-                                readStateService.emitJournalOpened(taskId)
-                                onNavigate(journalPath, null, 'chat')
-                              }}
-                            >
-                              💬
-                              {/* #373: the Chat icon carries no presence badge — the ↗
-                                  Telegram pip was removed per feedback. The icon still
-                                  opens the Telegram thread when one exists; the unread ★
-                                  lives on the Journal icon. */}
-                            </a>
+                            {/* #389: the 💬 Chat icon only exists when there is an
+                                actual chat thread to open — i.e. a Telegram deep link.
+                                With no Telegram link there is no separate chat surface
+                                (the 📔 Journal icon already opens the readable chat view),
+                                so we render nothing rather than a dead second icon. */}
+                            {telegram?.url && (
+                              <a
+                                href={telegram.url}
+                                className="journal-link journal-link-chat journal-link-tg"
+                                title="Open Telegram chat thread"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => {
+                                  // Telegram-active tasks: the Chat icon opens the
+                                  // Telegram thread instead of the in-app chat (task #352).
+                                  e.stopPropagation()
+                                }}
+                              >
+                                💬
+                                {/* #373: the Chat icon carries no presence badge — the ↗
+                                    Telegram pip was removed per feedback. The unread ★
+                                    lives on the Journal icon. */}
+                              </a>
+                            )}
                           </span>
                         )}
                       </span>
