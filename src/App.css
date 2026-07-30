@@ -3671,6 +3671,42 @@ tr.highlight-flash {
   line-height: 1.4;
   color: #64748b;
 }
+.settings-ai-advanced {
+  margin: 0;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.25);
+}
+.settings-ai-advanced[open] {
+  background: rgba(15, 23, 42, 0.4);
+}
+.settings-ai-advanced-summary {
+  cursor: pointer;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #94a3b8;
+  list-style: none;
+  user-select: none;
+}
+.settings-ai-advanced-summary::-webkit-details-marker { display: none; }
+.settings-ai-advanced-summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 0.45rem;
+  color: #64748b;
+  transition: transform 0.15s ease;
+}
+.settings-ai-advanced[open] .settings-ai-advanced-summary::before {
+  transform: rotate(90deg);
+}
+.settings-ai-advanced-summary:hover { color: #cbd5e1; }
+.settings-ai-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0 0.6rem 0.65rem;
+}
 .settings-ai-form-hint code {
   font-size: 0.7rem;
   color: #94a3b8;

@@ -40,6 +40,7 @@ import { getMissionStatement, loadMissionStatement, setMissionStatement, subscri
 import { SETTINGS_FILE } from './storage/settings.js'
 import { AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE } from './config/aiSettings.js'
 import { groupSettingsForm, serializeSettingsForm, hasSettingsForm } from './config/userSettingsForm.js'
+import { partitionAgentSettings } from './config/agentSettingsVisibility.js'
 import {
   attachmentFolderPath,
   formatAttachmentFolderMarkdown,
@@ -5075,7 +5076,7 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
             </div>
 
             <div className={`settings-dialog-section${sectionCollapsed.aiSettings ? ' collapsed' : ''}`}>
-              <SettingsSectionTitle id="aiSettings" label="AI agent settings" collapsed={!!sectionCollapsed.aiSettings} onToggle={toggleSection} />
+              <SettingsSectionTitle id="aiSettings" label="Agent settings" collapsed={!!sectionCollapsed.aiSettings} onToggle={toggleSection} />
               <div className="settings-mission-hint">
                 Config for the overnight agent, saved as <code>{AI_SETTINGS_FILE}</code> in
                 your active source (next to <code>{PLAN_FILE}</code>). The agent reads this
@@ -5126,33 +5127,52 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
                   </div>
                   {aiMode === 'form' && hasSettingsForm(aiText) ? (
                     <div className="settings-ai-form">
-                      {groupSettingsForm(aiText).map((group) => (
-                        <fieldset className="settings-ai-form-group" key={group.section || 'ungrouped'}>
-                          {group.section && (
-                            <legend className="settings-ai-form-legend">{group.section}</legend>
-                          )}
-                          {group.rows.map((row) => (
-                            <label className="settings-ai-field" key={row.index}>
-                              <span className="settings-ai-field-label">{row.label}</span>
-                              <input
-                                type="text"
-                                className="settings-ai-field-input"
-                                spellCheck={false}
-                                value={row.value}
-                                onChange={(e) => {
-                                  const values = groupSettingsForm(aiText)
-                                    .flatMap((g) => g.rows)
-                                    .sort((a, b) => a.index - b.index)
-                                    .map((r) => r.value)
-                                  values[row.index] = e.target.value
-                                  setAiText(serializeSettingsForm(aiText, values))
-                                  if (aiMsg) setAiMsg('')
-                                }}
-                              />
-                            </label>
-                          ))}
-                        </fieldset>
-                      ))}
+                      {(() => {
+                        const groups = groupSettingsForm(aiText)
+                        const { user: userGroups, advanced: advancedGroups } = partitionAgentSettings(groups)
+                        const renderGroups = (gs) => gs.map((group) => (
+                          <fieldset className="settings-ai-form-group" key={group.section || 'ungrouped'}>
+                            {group.section && (
+                              <legend className="settings-ai-form-legend">{group.section}</legend>
+                            )}
+                            {group.rows.map((row) => (
+                              <label className="settings-ai-field" key={row.index}>
+                                <span className="settings-ai-field-label">{row.label}</span>
+                                <input
+                                  type="text"
+                                  className="settings-ai-field-input"
+                                  spellCheck={false}
+                                  value={row.value}
+                                  onChange={(e) => {
+                                    const values = groupSettingsForm(aiText)
+                                      .flatMap((g) => g.rows)
+                                      .sort((a, b) => a.index - b.index)
+                                      .map((r) => r.value)
+                                    values[row.index] = e.target.value
+                                    setAiText(serializeSettingsForm(aiText, values))
+                                    if (aiMsg) setAiMsg('')
+                                  }}
+                                />
+                              </label>
+                            ))}
+                          </fieldset>
+                        ))
+                        return (
+                          <>
+                            {renderGroups(userGroups)}
+                            {advancedGroups.length > 0 && (
+                              <details className="settings-ai-advanced">
+                                <summary className="settings-ai-advanced-summary">
+                                  Advanced settings — paths, accounts &amp; internals (rarely need changing)
+                                </summary>
+                                <div className="settings-ai-advanced-body">
+                                  {renderGroups(advancedGroups)}
+                                </div>
+                              </details>
+                            )}
+                          </>
+                        )
+                      })()}
                       <div className="settings-ai-form-hint">
                         Prose-only settings (the <code>## Preferences</code> notes) aren’t shown here — switch to <strong>Raw</strong> to edit those.
                       </div>
