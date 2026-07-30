@@ -1268,7 +1268,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   
   const handleContextMenu = (e) => {
     e.preventDefault()
-    onContextMenu(e, rawLine, row, journalPath, taskId)
+    onContextMenu(e, rawLine, row, journalPath, taskId, telegram)
   }
 
   // Mobile (#335): visible kebab opens the same row-action sheet — no hidden
@@ -1276,7 +1276,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   const handleKebab = (e) => {
     e.preventDefault()
     e.stopPropagation()
-    onContextMenu(e, rawLine, row, journalPath, taskId)
+    onContextMenu(e, rawLine, row, journalPath, taskId, telegram)
   }
   
   // Filter to only uncompleted todos
@@ -1840,7 +1840,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     }
   }
 
-  const handleContextMenu = (e, rawLine, row, journalPath, taskId) => {
+  const handleContextMenu = (e, rawLine, row, journalPath, taskId, telegram) => {
     const options = []
     const currentSnoozeUntil = row.snoozeUntil || parseSnoozeUntil(rawLine)
     
