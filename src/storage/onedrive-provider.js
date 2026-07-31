@@ -68,7 +68,7 @@ export class OneDriveProvider {
 
   async scaffold() {
     const files = [
-      [PLAN_FILE, `## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Priorities\n\n`],
+      [PLAN_FILE, `## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Wake | Linked ID |\n|---|---|------|----------|-------|------|----------|\n\n## Priorities\n\n`],
       [COMPLETED_FILE, '# Completed Tasks\n'],
     ]
     for (const [name, content] of files) {

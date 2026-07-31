@@ -48,7 +48,8 @@ function inline(text) {
   s = s.replace(/~~([^~\n]+)~~/g, '<s>$1</s>')
 
   // Restore inline code (escaping its own contents).
-  s = s.replace(/\u0000C(\d+)\u0000/g, (_, i) => `<code>${escapeHtml(codes[Number(i)])}</code>`)
+  const sentinel = String.fromCharCode(0)
+  s = s.replace(new RegExp(`${sentinel}C(\\d+)${sentinel}`, 'g'), (_, i) => `<code>${escapeHtml(codes[Number(i)])}</code>`)
   return s
 }
 
