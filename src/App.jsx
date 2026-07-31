@@ -1486,17 +1486,18 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                         )}
                         {journalPath && !isMobile && (
                           <span className="journal-icons">
-                            {/* #373: the task list row offers two entry points —
-                                a Journal (raw notes) icon and a Chat icon — so you
-                                can jump straight to either view of the task. */}
+                            {/* #373/#389: the task list row offers two entry points —
+                                a Journal icon and a Chat icon. #389: the 📔 Journal
+                                icon opens the readable journal (chat thread) — the raw
+                                markdown source is one tap away via the in-view toggle. */}
                             <a
                               href="#"
                               className="journal-link journal-link-note"
-                              title="Open Journal (notes)"
+                              title="Open Journal"
                               onClick={(e) => {
                                 e.preventDefault()
                                 readStateService.emitJournalOpened(taskId)
-                                onNavigate(journalPath, null, 'journal')
+                                onNavigate(journalPath, null, 'chat')
                               }}
                             >
                               📔
@@ -1511,26 +1512,30 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                                 >★</span>
                               ) : null}
                             </a>
-                            <a
-                              href={telegram?.url || '#'}
-                              className={`journal-link journal-link-chat${telegram?.url ? ' journal-link-tg' : ''}`}
-                              title={telegram?.url ? 'Open Telegram chat thread' : 'Open Chat'}
-                              {...(telegram?.url ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-                              onClick={(e) => {
-                                // Telegram-active tasks: the Chat icon opens the
-                                // Telegram thread instead of the in-app chat (task #352).
-                                if (telegram?.url) { e.stopPropagation(); return }
-                                e.preventDefault()
-                                readStateService.emitJournalOpened(taskId)
-                                onNavigate(journalPath, null, 'chat')
-                              }}
-                            >
-                              💬
-                              {/* #373: the Chat icon carries no presence badge — the ↗
-                                  Telegram pip was removed per feedback. The icon still
-                                  opens the Telegram thread when one exists; the unread ★
-                                  lives on the Journal icon. */}
-                            </a>
+                            {/* #389: the 💬 Chat icon only exists when there is an
+                                actual chat thread to open — i.e. a Telegram deep link.
+                                With no Telegram link there is no separate chat surface
+                                (the 📔 Journal icon already opens the readable chat view),
+                                so we render nothing rather than a dead second icon. */}
+                            {telegram?.url && (
+                              <a
+                                href={telegram.url}
+                                className="journal-link journal-link-chat journal-link-tg"
+                                title="Open Telegram chat thread"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => {
+                                  // Telegram-active tasks: the Chat icon opens the
+                                  // Telegram thread instead of the in-app chat (task #352).
+                                  e.stopPropagation()
+                                }}
+                              >
+                                💬
+                                {/* #373: the Chat icon carries no presence badge — the ↗
+                                    Telegram pip was removed per feedback. The unread ★
+                                    lives on the Journal icon. */}
+                              </a>
+                            )}
                           </span>
                         )}
                       </span>
@@ -1628,8 +1633,8 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                       </a>
                     ) : (
                       // #373: with no Telegram, the single mobile rail icon falls
-                      // back to 📔 Journal (opens the raw notes view); in-app Chat
-                      // moves into the ⋯ kebab sheet.
+                      // back to 📔 Journal; #389: it opens the readable journal (chat
+                      // thread), with raw source a tap away via the in-view toggle.
                       <a
                         href="#"
                         className="row-action-btn journal-action"
@@ -1638,7 +1643,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                         onClick={(e) => {
                           e.preventDefault()
                           readStateService.emitJournalOpened(taskId)
-                          onNavigate(journalPath, null, 'journal')
+                          onNavigate(journalPath, null, 'chat')
                         }}
                       >
                         {/* #373: wrap glyph + pip so the ★ hugs the emoji corner (like
@@ -1907,7 +1912,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
           icon: '📔',
           action: () => {
             readStateService.emitJournalOpened(taskId)
-            onNavigate(journalPath, null, 'journal')
+            onNavigate(journalPath, null, 'chat')
           }
         })
       } else {
