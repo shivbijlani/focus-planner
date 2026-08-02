@@ -21,6 +21,9 @@ function makeHarness(files) {
   const sent = []
   let topicSeq = 0
   const created = []
+  const closed = []
+  const reopened = []
+  let completedBoard = ''
   let updatesQueue = []
 
   const client = {
@@ -31,6 +34,12 @@ function makeHarness(files) {
     },
     async sendMessage(m) {
       sent.push(m)
+    },
+    async closeForumTopic({ messageThreadId }) {
+      closed.push(messageThreadId)
+    },
+    async reopenForumTopic({ messageThreadId }) {
+      reopened.push(messageThreadId)
     },
     async getUpdates() {
       const out = updatesQueue
@@ -52,6 +61,9 @@ function makeHarness(files) {
     async writeJournal(id, content) {
       store[id] = content
     },
+    async readCompletedBoard() {
+      return completedBoard
+    },
   }
 
   const config = { chatId: '-100', taskAllowlist: [] }
@@ -59,9 +71,14 @@ function makeHarness(files) {
     store,
     sent,
     created,
+    closed,
+    reopened,
     client,
     io,
     config,
+    setCompletedBoard: (md) => {
+      completedBoard = md
+    },
     queueUpdates: (u) => {
       updatesQueue = u
     },
@@ -245,5 +262,100 @@ describe('syncDown', () => {
     // Offset still advances past processed updates so we don't re-fetch them.
     expect(state.updateOffset).toBe(8)
     expect(h.store['42']).toBe(AGENT_JOURNAL)
+  })
+})
+
+describe('syncArchive (mirror completed board -> closed topics)', () => {
+  const COMPLETED = `| # | 🎯 | Task | WP | Date |\n|---|---|---|---|---|\n| 42 | ✅ | done | - | 2026-08-02 |\n`
+
+  it('closes the topic of a task that has moved to the completed board', async () => {
+    const h = makeHarness({})
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42' }
+    h.setCompletedBoard(COMPLETED)
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.archived).toEqual(['42'])
+    expect(h.closed).toEqual([7])
+    expect(state.tasks['42'].archived).toBe(true)
+  })
+
+  it('is idempotent: an already-archived task is not re-closed', async () => {
+    const h = makeHarness({})
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42', archived: true }
+    h.setCompletedBoard(COMPLETED)
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.archived).toEqual([])
+    expect(h.closed).toHaveLength(0)
+  })
+
+  it('reopens a topic when its task leaves the completed board', async () => {
+    const h = makeHarness({})
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42', archived: true }
+    h.setCompletedBoard('') // no longer completed
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.reopened).toEqual(['42'])
+    expect(h.reopened).toEqual([7])
+    expect(state.tasks['42'].archived).toBe(false)
+  })
+
+  it('skips tasks that have no topic and honors the allowlist', async () => {
+    const h = makeHarness({})
+    const state = emptyState()
+    state.tasks['42'] = { name: '#42' } // no topicId yet
+    state.tasks['43'] = { topicId: 8, name: '#43' }
+    h.setCompletedBoard(`${COMPLETED}| 43 | ✅ | done | - | 2026-08-02 |\n`)
+    const config = { ...h.config, taskAllowlist: ['99'] } // 43 not allowed
+    const bridge = createBridge({ client: h.client, config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.archived).toEqual([])
+    expect(h.closed).toHaveLength(0)
+  })
+
+  it('a per-topic Telegram failure is swallowed and the flag is left unset', async () => {
+    const h = makeHarness({})
+    h.client.closeForumTopic = async () => {
+      throw new Error('not enough rights to manage topics')
+    }
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42' }
+    h.setCompletedBoard(COMPLETED)
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.archived).toEqual([]) // not recorded as archived
+    expect(state.tasks['42'].archived).toBeFalsy() // retried next run
+  })
+
+  it('syncOnce runs the archive pass between up and down', async () => {
+    const h = makeHarness({})
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42', lastPostedHash: 'x' }
+    h.setCompletedBoard(COMPLETED)
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncOnce()
+    expect(res.archived.archived).toEqual(['42'])
+    expect(h.closed).toEqual([7])
+  })
+
+  it('no-ops safely when io has no readCompletedBoard', async () => {
+    const h = makeHarness({})
+    delete h.io.readCompletedBoard
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42' }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.archived).toEqual([])
+    expect(res.reopened).toEqual([])
   })
 })

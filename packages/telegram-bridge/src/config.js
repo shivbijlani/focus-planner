@@ -55,6 +55,7 @@ export async function loadConfig({ env = process.env, repoRoot } = {}) {
     chatId,
     plannerPath,
     journalDir: path.join(plannerPath, 'journal'),
+    completedBoardPath: path.join(plannerPath, 'planner-completed.md'),
     stateDir,
     taskAllowlist,
   }

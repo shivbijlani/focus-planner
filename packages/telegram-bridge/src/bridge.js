@@ -15,11 +15,13 @@ import {
   getTask,
   setTopic,
   setLastPosted,
+  setArchived,
   setOffset,
   findTaskByTopic,
 } from './state.js'
 import { upsertTgMetaMarker, parseTgMeta } from './deepLink.js'
 import { mdToTelegramHtml, escapeHtml } from './telegramFormat.js'
+import { parseCompletedTaskIds } from './completed.js'
 
 const TELEGRAM_MAX = 4096
 
@@ -194,8 +196,57 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
 
   async function syncOnce() {
     const up = await syncUp()
+    const archived = await syncArchive()
     const down = await syncDown()
-    return { up, down }
+    return { up, archived, down }
+  }
+
+  // Archive/unarchive task topics to mirror the completed board. A task that has
+  // moved to planner-completed.md gets its forum topic CLOSED (Telegram's
+  // reversible "archive": it collapses under the group's Closed section and
+  // stops new non-admin posts). A task that later leaves the completed board
+  // (reopened) gets its topic REOPENED. Both directions are idempotent — we only
+  // call Telegram when the desired archived-state differs from what we recorded,
+  // so re-runs are no-ops. A per-topic failure (e.g. the bot lacks
+  // can_manage_topics) is logged and skipped; it never aborts the run and is
+  // retried next time.
+  async function syncArchive() {
+    const archived = []
+    const reopened = []
+    if (typeof io.readCompletedBoard !== 'function') return { archived, reopened }
+
+    const board = await io.readCompletedBoard()
+    const completed = new Set(parseCompletedTaskIds(board))
+
+    for (const [taskId, task] of Object.entries(state.tasks)) {
+      if (!task || task.topicId == null) continue
+      if (!isAllowed(taskId)) continue
+
+      const shouldArchive = completed.has(taskId)
+      const isArchived = !!task.archived
+      if (shouldArchive === isArchived) continue
+
+      try {
+        if (shouldArchive) {
+          await client.closeForumTopic({ chatId, messageThreadId: task.topicId })
+          setArchived(state, taskId, true)
+          archived.push(taskId)
+          logger(`archived (closed) topic ${task.topicId} for completed task #${taskId}`)
+        } else {
+          await client.reopenForumTopic({ chatId, messageThreadId: task.topicId })
+          setArchived(state, taskId, false)
+          reopened.push(taskId)
+          logger(`reopened topic ${task.topicId} for reactivated task #${taskId}`)
+        }
+      } catch (err) {
+        logger(
+          `archive: ${shouldArchive ? 'close' : 'reopen'} failed for task #${taskId} ` +
+            `(topic ${task.topicId}): ${err.message}`,
+        )
+      }
+    }
+
+    return { archived, reopened }
   }
 
   // One-time (idempotent) setup: record each existing agent-block journal's
@@ -228,5 +279,5 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     return { seen, skipped }
   }
 
-  return { ensureTopic, syncUp, syncDown, syncOnce, baseline }
+  return { ensureTopic, syncUp, syncDown, syncArchive, syncOnce, baseline }
 }

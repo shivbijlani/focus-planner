@@ -3,6 +3,7 @@ import {
   emptyState,
   setTopic,
   setLastPosted,
+  setArchived,
   setOffset,
   getTask,
   findTaskByTopic,
@@ -21,6 +22,15 @@ describe('state reducers', () => {
     setLastPosted(s, '352', 'abc')
     setTopic(s, '352', 5, 'renamed')
     expect(getTask(s, '352')).toMatchObject({ topicId: 5, lastPostedHash: 'abc', name: 'renamed' })
+  })
+
+  it('tracks the archived flag without clobbering the topic', () => {
+    const s = emptyState()
+    setTopic(s, '352', 5, 'name')
+    setArchived(s, '352', true)
+    expect(getTask(s, '352')).toMatchObject({ topicId: 5, archived: true })
+    setArchived(s, '352', false)
+    expect(getTask(s, '352').archived).toBe(false)
   })
 
   it('tracks the update offset', () => {
