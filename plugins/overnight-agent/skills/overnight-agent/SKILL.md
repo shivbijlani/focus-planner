@@ -441,6 +441,9 @@ phone replies back into the journals):
 $env:TELEGRAM_BOT_TOKEN = & "$env:LOCALAPPDATA\overnight-agent\secrets\telegram-secret.ps1" get
 $env:TELEGRAM_CHAT_ID   = '<Telegram chat id from user-settings.md>'
 $env:PLANNER_PATH       = '<planner folder>'   # same folder planner.md lives in
+# Honor the "Archive completed topics" user-setting (default on). Only set this
+# to 'off' when that row says off; otherwise leave it unset so the default holds.
+# $env:TELEGRAM_BRIDGE_ARCHIVE = 'off'
 $bridge = "<dev drive>\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js"
 
 # FIRST-TIME SETUP ONLY: if the bridge has never run (no state.json yet), baseline
@@ -465,6 +468,10 @@ Rules:
   unchanged content or make duplicate topics.
 - **Respect the allowlist.** If `Telegram → Tasks` names specific IDs, set
   `$env:TELEGRAM_BRIDGE_TASKS = '<comma-separated ids>'` before the call so only those are mirrored.
+- **Honor the archive setting.** `Telegram → Archive completed topics` (default **on** once Telegram is
+  added) controls whether a task's topic is closed when it reaches the completed board (and reopened if it
+  leaves). It's on by default; only when that row is `off` set `$env:TELEGRAM_BRIDGE_ARCHIVE = 'off'`
+  before the call.
 - **Never print the token** in your summary. If the vault lookup or the CLI fails (e.g. no token, network),
   note it briefly in the wrap-up and carry on — a failed mirror must never abort the run.
 
