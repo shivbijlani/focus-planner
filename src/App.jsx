@@ -5,6 +5,7 @@ import './mobile-board.css'
 import * as storage from './storage/storage.js'
 import { setActiveProvider, getActiveProvider, PROVIDERS, TARGET_STATUS, getProviderName } from './storage/storage.js'
 import { IndexedDbProvider } from './storage/indexeddb-provider.js'
+import { makeSyncStatusCoalescer } from './storage/syncStatusCoalesce.js'
 import { resumePendingMigration, hasPendingMigration, makeProvider } from './storage/migrate.js'
 import {
   loadSources, migrateLegacy, getSources, getActiveSourceId, getActiveSource, setActiveSource,
@@ -6614,9 +6615,18 @@ function App() {
     return true
   }
 
-  // Subscribe to sync status changes
+  // Subscribe to sync status changes. The engine fires a status object on every
+  // backup nudge; most are value-identical and rapid save cycles flip the state
+  // back and forth many times a second. Feeding each straight into React state
+  // thrashes the board and defeats Playwright's quiescence gate (#133), so route
+  // them through a coalescer that dedups identical churn and coalesces bursts.
   useEffect(() => {
-    return storage.subscribeSyncStatus((status) => setSyncStatus(status))
+    const coalescer = makeSyncStatusCoalescer({ apply: setSyncStatus })
+    const unsubscribe = storage.subscribeSyncStatus((status) => coalescer.push(status))
+    return () => {
+      coalescer.cancel()
+      unsubscribe()
+    }
   }, [])
 
   // Track the visual viewport height so the app shell (and the chat composer at
