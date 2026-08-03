@@ -95,13 +95,26 @@ already processed in this journal") lives in the **skill's own working dir**, wh
 - **Tool:** [`oa-state.ps1`](./oa-state.ps1) (next to this skill) reads/writes that state. Run it with
   `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\oa-state.ps1 <command>`:
   - **`scan`** → your per-run worklist as JSON, one row per task: `{ id, status, changed, reopened,
-    has_agent_block, tracked }`. **Run this first, every run** (see PHASE 1/2). It is how you find work
-    without re-reading 90+ journals by hand.
+    has_agent_block, tracked, due_poll, poll_cadence }`. **Run this first, every run** (see PHASE 1/2).
+    It is how you find work without re-reading 90+ journals by hand.
   - **`get -Id <id>`** → that task's full state JSON.
   - **`mark -Id <id> [-Status <s>] [-Version <n>] [-PlanId <p>]`** → call this **after you write your
     turn into a journal**. It updates the fields and re-snapshots the journal, so next run the task reads
     as quiet until the user touches it again.
+  - **`mark -Id <id> -Poll <cadence>` / `-PollDone` / `-PollClear`** → manage a **time-triggered poll**
+    on a task (see "Polling" below). Cadence is `hourly | daily | weekly | <N>h | <N>d | <N>m`.
   - **`seed [-Force]`** → one-time/migration bootstrap of state for every existing journal.
+
+**Polling (time-triggered tasks the user never touches):** `scan` normally only flags journals the
+**user** has changed — so a purely time-based job (e.g. "each night, check the video-backup folder and
+upload any drops") would be invisible and silently stop the moment the user stops replying. A **poll**
+fixes that: it lives only in the skill state (never in the journal, so the user sees nothing), and
+`scan` reports **`due_poll: true`** on any task whose poll is due. Lifecycle:
+- When a task commits you to a recurring self-check, arm it once:
+  `oa-state.ps1 mark -Id <ID> -Poll <cadence>` (a freshly armed poll is due on the next `scan`).
+- Every run, after the normal `scan`, **act on any row with `due_poll: true`** (do the recurring check),
+  then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone` (stamps `last_polled` and pushes `next_due`
+  forward by the cadence). When the recurring duty ends, `oa-state.ps1 mark -Id <ID> -PollClear`.
 
 **How "the user replied" is detected (the reopen fix):** the tool remembers a hash of each journal as
 you last left it. On the next `scan`:
@@ -324,6 +337,8 @@ If a linked journal is missing or empty, note it and proceed with what you have 
    `in-progress` whose next step is approved), **plus any `reopened` task whose newest user message is an
    approval** (e.g. "approve", "go ahead" appended at the bottom — interpret per "Reading the user's
    decision"). Use `oa-state.ps1 get -Id <ID>` if you need a task's full state.
+   **Also pick up any row with `due_poll: true`** — a time-triggered recurring check that's now due
+   (see "Polling"). Run its check, then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone`.
 2. For each, **execute the approved plan**:
 
    - First, **gather linked-task context** per "Gather linked-task context FIRST" above — read the
