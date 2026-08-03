@@ -20,17 +20,36 @@
 
 .COMMANDS
   seed   [-Force]                Initialise state for every journal (one-time / migration).
-  scan                          Emit the per-run worklist as JSON (what changed / reopened).
+  scan                          Emit the per-run worklist as JSON (what changed / reopened /
+                                due_poll).
   get    -Id <id>               Print one task's state JSON.
   mark   -Id <id> [-Status s] [-Version n] [-PlanId p]
                                 Record that the agent has processed the journal as it now
                                 stands (re-snapshots processed_file_hash + updates fields).
+         [-Poll <cadence>]      Register/update a recurring poll on the task so `scan` surfaces
+                                it on a timer even when the journal is untouched. Cadence is one
+                                of: hourly | daily | weekly | <N>h | <N>d | <N>m. A freshly
+                                registered poll is due immediately (next scan reports due_poll).
+         [-PollDone]            Record that the poll just ran: stamp last_polled = now and push
+                                next_due forward by the cadence interval.
+         [-PollClear]           Remove the poll from the task.
+
+.POLLING (why this exists)
+  `scan` only flags journals the USER has touched, so a purely time-triggered job (e.g. #400's
+  daily "check the video-backup folder and upload any drops") is invisible to it — if the user
+  never replies, the agent never gets reminded and the poll silently stops. A poll lives in the
+  skill's own state (never in the journal), so the agent can register it once, then every run:
+  read `scan`, act on any row with `due_poll: true`, and `mark -PollDone` to re-arm it. The user
+  sees nothing about it.
 
 .EXAMPLES
   pwsh oa-state.ps1 seed
   pwsh oa-state.ps1 scan
   pwsh oa-state.ps1 get  -Id 293
   pwsh oa-state.ps1 mark -Id 305 -Status proposed -Version 1 -PlanId t305-v1
+  pwsh oa-state.ps1 mark -Id 400 -Poll daily          # arm a daily poll on #400
+  pwsh oa-state.ps1 mark -Id 400 -PollDone            # after running it this run
+  pwsh oa-state.ps1 mark -Id 400 -PollClear           # stop polling #400
 #>
 
 [CmdletBinding()]
@@ -44,6 +63,11 @@ param(
   [int]$Version,
   [string]$PlanId,
   [switch]$Force,
+
+  # Polling (time-triggered worklist). See .POLLING in the header.
+  [string]$Poll,
+  [switch]$PollDone,
+  [switch]$PollClear,
 
   # Overridable so the skill stays shareable; defaults match user-settings.md.
   [string]$JournalDir = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\journal",
@@ -125,6 +149,42 @@ function Write-State($obj) {
 
 function Now-Iso { (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK') }
 
+function Set-Member($obj, [string]$name, $value) {
+  # PSCustomObjects from ConvertFrom-Json can't take a new property via `$o.x = ...`; add it.
+  if ($obj.PSObject.Properties[$name]) { $obj.$name = $value }
+  else { $obj | Add-Member -NotePropertyName $name -NotePropertyValue $value }
+}
+
+function Parse-PollMinutes([string]$spec) {
+  # Cadence -> interval in minutes. Accepts hourly|daily|weekly|<N>h|<N>d|<N>m (case-insensitive).
+  switch -regex ($spec.Trim().ToLower()) {
+    '^hourly$' { return 60 }
+    '^daily$' { return 1440 }
+    '^weekly$' { return 10080 }
+    '^(\d+)\s*h$' { return [int]$Matches[1] * 60 }
+    '^(\d+)\s*d$' { return [int]$Matches[1] * 1440 }
+    '^(\d+)\s*m$' { return [int]$Matches[1] }
+    default { throw "invalid -Poll cadence '$spec' (use hourly|daily|weekly|<N>h|<N>d|<N>m)" }
+  }
+}
+
+function New-PollObject([string]$cadence, [int]$minutes, [string]$lastPolled, [datetime]$nextDue) {
+  [pscustomobject]@{
+    cadence          = $cadence
+    interval_minutes = $minutes
+    last_polled      = $lastPolled
+    next_due         = $nextDue.ToString('yyyy-MM-ddTHH:mm:ssK')
+  }
+}
+
+function Test-PollDue($poll) {
+  # A poll with no next_due (freshly armed / malformed) is treated as due now.
+  if (-not $poll) { return $false }
+  if (-not $poll.next_due) { return $true }
+  try { return ([datetime]::Parse($poll.next_due) -le (Get-Date)) }
+  catch { return $true }
+}
+
 function Cmd-Seed {
   Ensure-StateDir
   $journals = Get-ChildItem $JournalDir -Filter 'task-*.md' -File | Where-Object { $_.BaseName -match '^task-\d+$' }
@@ -158,10 +218,12 @@ function Cmd-Scan {
   $rows = foreach ($f in $journals) {
     $facts = Get-JournalFacts $f.FullName
     $st = Read-State $facts.Id
+    $poll = $null
     if ($st) {
       $changed = ($facts.FullHash -ne $st.processed_file_hash)
       $reopened = $changed -and $facts.HasTrailingUser
       $status = "$($st.status)"
+      if ($st.PSObject.Properties['poll']) { $poll = $st.poll }
     }
     else {
       # No memory yet: a task is "reopened/active" only if the user has left prose below the
@@ -177,6 +239,8 @@ function Cmd-Scan {
       reopened      = $reopened
       has_agent_block = $facts.HasAgentBlock
       tracked       = [bool]$st
+      due_poll      = [bool](Test-PollDue $poll)
+      poll_cadence  = if ($poll) { "$($poll.cadence)" } else { $null }
     }
   }
   $rows | ConvertTo-Json -Depth 4
@@ -201,6 +265,23 @@ function Cmd-Mark {
   if ($Status) { $st.status = $Status }
   if ($Version -gt 0) { $st.version = $Version }
   if ($PlanId) { $st.plan_id = $PlanId }
+
+  # --- Polling -------------------------------------------------------------------
+  $existingPoll = if ($st.PSObject.Properties['poll']) { $st.poll } else { $null }
+  if ($PollClear) {
+    Set-Member $st 'poll' $null
+  }
+  elseif ($Poll) {
+    # (Re)arm: due immediately so the very next scan picks it up.
+    $mins = Parse-PollMinutes $Poll
+    Set-Member $st 'poll' (New-PollObject $Poll.Trim().ToLower() $mins '' (Get-Date))
+  }
+  elseif ($PollDone) {
+    if (-not $existingPoll) { throw "task $Id has no poll to mark done (arm one with -Poll first)" }
+    $mins = [int]$existingPoll.interval_minutes
+    Set-Member $st 'poll' (New-PollObject "$($existingPoll.cadence)" $mins (Now-Iso) (Get-Date).AddMinutes($mins))
+  }
+
   # Re-snapshot: the agent has now processed the journal as it currently stands.
   $st.processed_file_hash = $facts.FullHash
   $st.has_agent_block = $facts.HasAgentBlock
