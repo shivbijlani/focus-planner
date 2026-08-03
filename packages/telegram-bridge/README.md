@@ -32,6 +32,7 @@ Windows Credential Manager before invoking the CLI.
 | `TELEGRAM_CHAT_ID` | ✅ | The forum supergroup chat id (e.g. `-1004310604015`). |
 | `PLANNER_PATH` | — | Planner folder. Defaults to `planner-config.json`'s `plannerPath`, else `../planner`. |
 | `TELEGRAM_BRIDGE_TASKS` | — | Comma-separated allowlist of task IDs to mirror. Empty = all tasks with an agent block. |
+| `TELEGRAM_BRIDGE_ARCHIVE` | — | Archive (close) a task's topic when it lands on the completed board, and reopen it if the task leaves. Default **on**; set to `off`/`false`/`0`/`no` to disable. |
 | `TELEGRAM_BRIDGE_STATE_DIR` | — | State dir. Defaults to `%LOCALAPPDATA%\overnight-agent\telegram-bridge`. |
 
 ### Supplying the token (Windows Credential Manager)

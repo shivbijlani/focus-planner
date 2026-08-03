@@ -268,6 +268,22 @@ describe('syncDown', () => {
 describe('syncArchive (mirror completed board -> closed topics)', () => {
   const COMPLETED = `| # | 🎯 | Task | WP | Date |\n|---|---|---|---|---|\n| 42 | ✅ | done | - | 2026-08-02 |\n`
 
+  it('does nothing when archiveCompleted is disabled', async () => {
+    const h = makeHarness({})
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42' }
+    h.setCompletedBoard(COMPLETED)
+    const config = { ...h.config, archiveCompleted: false }
+    const bridge = createBridge({ client: h.client, config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.skipped).toBe(true)
+    expect(res.archived).toEqual([])
+    expect(res.reopened).toEqual([])
+    expect(h.closed).toHaveLength(0)
+    expect(state.tasks['42'].archived).toBeUndefined()
+  })
+
   it('closes the topic of a task that has moved to the completed board', async () => {
     const h = makeHarness({})
     const state = emptyState()

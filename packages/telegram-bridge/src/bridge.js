@@ -213,6 +213,9 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
   async function syncArchive() {
     const archived = []
     const reopened = []
+    // Gated on the "Archive completed topics" setting (default on). When the
+    // user turns it off we neither read the board nor touch any topic.
+    if (config.archiveCompleted === false) return { archived, reopened, skipped: true }
     if (typeof io.readCompletedBoard !== 'function') return { archived, reopened }
 
     const board = await io.readCompletedBoard()
