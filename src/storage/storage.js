@@ -170,9 +170,43 @@ export function getSyncStatus() {
   return mapEngineStatus(getEngine().status)
 }
 
+// Structural equality for the mapped status shape produced by mapEngineStatus:
+// `{ aggregate, folders: { [id]: { targets: { [t]: { status, message } } } } }`.
+// Used to dedupe the status stream (see subscribeSyncStatus).
+export function syncStatusEqual(a, b) {
+  if (a === b) return true
+  if (!a || !b) return false
+  if (a.aggregate !== b.aggregate) return false
+  const fa = a.folders || {}
+  const fb = b.folders || {}
+  const folderIds = new Set([...Object.keys(fa), ...Object.keys(fb)])
+  for (const fid of folderIds) {
+    const ta = fa[fid]?.targets || {}
+    const tb = fb[fid]?.targets || {}
+    const targetIds = new Set([...Object.keys(ta), ...Object.keys(tb)])
+    for (const tid of targetIds) {
+      if ((ta[tid]?.status || '') !== (tb[tid]?.status || '')) return false
+      if ((ta[tid]?.message || '') !== (tb[tid]?.message || '')) return false
+    }
+  }
+  return true
+}
+
 export function subscribeSyncStatus(listener) {
+  // The service worker re-emits status on every sync nudge/retry, and
+  // mapEngineStatus builds a fresh object each time. Forwarding those verbatim
+  // makes React re-render the whole board on every tick; while a provider is
+  // stuck in `syncing` ("Backing up…") this becomes a re-render storm that
+  // keeps list rows from ever settling, so clicks and edits never land (#400).
+  // Dedupe by value so the listener only fires when the meaningful status
+  // actually changes. (Remote-change refreshes flow via onLocalChange, which
+  // subscribes to the engine separately and is unaffected.)
+  let prev = null
   return getEngine().subscribe(s => {
-    try { listener(mapEngineStatus(s)) } catch { /* ignore */ }
+    const mapped = mapEngineStatus(s)
+    if (prev !== null && syncStatusEqual(prev, mapped)) return
+    prev = mapped
+    try { listener(mapped) } catch { /* ignore */ }
   })
 }
 
