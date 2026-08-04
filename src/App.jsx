@@ -31,6 +31,7 @@ import {
 } from './snooze.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
+import { patchPerSourceContent } from './combinedViewPatch.js'
 import * as ops from './focusPlanOps.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
@@ -5713,6 +5714,12 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     const newContent = typeof result === 'string' ? result : result.content
     if (newContent === text) return
     await storage.writeToSource(sourceId, PLAN_FILE, newContent)
+    // Reflect the write immediately so the board re-renders now, instead of
+    // waiting on the reloadKey re-read below — that re-read hits the provider
+    // directly and can return stale content right after a write, which left the
+    // board stale until a full page reload (#411). The reloadKey bump still
+    // reconciles every source from storage in the background.
+    setPerSource(prev => patchPerSourceContent(prev, sourceId, newContent, parseFocusPlan))
     setReloadKey(k => k + 1)
   }
 
@@ -5890,6 +5897,11 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     const newCompleted = ops.opAppendToCompleted(completedText, completedRow)
     await storage.writeToSource(sid, COMPLETED_FILE, newCompleted)
     await storage.writeToSource(sid, PLAN_FILE, newFocus)
+    // Reflect the completion immediately so the row disappears from the board
+    // now, instead of waiting on the async reloadKey re-read below (#411 — same
+    // stale-render class as the link path in applyOp). The reload still
+    // reconciles every source from storage in the background.
+    setPerSource(prev => patchPerSourceContent(prev, sid, newFocus, parseFocusPlan))
 
     // Write the optional close-out comment into the task journal.
     const closeOutText = formatCloseOutComment(closeout.outcome, closeout.comment)
