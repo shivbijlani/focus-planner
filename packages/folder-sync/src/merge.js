@@ -20,6 +20,8 @@
 // legacy/external write with clock 0 (loses to any explicit clock). Callers
 // should stamp a real clock via stampWrite when importing external edits.
 
+import { diag, isDiagEnabled } from '../../diagnostics/src/index.js'
+
 const SIDECAR_VERSION = 1
 
 // #371 collapse guard: the minimum number of alive meta rows that must be about
@@ -111,6 +113,47 @@ function pickWinner(a, b) {
   return sa > sb ? a : b
 }
 
+function summarizeEntry(entry) {
+  if (!entry.present) return { present: false }
+  const out = {
+    present: true,
+    clock: entry.clock ?? 0,
+    deleted: !!entry.deleted,
+  }
+  const fp = entry.fp ?? (!entry.deleted && entry.content !== undefined ? fingerprint(entry.content) : undefined)
+  if (fp !== undefined) out.fp = fp
+  return out
+}
+
+function mergeDecisionReason(a, b) {
+  if (!a.present) return 'remote-only'
+  if (!b.present) return 'local-only'
+  if (a.clock !== b.clock) return 'last-write-wins'
+  if (a.deleted !== b.deleted) return 'delete-beats-live'
+  if (a.deleted && b.deleted) return 'matching-tombstones'
+  const sa = serialize(a.content)
+  const sb = serialize(b.content)
+  return sa === sb ? 'same-content' : 'content-tiebreak'
+}
+
+function logMergeDecision(id, localEntry, remoteEntry, winner) {
+  if (!isDiagEnabled()) return
+  const winnerSide = winner === localEntry ? 'local' : 'remote'
+  const droppedSide = localEntry.present && remoteEntry.present
+    ? (winnerSide === 'local' ? 'remote' : 'local')
+    : null
+  const reason = mergeDecisionReason(localEntry, remoteEntry)
+  diag('folder-sync.merge', 'record-decision', {
+    id,
+    reason,
+    winner: winner.present ? winnerSide : null,
+    dropped: droppedSide,
+    droppedOnLww: reason === 'last-write-wins' ? droppedSide : null,
+    local: summarizeEntry(localEntry),
+    remote: summarizeEntry(remoteEntry),
+  })
+}
+
 /**
  * Merge two collection snapshots with per-record LWW + tombstones.
  *
@@ -133,7 +176,10 @@ export function mergeCollections(local = {}, remote = {}) {
   const mergedMeta = {}
 
   for (const id of ids) {
-    const winner = pickWinner(sideEntry(localSnap, id), sideEntry(remoteSnap, id))
+    const localEntry = sideEntry(localSnap, id)
+    const remoteEntry = sideEntry(remoteSnap, id)
+    const winner = pickWinner(localEntry, remoteEntry)
+    logMergeDecision(id, localEntry, remoteEntry, winner)
     if (!winner.present) continue
     if (winner.deleted) {
       mergedMeta[id] = winner.fp !== undefined
@@ -145,12 +191,22 @@ export function mergeCollections(local = {}, remote = {}) {
     }
   }
 
-  return {
+  const result = {
     records: mergedRecords,
     meta: mergedMeta,
     localChanged: !snapshotEqual(localSnap, { records: mergedRecords, meta: mergedMeta }),
     remoteChanged: !snapshotEqual(remoteSnap, { records: mergedRecords, meta: mergedMeta }),
   }
+  if (isDiagEnabled()) {
+    diag('folder-sync.merge', 'collections-merged', {
+      ids: ids.size,
+      records: Object.keys(result.records).length,
+      tombstones: Object.values(result.meta).filter((m) => m?.deleted).length,
+      localChanged: result.localChanged,
+      remoteChanged: result.remoteChanged,
+    })
+  }
+  return result
 }
 
 // Two snapshots are equal if their alive records and their meta (clock+deleted)
