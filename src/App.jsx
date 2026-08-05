@@ -37,6 +37,7 @@ import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment } from './journalChat.js'
 import * as readStateService from './readState/readStateService.js'
+import { journalLoadQueue } from './journalLoadQueue.js'
 import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
 import { SETTINGS_FILE } from './storage/settings.js'
 import { AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE } from './config/aiSettings.js'
@@ -1185,7 +1186,7 @@ function renderIconsWithTooltips(text, keyOffset = 0) {
 }
 
 // Task row component with expandable todos
-function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup }) {
+function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, loadOrder = 0 }) {
   const [todosExpanded, setTodosExpanded] = useState(false)
   const [todos, setTodos] = useState(null)
   const [todosLoading, setTodosLoading] = useState(false)
@@ -1213,39 +1214,41 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
     }
   }, [taskId, journalChecked])
   
-  // Fetch todos when journal path is known. We read the journal once and derive
-  // BOTH the todo list and the Telegram deep link (if the journal carries a
-  // tg-meta marker) from the same content — no extra round-trips.
-  useEffect(() => {
-    if (journalPath && todos === null) {
-      setTodosLoading(true)
-      storage.read(journalPath)
-        .then(content => {
-          setTodos(storage.parseTodos(content) || [])
-          setTelegram(parseTgLink(content))
-          setTodosLoading(false)
-        })
-        .catch(() => {
-          setTodos([])
-          setTodosLoading(false)
-        })
-    }
-  }, [journalPath])
-
-  // Journal read/unread indicator (task #311). The row holds NO business logic:
-  // it hands the raw journal content to the read-state service (which computes
-  // the signature + decides unread), renders the boolean, and fires an "opened"
-  // event when the user opens the journal. localStorage is one provider behind
-  // the service; the UI never touches it directly.
   const [isJournalUnread, setIsJournalUnread] = useState(false)
+
+  // Read the journal ONCE, funneled through journalLoadQueue, and derive
+  // everything the row needs from that single fetch: the todo list, the Telegram
+  // deep link (tg-meta marker), and the read/unread signature (task #311).
+  //
+  // Previously each row fired two independent storage.read() calls for the same
+  // file, and every row did so the moment it mounted — ~180 concurrent journal
+  // reads on a 90-row board, which stalls cloud storage providers. The queue
+  // collapses that to one read per row, run a few at a time in board order via
+  // `loadOrder` (Today first, top-to-bottom). Each row still paints incrementally
+  // as its own read resolves.
   useEffect(() => {
-    if (!journalPath || !taskId) return
+    if (!journalPath || todos !== null) return
     let cancelled = false
-    storage.read(journalPath)
-      .then(content => { if (!cancelled) readStateService.track(taskId, content) })
-      .catch(() => {})
+    setTodosLoading(true)
+    journalLoadQueue.enqueue(journalPath, loadOrder, () => storage.read(journalPath))
+      .then(content => {
+        if (cancelled) return
+        setTodos(storage.parseTodos(content) || [])
+        setTelegram(parseTgLink(content))
+        setTodosLoading(false)
+        if (taskId) readStateService.track(taskId, content)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setTodos([])
+        setTodosLoading(false)
+      })
     return () => { cancelled = true }
-  }, [journalPath, taskId])
+  }, [journalPath, loadOrder, taskId])
+
+  // Read/unread indicator (task #311): the row renders the boolean from the
+  // read-state service and re-renders when the service announces a change. The
+  // raw content is handed to the service by the single journal read above.
   useEffect(() => {
     if (!taskId) return
     const update = () => setIsJournalUnread(readStateService.isUnread(taskId))
@@ -2059,6 +2062,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
                 <TaskRow 
                   key={`${extractTaskId(row) || 'row'}-${i}`} 
                   row={row} 
+                  loadOrder={i}
                   headers={headers} 
                   onNavigate={onNavigate}
                   managerPriorities={managerPriorities}
