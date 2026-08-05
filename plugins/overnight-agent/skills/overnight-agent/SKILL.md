@@ -352,7 +352,10 @@ If a linked journal is missing or empty, note it and proceed with what you have 
      user can resolve (write the exact ask in **Needs from you**). `mark` re-snapshots the journal so the
      task goes quiet until the user replies again.
 
-3. Reflect completion on the board (see "Updating the planner board").
+3. **Do not move the row on the board.** Completing a task (moving its row to
+   `planner-completed.md`) is the **user's** action in the Focus Planner app — never the agent's.
+   Record `done` in agent state + the journal Run log only, and leave the board row in `planner.md`
+   for the user to complete (see "Updating the planner board").
 
 ### PHASE 1.5 — Spawn child tasks (when finishing a job needs work that isn't on the board)
 
@@ -398,9 +401,9 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
 
    Then branch:
    - **Already complete** → don't propose a plan. Set the block to `done` with a one-line Run log
-     noting how you determined it's complete ("user note says bought 2026-06-10"), and move the row
-     to `planner-completed.md` per "Updating the planner board". Surface it under **Already done** in
-     the wrap-up so the user can confirm.
+     noting how you determined it's complete ("user note says bought 2026-06-10"). **Do not move the
+     row to `planner-completed.md`** — leave it in `planner.md` for the user to complete in the app.
+     Surface it under **Already done** in the wrap-up so the user can confirm.
    - **Partially done / superseded** → propose only the *remaining* work, and say in the plan what's
      already handled and what you're skipping because of it.
    - **Genuinely not started** → propose normally.
@@ -496,11 +499,15 @@ Report back to the user a short summary:
 Be conservative with the board — it's the user's at-a-glance view.
 
 - While a task is in progress, **don't** rewrite its row; the journal holds the detail.
-- When an approved plan **completes the whole task**, move its row out of `planner.md` and into
-  `planner-completed.md`, marking it `✅` with the completion date, **matching the existing format**
-  in that file (e.g. `| 243 | ✅ | <title> | P0 | <date> |`). Keep the user's other rows untouched.
-- Do **not** reinterpret or churn the 🎯 status icons the user set (🟡/🔴/⚪/📖 etc.). Only change
-  status as part of a genuine completion move, and only for the task you actually finished.
+- **Never write to `planner-completed.md`, and never move or delete a row to mark it complete.**
+  Completion is the **user's** action in the Focus Planner app — the app is the only thing that moves a
+  row to the completed board. When the agent finishes an approved task's scope, it records `done` in its
+  own state (`oa-state.ps1 mark … -Status done`) + a journal Run log entry, and **leaves the board row
+  untouched in `planner.md`** for the user to complete. Any archive/close behavior that keys off the
+  completed board (e.g. Telegram topic archiving) then triggers only from the user's app-driven
+  completion.
+- Do **not** reinterpret or churn the 🎯 status icons the user set (🟡/🔴/⚪/📖 etc.), or otherwise
+  rewrite the user's rows.
 
 ## Reversibility — what you may do *while planning* vs. what needs approval
 
