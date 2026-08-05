@@ -81,7 +81,12 @@ export class OneDriveProvider {
   async read(path) {
     await this._ensureToken()
     const url = `${APPROOT}:/${path}:/content`
-    const res = await fetch(url, { headers: this._authHeader() })
+    // `cache: 'no-store'` is required for read-your-writes: Graph's :/content
+    // endpoint redirects to a cacheable CDN URL, so a default fetch can serve a
+    // stale body immediately after a write. The Combined view re-reads a source
+    // right after writing to it (link/mark handlers -> applyOp), so a cached read
+    // left the board showing stale content until a full page reload (#411).
+    const res = await fetch(url, { headers: this._authHeader(), cache: 'no-store' })
     if (res.status === 404) return ''
     if (!res.ok) throw new Error(`OneDrive read failed: ${res.status}`)
     return res.text()
