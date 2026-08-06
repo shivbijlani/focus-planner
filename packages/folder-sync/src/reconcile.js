@@ -9,6 +9,8 @@
 // without IndexedDB, a service-worker context, or network access. The service
 // worker supplies the concrete sets and predicates.
 
+import { diag } from '../../diagnostics/src/index.js'
+
 /**
  * @param {object} args
  * @param {Iterable<string>} args.candidates   Sync-managed file names to consider
@@ -72,11 +74,20 @@ export function isMassDeletion({ deletableCount, toDeleteCount }) {
  */
 export function planMirrorSync({ mirrorDeleted, mirrorContent, activeContent }) {
   const active = activeContent ?? ''
+  let action
   if (mirrorDeleted) {
-    return active !== '' ? 'delete' : 'skip'   // remove only if still present
+    action = active !== '' ? 'delete' : 'skip'   // remove only if still present
+  } else {
+    const mirror = mirrorContent ?? ''
+    action = active !== mirror ? 'write' : 'skip'  // rehydrate / update when diverged
   }
-  const mirror = mirrorContent ?? ''
-  return active !== mirror ? 'write' : 'skip'  // rehydrate / update when diverged
+  diag('folder-sync.reconcile', 'mirror-sync-decision', {
+    mirrorDeleted: !!mirrorDeleted,
+    mirrorBytes: typeof mirrorContent === 'string' ? mirrorContent.length : 0,
+    activeBytes: active.length,
+    action,
+  })
+  return action
 }
 
 export function filesToDeleteLocally({
@@ -90,10 +101,14 @@ export function filesToDeleteLocally({
   const pend = pending instanceof Set ? pending : new Set(pending)
   const out = []
   for (const name of new Set(candidates)) {
-    if (remote.has(name)) continue       // still on remote
-    if (isSidecar(name)) continue        // sync metadata, not user data
-    if (isRecordFile(name)) continue     // row-level files use tombstones
-    if (pend.has(name)) continue         // local change not yet pushed
+    let action = 'delete'
+    let reason = 'remote-absent'
+    if (remote.has(name)) { action = 'keep'; reason = 'remote-present' }       // still on remote
+    else if (isSidecar(name)) { action = 'keep'; reason = 'sidecar' }          // sync metadata, not user data
+    else if (isRecordFile(name)) { action = 'keep'; reason = 'record-file' }   // row-level files use tombstones
+    else if (pend.has(name)) { action = 'keep'; reason = 'pending-local' }     // local change not yet pushed
+    diag('folder-sync.reconcile', 'local-delete-decision', { name, action, reason })
+    if (action === 'keep') continue
     out.push(name)
   }
   return out
@@ -128,16 +143,27 @@ export function filesToDeleteLocally({
  */
 export function planPlainPush({ localContent, tracked, remoteHas }) {
   const localDeleted = localContent === null || localContent === undefined
+  let action
   if (localDeleted) {
     // Only delete remote files we've synced before. An untracked local deletion
     // on first contact must not wipe pre-existing cloud data.
-    return tracked ? 'delete' : 'skip'
+    action = tracked ? 'delete' : 'skip'
+  } else if (!tracked && remoteHas) {
+    // Local has content. Creating a brand-new remote file is always safe.
+    // Overwriting a file the remote already has, when we've never synced it, would
+    // clobber pre-existing cloud data — defer to the pull/merge step instead.
+    action = 'skip'
+  } else {
+    action = 'write'
   }
-  // Local has content. Creating a brand-new remote file is always safe.
-  // Overwriting a file the remote already has, when we've never synced it, would
-  // clobber pre-existing cloud data — defer to the pull/merge step instead.
-  if (!tracked && remoteHas) return 'skip'
-  return 'write'
+  diag('folder-sync.reconcile', 'plain-push-decision', {
+    localDeleted,
+    localBytes: typeof localContent === 'string' ? localContent.length : 0,
+    tracked: !!tracked,
+    remoteHas: !!remoteHas,
+    action,
+  })
+  return action
 }
 
 /**
@@ -162,10 +188,19 @@ export function planPlainPush({ localContent, tracked, remoteHas }) {
  * @returns {boolean} true if the file should be downloaded.
  */
 export function shouldPullRemote({ lastSeen, remoteMtime, localPresent }) {
-  if (!lastSeen) return true               // never synced → pull
-  if (remoteMtime > lastSeen) return true  // remote changed → pull
-  if (!localPresent) return true           // local copy missing → restore it
-  return false                             // up to date and present → skip
+  let decision = false
+  let reason = 'up-to-date'
+  if (!lastSeen) { decision = true; reason = 'never-synced' }              // never synced → pull
+  else if (remoteMtime > lastSeen) { decision = true; reason = 'remote-newer' } // remote changed → pull
+  else if (!localPresent) { decision = true; reason = 'local-missing' }    // local copy missing → restore it
+  diag('folder-sync.reconcile', 'pull-decision', {
+    lastSeen: lastSeen ?? null,
+    remoteMtime,
+    localPresent: !!localPresent,
+    pull: decision,
+    reason,
+  })
+  return decision
 }
 
 /**
