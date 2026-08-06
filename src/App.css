@@ -3549,6 +3549,11 @@ tr.highlight-flash {
   font-size: 0.72rem;
   color: #64748b;
 }
+.settings-diagnostics-row {
+  border-top: 1px solid rgba(30, 58, 95, 0.7);
+  margin-top: 0.35rem;
+  padding-top: 0.75rem;
+}
 .settings-mission-hint {
   font-size: 0.72rem;
   color: #64748b;
