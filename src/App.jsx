@@ -52,6 +52,11 @@ import {
   InstallButton, InstallModal, InstallNudge,
   InstallSettingsSection, InstallSuccessToast,
 } from '../packages/install-prompt/src/index.js'
+import {
+  disableDiagnostics,
+  enableDiagnostics,
+  isDiagEnabled,
+} from '../packages/diagnostics/src/index.js'
 import '../packages/install-prompt/src/styles/install-prompt.css'
 
 // ── Multi-source path helpers ───────────────────────────────────────
@@ -4638,6 +4643,7 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
   // App update (force latest service worker — fixes "stale build on mobile").
   const [updating, setUpdating] = useState(false)
   const [updateMsg, setUpdateMsg] = useState('')
+  const [diagnosticsEnabled, setDiagnosticsEnabled] = useState(isDiagEnabled())
   const oneDrive = targetStatus(syncStatus, PROVIDERS.ONEDRIVE)
   const aggregate = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
   const syncClass = aggregate.replace(/[^a-z-]/g, '')
@@ -4995,6 +5001,12 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
     }, 800)
   }
 
+  const toggleDiagnostics = () => {
+    if (diagnosticsEnabled) disableDiagnostics()
+    else enableDiagnostics()
+    setDiagnosticsEnabled(isDiagEnabled())
+  }
+
   return (
     <>
       <div className="sidebar-storage-footer">
@@ -5038,27 +5050,6 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
             <div className="settings-dialog-header">
               <h3>Settings</h3>
               <button className="settings-dialog-close" onClick={close}>✕</button>
-            </div>
-
-            <div className={`settings-dialog-section${sectionCollapsed.appVersion ? ' collapsed' : ''}`}>
-              <SettingsSectionTitle id="appVersion" label="App version" collapsed={!!sectionCollapsed.appVersion} onToggle={toggleSection} />
-              <div className="settings-update-row">
-                <div className="settings-update-info">
-                  <span className="settings-update-build">Build {storage.getBuildId()}</span>
-                  <span className="settings-update-hint">
-                    On a phone seeing stale data? Update to load the latest sync fixes.
-                  </span>
-                </div>
-                <button
-                  className="storage-footer-btn sync-target-action"
-                  onClick={handleUpdateApp}
-                  disabled={updating}
-                  title="Check for a new version and reload"
-                >
-                  {updating ? 'Updating…' : 'Update app'}
-                </button>
-              </div>
-              {updateMsg && <div className="settings-update-msg">{updateMsg}</div>}
             </div>
 
             <InstallSettingsSection onOpen={() => setInstallOpen(true)} appName={APP_NAME} />
@@ -5488,6 +5479,50 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
               {oneDrive.message && <div className="storage-footer-error">{oneDrive.message}</div>}
               <div className="storage-footer-note">
                 You can keep using {APP_NAME} without signing in. If you edit offline, backup resumes when you reconnect.
+              </div>
+            </div>
+
+            <div className={`settings-dialog-section${sectionCollapsed.appDiagnostics ? ' collapsed' : ''}`}>
+              <SettingsSectionTitle
+                id="appDiagnostics"
+                label="App version & diagnostics"
+                collapsed={!!sectionCollapsed.appDiagnostics}
+                onToggle={toggleSection}
+              />
+              <div className="settings-update-row">
+                <div className="settings-update-info">
+                  <span className="settings-update-build">Build {storage.getBuildId()}</span>
+                  <span className="settings-update-hint">
+                    On a phone seeing stale data? Update to load the latest sync fixes.
+                  </span>
+                </div>
+                <button
+                  className="storage-footer-btn sync-target-action"
+                  onClick={handleUpdateApp}
+                  disabled={updating}
+                  title="Check for a new version and reload"
+                >
+                  {updating ? 'Updating…' : 'Update app'}
+                </button>
+              </div>
+              {updateMsg && <div className="settings-update-msg">{updateMsg}</div>}
+              <div className="settings-update-row settings-diagnostics-row">
+                <div className="settings-update-info">
+                  <span className="settings-update-build">
+                    Diagnostics {diagnosticsEnabled ? 'on' : 'off'}
+                  </span>
+                  <span className="settings-update-hint">
+                    Captures sync decisions in the browser console and CDP buffer. Off by default.
+                  </span>
+                </div>
+                <button
+                  className="storage-footer-btn sync-target-action"
+                  onClick={toggleDiagnostics}
+                  aria-pressed={diagnosticsEnabled}
+                  title={`${diagnosticsEnabled ? 'Disable' : 'Enable'} diagnostics`}
+                >
+                  {diagnosticsEnabled ? 'Turn off' : 'Turn on'}
+                </button>
               </div>
             </div>
 
