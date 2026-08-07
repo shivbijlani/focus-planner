@@ -7,6 +7,7 @@ const state = {
   buffer: [],
   sinks: new Map(),
 }
+const workerDiagnosticClients = new Set()
 
 function root() {
   return typeof globalThis !== 'undefined' ? globalThis : {}
@@ -152,6 +153,18 @@ export function disableDiagnostics({ persist = true } = {}) {
   postWorkerToggle(false)
 }
 
+export function setWorkerDiagnosticsForClient(clientId, enabled) {
+  const id = String(clientId || 'unknown-client')
+  if (enabled) workerDiagnosticClients.add(id)
+  else workerDiagnosticClients.delete(id)
+
+  if (workerDiagnosticClients.size > 0) {
+    if (!state.enabled) enableDiagnostics({ persist: false })
+  } else if (state.enabled) {
+    disableDiagnostics({ persist: false })
+  }
+}
+
 export function clearDiagnostics() {
   state.buffer.length = 0
 }
@@ -218,8 +231,7 @@ function installWorkerListener() {
   if (!isWorkerGlobal()) return
   root().self.addEventListener('message', (evt) => {
     if (evt.data?.type !== 'planner-diag-enable') return
-    if (evt.data.enabled) enableDiagnostics({ persist: false })
-    else disableDiagnostics({ persist: false })
+    setWorkerDiagnosticsForClient(evt.source?.id, Boolean(evt.data.enabled))
   })
 }
 
@@ -228,6 +240,7 @@ export function resetDiagnosticsForTests() {
   state.limit = DEFAULT_LIMIT
   state.buffer.length = 0
   state.sinks.clear()
+  workerDiagnosticClients.clear()
   installDefaultSinks()
 }
 
@@ -237,8 +250,7 @@ installWorkerListener()
 if (shouldAutoEnable()) {
   enableDiagnostics({ persist: false })
 } else {
-  // A service worker outlives the page that enabled it. Explicitly send "off"
-  // on a normal load so removing ?diag=1 (or clearing the saved setting) also
-  // stops worker console/relay traffic instead of leaving a hidden firehose.
+  // Remove only this page from the worker's enabled-client set. A normal tab
+  // must not disable worker diagnostics requested by a separate ?diag=1 tab.
   postWorkerToggle(false)
 }

@@ -247,6 +247,7 @@ export class GoogleDriveProvider {
       headers: this._authHeader(),
       signal,
     })
+    if (!res.ok) throw new Error(`Drive root folder lookup failed: ${res.status}`)
     const data = await res.json()
     if (data.files?.length > 0) {
       this._folderId = data.files[0].id
@@ -259,6 +260,7 @@ export class GoogleDriveProvider {
       body: JSON.stringify({ name: this._folder, mimeType: 'application/vnd.google-apps.folder' }),
       signal,
     })
+    if (!create.ok) throw new Error(`Drive root folder creation failed: ${create.status}`)
     const created = await create.json()
     this._folderId = created.id
     return this._folderId
@@ -283,6 +285,7 @@ export class GoogleDriveProvider {
         body: JSON.stringify({ name: part, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] }),
         signal,
       })
+      if (!res.ok) throw new Error(`Drive subfolder creation failed: ${res.status}`)
       const data = await res.json()
       parentId = data.id
     }
@@ -295,6 +298,7 @@ export class GoogleDriveProvider {
       headers: this._authHeader(),
       signal,
     })
+    if (!res.ok) throw new Error(`Drive folder lookup failed: ${res.status}`)
     const data = await res.json()
     return data.files?.[0]?.id ?? null
   }
@@ -319,6 +323,7 @@ export class GoogleDriveProvider {
       headers: this._authHeader(),
       signal,
     })
+    if (!res.ok) throw new Error(`Drive file lookup failed: ${res.status}`)
     const data = await res.json()
     const id = data.files?.[0]?.id ?? null
     if (id) this._fileIndex[path] = id
@@ -342,7 +347,7 @@ export class GoogleDriveProvider {
       const res = await fetch(`${DRIVE_API}/files?${params.toString()}`, {
         headers: this._authHeader(),
       })
-      if (!res.ok) break
+      if (!res.ok) throw new Error(`Drive folder listing failed: ${res.status}`)
       const data = await res.json()
       for (const f of data.files ?? []) files.push(f)
       pageToken = data.nextPageToken ?? null

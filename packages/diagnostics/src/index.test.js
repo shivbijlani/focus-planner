@@ -5,9 +5,11 @@ import {
   diag,
   dumpDiagnostics,
   enableDiagnostics,
+  isDiagEnabled,
   registerDiagSink,
   resetDiagnosticsForTests,
   setDiagnosticsLimit,
+  setWorkerDiagnosticsForClient,
   unregisterDiagSink,
 } from './index.js'
 
@@ -67,5 +69,16 @@ describe('diagnostics', () => {
     expect(table).not.toHaveBeenCalled()
     debug.mockRestore()
     table.mockRestore()
+  })
+
+  it('keeps worker diagnostics enabled while another client still requests them', () => {
+    setWorkerDiagnosticsForClient('diag-tab', true)
+    expect(isDiagEnabled()).toBe(true)
+
+    setWorkerDiagnosticsForClient('normal-tab', false)
+    expect(isDiagEnabled()).toBe(true)
+
+    setWorkerDiagnosticsForClient('diag-tab', false)
+    expect(isDiagEnabled()).toBe(false)
   })
 })

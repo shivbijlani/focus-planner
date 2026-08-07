@@ -39,6 +39,7 @@ import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment } from './journalChat.js'
 import * as readStateService from './readState/readStateService.js'
 import { enqueueJournalLoad, waitForInitialJournalLoads } from './journalLoadQueue.js'
+import { createJournalInSource } from './journalCreate.js'
 import {
   JOURNAL_EXISTENCE,
   canCreateJournal,
@@ -1238,6 +1239,8 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
           setTelegram(parseTgLink(content))
           readStateService.migrateSeenState(taskId, readStateId)
           readStateService.track(readStateId, content)
+        } else {
+          readStateService.resolveInitialSeedCandidate(readStateId)
         }
         setTodosLoading(false)
         setJournalChecked(true)
@@ -1777,6 +1780,17 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
   // ops route back to the correct source even when two sources share an
   // identical row text / id. `lineSourceIds` is parallel to the data rows.
   if (lineSourceIds) tagMergedRows(rows, lineSourceIds)
+  const seedCandidateKey = rows
+    .map((row) => {
+      const taskId = extractTaskId(row)
+      if (!taskId) return null
+      return journalReadStateId(row.__sourceId || getActiveSourceId(), taskId)
+    })
+    .filter(Boolean)
+    .join('\n')
+  useEffect(() => {
+    readStateService.registerInitialSeedCandidates(seedCandidateKey.split('\n').filter(Boolean))
+  }, [seedCandidateKey])
   const [contextMenu, setContextMenu] = useState(null)
   // #346: separate state for the kebab's "Change priority" submenu.
   const [priorityMenu, setPriorityMenu] = useState(null)
@@ -1971,7 +1985,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       options.push({
         label: 'Create Journal',
         icon: '📓',
-        action: () => onCreateJournal(taskId, taskName)
+        action: () => onCreateJournal(taskId, taskName, row.__sourceId)
       })
     }
     
@@ -5898,13 +5912,11 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     await applyOp(sourceId, c => ops.opAddTask(c, { task, priority, linkedTask, section }, journalIds))
   }
 
-  const handleCreateJournal = async (taskId, taskName) => {
-    const sid = sourceForTask(taskId)
+  const handleCreateJournal = async (taskId, taskName, sourceId) => {
+    const sid = sourceId
     if (!sid) return
-    const cleanName = (taskName || '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim()
-    const journalPath = `journal/task-${taskId}.md`
     try {
-      await storage.writeToSource(sid, journalPath, `# Task ${taskId}: ${cleanName}\n\n- TODO: \n`)
+      const journalPath = await createJournalInSource(storage, sid, taskId, taskName)
       // Refresh the sidebar tree so the newly created journal appears in the
       // hamburger pane immediately (task #371).
       await onDataChanged?.()

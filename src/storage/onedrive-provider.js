@@ -167,7 +167,8 @@ export class OneDriveProvider {
     // 404 and an empty file, so it can't distinguish them).
     const url = `${APPROOT}:/${path}`
     const res = await fetch(url, { headers: this._authHeader(), signal })
-    if (!res.ok) return { exists: false }
+    if (res.status === 404) return { exists: false, path }
+    if (!res.ok) throw new Error(`OneDrive journal check failed: ${res.status}`)
     return { exists: true, path }
   }
 

@@ -19,12 +19,17 @@ import { computeJournalSignature } from './signature.js'
 import { LocalStorageReadStateProvider } from './localStorageReadStateProvider.js'
 
 const OPENED_EVENT = 'fp:journal-opened'
+const PENDING_INITIAL_SEED = '__fp_pending_initial_seed__'
 
 let _provider = new LocalStorageReadStateProvider()
 
 // In-memory cache of each journal's current signature for this session. Filled
 // by track(); read by isUnread()/markSeen() so callers never pass signatures.
 const _currentSigs = new Map()
+// Journals present on the initial board remain seed-eligible until their first
+// successful hydration. This covers collapsed sections and transient failures
+// that finish after the global initial queue drain.
+const _initialSeedCandidates = new Set()
 
 // Subscribers notified when read-state may have changed (for re-render).
 const _subscribers = new Set()
@@ -91,6 +96,24 @@ export function migrateSeenState(legacyJournalId, journalId) {
   _provider.setSeen(id, _provider.getSeen(legacyId))
 }
 
+export function registerInitialSeedCandidates(journalIds) {
+  if (_provider.isInitialized()) return
+  for (const journalId of journalIds ?? []) {
+    if (journalId == null) continue
+    const id = String(journalId)
+    if (_provider.hasSeen(id)) continue
+    _initialSeedCandidates.add(id)
+    _provider.setSeen(id, PENDING_INITIAL_SEED)
+  }
+}
+
+/** Resolve a successful absence check so a journal created later is truly new. */
+export function resolveInitialSeedCandidate(journalId) {
+  const id = String(journalId)
+  _initialSeedCandidates.delete(id)
+  if (_provider.getSeen(id) === PENDING_INITIAL_SEED) _provider.deleteSeen?.(id)
+}
+
 /**
  * Hand the service a journal's current content. The service computes and caches
  * its signature and, during initial seeding, records it as already-seen.
@@ -102,9 +125,12 @@ export function track(journalId, content) {
   _currentSigs.set(id, sig)
 
   // First-load seeding: mark pre-existing journals as seen so day one is clean.
-  if (!_provider.isInitialized()) {
+  const pendingInitialSeed = _initialSeedCandidates.has(id)
+    || _provider.getSeen(id) === PENDING_INITIAL_SEED
+  if (!_provider.isInitialized() || pendingInitialSeed) {
     _provider.setSeen(id, sig)
   }
+  _initialSeedCandidates.delete(id)
 
   if (isUnread(id) !== wasUnread) notify(id)
 }
@@ -119,6 +145,7 @@ export function isUnread(journalId) {
   const cur = _currentSigs.get(id)
   if (cur == null) return false
   if (_provider.hasSeen(id)) {
+    if (_provider.getSeen(id) === PENDING_INITIAL_SEED) return false
     return _provider.getSeen(id) !== cur
   }
   return _provider.isInitialized() === true
@@ -174,6 +201,7 @@ _bus.on((journalId) => markSeen(journalId))
 // Test-only reset so unit tests can start from a clean in-memory state.
 export function __resetForTests(provider) {
   _currentSigs.clear()
+  _initialSeedCandidates.clear()
   _subscribers.clear()
   _journalSubscribers.clear()
   if (provider) _provider = provider

@@ -6,6 +6,8 @@ import {
   emitJournalOpened,
   completeInitialSeeding,
   migrateSeenState,
+  registerInitialSeedCandidates,
+  resolveInitialSeedCandidate,
   subscribe,
   setReadStateProvider,
   __resetForTests,
@@ -19,6 +21,7 @@ function fakeProvider() {
     getSeen: (id) => (seen.has(id) ? seen.get(id) : undefined),
     hasSeen: (id) => seen.has(id),
     setSeen: (id, sig) => { seen.set(id, sig) },
+    deleteSeen: (id) => { seen.delete(id) },
     isInitialized: () => initialized,
     setInitialized: (v) => { initialized = !!v },
     _seen: seen,
@@ -48,6 +51,46 @@ describe('readStateService seeding', () => {
   it('returns not-unread for a journal that has never been tracked', () => {
     completeInitialSeeding()
     expect(isUnread('nope')).toBe(false)
+  })
+
+  it('seeds a collapsed row when it first hydrates after initial completion', () => {
+    registerInitialSeedCandidates(['source-a::42'])
+    completeInitialSeeding()
+
+    track('source-a::42', 'pre-existing collapsed journal')
+
+    expect(isUnread('source-a::42')).toBe(false)
+    expect(provider.hasSeen('source-a::42')).toBe(true)
+  })
+
+  it('keeps failed initial hydration eligible through a later retry', () => {
+    registerInitialSeedCandidates(['source-a::42'])
+    completeInitialSeeding()
+    // The failed attempt never calls track(); the successful retry does.
+    track('source-a::42', 'pre-existing journal loaded on retry')
+
+    expect(isUnread('source-a::42')).toBe(false)
+  })
+
+  it('keeps failed hydration eligible across a reload before retry', () => {
+    registerInitialSeedCandidates(['source-a::42'])
+    completeInitialSeeding()
+    __resetForTests(provider)
+    setReadStateProvider(provider)
+
+    track('source-a::42', 'pre-existing journal loaded after reload')
+
+    expect(isUnread('source-a::42')).toBe(false)
+  })
+
+  it('clears eligibility after a confirmed absence', () => {
+    registerInitialSeedCandidates(['source-a::42'])
+    resolveInitialSeedCandidate('source-a::42')
+    completeInitialSeeding()
+
+    track('source-a::42', 'journal created after initial load')
+
+    expect(isUnread('source-a::42')).toBe(true)
   })
 })
 
