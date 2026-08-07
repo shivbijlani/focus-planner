@@ -7,7 +7,7 @@
 import { enqueue, peekAll } from './queue.js'
 import { getTokens, clearTokens } from './auth/tokenStore.js'
 import { idbSet, idbGet, idbKeys, idbDel } from './idb.js'
-import { mtimeKeysForProvider, planMirrorSync } from './reconcile.js'
+import { isConsumerVisibleMirrorPath, mtimeKeysForProvider, planMirrorSync } from './reconcile.js'
 import { diag } from '../../diagnostics/src/index.js'
 
 const CHANNEL = 'folder-sync'
@@ -133,8 +133,11 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
       let deletes = 0
       for (const k of keys) {
         if (typeof k !== 'string' || !k.startsWith('local:')) continue
-        scanned++
         const name = k.slice('local:'.length)
+        // Sidecars are service-worker merge metadata. Copying their routine
+        // rewrites into the app store only triggers a no-op file-tree refresh.
+        if (!isConsumerVisibleMirrorPath(name)) continue
+        scanned++
         const rec = await idbGet(META_STORE, k)
         if (!rec) continue
         let activeContent = ''

@@ -28,6 +28,7 @@ const _currentSigs = new Map()
 
 // Subscribers notified when read-state may have changed (for re-render).
 const _subscribers = new Set()
+const _journalSubscribers = new Map()
 
 // Event bus. Prefer a real EventTarget so the "opened" signal is a genuine
 // event; fall back to a minimal shim in environments without EventTarget.
@@ -52,8 +53,19 @@ function makeBus() {
 
 const _bus = makeBus()
 
-function notify() {
+function notify(journalId) {
   for (const cb of _subscribers) {
+    try { cb() } catch { /* a bad subscriber shouldn't break others */ }
+  }
+  if (journalId == null) {
+    for (const subscribers of _journalSubscribers.values()) {
+      for (const cb of subscribers) {
+        try { cb() } catch { /* a bad subscriber shouldn't break others */ }
+      }
+    }
+    return
+  }
+  for (const cb of _journalSubscribers.get(String(journalId)) ?? []) {
     try { cb() } catch { /* a bad subscriber shouldn't break others */ }
   }
 }
@@ -77,8 +89,8 @@ export function getReadStateProvider() {
  */
 export function track(journalId, content) {
   const id = String(journalId)
+  const wasUnread = isUnread(id)
   const sig = computeJournalSignature(content)
-  const prev = _currentSigs.get(id)
   _currentSigs.set(id, sig)
 
   // First-load seeding: mark pre-existing journals as seen so day one is clean.
@@ -86,7 +98,7 @@ export function track(journalId, content) {
     _provider.setSeen(id, sig)
   }
 
-  if (prev !== sig) notify()
+  if (isUnread(id) !== wasUnread) notify(id)
 }
 
 /**
@@ -109,8 +121,9 @@ export function markSeen(journalId) {
   const id = String(journalId)
   const cur = _currentSigs.get(id)
   if (cur != null) {
+    const wasUnread = isUnread(id)
     _provider.setSeen(id, cur)
-    notify()
+    if (wasUnread) notify(id)
   }
 }
 
@@ -127,10 +140,23 @@ export function completeInitialSeeding() {
   }
 }
 
-/** Subscribe to read-state changes (for re-render). Returns an unsubscribe fn. */
-export function subscribe(cb) {
-  _subscribers.add(cb)
-  return () => _subscribers.delete(cb)
+/**
+ * Subscribe to read-state changes. Passing a journal id scopes updates to that
+ * row; the callback-only form remains available for aggregate consumers.
+ */
+export function subscribe(journalIdOrCallback, callback) {
+  if (typeof journalIdOrCallback === 'function') {
+    _subscribers.add(journalIdOrCallback)
+    return () => _subscribers.delete(journalIdOrCallback)
+  }
+  const id = String(journalIdOrCallback)
+  const subscribers = _journalSubscribers.get(id) ?? new Set()
+  subscribers.add(callback)
+  _journalSubscribers.set(id, subscribers)
+  return () => {
+    subscribers.delete(callback)
+    if (subscribers.size === 0) _journalSubscribers.delete(id)
+  }
 }
 
 // The service is itself the controller that reacts to the "opened" event by
@@ -141,5 +167,6 @@ _bus.on((journalId) => markSeen(journalId))
 export function __resetForTests(provider) {
   _currentSigs.clear()
   _subscribers.clear()
+  _journalSubscribers.clear()
   if (provider) _provider = provider
 }

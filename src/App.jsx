@@ -39,6 +39,7 @@ import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment } from './journalChat.js'
 import * as readStateService from './readState/readStateService.js'
 import { journalLoadQueue } from './journalLoadQueue.js'
+import { sameFileTree } from './fileTreeEqual.js'
 import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
 import { SETTINGS_FILE } from './storage/settings.js'
 import { AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE } from './config/aiSettings.js'
@@ -1259,7 +1260,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
     if (!taskId) return
     const update = () => setIsJournalUnread(readStateService.isUnread(taskId))
     update()
-    return readStateService.subscribe(update)
+    return readStateService.subscribe(taskId, update)
   }, [taskId])
   
   const getPriorityClass = (priority) => {
@@ -6389,7 +6390,7 @@ function App() {
       const liveSources = getSources()
       if (liveSources.length <= 1) {
         const data = await storage.getFiles()
-        setFiles(data)
+        setFiles(prev => sameFileTree(prev, data) ? prev : data)
         return
       }
       const perSource = await Promise.all(
@@ -6416,7 +6417,8 @@ function App() {
         path: `${source.id}::`,
         children: prefixTreePaths(tree, source.id),
       }))
-      setFiles([combinedFolder, ...sourceFolders])
+      const nextFiles = [combinedFolder, ...sourceFolders]
+      setFiles(prev => sameFileTree(prev, nextFiles) ? prev : nextFiles)
     } catch (err) {
       console.error('Failed to load files:', err)
     }

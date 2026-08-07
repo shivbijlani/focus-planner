@@ -100,6 +100,34 @@ describe('subscribe', () => {
     markSeen('1')
     expect(calls).toBe(afterUnsub)
   })
+
+  it('only notifies the row whose journal changed', () => {
+    let task1Calls = 0
+    let task2Calls = 0
+    subscribe('1', () => { task1Calls += 1 })
+    subscribe('2', () => { task2Calls += 1 })
+
+    completeInitialSeeding()
+    const task1Before = task1Calls
+    const task2Before = task2Calls
+    track('1', '## 2026-06-02\na')
+
+    expect(task1Calls).toBe(task1Before + 1)
+    expect(task2Calls).toBe(task2Before)
+  })
+
+  it('does not notify when tracking identical content again', () => {
+    let calls = 0
+    subscribe('1', () => { calls += 1 })
+    completeInitialSeeding()
+    const beforeTrack = calls
+    track('1', '## 2026-06-02\na')
+    expect(calls).toBe(beforeTrack + 1)
+
+    track('1', '## 2026-06-02\na')
+
+    expect(calls).toBe(beforeTrack + 1)
+  })
 })
 
 describe('provider swappability', () => {

@@ -11,6 +11,10 @@
 
 import { diag } from '../../diagnostics/src/index.js'
 
+export function isConsumerVisibleMirrorPath(name) {
+  return typeof name === 'string' && !name.endsWith('.sync.json')
+}
+
 /**
  * @param {object} args
  * @param {Iterable<string>} args.candidates   Sync-managed file names to consider
