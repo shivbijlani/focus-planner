@@ -83,6 +83,14 @@ export function getReadStateProvider() {
 
 // ── Public API used by the UI ──────────────────────────────────────
 
+/** Copy legacy bare-task seen state into a source-qualified journal id once. */
+export function migrateSeenState(legacyJournalId, journalId) {
+  const legacyId = String(legacyJournalId)
+  const id = String(journalId)
+  if (legacyId === id || _provider.hasSeen(id) || !_provider.hasSeen(legacyId)) return
+  _provider.setSeen(id, _provider.getSeen(legacyId))
+}
+
 /**
  * Hand the service a journal's current content. The service computes and caches
  * its signature and, during initial seeding, records it as already-seen.

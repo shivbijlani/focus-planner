@@ -40,6 +40,7 @@ import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutCo
 import * as readStateService from './readState/readStateService.js'
 import { enqueueJournalLoad, waitForInitialJournalLoads } from './journalLoadQueue.js'
 import { sameFileTree } from './fileTreeEqual.js'
+import { joinSourcePath, journalReadStateId } from './sourcePath.js'
 import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
 import { SETTINGS_FILE } from './storage/settings.js'
 import { AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE } from './config/aiSettings.js'
@@ -74,10 +75,6 @@ function splitSourcePath(qualified) {
   const idx = qualified.indexOf('::')
   if (idx === -1) return { sourceId: null, path: qualified }
   return { sourceId: qualified.slice(0, idx), path: qualified.slice(idx + 2) }
-}
-
-function joinSourcePath(sourceId, path) {
-  return sourceId ? `${sourceId}::${path}` : path
 }
 
 function prefixTreePaths(items, sourceId) {
@@ -1193,8 +1190,9 @@ function renderIconsWithTooltips(text, keyOffset = 0) {
 }
 
 // Task row component with expandable todos
-function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, loadOrder = 0 }) {
+function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, loadOrder = 0 }) {
   const taskId = extractTaskId(row)
+  const readStateId = journalReadStateId(sourceId, taskId)
   const [todosExpanded, setTodosExpanded] = useState(false)
   const [todos, setTodos] = useState(null)
   const [todosLoading, setTodosLoading] = useState(Boolean(taskId))
@@ -1221,7 +1219,8 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
           setJournalPath(path)
           setTodos(storage.parseTodos(content) || [])
           setTelegram(parseTgLink(content))
-          readStateService.track(taskId, content)
+          readStateService.migrateSeenState(taskId, readStateId)
+          readStateService.track(readStateId, content)
         }
         setTodosLoading(false)
         setJournalChecked(true)
@@ -1233,7 +1232,7 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
         setJournalChecked(true)
       })
     return () => { cancelled = true }
-  }, [journalChecked, journalProvider, loadOrder, taskId])
+  }, [journalChecked, journalProvider, loadOrder, readStateId, taskId])
 
   const [isJournalUnread, setIsJournalUnread] = useState(false)
 
@@ -1242,10 +1241,10 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
   // raw content is handed to the service by the single journal read above.
   useEffect(() => {
     if (!taskId) return
-    const update = () => setIsJournalUnread(readStateService.isUnread(taskId))
+    const update = () => setIsJournalUnread(readStateService.isUnread(readStateId))
     update()
-    return readStateService.subscribe(taskId, update)
-  }, [taskId])
+    return readStateService.subscribe(readStateId, update)
+  }, [readStateId, taskId])
   
   const getPriorityClass = (priority) => {
     if (priority?.includes('🔴')) return 'priority-urgent'
@@ -1491,8 +1490,8 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
                               title="Open Journal"
                               onClick={(e) => {
                                 e.preventDefault()
-                                readStateService.emitJournalOpened(taskId)
-                                onNavigate(journalPath, null, 'chat')
+                                readStateService.emitJournalOpened(readStateId)
+                                onNavigate(joinSourcePath(navigationSourceId, journalPath), null, 'chat')
                               }}
                             >
                               📔
@@ -1637,8 +1636,8 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
                         title="Open Journal"
                         onClick={(e) => {
                           e.preventDefault()
-                          readStateService.emitJournalOpened(taskId)
-                          onNavigate(journalPath, null, 'chat')
+                          readStateService.emitJournalOpened(readStateId)
+                          onNavigate(joinSourcePath(navigationSourceId, journalPath), null, 'chat')
                         }}
                       >
                         {/* #373: wrap glyph + pip so the ★ hugs the emoji corner (like
@@ -1760,7 +1759,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
   const isTaskSection = title === 'Today' || title === 'Deferred'
   if (sortedRows.length === 0 && !showAddDialog && !isTaskSection) return null
   
-  const openTaskPiP = async (taskId, taskName, priority, journalPath) => {
+  const openTaskPiP = async (taskId, taskName, priority, journalPath, sourceId, navigationSourceId) => {
     const pipWindow = await documentPictureInPicture.requestWindow({
       width: 420,
       height: 320,
@@ -1800,7 +1799,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     // Double-click anywhere to jump to journal in main window
     pipWindow.document.body.addEventListener('dblclick', () => {
       if (journalPath) {
-        onNavigate(journalPath)
+        onNavigate(joinSourcePath(navigationSourceId, journalPath))
       }
       window.focus()
     })
@@ -1808,7 +1807,9 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     // Fetch and show todos if journal exists
     if (journalPath) {
       try {
-        const todos = await storage.getTodos(journalPath)
+        const todos = sourceId
+          ? await storage.getTodosFromSource(sourceId, journalPath)
+          : await storage.getTodos(journalPath)
         if (todos.length > 0) {
           const label = pipWindow.document.createElement('div')
           label.className = 'pip-section-label'
@@ -1842,6 +1843,9 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
 
   const handleContextMenu = (e, rawLine, row, journalPath, taskId, telegram) => {
     const options = []
+    const rowSourceId = row.__sourceId || getActiveSourceId()
+    const rowReadStateId = journalReadStateId(rowSourceId, taskId)
+    const qualifiedJournalPath = joinSourcePath(row.__sourceId, journalPath)
     const currentSnoozeUntil = row.snoozeUntil || parseSnoozeUntil(rawLine)
     
     if (title === 'Today') {
@@ -1906,8 +1910,8 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
           label: 'Open journal',
           icon: '📔',
           action: () => {
-            readStateService.emitJournalOpened(taskId)
-            onNavigate(journalPath, null, 'chat')
+            readStateService.emitJournalOpened(rowReadStateId)
+            onNavigate(qualifiedJournalPath, null, 'chat')
           }
         })
       } else {
@@ -1915,8 +1919,8 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
           label: 'Open chat',
           icon: '💬',
           action: () => {
-            readStateService.emitJournalOpened(taskId)
-            onNavigate(journalPath, null, 'chat')
+            readStateService.emitJournalOpened(rowReadStateId)
+            onNavigate(qualifiedJournalPath, null, 'chat')
           }
         })
       }
@@ -1939,7 +1943,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       options.push({
         label: 'Focus Sticky Note',
         icon: '📌',
-        action: () => openTaskPiP(taskId, taskName, priority, journalPath)
+        action: () => openTaskPiP(taskId, taskName, priority, journalPath, rowSourceId, row.__sourceId)
       })
     }
     
@@ -2056,6 +2060,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
                   key={`${journalSourceId || 'active'}-${extractTaskId(row) || 'row'}-${i}`}
                   row={row} 
                   sourceId={journalSourceId}
+                  navigationSourceId={row.__sourceId}
                   loadOrder={i}
                   headers={headers} 
                   onNavigate={onNavigate}
@@ -3768,6 +3773,8 @@ function CompletedTaskRow({ row, headers, priorityCol, getPriorityClass, onNavig
   const taskId = typeof idValue === 'object'
     ? idValue.id?.match(/\d+/)?.[0]
     : String(idValue).match(/\d+/)?.[0]
+  const sourceId = getActiveSourceId()
+  const readStateId = journalReadStateId(sourceId, taskId)
 
   const [journalPath, setJournalPath] = useState(null)
   useEffect(() => {
@@ -3797,7 +3804,7 @@ function CompletedTaskRow({ row, headers, priorityCol, getPriorityClass, onNavig
                   title="Open journal"
                   onClick={(e) => {
                     e.preventDefault()
-                    readStateService.emitJournalOpened(taskId)
+                    readStateService.emitJournalOpened(readStateId)
                     onNavigate(journalPath)
                   }}
                 >
@@ -5862,7 +5869,7 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
       // Refresh the sidebar tree so the newly created journal appears in the
       // hamburger pane immediately (task #371).
       await onDataChanged?.()
-      onNavigate(journalPath)
+      onNavigate(joinSourcePath(sid, journalPath))
     } catch (e) {
       console.error('Failed to create journal:', e)
     }

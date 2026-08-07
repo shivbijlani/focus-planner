@@ -5,6 +5,7 @@ import {
   markSeen,
   emitJournalOpened,
   completeInitialSeeding,
+  migrateSeenState,
   subscribe,
   setReadStateProvider,
   __resetForTests,
@@ -82,6 +83,27 @@ describe('read/unread lifecycle', () => {
     expect(isUnread(7)).toBe(true)
     emitJournalOpened(7)
     expect(isUnread('7')).toBe(false)
+  })
+
+  it('keeps duplicate task ids independent when source-qualified', () => {
+    completeInitialSeeding()
+    track('source-a::7', 'source a')
+    track('source-b::7', 'source b')
+
+    emitJournalOpened('source-a::7')
+
+    expect(isUnread('source-a::7')).toBe(false)
+    expect(isUnread('source-b::7')).toBe(true)
+  })
+
+  it('migrates legacy bare-task seen state to a qualified id', () => {
+    track('7', 'existing')
+    completeInitialSeeding()
+
+    migrateSeenState('7', 'source-a::7')
+    track('source-a::7', 'existing')
+
+    expect(isUnread('source-a::7')).toBe(false)
   })
 })
 
