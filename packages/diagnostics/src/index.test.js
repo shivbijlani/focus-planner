@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  advertiseDiagnosticsToWorker,
   clearDiagnostics,
   diag,
   dumpDiagnostics,
   enableDiagnostics,
   isDiagEnabled,
   registerDiagSink,
+  reconcileWorkerDiagnosticsForClients,
   resetDiagnosticsForTests,
+  requestWorkerDiagnosticClientStates,
   setDiagnosticsLimit,
   setWorkerDiagnosticsForClient,
   unregisterDiagSink,
@@ -80,5 +83,33 @@ describe('diagnostics', () => {
 
     setWorkerDiagnosticsForClient('diag-tab', false)
     expect(isDiagEnabled()).toBe(false)
+  })
+
+  it('prunes a diagnostic client after its tab closes', () => {
+    setWorkerDiagnosticsForClient('diag-tab', true)
+    expect(isDiagEnabled()).toBe(true)
+
+    reconcileWorkerDiagnosticsForClients(['normal-tab'])
+
+    expect(isDiagEnabled()).toBe(false)
+  })
+
+  it('requests and re-advertises enabled state after a worker restart', async () => {
+    const diagnosticPage = { id: 'diag-tab', postMessage: vi.fn() }
+    await requestWorkerDiagnosticClientStates({
+      matchAll: vi.fn().mockResolvedValue([diagnosticPage]),
+    })
+    expect(diagnosticPage.postMessage).toHaveBeenCalledWith({
+      type: 'planner-diag-state-request',
+    })
+
+    const restartedWorker = { postMessage: vi.fn() }
+    enableDiagnostics({ persist: false })
+
+    expect(advertiseDiagnosticsToWorker(restartedWorker)).toBe(true)
+    expect(restartedWorker.postMessage).toHaveBeenCalledWith({
+      type: 'planner-diag-enable',
+      enabled: true,
+    })
   })
 })

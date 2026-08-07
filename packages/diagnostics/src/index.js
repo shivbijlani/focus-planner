@@ -8,6 +8,7 @@ const state = {
   sinks: new Map(),
 }
 const workerDiagnosticClients = new Set()
+let workerReconcilePromise = null
 
 function root() {
   return typeof globalThis !== 'undefined' ? globalThis : {}
@@ -131,8 +132,20 @@ function postWorkerToggle(enabled) {
   } catch { /* ignore */ }
 }
 
+export function advertiseDiagnosticsToWorker(worker) {
+  if (typeof worker?.postMessage !== 'function') return false
+  const msg = { type: 'planner-diag-enable', enabled: state.enabled }
+  try {
+    worker.postMessage(msg)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function diag(channel, event, fields = {}) {
   if (!state.enabled) return false
+  if (isWorkerGlobal()) void reconcileWorkerDiagnosticClients()
   emit(makeEvent(channel, event, fields))
   return true
 }
@@ -163,6 +176,46 @@ export function setWorkerDiagnosticsForClient(clientId, enabled) {
   } else if (state.enabled) {
     disableDiagnostics({ persist: false })
   }
+}
+
+export function reconcileWorkerDiagnosticsForClients(clientIds) {
+  const liveClients = new Set((clientIds ?? []).map(String))
+  for (const clientId of workerDiagnosticClients) {
+    if (!liveClients.has(clientId)) workerDiagnosticClients.delete(clientId)
+  }
+  if (workerDiagnosticClients.size > 0) {
+    if (!state.enabled) enableDiagnostics({ persist: false })
+  } else if (state.enabled) {
+    disableDiagnostics({ persist: false })
+  }
+}
+
+export function reconcileWorkerDiagnosticClients() {
+  if (!isWorkerGlobal()) return Promise.resolve()
+  if (workerReconcilePromise) return workerReconcilePromise
+  const clients = root().self.clients
+  if (!clients?.matchAll) return Promise.resolve()
+  workerReconcilePromise = clients.matchAll({ includeUncontrolled: true, type: 'window' })
+    .then((windows) => {
+      reconcileWorkerDiagnosticsForClients(windows.map(client => client.id))
+    })
+    .catch(() => {})
+    .finally(() => { workerReconcilePromise = null })
+  return workerReconcilePromise
+}
+
+export function requestWorkerDiagnosticClientStates(
+  clients = isWorkerGlobal() ? root().self.clients : null,
+) {
+  if (!clients?.matchAll) return Promise.resolve()
+  return clients.matchAll({ includeUncontrolled: true, type: 'window' })
+    .then((windows) => {
+      reconcileWorkerDiagnosticsForClients(windows.map(client => client.id))
+      for (const client of windows) {
+        try { client.postMessage({ type: 'planner-diag-state-request' }) } catch { /* ignore */ }
+      }
+    })
+    .catch(() => {})
 }
 
 export function clearDiagnostics() {
@@ -221,9 +274,16 @@ function installWindowGlobal() {
     setLimit: setDiagnosticsLimit,
   }
   try {
-    w.navigator?.serviceWorker?.addEventListener?.('message', (evt) => {
+    const serviceWorker = w.navigator?.serviceWorker
+    serviceWorker?.addEventListener?.('message', (evt) => {
       if (evt.data?.type === 'planner-diag-event') ingestRelayedEvent(evt.data.event)
+      if (evt.data?.type === 'planner-diag-state-request') {
+        if (!advertiseDiagnosticsToWorker(evt.source)) postWorkerToggle(state.enabled)
+      }
     })
+    serviceWorker?.addEventListener?.('controllerchange', () => postWorkerToggle(state.enabled))
+    w.addEventListener?.('pagehide', () => postWorkerToggle(false))
+    w.addEventListener?.('pageshow', () => postWorkerToggle(state.enabled))
   } catch { /* ignore */ }
 }
 
@@ -232,7 +292,9 @@ function installWorkerListener() {
   root().self.addEventListener('message', (evt) => {
     if (evt.data?.type !== 'planner-diag-enable') return
     setWorkerDiagnosticsForClient(evt.source?.id, Boolean(evt.data.enabled))
+    void reconcileWorkerDiagnosticClients()
   })
+  void requestWorkerDiagnosticClientStates()
 }
 
 export function resetDiagnosticsForTests() {
@@ -241,6 +303,7 @@ export function resetDiagnosticsForTests() {
   state.buffer.length = 0
   state.sinks.clear()
   workerDiagnosticClients.clear()
+  workerReconcilePromise = null
   installDefaultSinks()
 }
 
