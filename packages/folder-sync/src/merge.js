@@ -143,6 +143,10 @@ function logMergeDecision(id, localEntry, remoteEntry, winner) {
     ? (winnerSide === 'local' ? 'remote' : 'local')
     : null
   const reason = mergeDecisionReason(localEntry, remoteEntry)
+  // Identical rows/tombstones are the overwhelmingly common case. The
+  // collection summary records their count; reserve per-record events for
+  // decisions that actually explain a conflict or change.
+  if (reason === 'same-content' || reason === 'matching-tombstones') return
   diag('folder-sync.merge', 'record-decision', {
     id,
     reason,

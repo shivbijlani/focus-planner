@@ -59,10 +59,11 @@ function pushBuffer(item) {
 function consoleSink(item) {
   if (typeof console === 'undefined') return
   const prefix = `[planner:${item.channel}] ${item.event}`
+  // Keep this to one CDP event. console.table emits another, comparatively
+  // expensive event for every diagnostic record; a normal mirror pass can scan
+  // hundreds of files, flooding the automation transport while the page itself
+  // remains visually responsive.
   if (typeof console.debug === 'function') console.debug(prefix, item.fields)
-  if (item.fields && Object.keys(item.fields).length && typeof console.table === 'function') {
-    try { console.table(item.fields) } catch { /* ignore */ }
-  }
 }
 
 function bufferSink(item) {
@@ -233,4 +234,11 @@ export function resetDiagnosticsForTests() {
 resetDiagnosticsForTests()
 installWindowGlobal()
 installWorkerListener()
-if (shouldAutoEnable()) enableDiagnostics({ persist: false })
+if (shouldAutoEnable()) {
+  enableDiagnostics({ persist: false })
+} else {
+  // A service worker outlives the page that enabled it. Explicitly send "off"
+  // on a normal load so removing ?diag=1 (or clearing the saved setting) also
+  // stops worker console/relay traffic instead of leaving a hidden firehose.
+  postWorkerToggle(false)
+}

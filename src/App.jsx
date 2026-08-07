@@ -1212,6 +1212,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
       storage.checkJournal(taskId)
         .then(data => {
           if (data.exists) {
+            setTodosLoading(true)
             setJournalPath(data.path)
           }
           setJournalChecked(true)
@@ -1235,7 +1236,6 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   useEffect(() => {
     if (!journalPath || todos !== null) return
     let cancelled = false
-    setTodosLoading(true)
     journalLoadQueue.enqueue(journalPath, loadOrder, () => storage.read(journalPath))
       .then(content => {
         if (cancelled) return
@@ -1250,7 +1250,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
         setTodosLoading(false)
       })
     return () => { cancelled = true }
-  }, [journalPath, loadOrder, taskId])
+  }, [journalPath, loadOrder, taskId, todos])
 
   // Read/unread indicator (task #311): the row renders the boolean from the
   // read-state service and re-renders when the service announces a change. The

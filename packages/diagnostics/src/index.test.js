@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   clearDiagnostics,
@@ -53,5 +53,19 @@ describe('diagnostics', () => {
     diag('sync', 'three')
 
     expect(dumpDiagnostics().map((item) => item.event)).toEqual(['two', 'three'])
+  })
+
+  it('emits one lightweight console record per event', () => {
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    const table = vi.spyOn(console, 'table').mockImplementation(() => {})
+    resetDiagnosticsForTests()
+    enableDiagnostics({ persist: false })
+
+    diag('folder-sync.reconcile', 'mirror-reconcile-summary', { scanned: 700 })
+
+    expect(debug).toHaveBeenCalledTimes(1)
+    expect(table).not.toHaveBeenCalled()
+    debug.mockRestore()
+    table.mockRestore()
   })
 })
