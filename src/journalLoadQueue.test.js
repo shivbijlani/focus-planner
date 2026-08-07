@@ -164,6 +164,77 @@ describe('createLoadQueue', () => {
     expect(sourceBReads).toBe(1)
   })
 
+  it('keeps shared work alive when only one deduplicated consumer unmounts', async () => {
+    const q = createLoadQueue({ concurrency: 1 })
+    const gate = deferred()
+    let reads = 0
+    const provider = {
+      checkJournal: async () => ({ exists: true, path: 'journal/task-1.md' }),
+      read: async () => { reads++; return gate.promise },
+    }
+    const firstController = new AbortController()
+    const secondController = new AbortController()
+    const first = enqueueJournalLoad({
+      queue: q,
+      provider,
+      taskId: '1',
+      signal: firstController.signal,
+    })
+    const second = enqueueJournalLoad({
+      queue: q,
+      provider,
+      taskId: '1',
+      signal: secondController.signal,
+    })
+    expect(first).not.toBe(second)
+    await tick()
+    expect(reads).toBe(1)
+
+    const firstRejected = expect(first).rejects.toMatchObject({ name: 'AbortError' })
+    firstController.abort()
+    gate.resolve('shared')
+
+    await firstRejected
+    await expect(second).resolves.toMatchObject({ content: 'shared' })
+    expect(reads).toBe(1)
+  })
+
+  it('starts viable work for a StrictMode-style rapid remount after abort', async () => {
+    const q = createLoadQueue({ concurrency: 1 })
+    const never = new Promise(() => {})
+    let reads = 0
+    const provider = {
+      checkJournal: async () => ({ exists: true, path: 'journal/task-1.md' }),
+      read: async () => {
+        reads++
+        return reads === 1 ? never : 'remounted'
+      },
+    }
+    const firstController = new AbortController()
+    const first = enqueueJournalLoad({
+      queue: q,
+      provider,
+      taskId: '1',
+      signal: firstController.signal,
+    })
+    await tick()
+    expect(reads).toBe(1)
+
+    const firstRejected = expect(first).rejects.toMatchObject({ name: 'AbortError' })
+    firstController.abort()
+    const remounted = enqueueJournalLoad({
+      queue: q,
+      provider,
+      taskId: '1',
+      signal: new AbortController().signal,
+    })
+    expect(first).not.toBe(remounted)
+
+    await firstRejected
+    await expect(remounted).resolves.toMatchObject({ content: 'remounted' })
+    expect(reads).toBe(2)
+  })
+
   it('times out a stalled read so queue drain and seeding stay live', async () => {
     const q = createLoadQueue({ concurrency: 1 })
     const stalledProvider = {

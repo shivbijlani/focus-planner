@@ -135,10 +135,56 @@ function runWithDeadline(run, { signal, timeoutMs }) {
   })
 }
 
+const sharedJournalLoads = new WeakMap()
+
+function journalLoadsFor(queue, provider) {
+  let queueLoads = sharedJournalLoads.get(queue)
+  if (!queueLoads) {
+    queueLoads = new Map()
+    sharedJournalLoads.set(queue, queueLoads)
+  }
+  let providerLoads = queueLoads.get(provider)
+  if (!providerLoads) {
+    providerLoads = new Map()
+    queueLoads.set(provider, providerLoads)
+  }
+  return providerLoads
+}
+
+function attachJournalLoadConsumer(entry, signal, onLastConsumerDetached) {
+  entry.consumers++
+  return new Promise((resolve, reject) => {
+    let detached = false
+    const detach = () => {
+      if (detached) return
+      detached = true
+      signal?.removeEventListener('abort', onAbort)
+      entry.consumers--
+      if (entry.consumers === 0 && !entry.settled) onLastConsumerDetached()
+    }
+    const onAbort = () => {
+      const error = new Error('Journal load cancelled')
+      error.name = 'AbortError'
+      detach()
+      reject(error)
+    }
+
+    if (signal?.aborted) {
+      onAbort()
+      return
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    entry.promise.then(
+      value => { detach(); resolve(value) },
+      error => { detach(); reject(error) },
+    )
+  })
+}
+
 /**
- * Queue one source-stable journal lookup/read. The provider object is both the
- * de-duplication namespace and the captured read target, so switching sources
- * cannot attach a new row to an unfinished promise from the previous source.
+ * Queue one source-stable journal lookup/read. Shared provider work is
+ * reference-counted behind per-consumer promises, so one row unmounting cannot
+ * cancel another row's read and a rapid remount can start a fresh generation.
  */
 export function enqueueJournalLoad({
   queue = journalLoadQueue,
@@ -149,21 +195,44 @@ export function enqueueJournalLoad({
   timeoutMs = JOURNAL_LOAD_TIMEOUT_MS,
 }) {
   if (!provider) return Promise.reject(new Error('No journal provider'))
+  if (signal?.aborted) {
+    const error = new Error('Journal load cancelled')
+    error.name = 'AbortError'
+    return Promise.reject(error)
+  }
   const fallbackPath = `journal/task-${taskId}.md`
-  return queue.enqueue(
-    fallbackPath,
-    priority,
-    () => runWithDeadline(async (assertActive) => {
-      const journal = await provider.checkJournal(taskId)
-      assertActive()
-      if (!journal?.exists) return { exists: false, path: journal?.path ?? fallbackPath, content: '' }
-      const path = journal.path ?? fallbackPath
-      const content = await provider.read(path)
-      assertActive()
-      return { exists: true, path, content }
-    }, { signal, timeoutMs }),
-    provider,
-  )
+  const providerLoads = journalLoadsFor(queue, provider)
+  let entry = providerLoads.get(fallbackPath)
+  if (!entry) {
+    const controller = new AbortController()
+    entry = { consumers: 0, controller, settled: false, promise: null }
+    entry.promise = queue.enqueue(
+      null,
+      priority,
+      () => runWithDeadline(async (assertActive) => {
+        const journal = await provider.checkJournal(taskId)
+        assertActive()
+        if (!journal?.exists) return { exists: false, path: journal?.path ?? fallbackPath, content: '' }
+        const path = journal.path ?? fallbackPath
+        const content = await provider.read(path)
+        assertActive()
+        return { exists: true, path, content }
+      }, { signal: controller.signal, timeoutMs }),
+    )
+    providerLoads.set(fallbackPath, entry)
+    const settledEntry = entry
+    const markSettled = () => {
+      settledEntry.settled = true
+      if (providerLoads.get(fallbackPath) === settledEntry) providerLoads.delete(fallbackPath)
+    }
+    entry.promise.then(markSettled, markSettled)
+  }
+
+  const consumerEntry = entry
+  return attachJournalLoadConsumer(consumerEntry, signal, () => {
+    if (providerLoads.get(fallbackPath) === consumerEntry) providerLoads.delete(fallbackPath)
+    consumerEntry.controller.abort()
+  })
 }
 
 /**
