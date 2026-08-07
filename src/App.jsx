@@ -1212,7 +1212,13 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
   useEffect(() => {
     if (!taskId || journalChecked || !journalProvider) return
     let cancelled = false
-    enqueueJournalLoad({ provider: journalProvider, taskId, priority: loadOrder })
+    const controller = new AbortController()
+    enqueueJournalLoad({
+      provider: journalProvider,
+      taskId,
+      priority: loadOrder,
+      signal: controller.signal,
+    })
       .then(({ exists, path, content }) => {
         if (cancelled) return
         if (exists) {
@@ -1231,7 +1237,10 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
         setTodosLoading(false)
         setJournalChecked(true)
       })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
   }, [journalChecked, journalProvider, loadOrder, readStateId, taskId])
 
   const [isJournalUnread, setIsJournalUnread] = useState(false)

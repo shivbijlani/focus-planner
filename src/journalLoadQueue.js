@@ -90,6 +90,50 @@ export function createLoadQueue({ concurrency = 4 } = {}) {
 // Shared board-wide queue. Concurrency of 4 keeps a handful of reads in flight
 // (enough to stay responsive) without stampeding the storage provider.
 export const journalLoadQueue = createLoadQueue({ concurrency: 4 })
+export const JOURNAL_LOAD_TIMEOUT_MS = 15_000
+
+function runWithDeadline(run, { signal, timeoutMs }) {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const assertActive = () => {
+      if (!settled) return
+      const error = new Error('Journal load is no longer active')
+      error.name = 'AbortError'
+      throw error
+    }
+    const finish = (callback, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      callback(value)
+    }
+    const onAbort = () => {
+      const error = new Error('Journal load cancelled')
+      error.name = 'AbortError'
+      finish(reject, error)
+    }
+    const timer = setTimeout(
+      () => finish(reject, new Error(`Journal load timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    )
+
+    if (signal?.aborted) {
+      onAbort()
+      return
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    Promise.resolve()
+      .then(() => {
+        assertActive()
+        return run(assertActive)
+      })
+      .then(
+        value => finish(resolve, value),
+        error => finish(reject, error),
+      )
+  })
+}
 
 /**
  * Queue one source-stable journal lookup/read. The provider object is both the
@@ -101,15 +145,25 @@ export function enqueueJournalLoad({
   provider,
   taskId,
   priority = 0,
+  signal,
+  timeoutMs = JOURNAL_LOAD_TIMEOUT_MS,
 }) {
   if (!provider) return Promise.reject(new Error('No journal provider'))
   const fallbackPath = `journal/task-${taskId}.md`
-  return queue.enqueue(fallbackPath, priority, async () => {
-    const journal = await provider.checkJournal(taskId)
-    if (!journal?.exists) return { exists: false, path: journal?.path ?? fallbackPath, content: '' }
-    const path = journal.path ?? fallbackPath
-    return { exists: true, path, content: await provider.read(path) }
-  }, provider)
+  return queue.enqueue(
+    fallbackPath,
+    priority,
+    () => runWithDeadline(async (assertActive) => {
+      const journal = await provider.checkJournal(taskId)
+      assertActive()
+      if (!journal?.exists) return { exists: false, path: journal?.path ?? fallbackPath, content: '' }
+      const path = journal.path ?? fallbackPath
+      const content = await provider.read(path)
+      assertActive()
+      return { exists: true, path, content }
+    }, { signal, timeoutMs }),
+    provider,
+  )
 }
 
 /**

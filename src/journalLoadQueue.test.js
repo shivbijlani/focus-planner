@@ -131,6 +131,63 @@ describe('createLoadQueue', () => {
     await expect(fromA).resolves.toMatchObject({ content: 'source-a' })
   })
 
+  it('releases stalled old-source slots when their rows unmount', async () => {
+    const q = createLoadQueue({ concurrency: 4 })
+    const never = new Promise(() => {})
+    const sourceA = {
+      checkJournal: async (taskId) => ({ exists: true, path: `journal/task-${taskId}.md` }),
+      read: async () => never,
+    }
+    let sourceBReads = 0
+    const sourceB = {
+      checkJournal: async () => ({ exists: true, path: 'journal/task-1.md' }),
+      read: async () => { sourceBReads++; return 'source-b' },
+    }
+    const controllers = Array.from({ length: 4 }, () => new AbortController())
+    const oldLoads = controllers.map((controller, i) => enqueueJournalLoad({
+      queue: q,
+      provider: sourceA,
+      taskId: String(i + 1),
+      signal: controller.signal,
+      timeoutMs: 1_000,
+    }))
+    await tick()
+    expect(q.active).toBe(4)
+
+    const newLoad = enqueueJournalLoad({ queue: q, provider: sourceB, taskId: '1' })
+    await tick()
+    expect(sourceBReads).toBe(0)
+
+    controllers.forEach(controller => controller.abort())
+    await Promise.allSettled(oldLoads)
+    await expect(newLoad).resolves.toMatchObject({ content: 'source-b' })
+    expect(sourceBReads).toBe(1)
+  })
+
+  it('times out a stalled read so queue drain and seeding stay live', async () => {
+    const q = createLoadQueue({ concurrency: 1 })
+    const stalledProvider = {
+      checkJournal: async () => new Promise(() => {}),
+    }
+    const healthyProvider = {
+      checkJournal: async () => ({ exists: true, path: 'journal/task-2.md' }),
+      read: async () => 'healthy',
+    }
+
+    const stalled = enqueueJournalLoad({
+      queue: q,
+      provider: stalledProvider,
+      taskId: '1',
+      timeoutMs: 10,
+    })
+    const healthy = enqueueJournalLoad({ queue: q, provider: healthyProvider, taskId: '2' })
+    const drain = waitForInitialJournalLoads(q)
+
+    await expect(stalled).rejects.toThrow('timed out')
+    await expect(healthy).resolves.toMatchObject({ content: 'healthy' })
+    await expect(drain).resolves.toBeUndefined()
+  })
+
   it('keeps initial seeding open until the initial queue drains', async () => {
     const q = createLoadQueue({ concurrency: 1 })
     const gate = deferred()
