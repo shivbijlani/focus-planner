@@ -1378,6 +1378,21 @@ tr.highlight-flash {
   font-size: 0.8rem;
 }
 
+.journal-load-retry {
+  align-self: flex-start;
+  border: 0;
+  background: none;
+  color: #f59e0b;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0;
+}
+
+.journal-load-retry:hover {
+  text-decoration: underline;
+}
+
 .todo-row {
   background: #0f3460 !important;
 }

@@ -39,6 +39,12 @@ import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment } from './journalChat.js'
 import * as readStateService from './readState/readStateService.js'
 import { enqueueJournalLoad, waitForInitialJournalLoads } from './journalLoadQueue.js'
+import {
+  JOURNAL_EXISTENCE,
+  canCreateJournal,
+  journalStateFromError,
+  journalStateFromResult,
+} from './journalLoadState.js'
 import { sameFileTree } from './fileTreeEqual.js'
 import { joinSourcePath, journalReadStateId } from './sourcePath.js'
 import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
@@ -1196,7 +1202,12 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
   const [todosExpanded, setTodosExpanded] = useState(false)
   const [todos, setTodos] = useState(null)
   const [todosLoading, setTodosLoading] = useState(Boolean(taskId))
-  const [journalPath, setJournalPath] = useState(null)
+  const [journalState, setJournalState] = useState({
+    existence: JOURNAL_EXISTENCE.UNKNOWN,
+    path: null,
+    contentStatus: 'loading',
+  })
+  const journalPath = journalState.path
   const [journalChecked, setJournalChecked] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [editText, setEditText] = useState('')
@@ -1221,8 +1232,8 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
     })
       .then(({ exists, path, content }) => {
         if (cancelled) return
+        setJournalState(journalStateFromResult({ exists, path }))
         if (exists) {
-          setJournalPath(path)
           setTodos(storage.parseTodos(content) || [])
           setTelegram(parseTgLink(content))
           readStateService.migrateSeenState(taskId, readStateId)
@@ -1231,8 +1242,9 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
         setTodosLoading(false)
         setJournalChecked(true)
       })
-      .catch(() => {
+      .catch((error) => {
         if (cancelled) return
+        setJournalState(previous => journalStateFromError(error, previous))
         setTodos([])
         setTodosLoading(false)
         setJournalChecked(true)
@@ -1242,6 +1254,14 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
       controller.abort()
     }
   }, [journalChecked, journalProvider, loadOrder, readStateId, taskId])
+
+  const retryJournalLoad = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setJournalState(previous => ({ ...previous, contentStatus: 'loading' }))
+    setTodosLoading(true)
+    setJournalChecked(false)
+  }
 
   const [isJournalUnread, setIsJournalUnread] = useState(false)
 
@@ -1271,7 +1291,7 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
   
   const handleContextMenu = (e) => {
     e.preventDefault()
-    onContextMenu(e, rawLine, row, journalPath, taskId, telegram)
+    onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence)
   }
 
   // Mobile (#335): visible kebab opens the same row-action sheet — no hidden
@@ -1279,7 +1299,7 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
   const handleKebab = (e) => {
     e.preventDefault()
     e.stopPropagation()
-    onContextMenu(e, rawLine, row, journalPath, taskId, telegram)
+    onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence)
   }
   
   // Filter to only uncompleted todos
@@ -1546,6 +1566,16 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
                   </div>
                   {!isMobile && !isEditing && leadUpPreview}
                   {todosLoading && <span className="todo-loading">...</span>}
+                  {journalState.contentStatus === 'error' && (
+                    <button
+                      type="button"
+                      className="journal-load-retry"
+                      onClick={retryJournalLoad}
+                      title="The journal could not be loaded. Retry without creating or overwriting it."
+                    >
+                      Journal unavailable — Retry
+                    </button>
+                  )}
                 </div>
               </td>
             )
@@ -1850,7 +1880,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     }
   }
 
-  const handleContextMenu = (e, rawLine, row, journalPath, taskId, telegram) => {
+  const handleContextMenu = (e, rawLine, row, journalPath, taskId, telegram, journalExistence) => {
     const options = []
     const rowSourceId = row.__sourceId || getActiveSourceId()
     const rowReadStateId = journalReadStateId(rowSourceId, taskId)
@@ -1936,7 +1966,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     }
     
     // Add "Create Journal" option if no journal exists and we have a task ID
-    if (!journalPath && taskId) {
+    if (canCreateJournal(journalExistence) && taskId) {
       const taskName = row['Task'] || ''
       options.push({
         label: 'Create Journal',

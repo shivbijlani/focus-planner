@@ -235,6 +235,59 @@ describe('createLoadQueue', () => {
     expect(reads).toBe(2)
   })
 
+  it('preserves known journal existence and path when content read fails', async () => {
+    const q = createLoadQueue({ concurrency: 1 })
+    const provider = {
+      checkJournal: async () => ({ exists: true, path: 'journal/task-1.md' }),
+      read: async () => { throw new Error('content unavailable') },
+    }
+
+    await expect(enqueueJournalLoad({
+      queue: q,
+      provider,
+      taskId: '1',
+    })).rejects.toMatchObject({
+      message: 'content unavailable',
+      journal: { exists: true, path: 'journal/task-1.md' },
+    })
+  })
+
+  it('aborts provider I/O when the shared deadline expires', async () => {
+    const q = createLoadQueue({ concurrency: 1 })
+    let checkSignal
+    let readSignal
+    let readAborted = false
+    const provider = {
+      checkJournal: async (_taskId, options) => {
+        checkSignal = options.signal
+        return { exists: true, path: 'journal/task-1.md' }
+      },
+      read: async (_path, options) => {
+        readSignal = options.signal
+        return new Promise((_resolve, reject) => {
+          options.signal.addEventListener('abort', () => {
+            readAborted = true
+            reject(options.signal.reason)
+          }, { once: true })
+        })
+      },
+    }
+
+    await expect(enqueueJournalLoad({
+      queue: q,
+      provider,
+      taskId: '1',
+      timeoutMs: 10,
+    })).rejects.toMatchObject({
+      message: 'Journal load timed out after 10ms',
+      journal: { exists: true, path: 'journal/task-1.md' },
+    })
+
+    expect(checkSignal).toBe(readSignal)
+    expect(readSignal.aborted).toBe(true)
+    expect(readAborted).toBe(true)
+  })
+
   it('times out a stalled read so queue drain and seeding stay live', async () => {
     const q = createLoadQueue({ concurrency: 1 })
     const stalledProvider = {

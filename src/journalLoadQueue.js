@@ -92,7 +92,7 @@ export function createLoadQueue({ concurrency = 4 } = {}) {
 export const journalLoadQueue = createLoadQueue({ concurrency: 4 })
 export const JOURNAL_LOAD_TIMEOUT_MS = 15_000
 
-function runWithDeadline(run, { signal, timeoutMs }) {
+function runWithDeadline(run, { signal, timeoutMs, decorateError = error => error, onTimeout }) {
   return new Promise((resolve, reject) => {
     let settled = false
     const assertActive = () => {
@@ -102,19 +102,24 @@ function runWithDeadline(run, { signal, timeoutMs }) {
       throw error
     }
     const finish = (callback, value) => {
-      if (settled) return
+      if (settled) return false
       settled = true
       clearTimeout(timer)
       signal?.removeEventListener('abort', onAbort)
       callback(value)
+      return true
     }
     const onAbort = () => {
-      const error = new Error('Journal load cancelled')
-      error.name = 'AbortError'
-      finish(reject, error)
+      const error = signal?.reason instanceof Error
+        ? signal.reason
+        : Object.assign(new Error('Journal load cancelled'), { name: 'AbortError' })
+      finish(reject, decorateError(error))
     }
     const timer = setTimeout(
-      () => finish(reject, new Error(`Journal load timed out after ${timeoutMs}ms`)),
+      () => {
+        const error = new Error(`Journal load timed out after ${timeoutMs}ms`)
+        if (finish(reject, decorateError(error))) onTimeout?.(error)
+      },
       timeoutMs,
     )
 
@@ -130,7 +135,7 @@ function runWithDeadline(run, { signal, timeoutMs }) {
       })
       .then(
         value => finish(resolve, value),
-        error => finish(reject, error),
+        error => finish(reject, decorateError(error)),
       )
   })
 }
@@ -205,19 +210,34 @@ export function enqueueJournalLoad({
   let entry = providerLoads.get(fallbackPath)
   if (!entry) {
     const controller = new AbortController()
+    let knownJournal = null
+    const decorateError = (error) => {
+      if (!knownJournal?.exists) return error
+      error.journal = knownJournal
+      return error
+    }
     entry = { consumers: 0, controller, settled: false, promise: null }
     entry.promise = queue.enqueue(
       null,
       priority,
       () => runWithDeadline(async (assertActive) => {
-        const journal = await provider.checkJournal(taskId)
+        const journal = await provider.checkJournal(taskId, { signal: controller.signal })
         assertActive()
+        knownJournal = {
+          exists: Boolean(journal?.exists),
+          path: journal?.path ?? fallbackPath,
+        }
         if (!journal?.exists) return { exists: false, path: journal?.path ?? fallbackPath, content: '' }
         const path = journal.path ?? fallbackPath
-        const content = await provider.read(path)
+        const content = await provider.read(path, { signal: controller.signal })
         assertActive()
         return { exists: true, path, content }
-      }, { signal: controller.signal, timeoutMs }),
+      }, {
+        signal: controller.signal,
+        timeoutMs,
+        decorateError,
+        onTimeout: error => controller.abort(error),
+      }),
     )
     providerLoads.set(fallbackPath, entry)
     const settledEntry = entry

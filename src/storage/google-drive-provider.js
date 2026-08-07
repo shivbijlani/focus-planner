@@ -81,12 +81,13 @@ export class GoogleDriveProvider {
     await scaffoldAgentsDoc((p) => this.read(p), (p, c) => this.write(p, c))
   }
 
-  async read(path) {
-    await this._ensureToken()
-    const fileId = await this._resolveFileId(path)
+  async read(path, { signal } = {}) {
+    await this._ensureToken({ signal })
+    const fileId = await this._resolveFileId(path, { signal })
     if (!fileId) return ''
     const res = await fetch(`${DRIVE_API}/files/${fileId}?alt=media`, {
       headers: this._authHeader(),
+      signal,
     })
     if (res.status === 404) return ''
     if (!res.ok) throw new Error(`Drive read failed: ${res.status}`)
@@ -195,13 +196,13 @@ export class GoogleDriveProvider {
     return entries
   }
 
-  async checkJournal(taskId) {
-    await this._ensureToken()
+  async checkJournal(taskId, { signal } = {}) {
+    await this._ensureToken({ signal })
     const path = `journal/task-${taskId}.md`
     // Resolve the file id rather than reading content: a journal that exists
     // but is empty must still be reported as present (read() returns '' for
     // both a missing file and an empty one).
-    const fileId = await this._resolveFileId(path)
+    const fileId = await this._resolveFileId(path, { signal })
     if (!fileId) return { exists: false }
     return { exists: true, path }
   }
@@ -238,12 +239,13 @@ export class GoogleDriveProvider {
 
   // ── Private helpers ──────────────────────────────────
 
-  async _ensureFolder() {
+  async _ensureFolder({ signal } = {}) {
     if (this._folderId) return this._folderId
     // Try to find existing folder
     const q = `name='${this._folder}' and mimeType='application/vnd.google-apps.folder' and trashed=false`
     const res = await fetch(`${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=files(id,name)`, {
       headers: this._authHeader(),
+      signal,
     })
     const data = await res.json()
     if (data.files?.length > 0) {
@@ -255,29 +257,31 @@ export class GoogleDriveProvider {
       method: 'POST',
       headers: { ...this._authHeader(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: this._folder, mimeType: 'application/vnd.google-apps.folder' }),
+      signal,
     })
     const created = await create.json()
     this._folderId = created.id
     return this._folderId
   }
 
-  async _ensureParentFolder(path) {
+  async _ensureParentFolder(path, { signal } = {}) {
     const parts = path.split('/')
-    if (parts.length === 1) return this._ensureFolder() // root
+    if (parts.length === 1) return this._ensureFolder({ signal }) // root
     const subPath = parts.slice(0, -1).join('/')
-    return this._ensureSubfolder(subPath)
+    return this._ensureSubfolder(subPath, { signal })
   }
 
-  async _ensureSubfolder(subPath) {
+  async _ensureSubfolder(subPath, { signal } = {}) {
     const parts = subPath.split('/')
-    let parentId = await this._ensureFolder()
+    let parentId = await this._ensureFolder({ signal })
     for (const part of parts) {
-      const existing = await this._findFolder(part, parentId)
+      const existing = await this._findFolder(part, parentId, { signal })
       if (existing) { parentId = existing; continue }
       const res = await fetch(`${DRIVE_API}/files`, {
         method: 'POST',
         headers: { ...this._authHeader(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: part, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] }),
+        signal,
       })
       const data = await res.json()
       parentId = data.id
@@ -285,10 +289,11 @@ export class GoogleDriveProvider {
     return parentId
   }
 
-  async _findFolder(name, parentId) {
+  async _findFolder(name, parentId, { signal } = {}) {
     const q = `name='${name}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`
     const res = await fetch(`${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=files(id)`, {
       headers: this._authHeader(),
+      signal,
     })
     const data = await res.json()
     return data.files?.[0]?.id ?? null
@@ -305,13 +310,14 @@ export class GoogleDriveProvider {
     return parentId
   }
 
-  async _resolveFileId(path) {
+  async _resolveFileId(path, { signal } = {}) {
     if (this._fileIndex[path]) return this._fileIndex[path]
     const name = _basename(path)
-    const parentId = await this._ensureParentFolder(path)
+    const parentId = await this._ensureParentFolder(path, { signal })
     const q = `name='${name}' and '${parentId}' in parents and trashed=false`
     const res = await fetch(`${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=files(id)`, {
       headers: this._authHeader(),
+      signal,
     })
     const data = await res.json()
     const id = data.files?.[0]?.id ?? null
@@ -408,7 +414,7 @@ export class GoogleDriveProvider {
     return true
   }
 
-  async _refreshAccessToken() {
+  async _refreshAccessToken({ signal } = {}) {
     if (!this._refreshToken) return false
     const body = new URLSearchParams({
       client_id: CLIENT_ID,
@@ -419,16 +425,17 @@ export class GoogleDriveProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
+      signal,
     })
     if (!res.ok) { this._clearTokens(); return false }
     this._saveTokens(await res.json())
     return true
   }
 
-  async _ensureToken() {
+  async _ensureToken({ signal } = {}) {
     if (this._isTokenValid()) return
     if (this._refreshToken) {
-      const ok = await this._refreshAccessToken()
+      const ok = await this._refreshAccessToken({ signal })
       if (ok) return
     }
     await this._startPKCE()
