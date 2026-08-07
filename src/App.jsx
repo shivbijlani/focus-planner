@@ -38,7 +38,7 @@ import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment } from './journalChat.js'
 import * as readStateService from './readState/readStateService.js'
-import { journalLoadQueue } from './journalLoadQueue.js'
+import { enqueueJournalLoad, waitForInitialJournalLoads } from './journalLoadQueue.js'
 import { sameFileTree } from './fileTreeEqual.js'
 import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
 import { SETTINGS_FILE } from './storage/settings.js'
@@ -1193,10 +1193,11 @@ function renderIconsWithTooltips(text, keyOffset = 0) {
 }
 
 // Task row component with expandable todos
-function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, loadOrder = 0 }) {
+function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, loadOrder = 0 }) {
+  const taskId = extractTaskId(row)
   const [todosExpanded, setTodosExpanded] = useState(false)
   const [todos, setTodos] = useState(null)
-  const [todosLoading, setTodosLoading] = useState(false)
+  const [todosLoading, setTodosLoading] = useState(Boolean(taskId))
   const [journalPath, setJournalPath] = useState(null)
   const [journalChecked, setJournalChecked] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
@@ -1205,53 +1206,36 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   const [telegram, setTelegram] = useState(null)
   const isMobile = useIsMobile()
   
-  const taskId = extractTaskId(row)
+  const journalProvider = sourceId ? getProvider(sourceId) : getActiveProvider()
   
-  // Check if journal exists for this task ID
+  // Check and read the journal as one queued operation. The provider is captured
+  // now and namespaces de-duplication, so a source switch cannot reuse an
+  // unfinished promise (or read through the mutable active-provider singleton).
   useEffect(() => {
-    if (taskId && !journalChecked) {
-      storage.checkJournal(taskId)
-        .then(data => {
-          if (data.exists) {
-            setTodosLoading(true)
-            setJournalPath(data.path)
-          }
-          setJournalChecked(true)
-        })
-        .catch(() => setJournalChecked(true))
-    }
-  }, [taskId, journalChecked])
-  
-  const [isJournalUnread, setIsJournalUnread] = useState(false)
-
-  // Read the journal ONCE, funneled through journalLoadQueue, and derive
-  // everything the row needs from that single fetch: the todo list, the Telegram
-  // deep link (tg-meta marker), and the read/unread signature (task #311).
-  //
-  // Previously each row fired two independent storage.read() calls for the same
-  // file, and every row did so the moment it mounted — ~180 concurrent journal
-  // reads on a 90-row board, which stalls cloud storage providers. The queue
-  // collapses that to one read per row, run a few at a time in board order via
-  // `loadOrder` (Today first, top-to-bottom). Each row still paints incrementally
-  // as its own read resolves.
-  useEffect(() => {
-    if (!journalPath || todos !== null) return
+    if (!taskId || journalChecked || !journalProvider) return
     let cancelled = false
-    journalLoadQueue.enqueue(journalPath, loadOrder, () => storage.read(journalPath))
-      .then(content => {
+    enqueueJournalLoad({ provider: journalProvider, taskId, priority: loadOrder })
+      .then(({ exists, path, content }) => {
         if (cancelled) return
-        setTodos(storage.parseTodos(content) || [])
-        setTelegram(parseTgLink(content))
+        if (exists) {
+          setJournalPath(path)
+          setTodos(storage.parseTodos(content) || [])
+          setTelegram(parseTgLink(content))
+          readStateService.track(taskId, content)
+        }
         setTodosLoading(false)
-        if (taskId) readStateService.track(taskId, content)
+        setJournalChecked(true)
       })
       .catch(() => {
         if (cancelled) return
         setTodos([])
         setTodosLoading(false)
+        setJournalChecked(true)
       })
     return () => { cancelled = true }
-  }, [journalPath, loadOrder, taskId, todos])
+  }, [journalChecked, journalProvider, loadOrder, taskId])
+
+  const [isJournalUnread, setIsJournalUnread] = useState(false)
 
   // Read/unread indicator (task #311): the row renders the boolean from the
   // read-state service and re-renders when the service announces a change. The
@@ -2065,10 +2049,13 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
               </tr>
             </thead>
             <tbody>
-              {visibleRows.map((row, i) => (
-                <TaskRow 
-                  key={`${extractTaskId(row) || 'row'}-${i}`} 
+              {visibleRows.map((row, i) => {
+                const journalSourceId = row.__sourceId || getActiveSourceId()
+                return (
+                <TaskRow
+                  key={`${journalSourceId || 'active'}-${extractTaskId(row) || 'row'}-${i}`}
                   row={row} 
+                  sourceId={journalSourceId}
                   loadOrder={i}
                   headers={headers} 
                   onNavigate={onNavigate}
@@ -2085,7 +2072,8 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
                   activeTaskIds={activeTaskIds}
                   linkedIdMap={linkedIdMap}
                   adoLookup={adoLookup}/>
-              ))}
+                )
+              })}
               {isSearching && matchCount === 0 && (
                 <tr className="search-no-match-row">
                   <td colSpan={headers.length + (isMobile ? 1 : 0)}>No matches in {title}</td>
@@ -2627,6 +2615,18 @@ function useCoarsePointer() {
   return coarse
 }
 
+function useCompleteInitialReadStateSeeding(ready) {
+  useEffect(() => {
+    if (!ready) return
+    let cancelled = false
+    waitForInitialJournalLoads()
+      .then(() => {
+        if (!cancelled) readStateService.completeInitialSeeding()
+      })
+    return () => { cancelled = true }
+  }, [ready])
+}
+
 function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, search: searchProp, onSearchChange, mission, syncStatus, onDataChanged }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
@@ -2642,6 +2642,11 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
   const viewRootRef = useRef(null)
   const searchBarRef = useRef(null)
   const sections = parseFocusPlan(content)
+
+  // TaskRow effects enqueue every initial journal lookup/read during this mount.
+  // Keep first-load seeding open until that bounded queue has fully drained so
+  // slow rows are still established as seen rather than appearing newly unread.
+  useCompleteInitialReadStateSeeding(true)
   
   // Find sections
   const taskSections = sections.filter(s => 
@@ -5583,6 +5588,7 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
   const [reloadKey, setReloadKey] = useState(0)
   const [addDialog, setAddDialog] = useState(null) // { section }
   const [moveDialog, setMoveDialog] = useState(null)
+  useCompleteInitialReadStateSeeding(perSource !== null)
 
   // Reload all sources' focus-plan.md content.
   useEffect(() => {
@@ -6516,11 +6522,6 @@ function App() {
     const liveSources = getSources()
     const defaultFile = liveSources.length > 1 ? `${COMBINED_ID}::${PLAN_FILE}` : PLAN_FILE
     handleSelectFile(defaultFile)
-    // Journal read/unread (task #311): once the board's initial journals have
-    // had a chance to be tracked, close the seeding window so pre-existing
-    // journals are treated as already-seen (no day-one "wall of stars") while
-    // journals that gain new content afterward will flag as unread.
-    setTimeout(() => readStateService.completeInitialSeeding(), 3000)
   }
 
   useEffect(() => {

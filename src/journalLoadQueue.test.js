@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { createLoadQueue } from './journalLoadQueue.js'
+import {
+  createLoadQueue,
+  enqueueJournalLoad,
+  waitForInitialJournalLoads,
+} from './journalLoadQueue.js'
 
 // A deferred promise plus a resolver we can trigger by hand, so tests can
 // control exactly when each "read" finishes and assert ordering / concurrency.
@@ -104,5 +108,47 @@ describe('createLoadQueue', () => {
     gate.resolve()
     await Promise.all([p1, p2])
     expect(calls).toBe(2)
+  })
+
+  it('does not reuse an unfinished journal read across providers', async () => {
+    const q = createLoadQueue({ concurrency: 2 })
+    const sourceAGate = deferred()
+    const sourceA = {
+      checkJournal: async () => ({ exists: true, path: 'journal/task-1.md' }),
+      read: async () => sourceAGate.promise,
+    }
+    const sourceB = {
+      checkJournal: async () => ({ exists: true, path: 'journal/task-1.md' }),
+      read: async () => 'source-b',
+    }
+
+    const fromA = enqueueJournalLoad({ queue: q, provider: sourceA, taskId: '1' })
+    const fromB = enqueueJournalLoad({ queue: q, provider: sourceB, taskId: '1' })
+
+    expect(fromA).not.toBe(fromB)
+    await expect(fromB).resolves.toMatchObject({ content: 'source-b' })
+    sourceAGate.resolve('source-a')
+    await expect(fromA).resolves.toMatchObject({ content: 'source-a' })
+  })
+
+  it('keeps initial seeding open until the initial queue drains', async () => {
+    const q = createLoadQueue({ concurrency: 1 })
+    const gate = deferred()
+    let seedingComplete = false
+    const order = []
+
+    const drain = waitForInitialJournalLoads(q).then(() => {
+      seedingComplete = true
+      order.push('complete-seeding')
+    })
+    const load = q.enqueue('journal/task-1.md', 0, () => gate.promise)
+      .then(() => { order.push('track-journal') })
+    await tick()
+    expect(seedingComplete).toBe(false)
+
+    gate.resolve()
+    await Promise.all([load, drain])
+    expect(seedingComplete).toBe(true)
+    expect(order).toEqual(['track-journal', 'complete-seeding'])
   })
 })
