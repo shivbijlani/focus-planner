@@ -38,6 +38,16 @@ import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment } from './journalChat.js'
 import * as readStateService from './readState/readStateService.js'
+import { enqueueJournalLoad, waitForInitialJournalLoads } from './journalLoadQueue.js'
+import { createJournalInSource } from './journalCreate.js'
+import {
+  JOURNAL_EXISTENCE,
+  canCreateJournal,
+  journalStateFromError,
+  journalStateFromResult,
+} from './journalLoadState.js'
+import { sameFileTree } from './fileTreeEqual.js'
+import { joinSourcePath, journalReadStateId } from './sourcePath.js'
 import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
 import { SETTINGS_FILE } from './storage/settings.js'
 import { AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE } from './config/aiSettings.js'
@@ -72,10 +82,6 @@ function splitSourcePath(qualified) {
   const idx = qualified.indexOf('::')
   if (idx === -1) return { sourceId: null, path: qualified }
   return { sourceId: qualified.slice(0, idx), path: qualified.slice(idx + 2) }
-}
-
-function joinSourcePath(sourceId, path) {
-  return sourceId ? `${sourceId}::${path}` : path
 }
 
 function prefixTreePaths(items, sourceId) {
@@ -1191,11 +1197,18 @@ function renderIconsWithTooltips(text, keyOffset = 0) {
 }
 
 // Task row component with expandable todos
-function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup }) {
+function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, loadOrder = 0 }) {
+  const taskId = extractTaskId(row)
+  const readStateId = journalReadStateId(sourceId, taskId)
   const [todosExpanded, setTodosExpanded] = useState(false)
   const [todos, setTodos] = useState(null)
-  const [todosLoading, setTodosLoading] = useState(false)
-  const [journalPath, setJournalPath] = useState(null)
+  const [todosLoading, setTodosLoading] = useState(Boolean(taskId))
+  const [journalState, setJournalState] = useState({
+    existence: JOURNAL_EXISTENCE.UNKNOWN,
+    path: null,
+    contentStatus: 'loading',
+  })
+  const journalPath = journalState.path
   const [journalChecked, setJournalChecked] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [editText, setEditText] = useState('')
@@ -1203,61 +1216,67 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   const [telegram, setTelegram] = useState(null)
   const isMobile = useIsMobile()
   
-  const taskId = extractTaskId(row)
+  const journalProvider = sourceId ? getProvider(sourceId) : getActiveProvider()
   
-  // Check if journal exists for this task ID
+  // Check and read the journal as one queued operation. The provider is captured
+  // now and namespaces de-duplication, so a source switch cannot reuse an
+  // unfinished promise (or read through the mutable active-provider singleton).
   useEffect(() => {
-    if (taskId && !journalChecked) {
-      storage.checkJournal(taskId)
-        .then(data => {
-          if (data.exists) {
-            setJournalPath(data.path)
-          }
-          setJournalChecked(true)
-        })
-        .catch(() => setJournalChecked(true))
-    }
-  }, [taskId, journalChecked])
-  
-  // Fetch todos when journal path is known. We read the journal once and derive
-  // BOTH the todo list and the Telegram deep link (if the journal carries a
-  // tg-meta marker) from the same content — no extra round-trips.
-  useEffect(() => {
-    if (journalPath && todos === null) {
-      setTodosLoading(true)
-      storage.read(journalPath)
-        .then(content => {
+    if (!taskId || journalChecked || !journalProvider) return
+    let cancelled = false
+    const controller = new AbortController()
+    enqueueJournalLoad({
+      provider: journalProvider,
+      taskId,
+      priority: loadOrder,
+      signal: controller.signal,
+    })
+      .then(({ exists, path, content }) => {
+        if (cancelled) return
+        setJournalState(journalStateFromResult({ exists, path }))
+        if (exists) {
           setTodos(storage.parseTodos(content) || [])
           setTelegram(parseTgLink(content))
-          setTodosLoading(false)
-        })
-        .catch(() => {
-          setTodos([])
-          setTodosLoading(false)
-        })
+          readStateService.migrateSeenState(taskId, readStateId)
+          readStateService.track(readStateId, content)
+        } else {
+          readStateService.resolveInitialSeedCandidate(readStateId)
+        }
+        setTodosLoading(false)
+        setJournalChecked(true)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        setJournalState(previous => journalStateFromError(error, previous))
+        setTodos([])
+        setTodosLoading(false)
+        setJournalChecked(true)
+      })
+    return () => {
+      cancelled = true
+      controller.abort()
     }
-  }, [journalPath])
+  }, [journalChecked, journalProvider, loadOrder, readStateId, taskId])
 
-  // Journal read/unread indicator (task #311). The row holds NO business logic:
-  // it hands the raw journal content to the read-state service (which computes
-  // the signature + decides unread), renders the boolean, and fires an "opened"
-  // event when the user opens the journal. localStorage is one provider behind
-  // the service; the UI never touches it directly.
+  const retryJournalLoad = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setJournalState(previous => ({ ...previous, contentStatus: 'loading' }))
+    setTodosLoading(true)
+    setJournalChecked(false)
+  }
+
   const [isJournalUnread, setIsJournalUnread] = useState(false)
-  useEffect(() => {
-    if (!journalPath || !taskId) return
-    let cancelled = false
-    storage.read(journalPath)
-      .then(content => { if (!cancelled) readStateService.track(taskId, content) })
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [journalPath, taskId])
+
+  // Read/unread indicator (task #311): the row renders the boolean from the
+  // read-state service and re-renders when the service announces a change. The
+  // raw content is handed to the service by the single journal read above.
   useEffect(() => {
     if (!taskId) return
-    const update = () => setIsJournalUnread(readStateService.isUnread(taskId))
+    const update = () => setIsJournalUnread(readStateService.isUnread(readStateId))
     update()
-    return readStateService.subscribe(update)
-  }, [taskId])
+    return readStateService.subscribe(readStateId, update)
+  }, [readStateId, taskId])
   
   const getPriorityClass = (priority) => {
     if (priority?.includes('🔴')) return 'priority-urgent'
@@ -1275,7 +1294,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   
   const handleContextMenu = (e) => {
     e.preventDefault()
-    onContextMenu(e, rawLine, row, journalPath, taskId, telegram)
+    onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence)
   }
 
   // Mobile (#335): visible kebab opens the same row-action sheet — no hidden
@@ -1283,7 +1302,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   const handleKebab = (e) => {
     e.preventDefault()
     e.stopPropagation()
-    onContextMenu(e, rawLine, row, journalPath, taskId, telegram)
+    onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence)
   }
   
   // Filter to only uncompleted todos
@@ -1503,8 +1522,8 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                               title="Open Journal"
                               onClick={(e) => {
                                 e.preventDefault()
-                                readStateService.emitJournalOpened(taskId)
-                                onNavigate(journalPath, null, 'chat')
+                                readStateService.emitJournalOpened(readStateId)
+                                onNavigate(joinSourcePath(navigationSourceId, journalPath), null, 'chat')
                               }}
                             >
                               📔
@@ -1550,6 +1569,16 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                   </div>
                   {!isMobile && !isEditing && leadUpPreview}
                   {todosLoading && <span className="todo-loading">...</span>}
+                  {journalState.contentStatus === 'error' && (
+                    <button
+                      type="button"
+                      className="journal-load-retry"
+                      onClick={retryJournalLoad}
+                      title="The journal could not be loaded. Retry without creating or overwriting it."
+                    >
+                      Journal unavailable — Retry
+                    </button>
+                  )}
                 </div>
               </td>
             )
@@ -1649,8 +1678,8 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                         title="Open Journal"
                         onClick={(e) => {
                           e.preventDefault()
-                          readStateService.emitJournalOpened(taskId)
-                          onNavigate(journalPath, null, 'chat')
+                          readStateService.emitJournalOpened(readStateId)
+                          onNavigate(joinSourcePath(navigationSourceId, journalPath), null, 'chat')
                         }}
                       >
                         {/* #373: wrap glyph + pip so the ★ hugs the emoji corner (like
@@ -1751,6 +1780,17 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
   // ops route back to the correct source even when two sources share an
   // identical row text / id. `lineSourceIds` is parallel to the data rows.
   if (lineSourceIds) tagMergedRows(rows, lineSourceIds)
+  const seedCandidateKey = rows
+    .map((row) => {
+      const taskId = extractTaskId(row)
+      if (!taskId) return null
+      return journalReadStateId(row.__sourceId || getActiveSourceId(), taskId)
+    })
+    .filter(Boolean)
+    .join('\n')
+  useEffect(() => {
+    readStateService.registerInitialSeedCandidates(seedCandidateKey.split('\n').filter(Boolean))
+  }, [seedCandidateKey])
   const [contextMenu, setContextMenu] = useState(null)
   // #346: separate state for the kebab's "Change priority" submenu.
   const [priorityMenu, setPriorityMenu] = useState(null)
@@ -1772,7 +1812,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
   const isTaskSection = title === 'Today' || title === 'Deferred'
   if (sortedRows.length === 0 && !showAddDialog && !isTaskSection) return null
   
-  const openTaskPiP = async (taskId, taskName, priority, journalPath) => {
+  const openTaskPiP = async (taskId, taskName, priority, journalPath, sourceId, navigationSourceId) => {
     const pipWindow = await documentPictureInPicture.requestWindow({
       width: 420,
       height: 320,
@@ -1812,7 +1852,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     // Double-click anywhere to jump to journal in main window
     pipWindow.document.body.addEventListener('dblclick', () => {
       if (journalPath) {
-        onNavigate(journalPath)
+        onNavigate(joinSourcePath(navigationSourceId, journalPath))
       }
       window.focus()
     })
@@ -1820,7 +1860,9 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     // Fetch and show todos if journal exists
     if (journalPath) {
       try {
-        const todos = await storage.getTodos(journalPath)
+        const todos = sourceId
+          ? await storage.getTodosFromSource(sourceId, journalPath)
+          : await storage.getTodos(journalPath)
         if (todos.length > 0) {
           const label = pipWindow.document.createElement('div')
           label.className = 'pip-section-label'
@@ -1852,8 +1894,11 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     }
   }
 
-  const handleContextMenu = (e, rawLine, row, journalPath, taskId, telegram) => {
+  const handleContextMenu = (e, rawLine, row, journalPath, taskId, telegram, journalExistence) => {
     const options = []
+    const rowSourceId = row.__sourceId || getActiveSourceId()
+    const rowReadStateId = journalReadStateId(rowSourceId, taskId)
+    const qualifiedJournalPath = joinSourcePath(row.__sourceId, journalPath)
     const currentSnoozeUntil = row.snoozeUntil || parseSnoozeUntil(rawLine)
     
     if (title === 'Today') {
@@ -1918,8 +1963,8 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
           label: 'Open journal',
           icon: '📔',
           action: () => {
-            readStateService.emitJournalOpened(taskId)
-            onNavigate(journalPath, null, 'chat')
+            readStateService.emitJournalOpened(rowReadStateId)
+            onNavigate(qualifiedJournalPath, null, 'chat')
           }
         })
       } else {
@@ -1927,20 +1972,20 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
           label: 'Open chat',
           icon: '💬',
           action: () => {
-            readStateService.emitJournalOpened(taskId)
-            onNavigate(journalPath, null, 'chat')
+            readStateService.emitJournalOpened(rowReadStateId)
+            onNavigate(qualifiedJournalPath, null, 'chat')
           }
         })
       }
     }
     
     // Add "Create Journal" option if no journal exists and we have a task ID
-    if (!journalPath && taskId) {
+    if (canCreateJournal(journalExistence) && taskId) {
       const taskName = row['Task'] || ''
       options.push({
         label: 'Create Journal',
         icon: '📓',
-        action: () => onCreateJournal(taskId, taskName)
+        action: () => onCreateJournal(taskId, taskName, row.__sourceId)
       })
     }
     
@@ -1951,7 +1996,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       options.push({
         label: 'Focus Sticky Note',
         icon: '📌',
-        action: () => openTaskPiP(taskId, taskName, priority, journalPath)
+        action: () => openTaskPiP(taskId, taskName, priority, journalPath, rowSourceId, row.__sourceId)
       })
     }
     
@@ -2061,10 +2106,15 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
               </tr>
             </thead>
             <tbody>
-              {visibleRows.map((row, i) => (
-                <TaskRow 
-                  key={`${extractTaskId(row) || 'row'}-${i}`} 
+              {visibleRows.map((row, i) => {
+                const journalSourceId = row.__sourceId || getActiveSourceId()
+                return (
+                <TaskRow
+                  key={`${journalSourceId || 'active'}-${extractTaskId(row) || 'row'}-${i}`}
                   row={row} 
+                  sourceId={journalSourceId}
+                  navigationSourceId={row.__sourceId}
+                  loadOrder={i}
                   headers={headers} 
                   onNavigate={onNavigate}
                   managerPriorities={managerPriorities}
@@ -2080,7 +2130,8 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
                   activeTaskIds={activeTaskIds}
                   linkedIdMap={linkedIdMap}
                   adoLookup={adoLookup}/>
-              ))}
+                )
+              })}
               {isSearching && matchCount === 0 && (
                 <tr className="search-no-match-row">
                   <td colSpan={headers.length + (isMobile ? 1 : 0)}>No matches in {title}</td>
@@ -2622,6 +2673,18 @@ function useCoarsePointer() {
   return coarse
 }
 
+function useCompleteInitialReadStateSeeding(ready) {
+  useEffect(() => {
+    if (!ready) return
+    let cancelled = false
+    waitForInitialJournalLoads()
+      .then(() => {
+        if (!cancelled) readStateService.completeInitialSeeding()
+      })
+    return () => { cancelled = true }
+  }, [ready])
+}
+
 function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, search: searchProp, onSearchChange, mission, syncStatus, onDataChanged }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
@@ -2637,6 +2700,11 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
   const viewRootRef = useRef(null)
   const searchBarRef = useRef(null)
   const sections = parseFocusPlan(content)
+
+  // TaskRow effects enqueue every initial journal lookup/read during this mount.
+  // Keep first-load seeding open until that bounded queue has fully drained so
+  // slow rows are still established as seen rather than appearing newly unread.
+  useCompleteInitialReadStateSeeding(true)
   
   // Find sections
   const taskSections = sections.filter(s => 
@@ -3758,6 +3826,8 @@ function CompletedTaskRow({ row, headers, priorityCol, getPriorityClass, onNavig
   const taskId = typeof idValue === 'object'
     ? idValue.id?.match(/\d+/)?.[0]
     : String(idValue).match(/\d+/)?.[0]
+  const sourceId = getActiveSourceId()
+  const readStateId = journalReadStateId(sourceId, taskId)
 
   const [journalPath, setJournalPath] = useState(null)
   useEffect(() => {
@@ -3787,7 +3857,7 @@ function CompletedTaskRow({ row, headers, priorityCol, getPriorityClass, onNavig
                   title="Open journal"
                   onClick={(e) => {
                     e.preventDefault()
-                    readStateService.emitJournalOpened(taskId)
+                    readStateService.emitJournalOpened(readStateId)
                     onNavigate(journalPath)
                   }}
                 >
@@ -5578,6 +5648,7 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
   const [reloadKey, setReloadKey] = useState(0)
   const [addDialog, setAddDialog] = useState(null) // { section }
   const [moveDialog, setMoveDialog] = useState(null)
+  useCompleteInitialReadStateSeeding(perSource !== null)
 
   // Reload all sources' focus-plan.md content.
   useEffect(() => {
@@ -5841,17 +5912,15 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     await applyOp(sourceId, c => ops.opAddTask(c, { task, priority, linkedTask, section }, journalIds))
   }
 
-  const handleCreateJournal = async (taskId, taskName) => {
-    const sid = sourceForTask(taskId)
+  const handleCreateJournal = async (taskId, taskName, sourceId) => {
+    const sid = sourceId
     if (!sid) return
-    const cleanName = (taskName || '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim()
-    const journalPath = `journal/task-${taskId}.md`
     try {
-      await storage.writeToSource(sid, journalPath, `# Task ${taskId}: ${cleanName}\n\n- TODO: \n`)
+      const journalPath = await createJournalInSource(storage, sid, taskId, taskName)
       // Refresh the sidebar tree so the newly created journal appears in the
       // hamburger pane immediately (task #371).
       await onDataChanged?.()
-      onNavigate(journalPath)
+      onNavigate(joinSourcePath(sid, journalPath))
     } catch (e) {
       console.error('Failed to create journal:', e)
     }
@@ -6385,7 +6454,7 @@ function App() {
       const liveSources = getSources()
       if (liveSources.length <= 1) {
         const data = await storage.getFiles()
-        setFiles(data)
+        setFiles(prev => sameFileTree(prev, data) ? prev : data)
         return
       }
       const perSource = await Promise.all(
@@ -6412,7 +6481,8 @@ function App() {
         path: `${source.id}::`,
         children: prefixTreePaths(tree, source.id),
       }))
-      setFiles([combinedFolder, ...sourceFolders])
+      const nextFiles = [combinedFolder, ...sourceFolders]
+      setFiles(prev => sameFileTree(prev, nextFiles) ? prev : nextFiles)
     } catch (err) {
       console.error('Failed to load files:', err)
     }
@@ -6510,11 +6580,6 @@ function App() {
     const liveSources = getSources()
     const defaultFile = liveSources.length > 1 ? `${COMBINED_ID}::${PLAN_FILE}` : PLAN_FILE
     handleSelectFile(defaultFile)
-    // Journal read/unread (task #311): once the board's initial journals have
-    // had a chance to be tracked, close the seeding window so pre-existing
-    // journals are treated as already-seen (no day-one "wall of stars") while
-    // journals that gain new content afterward will flag as unread.
-    setTimeout(() => readStateService.completeInitialSeeding(), 3000)
   }
 
   useEffect(() => {

@@ -35,8 +35,11 @@ export class FSAProvider {
     return scaffoldIfEmpty(this._handle)
   }
 
-  async read(path) {
-    return readFile(this._handle, path)
+  async read(path, { signal } = {}) {
+    if (signal?.aborted) throw signal.reason
+    const content = await readFile(this._handle, path)
+    if (signal?.aborted) throw signal.reason
+    return content
   }
 
   async write(path, content) {
@@ -55,8 +58,11 @@ export class FSAProvider {
     return listFiles(this._handle)
   }
 
-  async checkJournal(taskId) {
-    return journalExists(this._handle, taskId)
+  async checkJournal(taskId, { signal } = {}) {
+    if (signal?.aborted) throw signal.reason
+    const journal = await journalExists(this._handle, taskId)
+    if (signal?.aborted) throw signal.reason
+    return journal
   }
 
   async maxJournalId() {

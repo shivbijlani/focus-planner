@@ -78,15 +78,15 @@ export class OneDriveProvider {
     await scaffoldAgentsDoc((p) => this.read(p), (p, c) => this.write(p, c))
   }
 
-  async read(path) {
-    await this._ensureToken()
+  async read(path, { signal } = {}) {
+    await this._ensureToken({ signal })
     const url = `${APPROOT}:/${path}:/content`
     // `cache: 'no-store'` is required for read-your-writes: Graph's :/content
     // endpoint redirects to a cacheable CDN URL, so a default fetch can serve a
     // stale body immediately after a write. The Combined view re-reads a source
     // right after writing to it (link/mark handlers -> applyOp), so a cached read
     // left the board showing stale content until a full page reload (#411).
-    const res = await fetch(url, { headers: this._authHeader(), cache: 'no-store' })
+    const res = await fetch(url, { headers: this._authHeader(), cache: 'no-store', signal })
     if (res.status === 404) return ''
     if (!res.ok) throw new Error(`OneDrive read failed: ${res.status}`)
     return res.text()
@@ -159,15 +159,16 @@ export class OneDriveProvider {
     return entries
   }
 
-  async checkJournal(taskId) {
-    await this._ensureToken()
+  async checkJournal(taskId, { signal } = {}) {
+    await this._ensureToken({ signal })
     const path = `journal/task-${taskId}.md`
     // Check item metadata rather than content: a journal that exists but is
     // empty must still be reported as present (read() returns '' for both a
     // 404 and an empty file, so it can't distinguish them).
     const url = `${APPROOT}:/${path}`
-    const res = await fetch(url, { headers: this._authHeader() })
-    if (!res.ok) return { exists: false }
+    const res = await fetch(url, { headers: this._authHeader(), signal })
+    if (res.status === 404) return { exists: false, path }
+    if (!res.ok) throw new Error(`OneDrive journal check failed: ${res.status}`)
     return { exists: true, path }
   }
 
@@ -304,7 +305,7 @@ export class OneDriveProvider {
     return true
   }
 
-  async _refreshAccessToken() {
+  async _refreshAccessToken({ signal } = {}) {
     if (!this._refreshToken) return false
     const body = new URLSearchParams({
       client_id: CLIENT_ID,
@@ -316,6 +317,7 @@ export class OneDriveProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
+      signal,
     })
     if (!res.ok) { this._clearTokens(); return false }
     this._saveTokens(await res.json())
@@ -330,10 +332,10 @@ export class OneDriveProvider {
     return !this._isTokenValid() && !this._refreshToken
   }
 
-  async _ensureToken() {
+  async _ensureToken({ signal } = {}) {
     if (this._isTokenValid()) return
     if (this._refreshToken) {
-      const ok = await this._refreshAccessToken()
+      const ok = await this._refreshAccessToken({ signal })
       if (ok) return
     }
     // Do NOT redirect automatically here — throw so callers can handle gracefully.

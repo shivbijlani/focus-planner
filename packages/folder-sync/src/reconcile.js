@@ -11,6 +11,10 @@
 
 import { diag } from '../../diagnostics/src/index.js'
 
+export function isConsumerVisibleMirrorPath(name) {
+  return typeof name === 'string' && !name.endsWith('.sync.json')
+}
+
 /**
  * @param {object} args
  * @param {Iterable<string>} args.candidates   Sync-managed file names to consider
@@ -81,12 +85,18 @@ export function planMirrorSync({ mirrorDeleted, mirrorContent, activeContent }) 
     const mirror = mirrorContent ?? ''
     action = active !== mirror ? 'write' : 'skip'  // rehydrate / update when diverged
   }
-  diag('folder-sync.reconcile', 'mirror-sync-decision', {
-    mirrorDeleted: !!mirrorDeleted,
-    mirrorBytes: typeof mirrorContent === 'string' ? mirrorContent.length : 0,
-    activeBytes: active.length,
-    action,
-  })
+  // A normal startup scans every mirrored file and almost all decisions are
+  // "skip". Logging each no-op produced hundreds of console/CDP events in a few
+  // seconds. Changed files remain individually visible; the engine emits one
+  // aggregate summary for the no-op majority.
+  if (action !== 'skip') {
+    diag('folder-sync.reconcile', 'mirror-sync-decision', {
+      mirrorDeleted: !!mirrorDeleted,
+      mirrorBytes: typeof mirrorContent === 'string' ? mirrorContent.length : 0,
+      activeBytes: active.length,
+      action,
+    })
+  }
   return action
 }
 
@@ -107,7 +117,9 @@ export function filesToDeleteLocally({
     else if (isSidecar(name)) { action = 'keep'; reason = 'sidecar' }          // sync metadata, not user data
     else if (isRecordFile(name)) { action = 'keep'; reason = 'record-file' }   // row-level files use tombstones
     else if (pend.has(name)) { action = 'keep'; reason = 'pending-local' }     // local change not yet pushed
-    diag('folder-sync.reconcile', 'local-delete-decision', { name, action, reason })
+    if (action === 'delete') {
+      diag('folder-sync.reconcile', 'local-delete-decision', { name, action, reason })
+    }
     if (action === 'keep') continue
     out.push(name)
   }
@@ -193,13 +205,15 @@ export function shouldPullRemote({ lastSeen, remoteMtime, localPresent }) {
   if (!lastSeen) { decision = true; reason = 'never-synced' }              // never synced → pull
   else if (remoteMtime > lastSeen) { decision = true; reason = 'remote-newer' } // remote changed → pull
   else if (!localPresent) { decision = true; reason = 'local-missing' }    // local copy missing → restore it
-  diag('folder-sync.reconcile', 'pull-decision', {
-    lastSeen: lastSeen ?? null,
-    remoteMtime,
-    localPresent: !!localPresent,
-    pull: decision,
-    reason,
-  })
+  if (decision) {
+    diag('folder-sync.reconcile', 'pull-decision', {
+      lastSeen: lastSeen ?? null,
+      remoteMtime,
+      localPresent: !!localPresent,
+      pull: decision,
+      reason,
+    })
+  }
   return decision
 }
 

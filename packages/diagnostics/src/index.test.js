@@ -1,13 +1,18 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  advertiseDiagnosticsToWorker,
   clearDiagnostics,
   diag,
   dumpDiagnostics,
   enableDiagnostics,
+  isDiagEnabled,
   registerDiagSink,
+  reconcileWorkerDiagnosticsForClients,
   resetDiagnosticsForTests,
+  requestWorkerDiagnosticClientStates,
   setDiagnosticsLimit,
+  setWorkerDiagnosticsForClient,
   unregisterDiagSink,
 } from './index.js'
 
@@ -53,5 +58,58 @@ describe('diagnostics', () => {
     diag('sync', 'three')
 
     expect(dumpDiagnostics().map((item) => item.event)).toEqual(['two', 'three'])
+  })
+
+  it('emits one lightweight console record per event', () => {
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    const table = vi.spyOn(console, 'table').mockImplementation(() => {})
+    resetDiagnosticsForTests()
+    enableDiagnostics({ persist: false })
+
+    diag('folder-sync.reconcile', 'mirror-reconcile-summary', { scanned: 700 })
+
+    expect(debug).toHaveBeenCalledTimes(1)
+    expect(table).not.toHaveBeenCalled()
+    debug.mockRestore()
+    table.mockRestore()
+  })
+
+  it('keeps worker diagnostics enabled while another client still requests them', () => {
+    setWorkerDiagnosticsForClient('diag-tab', true)
+    expect(isDiagEnabled()).toBe(true)
+
+    setWorkerDiagnosticsForClient('normal-tab', false)
+    expect(isDiagEnabled()).toBe(true)
+
+    setWorkerDiagnosticsForClient('diag-tab', false)
+    expect(isDiagEnabled()).toBe(false)
+  })
+
+  it('prunes a diagnostic client after its tab closes', () => {
+    setWorkerDiagnosticsForClient('diag-tab', true)
+    expect(isDiagEnabled()).toBe(true)
+
+    reconcileWorkerDiagnosticsForClients(['normal-tab'])
+
+    expect(isDiagEnabled()).toBe(false)
+  })
+
+  it('requests and re-advertises enabled state after a worker restart', async () => {
+    const diagnosticPage = { id: 'diag-tab', postMessage: vi.fn() }
+    await requestWorkerDiagnosticClientStates({
+      matchAll: vi.fn().mockResolvedValue([diagnosticPage]),
+    })
+    expect(diagnosticPage.postMessage).toHaveBeenCalledWith({
+      type: 'planner-diag-state-request',
+    })
+
+    const restartedWorker = { postMessage: vi.fn() }
+    enableDiagnostics({ persist: false })
+
+    expect(advertiseDiagnosticsToWorker(restartedWorker)).toBe(true)
+    expect(restartedWorker.postMessage).toHaveBeenCalledWith({
+      type: 'planner-diag-enable',
+      enabled: true,
+    })
   })
 })
