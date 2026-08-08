@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   advertiseDiagnosticsToWorker,
@@ -6,6 +6,7 @@ import {
   diag,
   dumpDiagnostics,
   enableDiagnostics,
+  ingestRelayedEvents,
   isDiagEnabled,
   registerDiagSink,
   reconcileWorkerDiagnosticsForClients,
@@ -21,6 +22,12 @@ describe('diagnostics', () => {
     resetDiagnosticsForTests()
     unregisterDiagSink('console')
     clearDiagnostics()
+  })
+
+  afterEach(() => {
+    delete globalThis.self
+    vi.useRealTimers()
+    resetDiagnosticsForTests()
   })
 
   it('is a cheap no-op when disabled', () => {
@@ -72,6 +79,44 @@ describe('diagnostics', () => {
     expect(table).not.toHaveBeenCalled()
     debug.mockRestore()
     table.mockRestore()
+  })
+
+  it('keeps relayed worker events in the buffer without echoing them to CDP', () => {
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    resetDiagnosticsForTests()
+    enableDiagnostics({ persist: false })
+
+    ingestRelayedEvents([
+      { channel: 'folder-sync', event: 'one', fields: { path: 'a' } },
+      { channel: 'folder-sync', event: 'two', fields: { path: 'b' } },
+    ])
+
+    expect(debug).not.toHaveBeenCalled()
+    expect(dumpDiagnostics().map(item => item.event)).toEqual(['one', 'two'])
+    debug.mockRestore()
+  })
+
+  it('batches a burst of worker events into one client lookup and message', async () => {
+    vi.useFakeTimers()
+    const client = { postMessage: vi.fn() }
+    const matchAll = vi.fn().mockResolvedValue([client])
+    globalThis.self = {
+      addEventListener: vi.fn(),
+      clients: { matchAll },
+    }
+    resetDiagnosticsForTests()
+    enableDiagnostics({ persist: false })
+
+    for (let i = 0; i < 500; i++) diag('folder-sync', `event-${i}`)
+    expect(matchAll).not.toHaveBeenCalled()
+
+    await vi.runAllTimersAsync()
+
+    expect(matchAll).toHaveBeenCalledTimes(1)
+    expect(client.postMessage).toHaveBeenCalledTimes(1)
+    expect(client.postMessage.mock.calls[0][0].type).toBe('planner-diag-batch')
+    expect(client.postMessage.mock.calls[0][0].events).toHaveLength(250)
+    expect(client.postMessage.mock.calls[0][0].events[0].event).toBe('event-250')
   })
 
   it('keeps worker diagnostics enabled while another client still requests them', () => {
