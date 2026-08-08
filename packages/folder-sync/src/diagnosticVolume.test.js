@@ -8,7 +8,7 @@ import {
   unregisterDiagSink,
 } from '../../diagnostics/src/index.js'
 import { mergeCollections } from './merge.js'
-import { planMirrorSync, shouldPullRemote } from './reconcile.js'
+import { planMirrorSync, planPlainPush, shouldPullRemote } from './reconcile.js'
 
 describe('sync diagnostic volume', () => {
   beforeEach(() => {
@@ -61,6 +61,18 @@ describe('sync diagnostic volume', () => {
     })).toBe(true)
     expect(dumpDiagnostics()).toHaveLength(1)
     expect(dumpDiagnostics()[0].event).toBe('pull-decision')
+  })
+
+  it('does not emit a plain-push record for every first-contact skip', () => {
+    for (let i = 0; i < 700; i++) {
+      expect(planPlainPush({
+        localContent: `journal-${i}`,
+        tracked: false,
+        remoteHas: true,
+      })).toBe('skip')
+    }
+
+    expect(dumpDiagnostics()).toEqual([])
   })
 
   it('summarizes an unchanged collection instead of logging every record', () => {

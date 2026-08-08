@@ -9,6 +9,8 @@ const state = {
 }
 const workerDiagnosticClients = new Set()
 let workerReconcilePromise = null
+let relayTimer = null
+let relayQueue = []
 
 function root() {
   return typeof globalThis !== 'undefined' ? globalThis : {}
@@ -76,11 +78,26 @@ function relaySink(item) {
   const g = root()
   const clients = g.self?.clients
   if (!clients || typeof clients.matchAll !== 'function') return
-  clients.matchAll({ includeUncontrolled: true, type: 'window' })
-    .then((windows) => {
-      for (const client of windows) client.postMessage({ type: 'planner-diag-event', event: item })
-    })
-    .catch(() => {})
+  relayQueue.push(item)
+  if (relayQueue.length > state.limit) {
+    relayQueue.splice(0, relayQueue.length - state.limit)
+  }
+  if (relayTimer !== null) return
+  const schedule = typeof g.setTimeout === 'function'
+    ? g.setTimeout.bind(g)
+    : (callback) => { Promise.resolve().then(callback); return true }
+  relayTimer = schedule(() => {
+    relayTimer = null
+    const events = relayQueue
+    relayQueue = []
+    clients.matchAll({ includeUncontrolled: true, type: 'window' })
+      .then((windows) => {
+        for (const client of windows) {
+          client.postMessage({ type: 'planner-diag-batch', events })
+        }
+      })
+      .catch(() => {})
+  }, 0)
 }
 
 function emit(item) {
@@ -145,7 +162,6 @@ export function advertiseDiagnosticsToWorker(worker) {
 
 export function diag(channel, event, fields = {}) {
   if (!state.enabled) return false
-  if (isWorkerGlobal()) void reconcileWorkerDiagnosticClients()
   emit(makeEvent(channel, event, fields))
   return true
 }
@@ -248,18 +264,29 @@ export function unregisterDiagSink(name) {
 }
 
 function installDefaultSinks() {
-  state.sinks.set('console', consoleSink)
+  // Worker diagnostics are pulled from the bounded page buffer. Mirroring each
+  // worker event to its console floods CDP and can starve the UI being debugged.
+  if (!isWorkerGlobal()) state.sinks.set('console', consoleSink)
   state.sinks.set('buffer', bufferSink)
   if (isWorkerGlobal()) state.sinks.set('relay', relaySink)
 }
 
 function ingestRelayedEvent(item) {
   if (!state.enabled || !item || typeof item !== 'object') return
-  emit({
+  const relayed = {
     ...item,
     fields: cloneFields(item.fields),
     relayed: true,
-  })
+  }
+  for (const [name, sink] of state.sinks) {
+    if (name === 'console') continue
+    try { sink(relayed) } catch { /* keep diagnostics non-fatal */ }
+  }
+}
+
+export function ingestRelayedEvents(items) {
+  if (!Array.isArray(items)) return
+  for (const item of items) ingestRelayedEvent(item)
 }
 
 function installWindowGlobal() {
@@ -277,6 +304,7 @@ function installWindowGlobal() {
     const serviceWorker = w.navigator?.serviceWorker
     serviceWorker?.addEventListener?.('message', (evt) => {
       if (evt.data?.type === 'planner-diag-event') ingestRelayedEvent(evt.data.event)
+      if (evt.data?.type === 'planner-diag-batch') ingestRelayedEvents(evt.data.events)
       if (evt.data?.type === 'planner-diag-state-request') {
         if (!advertiseDiagnosticsToWorker(evt.source)) postWorkerToggle(state.enabled)
       }
@@ -304,6 +332,11 @@ export function resetDiagnosticsForTests() {
   state.sinks.clear()
   workerDiagnosticClients.clear()
   workerReconcilePromise = null
+  if (relayTimer !== null && typeof root().clearTimeout === 'function') {
+    root().clearTimeout(relayTimer)
+  }
+  relayTimer = null
+  relayQueue = []
   installDefaultSinks()
 }
 
