@@ -1,5 +1,7 @@
 const STORAGE_KEY = 'planner.diag'
 const DEFAULT_LIMIT = 250
+const EVENT_SCHEMA_VERSION = 1
+const WORKER_DUMP_TIMEOUT_MS = 1500
 
 const state = {
   enabled: false,
@@ -9,8 +11,9 @@ const state = {
 }
 const workerDiagnosticClients = new Set()
 let workerReconcilePromise = null
-let relayTimer = null
-let relayQueue = []
+let contextId = null
+let contextKind = null
+let contextSequence = 0
 
 function root() {
   return typeof globalThis !== 'undefined' ? globalThis : {}
@@ -60,44 +63,8 @@ function pushBuffer(item) {
   }
 }
 
-function consoleSink(item) {
-  if (typeof console === 'undefined') return
-  const prefix = `[planner:${item.channel}] ${item.event}`
-  // Keep this to one CDP event. console.table emits another, comparatively
-  // expensive event for every diagnostic record; a normal mirror pass can scan
-  // hundreds of files, flooding the automation transport while the page itself
-  // remains visually responsive.
-  if (typeof console.debug === 'function') console.debug(prefix, item.fields)
-}
-
 function bufferSink(item) {
   pushBuffer(item)
-}
-
-function relaySink(item) {
-  const g = root()
-  const clients = g.self?.clients
-  if (!clients || typeof clients.matchAll !== 'function') return
-  relayQueue.push(item)
-  if (relayQueue.length > state.limit) {
-    relayQueue.splice(0, relayQueue.length - state.limit)
-  }
-  if (relayTimer !== null) return
-  const schedule = typeof g.setTimeout === 'function'
-    ? g.setTimeout.bind(g)
-    : (callback) => { Promise.resolve().then(callback); return true }
-  relayTimer = schedule(() => {
-    relayTimer = null
-    const events = relayQueue
-    relayQueue = []
-    clients.matchAll({ includeUncontrolled: true, type: 'window' })
-      .then((windows) => {
-        for (const client of windows) {
-          client.postMessage({ type: 'planner-diag-batch', events })
-        }
-      })
-      .catch(() => {})
-  }, 0)
 }
 
 function emit(item) {
@@ -106,10 +73,31 @@ function emit(item) {
   }
 }
 
+function makeContextId(kind) {
+  const randomId = root().crypto?.randomUUID?.()
+  if (randomId) return `${kind}:${randomId}`
+  return `${kind}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`
+}
+
+function eventContext() {
+  const kind = isWorkerGlobal() ? 'worker' : 'page'
+  if (contextKind !== kind || !contextId) {
+    contextKind = kind
+    contextId = makeContextId(kind)
+    contextSequence = 0
+  }
+  return { kind, id: contextId, sequence: ++contextSequence }
+}
+
 function makeEvent(channel, event, fields = {}) {
+  const context = eventContext()
   return {
+    schema: EVENT_SCHEMA_VERSION,
     ts: new Date().toISOString(),
     t: Date.now(),
+    context: context.kind,
+    contextId: context.id,
+    sequence: context.sequence,
     channel,
     event,
     fields: cloneFields(fields),
@@ -245,6 +233,117 @@ export function dumpDiagnostics() {
   }))
 }
 
+function isFolderSyncRegistration(registration) {
+  try {
+    const scopePath = new URL(registration?.scope).pathname
+    if (scopePath.endsWith('/folder-sync/')) return true
+  } catch { /* fall through to script URLs */ }
+  return [registration?.active, registration?.waiting, registration?.installing]
+    .some((worker) => {
+      try {
+        return new URL(worker?.scriptURL).pathname.endsWith('/folder-sync/sw.js')
+      } catch {
+        return false
+      }
+    })
+}
+
+export function findDiagnosticsWorker(registrations) {
+  const registration = (registrations ?? []).find(isFolderSyncRegistration)
+  return registration?.active ?? registration?.waiting ?? registration?.installing ?? null
+}
+
+function activeServiceWorker() {
+  const sw = win()?.navigator?.serviceWorker
+  if (!sw?.getRegistrations) return Promise.resolve(null)
+  try {
+    return sw.getRegistrations()
+      .then(findDiagnosticsWorker)
+      .catch(() => null)
+  } catch {
+    return Promise.resolve(null)
+  }
+}
+
+export function requestWorkerDiagnostics(
+  worker,
+  {
+    timeoutMs = WORKER_DUMP_TIMEOUT_MS,
+    messageChannelFactory,
+  } = {},
+) {
+  const factory = messageChannelFactory
+    ?? (typeof root().MessageChannel === 'function' ? () => new (root().MessageChannel)() : null)
+  if (typeof worker?.postMessage !== 'function' || !factory) {
+    return Promise.resolve({ available: false, events: [] })
+  }
+
+  return new Promise((resolve) => {
+    const requestId = `diag-dump:${Date.now()}:${Math.random().toString(36).slice(2)}`
+    const channel = factory()
+    let settled = false
+    const finish = (result) => {
+      if (settled) return
+      settled = true
+      root().clearTimeout?.(timer)
+      channel.port1?.close?.()
+      resolve(result)
+    }
+    const timer = root().setTimeout?.(
+      () => finish({ available: false, events: [], reason: 'timeout' }),
+      timeoutMs,
+    )
+    channel.port1.onmessage = (evt) => {
+      if (evt.data?.type !== 'planner-diag-dump-response' || evt.data.requestId !== requestId) return
+      finish({
+        available: true,
+        events: Array.isArray(evt.data.events) ? evt.data.events : [],
+      })
+    }
+    channel.port1.start?.()
+    try {
+      worker.postMessage(
+        { type: 'planner-diag-dump-request', requestId },
+        [channel.port2],
+      )
+    } catch {
+      finish({ available: false, events: [], reason: 'post-failed' })
+    }
+  })
+}
+
+function compareEvents(a, b) {
+  const time = Number(a?.t ?? 0) - Number(b?.t ?? 0)
+  if (time !== 0) return time
+  const context = String(a?.contextId ?? '').localeCompare(String(b?.contextId ?? ''))
+  if (context !== 0) return context
+  return Number(a?.sequence ?? 0) - Number(b?.sequence ?? 0)
+}
+
+export async function dumpAllDiagnostics({ worker, ...requestOptions } = {}) {
+  const page = dumpDiagnostics()
+  const target = worker === undefined ? await activeServiceWorker() : worker
+  const workerSnapshot = await requestWorkerDiagnostics(target, requestOptions)
+  const workerEvents = workerSnapshot.events.map(item => ({
+    ...item,
+    fields: cloneFields(item.fields),
+  }))
+  return {
+    page,
+    worker: workerEvents,
+    events: [...page, ...workerEvents].sort(compareEvents),
+    workerAvailable: workerSnapshot.available,
+  }
+}
+
+export async function printDiagnostics(options) {
+  const snapshot = await dumpAllDiagnostics(options)
+  if (typeof console !== 'undefined' && typeof console.log === 'function') {
+    console.log('[planner:diagnostics] snapshot', snapshot)
+  }
+  return snapshot
+}
+
 export function setDiagnosticsLimit(limit) {
   const n = Number(limit)
   state.limit = Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_LIMIT
@@ -264,29 +363,7 @@ export function unregisterDiagSink(name) {
 }
 
 function installDefaultSinks() {
-  // Worker diagnostics are pulled from the bounded page buffer. Mirroring each
-  // worker event to its console floods CDP and can starve the UI being debugged.
-  if (!isWorkerGlobal()) state.sinks.set('console', consoleSink)
   state.sinks.set('buffer', bufferSink)
-  if (isWorkerGlobal()) state.sinks.set('relay', relaySink)
-}
-
-function ingestRelayedEvent(item) {
-  if (!state.enabled || !item || typeof item !== 'object') return
-  const relayed = {
-    ...item,
-    fields: cloneFields(item.fields),
-    relayed: true,
-  }
-  for (const [name, sink] of state.sinks) {
-    if (name === 'console') continue
-    try { sink(relayed) } catch { /* keep diagnostics non-fatal */ }
-  }
-}
-
-export function ingestRelayedEvents(items) {
-  if (!Array.isArray(items)) return
-  for (const item of items) ingestRelayedEvent(item)
 }
 
 function installWindowGlobal() {
@@ -296,6 +373,8 @@ function installWindowGlobal() {
     enable: () => { enableDiagnostics(); return true },
     disable: () => { disableDiagnostics(); return true },
     dump: dumpDiagnostics,
+    dumpAll: dumpAllDiagnostics,
+    print: printDiagnostics,
     clear: clearDiagnostics,
     isEnabled: isDiagEnabled,
     setLimit: setDiagnosticsLimit,
@@ -303,8 +382,6 @@ function installWindowGlobal() {
   try {
     const serviceWorker = w.navigator?.serviceWorker
     serviceWorker?.addEventListener?.('message', (evt) => {
-      if (evt.data?.type === 'planner-diag-event') ingestRelayedEvent(evt.data.event)
-      if (evt.data?.type === 'planner-diag-batch') ingestRelayedEvents(evt.data.events)
       if (evt.data?.type === 'planner-diag-state-request') {
         if (!advertiseDiagnosticsToWorker(evt.source)) postWorkerToggle(state.enabled)
       }
@@ -317,12 +394,25 @@ function installWindowGlobal() {
 
 function installWorkerListener() {
   if (!isWorkerGlobal()) return
-  root().self.addEventListener('message', (evt) => {
-    if (evt.data?.type !== 'planner-diag-enable') return
+  root().self.addEventListener('message', handleWorkerDiagnosticMessage)
+  void requestWorkerDiagnosticClientStates()
+}
+
+export function handleWorkerDiagnosticMessage(evt) {
+  if (evt.data?.type === 'planner-diag-enable') {
     setWorkerDiagnosticsForClient(evt.source?.id, Boolean(evt.data.enabled))
     void reconcileWorkerDiagnosticClients()
-  })
-  void requestWorkerDiagnosticClientStates()
+    return true
+  }
+  if (evt.data?.type === 'planner-diag-dump-request') {
+    evt.ports?.[0]?.postMessage({
+      type: 'planner-diag-dump-response',
+      requestId: evt.data.requestId,
+      events: dumpDiagnostics(),
+    })
+    return true
+  }
+  return false
 }
 
 export function resetDiagnosticsForTests() {
@@ -332,11 +422,9 @@ export function resetDiagnosticsForTests() {
   state.sinks.clear()
   workerDiagnosticClients.clear()
   workerReconcilePromise = null
-  if (relayTimer !== null && typeof root().clearTimeout === 'function') {
-    root().clearTimeout(relayTimer)
-  }
-  relayTimer = null
-  relayQueue = []
+  contextId = null
+  contextKind = null
+  contextSequence = 0
   installDefaultSinks()
 }
 

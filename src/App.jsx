@@ -5582,7 +5582,7 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
                     Diagnostics {diagnosticsEnabled ? 'on' : 'off'}
                   </span>
                   <span className="settings-update-hint">
-                    Captures sync decisions in the browser console and CDP buffer. Off by default.
+                    Keeps a bounded in-memory flight recorder for on-demand troubleshooting. Off by default.
                   </span>
                 </div>
                 <button
