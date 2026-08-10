@@ -252,7 +252,13 @@ export function onLocalChange(listener) {
  */
 export async function registerSyncWorker() {
   const base = (import.meta.env?.BASE_URL || '/').replace(/\/$/, '')
-  return registerServiceWorker(`${base}/folder-sync/sw.js`, { type: 'module', scope: `${base}/folder-sync/` })
+  return registerServiceWorker(`${base}/folder-sync/sw.js`, {
+    type: 'module',
+    scope: `${base}/folder-sync/`,
+    // Diagnostics and sync behavior live in imported modules. Bypass the HTTP
+    // cache during update checks so a deployment cannot strand an older graph.
+    updateViaCache: 'none',
+  })
 }
 
 /** Build identifier injected at build time (see vite.config.js). */
