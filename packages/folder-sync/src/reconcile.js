@@ -168,13 +168,15 @@ export function planPlainPush({ localContent, tracked, remoteHas }) {
   } else {
     action = 'write'
   }
-  diag('folder-sync.reconcile', 'plain-push-decision', {
-    localDeleted,
-    localBytes: typeof localContent === 'string' ? localContent.length : 0,
-    tracked: !!tracked,
-    remoteHas: !!remoteHas,
-    action,
-  })
+  if (action !== 'skip') {
+    diag('folder-sync.reconcile', 'plain-push-decision', {
+      localDeleted,
+      localBytes: typeof localContent === 'string' ? localContent.length : 0,
+      tracked: !!tracked,
+      remoteHas: !!remoteHas,
+      action,
+    })
+  }
   return action
 }
 
