@@ -3324,7 +3324,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
   
   const handleChangeLinkedId = async (rawLine, newLinkedId) => {
     const lines = content.split('\n')
-    const lineIndex = lines.findIndex(line => line === rawLine)
+    const lineIndex = lines.findIndex(line => line.trim() === rawLine.trim())
     
     if (lineIndex !== -1) {
       const parts = rawLine.split('|')
