@@ -210,7 +210,9 @@ export function opRenameTask(content, rawLine, newTaskName) {
 
 export function opChangeLinkedId(content, rawLine, newLinkedId) {
   const lines = content.split('\n')
-  const lineIndex = lines.findIndex(line => line === rawLine)
+  // Rendered rows are trimmed by parseMarkdownTable, while CRLF-backed files
+  // retain a trailing \r after split('\n'). Match their normalized row text.
+  const lineIndex = lines.findIndex(line => line.trim() === rawLine.trim())
   if (lineIndex === -1) return content
   const parts = rawLine.split('|')
   if (parts.length < 7) return content
