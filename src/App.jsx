@@ -50,6 +50,14 @@ import { sameFileTree } from './fileTreeEqual.js'
 import { joinSourcePath, journalReadStateId } from './sourcePath.js'
 import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
 import { SETTINGS_FILE } from './storage/settings.js'
+import {
+  TASK_SETTINGS_FILE,
+  DEFAULT_TASK_SETTINGS,
+  parseTaskSettingsFile,
+  setTaskSetting as setTaskSettingInActiveSource,
+  readTaskSettingsFromSource,
+  setTaskSettingInSource,
+} from './storage/taskSettings.js'
 import { AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE } from './config/aiSettings.js'
 import { groupSettingsForm, serializeSettingsForm, hasSettingsForm } from './config/userSettingsForm.js'
 import {
@@ -1773,7 +1781,7 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
 
 // Collapsible section component
 // Collapsible section component
-function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onSnoozeTask, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource, onDeferBelow, searchQuery = '' }) {
+function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onSnoozeTask, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource, onDeferBelow, searchQuery = '', taskSettings = {}, onToggleTaskSetting }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const { headers, rows, rawLines } = parseMarkdownTable(tableLines)
   // Combined view (#39): tag each row with its owning source so destructive
@@ -2051,6 +2059,23 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
           idCell: row['ID'],
           sourceId: row.__sourceId,
         }),
+      })
+    }
+
+    // #379: per-task AI controls. Compact kebab toggles for the two opt-ins
+    // — AI-assisted and persistent session — defaulting to off so existing
+    // tasks with no recorded settings keep their current (non-AI) behavior.
+    if (taskId && onToggleTaskSetting) {
+      const currentTaskSettings = taskSettings[taskId] || DEFAULT_TASK_SETTINGS
+      options.push({
+        label: `AI-assisted: ${currentTaskSettings.aiAssisted ? 'On' : 'Off'}`,
+        icon: '🤖',
+        action: () => onToggleTaskSetting(taskId, { aiAssisted: !currentTaskSettings.aiAssisted }, row.__sourceId),
+      })
+      options.push({
+        label: `Persistent session: ${currentTaskSettings.persistentSession ? 'On' : 'Off'}`,
+        icon: '🧷',
+        action: () => onToggleTaskSetting(taskId, { persistentSession: !currentTaskSettings.persistentSession }, row.__sourceId),
       })
     }
 
@@ -2687,6 +2712,10 @@ function useCompleteInitialReadStateSeeding(ready) {
 
 function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, search: searchProp, onSearchChange, mission, syncStatus, onDataChanged }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
+  // Per-task AI-assisted / persistent-session opt-ins (#379), keyed by task ID.
+  // Loaded from task-settings.json independently of plan content since it's a
+  // separate sidecar file; refreshed on remote sync pulls to that file too.
+  const [taskSettings, setTaskSettingsMap] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
   const [closeOutDialog, setCloseOutDialog] = useState(null)
   const [searchLocal, setSearchLocal] = useState('')
@@ -2772,6 +2801,27 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       })
       .catch(() => {})
   }, [])
+
+  // Load per-task AI-controls settings (#379) and keep them fresh across
+  // remote sync pulls that touch task-settings.json.
+  useEffect(() => {
+    let cancelled = false
+    const load = () => storage.read(TASK_SETTINGS_FILE)
+      .then(raw => { if (!cancelled) setTaskSettingsMap(parseTaskSettingsFile(raw).tasks) })
+      .catch(() => { if (!cancelled) setTaskSettingsMap({}) })
+    load()
+    const unsub = storage.onLocalChange((path) => { if (path === TASK_SETTINGS_FILE) load() })
+    return () => { cancelled = true; unsub() }
+  }, [])
+
+  // Toggle one per-task AI-controls opt-in. Reads-modifies-writes
+  // task-settings.json in the active source (single-source view).
+  const handleToggleTaskSetting = async (taskId, patch) => {
+    try {
+      const next = await setTaskSettingInActiveSource(taskId, patch)
+      setTaskSettingsMap(next.tasks)
+    } catch { /* best effort — menu will show stale state until next load */ }
+  }
 
   // The board search is always shown now: it carries the mission statement as
   // its quote-styled zero-state placeholder (#322), so there's no separate
@@ -3716,6 +3766,8 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
           onRemoveFromManagerPriority={handleRemoveFromManagerPriority}
           otherSources={otherSources}
           onMoveToSource={handleMoveToSource}
+          taskSettings={taskSettings}
+          onToggleTaskSetting={handleToggleTaskSetting}
         />
       ))}
 
@@ -5642,6 +5694,10 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
 function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
   const [perSource, setPerSource] = useState(null) // [{ source, content, sections }]
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
+  // Per-task AI-controls settings (#379), keyed per source since each row's
+  // task belongs to a specific registered source (task-settings.json lives
+  // alongside that source's planner.md, not a single "active" source).
+  const [taskSettingsBySource, setTaskSettingsBySource] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
   const [closeOutDialog, setCloseOutDialog] = useState(null)
   const [error, setError] = useState('')
@@ -5715,6 +5771,36 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     })()
     return () => { cancelled = true }
   }, [sources, reloadKey])
+
+  // Load per-task AI-controls settings from every source, and keep them
+  // fresh across remote sync pulls that touch any source's task-settings.json.
+  useEffect(() => {
+    let cancelled = false
+    const load = () => Promise.all(sources.map(async (s) => {
+      try {
+        const file = await readTaskSettingsFromSource(s.id)
+        return [s.id, file.tasks]
+      } catch {
+        return [s.id, {}]
+      }
+    })).then(entries => {
+      if (!cancelled) setTaskSettingsBySource(Object.fromEntries(entries))
+    })
+    load()
+    const unsub = storage.onLocalChange((path) => { if (path === TASK_SETTINGS_FILE) load() })
+    return () => { cancelled = true; unsub() }
+  }, [sources])
+
+  // Toggle one per-task AI-controls opt-in, routed to the task's owning
+  // source (falls back to the row-supplied sourceId, then sourceForTask).
+  const handleToggleTaskSetting = async (taskId, patch, sourceId) => {
+    const sid = sourceId || sourceForTask(taskId)
+    if (!sid) return
+    try {
+      const next = await setTaskSettingInSource(sid, taskId, patch)
+      setTaskSettingsBySource(prev => ({ ...prev, [sid]: next.tasks }))
+    } catch { /* best effort — menu will show stale state until next load */ }
+  }
 
   if (error) return <div className="placeholder"><h1>✨ Combined</h1><p>Failed to load: {error}</p></div>
   if (!perSource) return <div className="placeholder"><h1>✨ Combined</h1><p>Loading…</p></div>
@@ -6242,6 +6328,10 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     if (sec) Object.assign(managerPriorities, parseManagerPriorities(sec.lines))
   }
 
+  // Flatten per-source task settings (#379) for TaskSection — same
+  // cross-source ID-collision caveat as managerPriorities above.
+  const taskSettings = Object.assign({}, ...Object.values(taskSettingsBySource))
+
   return (
     <div className="focus-plan-view combined-view">
       <h1>✨ Combined Focus Plan</h1>
@@ -6274,6 +6364,8 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
         onRemoveFromManagerPriority={handleRemoveFromManagerPriority}
         otherSources={sources}
         onMoveToSource={handleMoveToSource}
+        taskSettings={taskSettings}
+        onToggleTaskSetting={handleToggleTaskSetting}
       />
 
       <TaskSection
@@ -6304,6 +6396,8 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
         onRemoveFromManagerPriority={handleRemoveFromManagerPriority}
         otherSources={sources}
         onMoveToSource={handleMoveToSource}
+        taskSettings={taskSettings}
+        onToggleTaskSetting={handleToggleTaskSetting}
       />
 
       {perSource.map(({ source, sections }) => {
