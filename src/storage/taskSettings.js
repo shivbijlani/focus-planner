@@ -61,14 +61,16 @@ export function normalizeTaskSettingsFile(raw) {
   }
 }
 
-// Parse the raw JSON text of task-settings.json. Missing file / invalid JSON
-// both fall back to an empty, normalized file rather than throwing, so a
-// corrupt sidecar never blocks the board from loading.
-export function parseTaskSettingsFile(raw) {
+// Lenient reads keep the board available; strict mutation reads protect a
+// malformed sidecar from being overwritten with an empty settings map.
+export function parseTaskSettingsFile(raw, { strict = false } = {}) {
   if (!raw) return normalizeTaskSettingsFile({})
   try {
     return normalizeTaskSettingsFile(JSON.parse(raw))
-  } catch {
+  } catch (error) {
+    if (strict) {
+      throw new Error(`Cannot update ${TASK_SETTINGS_FILE}: the existing file is not valid JSON. Fix or restore it first.`, { cause: error })
+    }
     return normalizeTaskSettingsFile({})
   }
 }
@@ -98,14 +100,39 @@ export function withTaskSetting(file, taskId, patch) {
   }
 }
 
+export function moveTaskSettingsEntries(sourceFile, targetFile, idMap) {
+  const source = normalizeTaskSettingsFile(sourceFile)
+  const target = normalizeTaskSettingsFile(targetFile)
+  const nextSourceTasks = { ...source.tasks }
+  const nextTargetTasks = { ...target.tasks }
+
+  for (const [oldId, newId] of idMap) {
+    const sourceId = String(oldId)
+    if (!Object.prototype.hasOwnProperty.call(nextSourceTasks, sourceId)) continue
+    nextTargetTasks[String(newId)] = nextSourceTasks[sourceId]
+    delete nextSourceTasks[sourceId]
+  }
+
+  return {
+    source: { ...source, tasks: nextSourceTasks },
+    target: { ...target, tasks: nextTargetTasks },
+  }
+}
+
 let storageAdapter = {
   read: (path) => storage.read(path),
   write: (path, content) => storage.write(path, content),
 }
 
 async function readWith(readFn) {
-  const raw = await readFn(TASK_SETTINGS_FILE)
-  return parseTaskSettingsFile(raw)
+  let raw
+  try {
+    raw = await readFn(TASK_SETTINGS_FILE)
+  } catch (error) {
+    if (error?.name === 'NotFoundError') return normalizeTaskSettingsFile({})
+    throw error
+  }
+  return parseTaskSettingsFile(raw, { strict: true })
 }
 
 async function writeWith(writeFn, file) {

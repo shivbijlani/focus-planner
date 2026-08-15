@@ -8,6 +8,7 @@ import {
   serializeTaskSettingsFile,
   getTaskSettings,
   withTaskSetting,
+  moveTaskSettingsEntries,
   readTaskSettings,
   writeTaskSettings,
   setTaskSetting,
@@ -92,6 +93,21 @@ describe('taskSettings storage', () => {
       expect(next.tasks['379']).toEqual({ aiAssisted: true, persistentSession: false })
     })
 
+    it('moves settings to renumbered target IDs without disturbing unrelated entries', () => {
+      const result = moveTaskSettingsEntries(
+        { tasks: { '10': { aiAssisted: true }, '11': { persistentSession: true } } },
+        { tasks: { '20': { aiAssisted: true } } },
+        new Map([['10', '21']]),
+      )
+      expect(result.source.tasks).toEqual({
+        '11': { aiAssisted: false, persistentSession: true },
+      })
+      expect(result.target.tasks).toEqual({
+        '20': { aiAssisted: true, persistentSession: false },
+        '21': { aiAssisted: true, persistentSession: false },
+      })
+    })
+
     it('withTaskSetting leaves other tasks in the file untouched', () => {
       const file = normalizeTaskSettingsFile({
         tasks: { '379': { aiAssisted: true }, '400': { persistentSession: true } },
@@ -103,6 +119,18 @@ describe('taskSettings storage', () => {
 
   describe('active-source read/write', () => {
     it('returns an empty, normalized file when task-settings.json does not exist', async () => {
+      await expect(readTaskSettings()).resolves.toEqual({ version: 1, tasks: {} })
+    })
+
+    it('treats a provider NotFoundError as a fresh settings file', async () => {
+      __testing.setStorageAdapter({
+        read: async () => {
+          const error = new Error('missing')
+          error.name = 'NotFoundError'
+          throw error
+        },
+        write: async (path, content) => files.set(path, content),
+      })
       await expect(readTaskSettings()).resolves.toEqual({ version: 1, tasks: {} })
     })
 
@@ -133,6 +161,13 @@ describe('taskSettings storage', () => {
       const file = await readTaskSettings()
       expect(file.tasks['400']).toEqual({ aiAssisted: true, persistentSession: true })
       expect(file.tasks['379']).toEqual({ aiAssisted: true, persistentSession: false })
+    })
+
+    it('refuses to overwrite a malformed existing sidecar', async () => {
+      files.set(TASK_SETTINGS_FILE, '{not json')
+      await expect(setTaskSetting('379', { aiAssisted: true }))
+        .rejects.toThrow('existing file is not valid JSON')
+      expect(files.get(TASK_SETTINGS_FILE)).toBe('{not json')
     })
   })
 })

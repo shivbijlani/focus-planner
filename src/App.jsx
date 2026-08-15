@@ -53,10 +53,12 @@ import { SETTINGS_FILE } from './storage/settings.js'
 import {
   TASK_SETTINGS_FILE,
   DEFAULT_TASK_SETTINGS,
-  parseTaskSettingsFile,
-  setTaskSetting as setTaskSettingInActiveSource,
+  readTaskSettings,
+  writeTaskSettings,
   readTaskSettingsFromSource,
+  writeTaskSettingsToSource,
   setTaskSettingInSource,
+  moveTaskSettingsEntries,
 } from './storage/taskSettings.js'
 import { AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE } from './config/aiSettings.js'
 import { groupSettingsForm, serializeSettingsForm, hasSettingsForm } from './config/userSettingsForm.js'
@@ -2066,7 +2068,8 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     // — AI-assisted and persistent session — defaulting to off so existing
     // tasks with no recorded settings keep their current (non-AI) behavior.
     if (taskId && onToggleTaskSetting) {
-      const currentTaskSettings = taskSettings[taskId] || DEFAULT_TASK_SETTINGS
+      const settingsKey = row.__sourceId ? `${row.__sourceId}:${taskId}` : taskId
+      const currentTaskSettings = taskSettings[settingsKey] || DEFAULT_TASK_SETTINGS
       options.push({
         label: `AI-assisted: ${currentTaskSettings.aiAssisted ? 'On' : 'Off'}`,
         icon: '🤖',
@@ -2710,7 +2713,7 @@ function useCompleteInitialReadStateSeeding(ready) {
   }, [ready])
 }
 
-function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, search: searchProp, onSearchChange, mission, syncStatus, onDataChanged }) {
+function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sourceId, search: searchProp, onSearchChange, mission, syncStatus, onDataChanged }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   // Per-task AI-assisted / persistent-session opt-ins (#379), keyed by task ID.
   // Loaded from task-settings.json independently of plan content since it's a
@@ -2806,21 +2809,27 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
   // remote sync pulls that touch task-settings.json.
   useEffect(() => {
     let cancelled = false
-    const load = () => storage.read(TASK_SETTINGS_FILE)
-      .then(raw => { if (!cancelled) setTaskSettingsMap(parseTaskSettingsFile(raw).tasks) })
-      .catch(() => { if (!cancelled) setTaskSettingsMap({}) })
+    const load = () => readTaskSettingsFromSource(sourceId)
+      .then(file => { if (!cancelled) setTaskSettingsMap(file.tasks) })
+      .catch((error) => {
+        console.error('Failed to load task settings:', error)
+        if (!cancelled) setTaskSettingsMap({})
+      })
     load()
     const unsub = storage.onLocalChange((path) => { if (path === TASK_SETTINGS_FILE) load() })
     return () => { cancelled = true; unsub() }
-  }, [])
+  }, [sourceId])
 
   // Toggle one per-task AI-controls opt-in. Reads-modifies-writes
   // task-settings.json in the active source (single-source view).
   const handleToggleTaskSetting = async (taskId, patch) => {
     try {
-      const next = await setTaskSettingInActiveSource(taskId, patch)
+      const next = await setTaskSettingInSource(sourceId, taskId, patch)
       setTaskSettingsMap(next.tasks)
-    } catch { /* best effort — menu will show stale state until next load */ }
+    } catch (error) {
+      console.error('Failed to update task settings:', error)
+      alert(error.message || 'Could not update task settings.')
+    }
   }
 
   // The board search is always shown now: it carries the mission statement as
@@ -3619,6 +3628,19 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     const targetBase = maxTaskIdInRows(targetContent)
     const targetJournalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(target.id))
     const { idMap, rows: renumberedRows } = renumberMovedRows(movingRows, targetBase, targetJournalIds)
+    // Read both sides' task-settings.json up front, before any content is
+    // written. A malformed sidecar on either side aborts the whole move
+    // (nothing has been written yet) rather than silently dropping the
+    // moving tasks' AI-control settings.
+    let movedSettings
+    try {
+      const sourceSettings = await readTaskSettings()
+      const targetSettings = await readTaskSettingsFromSource(target.id)
+      movedSettings = moveTaskSettingsEntries(sourceSettings, targetSettings, idMap)
+    } catch (error) {
+      alert(error.message || 'Could not move task settings.')
+      return
+    }
     // Find Today section's insertion point (right after the separator row).
     let inToday = false
     let todayInsertIdx = -1
@@ -3698,7 +3720,9 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     // 4. Persist both sides. Write the target first so a failure there
     //    doesn't leave us with deleted-but-not-moved tasks.
     await targetProvider.write(PLAN_FILE, tLines.join('\n'))
+    await writeTaskSettingsToSource(target.id, movedSettings.target)
     await onContentUpdate(renumbered.join('\n'))
+    await writeTaskSettings(movedSettings.source)
   }
 
   return (
@@ -5780,7 +5804,8 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
       try {
         const file = await readTaskSettingsFromSource(s.id)
         return [s.id, file.tasks]
-      } catch {
+      } catch (error) {
+        console.error(`Failed to load task settings for source ${s.id}:`, error)
         return [s.id, {}]
       }
     })).then(entries => {
@@ -5799,7 +5824,10 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     try {
       const next = await setTaskSettingInSource(sid, taskId, patch)
       setTaskSettingsBySource(prev => ({ ...prev, [sid]: next.tasks }))
-    } catch { /* best effort — menu will show stale state until next load */ }
+    } catch (error) {
+      console.error('Failed to update task settings:', error)
+      alert(error.message || 'Could not update task settings.')
+    }
   }
 
   if (error) return <div className="placeholder"><h1>✨ Combined</h1><p>Failed to load: {error}</p></div>
@@ -6219,6 +6247,19 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     const targetBase = maxTaskIdInRows(targetContent)
     const targetJournalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(target.id))
     const { idMap, rows: renumberedRows } = renumberMovedRows(movingRows, targetBase, targetJournalIds)
+    // Read both sides' task-settings.json up front, before any content is
+    // written. A malformed sidecar on either side aborts the whole move
+    // (nothing has been written yet) rather than silently dropping the
+    // moving tasks' AI-control settings.
+    let movedSettings
+    try {
+      const sourceSettings = await readTaskSettingsFromSource(fromSourceId)
+      const targetSettings = await readTaskSettingsFromSource(target.id)
+      movedSettings = moveTaskSettingsEntries(sourceSettings, targetSettings, idMap)
+    } catch (error) {
+      alert(error.message || 'Could not move task settings.')
+      return
+    }
     let inToday = false
     let todayInsertIdx = -1
     for (let i = 0; i < tLines.length; i++) {
@@ -6277,7 +6318,9 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     }
 
     await storage.writeToSource(target.id, PLAN_FILE, tLines.join('\n'))
+    await writeTaskSettingsToSource(target.id, movedSettings.target)
     await storage.writeToSource(fromSourceId, PLAN_FILE, renumbered.join('\n'))
+    await writeTaskSettingsToSource(fromSourceId, movedSettings.source)
     setReloadKey(k => k + 1)
   }
 
@@ -6328,9 +6371,12 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     if (sec) Object.assign(managerPriorities, parseManagerPriorities(sec.lines))
   }
 
-  // Flatten per-source task settings (#379) for TaskSection — same
-  // cross-source ID-collision caveat as managerPriorities above.
-  const taskSettings = Object.assign({}, ...Object.values(taskSettingsBySource))
+  // Preserve source identity because independent sources may use the same task ID.
+  const taskSettings = Object.fromEntries(
+    Object.entries(taskSettingsBySource).flatMap(([sourceId, settings]) =>
+      Object.entries(settings).map(([taskId, value]) => [`${sourceId}:${taskId}`, value]),
+    ),
+  )
 
   return (
     <div className="focus-plan-view combined-view">
@@ -7067,6 +7113,7 @@ function App() {
               content={content}
               onNavigate={handleNavigate}
               onContentUpdate={handleContentUpdate}
+              sourceId={selSourceId}
               otherSources={sources.filter(s => s.id !== getActiveSourceId())}
               search={boardSearch}
               onSearchChange={setBoardSearch}
