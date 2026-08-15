@@ -163,11 +163,37 @@ describe('taskSettings storage', () => {
       expect(file.tasks['379']).toEqual({ aiAssisted: true, persistentSession: false })
     })
 
+    it('serializes concurrent toggles so neither update is lost', async () => {
+      let raw = ''
+      __testing.setStorageAdapter({
+        read: async () => raw,
+        write: async (_path, content) => {
+          await new Promise(resolve => setTimeout(resolve, 5))
+          raw = content
+        },
+      })
+      await Promise.all([
+        setTaskSetting('379', { aiAssisted: true }),
+        setTaskSetting('379', { persistentSession: true }),
+      ])
+      await expect(readTaskSettings()).resolves.toEqual({
+        version: 1,
+        tasks: { '379': { aiAssisted: true, persistentSession: true } },
+      })
+    })
+
     it('refuses to overwrite a malformed existing sidecar', async () => {
       files.set(TASK_SETTINGS_FILE, '{not json')
       await expect(setTaskSetting('379', { aiAssisted: true }))
         .rejects.toThrow('existing file is not valid JSON')
       expect(files.get(TASK_SETTINGS_FILE)).toBe('{not json')
+    })
+
+    it('refuses to overwrite a valid JSON document with a malformed schema', async () => {
+      files.set(TASK_SETTINGS_FILE, '{"version":1,"tasks":[]}')
+      await expect(setTaskSetting('379', { aiAssisted: true }))
+        .rejects.toThrow('must contain a "tasks" object')
+      expect(files.get(TASK_SETTINGS_FILE)).toBe('{"version":1,"tasks":[]}')
     })
   })
 })

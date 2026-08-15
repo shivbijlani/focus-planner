@@ -53,12 +53,11 @@ import { SETTINGS_FILE } from './storage/settings.js'
 import {
   TASK_SETTINGS_FILE,
   DEFAULT_TASK_SETTINGS,
-  readTaskSettings,
-  writeTaskSettings,
   readTaskSettingsFromSource,
   writeTaskSettingsToSource,
   setTaskSettingInSource,
   moveTaskSettingsEntries,
+  withTaskSettingsMutationLock,
 } from './storage/taskSettings.js'
 import { AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE } from './config/aiSettings.js'
 import { groupSettingsForm, serializeSettingsForm, hasSettingsForm } from './config/userSettingsForm.js'
@@ -3184,6 +3183,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sou
     // Existing journal IDs are only a collision-skip set — numbering is driven
     // by the planner's own rows so a stray/foreign high journal ID can't inflate it.
     const journalIds = await getJournalIds()
+    for (const id of Object.keys(taskSettings)) journalIds.add(Number(id))
     
     // Check if linkedTask is a URL with an extractable ticket/incident ID
     const extractTicketId = (url) => {
@@ -3243,6 +3243,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sou
   const handleAddAndPrioritize = async (taskName, prioritySectionTitle) => {
     const lines = content.split('\n')
     const journalIds = await getJournalIds()
+    for (const id of Object.keys(taskSettings)) journalIds.add(Number(id))
     let maxId = 0
     let todayInsertIndex = -1
     let inToday = false
@@ -3305,6 +3306,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sou
     let maxId = 0
     
     const journalIds = await getJournalIds()
+    for (const id of Object.keys(taskSettings)) journalIds.add(Number(id))
     
     // Find max ID and the Today section to insert the new task
     for (let i = 0; i < lines.length; i++) {
@@ -3554,6 +3556,8 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sou
   }
 
   const performMoveToSource = async ({ target, movingTasks }) => {
+    const sourceId = getActiveSourceId()
+    return withTaskSettingsMutationLock([sourceId, target.id], async () => {
     const movingIds = new Set(movingTasks.map(t => t.id))
     // Collect raw lines + journal task IDs in deterministic order.
     const movingRows = []
@@ -3627,20 +3631,22 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sou
     // never crosses folders (which would inflate the target's numbering).
     const targetBase = maxTaskIdInRows(targetContent)
     const targetJournalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(target.id))
-    const { idMap, rows: renumberedRows } = renumberMovedRows(movingRows, targetBase, targetJournalIds)
     // Read both sides' task-settings.json up front, before any content is
     // written. A malformed sidecar on either side aborts the whole move
     // (nothing has been written yet) rather than silently dropping the
     // moving tasks' AI-control settings.
-    let movedSettings
+    let sourceSettings
+    let targetSettings
     try {
-      const sourceSettings = await readTaskSettings()
-      const targetSettings = await readTaskSettingsFromSource(target.id)
-      movedSettings = moveTaskSettingsEntries(sourceSettings, targetSettings, idMap)
+      sourceSettings = await readTaskSettingsFromSource(sourceId)
+      targetSettings = await readTaskSettingsFromSource(target.id)
     } catch (error) {
       alert(error.message || 'Could not move task settings.')
       return
     }
+    for (const id of Object.keys(targetSettings.tasks)) targetJournalIds.add(Number(id))
+    const { idMap, rows: renumberedRows } = renumberMovedRows(movingRows, targetBase, targetJournalIds)
+    const movedSettings = moveTaskSettingsEntries(sourceSettings, targetSettings, idMap)
     // Find Today section's insertion point (right after the separator row).
     let inToday = false
     let todayInsertIdx = -1
@@ -3700,8 +3706,24 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sou
       tLines.splice(insertAt, 0, ...newEntries)
     }
 
-    // 3. Move journals (best effort — silently skip those that don't exist).
-    //    Renumber the journal filename + title to the task's new target ID.
+    // 3. Persist metadata and plans before moving journals. Roll back the
+    // target and source settings if the final source-plan write fails.
+    try {
+      await writeTaskSettingsToSource(target.id, movedSettings.target)
+      await targetProvider.write(PLAN_FILE, tLines.join('\n'))
+      await writeTaskSettingsToSource(sourceId, movedSettings.source)
+      await onContentUpdate(renumbered.join('\n'))
+    } catch (error) {
+      await Promise.allSettled([
+        writeTaskSettingsToSource(target.id, targetSettings),
+        targetProvider.write(PLAN_FILE, targetContent),
+        writeTaskSettingsToSource(sourceId, sourceSettings),
+        onContentUpdate(content),
+      ])
+      throw error
+    }
+
+    // 4. Move journals only after both task rows and settings are durable.
     const activeProvider = getActiveProvider()
     for (const r of renumberedRows) {
       const fromPath = `journal/task-${r.oldId}.md`
@@ -3716,13 +3738,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sou
         // No journal for this task — fine.
       }
     }
-
-    // 4. Persist both sides. Write the target first so a failure there
-    //    doesn't leave us with deleted-but-not-moved tasks.
-    await targetProvider.write(PLAN_FILE, tLines.join('\n'))
-    await writeTaskSettingsToSource(target.id, movedSettings.target)
-    await onContentUpdate(renumbered.join('\n'))
-    await writeTaskSettings(movedSettings.source)
+    })
   }
 
   return (
@@ -5814,7 +5830,7 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     load()
     const unsub = storage.onLocalChange((path) => { if (path === TASK_SETTINGS_FILE) load() })
     return () => { cancelled = true; unsub() }
-  }, [sources])
+  }, [sources, reloadKey])
 
   // Toggle one per-task AI-controls opt-in, routed to the task's owning
   // source (falls back to the row-supplied sourceId, then sourceForTask).
@@ -6017,12 +6033,14 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     const sid = sourceForTask(parentTaskId) || sources[0]?.id
     if (!sid) return
     const journalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(sid))
+    for (const id of Object.keys(taskSettingsBySource[sid] || {})) journalIds.add(Number(id))
     await applyOp(sid, c => ops.opPromoteTodoToTask(c, todoText, parentTaskId, journalIds))
   }
 
   const handleAdd = async ({ task, priority, linkedTask, section, sourceId }) => {
     if (!sourceId) return
     const journalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(sourceId))
+    for (const id of Object.keys(taskSettingsBySource[sourceId] || {})) journalIds.add(Number(id))
     await applyOp(sourceId, c => ops.opAddTask(c, { task, priority, linkedTask, section }, journalIds))
   }
 
@@ -6189,6 +6207,7 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
   }
 
   const performMoveToSource = async ({ target, fromSourceId, movingTasks }) => {
+    return withTaskSettingsMutationLock([fromSourceId, target.id], async () => {
     const fromEntry = perSource.find(p => p.source.id === fromSourceId)
     if (!fromEntry) return
     const movingIds = new Set(movingTasks.map(t => t.id))
@@ -6246,20 +6265,22 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     // Renumber moving tasks into the target's own sequence (no foreign IDs).
     const targetBase = maxTaskIdInRows(targetContent)
     const targetJournalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(target.id))
-    const { idMap, rows: renumberedRows } = renumberMovedRows(movingRows, targetBase, targetJournalIds)
     // Read both sides' task-settings.json up front, before any content is
     // written. A malformed sidecar on either side aborts the whole move
     // (nothing has been written yet) rather than silently dropping the
     // moving tasks' AI-control settings.
-    let movedSettings
+    let sourceSettings
+    let targetSettings
     try {
-      const sourceSettings = await readTaskSettingsFromSource(fromSourceId)
-      const targetSettings = await readTaskSettingsFromSource(target.id)
-      movedSettings = moveTaskSettingsEntries(sourceSettings, targetSettings, idMap)
+      sourceSettings = await readTaskSettingsFromSource(fromSourceId)
+      targetSettings = await readTaskSettingsFromSource(target.id)
     } catch (error) {
       alert(error.message || 'Could not move task settings.')
       return
     }
+    for (const id of Object.keys(targetSettings.tasks)) targetJournalIds.add(Number(id))
+    const { idMap, rows: renumberedRows } = renumberMovedRows(movingRows, targetBase, targetJournalIds)
+    const movedSettings = moveTaskSettingsEntries(sourceSettings, targetSettings, idMap)
     let inToday = false
     let todayInsertIdx = -1
     for (let i = 0; i < tLines.length; i++) {
@@ -6304,7 +6325,22 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
       tLines.splice(insertAt, 0, ...newEntries)
     }
 
-    // Move journals — renumber filename + title to the new target ID.
+    try {
+      await writeTaskSettingsToSource(target.id, movedSettings.target)
+      await storage.writeToSource(target.id, PLAN_FILE, tLines.join('\n'))
+      await writeTaskSettingsToSource(fromSourceId, movedSettings.source)
+      await storage.writeToSource(fromSourceId, PLAN_FILE, renumbered.join('\n'))
+    } catch (error) {
+      await Promise.allSettled([
+        writeTaskSettingsToSource(target.id, targetSettings),
+        storage.writeToSource(target.id, PLAN_FILE, targetContent),
+        writeTaskSettingsToSource(fromSourceId, sourceSettings),
+        storage.writeToSource(fromSourceId, PLAN_FILE, fromEntry.content),
+      ])
+      throw error
+    }
+
+    // Move journals after the rows and settings have committed successfully.
     for (const r of renumberedRows) {
       const fromPath = `journal/task-${r.oldId}.md`
       const toPath = `journal/task-${r.newId}.md`
@@ -6316,12 +6352,8 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
         }
       } catch { /* no journal — skip */ }
     }
-
-    await storage.writeToSource(target.id, PLAN_FILE, tLines.join('\n'))
-    await writeTaskSettingsToSource(target.id, movedSettings.target)
-    await storage.writeToSource(fromSourceId, PLAN_FILE, renumbered.join('\n'))
-    await writeTaskSettingsToSource(fromSourceId, movedSettings.source)
     setReloadKey(k => k + 1)
+    })
   }
 
   // ── Per-source priorities ──────────────────────────────────────────
@@ -6334,6 +6366,7 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
       applyOp(sourceId, c => ops.opUpdateManagerPriorities(c, newLines)),
     onAddAndPrioritize: async (taskName, prioritySectionTitle) => {
       const journalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(sourceId))
+      for (const id of Object.keys(taskSettingsBySource[sourceId] || {})) journalIds.add(Number(id))
       await applyOp(sourceId, c => ops.opAddAndPrioritize(c, taskName, prioritySectionTitle, journalIds))
     },
     onPromoteToManagerPriority: (taskId) =>
@@ -6984,6 +7017,7 @@ function App() {
       setContent(newContent)
     } catch (err) {
       console.error('Failed to update file:', err)
+      throw err
     }
   }
 
@@ -7113,7 +7147,7 @@ function App() {
               content={content}
               onNavigate={handleNavigate}
               onContentUpdate={handleContentUpdate}
-              sourceId={selSourceId}
+              sourceId={getActiveSourceId()}
               otherSources={sources.filter(s => s.id !== getActiveSourceId())}
               search={boardSearch}
               onSearchChange={setBoardSearch}

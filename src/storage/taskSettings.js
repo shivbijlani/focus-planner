@@ -31,6 +31,25 @@ function isPlainObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
+function validateTaskSettingsFile(input) {
+  if (!isPlainObject(input)) throw new Error(`${TASK_SETTINGS_FILE} must contain a JSON object.`)
+  if (input.version !== undefined && !Number.isFinite(input.version)) {
+    throw new Error(`${TASK_SETTINGS_FILE} has an invalid version.`)
+  }
+  if (input.tasks !== undefined && !isPlainObject(input.tasks)) {
+    throw new Error(`${TASK_SETTINGS_FILE} must contain a "tasks" object.`)
+  }
+  for (const [taskId, entry] of Object.entries(input.tasks || {})) {
+    if (!isPlainObject(entry)) throw new Error(`${TASK_SETTINGS_FILE} has invalid settings for task ${taskId}.`)
+    if (entry.aiAssisted !== undefined && typeof entry.aiAssisted !== 'boolean') {
+      throw new Error(`${TASK_SETTINGS_FILE} has a non-boolean aiAssisted value for task ${taskId}.`)
+    }
+    if (entry.persistentSession !== undefined && typeof entry.persistentSession !== 'boolean') {
+      throw new Error(`${TASK_SETTINGS_FILE} has a non-boolean persistentSession value for task ${taskId}.`)
+    }
+  }
+}
+
 // Normalize a single task's settings entry: known opt-ins are coerced to
 // booleans (defaulting when missing/malformed), while any other keys are
 // preserved as-is so future per-task settings round-trip even before this
@@ -65,14 +84,17 @@ export function normalizeTaskSettingsFile(raw) {
 // malformed sidecar from being overwritten with an empty settings map.
 export function parseTaskSettingsFile(raw, { strict = false } = {}) {
   if (!raw) return normalizeTaskSettingsFile({})
+  let parsed
   try {
-    return normalizeTaskSettingsFile(JSON.parse(raw))
+    parsed = JSON.parse(raw)
   } catch (error) {
     if (strict) {
       throw new Error(`Cannot update ${TASK_SETTINGS_FILE}: the existing file is not valid JSON. Fix or restore it first.`, { cause: error })
     }
     return normalizeTaskSettingsFile({})
   }
+  if (strict) validateTaskSettingsFile(parsed)
+  return normalizeTaskSettingsFile(parsed)
 }
 
 export function serializeTaskSettingsFile(file) {
@@ -141,6 +163,25 @@ async function writeWith(writeFn, file) {
   return next
 }
 
+const mutationQueues = new Map()
+
+function enqueueMutation(sourceKey, mutation) {
+  const previous = mutationQueues.get(sourceKey) || Promise.resolve()
+  const next = previous.catch(() => {}).then(mutation)
+  mutationQueues.set(sourceKey, next)
+  return next.finally(() => {
+    if (mutationQueues.get(sourceKey) === next) mutationQueues.delete(sourceKey)
+  })
+}
+
+export function withTaskSettingsMutationLock(sourceIds, mutation) {
+  const keys = [...new Set(sourceIds.map(String))].sort()
+  const acquire = (index) => index === keys.length
+    ? mutation()
+    : enqueueMutation(`source:${keys[index]}`, () => acquire(index + 1))
+  return acquire(0)
+}
+
 // ── Active-source convenience API (mirrors storage/settings.js) ─────────
 
 export async function readTaskSettings() {
@@ -153,10 +194,12 @@ export async function writeTaskSettings(file) {
 
 // Read-modify-write a single task's settings against the active source.
 export async function setTaskSetting(taskId, patch) {
-  const file = await readTaskSettings()
-  const next = withTaskSetting(file, taskId, patch)
-  await writeTaskSettings(next)
-  return next
+  return enqueueMutation('active', async () => {
+    const file = await readTaskSettings()
+    const next = withTaskSetting(file, taskId, patch)
+    await writeTaskSettings(next)
+    return next
+  })
 }
 
 // ── Per-source variants ──────────────────────────────────────────────────
@@ -174,15 +217,18 @@ export async function writeTaskSettingsToSource(sourceId, file) {
 }
 
 export async function setTaskSettingInSource(sourceId, taskId, patch) {
-  const file = await readTaskSettingsFromSource(sourceId)
-  const next = withTaskSetting(file, taskId, patch)
-  await writeTaskSettingsToSource(sourceId, next)
-  return next
+  return withTaskSettingsMutationLock([sourceId], async () => {
+    const file = await readTaskSettingsFromSource(sourceId)
+    const next = withTaskSetting(file, taskId, patch)
+    await writeTaskSettingsToSource(sourceId, next)
+    return next
+  })
 }
 
 export const __testing = {
   DEFAULT_TASK_SETTINGS,
   setStorageAdapter(adapter) {
+    mutationQueues.clear()
     storageAdapter = adapter || {
       read: (path) => storage.read(path),
       write: (path, content) => storage.write(path, content),
