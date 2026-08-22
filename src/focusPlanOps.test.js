@@ -106,6 +106,24 @@ describe('opMoveLinesBetweenSections', () => {
   })
 })
 
+describe('opChangeLinkedId', () => {
+  it('updates a rendered row from CRLF-backed content', () => {
+    const crlfPlan = [
+      '| ID | 🎯 | Task | Priority | Added | Linked ID |',
+      '|---|---|------|----------|-------|-----------|',
+      '| 349 | 🟡 | Overnight agent v2 | - |  |  |',
+    ].join('\r\n')
+
+    const out = opChangeLinkedId(
+      crlfPlan,
+      '| 349 | 🟡 | Overnight agent v2 | - |  |  |',
+      '192',
+    )
+
+    expect(out).toContain('| 349 | 🟡 | Overnight agent v2 | - |  | 192 |')
+  })
+})
+
 describe('snooze section moves', () => {
   const snoozePlan = [
     '# Focus Plan',

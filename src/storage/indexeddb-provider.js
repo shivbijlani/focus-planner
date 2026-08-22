@@ -61,8 +61,11 @@ export class IndexedDbProvider {
     await scaffoldAgentsDoc((p) => this.read(p), (p, c) => this.write(p, c))
   }
 
-  async read(path) {
-    return (await get(path, filesStore)) ?? ''
+  async read(path, { signal } = {}) {
+    if (signal?.aborted) throw signal.reason
+    const content = (await get(path, filesStore)) ?? ''
+    if (signal?.aborted) throw signal.reason
+    return content
   }
 
   async write(path, content) {
@@ -79,12 +82,15 @@ export class IndexedDbProvider {
     return buildTree(paths)
   }
 
-  async checkJournal(taskId) {
+  async checkJournal(taskId, { signal } = {}) {
+    if (signal?.aborted) throw signal.reason
     const path = `journal/task-${taskId}.md`
-    return {
+    const journal = {
       exists: (await get(path, filesStore)) !== undefined,
       path,
     }
+    if (signal?.aborted) throw signal.reason
+    return journal
   }
 
   async maxJournalId() {

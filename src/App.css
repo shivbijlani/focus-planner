@@ -1378,6 +1378,21 @@ tr.highlight-flash {
   font-size: 0.8rem;
 }
 
+.journal-load-retry {
+  align-self: flex-start;
+  border: 0;
+  background: none;
+  color: #f59e0b;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0;
+}
+
+.journal-load-retry:hover {
+  text-decoration: underline;
+}
+
 .todo-row {
   background: #0f3460 !important;
 }
@@ -3548,6 +3563,11 @@ tr.highlight-flash {
 .settings-update-hint {
   font-size: 0.72rem;
   color: #64748b;
+}
+.settings-diagnostics-row {
+  border-top: 1px solid rgba(30, 58, 95, 0.7);
+  margin-top: 0.35rem;
+  padding-top: 0.75rem;
 }
 .settings-mission-hint {
   font-size: 0.72rem;
