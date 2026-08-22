@@ -40,7 +40,7 @@
     align-items: center;
     gap: 2px 8px;
     position: relative;
-    padding: 8px 82px 8px 16px; /* L: slim priority tap-bar (#346); R: the actions rail */
+    padding: 8px 94px 8px 16px; /* L: slim priority tap-bar (#346); R: the actions rail (#388: widened so the ⋯ kebab clears the journal/chat icon) */
     border-bottom: 1px solid var(--border-color, #e5e7eb);
     width: 100%;
     box-sizing: border-box;
@@ -141,14 +141,16 @@
 
   /* The chat + kebab actions become a slim rail pinned to the right edge,
      laid out HORIZONTALLY with the 💬 chat icon to the LEFT of the ⋯ kebab.
-     The rail is 76px wide so both fit as full ~34px tap targets side-by-side
-     without clipping the kebab. */
+     The rail is 88px wide (#388) so both a ~34px icon AND the ⋯ kebab fit
+     side-by-side with slack — at 76px the exact-fit pair overflowed and pushed
+     the kebab (rightmost) off the screen edge whenever a journal/chat icon was
+     present, so it only appeared on rows that had no icon. */
   .task-table:not(.completed-table) tbody tr:not(.todo-row) > td.row-actions-cell {
     position: absolute;
     top: 0;
     right: 0;
     bottom: 0;
-    width: 76px;
+    width: 88px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -176,7 +178,7 @@
     flex-direction: row;
     flex-wrap: nowrap;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-end; /* #388: pin icons to the right so the ⋯ kebab always sits fully inside the rail, never spilling off the screen edge */
     gap: 2px;
     width: 100%;
   }

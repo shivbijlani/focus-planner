@@ -37,6 +37,7 @@ the end of every run (SKILL.md → "PHASE 3 — Mirror to Telegram"). Leave `Ena
 | Bot token | Stored in the OS credential vault, **never here** — read at run time via `%LOCALAPPDATA%\overnight-agent\secrets\telegram-secret.ps1 get`. |
 | Bridge CLI | `<dev drive>\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js` (dependency-free Node CLI). |
 | Tasks | *(optional)* comma-separated task IDs to mirror; empty = every task that has an agent block. |
+| Archive completed topics | `on` (default once Telegram is added) — close a task's topic when it reaches the completed board, reopen it if the task leaves. Set to `off` to disable. |
 
 ## Preferences
 

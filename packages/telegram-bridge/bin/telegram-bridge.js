@@ -5,7 +5,8 @@
 //   node bin/telegram-bridge.js baseline     # mark existing tasks already-seen (no posts)
 //   node bin/telegram-bridge.js sync-up      # post agent turns -> topics
 //   node bin/telegram-bridge.js sync-down    # fold replies -> journals
-//   node bin/telegram-bridge.js once         # sync-up then sync-down (default)
+//   node bin/telegram-bridge.js sync-archive # close topics for completed tasks (reopen reactivated)
+//   node bin/telegram-bridge.js once         # sync-up, sync-archive, then sync-down (default)
 //   node bin/telegram-bridge.js watch [secs] # loop `once` every N seconds
 //
 // Config comes from env (see packages/telegram-bridge/README.md):
@@ -28,7 +29,10 @@ const log = (msg) => console.log(`[telegram-bridge] ${msg}`)
 async function build() {
   const config = assertRunnable(await loadConfig({ repoRoot: REPO_ROOT }))
   const client = createTelegramClient({ token: config.token })
-  const io = createFsIo({ journalDir: config.journalDir })
+  const io = createFsIo({
+    journalDir: config.journalDir,
+    completedBoardPath: config.completedBoardPath,
+  })
   const state = await loadState(config.stateDir)
   const bridge = createBridge({ client, config, state, io, logger: log })
   return { config, client, state, bridge }
@@ -36,13 +40,14 @@ async function build() {
 
 async function runOnce() {
   const { config, state, bridge } = await build()
-  const { up, down } = await bridge.syncOnce()
+  const { up, archived, down } = await bridge.syncOnce()
   await saveState(config.stateDir, state)
   log(
     `up: posted ${up.posted.length}, new topics ${up.created.length}; ` +
+      `archive: closed ${archived.archived.length}, reopened ${archived.reopened.length}; ` +
       `down: folded ${down.folded.length} repl${down.folded.length === 1 ? 'y' : 'ies'}`,
   )
-  return { up, down }
+  return { up, archived, down }
 }
 
 async function main() {
@@ -77,6 +82,13 @@ async function main() {
       const down = await bridge.syncDown()
       await saveState(config.stateDir, state)
       log(`folded ${down.folded.length}`)
+      break
+    }
+    case 'sync-archive': {
+      const { config, state, bridge } = await build()
+      const res = await bridge.syncArchive()
+      await saveState(config.stateDir, state)
+      log(`archived ${res.archived.length}, reopened ${res.reopened.length}`)
       break
     }
     case 'once':
