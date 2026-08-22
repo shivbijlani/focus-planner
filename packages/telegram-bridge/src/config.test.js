@@ -55,3 +55,42 @@ describe('loadConfig digestEnabled', () => {
     expect(cfg.archiveCompleted).toBe(true)
   })
 })
+
+// Turning the digest off silences General but also removes the only
+// consolidated view of what is blocked on the user. `digestTopic` is the
+// middle path: keep the digest, move it out of General.
+describe('loadConfig digestTopic', () => {
+  it('defaults to empty (General thread) when unset', async () => {
+    const cfg = await loadConfig({ env: { ...BASE } })
+    expect(cfg.digestTopic).toBe('')
+  })
+
+  it('keeps a numeric topic id verbatim', async () => {
+    const cfg = await loadConfig({ env: { ...BASE, TELEGRAM_BRIDGE_DIGEST_TOPIC: '42' } })
+    expect(cfg.digestTopic).toBe('42')
+  })
+
+  it('keeps a topic name and trims surrounding whitespace', async () => {
+    const cfg = await loadConfig({
+      env: { ...BASE, TELEGRAM_BRIDGE_DIGEST_TOPIC: '  Waiting on you  ' },
+    })
+    expect(cfg.digestTopic).toBe('Waiting on you')
+  })
+
+  it('treats a whitespace-only value as unset', async () => {
+    const cfg = await loadConfig({ env: { ...BASE, TELEGRAM_BRIDGE_DIGEST_TOPIC: '   ' } })
+    expect(cfg.digestTopic).toBe('')
+  })
+
+  it('is independent of digestEnabled', async () => {
+    const cfg = await loadConfig({
+      env: {
+        ...BASE,
+        TELEGRAM_BRIDGE_DIGEST: 'off',
+        TELEGRAM_BRIDGE_DIGEST_TOPIC: 'Waiting on you',
+      },
+    })
+    expect(cfg.digestEnabled).toBe(false)
+    expect(cfg.digestTopic).toBe('Waiting on you')
+  })
+})

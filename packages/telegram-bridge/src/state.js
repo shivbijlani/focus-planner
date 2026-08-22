@@ -50,6 +50,18 @@ export function setLastDigest(state, hash) {
   return state
 }
 
+// Remember the forum topic the digest is posted into, when the user has asked
+// for a dedicated topic by NAME rather than by id. Persisting the resolved id
+// is what makes that safe to re-run: without it, every night would create
+// another "Waiting on you" topic. The name is stored alongside so that renaming
+// the setting is detected and resolved to a fresh topic rather than silently
+// continuing to post into the old one.
+export function setDigestTopic(state, topicId, name) {
+  state.digestTopicId = topicId
+  state.digestTopicName = name
+  return state
+}
+
 /** Reverse lookup: which task owns a given forum topic id. */
 export function findTaskByTopic(state, topicId) {
   for (const [taskId, entry] of Object.entries(state.tasks)) {
