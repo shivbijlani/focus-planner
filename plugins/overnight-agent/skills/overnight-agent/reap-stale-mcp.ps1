@@ -18,7 +18,10 @@
     1. It is node.exe.
     2. Its command line matches a known MCP server pattern (-Patterns).
     3. It has been running longer than -MinAgeMinutes (default 45).
-    4. It is not in the current process's own ancestor/descendant tree.
+    4. It is not in the current tool-shell's own ancestor/descendant tree. The upward walk stops at
+       the session host (copilot.exe / github.exe) -- see Get-ProtectedPidSet. It must not climb
+       past it: one copilot.exe hosts many successive runs, so protecting its whole descendant tree
+       would protect every run's servers and make this script a permanent no-op.
 
   The age gate is the important one. The default of 45 minutes is deliberately longer than the
   30-minute schedule interval, so servers belonging to the run that is executing this script are
@@ -26,6 +29,11 @@
 
 .PARAMETER MinAgeMinutes
   Minimum process age, in minutes, before a matching process is considered stale. Default 45.
+
+  This is the only thing protecting the *currently executing* run's own MCP servers: they are
+  siblings of this script (both hang off the same copilot.exe), not descendants of it, so the
+  ancestor/descendant pass cannot single them out. Keep this comfortably above the schedule
+  interval. Passing a value below it (e.g. -MinAgeMinutes 1) will reap the live run's servers.
 
 .PARAMETER Patterns
   Regex fragments matched against each node process's command line. Defaults cover the MCP
@@ -93,7 +101,17 @@ function Get-ProtectedPidSet {
     # Walk up from ourselves, stopping at OS/service boundaries. Without this stop-list the walk
     # can reach services.exe or the System process on some hosts; the descendant pass below would
     # then mark literally every process on the box as protected and the reaper would be a no-op.
-    $stopAt = @('services.exe', 'wininit.exe', 'winlogon.exe', 'svchost.exe', 'system', 'smss.exe', 'csrss.exe', 'explorer.exe')
+    #
+    # copilot.exe / github.exe are the *session host* boundary and are the important entries here.
+    # A single long-lived copilot.exe hosts many successive agent runs, and every run's MCP servers
+    # are spawned as its descendants (copilot.exe -> cmd.exe -> npx node -> cmd.exe -> node MCP).
+    # Measured on 2026-08-22: the 03:30 run's 8 servers and the 04:03 run's servers shared one
+    # copilot.exe (PID 12940), which itself hangs off a single github.exe shared by *every* Copilot
+    # session on the box. Climbing above copilot.exe therefore marks all 20 matched MCP processes
+    # protected, so `matched: 20` collapsed to `stale: 0` at every age gate -- the reaper could
+    # never fire. Stopping here leaves only the current tool-shell subtree protected; the current
+    # run's own servers stay safe via -MinAgeMinutes, which is what that gate is for.
+    $stopAt = @('services.exe', 'wininit.exe', 'winlogon.exe', 'svchost.exe', 'system', 'smss.exe', 'csrss.exe', 'explorer.exe', 'copilot.exe', 'github.exe')
 
     $ancestors = [System.Collections.Generic.HashSet[int]]::new()
     $cursor = $PID
