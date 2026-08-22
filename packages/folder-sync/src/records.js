@@ -23,6 +23,7 @@ import {
   parseSidecar,
 } from './merge.js'
 import { FRAME_ID } from './codecs/mdTable.js'
+import { diag, isDiagEnabled } from '../../diagnostics/src/index.js'
 
 /** True if a codec frame carries real structure (at least one `## ` heading). */
 export function frameHasStructure(frame) {
@@ -112,6 +113,56 @@ export function isSidecarPath(path) {
   return path.endsWith('.sync.json')
 }
 
+function summarizeMeta(meta) {
+  const entries = Object.entries(meta ?? {})
+  let alive = 0
+  let tombstones = 0
+  let zeroClock = 0
+  let withFp = 0
+  for (const [, m] of entries) {
+    if (m?.deleted) tombstones++
+    else alive++
+    if ((m?.clock ?? 0) === 0) zeroClock++
+    if (m?.fp !== undefined) withFp++
+  }
+  return {
+    count: entries.length,
+    alive,
+    tombstones,
+    zeroClock,
+    withFp,
+    sample: entries.slice(0, 20).map(([id, m]) => ({
+      id,
+      clock: m?.clock ?? 0,
+      deleted: !!m?.deleted,
+      fp: m?.fp,
+    })),
+  }
+}
+
+function logSidecarRead(path, localRaw, remoteRaw, localMeta, remoteMeta) {
+  if (!isDiagEnabled()) return
+  diag('folder-sync.records', 'sidecar-read', {
+    path,
+    localBytes: typeof localRaw === 'string' ? localRaw.length : 0,
+    remoteBytes: typeof remoteRaw === 'string' ? remoteRaw.length : 0,
+    local: summarizeMeta(localMeta),
+    remote: summarizeMeta(remoteMeta),
+  })
+}
+
+function logSidecarWrite(side, path, sidecar, contentChanged, raw, meta) {
+  if (!isDiagEnabled()) return
+  diag('folder-sync.records', 'sidecar-write', {
+    side,
+    path,
+    sidecar,
+    contentChanged,
+    bytes: typeof raw === 'string' ? raw.length : 0,
+    meta: summarizeMeta(meta),
+  })
+}
+
 // Fold the codec's frame into the record set so it merges by LWW like any other
 // record, then split it back out for serialize().
 function toCollection(codec, content) {
@@ -141,17 +192,19 @@ function fromCollection(codec, mergedRecords) {
  * @returns {Promise<{changedLocal:boolean, changedRemote:boolean, content:string}>}
  */
 export async function reconcileRecordsFile({ path, codec, local, remote, now = Date.now() }) {
+  const scPath = sidecarPath(path)
   const [localContent, remoteContent, localSidecar, remoteSidecar] = await Promise.all([
     local.readContent(path),
     remote.readContent(path),
-    local.readSidecar(sidecarPath(path)),
-    remote.readSidecar(sidecarPath(path)),
+    local.readSidecar(scPath),
+    remote.readSidecar(scPath),
   ])
 
   const localRecords = toCollection(codec, localContent)
   const remoteRecords = toCollection(codec, remoteContent)
   const localMeta = parseSidecar(localSidecar)
   const remoteMeta = parseSidecar(remoteSidecar)
+  logSidecarRead(path, localSidecar, remoteSidecar, localMeta, remoteMeta)
 
   // Detect and stamp any local edits (from our UI *or* an external editor such
   // as the desktop server / OneDrive web) so they carry an honest clock.
@@ -215,16 +268,20 @@ export async function reconcileRecordsFile({ path, codec, local, remote, now = D
 
   if (changedLocal) {
     await local.writeContent(path, mergedContent)
-    await local.writeSidecar(sidecarPath(path), mergedSidecar)
+    await local.writeSidecar(scPath, mergedSidecar)
+    logSidecarWrite('local', path, scPath, true, mergedSidecar, merged.meta)
   } else {
     // Keep sidecars converged even when content is identical.
-    await local.writeSidecar(sidecarPath(path), mergedSidecar)
+    await local.writeSidecar(scPath, mergedSidecar)
+    logSidecarWrite('local', path, scPath, false, mergedSidecar, merged.meta)
   }
   if (changedRemote) {
     await remote.writeContent(path, mergedContent)
-    await remote.writeSidecar(sidecarPath(path), mergedSidecar)
+    await remote.writeSidecar(scPath, mergedSidecar)
+    logSidecarWrite('remote', path, scPath, true, mergedSidecar, merged.meta)
   } else {
-    await remote.writeSidecar(sidecarPath(path), mergedSidecar)
+    await remote.writeSidecar(scPath, mergedSidecar)
+    logSidecarWrite('remote', path, scPath, false, mergedSidecar, merged.meta)
   }
 
   return { changedLocal, changedRemote, content: mergedContent }

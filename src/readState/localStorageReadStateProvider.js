@@ -9,6 +9,7 @@
 //   getSeen(journalId): string | undefined   // last-seen signature, or undefined
 //   setSeen(journalId, signature): void       // record a signature as seen
 //   hasSeen(journalId): boolean               // has this journal ever been seen?
+//   deleteSeen(journalId): void               // remove pending/obsolete state
 //   isInitialized(): boolean                  // has first-load seeding completed?
 //   setInitialized(value): void
 //
@@ -61,6 +62,12 @@ export class LocalStorageReadStateProvider {
   setSeen(journalId, signature) {
     const map = this._readMap()
     map[journalId] = signature
+    this._writeMap(map)
+  }
+
+  deleteSeen(journalId) {
+    const map = this._readMap()
+    delete map[journalId]
     this._writeMap(map)
   }
 

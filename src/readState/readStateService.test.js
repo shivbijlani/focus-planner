@@ -5,6 +5,9 @@ import {
   markSeen,
   emitJournalOpened,
   completeInitialSeeding,
+  migrateSeenState,
+  registerInitialSeedCandidates,
+  resolveInitialSeedCandidate,
   subscribe,
   setReadStateProvider,
   __resetForTests,
@@ -18,6 +21,7 @@ function fakeProvider() {
     getSeen: (id) => (seen.has(id) ? seen.get(id) : undefined),
     hasSeen: (id) => seen.has(id),
     setSeen: (id, sig) => { seen.set(id, sig) },
+    deleteSeen: (id) => { seen.delete(id) },
     isInitialized: () => initialized,
     setInitialized: (v) => { initialized = !!v },
     _seen: seen,
@@ -47,6 +51,46 @@ describe('readStateService seeding', () => {
   it('returns not-unread for a journal that has never been tracked', () => {
     completeInitialSeeding()
     expect(isUnread('nope')).toBe(false)
+  })
+
+  it('seeds a collapsed row when it first hydrates after initial completion', () => {
+    registerInitialSeedCandidates(['source-a::42'])
+    completeInitialSeeding()
+
+    track('source-a::42', 'pre-existing collapsed journal')
+
+    expect(isUnread('source-a::42')).toBe(false)
+    expect(provider.hasSeen('source-a::42')).toBe(true)
+  })
+
+  it('keeps failed initial hydration eligible through a later retry', () => {
+    registerInitialSeedCandidates(['source-a::42'])
+    completeInitialSeeding()
+    // The failed attempt never calls track(); the successful retry does.
+    track('source-a::42', 'pre-existing journal loaded on retry')
+
+    expect(isUnread('source-a::42')).toBe(false)
+  })
+
+  it('keeps failed hydration eligible across a reload before retry', () => {
+    registerInitialSeedCandidates(['source-a::42'])
+    completeInitialSeeding()
+    __resetForTests(provider)
+    setReadStateProvider(provider)
+
+    track('source-a::42', 'pre-existing journal loaded after reload')
+
+    expect(isUnread('source-a::42')).toBe(false)
+  })
+
+  it('clears eligibility after a confirmed absence', () => {
+    registerInitialSeedCandidates(['source-a::42'])
+    resolveInitialSeedCandidate('source-a::42')
+    completeInitialSeeding()
+
+    track('source-a::42', 'journal created after initial load')
+
+    expect(isUnread('source-a::42')).toBe(true)
   })
 })
 
@@ -83,6 +127,27 @@ describe('read/unread lifecycle', () => {
     emitJournalOpened(7)
     expect(isUnread('7')).toBe(false)
   })
+
+  it('keeps duplicate task ids independent when source-qualified', () => {
+    completeInitialSeeding()
+    track('source-a::7', 'source a')
+    track('source-b::7', 'source b')
+
+    emitJournalOpened('source-a::7')
+
+    expect(isUnread('source-a::7')).toBe(false)
+    expect(isUnread('source-b::7')).toBe(true)
+  })
+
+  it('migrates legacy bare-task seen state to a qualified id', () => {
+    track('7', 'existing')
+    completeInitialSeeding()
+
+    migrateSeenState('7', 'source-a::7')
+    track('source-a::7', 'existing')
+
+    expect(isUnread('source-a::7')).toBe(false)
+  })
 })
 
 describe('subscribe', () => {
@@ -99,6 +164,34 @@ describe('subscribe', () => {
     const afterUnsub = calls
     markSeen('1')
     expect(calls).toBe(afterUnsub)
+  })
+
+  it('only notifies the row whose journal changed', () => {
+    let task1Calls = 0
+    let task2Calls = 0
+    subscribe('1', () => { task1Calls += 1 })
+    subscribe('2', () => { task2Calls += 1 })
+
+    completeInitialSeeding()
+    const task1Before = task1Calls
+    const task2Before = task2Calls
+    track('1', '## 2026-06-02\na')
+
+    expect(task1Calls).toBe(task1Before + 1)
+    expect(task2Calls).toBe(task2Before)
+  })
+
+  it('does not notify when tracking identical content again', () => {
+    let calls = 0
+    subscribe('1', () => { calls += 1 })
+    completeInitialSeeding()
+    const beforeTrack = calls
+    track('1', '## 2026-06-02\na')
+    expect(calls).toBe(beforeTrack + 1)
+
+    track('1', '## 2026-06-02\na')
+
+    expect(calls).toBe(beforeTrack + 1)
   })
 })
 

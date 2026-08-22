@@ -139,6 +139,10 @@ function Get-Resolved {
   # Only honour a real comma-separated ID list; prose like "*(empty)* ..." means "all tasks".
   $tgTasksRaw = Clean-Value $map['Tasks']
   $tgTasks = if ($tgTasksRaw -match '^[\d,\s]+$') { ($tgTasksRaw -replace '\s', '') } else { '' }
+  # "Archive completed topics" defaults to ON once Telegram is configured; only an
+  # explicit "off" disables it. Anything else (missing row, prose) keeps the default.
+  $tgArchiveRaw = Clean-Value $map['Archive completed topics']
+  $tgArchive = -not ($tgArchiveRaw -match '(?i)^\s*`?off`?\s*$')
 
   # A run is only "ready" if the OPERATIONAL values resolved (no <...> placeholders in them).
   $opValues = @($plannerBoard, $journals, $devDrive, (Clean-Value $map['Agent email account']),
@@ -165,6 +169,7 @@ function Get-Resolved {
       chat_id = $tgChat
       bridge  = $tgBridge
       tasks   = $tgTasks
+      archive = $tgArchive
     }
   }
 }
@@ -260,6 +265,9 @@ function Cmd-Telegram {
     "`$env:PLANNER_PATH       = '$($r.planner_folder)'"
   )
   if ($r.telegram.tasks) { $lines += "`$env:TELEGRAM_BRIDGE_TASKS = '$($r.telegram.tasks)'" }
+  # Archive completed topics is ON by default; only emit the override when the
+  # user-setting says off, so the bridge's own default holds otherwise.
+  if (-not $r.telegram.archive) { $lines += "`$env:TELEGRAM_BRIDGE_ARCHIVE = 'off'" }
   $lines += "if (-not (Test-Path `"$stateJson`")) { node `"$($r.telegram.bridge)`" baseline }  # first-time only"
   $lines += "node `"$($r.telegram.bridge)`" once"
   $lines -join "`n"
