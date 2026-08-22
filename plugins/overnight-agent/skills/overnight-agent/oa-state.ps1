@@ -51,7 +51,10 @@ param(
   # The board, so `scan` can tell the agent which tasks are currently snoozed
   # (<!-- snooze:YYYY-MM-DD --> markers, from the #353 snooze feature). Sits next to the
   # journal dir by default; override to match a non-standard planner layout.
-  [string]$PlannerBoard = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\planner.md"
+  [string]$PlannerBoard = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\planner.md",
+  # Structured snooze store, written by the Planner web app and read-only here (#391).
+  # Preferred over the in-markdown markers above; see Get-SnoozeMap.
+  [string]$SnoozeStore = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\snooze.json"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -157,29 +160,87 @@ function Cmd-Seed {
   Write-Output "seeded $n task state file(s) into $StateDir"
 }
 
-function Get-SnoozeMap {
-  # Build id -> snooze-until (yyyy-MM-dd) for tasks that are CURRENTLY snoozed on the board.
-  # The #353 snooze feature stamps a `<!-- snooze:YYYY-MM-DD -->` HTML comment onto a task's
-  # planner.md row and moves it to Deferred; it resurfaces once the date passes. A task is
-  # "snoozed" here while its date is today or later (snooze_until >= today) — so the agent
-  # holds off through the snooze date and only re-engages the day after, erring toward
-  # respecting the user's snooze rather than acting a day early. Expired markers are ignored.
+function Test-SnoozeActive {
+  # A task counts as snoozed while its date is today or later, so the agent holds off
+  # *through* the snooze date and only re-engages the day after. Errs toward respecting
+  # the user's snooze rather than acting a day early. Returns the date, or $null.
+  param([string]$Raw)
+  if (-not $Raw) { return $null }
+  $d = [datetime]::MinValue
+  $ok = [datetime]::TryParseExact(
+    $Raw.Trim(), 'yyyy-MM-dd',
+    [System.Globalization.CultureInfo]::InvariantCulture,
+    [System.Globalization.DateTimeStyles]::None, [ref]$d)
+  if ($ok -and $d.Date -ge (Get-Date).Date) { return $Raw.Trim() }
+  return $null
+}
+
+function Get-SnoozeFromStore {
+  # snooze.json — the structured store the Planner web app owns (#391). Agent is READ-ONLY.
+  # Shape: a flat map of task id -> ISO date, optionally wrapped:
+  #   { "270": "2026-08-15" }              or   { "tasks":  { "270": "2026-08-15" } }
+  #   { "snoozed": { "270": "..." } }      or   { "270": { "until": "2026-08-15" } }
+  # Preferred over the in-markdown markers because it is typed, tiny, and does not ride on
+  # planner.md — the most sync-conflicted, human-edited file in the folder. Parsing prose is
+  # also where the markers bite: a task whose *title* contains "snooze:" (e.g. #391 itself)
+  # will fool any regex that isn't strict about the <!-- --> wrapper.
+  $map = @{}
+  if (-not (Test-Path $SnoozeStore)) { return $null }   # $null = "no store", so fall back
+  try {
+    $raw = Get-Content -Path $SnoozeStore -Raw -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $map }
+    $json = $raw | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    # A malformed store must never take the whole scan down, and must never be read as
+    # "nothing is snoozed" — that would silently un-snooze every task. Fall back instead.
+    Write-Warning "oa-state: could not parse $SnoozeStore ($($_.Exception.Message)); falling back to planner.md markers"
+    return $null
+  }
+  foreach ($wrapper in 'tasks', 'snoozed') {
+    if ($json.PSObject.Properties.Name -contains $wrapper -and $json.$wrapper) { $json = $json.$wrapper; break }
+  }
+  foreach ($prop in $json.PSObject.Properties) {
+    if ($prop.Name -notmatch '^\d+$') { continue }        # ignore metadata keys like "version"
+    $val = $prop.Value
+    if ($val -isnot [string]) { $val = $val.until }        # tolerate { "until": "..." } objects
+    $active = Test-SnoozeActive ([string]$val)
+    if ($active) { $map[$prop.Name] = $active }
+  }
+  return $map
+}
+
+function Get-SnoozeFromBoard {
+  # Legacy path: `<!-- snooze:YYYY-MM-DD -->` HTML comments stamped onto planner.md rows by
+  # the #353 feature. Kept as a migration fallback so nothing breaks the day snooze.json
+  # lands and old markers keep working until the web app switches over.
   $map = @{}
   if (-not (Test-Path $PlannerBoard)) { return $map }
-  $today = (Get-Date).Date
   foreach ($line in (Get-Content -Path $PlannerBoard)) {
     # Board rows look like: | 327 | 🟡 | Task… | P1 | 2026-07-20 | 353 | <!-- snooze:2026-08-18 -->
     if ($line -notmatch '^\s*\|\s*(\d+)\s*\|') { continue }
     $tid = $Matches[1]
+    # The <!-- --> wrapper is REQUIRED. Without it a task titled "snooze: …" matches its own
+    # title and hides itself from the board — the concrete failure mode behind #391.
     if ($line -match '<!--\s*snooze:(\d{4}-\d{2}-\d{2})\s*-->') {
-      $raw = $Matches[1]
-      $d = [datetime]::MinValue
-      if ([datetime]::TryParseExact($raw, 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$d)) {
-        if ($d.Date -ge $today) { $map[$tid] = $raw }
-      }
+      $active = Test-SnoozeActive $Matches[1]
+      if ($active) { $map[$tid] = $active }
     }
   }
   return $map
+}
+
+function Get-SnoozeMap {
+  # Build id -> snooze-until (yyyy-MM-dd) for tasks that are CURRENTLY snoozed.
+  # Order: snooze.json (structured, web-app-owned) wins; planner.md markers fill the gaps.
+  # The union is deliberate — during migration some tasks live in one store and some in the
+  # other, and dropping either would silently un-snooze tasks the user asked to hide.
+  $board = Get-SnoozeFromBoard
+  $store = Get-SnoozeFromStore
+  if ($null -eq $store) { return $board }   # no store yet, or unreadable → legacy behaviour
+  $merged = @{}
+  foreach ($k in $board.Keys) { $merged[$k] = $board[$k] }
+  foreach ($k in $store.Keys) { $merged[$k] = $store[$k] }   # store wins on conflict
+  return $merged
 }
 
 function Cmd-Scan {
