@@ -14,8 +14,14 @@
   inbox check silently failed, which means emailed instructions can be dropped without anyone
   noticing. Reaping first makes PHASE 0 reliable again.
 
+  Not every MCP server is a node process. The servers launched through `uvx` (better-telegram-mcp,
+  workspace-mcp) run as `uv.exe` plus two `python.exe` children, and they leak on exactly the same
+  per-run cadence -- 6 processes a run, ~250 MB. Measured on 2026-08-22: nine intact generations
+  (ages 5/35/62/96/125/155/185/214/245 min) were still resident, 48 processes holding ~2.9 GB, none
+  of which a node-only scan can see. So the scan is over -ProcessNames, not one hardcoded name.
+
   Safety model -- this only ever kills a process that satisfies ALL of:
-    1. It is node.exe.
+    1. Its image name is in -ProcessNames (node.exe / uv.exe / python.exe by default).
     2. Its command line matches a known MCP server pattern (-Patterns).
     3. It has been running longer than -MinAgeMinutes (default 45).
     4. It is not in the current tool-shell's own ancestor/descendant tree. The upward walk stops at
@@ -35,9 +41,16 @@
   ancestor/descendant pass cannot single them out. Keep this comfortably above the schedule
   interval. Passing a value below it (e.g. -MinAgeMinutes 1) will reap the live run's servers.
 
+.PARAMETER ProcessNames
+  Image names to scan. Defaults to node.exe (npx-launched servers) plus uv.exe / python.exe
+  (uvx-launched servers). A name alone never justifies a kill -- the command line must still match
+  -Patterns -- so this list only widens what is *eligible* to be pattern-matched.
+
 .PARAMETER Patterns
-  Regex fragments matched against each node process's command line. Defaults cover the MCP
-  servers this project launches via npx.
+  Regex fragments matched against each candidate process's command line. Defaults cover the MCP
+  servers this project launches via npx and uvx. The uvx servers are matched on the same names,
+  because uv puts the entry point in the child's own command line, e.g.
+  `...\python.exe "...\Scripts\better-telegram-mcp.exe"`.
 
 .PARAMETER DryRun
   Report what would be killed without killing anything.
@@ -54,10 +67,12 @@
 [CmdletBinding()]
 param(
     [int] $MinAgeMinutes = 45,
+    [string[]] $ProcessNames = @('node.exe', 'uv.exe', 'python.exe'),
     [string[]] $Patterns = @(
         '@playwright[\\/]mcp',
         '@marlinjai[\\/]email-mcp',
-        'better-telegram-mcp'
+        'better-telegram-mcp',
+        'workspace-mcp'
     ),
     [switch] $DryRun
 )
@@ -152,9 +167,10 @@ $cutoff    = (Get-Date).AddMinutes(-$MinAgeMinutes)
 $protected = Get-ProtectedPidSet
 $combined  = ($Patterns -join '|')
 
-$nodeProcs = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue)
+$nameFilter = ($ProcessNames | ForEach-Object { "Name='$($_ -replace "'", "''")'" }) -join ' OR '
+$candidates = @(Get-CimInstance Win32_Process -Filter $nameFilter -ErrorAction SilentlyContinue)
 
-$scanned = $nodeProcs.Count
+$scanned = $candidates.Count
 $matched = 0
 $stale   = 0
 $killed  = 0
@@ -162,7 +178,7 @@ $failed  = 0
 $freedKB = 0
 $details = New-Object System.Collections.ArrayList
 
-foreach ($p in $nodeProcs) {
+foreach ($p in $candidates) {
     $cmd = $p.CommandLine
     if ([string]::IsNullOrWhiteSpace($cmd)) { continue }
     if ($cmd -notmatch $combined) { continue }
