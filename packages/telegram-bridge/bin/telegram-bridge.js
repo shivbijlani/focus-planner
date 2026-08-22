@@ -45,7 +45,8 @@ async function runOnce() {
   log(
     `up: posted ${up.posted.length}, new topics ${up.created.length}; ` +
       `archive: closed ${archived.archived.length}, reopened ${archived.reopened.length}; ` +
-      `down: folded ${down.folded.length} repl${down.folded.length === 1 ? 'y' : 'ies'}`,
+      `down: folded ${down.folded.length} repl${down.folded.length === 1 ? 'y' : 'ies'}` +
+      (down.unrouted && down.unrouted.length ? `, ${down.unrouted.length} unrouted` : ''),
   )
   return { up, archived, down }
 }
@@ -81,7 +82,10 @@ async function main() {
       const { config, state, bridge } = await build()
       const down = await bridge.syncDown()
       await saveState(config.stateDir, state)
-      log(`folded ${down.folded.length}`)
+      log(
+        `folded ${down.folded.length}` +
+          (down.unrouted && down.unrouted.length ? `, ${down.unrouted.length} unrouted` : ''),
+      )
       break
     }
     case 'sync-archive': {

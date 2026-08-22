@@ -56,12 +56,24 @@ export function createTelegramClient({ token, fetchImpl = fetch, apiBase = API_B
         chat_id: chatId,
         message_thread_id: messageThreadId,
       }),
-    sendMessage: ({ chatId, text, messageThreadId, parseMode, disablePreview = true }) =>
+    sendMessage: ({
+      chatId,
+      text,
+      messageThreadId,
+      parseMode,
+      replyToMessageId,
+      disablePreview = true,
+    }) =>
       call('sendMessage', {
         chat_id: chatId,
         text,
         ...(messageThreadId != null ? { message_thread_id: messageThreadId } : {}),
         ...(parseMode ? { parse_mode: parseMode } : {}),
+        // Threading the acknowledgement under the message it answers keeps a
+        // busy General feed readable, and tells the user *which* reply landed.
+        ...(replyToMessageId != null
+          ? { reply_parameters: { message_id: replyToMessageId, allow_sending_without_reply: true } }
+          : {}),
         link_preview_options: { is_disabled: disablePreview },
       }),
     getUpdates: ({ offset, timeout = 0, allowedUpdates } = {}) =>

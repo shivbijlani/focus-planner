@@ -22,6 +22,7 @@ import {
 import { upsertTgMetaMarker, parseTgMeta } from './deepLink.js'
 import { mdToTelegramHtml, escapeHtml } from './telegramFormat.js'
 import { parseCompletedTaskIds } from './completed.js'
+import { parseReplyRouting, coalesceByTask } from './routeReply.js'
 
 const TELEGRAM_MAX = 4096
 
@@ -162,36 +163,100 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
 
   async function syncDown() {
     const folded = []
+    const unrouted = []
     const offset = state.updateOffset > 0 ? state.updateOffset : undefined
     const updates = await client.getUpdates({
       offset,
       allowedUpdates: ['message'],
     })
 
+    // Only paid for when an off-topic reply actually shows up.
+    let knownTaskIds = null
+    const loadKnownTaskIds = async () => {
+      if (!knownTaskIds) knownTaskIds = (await io.listJournals()).map((j) => j.taskId)
+      return knownTaskIds
+    }
+
     let maxUpdateId = state.updateOffset - 1
     for (const update of updates) {
       if (update.update_id > maxUpdateId) maxUpdateId = update.update_id
       const msg = update.message
-      if (!msg || msg.message_thread_id == null) continue
+      if (!msg) continue
       if (msg.from && msg.from.is_bot) continue
       const text = msg.text
       if (!text || !text.trim()) continue
       // Ignore the service message that opens a forum topic.
       if (msg.forum_topic_created) continue
 
-      const taskId = findTaskByTopic(state, msg.message_thread_id)
-      if (!taskId) continue
+      // A reply inside a task's topic is unambiguous — it answers that task.
+      const topicTaskId =
+        msg.message_thread_id != null ? findTaskByTopic(state, msg.message_thread_id) : null
 
-      const content = await io.readJournal(taskId)
+      // Otherwise it's an answer to a cross-task digest (General, or a topic we
+      // don't own). Previously these were dropped silently; now we route by the
+      // task IDs named in the text. See routeReply.js.
+      const routed = topicTaskId
+        ? [{ taskId: topicTaskId, text }]
+        : coalesceByTask(parseReplyRouting(text, { knownTaskIds: await loadKnownTaskIds() }))
+
+      if (!routed.length) {
+        // Nothing to file, but the user did say something — surface it instead
+        // of pretending it never arrived.
+        unrouted.push({ text, messageId: msg.message_id, threadId: msg.message_thread_id ?? null })
+        logger(`could not route reply: ${text.slice(0, 80)}`)
+        continue
+      }
+
       const day = now().toISOString().slice(0, 10)
-      const updated = appendUserReply(content, { text, date: day })
-      await io.writeJournal(taskId, updated)
-      folded.push({ taskId, text })
-      logger(`folded reply into task #${taskId}`)
+      for (const entry of routed) {
+        let content
+        try {
+          content = await io.readJournal(entry.taskId)
+        } catch {
+          content = null
+        }
+        if (content == null) {
+          // A named task with no journal file yet: don't lose the answer.
+          unrouted.push({
+            text: entry.text,
+            messageId: msg.message_id,
+            threadId: msg.message_thread_id ?? null,
+          })
+          logger(`no journal for task #${entry.taskId}; reply left unrouted`)
+          continue
+        }
+        const updated = appendUserReply(content, { text: entry.text, date: day })
+        await io.writeJournal(entry.taskId, updated)
+        folded.push({ taskId: entry.taskId, text: entry.text })
+        logger(`folded reply into task #${entry.taskId}`)
+      }
+
+      // Close the loop: a batched answer is worthless if the user can't tell it
+      // registered. Ack only off-topic replies — inside a task topic the next
+      // agent turn is itself the confirmation.
+      if (!topicTaskId) {
+        await acknowledge(msg, routed)
+      }
     }
 
     if (updates.length) setOffset(state, maxUpdateId + 1)
-    return { folded }
+    return { folded, unrouted }
+  }
+
+  // Best-effort receipt for a batched reply. Never let a failed ack abort the
+  // run — the answers are already safely in the journals by this point.
+  async function acknowledge(msg, routed) {
+    const filed = routed.map((r) => `#${r.taskId}`).join(', ')
+    try {
+      await client.sendMessage({
+        chatId,
+        text: `\u2705 Filed to ${filed} \u2014 I'll pick these up on the next run.`,
+        messageThreadId: msg.message_thread_id ?? undefined,
+        replyToMessageId: msg.message_id,
+      })
+    } catch (err) {
+      logger(`ack failed: ${err.message}`)
+    }
   }
 
   async function syncOnce() {
