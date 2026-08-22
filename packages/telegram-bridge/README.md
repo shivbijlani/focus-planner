@@ -55,9 +55,30 @@ node bin/telegram-bridge.js baseline      # mark existing tasks already-seen (no
 node bin/telegram-bridge.js sync-up       # post NEW agent turns -> topics
 node bin/telegram-bridge.js sync-archive  # close topics of completed tasks (reopen if un-completed)
 node bin/telegram-bridge.js sync-down     # fold replies -> journals
-node bin/telegram-bridge.js once          # sync-up, sync-archive, then sync-down (default)
+node bin/telegram-bridge.js digest        # post the consolidated "waiting on you" queue
+node bin/telegram-bridge.js digest --force  # ...even if it hasn't changed
+node bin/telegram-bridge.js once          # sync-up, sync-archive, sync-down, then digest (default)
 node bin/telegram-bridge.js watch [secs]  # loop `once` every N seconds (min 10, default 60)
 ```
+
+**The approval digest.** `digest` posts a single message to the group's **General** thread listing every
+task's open ask, so the whole approval queue can be answered in **one reply** instead of one reply per
+topic. It runs automatically at the end of `once`, and is **idempotent**: the composed text is hashed and
+compared against the last one posted, so a run where nothing changed posts nothing at all (use `--force`
+to override). When the bot's privacy mode is on, the message also tells you to *reply* to it — with
+privacy mode on, a message you merely **type** in the group is never delivered to the bot, so an answer
+that isn't a reply is silently lost.
+
+> ⚠️ **The ask is read from each task's newest agent turn**, never by grepping the journal for its last
+> `**Needs from you:**` line. Journals are bottom-appended chat threads and later turns often restate a
+> blocker in prose without re-emitting the marker, so a file-wide grep can surface an ask that newer turns
+> already invalidated (this really happened: task #250's marker was written 2026-07-01, superseded on
+> 07-07, and still got acted on). A digest built that way would rebroadcast dead asks every night. See the
+> regression tests in `src/digest.test.js`.
+>
+> Formal `**Needs from you:**` asks are treated as blocking; a bare `Next:` line is a weaker fallback
+> (it often describes what the *agent* does next, e.g. "keep polling on future overnight runs") and is
+> ranked below them, so when the message has to be trimmed it is the soft ones that fall off.
 
 **Archive on complete.** `sync-archive` reads the completed board (`planner-completed.md`) and, for any
 task whose topic exists, **closes** the forum topic (Telegram collapses it under the group's *Closed*

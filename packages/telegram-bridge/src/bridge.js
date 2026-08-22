@@ -17,8 +17,10 @@ import {
   setLastPosted,
   setArchived,
   setOffset,
+  setLastDigest,
   findTaskByTopic,
 } from './state.js'
+import { extractAskEntry, buildDigest, hashDigest } from './digest.js'
 import { upsertTgMetaMarker, parseTgMeta } from './deepLink.js'
 import { mdToTelegramHtml, escapeHtml } from './telegramFormat.js'
 import { parseCompletedTaskIds } from './completed.js'
@@ -263,7 +265,16 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     const up = await syncUp()
     const archived = await syncArchive()
     const down = await syncDown()
-    return { up, archived, down }
+    // Digest goes LAST so it reflects the turns just posted, and so a failure
+    // to compose it can never prevent the mirroring/fold-back work above from
+    // being persisted.
+    let digest = { posted: false, count: 0 }
+    try {
+      digest = await syncDigest()
+    } catch (err) {
+      logger(`digest failed (${err.message}); continuing`)
+    }
+    return { up, archived, down, digest }
   }
 
   // Archive/unarchive task topics to mirror the completed board. A task that has
@@ -317,6 +328,78 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     return { archived, reopened }
   }
 
+  // Post ONE consolidated "waiting on you" message to the group's General
+  // thread (no message_thread_id), listing every task's open ask.
+  //
+  // The asks are read from each task's NEWEST agent turn via latestAgentTurn —
+  // never by grepping the journal for its last `Needs from you:` marker, which
+  // can be weeks stale (see the note at the top of digest.js). Getting this
+  // wrong would rebroadcast dead asks nightly.
+  //
+  // Idempotent: the composed text is hashed and compared against the last one
+  // posted, so a run where nothing changed posts nothing at all.
+  async function syncDigest({ force = false } = {}) {
+    const entries = []
+    const journals = await io.listJournals()
+
+    for (const { taskId } of journals) {
+      if (!isAllowed(taskId)) continue
+      const content = await io.readJournal(taskId)
+      if (!hasAgentBlock(content)) continue
+      const turn = latestAgentTurn(content)
+      if (!turn) continue
+      const ask = extractAskEntry(turn)
+      if (!ask) continue
+      entries.push({
+        taskId,
+        title: parseTitle(content),
+        ask: ask.text,
+        source: ask.source,
+      })
+    }
+
+    // Blocking asks first, then newest-first within each group, so the most
+    // recent real decisions lead the message.
+    const rank = (e) => (e.source === 'next' ? 1 : 0)
+    entries.sort((a, b) => rank(a) - rank(b) || Number(b.taskId) - Number(a.taskId))
+
+    // Only surface the privacy warning when it is actually true, so it stays
+    // meaningful instead of becoming boilerplate the user learns to skip.
+    let privacyModeOn = false
+    try {
+      const me = await client.getMe()
+      privacyModeOn = me && me.can_read_all_group_messages === false
+    } catch {
+      privacyModeOn = false
+    }
+
+    const md = buildDigest(entries, {
+      date: now().toISOString().slice(0, 10),
+      privacyModeOn,
+    })
+    const hash = hashDigest(md)
+
+    if (!force && state.lastDigestHash === hash) {
+      logger(`digest unchanged (${entries.length} open asks); not posting`)
+      return { posted: false, count: entries.length, hash }
+    }
+
+    try {
+      await client.sendMessage({
+        chatId,
+        text: mdToTelegramHtml(md),
+        parseMode: 'HTML',
+      })
+    } catch (err) {
+      logger(`HTML digest send failed (${err.message}); retrying as plain text`)
+      await client.sendMessage({ chatId, text: md })
+    }
+
+    setLastDigest(state, hash)
+    logger(`posted digest with ${entries.length} open ask(s)`)
+    return { posted: true, count: entries.length, hash }
+  }
+
   // One-time (idempotent) setup: record each existing agent-block journal's
   // current latest-turn hash as "already posted" WITHOUT creating a topic or
   // sending anything. After this, syncUp only mirrors tasks whose agent turn
@@ -347,5 +430,5 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     return { seen, skipped }
   }
 
-  return { ensureTopic, syncUp, syncDown, syncArchive, syncOnce, baseline }
+  return { ensureTopic, syncUp, syncDown, syncArchive, syncOnce, syncDigest, baseline }
 }

@@ -42,6 +42,14 @@ export function setOffset(state, offset) {
   return state
 }
 
+// Content hash of the last "waiting on you" digest we posted. Stored so an
+// unchanged approval queue is not re-posted on every run — the digest is meant
+// to fire every run, which is only tolerable if a no-change run stays silent.
+export function setLastDigest(state, hash) {
+  state.lastDigestHash = hash
+  return state
+}
+
 /** Reverse lookup: which task owns a given forum topic id. */
 export function findTaskByTopic(state, topicId) {
   for (const [taskId, entry] of Object.entries(state.tasks)) {
