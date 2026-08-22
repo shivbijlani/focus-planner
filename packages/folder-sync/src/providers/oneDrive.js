@@ -145,25 +145,37 @@ async function listRemote(providerConfig) {
 // only listed the app-folder root, so files in subfolders (journals) were
 // invisible to sync — they were never pulled and their remote deletions were
 // never reconciled, which let stale local copies resurrect like ghosts.
-async function listFolderRecursive(token, prefix) {
-  const childrenUrl = prefix
+//
+// Microsoft Graph paginates `/children`: it returns at most ~200 items per
+// response and hands back an `@odata.nextLink` URL for the next page. The
+// earlier version read only the FIRST page, so once a folder (e.g. `journal/`)
+// grew past ~200 files, the overflow was silently dropped — those journals were
+// never pulled into the local mirror and never appeared in the sidebar. We now
+// follow `@odata.nextLink` until every page is consumed.
+export async function listFolderRecursive(token, prefix) {
+  const firstUrl = prefix
     ? `${APPROOT}:/${encodePath(prefix)}:/children?$select=name,lastModifiedDateTime,file,folder`
     : `${APPROOT}/children?$select=name,lastModifiedDateTime,file,folder`
-  const res = await fetch(childrenUrl, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (res.status === 404) return []
-  if (!res.ok) throw new Error(`OneDrive list failed: ${res.status}`)
-  const data = await res.json()
   const out = []
-  for (const item of data.value || []) {
-    const rel = prefix ? `${prefix}/${item.name}` : item.name
-    if (item.folder) {
-      const children = await listFolderRecursive(token, rel)
-      for (const c of children) out.push(c)
-    } else if (item.file) {
-      out.push({ name: rel, mtime: new Date(item.lastModifiedDateTime).getTime() })
+  let nextUrl = firstUrl
+  while (nextUrl) {
+    const res = await fetch(nextUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    // A 404 on the very first request means the folder doesn't exist yet.
+    if (res.status === 404 && nextUrl === firstUrl) return []
+    if (!res.ok) throw new Error(`OneDrive list failed: ${res.status}`)
+    const data = await res.json()
+    for (const item of data.value || []) {
+      const rel = prefix ? `${prefix}/${item.name}` : item.name
+      if (item.folder) {
+        const children = await listFolderRecursive(token, rel)
+        for (const c of children) out.push(c)
+      } else if (item.file) {
+        out.push({ name: rel, mtime: new Date(item.lastModifiedDateTime).getTime() })
+      }
     }
+    nextUrl = data['@odata.nextLink'] || null
   }
   return out
 }

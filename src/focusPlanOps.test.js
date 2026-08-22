@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildCompletedRow,
   opApplySnoozeTransitions,
   opBridgeLinks,
+  opChangeLinkedId,
   opMoveLinesBetweenSections,
   opSetTaskSnooze,
   opSnoozeTask,
@@ -26,6 +28,41 @@ const plan = [
   '| 9 | ⚪ | X |',
   '',
 ].join('\n')
+
+describe('buildCompletedRow', () => {
+  const today = new Date().toISOString().split('T')[0]
+
+  it('builds a row without an outcome', () => {
+    const row = buildCompletedRow({ taskId: '42', taskName: 'Ship the thing', priority: 'P1' })
+    expect(row).toBe(`| 42 | ✅ | Ship the thing | P1 | ${today} |`)
+  })
+
+  it('stamps the outcome inline on the task cell', () => {
+    const row = buildCompletedRow({ taskId: '42', taskName: 'Ship the thing', priority: 'P1', outcome: 'Canceled' })
+    expect(row).toContain('· _Canceled_')
+    expect(row).toBe(`| 42 | ✅ | Ship the thing · _Canceled_ | P1 | ${today} |`)
+  })
+
+  it('appends the outcome after todo items', () => {
+    const row = buildCompletedRow({
+      taskId: '7', taskName: 'Task', priority: 'P0',
+      todoItems: ['step one', 'step two'], outcome: 'Done by me',
+    })
+    expect(row).toBe(`| 7 | ✅ | Task - step one - step two · _Done by me_ | P0 | ${today} |`)
+  })
+
+  it('sanitizes pipes in the outcome so the row cannot break', () => {
+    const row = buildCompletedRow({ taskId: '9', taskName: 'X', priority: 'P2', outcome: 'a|b' })
+    expect(row).toContain('· _a/b_')
+    expect(row.match(/\|/g).length).toBe(6)
+  })
+
+  it('ignores an empty/whitespace outcome', () => {
+    const row = buildCompletedRow({ taskId: '3', taskName: 'Y', priority: '-', outcome: '   ' })
+    expect(row).not.toContain('·')
+    expect(row).toBe(`| 3 | ✅ | Y | - | ${today} |`)
+  })
+})
 
 describe('opMoveLinesBetweenSections', () => {
   it('moves multiple rows from Today to Deferred preserving order', () => {
@@ -64,6 +101,24 @@ describe('opMoveLinesBetweenSections', () => {
     )
     expect(out).toContain('| 3 | 🟡 | C |')
     expect(out).not.toContain('ghost')
+  })
+})
+
+describe('opChangeLinkedId', () => {
+  it('updates a rendered row from CRLF-backed content', () => {
+    const crlfPlan = [
+      '| ID | 🎯 | Task | Priority | Added | Linked ID |',
+      '|---|---|------|----------|-------|-----------|',
+      '| 349 | 🟡 | Overnight agent v2 | - |  |  |',
+    ].join('\r\n')
+
+    const out = opChangeLinkedId(
+      crlfPlan,
+      '| 349 | 🟡 | Overnight agent v2 | - |  |  |',
+      '192',
+    )
+
+    expect(out).toContain('| 349 | 🟡 | Overnight agent v2 | - |  | 192 |')
   })
 })
 

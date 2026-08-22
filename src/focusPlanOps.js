@@ -210,7 +210,9 @@ export function opRenameTask(content, rawLine, newTaskName) {
 
 export function opChangeLinkedId(content, rawLine, newLinkedId) {
   const lines = content.split('\n')
-  const lineIndex = lines.findIndex(line => line === rawLine)
+  // Rendered rows are trimmed by parseMarkdownTable, while CRLF-backed files
+  // retain a trailing \r after split('\n'). Match their normalized row text.
+  const lineIndex = lines.findIndex(line => line.trim() === rawLine.trim())
   if (lineIndex === -1) return content
   const parts = rawLine.split('|')
   if (parts.length < 7) return content
@@ -491,10 +493,14 @@ export function opRemoveTaskFromFocusPlan(content, rawLine, fromSection) {
   return content
 }
 
-export function buildCompletedRow({ taskId, taskName, priority, todoItems = [] }) {
+export function buildCompletedRow({ taskId, taskName, priority, todoItems = [], outcome = '' }) {
   const today = new Date().toISOString().split('T')[0]
   let displayName = (taskName || '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
   if (todoItems.length > 0) displayName += ' - ' + todoItems.join(' - ')
+  // Stamp the optional close-out outcome inline on the task cell so the
+  // completed board stays skimmable. Sanitize pipes so it can't break the row.
+  const cleanOutcome = (outcome || '').replace(/\|/g, '/').trim()
+  if (cleanOutcome) displayName += ` · _${cleanOutcome}_`
   return `| ${taskId || '-'} | ✅ | ${displayName} | ${priority || '-'} | ${today} |`
 }
 

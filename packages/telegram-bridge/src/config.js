@@ -34,7 +34,7 @@ async function resolvePlannerPath({ env, repoRoot }) {
  * @param {object} [opts]
  * @param {NodeJS.ProcessEnv} [opts.env]
  * @param {string} [opts.repoRoot] path of the focus-planner repo root
- * @returns {Promise<{token,chatId,plannerPath,journalDir,stateDir,taskAllowlist,replySignatureAsMe}>}
+ * @returns {Promise<{token,chatId,plannerPath,journalDir,stateDir,taskAllowlist,archiveCompleted}>}
  */
 export async function loadConfig({ env = process.env, repoRoot } = {}) {
   const root = repoRoot || path.resolve(process.cwd())
@@ -50,13 +50,24 @@ export async function loadConfig({ env = process.env, repoRoot } = {}) {
     .map((s) => s.trim())
     .filter(Boolean)
 
+  // Whether to archive (close) a task's forum topic when it lands on the
+  // completed board, and reopen it if the task later leaves that board. Default
+  // ON once Telegram is set up — only an explicit off/false/0/no in
+  // TELEGRAM_BRIDGE_ARCHIVE disables it. The overnight agent maps the
+  // "Archive completed topics" user-setting onto this env var (SKILL.md PHASE 3).
+  const archiveCompleted = !/^(off|false|0|no)$/i.test(
+    (env.TELEGRAM_BRIDGE_ARCHIVE || '').trim(),
+  )
+
   return {
     token,
     chatId,
     plannerPath,
     journalDir: path.join(plannerPath, 'journal'),
+    completedBoardPath: path.join(plannerPath, 'planner-completed.md'),
     stateDir,
     taskAllowlist,
+    archiveCompleted,
   }
 }
 

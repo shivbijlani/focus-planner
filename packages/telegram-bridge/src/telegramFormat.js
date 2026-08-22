@@ -52,6 +52,33 @@ function inline(text) {
   return s
 }
 
+// Reduce inline markdown to plain text. Telegram renders NO inline tags inside a
+// <pre> block, so table cells are flattened to text (bold/link/code markers
+// stripped) before being aligned into the monospace grid.
+function stripInline(text) {
+  return String(text)
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/__([^_\n]+)__/g, '$1')
+    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1$2')
+    .replace(/(^|[^_\w])_([^_\n]+)_(?![_\w])/g, '$1$2')
+    .replace(/~~([^~\n]+)~~/g, '$1')
+    .trim()
+}
+
+// Split a markdown table row into trimmed cells (outer pipes stripped).
+function splitTableRow(line) {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim())
+}
+
+// A markdown table separator row: pipes plus cells of only - : (e.g. |---|:--:|).
+function isTableSeparator(line) {
+  if (!line || !line.includes('|')) return false
+  const cells = splitTableRow(line)
+  return cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c))
+}
+
 /**
  * Convert a markdown string into Telegram-flavoured HTML.
  * The output is always tag-balanced (fenced code blocks and blockquotes are
@@ -98,6 +125,34 @@ export function mdToTelegramHtml(md) {
       continue
     }
     flushQuote()
+
+    // Markdown table: a row followed by a |---|--- separator. Telegram HTML has
+    // no <table>, so render an aligned monospace grid inside <pre> (which it does
+    // support) — otherwise the raw `| a | b |` pipes show up as literal text.
+    if (line.includes('|') && isTableSeparator(lines[i + 1])) {
+      const header = splitTableRow(line).map(stripInline)
+      i += 2 // consume the header row and the separator row
+      const rows = []
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '' && !/^\s*```/.test(lines[i])) {
+        rows.push(splitTableRow(lines[i]).map(stripInline))
+        i++
+      }
+      const cols = Math.max(header.length, ...rows.map((r) => r.length))
+      const widths = []
+      for (let c = 0; c < cols; c++) {
+        let w = (header[c] || '').length
+        for (const r of rows) w = Math.max(w, (r[c] || '').length)
+        widths[c] = w
+      }
+      const fmtRow = (cells) =>
+        Array.from({ length: cols }, (_, c) => (cells[c] || '').padEnd(widths[c]))
+          .join('  ')
+          .replace(/\s+$/, '')
+      const sep = widths.map((w) => '-'.repeat(w)).join('  ')
+      const grid = [fmtRow(header), sep, ...rows.map(fmtRow)].join('\n')
+      out.push(`<pre>${escapeHtml(grid)}</pre>`)
+      continue
+    }
 
     // Horizontal rule -> drop (Telegram has no <hr>). Must be checked before the
     // bullet rule so a `---` line isn't read as a list item.

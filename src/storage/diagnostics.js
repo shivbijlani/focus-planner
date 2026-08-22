@@ -18,18 +18,29 @@
  */
 
 const PREFIX = 'fp-file:'
-const ENABLE_KEY = 'fp-diagnostics-enabled'
+// Single source of truth for the capture toggle. `packages/diagnostics` owns the
+// flag (Settings → App version & diagnostics writes it, and it also drives the
+// service-worker recorder); we read the same persisted key so there is only ever
+// one switch instead of two that silently disagree.
+const ENABLE_KEY = 'planner.diag'
+const ENABLE_TRUTHY = ['1', 'true', 'on', 'yes']
 const MAX_EVENTS = 100
 const events = []
 
 /** Whether diagnostic event capture is enabled (persisted across sessions). */
 export function isDiagnosticsEnabled() {
-  try { return localStorage.getItem(ENABLE_KEY) === '1' } catch { return false }
+  try {
+    const v = localStorage.getItem(ENABLE_KEY)
+    return v != null && ENABLE_TRUTHY.includes(String(v).toLowerCase())
+  } catch { return false }
 }
 
 /** Turn diagnostic event capture on/off. */
 export function setDiagnosticsEnabled(on) {
-  try { localStorage.setItem(ENABLE_KEY, on ? '1' : '0') } catch { /* ignore */ }
+  try {
+    if (on) localStorage.setItem(ENABLE_KEY, '1')
+    else localStorage.removeItem(ENABLE_KEY)
+  } catch { /* ignore */ }
 }
 
 /**

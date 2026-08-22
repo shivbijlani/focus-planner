@@ -6,7 +6,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import { taskIdFromFilename, journalFilename } from './journal.js'
 
-export function createFsIo({ journalDir }) {
+export function createFsIo({ journalDir, completedBoardPath }) {
   return {
     async listJournals() {
       let entries
@@ -34,6 +34,18 @@ export function createFsIo({ journalDir }) {
         content,
         'utf-8',
       )
+    },
+
+    // Returns the raw completed-board markdown, or '' if it isn't configured or
+    // doesn't exist yet. Never throws — a missing board just means "nothing to
+    // archive this run".
+    async readCompletedBoard() {
+      if (!completedBoardPath) return ''
+      try {
+        return await fs.readFile(completedBoardPath, 'utf-8')
+      } catch {
+        return ''
+      }
     },
   }
 }

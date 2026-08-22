@@ -41,6 +41,21 @@ export function createTelegramClient({ token, fetchImpl = fetch, apiBase = API_B
         message_thread_id: messageThreadId,
         ...(name != null ? { name } : {}),
       }),
+    // "Archive" a task's thread: closing a forum topic collapses it under the
+    // group's Closed section and blocks new messages from non-admins. The Bot
+    // API has no separate per-topic archive primitive, so close/reopen is the
+    // reversible equivalent. Requires the bot to have can_manage_topics (or be
+    // the topic creator, which it is for topics it opened).
+    closeForumTopic: ({ chatId, messageThreadId }) =>
+      call('closeForumTopic', {
+        chat_id: chatId,
+        message_thread_id: messageThreadId,
+      }),
+    reopenForumTopic: ({ chatId, messageThreadId }) =>
+      call('reopenForumTopic', {
+        chat_id: chatId,
+        message_thread_id: messageThreadId,
+      }),
     sendMessage: ({ chatId, text, messageThreadId, parseMode, disablePreview = true }) =>
       call('sendMessage', {
         chat_id: chatId,

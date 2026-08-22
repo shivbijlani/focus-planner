@@ -32,6 +32,7 @@ Windows Credential Manager before invoking the CLI.
 | `TELEGRAM_CHAT_ID` | ✅ | The forum supergroup chat id (e.g. `-1004310604015`). |
 | `PLANNER_PATH` | — | Planner folder. Defaults to `planner-config.json`'s `plannerPath`, else `../planner`. |
 | `TELEGRAM_BRIDGE_TASKS` | — | Comma-separated allowlist of task IDs to mirror. Empty = all tasks with an agent block. |
+| `TELEGRAM_BRIDGE_ARCHIVE` | — | Archive (close) a task's topic when it lands on the completed board, and reopen it if the task leaves. Default **on**; set to `off`/`false`/`0`/`no` to disable. |
 | `TELEGRAM_BRIDGE_STATE_DIR` | — | State dir. Defaults to `%LOCALAPPDATA%\overnight-agent\telegram-bridge`. |
 
 ### Supplying the token (Windows Credential Manager)
@@ -52,10 +53,19 @@ node packages/telegram-bridge/bin/telegram-bridge.js once
 node bin/telegram-bridge.js whoami        # verify the token / print bot info
 node bin/telegram-bridge.js baseline      # mark existing tasks already-seen (no posts) — run once
 node bin/telegram-bridge.js sync-up       # post NEW agent turns -> topics
+node bin/telegram-bridge.js sync-archive  # close topics of completed tasks (reopen if un-completed)
 node bin/telegram-bridge.js sync-down     # fold replies -> journals
-node bin/telegram-bridge.js once          # sync-up then sync-down (default)
+node bin/telegram-bridge.js once          # sync-up, sync-archive, then sync-down (default)
 node bin/telegram-bridge.js watch [secs]  # loop `once` every N seconds (min 10, default 60)
 ```
+
+**Archive on complete.** `sync-archive` reads the completed board (`planner-completed.md`) and, for any
+task whose topic exists, **closes** the forum topic (Telegram collapses it under the group's *Closed*
+section) once the task appears there — the reversible equivalent of archiving, since the bot has no
+per-topic archive primitive. If a task later leaves the completed board, its topic is **reopened**. The
+pass is idempotent (it tracks an `archived` flag per task in state) and each per-topic call is best-effort:
+a failure is logged and retried next run, never aborting the sync. The bot must be able to manage topics —
+it can always close/reopen topics **it created**, or grant it the `can_manage_topics` admin right.
 
 **Natural (incremental) mirroring — no backfill.** `sync-up` only mirrors a task when its *latest agent
 turn changes*; unchanged tasks are skipped entirely, so no topic is created for them. Run `baseline` **once**

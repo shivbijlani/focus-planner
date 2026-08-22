@@ -28,6 +28,15 @@ export function setLastPosted(state, taskId, hash) {
   return state
 }
 
+// Track whether a task's forum topic is currently archived (closed). Used so
+// syncArchive only calls closeForumTopic/reopenForumTopic when the desired
+// state actually changes — making the archive pass idempotent across runs.
+export function setArchived(state, taskId, archived) {
+  const prev = state.tasks[taskId] || {}
+  state.tasks[taskId] = { ...prev, archived: !!archived }
+  return state
+}
+
 export function setOffset(state, offset) {
   state.updateOffset = offset
   return state
