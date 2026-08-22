@@ -29,17 +29,44 @@
        past it: one copilot.exe hosts many successive runs, so protecting its whole descendant tree
        would protect every run's servers and make this script a permanent no-op.
 
-  The age gate is the important one. The default of 45 minutes is deliberately longer than the
-  30-minute schedule interval, so servers belonging to the run that is executing this script are
-  never candidates, and neither are those of the run immediately before it.
+  The age gate is the important one, and it must be sized against *when this script runs*, not
+  against the schedule interval.
+
+  The original default of 45 minutes was chosen to be longer than the 30-minute schedule so that
+  neither the current run's servers nor "those of the run immediately before it" were candidates.
+  Sparing the previous run was a mistake: that run has already finished, so its servers are exactly
+  the garbage this script exists to collect. Holding them for an extra full cycle is the leak.
+
+  Measured on 2026-08-22 at a 30-minute cadence (task #349). Three intact generations were resident,
+  18 processes / ~1.4 GB each:
+
+      age  6 min : 18 procs, 1435 MB   <- current run
+      age  7 min : 18 procs, 1449 MB   <- current run
+      age 37 min : 18 procs, 1411 MB   <- previous run, already finished, spared by the 45 gate
+
+  Under the 45-minute gate the 37-minute generation survived the whole run and was only collected by
+  the *next* one, so the steady state carried a permanent extra generation -- ~1.4 GB of a 16 GB box
+  wasted around the clock, on top of the ~4.4 GB held by the always-on CDP browser profiles. That is
+  the "performance degradation" reported at the 30-minute cadence.
+
+  The correct anchor is this script's own position in the run. SKILL.md mandates that it runs FIRST,
+  before PHASE 0, at which point the current run's MCP servers are 0-2 minutes old. A 20-minute gate
+  therefore leaves a ~10x safety margin over the thing it must protect, while still collecting the
+  previous run's orphans. Verified the same day with -DryRun -MinAgeMinutes 20: stale 18, freed
+  1410 MB -- exactly the 37-minute generation, with the 6/7-minute current-run processes untouched.
 
 .PARAMETER MinAgeMinutes
-  Minimum process age, in minutes, before a matching process is considered stale. Default 45.
+  Minimum process age, in minutes, before a matching process is considered stale. Default 20.
 
   This is the only thing protecting the *currently executing* run's own MCP servers: they are
   siblings of this script (both hang off the same copilot.exe), not descendants of it, so the
-  ancestor/descendant pass cannot single them out. Keep this comfortably above the schedule
-  interval. Passing a value below it (e.g. -MinAgeMinutes 1) will reap the live run's servers.
+  ancestor/descendant pass cannot single them out.
+
+  Size it against how old the current run's servers are when this script executes -- which, when the
+  script is run first as intended, is 0-2 minutes -- NOT against the schedule interval. Do not raise
+  it above the interval "to be safe": that is what caused the leak documented above. Passing a very
+  low value (e.g. -MinAgeMinutes 1) will reap the live run's servers; if you ever invoke this script
+  mid-run rather than at the start, raise it to comfortably exceed the elapsed run time instead.
 
 .PARAMETER ProcessNames
   Image names to scan. Defaults to node.exe (npx-launched servers) plus uv.exe / python.exe
@@ -66,7 +93,7 @@
 #>
 [CmdletBinding()]
 param(
-    [int] $MinAgeMinutes = 45,
+    [int] $MinAgeMinutes = 20,
     [string[]] $ProcessNames = @('node.exe', 'uv.exe', 'python.exe'),
     [string[]] $Patterns = @(
         '@playwright[\\/]mcp',
