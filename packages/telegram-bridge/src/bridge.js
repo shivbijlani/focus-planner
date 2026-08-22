@@ -25,6 +25,7 @@ import { extractAskEntry, buildDigest, hashDigest } from './digest.js'
 import { upsertTgMetaMarker, parseTgMeta } from './deepLink.js'
 import { mdToTelegramHtml, escapeHtml } from './telegramFormat.js'
 import { parseCompletedTaskIds } from './completed.js'
+import { parseBoardOrder, boardRank, boardIndex } from './board.js'
 import { parseReplyRouting, coalesceByTask } from './routeReply.js'
 
 const TELEGRAM_MAX = 4096
@@ -393,10 +394,28 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       })
     }
 
-    // Blocking asks first, then newest-first within each group, so the most
-    // recent real decisions lead the message.
+    // Blocking asks first; then by the user's OWN board rather than by task-ID
+    // magnitude. The digest is size-capped, so with a large queue only the
+    // leading entries survive — which makes this ordering the whole feature.
+    // Raw `Number(taskId)` descending put malformed six-digit IDs (#281) above
+    // every real task, and buried genuine P0s under whatever was filed last.
+    // Falls back to newest-first when there is no board to read.
+    let board = null
+    if (typeof io.readBoard === 'function') {
+      try {
+        board = parseBoardOrder(await io.readBoard())
+      } catch {
+        board = null
+      }
+    }
     const rank = (e) => (e.source === 'next' ? 1 : 0)
-    entries.sort((a, b) => rank(a) - rank(b) || Number(b.taskId) - Number(a.taskId))
+    entries.sort(
+      (a, b) =>
+        rank(a) - rank(b) ||
+        boardRank(board, a.taskId) - boardRank(board, b.taskId) ||
+        boardIndex(board, a.taskId) - boardIndex(board, b.taskId) ||
+        Number(b.taskId) - Number(a.taskId),
+    )
 
     // Only surface the privacy warning when it is actually true, so it stays
     // meaningful instead of becoming boilerplate the user learns to skip.

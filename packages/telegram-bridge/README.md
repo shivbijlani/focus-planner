@@ -55,6 +55,28 @@ The third option exists because switching the digest off entirely is a blunt fix
 also removes the one consolidated view of what is actually blocked on you, leaving the queue scattered
 across every task topic.
 
+
+### How the digest is ordered
+
+The digest has a hard Telegram size cap, so a large queue does not fit: the message keeps as many whole
+entries as it can and collapses the rest into `…and N more`. That makes the **order** the feature —
+whatever leads the message is, in practice, the only part that gets read.
+
+Entries are sorted by:
+
+1. **Formal asks before soft ones** — an explicit `**Needs from you:**` outranks a bare `Next:` line,
+   which often describes agent-side continuation rather than a decision you owe.
+2. **Your own board** (`planner.md`) — `## Today` before `## Deferred`, and within each, rows marked
+   🔴 or `P0` first, then your top-to-bottom row order.
+3. **Newest first**, as a tie-break.
+
+Ranking by the board rather than by task-ID magnitude fixes two real failure modes: malformed six-digit
+IDs used to sort above every genuine task and permanently occupy the top slot, and a true P0 could sit
+below whatever happened to be filed most recently. Anything not on the board at all — orphans, completed
+rows, broken IDs — sorts last.
+
+If `planner.md` cannot be read, ordering falls back to newest-first and the digest still posts.
+
 A **name** is resolved to a forum topic once and cached in bridge state, so re-runs reuse that topic
 instead of creating a new one each night; changing the name resolves a fresh topic. Resolution happens
 only when a digest is actually being posted, so a run with an unchanged queue creates nothing.

@@ -200,7 +200,7 @@ describe('hashDigest', () => {
   })
 })
 
-function makeHarness(files, { privacyModeOn = true } = {}) {
+function makeHarness(files, { privacyModeOn = true, board = null } = {}) {
   const store = { ...files }
   const sent = []
   const client = {
@@ -233,6 +233,9 @@ function makeHarness(files, { privacyModeOn = true } = {}) {
       return ''
     },
   }
+  // Only expose readBoard when a board was supplied, so the "io predates this
+  // feature" path stays covered by every other test in this file.
+  if (board != null) io.readBoard = async () => board
   return { store, sent, client, io, config: { chatId: '-100', taskAllowlist: [] } }
 }
 
@@ -430,5 +433,117 @@ describe('syncOnce', () => {
       const res = await bridge.syncOnce()
       expect(res.digest.posted).toBe(true)
     }
+  })
+})
+
+describe('syncDigest ordering (board-aware)', () => {
+  // A realistic slice of planner.md: two P0s at the top of Today, an ordinary
+  // Today task, a Deferred task, and NOTHING for 426580 — the malformed
+  // six-digit id from #281 that used to win on numeric sort alone.
+  const BOARD = `## Today
+
+| ID | 🎯 | Task | Work Priority | Added | Linked ID |
+|---|---|------|---------------|-------|-----------|
+| 435 | 🔴 | Surrey BC dhol trip | P0 | 2026-08-22 | 392 |
+| 433 | 🔴 | Land GH #150 | P0 | 2026-08-22 | 371 |
+| 428 | 🟡 | Neon Rave prep | - | 2026-08-18 | 351 |
+
+## Deferred
+
+| ID | 🎯 | Task | Work Priority | Added | Linked ID |
+|---|---|------|---------------|-------|-----------|
+| 349 | 🟡 | Overnight agent v2 | - | | 192 |
+`
+
+  const files = {
+    426580: journalWithAsk(426580, 'Stale parade question', 'approve the .ics'),
+    349: journalWithAsk(349, 'Overnight agent v2', 'say `merge 150`'),
+    428: journalWithAsk(428, 'Neon Rave prep', '`drop it` or `post it`'),
+    433: journalWithAsk(433, 'Land GH #150', 'one word — `merge 150`'),
+    435: journalWithAsk(435, 'Surrey BC dhol trip', 'pick a day'),
+  }
+
+  const orderOf = (text) =>
+    text
+      .split('\n')
+      .filter((l) => l.startsWith('\u2022'))
+      .map((l) => /#(\d+)/.exec(l)?.[1])
+
+  it('leads with board urgency and sinks the off-board orphan', async () => {
+    const h = makeHarness(files, { board: BOARD })
+    const bridge = createBridge({
+      client: h.client,
+      config: h.config,
+      state: emptyState(),
+      io: h.io,
+    })
+
+    await bridge.syncDigest()
+    expect(orderOf(h.sent[0].text)).toEqual([
+      '435', // Today + P0
+      '433', // Today + P0
+      '428', // Today
+      '349', // Deferred
+      '426580', // not on the board at all
+    ])
+  })
+
+  it('without a board, still falls back to newest-first', async () => {
+    const h = makeHarness(files) // no readBoard on io
+    const bridge = createBridge({
+      client: h.client,
+      config: h.config,
+      state: emptyState(),
+      io: h.io,
+    })
+
+    await bridge.syncDigest()
+    expect(orderOf(h.sent[0].text)).toEqual(['426580', '435', '433', '428', '349'])
+  })
+
+  it('survives a board that cannot be read', async () => {
+    const h = makeHarness(files, { board: BOARD })
+    h.io.readBoard = async () => {
+      throw new Error('ENOENT')
+    }
+    const bridge = createBridge({
+      client: h.client,
+      config: h.config,
+      state: emptyState(),
+      io: h.io,
+    })
+
+    const res = await bridge.syncDigest()
+    expect(res.posted).toBe(true)
+    expect(orderOf(h.sent[0].text)).toHaveLength(5)
+  })
+
+  it('keeps formal asks ahead of soft Next: lines regardless of board rank', async () => {
+    // 349 is only Deferred, but it is a real ask; 435 is a P0 with just a
+    // Next: line, which describes agent-side work rather than a user decision.
+    const softP0 = `# Task 435: Surrey BC dhol trip
+
+---
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+## \u{1F319} Overnight Agent
+
+**Status:** In-progress
+
+- Next: keep polling charger availability
+`
+    const h = makeHarness(
+      { 435: softP0, 349: journalWithAsk(349, 'Overnight agent v2', 'say `merge 150`') },
+      { board: BOARD },
+    )
+    const bridge = createBridge({
+      client: h.client,
+      config: h.config,
+      state: emptyState(),
+      io: h.io,
+    })
+
+    await bridge.syncDigest()
+    expect(orderOf(h.sent[0].text)).toEqual(['349', '435'])
   })
 })
