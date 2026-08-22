@@ -59,6 +59,17 @@ export async function loadConfig({ env = process.env, repoRoot } = {}) {
     (env.TELEGRAM_BRIDGE_ARCHIVE || '').trim(),
   )
 
+  // Whether to post the consolidated "waiting on you" digest. It is the ONLY
+  // thing the bridge sends to the group's General thread — every other message
+  // goes into its task's own topic. Users who want the group to be strictly
+  // one-topic-per-task therefore need a way to silence it without losing the
+  // per-task mirroring, so it is gated separately from `archiveCompleted`.
+  // Default ON to preserve existing behaviour; only an explicit
+  // off/false/0/no in TELEGRAM_BRIDGE_DIGEST disables it.
+  const digestEnabled = !/^(off|false|0|no)$/i.test(
+    (env.TELEGRAM_BRIDGE_DIGEST || '').trim(),
+  )
+
   return {
     token,
     chatId,
@@ -68,6 +79,7 @@ export async function loadConfig({ env = process.env, repoRoot } = {}) {
     stateDir,
     taskAllowlist,
     archiveCompleted,
+    digestEnabled,
   }
 }
 

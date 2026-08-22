@@ -390,4 +390,45 @@ describe('syncOnce', () => {
     expect(res2.up.posted).toEqual(['349'])
     expect(calls).toBeGreaterThan(0)
   })
+
+  // Regression: the digest is the bridge's only General-thread message. A user
+  // who wants a strictly one-topic-per-task group must be able to silence it
+  // WITHOUT losing per-task mirroring, so the opt-out has to skip the digest
+  // and still post the task turn into its own topic.
+  it('skips the digest entirely when digestEnabled is false, but still mirrors tasks', async () => {
+    const h = makeHarness({ 349: journalWithAsk(349, 'Demo', 'say `merge 150`') })
+    const state = emptyState()
+    const bridge = createBridge({
+      client: h.client,
+      config: { ...h.config, digestEnabled: false },
+      state,
+      io: h.io,
+    })
+
+    const res = await bridge.syncOnce()
+
+    expect(res.digest.posted).toBe(false)
+    expect(res.digest.skipped).toBe(true)
+    // The task turn still goes out...
+    expect(res.up.posted).toEqual(['349'])
+    // ...and nothing at all was sent to General (no message_thread_id).
+    expect(h.sent.filter((m) => m.messageThreadId == null)).toEqual([])
+    // The digest hash must stay unwritten, so re-enabling posts a fresh digest
+    // rather than silently suppressing the first one as "unchanged".
+    expect(state.lastDigestHash).toBeFalsy()
+  })
+
+  it('still posts the digest when digestEnabled is true or absent', async () => {
+    for (const cfgExtra of [{}, { digestEnabled: true }]) {
+      const h = makeHarness({ 349: journalWithAsk(349, 'Demo', 'say `merge 150`') })
+      const bridge = createBridge({
+        client: h.client,
+        config: { ...h.config, ...cfgExtra },
+        state: emptyState(),
+        io: h.io,
+      })
+      const res = await bridge.syncOnce()
+      expect(res.digest.posted).toBe(true)
+    }
+  })
 })
