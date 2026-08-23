@@ -44,6 +44,62 @@ describe('extractAsk', () => {
     expect(extractAsk('**Needs from you:** nothing to read the doc.')).toBeNull()
   })
 
+  // Regression: the dismissive short-circuit used to return null for the WHOLE
+  // turn the moment a `Needs from you:` opened with "none"/"nothing" — even
+  // when the very same sentence went on to state a real ask. Measured against
+  // the live journals, that silently dropped 12 open board tasks (7 on
+  // `## Today`) out of the approval queue before any ordering ran.
+  it('keeps the real ask that follows a dismissive "none"/"nothing" clause', () => {
+    expect(
+      extractAsk('**Needs from you:** none - but tell me if you want the outreach draft.'),
+    ).toBe('but tell me if you want the outreach draft.')
+    expect(
+      extractAsk('**Needs from you:** nothing to unblock it. Two optional calls when ready:'),
+    ).toBe('Two optional calls when ready:')
+    expect(
+      extractAsk('**Needs from you:** none for the first pass. A photo of each water source.'),
+    ).toBe('A photo of each water source.')
+  })
+
+  it('does not mistake the tail of a dismissive clause for an ask', () => {
+    expect(extractAsk('**Needs from you:** none.')).toBeNull()
+    expect(extractAsk('**Needs from you:** nothing required')).toBeNull()
+    expect(extractAsk('**Needs from you:** none needed for now.')).toBeNull()
+  })
+
+  // SKILL.md's own block template pairs `**Needs from you:** none` with a
+  // `**Your call:**` hand-back, so every freshly proposed plan that needs no
+  // extra information carried its ask ONLY on that line - and was invisible.
+  it('falls back to the "Your call" hand-back when nothing else asks', () => {
+    const turn = [
+      '**Needs from you:** none.',
+      '',
+      '**Your call:** just reply below in plain English - "approve", "revise: ...", or "skip".',
+    ].join('\n')
+    expect(extractAsk(turn)).toBe(
+      'just reply below in plain English - "approve", "revise: ...", or "skip".',
+    )
+    expect(extractAskEntry(turn).source).toBe('call')
+  })
+
+  it('prefers an informative "Next" over the generic "Your call" boilerplate', () => {
+    const turn = [
+      '**Needs from you:** none.',
+      '- Next: your word on either (a) `go POC` or (b) `add the child`.',
+      '**Your call:** just reply below in plain English.',
+    ].join('\n')
+    const entry = extractAskEntry(turn)
+    expect(entry.source).toBe('next')
+    expect(entry.text).toBe('your word on either (a) `go POC` or (b) `add the child`.')
+  })
+
+  it('marks boilerplate-salvaged asks as weak so callers can gate them', () => {
+    expect(extractAskEntry('**Needs from you:** none - but confirm the venue.').weak).toBe(true)
+    expect(extractAskEntry('**Your call:** reply "approve" or "skip".').weak).toBe(true)
+    // A strong, unqualified ask is never weak.
+    expect(extractAskEntry('**Needs from you:** the front filter photo.').weak).toBeUndefined()
+  })
+
   it('treats a completed "Next" as not waiting on the user', () => {
     expect(extractAsk('- Next: complete')).toBeNull()
     expect(extractAsk('- Next: done')).toBeNull()

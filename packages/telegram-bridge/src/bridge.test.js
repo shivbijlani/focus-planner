@@ -723,8 +723,27 @@ Unrelated new task: buy a mattress.
 Created that as #438 and cross-linked it. Nothing outstanding on my side here.
 `
 
-describe('syncDigest agent-block fallback', () => {
-  it('surfaces an ask from the agent block when the newest turn has none', async () => {
+// A freshly proposed plan written with SKILL.md's own block template: it needs
+// no extra information, so `Needs from you:` is "none" and the actual ask - the
+// approve/revise/skip decision - lives only on the `Your call:` line.
+const TEMPLATE_PROPOSAL = `# Task 42: Demo
+
+---
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+## \u{1F319} Overnight Agent
+
+**Status:** Proposed \u00B7 plan v1 \u00B7 2026-08-01
+
+### Proposed plan (v1)
+1. Do the thing.
+
+**Needs from you:** none.
+
+**Your call:** just reply below in plain English - "approve", "revise: ...", or "skip".
+`
+
+describe('syncDigest agent-block fallback', () => {  it('surfaces an ask from the agent block when the newest turn has none', async () => {
     const h = makeHarness({ 42: DEMOTED_JOURNAL })
     const state = emptyState()
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
@@ -752,8 +771,36 @@ describe('syncDigest agent-block fallback', () => {
     expect(h.sent[0].text).not.toContain('merge 120')
   })
 
-  it('still prefers the newest turn when that turn HAS an ask', async () => {
-    // The fallback must never override a fresher ask - otherwise it would
+  // SKILL.md's block template closes a proposed plan with `**Needs from you:**
+  // none` + `**Your call:** ...`. Measured live, that combination made every
+  // such plan invisible in the approval queue - the ask the user is meant to
+  // answer was the ONLY thing the digest could not see.
+  it('surfaces a proposed plan whose only ask is the "Your call" hand-back', async () => {
+    const h = makeHarness({ 42: TEMPLATE_PROPOSAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncDigest()
+    expect(res.count).toBe(1)
+    expect(h.sent[0].text).toContain('#42')
+  })
+
+  it('does NOT let boilerplate revive a finished task', async () => {
+    // Identical turn, terminal block. The `Your call:` line survives verbatim
+    // into closed turns, so on its own it must never reopen the queue entry.
+    const done = TEMPLATE_PROPOSAL.replace(
+      '**Status:** Proposed \u00B7 plan v1 \u00B7 2026-08-01',
+      '**Status:** Done \u00B7 plan v1 \u00B7 2026-08-01',
+    )
+    const h = makeHarness({ 42: done })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncDigest()
+    expect(res.count).toBe(0)
+  })
+
+  it('still prefers the newest turn when that turn HAS an ask', async () => {    // The fallback must never override a fresher ask - otherwise it would
     // resurrect exactly the stale asks digest.js warns about.
     const fresher = DEMOTED_JOURNAL.replace(
       'Created that as #438 and cross-linked it. Nothing outstanding on my side here.',

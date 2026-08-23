@@ -34,9 +34,25 @@ const NEXT_RE = /^\s*[-*]?\s*\*{0,2}Next\*{0,2}\s*:\s*(.*)$/i
 // as having NO ask at all — see the note above `extractAskEntry`.
 const REPLY_RE =
   /^\s*[-*]?\s*\*{0,2}(?:Reply|Say|Answer)\b[^\r\n]{0,80}?[`"\u201c\u2018']/i
+// Matches SKILL.md's own hand-back line, `**Your call:** ...`. The block
+// template pairs it with `**Needs from you:** none`, so a proposed plan that
+// needs no extra information carries its ask ONLY on this line.
+const YOUR_CALL_RE = /^\s*[-*]?\s*\*{0,2}Your call\b[^:]*:\*{0,2}\s*(.*)$/i
 // `Next:` values that describe the AGENT's own future work rather than
 // something the user owes. These must never be presented as user asks.
 const AGENT_SIDE_RE = /^(complete|done|nothing|none|keep|continue|monitor|poll)\b/i
+// A `Needs from you:` value that OPENS with "none"/"nothing" is dismissive —
+// but only for the clause it opens. The journals very often continue with a
+// real ask after that clause break ("none — but tell me if…", "nothing to
+// unblock it. Two optional calls when you're ready:"), so we discard the
+// dismissive clause and keep only what follows it.
+const DISMISSIVE_RE = /^(?:none|nothing)\b[^.;:\u2014]*(?:[.;:\u2014]+\s*([\s\S]*))?$/i
+// Journals write that clause break as an em dash, an en dash or a spaced
+// ASCII hyphen. Normalise the first one so DISMISSIVE_RE only needs to know
+// about the em dash. Unspaced hyphens (`re-check`, `merge/ship`) are untouched.
+function normaliseClauseBreak(text) {
+  return text.replace(/\s+[-\u2013]\s+/, ' \u2014 ')
+}
 
 /** Collapse whitespace and strip trailing markdown noise from an ask line. */
 function tidy(text) {
@@ -57,6 +73,10 @@ function tidy(text) {
  *             runs"), not something the user owes. Callers should rank these
  *             below 'needs' and drop them first when space is tight, so the
  *             digest never presents agent-side continuation as a user ask.
+ *   'call'  — SKILL.md's generic `**Your call:**` hand-back, used as a last
+ *             resort. The block template emits it alongside
+ *             `**Needs from you:** none`, so for a freshly proposed plan it is
+ *             the only marker carrying the ask ("approve / revise / skip").
  *
  * When the marker line is empty (the ask continues on the following lines,
  * which the journals do often), continuation lines are folded in until a blank
@@ -76,6 +96,7 @@ export function extractAskEntry(turn) {
       // Stop at the start of a new structural block or a new marker line.
       if (/^\s{0,3}(#{1,6}\s|\*{2}[A-Z])/.test(raw)) break
       if (NEEDS_RE.test(raw) || NEXT_RE.test(raw) || REPLY_RE.test(raw)) break
+      if (YOUR_CALL_RE.test(raw)) break
       parts.push(raw.trim())
       // Keep asks short — one or two wrapped lines is plenty for a digest.
       if (parts.join(' ').length > 400) break
@@ -86,16 +107,30 @@ export function extractAskEntry(turn) {
 
   let nextAsk = null
   let replyAsk = null
+  let callAsk = null
+  let residualAsk = null
   for (let i = 0; i < lines.length; i++) {
     const needs = NEEDS_RE.exec(lines[i])
     if (needs) {
       const ask = gather(i, needs[1].trim())
-      // "none" / "nothing" means explicitly not waiting on the user.
-      if (ask && /^(none|nothing)\b/i.test(ask)) return null
-      if (ask) return { text: ask, source: 'needs' }
+      const dismissive = ask ? DISMISSIVE_RE.exec(normaliseClauseBreak(ask)) : null
+      if (dismissive) {
+        // "none"/"nothing" only dismisses the clause it opens. Anything after
+        // that clause break is a genuine ask the user still owes, so keep it
+        // and let the remaining markers compete if there is nothing left.
+        if (residualAsk == null) {
+          const rest = tidy(dismissive[1] || '')
+          if (rest && !AGENT_SIDE_RE.test(rest)) residualAsk = rest
+        }      } else if (ask) {
+        return { text: ask, source: 'needs' }
+      }
     }
     if (replyAsk == null && REPLY_RE.test(lines[i])) {
       replyAsk = gather(i, lines[i].trim())
+    }
+    if (callAsk == null) {
+      const call = YOUR_CALL_RE.exec(lines[i])
+      if (call) callAsk = gather(i, call[1].trim())
     }
     if (nextAsk == null) {
       const next = NEXT_RE.exec(lines[i])
@@ -103,11 +138,21 @@ export function extractAskEntry(turn) {
     }
   }
 
+  // A qualified "none, but …" is still the agent's formal ask, so it outranks
+  // the weaker markers. It is flagged `weak` because the turn only got here by
+  // salvaging a line that opened by dismissing the user — not strong enough on
+  // its own to revive a task the agent has already closed.
+  if (residualAsk) return { text: residualAsk, source: 'needs', weak: true }
   // An imperative hand-back is a real ask, so prefer it over a weak `Next:`.
   if (replyAsk) return { text: replyAsk, source: 'reply' }
-  if (!nextAsk) return null
-  if (AGENT_SIDE_RE.test(nextAsk)) return null
-  return { text: nextAsk, source: 'next' }
+  if (nextAsk && !AGENT_SIDE_RE.test(nextAsk)) return { text: nextAsk, source: 'next' }
+  // Last resort: SKILL.md's generic `**Your call:**` hand-back. Its wording is
+  // boilerplate, but it is the ONLY ask a freshly proposed plan carries when it
+  // needs nothing extra — without this such plans never reach the queue at all.
+  // Also `weak`: the template line survives verbatim into finished turns, so on
+  // its own it must never drag a closed task back into the queue.
+  if (callAsk) return { text: callAsk, source: 'call', weak: true }
+  return null
 }
 
 /** Convenience wrapper: just the ask text, or null. */

@@ -408,9 +408,16 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       const turn = latestAgentTurn(content)
       if (!turn) continue
       let ask = extractAskEntry(turn)
+      const block = agentBlockText(content)
+      const status = agentBlockStatus(block)
+      // A `weak` ask was salvaged from boilerplate — SKILL.md's generic
+      // `**Your call:**` line, or the remainder of a `Needs from you: none …`
+      // that opened by dismissing the user. Both survive verbatim into turns
+      // the agent has already closed, so on their own they must never drag a
+      // finished task back into the approval queue. Strong markers keep their
+      // existing behaviour and are still honoured on any status.
+      if (ask && ask.weak && DIGEST_TERMINAL_STATUS.has(status)) ask = null
       if (!ask) {
-        const block = agentBlockText(content)
-        const status = agentBlockStatus(block)
         if (!block || DIGEST_TERMINAL_STATUS.has(status)) continue
         ask = extractAskEntry(block)
         if (!ask) continue
