@@ -106,9 +106,10 @@ already processed in this journal") lives in the **skill's own working dir**, wh
 **How "the user replied" is detected (the reopen fix):** the tool remembers a hash of each journal as
 you last left it. On the next `scan`:
 - **`reopened: true`** means the user added content after your last turn (a new `## <date>` entry or
-  raw text at the bottom) and you haven't answered it — **even if the task was `done`/`skip`.** Treat it
-  as fresh input: read the newest message and act (approve→execute, new ask→re-plan). This is the rule
-  that stops tasks like a closed-then-reopened one from being silently skipped.
+  raw text at the bottom) and you haven't answered it. **On an *active* task** (any status other than
+  `done`/`skip`) treat it as fresh input: read the newest message and act (approve→execute, new
+  ask→re-plan). **On a `done`/`skip` task, do NOT act and do NOT write a turn** — re-`mark` it with its
+  existing status and surface the message in the wrap-up instead (see "Reopened after close").
 - **`reopened: false` + `changed: false`** means you spoke last and nothing changed — leave it alone.
 - **`has_agent_block: false`** means there's no plan yet — a PHASE 2 propose candidate (subject to the
   board, below).
@@ -214,11 +215,22 @@ never have to know that.
 each journal to the hash you last left behind and reports **`reopened: true`** for any task where the
 user has spoken after your last turn:
 
-- Treat a `reopened` task as **fresh input**, regardless of its stored status: read the newest message
-  and act — an approval → execute; a new ask → re-plan as a new version (per "Revise → replace").
-- This holds **even when status is `done` or `skip`** — a reply after you closed a task means it's open
-  again. (This is exactly what was being silently dropped before: the user appended a new instruction
-  under a `done` block and the old marker-only logic never saw it.)
+- Treat a `reopened` **active** task as **fresh input**: read the newest message and act — an approval →
+  execute; a new ask → re-plan as a new version (per "Revise → replace"). "Active" means any status other
+  than `done`/`skip` (`proposed`, `approved`, `revise`, `in-progress`, `blocked`).
+- ⛔ **A reply on a *closed* task (`done`/`skip`) does NOT reopen it — do not act on it and do not write a
+  turn to it.** Instead, re-`mark` the task with its existing status (to re-snapshot and stop it
+  re-surfacing) and list it in the wrap-up under **Replies on closed tasks**, quoting the message so the
+  user can decide. If they want it reopened they will say so explicitly, or move the row back onto the
+  board — either of which makes it active again and brings it back under the rule above.
+
+  *Why this is the rule (user's instruction, 2026-08-23): "I don't think we need to handle the case where
+  a reply on a closed task is considered [a reopen]."* Closed-task reopening was the **third** mechanism
+  behind the report that *"something seems to be executing in tasks that are already closed"* — the other
+  two being the bridge's re-post path (fixed) and the stale-hash loop from mark/fold ordering (fixed).
+  Those two removed the **false** reopens; this removes the **genuine** ones, which is the only class
+  left that can still resurrect finished work. A missed nudge on a closed task is cheap and recoverable
+  (it is in the wrap-up); silently reanimating a task the user finished is not.
 - ⚠️ **But first check it's a *real* reopen, not a stale hash.** `reopened` only means "the file changed
   after my snapshot" — it does **not** prove the message is unanswered. If the newest `<!-- from: me -->`
   entry was folded in by the bridge *after* you marked (see PHASE 0.5), you have already answered it, and
@@ -243,7 +255,8 @@ Do the phases **in this order** every time.
 
 > **Scan first (applies to PHASE 1 *and* PHASE 2):** before judging any task, run
 > `oa-state.ps1 scan` once and use its JSON as your worklist. Each row tells you what changed and
-> what's `reopened` (the user spoke after your last turn — active again, even if `done`/`skip`). Don't
+> what's `reopened` (the user spoke after your last turn). A reopened **active** task needs work; a
+> reopened `done`/`skip` task stays closed and is only reported (see "Reopened after close"). Don't
 > reconstruct state by eyeballing 90+ journals; let the tool point you at the handful that need work.
 > ⚠️ **Run PHASE 0.5's `sync-down` before this scan**, so the user's phone replies are already in the
 > journals when you scan — otherwise `reopened` reports yesterday's answered messages as new.
@@ -314,10 +327,12 @@ journals as `<!-- from: me -->` entries. It used to run *only* inside PHASE 3's 
 **last** thing a run does — i.e. **after** PHASE 1/2 already called `oa-state.ps1 mark`. `mark`
 snapshots a hash of the journal, so the fold always landed *after* the snapshot and left every answered
 task with a **stale hash**. The next run then read `reopened: true` for a message it had already
-answered — and per the reopen rule ("treat it as fresh input, even if `done`/`skip`") it would answer
-it **again**, writing a new turn to a finished task, which the bridge then posted. That is a
-self-sustaining loop, and it is one of the two mechanisms behind the user's report that *"something
-seems to be executing in tasks that are already closed"* (the other is the bridge's own re-post path).
+answered — and per the **then-current** reopen rule ("treat it as fresh input, even if `done`/`skip`") it
+would answer it **again**, writing a new turn to a finished task, which the bridge then posted. That is a
+self-sustaining loop, and it is one of the mechanisms behind the user's report that *"something
+seems to be executing in tasks that are already closed"* (the others being the bridge's own re-post path,
+and genuine replies on closed tasks — now handled by "Reopened after close", which keeps a closed task
+closed).
 
 Folding first makes the state machine honest: the reply is in the journal **before** you read it,
 so your answer and your `mark` both cover it, and the task correctly goes quiet until the user
@@ -431,9 +446,11 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
    capacity allows, preferring higher 🎯 urgency and set `Work Priority` (P0 > P1 > P2). Honor the
    `## Priorities` list at the bottom of planner.md.
 2. Use the `scan` worklist to triage:
-   - **`reopened: true`** → the user replied after your last turn; pick it up as new input (approval →
-     PHASE 1; new ask → re-plan as a new version per "Revise → replace"). **Never skip a reopened task,
-     even if its status is `done`/`skip`/`proposed`.**
+   - **`reopened: true`** → the user replied after your last turn. **If the task is active** (status other
+     than `done`/`skip`), pick it up as new input (approval → PHASE 1; new ask → re-plan as a new version
+     per "Revise → replace") — **never skip an active reopened task, including a `proposed` one.**
+     **If the task is `done`/`skip`, leave it closed:** don't act, don't write a turn — re-`mark` it with
+     its existing status and report the message in the wrap-up.
    - **`has_agent_block: false`** → no plan yet; propose if it's a board candidate.
    - **stored status `proposed`, `done`, or `skip` with `reopened: false`** → leave it alone (waiting on
      the user or settled); don't spam a new plan.
@@ -545,6 +562,9 @@ Report back to the user a short summary:
 - **Waiting on you:** which tasks now have a plan to approve (and any that are `blocked` with a
   specific question).
 - **Skipped:** anything intentionally left.
+- **Replies on closed tasks:** any `done`/`skip` task the user replied to. Quote the message and name the
+  task, but do **not** act on it — the user reopens a closed task explicitly (see "Reopened after close").
+  Omit this line when there were none.
 - **Mirrored to Telegram:** if Telegram is enabled, how many topics were created/updated (or a one-line
   note if the mirror was skipped or failed). Omit this line entirely when Telegram is `off`.
 
