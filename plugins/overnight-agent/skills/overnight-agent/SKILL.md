@@ -219,6 +219,13 @@ user has spoken after your last turn:
 - This holds **even when status is `done` or `skip`** — a reply after you closed a task means it's open
   again. (This is exactly what was being silently dropped before: the user appended a new instruction
   under a `done` block and the old marker-only logic never saw it.)
+- ⚠️ **But first check it's a *real* reopen, not a stale hash.** `reopened` only means "the file changed
+  after my snapshot" — it does **not** prove the message is unanswered. If the newest `<!-- from: me -->`
+  entry was folded in by the bridge *after* you marked (see PHASE 0.5), you have already answered it, and
+  answering again is how a finished task starts producing new turns. **Discriminator:** compare the
+  message's time in `inbound-archive.jsonl` with that task's `updated` time in its state JSON —
+  **message older than the mark = already answered**. In that case just re-`mark` the task (same status)
+  to re-snapshot, and say nothing. Message newer than the mark = a genuine reopen; act on it.
 - After you respond, call `oa-state.ps1 mark -Id <ID> …` so the task goes quiet again until the user
   next touches it.
 
@@ -228,13 +235,18 @@ user has spoken after your last turn:
 
 Do the phases **in this order** every time.
 
-> **Telegram mirror runs last.** PHASE 3 mirrors the journals to Telegram *after* PHASE 1/2 have written
-> your turns, so a task's thread reflects the work you just did. It's gated on `user-settings.md → Telegram`.
+> **Telegram mirror runs last — but the *fold* runs first.** PHASE 3 posts your turns to Telegram *after*
+> PHASE 1/2 have written them, so a task's thread reflects the work you just did. The bridge's inbound
+> half (`sync-down`, which folds the user's replies into journals) is the opposite: it must run in
+> **PHASE 0.5, before the scan**, or every task you answer reads as `reopened` on the next run. Both
+> halves are gated on `user-settings.md → Telegram`.
 
 > **Scan first (applies to PHASE 1 *and* PHASE 2):** before judging any task, run
 > `oa-state.ps1 scan` once and use its JSON as your worklist. Each row tells you what changed and
 > what's `reopened` (the user spoke after your last turn — active again, even if `done`/`skip`). Don't
 > reconstruct state by eyeballing 90+ journals; let the tool point you at the handful that need work.
+> ⚠️ **Run PHASE 0.5's `sync-down` before this scan**, so the user's phone replies are already in the
+> journals when you scan — otherwise `reopened` reports yesterday's answered messages as new.
 
 ### PHASE 0 — Check the agent inbox (do this before everything)
 
@@ -284,6 +296,46 @@ Write clean, lightweight, mobile-friendly HTML: real `<p>` paragraphs, `<ul>`/`<
 `<strong>`/`<em>` for emphasis, and `<a href="…">` anchors for links (never paste bare URLs as visible
 text). Convert any Markdown you would have written into the equivalent HTML. Avoid heavy inline CSS,
 remote/tracking images, and `<script>`. Keep it short.
+
+### PHASE 0.5 — Fold in the user's Telegram replies (BEFORE you scan)
+
+If Telegram is enabled, run the bridge's **`sync-down`** pass now — *before* `oa-state.ps1 scan`, and
+before you judge any task:
+
+```powershell
+$env:TELEGRAM_BOT_TOKEN = & "$env:LOCALAPPDATA\overnight-agent\secrets\telegram-secret.ps1" get
+$env:TELEGRAM_CHAT_ID   = '<Telegram chat id from user-settings.md>'
+$env:PLANNER_PATH       = '<planner folder>'
+node "<bridge>" sync-down
+```
+
+**Why this ordering is load-bearing.** `sync-down` is what folds the user's phone replies into the
+journals as `<!-- from: me -->` entries. It used to run *only* inside PHASE 3's `once`, which is the
+**last** thing a run does — i.e. **after** PHASE 1/2 already called `oa-state.ps1 mark`. `mark`
+snapshots a hash of the journal, so the fold always landed *after* the snapshot and left every answered
+task with a **stale hash**. The next run then read `reopened: true` for a message it had already
+answered — and per the reopen rule ("treat it as fresh input, even if `done`/`skip`") it would answer
+it **again**, writing a new turn to a finished task, which the bridge then posted. That is a
+self-sustaining loop, and it is one of the two mechanisms behind the user's report that *"something
+seems to be executing in tasks that are already closed"* (the other is the bridge's own re-post path).
+
+Folding first makes the state machine honest: the reply is in the journal **before** you read it,
+so your answer and your `mark` both cover it, and the task correctly goes quiet until the user
+actually speaks again.
+
+**Rules:**
+
+- **Gate it on the Telegram setting**, exactly like PHASE 3. If Telegram is `off`, skip this phase.
+- **Run the inbound capture guard first** (`capture-inbound.ps1`, see `user-settings.md`) so replies are
+  archived before `sync-down` consumes them.
+- **It is safe and idempotent.** `sync-down` only reads pending updates and appends folded replies; it
+  posts nothing. `folded 0` just means the user hasn't replied since the last run.
+- **PHASE 3 still runs `once`.** Its `down` pass becomes a no-op safety net that catches anything the
+  user sent *during* the run — but because that fold again lands after `mark`, treat a `folded > 0`
+  there as work for the **next** run, not this one.
+- **Never "fix" a stale-hash reopen by re-answering it.** If a task reads `reopened` but the newest
+  `<!-- from: me -->` message pre-dates that task's last `mark` (compare against the message time in
+  `inbound-archive.jsonl`), it was already answered: re-`mark` it to re-snapshot and move on.
 
 ### Gather linked-task context FIRST (before you plan or execute any task)
 
@@ -477,6 +529,10 @@ Rules:
   before the call.
 - **Never print the token** in your summary. If the vault lookup or the CLI fails (e.g. no token, network),
   note it briefly in the wrap-up and carry on — a failed mirror must never abort the run.
+- ⚠️ **`once` also folds inbound replies — and that fold lands *after* your `mark`s.** That is why the
+  real fold happens in **PHASE 0.5**. If `once` here reports `folded N` with `N > 0`, the user replied
+  *during* this run: those tasks are now stale-hashed and will show as `reopened` next run, which is
+  correct — pick them up **next** run rather than reopening finished work now.
 
 ### Wrap up
 
