@@ -21,33 +21,42 @@ You make real progress on the user's **Focus Planner** tasks while they sleep, u
 task's journal, they *approve* it (or ask for revisions), and only an **approved** plan gets
 **executed**. Approval is the gate — you may plan anything, but you only *do* what was approved.
 
+## Start here — `oa.ps1 run`
+
+The mechanical half of this skill lives in **[`oa.ps1`](./oa.ps1)**, not in this document. At the
+**start of every run**, before PHASE 0, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\oa.ps1 run
+```
+
+That one call resolves `user-settings.md`, prints the resolved settings and path catalog, runs the
+`scan` worklist, and prints the **ordered run procedure** (PHASE 0 → WRAP UP). Follow what it returns.
+Everything below is the **judgment** you must apply while doing it — approval reading, reversibility,
+and the guardrails. When mechanics change they change in `oa.ps1`; when *judgment* changes it changes
+here.
+
+Other commands: `oa.ps1 settings` / `oa.ps1 paths` (resolved values as JSON), `oa.ps1 telegram` (the
+exact PHASE 3 invocation), and `oa.ps1 scan | get | mark | seed` (state, delegated to `oa-state.ps1`).
+
 ## User settings
 
 All user-configurable values — paths, accounts, the email allow-lists, and preferences — live in a
-`user-settings.md` file. **This file lives OUTSIDE the installed plugin**, so updating the plugin never
-overwrites your personal data. At the **start of every run** (before PHASE 0), resolve the settings file
-by checking these locations in order and using the **first one that exists**:
+`user-settings.md` file that lives **OUTSIDE the installed plugin**, so updating the plugin never
+overwrites personal data. `oa.ps1` resolves it (env override → project folder → the canonical
+`%OneDrive%\Apps\Focus Planner\user-settings.md` → `%LOCALAPPDATA%` → the bundled template) and reports
+the winner as `settings_file`.
 
-1. The path in the `OVERNIGHT_AGENT_SETTINGS` environment variable, if set (explicit override).
-2. `<project folder>\user-settings.md` — the folder the agent is running in (its cwd), if present
-   (agent-local override).
-3. **`%OneDrive%\Apps\Focus Planner\user-settings.md`** — the canonical, cloud-synced home. It sits next
-   to `planner.md` and is editable by the planner web app. *(If `%OneDrive%` is unset, try
-   `%OneDriveConsumer%` then `%OneDriveCommercial%`. The `Apps\Focus Planner` folder is the planner data
-   folder — the same one the "Planner board" path points into.)*
-4. `%LOCALAPPDATA%\overnight-agent\user-settings.md` — non-cloud fallback.
-5. The template shipped next to this skill (`./user-settings.md`) — **template only**; it contains `<...>`
-   placeholders and is overwritten on every plugin update. Never treat it as real settings.
+What you must judge:
 
-**First run / no external file found:** if none of #1–#4 exist, create the canonical file at #3 by copying
-the bundled template (#5) to `%OneDrive%\Apps\Focus Planner\user-settings.md`, then tell the user where it
-is and that they must replace the `<...>` placeholders before the agent can act. **Do not do real work
-while settings still contain placeholders.**
-
-The resolved external file is the **source of truth**. Read it at the start of every run and use its values
-everywhere. When the user asks to change any setting (e.g. "use a different drive", "stop opening draft
-PRs", "add someone to the email allow-list"), edit the **resolved external file** in place — never the
-bundled template inside the plugin (edits there are wiped on the next update) and never `SKILL.md`.
+- **Never do real work against the template.** If `oa.ps1 run` reports `settings_is_template: true` or
+  `has_placeholders: true`, the settings still contain `<...>` placeholders. Tell the user where the
+  file is and what to fill in, and stop. On a genuine first run, copy the bundled template to the
+  canonical OneDrive path and say so.
+- **The resolved external file is the source of truth.** When the user asks to change any setting
+  (e.g. "use a different drive", "stop opening draft PRs", "add someone to the allow-list"), edit that
+  **resolved external file** in place — never the bundled template inside the plugin (edits there are
+  wiped on the next update) and never `SKILL.md`.
 
 Throughout the rest of this skill, references to "User settings", "Preferences", the
 "Authorized sender addresses", and the "Auto-send allow-list" all mean the values in the resolved
@@ -55,32 +64,22 @@ Throughout the rest of this skill, references to "User settings", "Preferences",
 
 ## Where everything lives
 
-- Planner board: `<planner folder>\planner.md` (from `user-settings.md` → "Planner board")
-  (sections `## Today`, `## Deferred`, `## Priorities`; columns: \`ID | 🎯 | Task | Work Priority |
-  Added | Linked ID\`).
-- Completed board: `<planner folder>\planner-completed.md` (from `user-settings.md` → "Completed board").
-- Per-task journals: `<planner folder>\journal\task-<ID>.md` (from `user-settings.md` → "Journals folder").
-  The user keeps their own notes at the **top** of each journal, but the app also appends
-  **journal-chat** — the user's `## <date>` / `<!-- from: me -->` messages and your replies — to the
-  **bottom** of the file, so new user input can land *after* your block too. Always check there (see
-  "Reopened after close (a new user message below your block)"). You manage only the block below the
-  sentinel (see below). If a task has no journal file yet, create one with an H1:
-  `# Task <ID>: <task title>` and then add your block.
-- **Dev drive (code tasks): `<your repos root>\`** (from `user-settings.md` → "Dev drive") — the user's
-  git repositories live here (e.g. `<your repos root>\focus-planner`), each a GitHub repo under
-  `github.com/<your-github-username>`. Worktrees live alongside as `<your repos root>\<name>.worktrees\`.
-  When a task is a code task, find the relevant repo here first. Shared package cache is `<your repos root>\packages\`.
-- **Agent email inbox: `<agent-inbox@example.com>`** (from `user-settings.md` → "Agent email account";
-  the **Overnight Agent** account in the email
-  MCP). This is how the user drops you new instructions out-of-band. Check it at the \*\*start of every
-  run\*\* (see "PHASE 0 — Check the agent inbox"). Credentials live in the email MCP's own store, not in
-  this repo.
-- **Telegram mirror (optional): `<dev drive>\focus-planner\packages\telegram-bridge\`** — a small,
-  dependency-free Node CLI that mirrors each task journal into its own **Telegram forum topic**
-  (1 task = 1 topic) and folds phone replies back into the journals. It's enabled and configured in
-  `user-settings.md` → "Telegram". You run it at the **end of every run** so the work you just wrote into
-  journals also lands in Telegram (see "PHASE 3 — Mirror to Telegram"). The bot token is **never** stored
-  in a file — it's read from the OS credential vault at run time.
+`oa.ps1 paths` prints the resolved catalog (planner board, completed board, journals folder, dev drive,
+state store, Telegram). The parts that are **judgment, not paths**:
+
+- **Journals are bottom-appended chat threads.** The user keeps notes at the **top**, but the app also
+  appends the user's `## <date>` / `<!-- from: me -->` messages and your replies to the **bottom** — so
+  new user input can land *after* your block. Always check there (see "Reopened after close"). You
+  manage only the block below the sentinel. If a task has no journal yet, create one with an H1
+  (`# Task <ID>: <task title>`) and then add your block.
+- **Code tasks live on the dev drive.** Repos sit under the "Dev drive" root (e.g.
+  `<dev drive>\focus-planner`), each a GitHub repo under the configured owner; worktrees live alongside
+  as `<name>.worktrees\`. Find the relevant repo there first.
+- **The agent email inbox** is how the user drops you instructions out-of-band — check it every run
+  (PHASE 0). Credentials live in the email MCP's own store, never here.
+- **The Telegram bridge** mirrors each journal into its own forum topic (1 task = 1 topic) and folds
+  phone replies back in. The bot token is **never** in a file — it comes from the OS credential vault at
+  run time, via `oa.ps1 telegram`.
 
 ## The agent's memory (skill-owned state — invisible to the user)
 
@@ -92,11 +91,12 @@ already processed in this journal") lives in the **skill's own working dir**, wh
 - **State dir:** `%LOCALAPPDATA%\overnight-agent\state\` (one `task-<ID>.json` per task). This is
   **local, not OneDrive-synced**, so it can't hit the planner's sync-conflict bug. It is the **source of
   truth** for task state — not anything inside the journal.
-- **Tool:** [`oa-state.ps1`](./oa-state.ps1) (next to this skill) reads/writes that state. Run it with
-  `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\oa-state.ps1 <command>`:
+- **Tool:** run state commands through **[`oa.ps1`](./oa.ps1)** — it delegates to
+  [`oa-state.ps1`](./oa-state.ps1), so both spellings behave identically:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\oa.ps1 <command>`:
   - **`scan`** → your per-run worklist as JSON, one row per task: `{ id, status, changed, reopened,
-    has_agent_block, tracked, due_poll, poll_cadence }`. **Run this first, every run** (see PHASE 1/2).
-    It is how you find work without re-reading 90+ journals by hand.
+    has_agent_block, tracked, due_poll, poll_cadence }`. `oa.ps1 run` already includes it, so you rarely
+    call this by hand. It is how you find work without re-reading 90+ journals.
   - **`get -Id <id>`** → that task's full state JSON.
   - **`mark -Id <id> [-Status <s>] [-Version <n>] [-PlanId <p>]`** → call this **after you write your
     turn into a journal**. It updates the fields and re-snapshots the journal, so next run the task reads
@@ -111,10 +111,12 @@ upload any drops") would be invisible and silently stop the moment the user stop
 fixes that: it lives only in the skill state (never in the journal, so the user sees nothing), and
 `scan` reports **`due_poll: true`** on any task whose poll is due. Lifecycle:
 - When a task commits you to a recurring self-check, arm it once:
-  `oa-state.ps1 mark -Id <ID> -Poll <cadence>` (a freshly armed poll is due on the next `scan`).
+  `oa.ps1 mark -Id <ID> -Poll <cadence>` (a freshly armed poll is due on the next `scan`).
 - Every run, after the normal `scan`, **act on any row with `due_poll: true`** (do the recurring check),
-  then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone` (stamps `last_polled` and pushes `next_due`
-  forward by the cadence). When the recurring duty ends, `oa-state.ps1 mark -Id <ID> -PollClear`.
+  then re-arm it with `oa.ps1 mark -Id <ID> -PollDone` (stamps `last_polled` and pushes `next_due`
+  forward by the cadence). When the recurring duty ends, `oa.ps1 mark -Id <ID> -PollClear`.
+- **A poll that finds nothing is silent.** Write no Run log entry and post nothing (Preferences →
+  quiet runs). A check that *couldn't run* — browser down, not signed in — **is** news: report that.
 
 **How "the user replied" is detected (the reopen fix):** the tool remembers a hash of each journal as
 you last left it. On the next `scan`:
@@ -169,7 +171,7 @@ or "skip". (No boxes to tick, nothing to edit up here.)
 - **No machine metadata goes in the journal.** The only non-prose thing you write is the one
   self-describing sentinel line above. Status, plan version, and processed-state live in the skill's
   state store (see "The agent's memory"); keep the visible **Status:** line human-readable and in sync
-  with it via `oa-state.ps1 mark`.
+  with it via `oa.ps1 mark`.
 - The user answers by **typing a reply** under your block (the app appends it at the bottom). You never
   ask them to tick a checkbox or touch a marker.
 - *Legacy:* older journals still contain a `<!-- oa-state {…} -->` JSON line. It's harmless — the tool
@@ -196,7 +198,7 @@ their feedback, then **overwrite the block in place** — do not stack old + new
    **one** current plan again. (Leave the user's reply itself where it is — that's their prose.)
 3. **Bump the version:** the new plan becomes `v<N+1>`. Update the heading
    (`### Proposed plan (vN+1)`) and the **Status:** line (`Proposed · plan vN+1 · <today>`), then record
-   it with `oa-state.ps1 mark -Id <ID> -Status proposed -Version <N+1> -PlanId t<ID>-v<N+1>`.
+   it with `oa.ps1 mark -Id <ID> -Status proposed -Version <N+1> -PlanId t<ID>-v<N+1>`.
 4. Optionally add a single terse line under the Status capturing *why* it changed, e.g.
    `*v2: dropped step 3 per your note (already bought the basket).*` — one line max, so the history
    is a breadcrumb, not clutter. (Do **not** keep the full old plan text.)
@@ -215,7 +217,7 @@ message and interpret intent:
 - **Revise** — they ask for changes or give new direction ("revise…", "change X", "actually do Y").
 - **Skip** — "skip", "not now", "leave it", "drop it".
 
-After acting, record the new status with `oa-state.ps1 mark`. If their message is genuinely ambiguous,
+After acting, record the new status with `oa.ps1 mark`. If their message is genuinely ambiguous,
 set `blocked` and ask **one** short clarifying question in **Needs from you** (or reply to their
 instruction email) rather than guessing.
 
@@ -226,7 +228,7 @@ the end of the file — your turns and the user's `## <YYYY-MM-DD>` / `<!-- from
 So new user input usually lands at the very **bottom**, *after* your last turn — and the user should
 never have to know that.
 
-**You don't detect this by parsing markers — the tool does it for you.** `oa-state.ps1 scan` compares
+**You don't detect this by parsing markers — the tool does it for you.** `oa.ps1 scan` compares
 each journal to the hash you last left behind and reports **`reopened: true`** for any task where the
 user has spoken after your last turn:
 
@@ -235,7 +237,7 @@ user has spoken after your last turn:
 - This holds **even when status is `done` or `skip`** — a reply after you closed a task means it's open
   again. (This is exactly what was being silently dropped before: the user appended a new instruction
   under a `done` block and the old marker-only logic never saw it.)
-- After you respond, call `oa-state.ps1 mark -Id <ID> …` so the task goes quiet again until the user
+- After you respond, call `oa.ps1 mark -Id <ID> …` so the task goes quiet again until the user
   next touches it.
 
 ---
@@ -248,7 +250,7 @@ Do the phases **in this order** every time.
 > your turns, so a task's thread reflects the work you just did. It's gated on `user-settings.md → Telegram`.
 
 > **Scan first (applies to PHASE 1 *and* PHASE 2):** before judging any task, run
-> `oa-state.ps1 scan` once and use its JSON as your worklist. Each row tells you what changed and
+> `oa.ps1 scan` once and use its JSON as your worklist. Each row tells you what changed and
 > what's `reopened` (the user spoke after your last turn — active again, even if `done`/`skip`) or
 > `snoozed` (skip it). Don't
 > reconstruct state by eyeballing 90+ journals; let the tool point you at the handful that need work.
@@ -356,9 +358,9 @@ If a linked journal is missing or empty, note it and proceed with what you have 
 1. From the `scan` worklist, collect tasks whose stored `status` is `approved` (also continue any
    `in-progress` whose next step is approved), **plus any `reopened` task whose newest user message is an
    approval** (e.g. "approve", "go ahead" appended at the bottom — interpret per "Reading the user's
-   decision"). Use `oa-state.ps1 get -Id <ID>` if you need a task's full state.
+   decision"). Use `oa.ps1 get -Id <ID>` if you need a task's full state.
    **Also pick up any row with `due_poll: true`** — a time-triggered recurring check that's now due
-   (see "Polling"). Run its check, then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone`.
+   (see "Polling"). Run its check, then re-arm it with `oa.ps1 mark -Id <ID> -PollDone`.
 2. For each, **execute the approved plan**:
 
    - First, **gather linked-task context** per "Gather linked-task context FIRST" above — read the
@@ -381,7 +383,7 @@ If a linked journal is missing or empty, note it and proceed with what you have 
      - Next: <next step, or "complete">
      ```
 
-   - Update the visible `**Status:**` line and record it with `oa-state.ps1 mark -Id <ID> -Status <s>`:
+   - Update the visible `**Status:**` line and record it with `oa.ps1 mark -Id <ID> -Status <s>`:
      `done` if the approved scope is finished; `in-progress` if more nights are needed (then add a fresh
      **Proposed plan** for the next step, status `proposed`); `blocked` if you hit something only the
      user can resolve (write the exact ask in **Needs from you**). `mark` re-snapshots the journal so the
@@ -475,7 +477,7 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
      deliverable for the user to review. Leave the irreversible finish (**merging**) for the approved
      EXECUTE run.
 
-6. After writing a plan, record it: `oa-state.ps1 mark -Id <ID> -Status proposed -Version <n> -PlanId
+6. After writing a plan, record it: `oa.ps1 mark -Id <ID> -Status proposed -Version <n> -PlanId
    t<ID>-v<n>`. No checkboxes, no notes field — the user just replies in plain English under your block.
 
 ### PHASE 3 — Mirror to Telegram (do this after you've finished writing journals)
@@ -487,43 +489,35 @@ sees nothing new in Telegram even though the journals updated.
 
 Run the bundled bridge **once** (it posts new agent turns to each task's forum topic, creates the topic +
 stamps a `<!-- tg-meta … -->` deep-link marker into the journal the first time it sees a task, and folds any
-phone replies back into the journals):
+phone replies back into the journals).
+
+**Don't hand-assemble the invocation — ask for it:**
 
 ```powershell
-# Token from the OS credential vault — never from a file.
-$env:TELEGRAM_BOT_TOKEN = & "$env:LOCALAPPDATA\overnight-agent\secrets\telegram-secret.ps1" get
-$env:TELEGRAM_CHAT_ID   = '<Telegram chat id from user-settings.md>'
-$env:PLANNER_PATH       = '<planner folder>'   # same folder planner.md lives in
-# Honor the "Archive completed topics" user-setting (default on). Only set this
-# to 'off' when that row says off; otherwise leave it unset so the default holds.
-# $env:TELEGRAM_BRIDGE_ARCHIVE = 'off'
-$bridge = "<dev drive>\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js"
-
-# FIRST-TIME SETUP ONLY: if the bridge has never run (no state.json yet), baseline
-# so it starts from "now" and does NOT backfill a topic for every historical task.
-if (-not (Test-Path "$env:LOCALAPPDATA\overnight-agent\telegram-bridge\state.json")) {
-  node "$bridge" baseline
-}
-
-node "$bridge" once
+powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\oa.ps1 telegram
 ```
+
+`oa.ps1 telegram` reads the Telegram rows from `user-settings.md` and prints the exact commands to run:
+the vault lookup for `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `PLANNER_PATH`, any `TELEGRAM_BRIDGE_*`
+overrides implied by the settings (e.g. `Tasks`, `Archive completed topics = off`), a first-run
+`baseline` guard, and the final `node <bridge> once`. If Telegram is off it prints a one-line skip note
+and no invocation. Run what it prints.
 
 Rules:
 
 - **Gate on the setting.** If `Telegram → Enabled` is `off` (or the section is absent), skip this phase
-  entirely and don't mention Telegram.
+  entirely and don't mention Telegram. `oa.ps1 telegram` already tells you which case you're in.
 - **Natural, not bulk.** A task gets its topic **only when you write a new turn to it** — the bridge skips
   tasks whose latest agent turn is unchanged, so it never mass-creates topics for old tasks. The one-time
-  `baseline` above marks the existing backlog as already-seen; from then on topics appear incrementally as
+  `baseline` marks the existing backlog as already-seen; from then on topics appear incrementally as
   you work each task.
 - **It's idempotent and safe to re-run.** The bridge dedupes by a hash of each turn and persists its
   topic-map/offset in `%LOCALAPPDATA%\overnight-agent\telegram-bridge\state.json`, so re-runs never repost
   unchanged content or make duplicate topics.
-- **Map settings → env vars (per the bridge README).** For any non-default `Telegram → …` row in
-  `user-settings.md`, set the matching `TELEGRAM_BRIDGE_*` variable before the call; the bridge README's
-  env table is the authoritative list (e.g. `Tasks` → `$env:TELEGRAM_BRIDGE_TASKS = '<ids>'`,
-  `Archive completed topics = off` → `$env:TELEGRAM_BRIDGE_ARCHIVE = 'off'`). Defaults hold when a var is
-  unset, so a new toggle is a README row + a `user-settings.md` row — **no change here**.
+- **New toggles need no edit here.** For any non-default `Telegram → …` row, the bridge README's env
+  table is the authoritative list; `oa.ps1` maps settings → `TELEGRAM_BRIDGE_*` vars and defaults hold
+  when a var is unset. So a new toggle is a README row + a `user-settings.md` row — **no change to this
+  document**.
 - **Never print the token** in your summary. If the vault lookup or the CLI fails (e.g. no token, network),
   note it briefly in the wrap-up and carry on — a failed mirror must never abort the run.
 
@@ -551,7 +545,7 @@ Be conservative with the board — it's the user's at-a-glance view.
 - **Never write to `planner-completed.md`, and never move or delete a row to mark it complete.**
   Completion is the **user's** action in the Focus Planner app — the app is the only thing that moves a
   row to the completed board. When the agent finishes an approved task's scope, it records `done` in its
-  own state (`oa-state.ps1 mark … -Status done`) + a journal Run log entry, and **leaves the board row
+  own state (`oa.ps1 mark … -Status done`) + a journal Run log entry, and **leaves the board row
   untouched in `planner.md`** for the user to complete. Any archive/close behavior that keys off the
   completed board (e.g. Telegram topic archiving) then triggers only from the user's app-driven
   completion.
@@ -605,9 +599,9 @@ present the reversible draft and stop short of the committing action.
   fine without extra approval.) If a plan is vague about a risky step, set `blocked` and ask before
   doing it. When in doubt, prefer producing a ready-to-send draft (or an open PR) over the committing
   action.
-- **Be idempotent.** Your memory is the **skill state store** (via `oa-state.ps1`) plus the **Run log**
-  in the journal. On re-run, start from `oa-state.ps1 scan`; don't redo finished steps or create
-  duplicate deliverables — check the journal first, and call `oa-state.ps1 mark` after each turn so the
+- **Be idempotent.** Your memory is the **skill state store** (via `oa.ps1`) plus the **Run log**
+  in the journal. On re-run, start from `oa.ps1 scan`; don't redo finished steps or create
+  duplicate deliverables — check the journal first, and call `oa.ps1 mark` after each turn so the
   task goes quiet. \*\*Mark handled instruction emails as read\*\* so you don't reprocess them.
 - **Stay in the user's space cleanly.** Never edit above the sentinel. Preserve the user's notes,
   links, and formatting. Write files as UTF-8.

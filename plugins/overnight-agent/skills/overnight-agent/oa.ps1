@@ -23,7 +23,8 @@
   paths                          Print the resolved path catalog (planner, completed, journal, dev drive, telegram) as JSON.
   telegram                       Print the exact Telegram-bridge invocation for this run (or note it's disabled).
   run                            Instruction provider: resolved settings + the scan worklist + the ordered run procedure.
-  scan | get | mark | seed       Delegated to oa-state.ps1 (unchanged behaviour).
+  scan | get | mark | seed       Delegated to oa-state.ps1 (unchanged behaviour), including the
+                                 poll lifecycle (-Poll/-PollDone/-PollClear) and -PlannerBoard/-SnoozeStore.
 
 .EXAMPLES
   pwsh oa.ps1 settings
@@ -31,6 +32,8 @@
   pwsh oa.ps1 run
   pwsh oa.ps1 scan
   pwsh oa.ps1 mark -Id 305 -Status proposed -Version 1 -PlanId t305-v1
+  pwsh oa.ps1 mark -Id 405 -Poll daily        # arm a recurring self-check
+  pwsh oa.ps1 mark -Id 405 -PollDone          # re-arm after acting on due_poll
 #>
 
 [CmdletBinding()]
@@ -45,9 +48,18 @@ param(
   [string]$PlanId,
   [switch]$Force,
 
+  # Poll lifecycle (time-triggered tasks). These MUST be declared here or the delegated
+  # `mark` breaks: PowerShell binds params on THIS script first, so an undeclared -Poll
+  # fails with NamedParameterNotFound before oa-state.ps1 is ever invoked.
+  [string]$Poll,
+  [switch]$PollDone,
+  [switch]$PollClear,
+
   # Passthrough to oa-state.ps1 for the delegated scan/get/mark/seed commands (backward-compat).
   [string]$JournalDir,
   [string]$StateDir,
+  [string]$PlannerBoard,
+  [string]$SnoozeStore,
 
   # Optional explicit settings file (highest-priority override, same as $OVERNIGHT_AGENT_SETTINGS).
   [string]$SettingsFile,
@@ -118,6 +130,27 @@ function Clean-Value([string]$v) {
 
 function Has-Placeholder([string]$v) { return ($v -match '<[^>]+>') }
 
+function Get-BridgeEnvOverrides([hashtable]$map) {
+  # A user-settings row may spell out the exact bridge env var it needs, e.g.
+  #   | Approval digest | `on` - set `TELEGRAM_BRIDGE_DIGEST=on` and `TELEGRAM_BRIDGE_DIGEST_TOPIC="Waiting on you"` |
+  # Harvest ANY TELEGRAM_BRIDGE_* assignment written anywhere in the settings so a new
+  # bridge toggle is a README row + a settings row - no change to oa.ps1 or SKILL.md.
+  $found = [ordered]@{}
+  if (-not $map) { return $found }
+  foreach ($raw in $map.Values) {
+    if (-not $raw) { continue }
+    foreach ($m in [regex]::Matches([string]$raw, 'TELEGRAM_BRIDGE_([A-Z0-9_]+)\s*=\s*(?:"([^"]*)"|''([^'']*)''|([^`''"\s,;.]+))')) {
+      $name = 'TELEGRAM_BRIDGE_' + $m.Groups[1].Value
+      $val = if ($m.Groups[2].Success) { $m.Groups[2].Value }
+      elseif ($m.Groups[3].Success) { $m.Groups[3].Value }
+      else { $m.Groups[4].Value }
+      # First spelling wins, so an explicit row can't be clobbered by a later mention.
+      if (-not $found.Contains($name)) { $found[$name] = (Expand-Vars $val) }
+    }
+  }
+  return $found
+}
+
 function Get-Resolved {
   $sf = Resolve-SettingsFile
   $map = Parse-Settings $sf.Path
@@ -170,6 +203,7 @@ function Get-Resolved {
       bridge  = $tgBridge
       tasks   = $tgTasks
       archive = $tgArchive
+      env     = (Get-BridgeEnvOverrides $map)
     }
   }
 }
@@ -204,17 +238,26 @@ PHASE 1 - Execute APPROVED plans.
   approval. For each: gather linked-task context first, do the work, write deliverables
   (inline or a linked file), append a Run log, then `oa.ps1 mark -Id <id> -Status <s>`.
 
+PHASE 1.2 - Act on DUE POLLS (time-triggered work the user never touches).
+  `scan` flags `due_poll: true` on any task whose recurring self-check is due. Act on every
+  such row REGARDLESS of whether the user replied - that is the whole point of a poll - then
+  re-arm with `oa.ps1 mark -Id <id> -PollDone`. Arm a new poll with `-Poll <hourly|daily|
+  weekly|Nh|Nd|Nm>`; retire one with `-PollClear`. If a poll finds NOTHING new, stay silent:
+  write no Run log entry and post nothing (quiet-runs). A check that could not RUN is news.
+
 PHASE 1.5 - Spawn child tasks only when finishing a job needs work that isn't on the board
   (blocked/partially-complete). Cap ~2 children per parent per run; propose rows, don't
   mutate the board unattended on a half-fix.
 
 PHASE 2 - Propose plans for tasks without a current one.
   Default candidates: every task in `## Today` (expand to `## Deferred` as capacity allows).
-  Triage by the scan worklist: `reopened:true` -> pick up as new input (never skip, even if
-  done/skip); `has_agent_block:false` -> propose; stored proposed/done/skip + not reopened ->
-  leave alone; stored `revise` -> re-propose overwriting in place + bump version. ASSESS
-  current status before planning (don't propose already-done work). Gather linked-task
-  context, then write a concrete 2-6 step plan; record with
+  Triage by the scan worklist: `snoozed:true` -> SKIP ENTIRELY in every phase (no plan, no
+  execution, no board/journal edit, even if `approved`); report only as "skipped (snoozed
+  until DATE)" - the sole override is `reopened`. `reopened:true` -> pick up as new input
+  (never skip, even if done/skip); `has_agent_block:false` -> propose; stored
+  proposed/done/skip + not reopened -> leave alone; stored `revise` -> re-propose overwriting
+  in place + bump version. ASSESS current status before planning (don't propose already-done
+  work). Gather linked-task context, then write a concrete 2-6 step plan; record with
   `oa.ps1 mark -Id <id> -Status proposed -Version <n> -PlanId t<id>-v<n>`.
 
 PHASE 3 - Mirror to Telegram (LAST, only if Telegram enabled).
@@ -268,6 +311,16 @@ function Cmd-Telegram {
   # Archive completed topics is ON by default; only emit the override when the
   # user-setting says off, so the bridge's own default holds otherwise.
   if (-not $r.telegram.archive) { $lines += "`$env:TELEGRAM_BRIDGE_ARCHIVE = 'off'" }
+  # Any other TELEGRAM_BRIDGE_* the settings spell out verbatim (e.g. the approval
+  # digest + its topic). Skip the two handled above so they can't be emitted twice.
+  $handled = @('TELEGRAM_BRIDGE_TASKS', 'TELEGRAM_BRIDGE_ARCHIVE')
+  if ($r.telegram.env) {
+    foreach ($k in $r.telegram.env.Keys) {
+      if ($handled -contains $k) { continue }
+      $v = ($r.telegram.env[$k] -replace "'", "''")
+      $lines += "`$env:$k = '$v'"
+    }
+  }
   $lines += "if (-not (Test-Path `"$stateJson`")) { node `"$($r.telegram.bridge)`" baseline }  # first-time only"
   $lines += "node `"$($r.telegram.bridge)`" once"
   $lines -join "`n"
@@ -306,8 +359,13 @@ switch ($Command) {
     if ($Version) { $p['Version'] = $Version }
     if ($PlanId)  { $p['PlanId']  = $PlanId }
     if ($Force)   { $p['Force']   = $true }
+    if ($Poll)      { $p['Poll']      = $Poll }
+    if ($PollDone)  { $p['PollDone']  = $true }
+    if ($PollClear) { $p['PollClear'] = $true }
     if ($JournalDir) { $p['JournalDir'] = $JournalDir }
     if ($StateDir)   { $p['StateDir']   = $StateDir }
+    if ($PlannerBoard) { $p['PlannerBoard'] = $PlannerBoard }
+    if ($SnoozeStore)  { $p['SnoozeStore']  = $SnoozeStore }
     Invoke-State $Command $p
   }
 }

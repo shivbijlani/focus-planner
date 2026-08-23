@@ -60,6 +60,7 @@ $goodSettings = Join-Path $tmp 'user-settings.good.md'
 | Chat id | ``-100999`` (test) |
 | Bridge CLI | ``Z:\bridge.js`` (node) |
 | Tasks | *(empty)* - mirror every task |
+| Approval digest | ``on``, in its own topic - set ``TELEGRAM_BRIDGE_DIGEST=on`` and ``TELEGRAM_BRIDGE_DIGEST_TOPIC="Waiting on you"`` |
 "@ | Set-Content -Path $goodSettings -Encoding UTF8
 
 # Same, but Telegram OFF and an unresolved <placeholder> in an operational value.
@@ -177,6 +178,71 @@ Check 'an unknown command is rejected (ValidateSet)' {
   $out = (Oa 'bogus-command' | Out-String)
   $code = $LASTEXITCODE
   Assert (($code -ne 0) -or ($out -match 'does not belong to the set|Cannot validate argument')) 'invalid command should be rejected'
+}
+
+# --- 9. poll lifecycle passes through to oa-state.ps1 ------------------------
+# Regression guard: PowerShell binds parameters on oa.ps1 FIRST, so a poll switch that
+# oa.ps1 does not declare dies with NamedParameterNotFound before oa-state.ps1 is reached.
+# That silently breaks time-triggered tasks (the ones the user never replies to).
+Check 'mark -Poll/-PollDone/-PollClear delegate instead of failing to bind' {
+  $pollJournal = Join-Path $tmp 'journal-poll'
+  $pollState = Join-Path $tmp 'state-poll'
+  New-Item -ItemType Directory -Force -Path $pollJournal | Out-Null
+  '# Task 998: poll fixture' | Set-Content -Path (Join-Path $pollJournal 'task-998.md') -Encoding UTF8
+
+  $armed = (Oa mark -Id 998 -Poll daily -JournalDir $pollJournal -StateDir $pollState | Out-String)
+  Assert ($armed -notmatch 'parameter cannot be found') "-Poll failed to bind on oa.ps1: $armed"
+
+  $scan = (Oa scan -JournalDir $pollJournal -StateDir $pollState | Out-String | ConvertFrom-Json)
+  $row = @($scan) | Where-Object { "$($_.id)" -eq '998' }
+  Assert ($null -ne $row) 'poll fixture task 998 missing from scan'
+  Assert ($row.due_poll -eq $true) 'a freshly armed poll must be due on the next scan'
+  Assert ($row.poll_cadence -eq 'daily') "poll_cadence wrong: '$($row.poll_cadence)'"
+
+  $done = (Oa mark -Id 998 -PollDone -JournalDir $pollJournal -StateDir $pollState | Out-String)
+  Assert ($done -notmatch 'parameter cannot be found') "-PollDone failed to bind on oa.ps1: $done"
+  $after = (Oa scan -JournalDir $pollJournal -StateDir $pollState | Out-String | ConvertFrom-Json)
+  $row2 = @($after) | Where-Object { "$($_.id)" -eq '998' }
+  Assert ($row2.due_poll -eq $false) 'PollDone should push next_due forward so the poll is no longer due'
+
+  $cleared = (Oa mark -Id 998 -PollClear -JournalDir $pollJournal -StateDir $pollState | Out-String)
+  Assert ($cleared -notmatch 'parameter cannot be found') "-PollClear failed to bind on oa.ps1: $cleared"
+}
+
+# --- 10. the run procedure teaches the rules the worklist can surface --------
+# `run` is the instruction provider. If scan can report a flag, the procedure must say
+# what to do about it, or a slimmed SKILL.md loses that behaviour silently.
+Check 'run procedure covers the snooze and poll rules' {
+  $out = (Oa run -SettingsFile $goodSettings | Out-String)
+  Assert ($out -match 'snoozed') 'run procedure must state the snooze skip rule (#391)'
+  Assert ($out -match 'due_poll') 'run procedure must state the due-poll rule (#395)'
+  Assert ($out -match 'PollDone') 'run procedure must say how to re-arm a poll'
+}
+
+# --- 11. arbitrary TELEGRAM_BRIDGE_* toggles are honoured --------------------
+# SKILL.md now says "run what `oa.ps1 telegram` prints", so any bridge toggle the user
+# spells out in user-settings.md MUST appear in that invocation. Otherwise a setting like
+# the approval digest is silently dropped the moment the doc stops listing env vars.
+Check 'telegram emits TELEGRAM_BRIDGE_* overrides spelled out in settings' {
+  $out = (Oa telegram -SettingsFile $goodSettings | Out-String)
+  Assert ($out -match [regex]::Escape("TELEGRAM_BRIDGE_DIGEST = 'on'")) "digest toggle not emitted:`n$out"
+  Assert ($out -match [regex]::Escape("TELEGRAM_BRIDGE_DIGEST_TOPIC = 'Waiting on you'")) "digest topic (quoted value with spaces) not emitted:`n$out"
+  # The two vars oa.ps1 derives itself must not also come through the generic harvester.
+  $tasks = ([regex]::Matches($out, 'TELEGRAM_BRIDGE_TASKS')).Count
+  $arch = ([regex]::Matches($out, 'TELEGRAM_BRIDGE_ARCHIVE')).Count
+  Assert ($tasks -le 1) "TELEGRAM_BRIDGE_TASKS emitted $tasks times (duplicate)"
+  Assert ($arch -le 1) "TELEGRAM_BRIDGE_ARCHIVE emitted $arch times (duplicate)"
+}
+
+Check 'settings exposes the harvested bridge env map' {
+  $r = (Oa settings -SettingsFile $goodSettings | Out-String | ConvertFrom-Json)
+  Assert ($null -ne $r.telegram.env) 'telegram.env missing from settings output'
+  Assert ($r.telegram.env.TELEGRAM_BRIDGE_DIGEST -eq 'on') "telegram.env digest wrong: '$($r.telegram.env.TELEGRAM_BRIDGE_DIGEST)'"
+}
+
+Check 'a settings file with no bridge toggles emits none' {
+  $out = (Oa telegram -SettingsFile $offSettings | Out-String)
+  Assert ($out -notmatch 'TELEGRAM_BRIDGE_') 'must not invent bridge env vars when Telegram is off'
 }
 
 # --- cleanup + summary -------------------------------------------------------
