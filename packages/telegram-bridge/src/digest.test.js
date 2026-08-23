@@ -239,13 +239,51 @@ describe('buildDigest', () => {
     )
   })
 
-  it('stays within the Telegram size budget and reports what it dropped', () => {
+  it('stays within the Telegram size budget and still names every open ask', () => {
     const many = Array.from({ length: 300 }, (_, i) => ({
       taskId: `${i}`,
       title: `Task number ${i} with a reasonably long title`,
       ask: 'a fairly wordy ask that takes up a decent amount of room in the message',
     }))
     const md = buildDigest(many, { date: '2026-08-22', privacyModeOn: true })
+    expect(md.length).toBeLessThanOrEqual(4096 - 600)
+    // The whole point of the compact tier: overflow is named, not swallowed.
+    for (const e of many) expect(md).toContain(`#${e.taskId}`)
+  })
+
+  it('names overflow entries in a compact tier instead of dropping them', () => {
+    const many = Array.from({ length: 120 }, (_, i) => ({
+      taskId: `${500 + i}`,
+      title: `Task number ${i} with a reasonably long descriptive title`,
+      ask: 'a fairly wordy ask that takes up a decent amount of room in the message',
+      source: 'needs',
+    }))
+    const md = buildDigest(many, { date: '2026-08-22' })
+    expect(md).toContain('**Also waiting:**')
+    // Head of the queue keeps its full detail...
+    expect(md).toContain('• **#500 ·')
+    // ...and the tail is still named, just compactly.
+    expect(md).toContain('#619')
+    expect(md).not.toContain('• **#619 ·')
+  })
+
+  it('never starts a line with # in the roll-up (that would render as a heading)', () => {
+    const many = Array.from({ length: 200 }, (_, i) => ({
+      taskId: `${700 + i}`,
+      title: `Task number ${i} with a reasonably long descriptive title`,
+      ask: 'a fairly wordy ask that takes up a decent amount of room in the message',
+    }))
+    const md = buildDigest(many, { date: '2026-08-22' })
+    for (const line of md.split('\n')) expect(line.startsWith('#')).toBe(false)
+  })
+
+  it('degrades to a count only when even the compact tier cannot fit', () => {
+    const many = Array.from({ length: 2000 }, (_, i) => ({
+      taskId: `${10000 + i}`,
+      title: `Task number ${i} with a reasonably long descriptive title`,
+      ask: 'a fairly wordy ask that takes up a decent amount of room in the message',
+    }))
+    const md = buildDigest(many, { date: '2026-08-22' })
     expect(md.length).toBeLessThanOrEqual(4096 - 600)
     expect(md).toMatch(/and \d+ more/)
   })
@@ -261,7 +299,7 @@ describe('buildDigest', () => {
     expect(md).toContain('1 open ask.')
   })
 
-  it('when trimming, keeps blocking asks and sheds the soft ones', () => {
+  it('when trimming, spends the detailed slots on blocking asks', () => {
     const blocking = Array.from({ length: 40 }, (_, i) => ({
       taskId: `${900 + i}`,
       title: `Blocking task ${i} with a reasonably long descriptive title`,
@@ -275,9 +313,11 @@ describe('buildDigest', () => {
       source: 'next',
     }))
     const md = buildDigest([...soft, ...blocking], { date: '2026-08-22' })
-    expect(md).toContain('#900')
-    // Soft entries are last, so they are the ones that get dropped.
-    expect(md).not.toContain('#159')
+    // Blocking asks get the expensive detailed treatment...
+    expect(md).toContain('• **#900 ·')
+    // ...soft ones do not, but they are still named rather than lost.
+    expect(md).not.toContain('• **#159 ·')
+    expect(md).toContain('#159')
   })
 })
 

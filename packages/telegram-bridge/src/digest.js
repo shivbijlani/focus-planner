@@ -231,25 +231,61 @@ export function buildDigest(
   const budget = TELEGRAM_MAX - 600
   if (out.length <= budget) return out
 
-  // Too many asks to fit: keep as many WHOLE entries as will fit and say how
-  // many were dropped, rather than truncating mid-entry. The footer has to be
-  // budgeted for up front — appending it after the fill is what pushes the
-  // message back over the cap.
+  // Too many asks to fit in full. Rather than dropping the overflow behind an
+  // "…and N more" count, name every remaining task in a compact second tier.
+  //
+  // Why this matters: the queue is routinely an order of magnitude larger than
+  // one Telegram message. Measured live at 148 open asks, the old fill showed
+  // 17 and silently swallowed 131 (88%) — so a task outside the top of the
+  // board was unanswerable in practice, because the user never learned it was
+  // waiting. A detailed entry costs ~200 chars; a bare `#id` costs ~6. Spending
+  // a few detailed slots to buy complete coverage is a much better trade than
+  // spending the whole budget on the top of the list.
   const headerCount = privacyModeOn ? 6 : 4
   const header = lines.slice(0, headerCount)
   const entryLines = lines.slice(headerCount)
-  // Worst-case footer, sized for the largest count it could report.
-  const footerFor = (n) => `\n\n\u2026and ${n} more \u2014 see the task topics.`
-  const footerBudget = footerFor(entryLines.length).length
+  const tokens = ordered.map((e) => `#${e.taskId}`)
 
-  let used = header.join('\n').length + footerBudget
+  // The roll-up must never start a line with `#`, or the markdown-to-HTML
+  // converter downstream reads it as a heading. The label guarantees it can't.
+  const ROLLUP_LABEL = '\n\n**Also waiting:** '
+  const overflowFor = (n) => ` \u2026and ${n} more.`
+
+  // Cost of naming everything from `from` onwards. Monotonically decreasing in
+  // `from`, so the greedy fill below stays within budget at every step.
+  const rollupCost = (from) =>
+    from >= tokens.length
+      ? 0
+      : ROLLUP_LABEL.length + tokens.slice(from).join(' ').length
+
+  let used = header.join('\n').length
   const kept = []
   for (const line of entryLines) {
-    if (used + line.length + 1 > budget) break
+    // Budget for the worst case: this line PLUS naming every entry after it.
+    if (used + line.length + 1 + rollupCost(kept.length + 1) > budget) break
     kept.push(line)
     used += line.length + 1
   }
 
-  const dropped = entryLines.length - kept.length
-  return [...header, ...kept].join('\n') + footerFor(dropped)
+  const remaining = tokens.slice(kept.length)
+  if (remaining.length === 0) return [...header, ...kept].join('\n')
+
+  // Normally the whole remainder fits by construction. It only won't when even
+  // the minimum detailed fill leaves too little room, so degrade by naming as
+  // many as possible and counting the rest.
+  let named = remaining
+  if (used + rollupCost(kept.length) > budget) {
+    named = []
+    let cost = used + ROLLUP_LABEL.length + overflowFor(remaining.length).length
+    for (const token of remaining) {
+      if (cost + token.length + 1 > budget) break
+      named.push(token)
+      cost += token.length + 1
+    }
+  }
+
+  const missing = remaining.length - named.length
+  const rollup =
+    ROLLUP_LABEL + named.join(' ') + (missing > 0 ? overflowFor(missing) : '')
+  return [...header, ...kept].join('\n') + rollup
 }
