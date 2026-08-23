@@ -94,3 +94,25 @@ describe('loadConfig digestTopic', () => {
     expect(cfg.digestTopic).toBe('Waiting on you')
   })
 })
+
+// The digest orders itself by the ACTIVE board, so the bridge has to know where
+// planner.md is — not just the completed board it already tracked for archiving.
+describe('loadConfig boardPath', () => {
+  it('resolves planner.md next to the journal dir and completed board', async () => {
+    const cfg = await loadConfig({ env: { ...BASE } })
+    expect(cfg.boardPath.replace(/\\/g, '/')).toBe('C:/planner/planner.md')
+    expect(cfg.completedBoardPath.replace(/\\/g, '/')).toBe(
+      'C:/planner/planner-completed.md',
+    )
+    expect(cfg.journalDir.replace(/\\/g, '/')).toBe('C:/planner/journal')
+  })
+
+  it('follows PLANNER_PATH wherever it points', async () => {
+    const cfg = await loadConfig({
+      env: { ...BASE, PLANNER_PATH: 'D:/elsewhere/Focus Planner' },
+    })
+    expect(cfg.boardPath.replace(/\\/g, '/')).toBe(
+      'D:/elsewhere/Focus Planner/planner.md',
+    )
+  })
+})

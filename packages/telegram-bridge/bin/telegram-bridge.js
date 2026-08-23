@@ -34,6 +34,7 @@ async function build() {
   const io = createFsIo({
     journalDir: config.journalDir,
     completedBoardPath: config.completedBoardPath,
+    boardPath: config.boardPath,
   })
   const state = await loadState(config.stateDir)
   const bridge = createBridge({ client, config, state, io, logger: log })
