@@ -263,6 +263,120 @@ describe('syncDown', () => {
     expect(state.updateOffset).toBe(8)
     expect(h.store['42']).toBe(AGENT_JOURNAL)
   })
+
+  // Regression: replies to a cross-task digest arrive in General, which carries
+  // no message_thread_id. These used to be dropped on the floor while looking
+  // delivered to the user.
+  it('routes a General-thread reply to the tasks it names', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL, 77: AGENT_JOURNAL.replace('42', '77') })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    h.queueUpdates([
+      {
+        update_id: 200,
+        message: {
+          message_id: 9,
+          text: 'merge 42; go on 77',
+          from: { is_bot: false },
+        },
+      },
+    ])
+
+    const res = await bridge.syncDown()
+    expect(res.folded.map((f) => f.taskId).sort()).toEqual(['42', '77'])
+    expect(h.store['42']).toContain('merge 42')
+    expect(h.store['77']).toContain('go on 77')
+    expect(state.updateOffset).toBe(201)
+  })
+
+  it('acknowledges an off-topic reply so the user knows it registered', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    h.queueUpdates([
+      { update_id: 300, message: { message_id: 11, text: 'merge 42', from: { is_bot: false } } },
+    ])
+
+    await bridge.syncDown()
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).toContain('#42')
+    expect(h.sent[0].replyToMessageId).toBe(11)
+  })
+
+  it('does not acknowledge a reply posted inside a task topic', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42' }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    h.queueUpdates([
+      {
+        update_id: 400,
+        message: { message_id: 12, message_thread_id: 7, text: 'ship it', from: { is_bot: false } },
+      },
+    ])
+
+    await bridge.syncDown()
+    expect(h.sent).toHaveLength(0)
+    expect(h.store['42']).toContain('ship it')
+  })
+
+  it('reports an unroutable reply instead of silently discarding it', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    h.queueUpdates([
+      { update_id: 500, message: { message_id: 13, text: 'merge all', from: { is_bot: false } } },
+    ])
+
+    const res = await bridge.syncDown()
+    expect(res.folded).toHaveLength(0)
+    expect(res.unrouted).toHaveLength(1)
+    expect(res.unrouted[0].text).toBe('merge all')
+    expect(h.sent).toHaveLength(0)
+  })
+
+  it('keeps folding when one named task has no journal yet', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    // 77 is a known ID only if a journal exists; simulate a listed-but-unreadable
+    // journal by listing it while reads return undefined.
+    h.io.listJournals = async () => [{ taskId: '42' }, { taskId: '77' }]
+
+    h.queueUpdates([
+      {
+        update_id: 600,
+        message: { message_id: 14, text: 'merge 42; go on 77', from: { is_bot: false } },
+      },
+    ])
+
+    const res = await bridge.syncDown()
+    expect(res.folded.map((f) => f.taskId)).toEqual(['42'])
+    expect(res.unrouted).toHaveLength(1)
+    expect(h.store['42']).toContain('merge 42')
+  })
+
+  it('survives a failed acknowledgement without losing the folded reply', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    h.client.sendMessage = async () => {
+      throw new Error('429 Too Many Requests')
+    }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    h.queueUpdates([
+      { update_id: 700, message: { message_id: 15, text: 'merge 42', from: { is_bot: false } } },
+    ])
+
+    const res = await bridge.syncDown()
+    expect(res.folded).toHaveLength(1)
+    expect(h.store['42']).toContain('merge 42')
+  })
 })
 
 describe('syncArchive (mirror completed board -> closed topics)', () => {
