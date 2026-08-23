@@ -800,6 +800,36 @@ describe('syncDigest agent-block fallback', () => {  it('surfaces an ask from th
     expect(res.count).toBe(0)
   })
 
+  // A journal whose newest agent entry is malformed - the `<!-- from:
+  // overnight-agent -->` marker written ABOVE its `## <date>` heading - parses
+  // to an empty turn. The task must still reach the queue via its block.
+  it('falls back to the block when the newest turn is unparseable', async () => {
+    const malformed = `# Task 42: Demo
+
+---
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+## \u{1F319} Overnight Agent
+
+**Status:** In-progress \u00B7 plan v2 \u00B7 2026-08-01
+
+**Needs from you:** just approve and I will open the PR.
+
+<!-- from: overnight-agent -->
+
+## 2026-08-02
+
+A later turn whose marker sits above its date heading, so it parses as empty.
+`
+    const h = makeHarness({ 42: malformed })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncDigest()
+    expect(res.count).toBe(1)
+    expect(h.sent[0].text).toContain('just approve')
+  })
+
   it('still prefers the newest turn when that turn HAS an ask', async () => {    // The fallback must never override a fresher ask - otherwise it would
     // resurrect exactly the stale asks digest.js warns about.
     const fresher = DEMOTED_JOURNAL.replace(

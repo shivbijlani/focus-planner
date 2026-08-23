@@ -406,11 +406,16 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       const content = await io.readJournal(taskId)
       if (!hasAgentBlock(content)) continue
       const turn = latestAgentTurn(content)
-      if (!turn) continue
-      let ask = extractAskEntry(turn)
       const block = agentBlockText(content)
       const status = agentBlockStatus(block)
-      // A `weak` ask was salvaged from boilerplate — SKILL.md's generic
+      // An unparseable turn must NOT end the task's chances. A journal whose
+      // newest agent entry is malformed - e.g. the `<!-- from: overnight-agent
+      // -->` marker written ABOVE its `## <date>` heading, which makes the turn
+      // body parse as empty - would otherwise be dropped here, before the
+      // agent-block fallback below ever ran. Observed live on #273, a `## Today`
+      // task holding a real `**Needs from you:** just approve` in its block.
+      let ask = turn ? extractAskEntry(turn) : null
+      // A `weak` ask was salvaged from boilerplate - SKILL.md's generic
       // `**Your call:**` line, or the remainder of a `Needs from you: none …`
       // that opened by dismissing the user. Both survive verbatim into turns
       // the agent has already closed, so on their own they must never drag a
