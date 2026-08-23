@@ -5167,7 +5167,7 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
       {installOpen && <InstallModal onClose={() => setInstallOpen(false)} appName={APP_NAME} />}
       {tourOpen && <TourModal onClose={() => setTourOpen(false)} />}
 
-      {open && (
+      {open && createPortal(
         <div className="dialog-overlay" onClick={close}>
           <div className="settings-dialog" onClick={e => e.stopPropagation()}>
             <div className="settings-dialog-header">
@@ -5379,7 +5379,7 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
                         <div className="sync-target-name">{displayName}</div>
                         <div className="sync-target-status">
                           {isActive
-                            ? 'Active — stored as Markdown in this folder'
+                            ? 'Stored as Markdown in this folder'
                             : 'Local Folder — switch to use'}
                         </div>
                       </div>
@@ -5678,10 +5678,11 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
 
             {error && <div className="storage-footer-error">⚠️ {error}</div>}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {removeConfirm && (
+      {removeConfirm && createPortal(
         <div className="dialog-overlay" onClick={() => !busy && setRemoveConfirm(null)}>
           <div className="settings-dialog" onClick={e => e.stopPropagation()} style={{ maxWidth: '420px' }}>
             <div className="settings-dialog-header">
@@ -5706,7 +5707,8 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   )
