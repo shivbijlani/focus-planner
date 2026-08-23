@@ -7,6 +7,8 @@ import { createHash } from 'crypto'
 import {
   hasAgentBlock,
   latestAgentTurn,
+  agentBlockText,
+  agentBlockStatus,
   parseTitle,
   topicName,
   appendUserReply,
@@ -29,6 +31,11 @@ import { parseBoardOrder, boardRank, boardIndex } from './board.js'
 import { parseReplyRouting, coalesceByTask } from './routeReply.js'
 
 const TELEGRAM_MAX = 4096
+
+// Block statuses that are finished as far as the user is concerned. A task in
+// one of these must never be pulled back into the approval queue by the
+// agent-block fallback in syncDigest().
+const DIGEST_TERMINAL_STATUS = new Set(['done', 'skip', 'skipped', 'complete', 'completed'])
 
 export function hashTurn(text) {
   return createHash('sha256').update(text, 'utf8').digest('hex')
@@ -372,6 +379,22 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
   // can be weeks stale (see the note at the top of digest.js). Getting this
   // wrong would rebroadcast dead asks nightly.
   //
+  // ⚠️ With ONE bounded exception. Journals are bottom-appended chat threads, so
+  // the "newest agent turn" is often a conversational reply — and a reply about
+  // some *other* task carries no ask marker. That silently demoted the task's
+  // real, still-open ask out of the queue entirely: measured live 2026-08-23,
+  // **38 tasks** had a properly-marked ask in their current agent block that the
+  // user never saw, including one-word wins (#405 "go", #391 `merge 120`, and
+  // the #371/#372/#388/#404 PR approvals). That is ~27% of all open asks.
+  //
+  // So when the newest turn has no ask, fall back to `agentBlockText()` — the
+  // sentinel block only, stopping at the first chat entry. That is NOT the
+  // whole-file grep the warning above forbids: it cannot reach a superseded
+  // block or a marker buried in an old Run log, and the block is by definition
+  // the agent's *current* state for the task (it holds the live Status line,
+  // rewritten every time the agent acts). Terminal statuses are excluded so a
+  // finished task can never be revived into the queue.
+  //
   // Idempotent: the composed text is hashed and compared against the last one
   // posted, so a run where nothing changed posts nothing at all.
   async function syncDigest({ force = false } = {}) {
@@ -384,8 +407,14 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       if (!hasAgentBlock(content)) continue
       const turn = latestAgentTurn(content)
       if (!turn) continue
-      const ask = extractAskEntry(turn)
-      if (!ask) continue
+      let ask = extractAskEntry(turn)
+      if (!ask) {
+        const block = agentBlockText(content)
+        const status = agentBlockStatus(block)
+        if (!block || DIGEST_TERMINAL_STATUS.has(status)) continue
+        ask = extractAskEntry(block)
+        if (!ask) continue
+      }
       entries.push({
         taskId,
         title: parseTitle(content),

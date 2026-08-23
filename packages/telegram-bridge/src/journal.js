@@ -57,6 +57,42 @@ export function hasAgentBlock(content) {
 }
 
 /**
+ * The agent-managed block ONLY — from the sentinel down to the first chat entry
+ * that follows it. Chat entries (`<!-- from: … -->`) are conversation appended
+ * *below* the block; they are not part of it.
+ *
+ * This is deliberately a bounded region, not a whole-file scan: it cannot reach
+ * an older superseded block or a stale marker buried in a historical Run log,
+ * which is the failure mode digest.js warns about. The block is the agent's
+ * current state for the task — it carries the live `**Status:**` and
+ * `**Needs from you:**` — so it is the right fallback when the newest chat turn
+ * happens not to restate the ask.
+ */
+export function agentBlockText(content) {
+  const { block } = splitAtSentinel(content)
+  if (!block) return null
+  const lines = block.split(/\r?\n/)
+  const body = []
+  for (const raw of lines) {
+    const trimmed = raw.trim()
+    if (trimmed === FROM_ME || trimmed === FROM_AGENT) break
+    if (DATE_HEADER.test(raw)) break
+    body.push(raw)
+  }
+  return body.join('\n').trim() || null
+}
+
+/**
+ * The status word from a block's `**Status:** Proposed · plan v1 · <date>` line,
+ * lowercased (e.g. `proposed`, `done`, `in-progress`). Null when absent.
+ */
+export function agentBlockStatus(block) {
+  if (!block) return null
+  const m = /^\s*\*{0,2}Status:?\*{0,2}\s*:?\s*\*{0,2}([A-Za-z-]+)/m.exec(block)
+  return m ? m[1].toLowerCase() : null
+}
+
+/**
  * The most recent agent-authored message in the journal — either the latest
  * `<!-- from: overnight-agent -->` chat entry or the managed plan block,
  * whichever appears later. Returns the trimmed text, or null if none.

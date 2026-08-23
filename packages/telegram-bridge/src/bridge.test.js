@@ -698,3 +698,86 @@ describe('syncDigest destination', () => {
     expect(h.store['42']).toContain(FROM_ME)
   })
 })
+
+// A journal whose agent block holds a real, still-open ask, but whose NEWEST
+// agent turn is a later chat reply about something else - so it carries no ask
+// marker of its own. Before the fallback this task vanished from the digest
+// entirely (measured live: 38 tasks in this exact shape).
+const DEMOTED_JOURNAL = `# Task 42: Demo
+
+---
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+## \u{1F319} Overnight Agent
+
+**Status:** In-progress \u00B7 plan v1 \u00B7 2026-08-01
+
+**Needs from you:** one word - merge 120.
+
+## 2026-08-23
+
+<!-- from: me -->
+Unrelated new task: buy a mattress.
+
+<!-- from: overnight-agent -->
+Created that as #438 and cross-linked it. Nothing outstanding on my side here.
+`
+
+describe('syncDigest agent-block fallback', () => {
+  it('surfaces an ask from the agent block when the newest turn has none', async () => {
+    const h = makeHarness({ 42: DEMOTED_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncDigest()
+    expect(res.posted).toBe(true)
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).toContain('#42')
+    expect(h.sent[0].text).toContain('merge 120')
+  })
+
+  it('does NOT revive a finished task into the queue', async () => {
+    // Same shape, but the block is terminal. A done task must stay gone even
+    // though its block still contains the historical marker.
+    const done = DEMOTED_JOURNAL.replace(
+      '**Status:** In-progress \u00B7 plan v1 \u00B7 2026-08-01',
+      '**Status:** Done \u00B7 plan v1 \u00B7 2026-08-01',
+    )
+    const h = makeHarness({ 42: done })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncDigest()
+    expect(res.count).toBe(0)
+    expect(h.sent[0].text).not.toContain('merge 120')
+  })
+
+  it('still prefers the newest turn when that turn HAS an ask', async () => {
+    // The fallback must never override a fresher ask - otherwise it would
+    // resurrect exactly the stale asks digest.js warns about.
+    const fresher = DEMOTED_JOURNAL.replace(
+      'Created that as #438 and cross-linked it. Nothing outstanding on my side here.',
+      '**Needs from you:** the newer question instead.',
+    )
+    const h = makeHarness({ 42: fresher })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncDigest()
+    expect(h.sent[0].text).toContain('the newer question instead')
+    expect(h.sent[0].text).not.toContain('merge 120')
+  })
+
+  it('ignores a block whose ask is explicitly "none"', async () => {
+    const none = DEMOTED_JOURNAL.replace(
+      '**Needs from you:** one word - merge 120.',
+      '**Needs from you:** none',
+    )
+    const h = makeHarness({ 42: none })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncDigest()
+    expect(res.count).toBe(0)
+  })
+})
