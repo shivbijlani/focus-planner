@@ -269,10 +269,15 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     // to compose it can never prevent the mirroring/fold-back work above from
     // being persisted.
     let digest = { posted: false, count: 0 }
-    try {
-      digest = await syncDigest()
-    } catch (err) {
-      logger(`digest failed (${err.message}); continuing`)
+    if (config.digestEnabled === false) {
+      logger('digest disabled (TELEGRAM_BRIDGE_DIGEST=off); General thread left alone')
+      digest = { posted: false, count: 0, skipped: true }
+    } else {
+      try {
+        digest = await syncDigest()
+      } catch (err) {
+        logger(`digest failed (${err.message}); continuing`)
+      }
     }
     return { up, archived, down, digest }
   }
