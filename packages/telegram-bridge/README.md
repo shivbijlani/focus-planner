@@ -33,7 +33,35 @@ Windows Credential Manager before invoking the CLI.
 | `PLANNER_PATH` | — | Planner folder. Defaults to `planner-config.json`'s `plannerPath`, else `../planner`. |
 | `TELEGRAM_BRIDGE_TASKS` | — | Comma-separated allowlist of task IDs to mirror. Empty = all tasks with an agent block. |
 | `TELEGRAM_BRIDGE_ARCHIVE` | — | Archive (close) a task's topic when it lands on the completed board, and reopen it if the task leaves. Default **on**; set to `off`/`false`/`0`/`no` to disable. |
+| `TELEGRAM_BRIDGE_DIGEST` | — | Post the consolidated "waiting on you" approval digest. Default **on**; set to `off`/`false`/`0`/`no` to disable. |
+| `TELEGRAM_BRIDGE_DIGEST_TOPIC` | — | Where the digest is posted. Empty = the group's **General** thread (default). A **number** posts into that existing topic id. Any other value is treated as a **topic name**, created once and reused. |
 | `TELEGRAM_BRIDGE_STATE_DIR` | — | State dir. Defaults to `%LOCALAPPDATA%\overnight-agent\telegram-bridge`. |
+
+### Where the approval digest goes
+
+The digest is the **only** message the bridge sends outside a task's own topic — everything else is
+mirrored into that task's thread. So in a group run as strictly one-topic-per-task, it is the sole source
+of General-thread traffic.
+
+That leaves three options rather than two:
+
+| You want | Set |
+| --- | --- |
+| Digest in General (original behaviour) | nothing |
+| No digest at all | `TELEGRAM_BRIDGE_DIGEST=off` |
+| Digest, but out of General | `TELEGRAM_BRIDGE_DIGEST_TOPIC="Waiting on you"` |
+
+The third option exists because switching the digest off entirely is a blunt fix: it quiets General but
+also removes the one consolidated view of what is actually blocked on you, leaving the queue scattered
+across every task topic.
+
+A **name** is resolved to a forum topic once and cached in bridge state, so re-runs reuse that topic
+instead of creating a new one each night; changing the name resolves a fresh topic. Resolution happens
+only when a digest is actually being posted, so a run with an unchanged queue creates nothing.
+
+Batched replies still work from the dedicated topic: it is not a *task* topic, so a reply inside it falls
+through to the same by-task-id routing used for General (`routeReply.js`), and the acknowledgement is
+threaded back into that topic.
 
 ### Supplying the token (Windows Credential Manager)
 

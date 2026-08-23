@@ -18,6 +18,7 @@ import {
   setArchived,
   setOffset,
   setLastDigest,
+  setDigestTopic,
   findTaskByTopic,
 } from './state.js'
 import { extractAskEntry, buildDigest, hashDigest } from './digest.js'
@@ -333,8 +334,37 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     return { archived, reopened }
   }
 
-  // Post ONE consolidated "waiting on you" message to the group's General
-  // thread (no message_thread_id), listing every task's open ask.
+  // Resolve WHERE the digest should be posted.
+  //
+  // Returns the message_thread_id to post into, or undefined for the General
+  // thread (the historical behaviour, kept as the default so existing setups
+  // are unaffected).
+  //
+  // A numeric setting is used as-is. A name is resolved to a topic exactly
+  // once and cached in state — re-resolving every run would create a duplicate
+  // "Waiting on you" topic every night, which is the obvious failure mode here.
+  // Changing the configured name is treated as pointing at a different topic,
+  // so it resolves afresh rather than quietly posting into the old one.
+  async function resolveDigestThreadId() {
+    const setting = (config.digestTopic || '').trim()
+    if (!setting) return undefined
+
+    if (/^\d+$/.test(setting)) return Number(setting)
+
+    if (state.digestTopicId != null && state.digestTopicName === setting) {
+      return state.digestTopicId
+    }
+
+    const result = await client.createForumTopic({ chatId, name: setting })
+    const topicId = result.message_thread_id
+    setDigestTopic(state, topicId, setting)
+    logger(`created digest topic "${setting}" (${topicId})`)
+    return topicId
+  }
+
+  // Post ONE consolidated "waiting on you" message listing every task's open
+  // ask. It goes to the group's General thread by default, or to a dedicated
+  // forum topic when TELEGRAM_BRIDGE_DIGEST_TOPIC names one.
   //
   // The asks are read from each task's NEWEST agent turn via latestAgentTurn —
   // never by grepping the journal for its last `Needs from you:` marker, which
@@ -389,20 +419,28 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       return { posted: false, count: entries.length, hash }
     }
 
+    // Resolved only once we know we're actually posting, so a run with an
+    // unchanged queue never creates a topic as a side effect.
+    const messageThreadId = await resolveDigestThreadId()
+
     try {
       await client.sendMessage({
         chatId,
         text: mdToTelegramHtml(md),
         parseMode: 'HTML',
+        messageThreadId,
       })
     } catch (err) {
       logger(`HTML digest send failed (${err.message}); retrying as plain text`)
-      await client.sendMessage({ chatId, text: md })
+      await client.sendMessage({ chatId, text: md, messageThreadId })
     }
 
     setLastDigest(state, hash)
-    logger(`posted digest with ${entries.length} open ask(s)`)
-    return { posted: true, count: entries.length, hash }
+    logger(
+      `posted digest with ${entries.length} open ask(s)` +
+        (messageThreadId != null ? ` to topic ${messageThreadId}` : ' to General'),
+    )
+    return { posted: true, count: entries.length, hash, threadId: messageThreadId ?? null }
   }
 
   // One-time (idempotent) setup: record each existing agent-block journal's

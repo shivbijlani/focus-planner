@@ -70,6 +70,21 @@ export async function loadConfig({ env = process.env, repoRoot } = {}) {
     (env.TELEGRAM_BRIDGE_DIGEST || '').trim(),
   )
 
+  // WHERE the digest is posted. Turning the digest off is a blunt instrument:
+  // it silences the General thread but also costs you the only consolidated
+  // view of the approval queue, which is the one message that says what is
+  // actually blocked on you. This gives the middle option — keep the digest,
+  // but move it out of General into its own forum topic, so the group stays
+  // strictly one-topic-per-subject.
+  //
+  //   unset/empty  -> General thread (unchanged default)
+  //   numeric id   -> post into that existing topic
+  //   any name     -> find-or-create a forum topic with that name
+  //
+  // A name is resolved to a topic id once and remembered in bridge state, so
+  // re-runs reuse the same topic instead of creating a new one each night.
+  const digestTopic = (env.TELEGRAM_BRIDGE_DIGEST_TOPIC || '').trim()
+
   return {
     token,
     chatId,
@@ -80,6 +95,7 @@ export async function loadConfig({ env = process.env, repoRoot } = {}) {
     taskAllowlist,
     archiveCompleted,
     digestEnabled,
+    digestTopic,
   }
 }
 

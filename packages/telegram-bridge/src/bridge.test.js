@@ -489,3 +489,150 @@ describe('syncArchive (mirror completed board -> closed topics)', () => {
     expect(res.reopened).toEqual([])
   })
 })
+
+// The digest is the only message that leaves a task topic. Posting it to
+// General is what made the group noisy enough to be switched off wholesale —
+// which then cost the user the only consolidated view of the approval queue.
+// These cover the middle option: keep the digest, give it its own topic.
+describe('syncDigest destination', () => {
+  const ASK_JOURNAL = `# Task 42: Demo
+
+---
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+## \u{1F319} Overnight Agent
+
+**Status:** Proposed \u00B7 plan v1 \u00B7 2026-07-08
+
+**Needs from you:** one word - merge 150.
+`
+
+  it('posts to the General thread when no topic is configured', async () => {
+    const h = makeHarness({ 42: ASK_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncDigest()
+    expect(res.posted).toBe(true)
+    expect(res.threadId).toBe(null)
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].messageThreadId).toBeUndefined()
+    // No topic should be created for the General-thread default.
+    expect(h.created).toHaveLength(0)
+  })
+
+  it('posts into an existing topic when configured with a numeric id', async () => {
+    const h = makeHarness({ 42: ASK_JOURNAL })
+    h.config.digestTopic = '77'
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncDigest()
+    expect(res.threadId).toBe(77)
+    expect(h.sent[0].messageThreadId).toBe(77)
+    // A numeric id names a topic that already exists - never create one.
+    expect(h.created).toHaveLength(0)
+  })
+
+  it('creates a named topic once and reuses it on later runs', async () => {
+    const h = makeHarness({ 42: ASK_JOURNAL })
+    h.config.digestTopic = 'Waiting on you'
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const first = await bridge.syncDigest()
+    expect(h.created).toEqual([{ id: 1, name: 'Waiting on you' }])
+    expect(first.threadId).toBe(1)
+    expect(state.digestTopicId).toBe(1)
+    expect(state.digestTopicName).toBe('Waiting on you')
+
+    // Force a repost: the queue is unchanged, so only `force` gets us here.
+    // The topic must be reused, not recreated - otherwise the group collects a
+    // new "Waiting on you" topic every single night.
+    const second = await bridge.syncDigest({ force: true })
+    expect(h.created).toHaveLength(1)
+    expect(second.threadId).toBe(1)
+    expect(h.sent).toHaveLength(2)
+    expect(h.sent[1].messageThreadId).toBe(1)
+  })
+
+  it('resolves a fresh topic when the configured name changes', async () => {
+    const h = makeHarness({ 42: ASK_JOURNAL })
+    h.config.digestTopic = 'Waiting on you'
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+    await bridge.syncDigest()
+    expect(state.digestTopicId).toBe(1)
+
+    h.config.digestTopic = 'Approvals'
+    const renamed = createBridge({ client: h.client, config: h.config, state, io: h.io })
+    const res = await renamed.syncDigest({ force: true })
+    expect(res.threadId).toBe(2)
+    expect(state.digestTopicName).toBe('Approvals')
+    expect(h.created).toEqual([
+      { id: 1, name: 'Waiting on you' },
+      { id: 2, name: 'Approvals' },
+    ])
+  })
+
+  it('does not create a topic when the queue is unchanged', async () => {
+    const h = makeHarness({ 42: ASK_JOURNAL })
+    h.config.digestTopic = 'Waiting on you'
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncDigest()
+    expect(h.created).toHaveLength(1)
+
+    // Second run, nothing changed: it must short-circuit BEFORE resolving the
+    // destination, so a quiet night has no side effects at all.
+    const quiet = await bridge.syncDigest()
+    expect(quiet.posted).toBe(false)
+    expect(h.created).toHaveLength(1)
+    expect(h.sent).toHaveLength(1)
+  })
+
+  it('keeps the thread id on the plain-text retry path', async () => {
+    const h = makeHarness({ 42: ASK_JOURNAL })
+    h.config.digestTopic = '77'
+    let first = true
+    h.client.sendMessage = async (m) => {
+      if (first) {
+        first = false
+        throw new Error('bad entity')
+      }
+      h.sent.push(m)
+    }
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncDigest()
+    // The HTML attempt failed; the fallback must still land in the topic
+    // rather than silently falling back to General.
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].messageThreadId).toBe(77)
+    expect(h.sent[0].parseMode).toBeUndefined()
+  })
+
+  it('a reply inside the digest topic still routes by task id', async () => {
+    const h = makeHarness({ 42: ASK_JOURNAL })
+    h.config.digestTopic = 'Waiting on you'
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+    await bridge.syncDigest()
+
+    // The digest topic is NOT a task topic, so a reply in it must fall through
+    // to by-task-id routing exactly as a General reply does.
+    h.queueUpdates([
+      {
+        update_id: 1,
+        message: { message_id: 9, message_thread_id: 1, text: '#42 approve', from: { id: 5 } },
+      },
+    ])
+    const down = await bridge.syncDown()
+    // routeReply folds the segment in verbatim by design, so the id prefix
+    // stays; what matters here is that it reached task 42 at all.
+    expect(down.folded).toEqual([{ taskId: '42', text: '#42 approve' }])
+    expect(h.store['42']).toContain(FROM_ME)
+  })
+})
