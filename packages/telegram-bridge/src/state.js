@@ -37,6 +37,20 @@ export function setArchived(state, taskId, archived) {
   return state
 }
 
+// Remember that the user has spoken about this task since we last posted. syncUp
+// stays silent on tasks that have reached the completed board, but that must not
+// swallow a genuine conversation: once the user replies about a finished task,
+// they are owed the agent's answer even though the task is closed. This flag is
+// what distinguishes "the agent touched an old journal" from "the user reopened
+// the conversation". It is cleared as soon as that answer goes out, so a closed
+// task delivers exactly one agent turn per user message and cannot drift back
+// into posting unprompted.
+export function setUserEngaged(state, taskId, engaged) {
+  const prev = state.tasks[taskId] || {}
+  state.tasks[taskId] = { ...prev, userEngaged: !!engaged }
+  return state
+}
+
 export function setOffset(state, offset) {
   state.updateOffset = offset
   return state

@@ -18,6 +18,7 @@ import {
   setTopic,
   setLastPosted,
   setArchived,
+  setUserEngaged,
   setOffset,
   setLastDigest,
   setDigestTopic,
@@ -95,10 +96,31 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     return topicId
   }
 
+  // The set of task IDs currently on the completed board, read at most once per
+  // run. Returns null when the board can't be read, which callers treat as "no
+  // suppression" so a missing board never silences the mirror.
+  let completedIds
+  async function loadCompletedIds() {
+    if (completedIds !== undefined) return completedIds
+    if (typeof io.readCompletedBoard !== 'function') {
+      completedIds = null
+      return completedIds
+    }
+    try {
+      completedIds = new Set(parseCompletedTaskIds(await io.readCompletedBoard()))
+    } catch (err) {
+      logger(`could not read completed board (${err.message}); posting to all tasks`)
+      completedIds = null
+    }
+    return completedIds
+  }
+
   async function syncUp() {
     const posted = []
     const created = []
+    const suppressed = []
     const journals = await io.listJournals()
+    const completed = await loadCompletedIds()
 
     for (const { taskId } of journals) {
       if (!isAllowed(taskId)) continue
@@ -118,6 +140,27 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       // as already-seen up front by `baseline` (run once), so their first topic
       // is created only when the agent next writes to them.
       if (task && task.lastPostedHash === hash) continue
+
+      // A task that has reached the completed board is finished, and the user
+      // should not hear about it again. Posting was previously gated ONLY on the
+      // turn hash changing, which made it fire for reasons that have nothing to
+      // do with the task being worked: any maintenance edit to an old journal
+      // (reformatting a marker, repairing a block so the digest can parse it)
+      // changes the parsed turn and therefore re-posted a months-old entry into
+      // a closed topic. syncArchive() closes those topics, but the bot is a group
+      // ADMIN and Telegram lets admins post into closed topics — so the message
+      // landed anyway and the topic resurfaced, looking exactly like the agent
+      // had started working a task the user had already closed.
+      //
+      // Absorb the new hash rather than just skipping: the change is
+      // acknowledged, so the task stays quiet on later runs instead of queueing
+      // up a stale post for whenever it next becomes eligible.
+      if (completed && completed.has(taskId) && !(task && task.userEngaged)) {
+        setLastPosted(state, taskId, hash)
+        suppressed.push(taskId)
+        logger(`suppressed post for completed task #${taskId} (no user reply since it closed)`)
+        continue
+      }
 
       // Adopt an existing topic id from the journal's own tg-meta marker when our
       // local state has forgotten it. state.json is machine-local and can be lost
@@ -165,11 +208,15 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
         })
       }
       setLastPosted(state, taskId, hash)
+      // Consume the engagement: the user's message has now been answered. A
+      // closed task therefore delivers one agent turn per user reply and then
+      // goes quiet again, instead of the flag latching it permanently open.
+      if (task && task.userEngaged) setUserEngaged(state, taskId, false)
       posted.push(taskId)
       logger(`posted task #${taskId} to topic ${topicId}`)
     }
 
-    return { posted, created }
+    return { posted, created, suppressed }
   }
 
   async function syncDown() {
@@ -238,6 +285,11 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
         }
         const updated = appendUserReply(content, { text: entry.text, date: day })
         await io.writeJournal(entry.taskId, updated)
+        // The user has spoken about this task, so it is a live conversation even
+        // if the task itself is closed. Without this, the completed-board guard
+        // in syncUp would swallow the agent's reply and the user would be left
+        // asking a question into a topic that never answers.
+        setUserEngaged(state, entry.taskId, true)
         folded.push({ taskId: entry.taskId, text: entry.text })
         logger(`folded reply into task #${entry.taskId}`)
       }

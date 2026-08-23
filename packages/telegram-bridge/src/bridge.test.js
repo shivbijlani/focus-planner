@@ -379,6 +379,123 @@ describe('syncDown', () => {
   })
 })
 
+describe('syncUp does not disturb tasks the user has already closed', () => {
+  const COMPLETED = `| # | 🎯 | Task | WP | Date |\n|---|---|---|---|---|\n| 42 | ✅ | done | - | 2026-08-02 |\n`
+
+  // The regression this guards: a maintenance edit to an OLD closed journal
+  // (reformatting a marker so the digest can parse it) changes the parsed turn,
+  // which used to be the only thing gating a post. The bot is a group admin, so
+  // Telegram let it post into the closed topic and the finished task resurfaced.
+  it('suppresses a post when the task is on the completed board', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    h.setCompletedBoard(COMPLETED)
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42', lastPostedHash: 'stale', archived: true }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncUp()
+    expect(res.posted).toEqual([])
+    expect(res.suppressed).toEqual(['42'])
+    expect(h.sent).toHaveLength(0)
+  })
+
+  it('absorbs the new hash so the stale post is not merely queued for later', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    h.setCompletedBoard(COMPLETED)
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42', lastPostedHash: 'stale', archived: true }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(state.tasks['42'].lastPostedHash).not.toBe('stale')
+
+    // Even if the task is later reopened, the absorbed edit must not fire.
+    h.setCompletedBoard('')
+    const again = await bridge.syncUp()
+    expect(again.posted).toEqual([])
+    expect(h.sent).toHaveLength(0)
+  })
+
+  it('never creates a forum topic for a completed task', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    h.setCompletedBoard(COMPLETED)
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncUp()
+    expect(h.created).toHaveLength(0)
+    expect(res.suppressed).toEqual(['42'])
+    expect(h.store['42']).not.toContain('<!-- tg-meta')
+  })
+
+  it('still posts for an OPEN task', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    h.setCompletedBoard('') // not completed
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncUp()
+    expect(res.posted).toEqual(['42'])
+    expect(res.suppressed).toEqual([])
+  })
+
+  // The guard must not swallow a real conversation: if the user asks something
+  // in a closed task's topic, they are owed the answer.
+  it('answers a closed task once the user has replied in it', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    h.setCompletedBoard(COMPLETED)
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42', lastPostedHash: 'stale', archived: true }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    h.queueUpdates([
+      {
+        update_id: 900,
+        message: { message_thread_id: 7, message_id: 3, text: 'why did this run?', from: { is_bot: false } },
+      },
+    ])
+    await bridge.syncDown()
+    expect(state.tasks['42'].userEngaged).toBe(true)
+
+    const res = await bridge.syncUp()
+    expect(res.posted).toEqual(['42'])
+    expect(h.sent).toHaveLength(1)
+  })
+
+  it('goes quiet again after answering, so one reply buys one answer', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    h.setCompletedBoard(COMPLETED)
+    const state = emptyState()
+    state.tasks['42'] = {
+      topicId: 7,
+      name: '#42',
+      lastPostedHash: 'stale',
+      archived: true,
+      userEngaged: true,
+    }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(state.tasks['42'].userEngaged).toBe(false)
+
+    // The agent writes to the closed journal again, unprompted: stay silent.
+    h.store['42'] = `${AGENT_JOURNAL}\nanother unprompted edit\n`
+    const second = await bridge.syncUp()
+    expect(second.posted).toEqual([])
+    expect(second.suppressed).toEqual(['42'])
+  })
+
+  it('posts normally when the completed board cannot be read', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    delete h.io.readCompletedBoard
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncUp()
+    expect(res.posted).toEqual(['42'])
+  })
+})
+
 describe('syncArchive (mirror completed board -> closed topics)', () => {
   const COMPLETED = `| # | 🎯 | Task | WP | Date |\n|---|---|---|---|---|\n| 42 | ✅ | done | - | 2026-08-02 |\n`
 
