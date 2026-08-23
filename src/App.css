@@ -3697,9 +3697,142 @@ tr.highlight-flash {
   line-height: 1.4;
   color: #64748b;
 }
+.settings-ai-advanced {
+  margin: 0;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.25);
+}
+.settings-ai-advanced[open] {
+  background: rgba(15, 23, 42, 0.4);
+}
+.settings-ai-advanced-summary {
+  cursor: pointer;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #94a3b8;
+  list-style: none;
+  user-select: none;
+}
+.settings-ai-advanced-summary::-webkit-details-marker { display: none; }
+.settings-ai-advanced-summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 0.45rem;
+  color: #64748b;
+  transition: transform 0.15s ease;
+}
+.settings-ai-advanced[open] .settings-ai-advanced-summary::before {
+  transform: rotate(90deg);
+}
+.settings-ai-advanced-summary:hover { color: #cbd5e1; }
+.settings-ai-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0 0.6rem 0.65rem;
+}
 .settings-ai-form-hint code {
   font-size: 0.7rem;
   color: #94a3b8;
+}
+.agent-settings-page {
+  width: 100%;
+  min-height: calc(100dvh - 4rem);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.agent-settings-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  max-width: 1100px;
+}
+.agent-settings-eyebrow {
+  margin: 0 0 0.35rem;
+  color: #818cf8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.agent-settings-description {
+  max-width: 760px;
+  color: #94a3b8;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+.agent-settings-description code {
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.agent-settings-card {
+  width: 100%;
+  max-width: 1100px;
+  padding: 1rem;
+  border: 1px solid #1e3a5f;
+  border-radius: 12px;
+  background: rgba(13, 27, 53, 0.72);
+}
+.agent-settings-page .settings-ai-modes {
+  margin-bottom: 1rem;
+}
+.agent-settings-page .settings-ai-form {
+  gap: 1rem;
+}
+.agent-settings-page .settings-ai-form-group {
+  padding: 0.8rem 0.9rem 0.95rem;
+}
+.agent-settings-page .settings-ai-field-input {
+  font-size: 0.86rem;
+}
+.agent-settings-page .settings-ai-input {
+  min-height: min(58dvh, 680px);
+}
+.agent-settings-save-row,
+.agent-settings-create-row {
+  margin-top: 1rem;
+}
+.settings-agent-settings-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0 0.75rem;
+  border-top: 1px solid #0f3460;
+}
+.settings-agent-settings-hint code {
+  color: #94a3b8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.settings-link-button {
+  flex-shrink: 0;
+  color: #93c5fd;
+  background: transparent;
+  border: 1px solid #1e3a5f;
+  border-radius: 6px;
+  padding: 0.32rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.settings-link-button:hover {
+  color: #bfdbfe;
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.08);
+}
+@media (max-width: 768px) {
+  .agent-settings-card {
+    padding: 0.75rem;
+  }
+  .settings-agent-settings-hint {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 .settings-update-msg {
   margin-top: 0.4rem;
