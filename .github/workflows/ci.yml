@@ -1,0 +1,54 @@
+name: CI
+
+# Runs the test suite and a production build on every pull request, so a PR's
+# "mergeable" badge means "verified", not just "no merge conflict". Before this
+# workflow existed the repo had no CI at all: `gh pr checks` reported "no checks
+# reported" for every open PR, and main sat red (a missing `fake-indexeddb`
+# devDependency) without anything noticing.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One in-flight run per ref; a new push supersedes the previous run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Root vitest also picks up the workspace packages (e.g. telegram-bridge).
+      - name: Unit tests
+        run: npm test
+      # Mirrors deploy.yml's build so a PR cannot break Pages after it merges.
+      - name: Production build
+        run: npm run build
+
+  lint:
+    name: Lint (non-blocking)
+    runs-on: ubuntu-latest
+    # main currently has pre-existing lint errors. Reporting them is useful;
+    # blocking every open PR on them is not, so this job never fails the run.
+    # Flip to blocking once main is lint-clean.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
