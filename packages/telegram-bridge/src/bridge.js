@@ -394,11 +394,22 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       })
     }
 
-    // Blocking asks first; then by the user's OWN board rather than by task-ID
-    // magnitude. The digest is size-capped, so with a large queue only the
-    // leading entries survive — which makes this ordering the whole feature.
-    // Raw `Number(taskId)` descending put malformed six-digit IDs (#281) above
-    // every real task, and buried genuine P0s under whatever was filed last.
+    // The user's OWN board is the priority order — it is the thing he
+    // maintains by hand, and `## Today` / 🔴 / row position is exactly how he
+    // says what matters. So the board leads, and the ask's marker style only
+    // breaks ties between tasks sitting at the same board position.
+    //
+    // This deliberately inverts the previous key order. Ranking `needs` above
+    // `next` FIRST meant a single formatting choice inside a journal outranked
+    // every priority the user had set: a 🔴 `## Today` task whose newest turn
+    // happened to phrase its ask as `Next:` sorted below all ~81 ordinary
+    // `Needs from you:` asks and fell off the size-capped message entirely.
+    // Observed live one day after the board-order change landed: #356 (🔴),
+    // #434 (`merge 154`) and #407 (`merge 124`) were all pushed out by
+    // ordinary household rows, while the digest claimed to lead with the P0
+    // merge asks. Marker style drifts every time a journal gains a turn; the
+    // board does not, so the board has to be the stable key.
+    //
     // Falls back to newest-first when there is no board to read.
     let board = null
     if (typeof io.readBoard === 'function') {
@@ -411,9 +422,9 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     const rank = (e) => (e.source === 'next' ? 1 : 0)
     entries.sort(
       (a, b) =>
-        rank(a) - rank(b) ||
         boardRank(board, a.taskId) - boardRank(board, b.taskId) ||
         boardIndex(board, a.taskId) - boardIndex(board, b.taskId) ||
+        rank(a) - rank(b) ||
         Number(b.taskId) - Number(a.taskId),
     )
 
@@ -430,6 +441,7 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     const md = buildDigest(entries, {
       date: now().toISOString().slice(0, 10),
       privacyModeOn,
+      preserveOrder: true,
     })
     const hash = hashDigest(md)
 

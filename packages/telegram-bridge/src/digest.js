@@ -28,6 +28,15 @@ const TELEGRAM_MAX = 4096
 const NEEDS_RE = /^\s*\*{0,2}Needs from you\b[^:]*:\*{0,2}\s*(.*)$/i
 // Matches a `Next:` / `- Next:` / `**Next:**` line.
 const NEXT_RE = /^\s*[-*]?\s*\*{0,2}Next\*{0,2}\s*:\s*(.*)$/i
+// Matches an imperative hand-back such as **Reply `merge 150`**, Say "approve",
+// or Answer 'yes'. Journals increasingly close a turn this way instead of
+// re-emitting a `Needs from you:` marker, and such a turn was previously read
+// as having NO ask at all — see the note above `extractAskEntry`.
+const REPLY_RE =
+  /^\s*[-*]?\s*\*{0,2}(?:Reply|Say|Answer)\b[^\r\n]{0,80}?[`"\u201c\u2018']/i
+// `Next:` values that describe the AGENT's own future work rather than
+// something the user owes. These must never be presented as user asks.
+const AGENT_SIDE_RE = /^(complete|done|nothing|none|keep|continue|monitor|poll)\b/i
 
 /** Collapse whitespace and strip trailing markdown noise from an ask line. */
 function tidy(text) {
@@ -40,6 +49,9 @@ function tidy(text) {
  * Returns `{ text, source }` where source is:
  *   'needs' — an explicit `**Needs from you:**`. This is the agent's formal
  *             ask and is genuinely blocking on the user.
+ *   'reply' — an imperative hand-back like **Reply `merge 150`**. Also
+ *             genuinely blocking: it is the agent telling the user the exact
+ *             words to send back. Ranked with 'needs'.
  *   'next'  — only a `Next:` line. Much weaker: `Next:` often describes what
  *             the *agent* will do next ("keep polling on future overnight
  *             runs"), not something the user owes. Callers should rank these
@@ -63,7 +75,7 @@ export function extractAskEntry(turn) {
       if (!raw.trim()) break
       // Stop at the start of a new structural block or a new marker line.
       if (/^\s{0,3}(#{1,6}\s|\*{2}[A-Z])/.test(raw)) break
-      if (NEEDS_RE.test(raw) || NEXT_RE.test(raw)) break
+      if (NEEDS_RE.test(raw) || NEXT_RE.test(raw) || REPLY_RE.test(raw)) break
       parts.push(raw.trim())
       // Keep asks short — one or two wrapped lines is plenty for a digest.
       if (parts.join(' ').length > 400) break
@@ -73,6 +85,7 @@ export function extractAskEntry(turn) {
   }
 
   let nextAsk = null
+  let replyAsk = null
   for (let i = 0; i < lines.length; i++) {
     const needs = NEEDS_RE.exec(lines[i])
     if (needs) {
@@ -81,14 +94,19 @@ export function extractAskEntry(turn) {
       if (ask && /^(none|nothing)\b/i.test(ask)) return null
       if (ask) return { text: ask, source: 'needs' }
     }
+    if (replyAsk == null && REPLY_RE.test(lines[i])) {
+      replyAsk = gather(i, lines[i].trim())
+    }
     if (nextAsk == null) {
       const next = NEXT_RE.exec(lines[i])
       if (next) nextAsk = gather(i, next[1].trim())
     }
   }
 
+  // An imperative hand-back is a real ask, so prefer it over a weak `Next:`.
+  if (replyAsk) return { text: replyAsk, source: 'reply' }
   if (!nextAsk) return null
-  if (/^(complete|done|nothing|none)\b/i.test(nextAsk)) return null
+  if (AGENT_SIDE_RE.test(nextAsk)) return null
   return { text: nextAsk, source: 'next' }
 }
 
@@ -115,8 +133,17 @@ function truncateAsk(ask, max = 220) {
  * decoration: with privacy mode on, a typed message never reaches the bot, so
  * a digest that does not tell the user to *reply* can produce answers that
  * vanish silently.
+ *
+ * `preserveOrder` keeps `entries` exactly as the caller sorted them. Callers
+ * that have already applied a stronger priority signal — `syncDigest` sorts by
+ * the user's own board — must set it, otherwise the source partition below
+ * silently re-sorts the list and discards that work. It stays off by default so
+ * a caller that passes an unsorted list still gets real asks before soft ones.
  */
-export function buildDigest(entries, { date, privacyModeOn = false } = {}) {
+export function buildDigest(
+  entries,
+  { date, privacyModeOn = false, preserveOrder = false } = {},
+) {
   const day = date || new Date().toISOString().slice(0, 10)
   const open = entries.filter((e) => e && e.ask)
 
@@ -126,7 +153,7 @@ export function buildDigest(entries, { date, privacyModeOn = false } = {}) {
   // the soft ones that fall off the end.
   const blocking = open.filter((e) => e.source !== 'next')
   const soft = open.filter((e) => e.source === 'next')
-  const ordered = [...blocking, ...soft]
+  const ordered = preserveOrder ? open : [...blocking, ...soft]
 
   const lines = [`**\u{1F319} Waiting on you \u2014 ${day}**`, '']
 

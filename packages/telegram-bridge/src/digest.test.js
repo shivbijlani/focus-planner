@@ -62,12 +62,44 @@ describe('extractAskEntry source', () => {
   })
 
   it('labels a bare Next line as the weaker fallback', () => {
-    // `Next:` often describes what the AGENT will do, not what the user owes —
-    // e.g. "keep polling on future overnight runs". Marking it lets the digest
-    // rank it below real asks instead of presenting it as a decision.
-    const e = extractAskEntry('- Next: keep polling on future overnight runs.')
+    // `Next:` can still carry a real user ask; it is just weaker evidence than
+    // a formal `Needs from you:` marker, so it is labelled for ranking.
+    const e = extractAskEntry('- Next: your one word on the repoint.')
     expect(e.source).toBe('next')
-    expect(e.text).toBe('keep polling on future overnight runs.')
+    expect(e.text).toBe('your one word on the repoint.')
+  })
+
+  it('drops a Next line that describes the AGENT\u2019s own work', () => {
+    // "keep polling on future overnight runs" is something the agent does, not
+    // something the user owes. Listing it as an ask trains the user to ignore
+    // the digest, so it must not appear at all.
+    expect(extractAskEntry('- Next: keep polling on future overnight runs.')).toBeNull()
+    expect(extractAskEntry('- Next: continue the sweep next run')).toBeNull()
+    expect(extractAskEntry('- Next: monitor the queue')).toBeNull()
+  })
+
+  it('treats an imperative hand-back as a blocking ask', () => {
+    // Journals routinely close a turn with "**Reply `merge 150`**" instead of
+    // re-emitting a Needs-from-you marker. That used to read as NO ask at all,
+    // which is how task #433 — a P0 whose entire ask is `merge 150` —
+    // disappeared from the live digest completely.
+    const e = extractAskEntry('**Reply `merge 150`** (or `merge 150 153` to do both).')
+    expect(e.source).toBe('reply')
+    expect(e.text).toContain('merge 150')
+  })
+
+  it('prefers a formal Needs marker over an imperative hand-back', () => {
+    const turn = ['**Needs from you:** pick a size', '', 'Reply `merge 150`'].join('\n')
+    expect(extractAskEntry(turn).source).toBe('needs')
+  })
+
+  it('prefers an imperative hand-back over a weak Next line', () => {
+    const turn = ['- Next: your one word.', '', '**Reply `merge 150`**'].join('\n')
+    expect(extractAskEntry(turn).source).toBe('reply')
+  })
+
+  it('does not mistake ordinary prose starting with "reply" for an ask', () => {
+    expect(extractAskEntry('Replied to the thread and moved on.')).toBeNull()
   })
 
   it('returns null for no ask', () => {
@@ -518,9 +550,11 @@ describe('syncDigest ordering (board-aware)', () => {
     expect(orderOf(h.sent[0].text)).toHaveLength(5)
   })
 
-  it('keeps formal asks ahead of soft Next: lines regardless of board rank', async () => {
-    // 349 is only Deferred, but it is a real ask; 435 is a P0 with just a
-    // Next: line, which describes agent-side work rather than a user decision.
+  it('excludes a P0 whose only Next: line is agent-side work', async () => {
+    // 435 is a P0, but "keep polling charger availability" is work the AGENT
+    // does. Ranking it low was not enough — it should not be listed at all,
+    // otherwise the board-first order below would promote agent chatter to the
+    // top of the queue. 349 is only Deferred but is a genuine ask.
     const softP0 = `# Task 435: Surrey BC dhol trip
 
 ---
@@ -544,6 +578,38 @@ describe('syncDigest ordering (board-aware)', () => {
     })
 
     await bridge.syncDigest()
-    expect(orderOf(h.sent[0].text)).toEqual(['349', '435'])
+    expect(orderOf(h.sent[0].text)).toEqual(['349'])
+  })
+
+  it('ranks a P0 with a genuine Next: ask above an ordinary Today needs ask', async () => {
+    // The regression this guards: marker style used to be the PRIMARY sort key,
+    // so a 🔴 Today task phrasing its ask as `Next:` sorted below every
+    // ordinary `Needs from you:` ask and fell off the size-capped message.
+    // Observed live on #356, #434 and #407 one day after board ordering landed.
+    const p0WithNext = `# Task 435: Surrey BC dhol trip
+
+---
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+## \u{1F319} Overnight Agent
+
+**Status:** In-progress
+
+- Next: reply with the day you want to drive.
+`
+    const h = makeHarness(
+      { 435: p0WithNext, 428: journalWithAsk(428, 'Neon rave', 'watch it or drop it') },
+      { board: BOARD },
+    )
+    const bridge = createBridge({
+      client: h.client,
+      config: h.config,
+      state: emptyState(),
+      io: h.io,
+    })
+
+    await bridge.syncDigest()
+    // 435 is Today+P0, 428 is ordinary Today: the board decides, not the marker.
+    expect(orderOf(h.sent[0].text)).toEqual(['435', '428'])
   })
 })
