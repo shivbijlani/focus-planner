@@ -7,6 +7,7 @@ import {
   taskIdFromFilename,
   journalFilename,
   hasAgentBlock,
+  agentBlockText,
   FROM_ME,
 } from './journal.js'
 
@@ -111,5 +112,96 @@ describe('hasAgentBlock', () => {
   it('detects the sentinel', () => {
     expect(hasAgentBlock(JOURNAL)).toBe(true)
     expect(hasAgentBlock('# Task 1: x')).toBe(false)
+  })
+})
+
+// A journal whose agent block carries a STRAY `<!-- from: overnight-agent -->`
+// provenance stamp between the Status line and the plan body. This is not a
+// chat entry — no `## <date>` header precedes it — but it used to terminate the
+// block, throwing away the `**Needs from you:**` underneath and silently
+// disabling syncDigest()'s agent-block fallback. Measured live on 26 journals;
+// #308 (a `proposed` ask open since 2026-08-10) vanished from the digest.
+const STRAY_MARKER_JOURNAL = `# Task 308: Export from fidelity
+
+---
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+## 🌙 Overnight Agent
+
+**Status:** Proposed · plan v2 · 2026-08-10
+
+<!-- from: overnight-agent -->
+**Context:** read #232 and #312.
+
+### Proposed plan (v2)
+1. Drop the Plaid dashboard MCP route.
+
+**Needs from you:** reply **"approve Truthifi"** to authorize the connect flow.
+
+**Your call:** reply below in plain English.
+
+## 2026-06-24
+
+<!-- from: me -->
+I signed in for you.
+`
+
+describe('agentBlockText', () => {
+  it('keeps a stray agent marker inside the block instead of ending there', () => {
+    const block = agentBlockText(STRAY_MARKER_JOURNAL)
+    expect(block).toContain('**Needs from you:**')
+    expect(block).toContain('approve Truthifi')
+    expect(block).toContain('**Your call:**')
+  })
+
+  it('still stops at the first dated chat entry', () => {
+    const block = agentBlockText(STRAY_MARKER_JOURNAL)
+    expect(block).not.toContain('## 2026-06-24')
+    expect(block).not.toContain('I signed in for you')
+    expect(block).not.toContain(FROM_ME)
+  })
+
+  it('stops at a user reply even when no date header precedes it', () => {
+    // `<!-- from: me -->` is unconditional: once the user has spoken the block
+    // is over, header or not. Only the AGENT marker is treated as provenance.
+    const journal = [
+      '---',
+      '<!-- OVERNIGHT-AGENT do not edit this line -->',
+      '',
+      '**Status:** Proposed · plan v1 · 2026-08-10',
+      '**Needs from you:** pick a size.',
+      '',
+      FROM_ME,
+      'actually skip it',
+    ].join('\n')
+    const block = agentBlockText(journal)
+    expect(block).toContain('pick a size')
+    expect(block).not.toContain('actually skip it')
+  })
+
+  it('does not reach past a dated entry into a later agent turn', () => {
+    // The stray-marker allowance must never let the block swallow a genuine
+    // later agent chat turn — that would resurrect stale asks, the exact
+    // failure mode digest.js warns about.
+    const journal = [
+      '---',
+      '<!-- OVERNIGHT-AGENT do not edit this line -->',
+      '',
+      '**Status:** Proposed · plan v1 · 2026-08-10',
+      '<!-- from: overnight-agent -->',
+      '**Needs from you:** the real, current ask.',
+      '',
+      '## 2026-08-20',
+      '',
+      '<!-- from: overnight-agent -->',
+      '**Needs from you:** a much later, different ask.',
+    ].join('\n')
+    const block = agentBlockText(journal)
+    expect(block).toContain('the real, current ask.')
+    expect(block).not.toContain('a much later, different ask.')
+  })
+
+  it('returns null when there is no block', () => {
+    expect(agentBlockText('# Task 1: x')).toBeNull()
   })
 })

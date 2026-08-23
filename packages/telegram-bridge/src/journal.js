@@ -67,16 +67,33 @@ export function hasAgentBlock(content) {
  * current state for the task — it carries the live `**Status:**` and
  * `**Needs from you:**` — so it is the right fallback when the newest chat turn
  * happens not to restate the ask.
+ *
+ * A chat entry is `## <date>` followed by a `<!-- from: … -->` marker, so the
+ * date header is the real boundary. A *bare* `<!-- from: overnight-agent -->`
+ * seen before any date header is not a chat entry at all — it is a stray
+ * provenance stamp some past run wrote INSIDE the block, above the plan body.
+ * Treating it as a terminator severed the block at that line and discarded the
+ * `**Needs from you:**` / `**Your call:**` below it, which silently disabled the
+ * whole agent-block fallback in syncDigest() for those tasks. Measured live:
+ * 26 journals in this shape, and #308 — a `proposed` ask open since 2026-08-10
+ * whose newest turn also carries no marker — was dropped from the digest
+ * entirely as a result. `<!-- from: me -->` still terminates unconditionally:
+ * once the user has spoken, the block is over regardless of headers.
  */
 export function agentBlockText(content) {
   const { block } = splitAtSentinel(content)
   if (!block) return null
   const lines = block.split(/\r?\n/)
   const body = []
+  let sawDateHeader = false
   for (const raw of lines) {
     const trimmed = raw.trim()
-    if (trimmed === FROM_ME || trimmed === FROM_AGENT) break
-    if (DATE_HEADER.test(raw)) break
+    if (trimmed === FROM_ME) break
+    if (DATE_HEADER.test(raw)) {
+      sawDateHeader = true
+      break
+    }
+    if (trimmed === FROM_AGENT && sawDateHeader) break
     body.push(raw)
   }
   return body.join('\n').trim() || null
