@@ -4,7 +4,9 @@ import {
   opApplySnoozeTransitions,
   opBridgeLinks,
   opChangeLinkedId,
+  opLinkToAdoBugDb,
   opMoveLinesBetweenSections,
+  opRenameTask,
   opSetTaskSnooze,
   opSnoozeTask,
 } from './focusPlanOps.js'
@@ -236,5 +238,44 @@ describe('opBridgeLinks', () => {
   it('handles non-existent removedId gracefully', () => {
     const out = opBridgeLinks(table, '99', '100')
     expect(out).toBe(table)
+  })
+})
+
+describe('#394 Part 2: row-write ops tolerate CRLF / surrounding whitespace', () => {
+  // rawLine passed to these ops is the TRIMMED table line (App.jsx pushes trimmed
+  // rawLines). On Windows/CRLF files, content.split('\n') leaves a trailing \r on
+  // each line, so an exact `line === rawLine` compare silently fails to find the
+  // row and the write no-ops. These ops must match with line.trim() === rawLine.
+  const header = '| ID | 🎯 | Task | Priority | Added | Linked ID |'
+  const sep = '|---|---|------|----------|-------|-----------|'
+  const row = '| 331 | 🟡 | Fix bug | P1 | 2026-07-01 | |'
+  const table = [header, sep, row, '']
+
+  describe('opChangeLinkedId', () => {
+    it('sets the linked id on an exact-match line', () => {
+      const out = opChangeLinkedId(table.join('\n'), row, '192')
+      expect(out).toMatch(/\| 331 \|.*\| 192 \|/)
+    })
+
+    it('sets the linked id when the file line has a trailing CR (CRLF)', () => {
+      const out = opChangeLinkedId(table.join('\r\n'), row, '192')
+      expect(out).toMatch(/\| 331 \|.*\| 192 \|/)
+    })
+
+    it('sets the linked id when the file line has trailing whitespace', () => {
+      const content = table.map((l, i) => (i === 2 ? l + '   ' : l)).join('\n')
+      const out = opChangeLinkedId(content, row, '192')
+      expect(out).toMatch(/\| 331 \|.*\| 192 \|/)
+    })
+  })
+
+  it('opRenameTask renames even with CRLF line endings', () => {
+    const out = opRenameTask(table.join('\r\n'), row, 'Renamed')
+    expect(out).toMatch(/\| 331 \|.*\| Renamed \|/)
+  })
+
+  it('opLinkToAdoBugDb links even with CRLF line endings', () => {
+    const out = opLinkToAdoBugDb(table.join('\r\n'), row, { id: 'AB#5', url: 'https://ado/5' })
+    expect(out).toContain('[AB#5](https://ado/5)')
   })
 })

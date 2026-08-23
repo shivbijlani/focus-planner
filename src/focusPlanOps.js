@@ -199,7 +199,7 @@ export function opDeleteTask(content, rawLine) {
 
 export function opRenameTask(content, rawLine, newTaskName) {
   const lines = content.split('\n')
-  const lineIndex = lines.findIndex(line => line === rawLine)
+  const lineIndex = lines.findIndex(line => line.trim() === rawLine)
   if (lineIndex === -1) return content
   const parts = rawLine.split('|')
   if (parts.length < 4) return content
@@ -223,7 +223,7 @@ export function opChangeLinkedId(content, rawLine, newLinkedId) {
 
 export function opLinkToAdoBugDb(content, rawLine, adoLink) {
   const lines = content.split('\n')
-  const lineIndex = lines.findIndex(line => line === rawLine)
+  const lineIndex = lines.findIndex(line => line.trim() === rawLine)
   if (lineIndex === -1) return content
   const parts = rawLine.split('|')
   if (parts.length < 3) return content
