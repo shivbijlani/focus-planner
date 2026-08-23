@@ -430,10 +430,37 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
 
     // Only surface the privacy warning when it is actually true, so it stays
     // meaningful instead of becoming boilerplate the user learns to skip.
+    //
+    // `can_read_all_group_messages` ALONE is not sufficient, and trusting it
+    // was an active bug: Telegram delivers every group message to a bot that
+    // is a group ADMINISTRATOR regardless of the privacy flag, but `getMe`
+    // keeps reporting `can_read_all_group_messages: false` for that bot. So an
+    // admin bot printed "a message you merely type in the group is never
+    // delivered" on top of every digest — false, and it put friction on the
+    // exact channel the user chose as primary, telling him to reply-to-bot
+    // when plain typing works fine.
+    //
+    // Judge by admin status first; only fall back to the flag when membership
+    // can't be read. Any failure keeps the warning OFF, because a spurious
+    // warning is worse than a missing one.
     let privacyModeOn = false
     try {
       const me = await client.getMe()
-      privacyModeOn = me && me.can_read_all_group_messages === false
+      const flagged = !!me && me.can_read_all_group_messages === false
+      if (flagged && typeof client.getChatMember === 'function' && me.id != null) {
+        try {
+          const member = await client.getChatMember({ chatId, userId: me.id })
+          const isAdmin =
+            member &&
+            (member.status === 'administrator' || member.status === 'creator')
+          privacyModeOn = !isAdmin
+        } catch {
+          // Membership unreadable — fall back to the flag alone.
+          privacyModeOn = true
+        }
+      } else {
+        privacyModeOn = flagged
+      }
     } catch {
       privacyModeOn = false
     }

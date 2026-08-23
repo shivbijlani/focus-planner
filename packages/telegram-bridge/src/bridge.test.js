@@ -490,6 +490,68 @@ describe('syncArchive (mirror completed board -> closed topics)', () => {
   })
 })
 
+// The digest's privacy warning tells the user his plain typed messages are
+// never delivered and that he must reply-to-bot. That is FALSE for a bot that
+// is a group administrator — Telegram delivers everything to an admin bot even
+// with privacy mode on, while `getMe` still reports
+// `can_read_all_group_messages: false`. Printing it anyway put friction on the
+// user's primary channel, so admin status has to win over the flag.
+describe('syncDigest privacy warning', () => {
+  const ASK_JOURNAL = `# Task 42: Demo
+
+---
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+## \u{1F319} Overnight Agent
+
+**Status:** Proposed \u00B7 plan v1 \u00B7 2026-07-08
+
+**Needs from you:** one word - merge 150.
+`
+
+  const WARNING = 'Bot privacy mode is ON'
+
+  const run = async (getChatMember) => {
+    const h = makeHarness({ 42: ASK_JOURNAL })
+    h.client.getMe = async () => ({
+      username: 'test_bot',
+      id: 1,
+      can_read_all_group_messages: false,
+    })
+    if (getChatMember) h.client.getChatMember = getChatMember
+    const bridge = createBridge({
+      client: h.client,
+      config: h.config,
+      state: emptyState(),
+      io: h.io,
+    })
+    await bridge.syncDigest()
+    return h.sent[0].text || h.sent[0].markdown || JSON.stringify(h.sent[0])
+  }
+
+  it('omits the warning when the bot is a group administrator', async () => {
+    const text = await run(async () => ({ status: 'administrator' }))
+    expect(text).not.toContain(WARNING)
+  })
+
+  it('omits the warning when the bot is the group creator', async () => {
+    const text = await run(async () => ({ status: 'creator' }))
+    expect(text).not.toContain(WARNING)
+  })
+
+  it('keeps the warning when the bot is only a member', async () => {
+    const text = await run(async () => ({ status: 'member' }))
+    expect(text).toContain(WARNING)
+  })
+
+  it('falls back to the flag when membership cannot be read', async () => {
+    const text = await run(async () => {
+      throw new Error('forbidden')
+    })
+    expect(text).toContain(WARNING)
+  })
+})
+
 // The digest is the only message that leaves a task topic. Posting it to
 // General is what made the group noisy enough to be switched off wholesale —
 // which then cost the user the only consolidated view of the approval queue.

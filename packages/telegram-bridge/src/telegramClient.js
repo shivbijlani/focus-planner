@@ -29,6 +29,11 @@ export function createTelegramClient({ token, fetchImpl = fetch, apiBase = API_B
   return {
     call,
     getMe: () => call('getMe'),
+    getChatMember: ({ chatId, userId }) =>
+      call('getChatMember', {
+        chat_id: chatId,
+        user_id: userId,
+      }),
     createForumTopic: ({ chatId, name, iconColor }) =>
       call('createForumTopic', {
         chat_id: chatId,
