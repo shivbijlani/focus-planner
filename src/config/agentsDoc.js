@@ -31,9 +31,9 @@ the contract for how to update them correctly.
 Each task is a row in a Markdown table:
 
 \`\`\`markdown
-| ID | 🎯 | Task | Priority | Added | Linked ID |
-|----|----|------|----------|-------|-----------|
-| 70 | 🟡 | Write the design doc | Sydney rollout | 2026-01-27 | |
+| ID | 🎯 | Task | Priority | Added | Wake | Linked ID |
+|----|----|------|----------|-------|------|-----------|
+| 70 | 🟡 | Write the design doc | Sydney rollout | 2026-01-27 | 2026-02-02 | |
 \`\`\`
 
 Priority icons: 🔴 urgent+important · 🟡 important · 🔵 urgent/delegate ·
