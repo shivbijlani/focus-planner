@@ -460,7 +460,17 @@ $env:TELEGRAM_BRIDGE_DIGEST = '<on|off — from user-settings.md>'
 # Honor the "Archive completed topics" user-setting (default on). Only set this
 # to 'off' when that row says off; otherwise leave it unset so the default holds.
 # $env:TELEGRAM_BRIDGE_ARCHIVE = 'off'
-$bridge = "<dev drive>\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js"
+
+# ⚠️ RESOLVE THIS FROM user-settings.md → "Bridge CLI" — do NOT assume the default
+# repo path below. That row exists so the bridge can be PINNED (e.g. to a worktree)
+# while the main checkout sits on an unrelated or known-buggy branch. Using the
+# default path when the row names another one runs a DIFFERENT BUILD than the one
+# the user validated — and `sync-down` on a stale build can silently destroy the
+# user's phone replies (it reads an update, skips it, and still advances the
+# Telegram offset, which is not redeliverable).
+$bridge = "<path from user-settings.md -> Bridge CLI; fall back to the line below>"
+# Fallback only when no Bridge CLI row exists:
+# $bridge = "<dev drive>\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js"
 
 # FIRST-TIME SETUP ONLY: if the bridge has never run (no state.json yet), baseline
 # so it starts from "now" and does NOT backfill a topic for every historical task.
@@ -486,6 +496,22 @@ Rules:
   unchanged content or make duplicate topics.
 - **Respect the allowlist.** If `Telegram → Tasks` names specific IDs, set
   `$env:TELEGRAM_BRIDGE_TASKS = '<comma-separated ids>'` before the call so only those are mirrored.
+- ⚠️ **Resolve the bridge path from `user-settings.md` → "Bridge CLI"; never hard-code the repo default.**
+  That row is how a user pins the bridge to a *specific, validated* build — typically a worktree, while the
+  main checkout sits on some other branch. Running the default path in that situation executes a **different
+  build** than the one they verified. This is not hypothetical: it is the same "an operative line told the
+  agent to do the dangerous thing while the warning lived elsewhere" shape as the fail-open gate above, and
+  it bites hardest on `sync-down`, because a stale build can **permanently destroy the user's phone replies**
+  — it reads a batched update, skips it, and still advances the Telegram offset, and Telegram never
+  redelivers a confirmed update. **If a wrapper script is configured, prefer it for `sync-down` too** (it
+  pins the path *and* sets the fail-open digest flag), rather than hand-rolling `node "$bridge" sync-down`.
+- ⚠️ **Fold phone replies BEFORE `oa-state.ps1 scan`, not just before `once`.** The `sync-down` in the block
+  above protects *this* phase, but the scan in PHASE 1/2 has already run by then. `oa-state.ps1 mark`
+  snapshots each journal's hash, and a fold that lands *after* the mark leaves every answered task with a
+  stale hash — so the next run reports it `reopened` and re-answers it, writing new turns to tasks that were
+  already finished. Run a `sync-down` pass **early**, before the scan, and treat the one here as a no-op
+  safety net; if this one ever reports `folded > 0`, that reply arrived mid-run and is **next** run's work —
+  do not reopen finished tasks to chase it.
 - ⚠️ **The approval digest is FAIL-OPEN — always pass `TELEGRAM_BRIDGE_DIGEST` explicitly.** The bridge
   treats an **absent** variable as *enabled*, and an absent `TELEGRAM_BRIDGE_DIGEST_TOPIC` as *post to
   the **General** thread*. So "just leave it unset" does **not** mean "stay quiet" — it means dump the
