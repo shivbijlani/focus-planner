@@ -439,11 +439,24 @@ Run the bundled bridge **once** (it posts new agent turns to each task's forum t
 stamps a `<!-- tg-meta … -->` deep-link marker into the journal the first time it sees a task, and folds any
 phone replies back into the journals):
 
+> 🚦 **If `user-settings.md` names a PHASE 3 wrapper script, run *that* and skip this code block.**
+> A wrapper exists precisely so the flags below cannot be forgotten. Only fall back to the raw
+> command when no wrapper is configured.
+
 ```powershell
 # Token from the OS credential vault — never from a file.
 $env:TELEGRAM_BOT_TOKEN = & "$env:LOCALAPPDATA\overnight-agent\secrets\telegram-secret.ps1" get
 $env:TELEGRAM_CHAT_ID   = '<Telegram chat id from user-settings.md>'
 $env:PLANNER_PATH       = '<planner folder>'   # same folder planner.md lives in
+
+# ⚠️ FAIL-OPEN — you MUST set this explicitly, every run. An ABSENT variable means
+# "digest enabled", and an absent *_TOPIC means "post it to the General thread".
+# Omitting these is strictly WORSE than setting them. Copy the value from the
+# "Approval digest" row of user-settings.md ('on' or 'off').
+$env:TELEGRAM_BRIDGE_DIGEST = '<on|off — from user-settings.md>'
+# Only when the digest is 'on': keeps it out of General by giving it its own topic.
+# $env:TELEGRAM_BRIDGE_DIGEST_TOPIC = '<topic name or id from user-settings.md>'
+
 # Honor the "Archive completed topics" user-setting (default on). Only set this
 # to 'off' when that row says off; otherwise leave it unset so the default holds.
 # $env:TELEGRAM_BRIDGE_ARCHIVE = 'off'
@@ -455,6 +468,8 @@ if (-not (Test-Path "$env:LOCALAPPDATA\overnight-agent\telegram-bridge\state.jso
   node "$bridge" baseline
 }
 
+# Fold the user's phone replies in BEFORE posting, so this run sees them.
+node "$bridge" sync-down
 node "$bridge" once
 ```
 
@@ -471,6 +486,14 @@ Rules:
   unchanged content or make duplicate topics.
 - **Respect the allowlist.** If `Telegram → Tasks` names specific IDs, set
   `$env:TELEGRAM_BRIDGE_TASKS = '<comma-separated ids>'` before the call so only those are mirrored.
+- ⚠️ **The approval digest is FAIL-OPEN — always pass `TELEGRAM_BRIDGE_DIGEST` explicitly.** The bridge
+  treats an **absent** variable as *enabled*, and an absent `TELEGRAM_BRIDGE_DIGEST_TOPIC` as *post to
+  the **General** thread*. So "just leave it unset" does **not** mean "stay quiet" — it means dump the
+  entire approval queue into General, which is the one place users most often ask the bot to stay out
+  of. Read the desired value from the `Approval digest` row of `user-settings.md` and export it on every
+  run, even when it is `off`. **The bridge does not persist the digest's message id, so a wrongly-sent
+  digest can never be deleted afterwards** — this mistake is permanent, which is why it is called out
+  here and not left to the code comment alone.
 - **Honor the archive setting.** `Telegram → Archive completed topics` (default **on** once Telegram is
   added) controls whether a task's topic is closed when it reaches the completed board (and reopened if it
   leaves). It's on by default; only when that row is `off` set `$env:TELEGRAM_BRIDGE_ARCHIVE = 'off'`
