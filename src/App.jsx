@@ -34,6 +34,7 @@ import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import { patchPerSourceContent } from './combinedViewPatch.js'
 import * as ops from './focusPlanOps.js'
+import { deleteJournalForTask } from './journalDelete.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment } from './journalChat.js'
@@ -2914,7 +2915,13 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
             const final = ops.opDeleteTask(bridged, rawLine)
             await onContentUpdate(final)
             if (taskId) recordDeletedId(taskId)
-            if (journalPath) await storage.remove(journalPath).catch(() => {})
+            await deleteJournalForTask({
+              journalPath,
+              taskId,
+              checkJournal: storage.checkJournal,
+              remove: storage.remove,
+              onError: (e) => console.error('Failed to delete journal:', e),
+            })
             setBridgeDialog(null)
           }
         })
@@ -2929,14 +2936,16 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     // still resurrect this task's journal (#314).
     if (taskId) recordDeletedId(taskId)
     
-    // Also delete journal if it exists
-    if (journalPath) {
-      try {
-        await storage.remove(journalPath)
-      } catch (e) {
-        console.error('Failed to delete journal:', e)
-      }
-    }
+    // Also delete the journal if the task has one. The path is resolved at
+    // delete time rather than taken from lazily-loaded row state, so deleting a
+    // row whose journal was still loading no longer orphans the file (#185).
+    await deleteJournalForTask({
+      journalPath,
+      taskId,
+      checkJournal: storage.checkJournal,
+      remove: storage.remove,
+      onError: (e) => console.error('Failed to delete journal:', e),
+    })
   }
   
   const handleMoveToCompleted = async (rawLine, row, fromSection) => {
@@ -5882,7 +5891,13 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
             }))
             await applyOp(sid, c => ops.opDeleteTask(c, rawLine))
             if (taskId) recordDeletedId(taskId)
-            if (journalPath) await storage.removeFromSource(sid, journalPath).catch(() => {})
+            await deleteJournalForTask({
+              journalPath,
+              taskId,
+              checkJournal: (id) => storage.checkJournalFromSource(sid, id),
+              remove: (p) => storage.removeFromSource(sid, p),
+              onError: (e) => console.error('Failed to delete journal:', e),
+            })
             setBridgeDialog(null)
             setReloadKey(k => k + 1)
           }
@@ -5893,9 +5908,14 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
 
     await applyOp(sid, c => ops.opDeleteTask(c, rawLine))
     if (taskId) recordDeletedId(taskId)
-    if (journalPath) {
-      try { await storage.removeFromSource(sid, journalPath) } catch (e) { console.error('Failed to delete journal:', e) }
-    }
+    // Resolved at delete time, not from lazily-loaded row state (#185).
+    await deleteJournalForTask({
+      journalPath,
+      taskId,
+      checkJournal: (id) => storage.checkJournalFromSource(sid, id),
+      remove: (p) => storage.removeFromSource(sid, p),
+      onError: (e) => console.error('Failed to delete journal:', e),
+    })
   }
 
   const handlePromoteTodo = async (todoText, parentTaskId) => {
