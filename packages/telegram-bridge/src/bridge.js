@@ -41,18 +41,39 @@ function truncateMarkdown(md, budget) {
 }
 
 // Build the HTML message: a bold task header + the agent turn rendered as
-// Telegram HTML. Leaves headroom under the 4096 char cap for tag expansion.
+// Telegram HTML, always tag-balanced.
+//
+// The 400-char allowance below used to be the ONLY guard, followed by a raw
+// `msg.slice(...)` if the result still overflowed. That slice is the bug: it cuts
+// the generated HTML at an arbitrary character, which lands inside a tag, and
+// Telegram then rejects the whole message with
+//   `Bad Request: can't parse entities: Can't find end tag corresponding to start tag "b"`
+// so the send falls back to plain text and the turn loses ALL formatting.
+//
+// It fires whenever tag expansion exceeds the fixed allowance, which dense agent
+// turns do routinely: a real #448 turn expanded by 545 chars (bodyHtml 4147,
+// msg 4241) and was cut mid-`<b>0 reopened, 0 approved</b>`.
+//
+// Fix: shrink the MARKDOWN and re-convert until the HTML fits. Truncation then
+// always happens at a line boundary, where `mdToTelegramHtml` guarantees balance,
+// so we never hand Telegram a severed tag.
 function formatForTelegram(taskId, title, turn) {
   const header = title
     ? `\u{1F4CB} Task #${taskId} \u2014 ${title}`
     : `\u{1F4CB} Task #${taskId}`
   const headerHtml = `<b>${escapeHtml(header)}</b>`
-  // Reserve room for the header, the blank line, and tag expansion.
-  const budget = Math.max(0, TELEGRAM_MAX - headerHtml.length - 2 - 400)
-  const bodyHtml = mdToTelegramHtml(truncateMarkdown(turn, budget))
-  let msg = `${headerHtml}\n\n${bodyHtml}`
-  if (msg.length > TELEGRAM_MAX) msg = msg.slice(0, TELEGRAM_MAX - 1) + '\u2026'
-  return msg
+  const room = Math.max(0, TELEGRAM_MAX - headerHtml.length - 2)
+
+  let budget = Math.max(0, room - 400)
+  let bodyHtml = mdToTelegramHtml(truncateMarkdown(turn, budget))
+  // Converge on a markdown budget whose HTML fits. Each pass shrinks the budget by
+  // at least 128 chars, so this terminates regardless of the expansion ratio.
+  while (bodyHtml.length > room && budget > 0) {
+    const scaled = Math.floor((budget * room) / bodyHtml.length)
+    budget = Math.max(0, Math.min(budget - 128, scaled))
+    bodyHtml = mdToTelegramHtml(truncateMarkdown(turn, budget))
+  }
+  return `${headerHtml}\n\n${bodyHtml}`
 }
 
 // Plain-text fallback (no parse_mode) for the rare case Telegram rejects our
