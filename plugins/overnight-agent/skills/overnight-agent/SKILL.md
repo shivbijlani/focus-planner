@@ -238,6 +238,22 @@ Do the phases **in this order** every time.
 
 ### PHASE 0 — Check the agent inbox (do this before everything)
 
+**First, reap stale MCP servers.** Every scheduled run starts its own set of stdio MCP servers, and
+finished sessions don't always reap them. They pile up (~6 per run, 75–150 MB each) until the box runs
+out of memory and the *next* run's MCP servers die on startup — which silently breaks the inbox check
+below, so emailed instructions get dropped without anyone noticing. Run this first, every run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\reap-stale-mcp.ps1"
+```
+
+It prints one JSON line (`{scanned, matched, stale, killed, freedMB, …}`). It only ever kills a
+`node.exe` whose command line matches a known MCP server, that is **older than 45 minutes** (longer
+than the 30-minute run interval, so the current and previous runs are never touched), and that is not
+in this run's own process tree. Add `-DryRun` to preview. If it reports a non-zero `killed`, mention
+the count in the wrap-up; if the script itself fails, note it and carry on — a failed reap must never
+abort the run.
+
 The user can leave you new instructions by emailing the agent account
 (`<agent-inbox@example.com>`, from `user-settings.md`). At the start of each run, read the inbox via the email MCP and fold any
 new instructions into the run.

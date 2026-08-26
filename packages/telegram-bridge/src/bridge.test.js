@@ -975,3 +975,75 @@ A later turn whose marker sits above its date heading, so it parses as empty.
     expect(res.count).toBe(0)
   })
 })
+
+describe('formatForTelegram (via syncUp)', () => {
+  // Walk the tag stream and report the first structural fault. Counting opens vs
+  // closes is not enough: a raw slice can leave counts equal but nesting broken.
+  function firstNestingError(html) {
+    const stack = []
+    const rx = /<(\/?)(b|i|u|s|code|pre|blockquote|a)\b[^>]*>/g
+    let m
+    while ((m = rx.exec(html))) {
+      if (m[1] === '') stack.push({ tag: m[2], at: m.index })
+      else {
+        const top = stack.pop()
+        if (!top) return `stray </${m[2]}> at ${m.index}`
+        if (top.tag !== m[2]) return `<${top.tag}> at ${top.at} closed by </${m[2]}>`
+      }
+    }
+    return stack.length ? `unclosed <${stack[stack.length - 1].tag}> at ${stack[stack.length - 1].at}` : null
+  }
+
+  // A turn whose MARKDOWN fits the old fixed 400-char allowance but whose HTML does
+  // not: every line gains ~30 chars of tags. The old code emitted oversized HTML and
+  // then did `msg.slice(0, 4095)`, which lands inside a tag; Telegram rejects the
+  // whole message with "Can't find end tag corresponding to start tag b" and the
+  // bridge silently downgrades to plain text, losing all formatting.
+  // Observed live on task #448 (bodyHtml 4147, msg 4241, cut mid-`<b>`).
+  const denseTurn = Array.from(
+    { length: 120 },
+    (_, i) => `- **bold item ${i}** with \`code ${i}\` and *emph ${i}* trailing words here`,
+  ).join('\n')
+
+  const denseJournal = `# Task 77: Dense formatting
+
+---
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+## \u{1F319} Overnight Agent
+
+**Status:** Proposed \u00B7 plan v1 \u00B7 2026-08-25
+
+${denseTurn}
+`
+
+  it('never hands Telegram a severed tag, even when tag expansion blows the allowance', async () => {
+    const h = makeHarness({ 77: denseJournal })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+
+    expect(h.sent).toHaveLength(1)
+    const { text } = h.sent[0]
+    expect(text.length).toBeLessThanOrEqual(4096)
+    expect(firstNestingError(text)).toBeNull()
+    // It must still be a real HTML message, not silently degraded to plain text.
+    expect(text).toContain('<b>')
+    // And it must not end mid-tag.
+    expect(text).not.toMatch(/<[^>]*$/)
+  })
+
+  it('still posts short turns whole and unpadded', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+
+    const { text } = h.sent[0]
+    expect(text).toContain('do the thing')
+    expect(text).not.toContain('\u2026')
+    expect(firstNestingError(text)).toBeNull()
+  })
+})
