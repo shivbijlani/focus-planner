@@ -642,20 +642,35 @@ export function opRemoveFromManagerPriority(content, taskId) {
 // section). Each file edit is returned so the caller can write them in
 // the right order to the right source.
 
-export function opRemoveTaskFromFocusPlan(content, rawLine, fromSection) {
+// Reports whether the row was actually removed. A move-to-completed that
+// appends to the completed board but silently fails to remove the source row
+// leaves the task on BOTH boards, so the caller must be able to tell the
+// difference between "removed" and "found nothing".
+export function opRemoveTaskFromFocusPlanResult(content, rawLine, fromSection) {
   const lines = content.split('\n')
+  const target = normalizeRow(rawLine)
   let inFromSection = false
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     if (line.startsWith('## ')) {
       inFromSection = line.replace('## ', '').trim() === fromSection
     }
-    if (inFromSection && line.trim() === rawLine) {
+    if (inFromSection && target && normalizeRow(line) === target) {
       lines.splice(i, 1)
-      return lines.join('\n')
+      return { content: lines.join('\n'), removed: true }
     }
   }
-  return content
+  return { content, removed: false }
+}
+
+// Compare rows on their cell values, so a stray \r (CRLF sources) or drifting
+// padding inside the markdown table can't make an exact-string match miss.
+function normalizeRow(line) {
+  return (line || '').replace(/\r/g, '').trim().replace(/\s*\|\s*/g, '|')
+}
+
+export function opRemoveTaskFromFocusPlan(content, rawLine, fromSection) {
+  return opRemoveTaskFromFocusPlanResult(content, rawLine, fromSection).content
 }
 
 export function buildCompletedRow({ taskId, taskName, priority, todoItems = [], outcome = '' }) {
@@ -669,7 +684,23 @@ export function buildCompletedRow({ taskId, taskName, priority, todoItems = [], 
   return `| ${taskId || '-'} | ✅ | ${displayName} | ${priority || '-'} | ${today} |`
 }
 
-export function opAppendToCompleted(completedContent, completedRow) {
+// True when the completed board already carries a row for this task id.
+// Guards the append against re-entry: the completed write happens before the
+// plan write, so a failed/retried move would otherwise stack duplicate rows.
+export function completedRowExistsForTask(completedContent, taskId) {
+  if (!taskId) return false
+  const id = String(taskId).trim()
+  if (!id || id === '-') return false
+  return (completedContent || '')
+    .split('\n')
+    .some(line => {
+      const m = line.replace(/\r/g, '').match(/^\s*\|\s*([^|]+?)\s*\|/)
+      return m ? m[1] === id : false
+    })
+}
+
+export function opAppendToCompleted(completedContent, completedRow, { taskId = '' } = {}) {
+  if (completedRowExistsForTask(completedContent, taskId)) return completedContent
   const lines = (completedContent || '# Completed Tasks\n').split('\n')
   const now = new Date()
   const dayOfWeek = now.getDay()

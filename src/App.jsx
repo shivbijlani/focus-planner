@@ -6059,10 +6059,19 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     // Write the focus-plan deletion and the completed-plan append in
     // sequence against the same source.
     const focusText = await storage.readFromSource(sid, PLAN_FILE)
-    const newFocus = ops.opRemoveTaskFromFocusPlan(focusText, rawLine, fromSection)
+    const removal = ops.opRemoveTaskFromFocusPlanResult(focusText, rawLine, fromSection)
+    if (!removal.removed) {
+      // The source row could not be located, so completing here would append to
+      // the completed board while leaving the task active — the "on both boards"
+      // corruption. Fail loudly and change nothing instead.
+      console.error('Move to completed aborted: task row not found on the plan board', { taskId, fromSection })
+      alert('Could not complete this task: its row was not found on the board. Reload and try again.')
+      return
+    }
+    const newFocus = removal.content
     let completedText = ''
     try { completedText = await storage.readFromSource(sid, COMPLETED_FILE) } catch { /* file may not exist */ }
-    const newCompleted = ops.opAppendToCompleted(completedText, completedRow)
+    const newCompleted = ops.opAppendToCompleted(completedText, completedRow, { taskId })
     await storage.writeToSource(sid, COMPLETED_FILE, newCompleted)
     await storage.writeToSource(sid, PLAN_FILE, newFocus)
     // Reflect the completion immediately so the row disappears from the board
