@@ -292,6 +292,22 @@ $Suite = @(
   # baseline case rather than a mutant, because it is matcher logic and neutering it broke 3
   # of 6 cases. Exits 1 on findings; reads 3 today (SKILL.md + the two files PR #192 carries).
   @{ n = 'installed-skill-drift-sweep'; bridge = $false }
+  # raw-append-reopen-sweep (added 2026-08-27 01:xx PT run) — the THIRD false-reopen defect,
+  # and the only one that loses data. #191 and #192 both fix false POSITIVES (a settled task
+  # reads reopened). This is a false NEGATIVE: a reply the user types at the bottom of a
+  # journal with no `## <date>` heading and no `<!-- from: me -->` marker is absorbed into the
+  # agent's own turn and never seen. SKILL.md explicitly promises that shape reopens a task.
+  # Mechanism: Get-AgentEndIndex searches FORWARD from the agent's last anchor for the next
+  # `## ` heading; when the agent's turn is the newest (the normal case) there is none, so it
+  # returns $content.Length and the whole file counts as the agent's turn.
+  # NOT fixed by #191/#192 — measured 2026-08-27, both behave identically on the fixtures, and
+  # the fixture stamps the agent turn precisely so their boundary bugs cannot colour the
+  # verdict. Exposure 216 of 239 journals, confirmed two independent ways (this port, and a
+  # batched behavioural scan of all 239 with raw text appended: 23 detected either way).
+  # BEHAVIOURAL like its two siblings. Its GUARD cases are the load-bearing half: the app and
+  # the Telegram fold-back both write a `## <date>` heading, and those paths (921/922) must
+  # keep working while 923 is fixed. Reads 1 finding until the boundary is fixed.
+  @{ n = 'raw-append-reopen-sweep'; bridge = $false }
 )
 
 if ($IncludeMutchecks) {
