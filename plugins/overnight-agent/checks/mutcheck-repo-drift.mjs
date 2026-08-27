@@ -224,6 +224,54 @@ console.log('\n== G4 git-aware: a file in ANOTHER ref is backed up, not a findin
 }
 
 // ---------------------------------------------------------------------------
+// G6 is G4's principle applied to CONTENT rather than EXISTENCE.
+//
+// G4 proved a file absent from this worktree but present on another ref is
+// backed up. The MODIFIED arm had no equivalent, so a file that EXISTS here but
+// whose live bytes are committed on a different ref was reported as
+// "live ahead (uncommitted)".
+//
+// That fired for real on 2026-08-27 against `dropped-ask-sweep.mjs` and
+// `mutcheck-dropped-ask.mjs`, both committed and open as PR #203 — a PR based
+// on the very branch the archive had checked out. A run believed the report and
+// committed #203's change onto #203's own base branch, which would have
+// collided on merge. The reading was wrong; the action it invited was worse.
+console.log('\n== G6 git-aware CONTENT: live bytes committed on ANOTHER ref are backed up ==');
+{
+  const w = makeWorld('g6');
+  writeBoth(w, 'beta-sweep.mjs', 'console.log(2);\n');
+  writeBoth(w, 'gamma-sweep.mjs', 'console.log(3);\n');
+  // Archive (this worktree) holds OLD; the live copy holds the NEW bytes that
+  // are committed on `side` — exactly the open-PR-stacked-on-this-branch shape.
+  writeBoth(w, 'alpha-sweep.mjs', 'console.log(1);\n// tonight\n', {
+    archiveBody: 'console.log(1);\n',
+  });
+
+  const git = (...args) => execFileSync('git', ['-C', w.repo, ...args], { stdio: 'ignore' });
+  git('init', '-q');
+  git('config', 'user.email', 'mutcheck@example.com');
+  git('config', 'user.name', 'mutcheck');
+  git('add', '-A');
+  git('commit', '-qm', 'base with OLD alpha');
+  git('checkout', '-qb', 'side');
+  fs.writeFileSync(path.join(w.checks, 'alpha-sweep.mjs'), 'console.log(1);\n// tonight\n');
+  git('add', '-A');
+  git('commit', '-qm', 'alpha advanced on side branch');
+  git('checkout', '-q', '-');
+  fs.writeFileSync(path.join(w.checks, 'alpha-sweep.mjs'), 'console.log(1);\n');
+
+  const r = run(w);
+  check('G6 exits 0', r.code === 0, `exit=${r.code}\n${r.out}`);
+  check(
+    'G6 classifies as committed-elsewhere, not MODIFIED',
+    /live content committed on another ref[\s\S]*alpha-sweep\.mjs/.test(r.out) &&
+      !/MODIFIED \(archived copy has diverged\)/.test(r.out),
+    r.out
+  );
+  check('G6 names the ref carrying the content', /alpha-sweep\.mjs[^\n]*side/.test(r.out), r.out);
+}
+
+// ---------------------------------------------------------------------------
 // Mutation: disable each guard and assert exactly its own case breaks.
 // ---------------------------------------------------------------------------
 console.log('\n== mutation: each guard must be load-bearing ==');
@@ -251,6 +299,12 @@ const mutants = [
     repl: '      if (false) elsewhere.push(file);',
     breaks: 'g4',
   },
+  {
+    name: 'G6 git-aware content',
+    find: '      const at = committedAtPathElsewhere(repoRoot, relPath, live);',
+    repl: '      const at = null;',
+    breaks: 'g6',
+  },
 ];
 
 function worldFor(kind) {
@@ -268,6 +322,26 @@ function worldFor(kind) {
     });
     writeBoth(w, 'beta-sweep.mjs', 'console.log(2);\n');
     writeBoth(w, 'gamma-sweep.mjs', 'console.log(3);\n');
+    return { w, expectFires: false };
+  }
+  if (kind === 'g6') {
+    writeBoth(w, 'beta-sweep.mjs', 'console.log(2);\n');
+    writeBoth(w, 'gamma-sweep.mjs', 'console.log(3);\n');
+    writeBoth(w, 'alpha-sweep.mjs', 'console.log(1);\n// tonight\n', {
+      archiveBody: 'console.log(1);\n',
+    });
+    const g = (...args) => execFileSync('git', ['-C', w.repo, ...args], { stdio: 'ignore' });
+    g('init', '-q');
+    g('config', 'user.email', 'm@e.com');
+    g('config', 'user.name', 'm');
+    g('add', '-A');
+    g('commit', '-qm', 'base');
+    g('checkout', '-qb', 'side');
+    fs.writeFileSync(path.join(w.checks, 'alpha-sweep.mjs'), 'console.log(1);\n// tonight\n');
+    g('add', '-A');
+    g('commit', '-qm', 'side');
+    g('checkout', '-q', '-');
+    fs.writeFileSync(path.join(w.checks, 'alpha-sweep.mjs'), 'console.log(1);\n');
     return { w, expectFires: false };
   }
   // g4
@@ -314,7 +388,7 @@ for (const m of mutants) {
 
   // Every other case must be unaffected: no collateral.
   let collateral = [];
-  for (const other of ['g2', 'g3', 'g4'].filter((k) => k !== m.breaks)) {
+  for (const other of ['g2', 'g3', 'g4', 'g6'].filter((k) => k !== m.breaks)) {
     const ow = worldFor(other);
     const b = run(ow.w, {}, SWEEP);
     const a = run(ow.w, {}, mutPath);

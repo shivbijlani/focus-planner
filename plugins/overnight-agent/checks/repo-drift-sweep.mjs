@@ -227,6 +227,75 @@ function trackedAnywhere(repoRoot) {
   }
 }
 
+/**
+ * Is this EXACT live content already committed at this path on some ref?
+ *
+ * `trackedAnywhere` applies the across-all-refs principle to EXISTENCE only.
+ * The MODIFIED arm never got it, so it compared the live file against the one
+ * ref this worktree happens to have checked out and called anything else drift.
+ *
+ * That is not hypothetical: on 2026-08-27 it reported `dropped-ask-sweep.mjs`
+ * and `mutcheck-dropped-ask.mjs` as "live ahead (uncommitted)" while both were
+ * committed, reviewed and open as PR #203 — a PR based on the very branch the
+ * archive had checked out. Acting on that reading duplicated #203's change into
+ * its own base branch, which would have collided when #203 merged. The file's
+ * own recorded lesson applies: a fix made in one arm of a checker is evidence
+ * the other arm is wrong, not evidence the problem is handled.
+ *
+ * Cost is paid only on the finding path — one `hash-object` plus the commits
+ * that touch this single file (4, here), never the whole corpus.
+ *
+ * Returns the commit that carries the content, or null.
+ */
+function committedAtPathElsewhere(repoRoot, relPath, livePath) {
+  try {
+    const blob = execFileSync('git', ['-C', repoRoot, 'hash-object', livePath], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (!blob) return null;
+    const commits = execFileSync(
+      'git',
+      ['-C', repoRoot, 'log', '--all', '--format=%H', '--', relPath],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+    )
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const c of commits) {
+      try {
+        const at = execFileSync('git', ['-C', repoRoot, 'rev-parse', `${c}:${relPath}`], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        if (at === blob) return c;
+      } catch {
+        /* path absent in that commit */
+      }
+    }
+  } catch {
+    /* no git, or unreadable — fall through to reporting drift, the safe direction */
+  }
+  return null;
+}
+
+/** Which ref names contain a commit — so the report can name where the content lives. */
+function refsContaining(repoRoot, commit) {
+  try {
+    return execFileSync(
+      'git',
+      ['-C', repoRoot, 'for-each-ref', '--format=%(refname:short)', '--contains', commit],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+    )
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 4);
+  } catch {
+    return [];
+  }
+}
+
 function norm(text) {
   // Strip a UTF-8 BOM, normalize CRLF -> LF, drop trailing whitespace per line
   // and at EOF. These are exactly the transforms git/autocrlf may apply.
@@ -318,6 +387,7 @@ function main() {
   const unversioned = [];
   const elsewhere = [];
   const modified = [];
+  const elsewhereContent = [];
   const ok = [];
 
   // Walk up from the archive dir to the repo root so `git -C` has a real repo.
@@ -348,6 +418,15 @@ function main() {
     const a = hash(fs.readFileSync(live, 'utf8'));
     const b = hash(fs.readFileSync(archived, 'utf8'));
     if (a !== b) {
+      // Diverged from THIS worktree — but the live bytes may already be committed
+      // on another ref (typically an open PR stacked on the checked-out branch).
+      // That is backed up, not drift, and reporting it invites a duplicate commit.
+      const relPath = path.relative(repoRoot, archived).replace(/\\/g, '/');
+      const at = committedAtPathElsewhere(repoRoot, relPath, live);
+      if (at) {
+        elsewhereContent.push({ file, commit: at.slice(0, 7), refs: refsContaining(repoRoot, at) });
+        continue;
+      }
       const liveLen = norm(fs.readFileSync(live, 'utf8')).length;
       const repoLen = norm(fs.readFileSync(archived, 'utf8')).length;
       modified.push({
@@ -399,6 +478,16 @@ function main() {
       `\nversioned in another ref, not on this branch: ${elsewhere.length} (backed up - not a finding)`
     );
     for (const f of elsewhere) console.log(`  - ${f}`);
+  }
+
+  if (elsewhereContent.length) {
+    console.log(
+      `\nlive content committed on another ref, not on this branch: ${elsewhereContent.length} (backed up - not a finding)`
+    );
+    for (const e of elsewhereContent) {
+      const where = e.refs.length ? e.refs.join(', ') : 'unnamed ref';
+      console.log(`  - ${e.file}  ${e.commit}  [${where}]`);
+    }
   }
 
   if (orphaned.length) {
