@@ -71,6 +71,29 @@ The two shortlisted options land around ~\-275 all in.
 
 The two shortlisted options land around ~$150-275 all in, versus $1,035 for two.
 '@ }
+  # G1 negative, and the case that forced the exemption to exist: a turn that DOCUMENTS
+  # the defect must be writable. The #448 turn announcing these guards was refused by
+  # them on exactly this line. A tool that cannot write the document explaining itself
+  # gets bypassed, and then it is not a guard at all.
+  @{ name = 'g1-quoted';        expect = @();     nl = 'LF';   body = @'
+## MOON Overnight Agent -- 2026-08-27 reply
+
+Writing a price inside a shell command can drop it and leave `~\-275` behind, and the
+sentence around it still reads fine.
+'@ }
+  # G1 positive, guarding the exemption itself: a fenced block is quotation, but bare
+  # prose OUTSIDE it is not, and must still fire.
+  @{ name = 'g1-fence-plus-prose'; expect = @('G1'); nl = 'LF'; body = @'
+## MOON Overnight Agent -- 2026-08-27 reply
+
+Here is the shape it leaves:
+
+```
+~\-275
+```
+
+The quote came out at ~\-275 all in.
+'@ }
 
   # G2 -- single-quote escaping survived into the text.
   @{ name = 'g2-apostrophe';    expect = @('G2'); nl = 'LF';   body = @'
@@ -82,6 +105,12 @@ I don''t think that''s the right trade here.
 ## MOON Overnight Agent -- 2026-08-27 reply
 
 It''s the same defect on a CRLF file.
+'@ }
+  # G2 negative: the same text quoted as an example must be writable.
+  @{ name = 'g2-quoted';        expect = @();     nl = 'LF';   body = @'
+## MOON Overnight Agent -- 2026-08-27 reply
+
+Apostrophes get doubled: `don''t` instead of the word you meant.
 '@ }
 
   # G3 -- date-first H2. The bridge anchors on `##` + moon, so this heading is not an
@@ -102,6 +131,19 @@ Body text on a CRLF file.
 
 ### Run log
 - did the thing
+'@ }
+  # G3 negative: a bad heading QUOTED inside a fence is an example, not a heading.
+  # Without this the tool could not document its own rule.
+  @{ name = 'g3-fenced-example'; expect = @();    nl = 'LF';   body = @'
+## MOON Overnight Agent -- 2026-08-27 reply
+
+This heading shape is the one that truncates the turn:
+
+```
+## 2026-08-27 -- MOON Overnight Agent reply
+```
+
+Use the moon first instead.
 '@ }
 
   # G4 -- a provenance stamp with no heading above it severs the block.

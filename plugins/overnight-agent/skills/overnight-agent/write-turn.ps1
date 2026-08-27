@@ -86,6 +86,32 @@ function New-Finding([string]$guard, [int]$line, [string]$snippet, [string]$why)
   [pscustomobject]@{ guard = $guard; line = $line; snippet = $snippet; why = $why }
 }
 
+<#
+  Strip inline code spans before testing for the two QUOTATION classes (G1, G2).
+
+  This is not a convenience -- it is the discriminator that makes the guards usable, and
+  it is copied deliberately from `lib-lost-interpolation.mjs`, which established it
+  against the live corpus rather than by argument. Its reasoning applies verbatim here:
+  "Real damage sits in prose and table cells, never inside backticks", and "a detector
+  that flags its own postmortem is a detector that gets switched off."
+
+  Proven the first time this script was run for real: the #448 turn ANNOUNCING these
+  guards was refused by them, because it necessarily quotes `~\-275` and `don''t` as
+  examples of what they catch. A tool that cannot write the document explaining itself
+  would simply be bypassed.
+
+  ⚠️ KNOWN BLIND SPOT, stated rather than hidden. The interpolation defect does damage
+  text inside code spans too -- #249 carried `.1338/kWh` where `$0.1338/kWh` was meant.
+  Code spans use no markdown escaping, so no `\` tombstone is left and the deletion is
+  perfectly silent; nothing can see it from the text alone. The nightly
+  `lost-interpolation-sweep` carries the same limitation and documents the recovery
+  route: the task's own deliverable file, which is written by a different code path and
+  survives intact.
+#>
+function Remove-CodeSpans([string]$line) {
+  return ($line -replace '`[^`]*`', ' ')
+}
+
 function Test-TurnBody {
   param([string]$Body, [string[]]$Disabled = @())
 
@@ -93,16 +119,27 @@ function Test-TurnBody {
   $lines = $Body -split "`r?`n"
   $on = { param($g) return ($Disabled -notcontains $g) }
 
+  # A fenced block is a verbatim quotation of something else -- sample markdown, a
+  # transcript, a command. None of the four guards applies to its contents, and G3 in
+  # particular would fire on any fenced example of a bad heading.
+  $inFence = New-Object bool[] $lines.Count
+  $fence = $false
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($lines[$i] -match '^[ \t]*```') { $fence = -not $fence; $inFence[$i] = $true; continue }
+    $inFence[$i] = $fence
+  }
+
   # --- G1: lost-interpolation tombstones ------------------------------------------
   # An eaten `$nnn` leaves the escape that preceded it stranded against the surviving
   # half of the range: `~$150-275` -> `~\-275`. Also `\-520` (eaten low end), and bold
   # values that leave no backslash at all -- `****` and `~**,035**`.
   if (& $on 'G1') {
     for ($i = 0; $i -lt $lines.Count; $i++) {
-      $l = $lines[$i]
+      if ($inFence[$i]) { continue }
+      $l = Remove-CodeSpans $lines[$i]
       foreach ($pat in @('~\\-\d', '(?<![\\`])\\-\d{2,}', '\*\*\*\*', '~\*\*,\d')) {
         if ($l -match $pat) {
-          $findings += New-Finding 'G1' ($i + 1) $l.Trim() `
+          $findings += New-Finding 'G1' ($i + 1) $lines[$i].Trim() `
             'looks like a value was eaten by PowerShell string interpolation (a `$` expanded to nothing)'
           break
         }
@@ -115,7 +152,8 @@ function Test-TurnBody {
   # mechanically is safe.
   if (& $on 'G2') {
     for ($i = 0; $i -lt $lines.Count; $i++) {
-      if ($lines[$i] -match "[A-Za-z]''[A-Za-z]") {
+      if ($inFence[$i]) { continue }
+      if ((Remove-CodeSpans $lines[$i]) -match "[A-Za-z]''[A-Za-z]") {
         $findings += New-Finding 'G2' ($i + 1) $lines[$i].Trim() `
           "a doubled apostrophe (don''t) -- PowerShell single-quote escaping survived into the text"
       }
@@ -127,6 +165,7 @@ function Test-TurnBody {
   # truncates the turn at this heading.
   if (& $on 'G3') {
     for ($i = 0; $i -lt $lines.Count; $i++) {
+      if ($inFence[$i]) { continue }
       $l = $lines[$i]
       if ($l -match '^[ \t]*##[ \t]+\S' -and $l -notmatch '^[ \t]*###') {
         $after = ($l -replace '^[ \t]*##[ \t]+', '')
@@ -144,6 +183,7 @@ function Test-TurnBody {
   if (& $on 'G4') {
     $seenHeading = $false
     for ($i = 0; $i -lt $lines.Count; $i++) {
+      if ($inFence[$i]) { continue }
       $l = $lines[$i]
       if ($l -match '^[ \t]*##[ \t]+\S' -and $l -notmatch '^[ \t]*###') { $seenHeading = $true; continue }
       if ($l -match '^[ \t]*<!--[ \t]*from:[ \t]*overnight-agent[ \t]*-->' -and -not $seenHeading) {
