@@ -98,17 +98,29 @@ function probeInstalledScript() {
   mkdirSync(jdir);
   mkdirSync(sdir);
   try {
-    for (const [id, append] of CASES) {
-      writeFileSync(join(jdir, `task-${id}.md`), AGENT_BLOCK + append, 'utf8');
+    for (const [id] of CASES) {
+      writeFileSync(join(jdir, `task-${id}.md`), AGENT_BLOCK, 'utf8');
     }
-    const run = (cmd) =>
+    const run = (cmd, extra = []) =>
       execFileSync(
         'powershell',
         ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, cmd,
-         '-JournalDir', jdir, '-StateDir', sdir],
+         '-JournalDir', jdir, '-StateDir', sdir, ...extra],
         { encoding: 'utf8' },
       );
     run('seed');
+    // Drive the REAL production sequence. SKILL.md requires `mark` after every turn the
+    // agent writes, so a journal the agent has answered has ALWAYS been marked. Probing
+    // seed->scan alone models a state that does not occur in practice, and would miss a
+    // fix that does its work at mark time.
+    for (const [id] of CASES) run('mark', ['-Id', id]);
+    // The user speaks only AFTER the agent has finished and marked -- that ordering is the
+    // whole point, so the appends have to happen here rather than up front.
+    for (const [id, append] of CASES) {
+      if (!append) continue;
+      const f = join(jdir, `task-${id}.md`);
+      writeFileSync(f, readFileSync(f, 'utf8').replace(/\s+$/, '') + append, 'utf8');
+    }
     const rows = JSON.parse(run('scan'));
     const byId = new Map(rows.map((r) => [String(r.id), r]));
     const failures = [];
@@ -122,14 +134,20 @@ function probeInstalledScript() {
   }
 }
 
-// Sizes live exposure. The precondition for the blind spot is version-independent: if no
-// `## ` heading follows this agent's last anchor, the boundary is EOF under BOTH main and
-// PR #192, so anything appended below is absorbed into the agent's own turn.
+// Sizes live exposure. A journal is exposed when nothing marks where the agent's turn
+// ended, so anything appended below it is absorbed into that turn.
 //
-// The sentinel branch mirrors PR #192 (skip the managed "Overnight Agent" heading, which is
-// the agent's own, not a user entry). On main that heading terminates the boundary instead,
-// which pins the journal at HasTrailingUser=true -- a DIFFERENT defect (#192's) that hides
-// this one behind a permanently-true verdict rather than curing it.
+// Two things can provide that boundary:
+//   1. a `## ` heading after the agent's last anchor (a later entry), or
+//   2. an explicit `<!-- /overnight-agent turn-end -->` stamp, which `mark` writes at the
+//      end of the turn. The stamp is the durable fix, because the boundary is genuinely
+//      ambiguous from content alone -- an agent turn may end in a plain prose paragraph
+//      that is indistinguishable from a short human reply.
+//
+// The sentinel branch mirrors the shipped boundary logic (skip the managed "Overnight
+// Agent" heading, which is the agent's own, not a user entry).
+const TURN_END = /^[ \t]*<!--[ \t]*\/overnight-agent[ \t]+turn-end[ \t]*-->[ \t]*$/m;
+
 function rawAppendInvisible(content) {
   const sentinel = content.lastIndexOf('OVERNIGHT-AGENT do not edit');
   let self = -1;
@@ -138,6 +156,11 @@ function rawAppendInvisible(content) {
   }
   const marker = Math.max(self, sentinel, content.lastIndexOf('<!-- oa-state'));
   if (marker < 0) return false;
+
+  // A turn-end stamp at or after the anchor is an explicit boundary: not exposed.
+  const stamp = content.slice(marker).match(TURN_END);
+  if (stamp) return false;
+
   let next = content.indexOf('\n## ', marker);
   if (marker === sentinel && next >= 0) {
     const he = content.indexOf('\n', next + 1);
