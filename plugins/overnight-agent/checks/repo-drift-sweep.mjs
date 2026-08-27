@@ -80,6 +80,7 @@ const ORCHESTRATION = [
   'write-turn.ps1',
   'artifact-index.mjs',
   'sync-checks.ps1',
+  'deploy-installed-plugin.ps1',
 ];
 
 function firstExisting(paths) {
