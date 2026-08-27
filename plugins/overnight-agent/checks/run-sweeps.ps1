@@ -265,6 +265,27 @@ $Suite = @(
   # runs the real sweep as a child process against synthetic worlds and asserts
   # each guard breaks EXACTLY its own case. Reads 0 once the archive is in place.
   @{ n = 'repo-drift-sweep';         bridge = $false }
+  # installed-skill-drift-sweep (added 2026-08-26 18:40 PT) — the COMPLEMENT of the line
+  # above, and the gap it left. repo-drift-sweep asks whether every DETECTOR is in git; it
+  # walks this registry, which lives in %LOCALAPPDATA%. Nothing ever looked at
+  # ~\.copilot\installed-plugins\focus-planner — the plugin the CLI actually loads. So the
+  # live SKILL.md and the live oa-state.ps1 were guarded by nothing.
+  # Measured this run: the installed oa-state.ps1 was byte-identical to 90716eb, the #191
+  # sibling-skill fix, which is NOT an ancestor of origin/main, while origin/main still had
+  # the 217-line Aug-3 version with no reopen fixes at all. Two silent failure directions:
+  #   FORWARD  — a fix green in git, red in production, because deploying it is a manual copy
+  #              nobody scheduled. unstamped-runlog-reopen-sweep probes the INSTALLED script
+  #              and was red for 8 straight runs against a branch that was green throughout;
+  #              the run that shipped it recorded "turns green when 192 lands", which is
+  #              false — merging never writes to installed-plugins.
+  #   BACKWARD — a plugin reinstall overwrites the hand-deployed file with main's copy and
+  #              REVERTS the fixes, with nothing to notice.
+  # Verdicts: MAIN (fine) / BRANCH-ONLY (backed up but a reinstall reverts it) / UNVERSIONED
+  # (recoverable from no ref). 2 guards mutation-proven load-bearing by
+  # mutcheck-installed-skill-drift.mjs (6/6 baseline); main-first precedence is asserted by a
+  # baseline case rather than a mutant, because it is matcher logic and neutering it broke 3
+  # of 6 cases. Exits 1 on findings; reads 3 today (SKILL.md + the two files PR #192 carries).
+  @{ n = 'installed-skill-drift-sweep'; bridge = $false }
 )
 
 if ($IncludeMutchecks) {
