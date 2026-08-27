@@ -132,6 +132,20 @@ $Suite = @(
   @{ n = 'hidden-turn-sweep';        bridge = $true  }
   @{ n = 'closed-task-posts';        bridge = $true  }
   @{ n = 'workflow-health-sweep';    bridge = $false }
+  # The RECOVERY half of the line above, added 2026-08-27. workflow-health-sweep
+  # correctly flagged "Browser watchdog [OVERDUE] ... last=running" in 16 CONSECUTIVE
+  # runs (07:52 -> 11:38 PT) and not one acted on it, while the hourly watchdog stayed
+  # dead for 11 hours. Root cause: its 07:43 run finished its work, then the process
+  # died during shutdown without writing a terminal status, orphaning the row at
+  # status='running' - and the app refuses to start a workflow it believes is running,
+  # so ONE orphaned row permanently disables that workflow for scheduler AND manual
+  # triggers (verified: run_workflow returned "already running"). Detection alone was
+  # demonstrably not enough, so this one REPAIRS: it only ever touches a run whose
+  # owning OS process is provably dead (via the session's inuse.<pid>.lock) and older
+  # than a 20m grace window, reads the terminal status out of the session's own event
+  # log rather than guessing, and backs up every row before writing. Arms proven in
+  # both directions by stuck-run-sweep.test.mjs (26/26).
+  @{ n = 'stuck-run-sweep';          bridge = $false; args = @('--repair') }
   @{ n = 'recurring-liveness-sweep'; bridge = $false }
   @{ n = 'stale-trigger-sweep';      bridge = $false }
   @{ n = 'parked-age';               bridge = $false }
@@ -458,7 +472,11 @@ foreach ($s in $Suite) {
   }
   $soF = Join-Path $OutDir "$($s.n).out.txt"
   $seF = Join-Path $OutDir "$($s.n).err.txt"
-  $p = Start-Process -FilePath 'node' -ArgumentList $path -NoNewWindow -Wait -PassThru `
+  # Per-sweep arguments. Only stuck-run-sweep uses this today (it needs --repair);
+  # kept generic so the next sweep that needs a flag does not re-touch the runner.
+  $argList = @($path)
+  if ($s.ContainsKey('args') -and $s.args) { $argList += @($s.args) }
+  $p = Start-Process -FilePath 'node' -ArgumentList $argList -NoNewWindow -Wait -PassThru `
                      -RedirectStandardOutput $soF -RedirectStandardError $seF
   $so = if (Test-Path $soF) { (Get-Content $soF -Raw) } else { '' }
   $se = if (Test-Path $seF) { (Get-Content $seF -Raw) } else { '' }
