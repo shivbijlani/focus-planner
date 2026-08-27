@@ -208,6 +208,30 @@ $Suite = @(
   # mutcheck-owned-target-gate.mjs, which also DELETED a dead EXTERNAL guard that would have
   # suppressed real defects. Exits 1 on findings; reads 0 now that #403 is closed.
   @{ n = 'owned-target-gate-sweep';  bridge = $false }
+  # self-attested-gate-sweep (added 2026-08-27 05:xx PT run) — the FOURTH dimension of the
+  # reversible-gate defect class, and the one that caught the other three going green on a
+  # live instance. On 2026-08-27 #448 gated `deploy it` — "copy the fixed script into the
+  # plugin … it is a file copy with a backup, and I measured that it changes no current
+  # verdict" — and reversible-gate, owned-target-gate and deliverable-gate ALL read 0. Proven
+  # structural, not a timing artifact: re-run with OA_TODAY advanced a day to defeat their
+  # "written today is not rot" skip, both verb-based arms still read 0.
+  # ROOT CAUSE: those arms decide reversibility from the VERB, and both carry `deploy` on a
+  # hard IRREVERSIBLE list. But `deploy`/`apply`/`install`/`enable` are ambiguous by nature —
+  # "deploy to production" is irreversible, "deploy = copy a file into a local folder, backup
+  # taken" is not — and no verb list can separate them, because the distinction lives in the
+  # OBJECT, not the verb.
+  # DISCRIMINATOR: don't judge the verb; use the agent's OWN ATTESTATION. When the ask itself
+  # certifies the action is backed-up / undoable / measured-to-change-nothing, gating it is a
+  # defect by its own account. Suppression is applied to the reply TOKEN, never the prose —
+  # #448's ask ends "that is why the ask is 'deploy', not 'merge'", and a whole-ask keyword
+  # scan would have silenced it on the word "merge". It also resolves CARRIED-FORWARD asks
+  # (a re-stated "the `X` decision above still stands" whose justification is several turns
+  # up) by walking back past the intermediate pointers — without that, every ask that waits
+  # more than one night is invisible to attestation checking.
+  # Deliberately does NOT skip journals written today: that skip is what hid #448 all night.
+  # 14 assertions, all guards mutation-proven load-bearing by mutcheck-self-attested-gate.mjs.
+  # Exits 1 on findings; first live run read 3 (#222, #280, #448), all hand-verified.
+  @{ n = 'self-attested-gate-sweep'; bridge = $false }
   # Guards the reopen detector itself: a SIBLING SKILL's journal turn (dance-church,
   # instagram-publisher-monitor, kranbox-backup, ...) must never read as a USER reopen.
   # Journals are shared, and oa-state.ps1 originally treated any non-overnight-agent
