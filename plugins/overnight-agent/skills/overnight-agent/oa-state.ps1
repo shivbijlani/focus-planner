@@ -83,10 +83,36 @@ $script:SelfAuthor    = 'overnight-agent'
 $script:ProvenanceRe  = '(?m)^[ \t]*<!--[ \t]*from:[ \t]*([^>\r\n]*?)[ \t]*-->'
 $script:LegacyStateRe = '(?m)^[ \t]*<!--[ \t]*oa-state'
 
+# `### Run log` is SKILL.md's managed heading for this agent's execution record. Only this
+# agent writes it, so it is a reliable machine-turn marker even in the many historical
+# journals where the agent replied without stamping a `<!-- from: overnight-agent -->`
+# provenance marker at all.
+#
+# The trailing `\r?` is load-bearing: these journals round-trip through OneDrive and the
+# planner web app, so CRLF is common. `$` in .NET multiline mode matches before the `\n`,
+# which leaves the `\r` unconsumed -- and `[ \t]` does not match `\r`. Without it the
+# heading is simply never found on a CRLF file and the whole recovery silently no-ops.
+$script:RunLogRe = '(?m)^[ \t]*###[ \t]+Run log[ \t]*\r?$'
+
+# The shape of a run-log body: the heading itself, blank lines, the bold date line
+# (`**2026-08-26 (overnight):**`), list items, and indented wrapped continuations.
+# Anything else in that region is prose this agent did not write.
+$script:RunLogBodyLineRe = '^(?:[ \t\r]*$|[ \t]*###[ \t]+Run log[ \t\r]*$|[ \t]*\*\*.*$|[ \t]*[-*+][ \t].*$|[ \t]*\d+\.[ \t].*$|[ \t]+\S.*$)'
+
 function Get-LastIndexOfPattern([string]$content, [string]$pattern) {
   $idx = -1
   foreach ($m in [regex]::Matches($content, $pattern)) { $idx = $m.Index }
   return $idx
+}
+
+function Test-IsRunLogBodyOnly([string]$region) {
+  # Is this region nothing but the agent's own run-log entry? Used as a GUARD, so it must
+  # answer "no" whenever it is unsure: a false "no" costs one needless look at a settled
+  # task, a false "yes" silently swallows the user's message.
+  foreach ($line in ($region -split "`r?`n")) {
+    if ($line -notmatch $script:RunLogBodyLineRe) { return $false }
+  }
+  return $true
 }
 
 function Get-AgentEndIndex([string]$content) {
@@ -119,7 +145,31 @@ function Get-AgentEndIndex([string]$content) {
     $nextHeading = $content.IndexOf("`n## ", $headingEnd)
   }
   if ($nextHeading -lt 0) { return $content.Length }
-  return $nextHeading + 1
+  $end = $nextHeading + 1
+
+  # --- Unstamped run-log recovery -------------------------------------------------------
+  # Most historical journals contain NO `<!-- from: overnight-agent -->` marker: the agent
+  # answered the user by appending a `### Run log` under their `## <date>` entry. The
+  # boundary above then lands on that user heading, so the agent's own reply sits in the
+  # "trailing" region and is mistaken for unanswered user prose -- pinning the journal at
+  # HasTrailingUser=true forever. It reads as quiet only while the file is byte-identical to
+  # the last snapshot, so any in-place edit by a sibling sweep (a dead-link rewrite, an
+  # apostrophe repair) flips `changed` and the task false-reopens with a message that was
+  # answered weeks ago.
+  #
+  # So: if this agent's `### Run log` appears AFTER the boundary, its reply is the newest
+  # turn and the boundary belongs after it. Guarded by Test-IsRunLogBodyOnly, which refuses
+  # to advance over anything that is not run-log shaped -- so raw user text appended below a
+  # run log still reopens the task.
+  $runLog = Get-LastIndexOfPattern $content $script:RunLogRe
+  if ($runLog -ge $end) {
+    $afterRunLog = $content.IndexOf("`n## ", $runLog)
+    $regionEnd = if ($afterRunLog -lt 0) { $content.Length } else { $afterRunLog + 1 }
+    $region = $content.Substring($runLog, $regionEnd - $runLog)
+    if (Test-IsRunLogBodyOnly $region) { return $regionEnd }
+  }
+
+  return $end
 }
 
 function Test-TrailingHasUser([string]$trailing) {

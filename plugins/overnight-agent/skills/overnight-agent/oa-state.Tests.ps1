@@ -42,10 +42,30 @@ The agent's last turn. Nothing outstanding.
 **Needs from you:** none
 '@
 
+# The historical shape, and still the majority of the corpus: the agent's turn carries NO
+# `<!-- from: overnight-agent -->` stamp at all, so the only boundary marker is the sentinel.
+$UnstampedBlock = @'
+# Task {ID}: synthetic
+
+Some user notes at the top.
+
+---
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+## Overnight Agent
+
+**Status:** Done - plan v1 - 2026-08-26
+
+### Proposed plan (v1)
+1. Do the thing.
+
+**Needs from you:** none
+'@
+
 function New-Journal {
-  param([string]$Dir, [string]$Id, [string[]]$Entries)
+  param([string]$Dir, [string]$Id, [string[]]$Entries, [string]$Block = $AgentBlock)
   $sb = [System.Text.StringBuilder]::new()
-  [void]$sb.AppendLine(($AgentBlock -replace '\{ID\}', $Id))
+  [void]$sb.AppendLine(($Block -replace '\{ID\}', $Id))
   foreach ($e in $Entries) {
     [void]$sb.AppendLine()
     [void]$sb.AppendLine($e)
@@ -59,6 +79,43 @@ $danceTurn   = "## 2026-08-26`n`n<!-- from: dance-church -->`nRan the loop - not
 $kranboxTurn = "## 2026-08-26`n`n<!-- from: kranbox-backup -->`nUploaded 0 new files."
 $rawProse    = "## 2026-08-26`n`nRaw text with no provenance marker at all."
 
+# --- unstamped-run-log fixtures -------------------------------------------------------
+# The user speaks under an unmarked `## <date>` heading and the agent answers by appending a
+# bare `### Run log` beneath it. Before the fix the boundary landed on the user's heading, so
+# the agent's own reply was counted as unanswered user prose.
+$answeredByRunLog = @'
+## 2026-07-27
+
+He accidentally purchased from orbit, so we are just going to use that
+
+### Run log
+**2026-07-27 (overnight):**
+- Got it, closing this out.
+- Result: done. No further action.
+- Next: complete.
+'@
+
+$unansweredUser = @'
+## 2026-07-27
+
+He accidentally purchased from orbit, so we are just going to use that
+'@
+
+# The reason the recovery is guarded. SKILL.md allows the user to append "raw text at the
+# bottom", i.e. with no heading of its own. That must never be swallowed into the agent's turn.
+$rawTextBelowRunLog = @'
+## 2026-07-27
+
+Earlier question?
+
+### Run log
+**2026-07-27 (overnight):**
+- Answered it.
+- Next: complete.
+
+Actually wait, one more thing - can you also check the deductible?
+'@
+
 # id -> @{ entries; expectNew; expectOld; why }
 $cases = [ordered]@{
   '901' = @{ entries = @($danceTurn);                 new = $false; old = $true;  why = 'sibling-skill turn only -> NOT a reopen (the bug)' }
@@ -68,6 +125,15 @@ $cases = [ordered]@{
   '905' = @{ entries = @();                           new = $false; old = $false; why = 'nothing below the agent block -> quiet' }
   '906' = @{ entries = @($rawProse);                  new = $true;  old = $true;  why = 'unmarked prose -> treat as user (conservative)' }
   '907' = @{ entries = @($danceTurn, $kranboxTurn);   new = $false; old = $true;  why = 'two different sibling skills -> still NOT a reopen' }
+
+  # Unstamped run log: the agent answered without a provenance marker.
+  '911' = @{ entries = @($answeredByRunLog);              block = $UnstampedBlock; new = $false; old = $true;  why = 'unstamped run log answered the user -> quiet (the bug)' }
+  '912' = @{ entries = @($unansweredUser);                block = $UnstampedBlock; new = $true;  old = $true;  why = 'unanswered unmarked user message -> reopen' }
+  '913' = @{ entries = @($rawTextBelowRunLog);            block = $UnstampedBlock; new = $true;  old = $true;  why = 'GUARD: raw user text below a run log -> reopen' }
+  '914' = @{ entries = @($answeredByRunLog, $userTurn);   block = $UnstampedBlock; new = $true;  old = $true;  why = 'new user reply after an answered turn -> reopen' }
+  '915' = @{ entries = @($answeredByRunLog, $danceTurn);  block = $UnstampedBlock; new = $false; old = $true;  why = 'sibling turn after an answered turn -> quiet' }
+  '916' = @{ entries = @($userTurn);                      block = $UnstampedBlock; new = $true;  old = $true;  why = 'marked user reply, unstamped block -> reopen' }
+  '917' = @{ entries = @($danceTurn);                     block = $UnstampedBlock; new = $false; old = $true;  why = 'sibling turn, unstamped block -> quiet' }
 }
 
 $root = Join-Path $env:TEMP ("oa-mutcheck-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -77,7 +143,10 @@ New-Item -ItemType Directory -Path $jdir -Force | Out-Null
 New-Item -ItemType Directory -Path $sdir -Force | Out-Null
 
 try {
-  foreach ($id in $cases.Keys) { New-Journal -Dir $jdir -Id $id -Entries $cases[$id].entries }
+  foreach ($id in $cases.Keys) {
+    $block = if ($cases[$id].block) { $cases[$id].block } else { $AgentBlock }
+    New-Journal -Dir $jdir -Id $id -Entries $cases[$id].entries -Block $block
+  }
 
   & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath seed -JournalDir $jdir -StateDir $sdir | Out-Null
   $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath scan -JournalDir $jdir -StateDir $sdir
