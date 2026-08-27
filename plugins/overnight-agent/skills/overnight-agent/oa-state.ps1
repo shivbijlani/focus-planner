@@ -11,12 +11,18 @@
   (so it can't hit the planner's sync-conflict bug). The user never sees or edits any of it.
 
 .MODEL
-  "Has the user changed this journal since I last wrote to it?"  ==  reopen.
+  "Has the USER changed this journal since I last wrote to it?"  ==  reopen.
   We answer it by hashing the journal and remembering the hash the agent left behind:
     - reopened = current-file-hash != processed_file_hash   (the user/app edited it)
     - on first sight of a journal (no state yet), reopened = there is user prose AFTER
       the agent's last block (catches already-reopened tasks like #293 on the first run).
   The agent calls `mark` after it writes its turn, which re-snapshots the hash.
+
+  "The user" means the human, `<!-- from: me -->`, and nothing else. These journals are
+  shared: sibling skills (dance-church, instagram-publisher-monitor, kranbox-backup, ...)
+  append their own turns with their own `<!-- from: ... -->` stamps. Those are machine
+  turns. Counting one as user prose pins the task at `reopened` permanently -- there is no
+  human message to answer, and the sibling skill re-appends on its own schedule.
 
 .COMMANDS
   seed   [-Force]                Initialise state for every journal (one-time / migration).
@@ -65,22 +71,132 @@ function Get-Sha256([string]$text) {
   finally { $sha.Dispose() }
 }
 
+# A journal turn is stamped with a provenance marker, `<!-- from: <author> -->`. Exactly ONE
+# author is the human -- `me`. Every other author is a machine: this agent
+# (`overnight-agent`) and the sibling skills that also append turns to these same journals
+# (`dance-church`, `instagram-publisher-monitor`, `kranbox-backup`, ...).
+#
+# Markers are matched at the START OF A LINE, because journals legitimately *discuss* these
+# markers in prose; a quoted marker must not be mistaken for a real turn boundary.
+$script:HumanAuthor   = 'me'
+$script:SelfAuthor    = 'overnight-agent'
+$script:ProvenanceRe  = '(?m)^[ \t]*<!--[ \t]*from:[ \t]*([^>\r\n]*?)[ \t]*-->'
+$script:LegacyStateRe = '(?m)^[ \t]*<!--[ \t]*oa-state'
+
+# `### Run log` is SKILL.md's managed heading for this agent's execution record. Only this
+# agent writes it, so it is a reliable machine-turn marker even in the many historical
+# journals where the agent replied without stamping a `<!-- from: overnight-agent -->`
+# provenance marker at all.
+#
+# The trailing `\r?` is load-bearing: these journals round-trip through OneDrive and the
+# planner web app, so CRLF is common. `$` in .NET multiline mode matches before the `\n`,
+# which leaves the `\r` unconsumed -- and `[ \t]` does not match `\r`. Without it the
+# heading is simply never found on a CRLF file and the whole recovery silently no-ops.
+$script:RunLogRe = '(?m)^[ \t]*###[ \t]+Run log[ \t]*\r?$'
+
+# The shape of a run-log body: the heading itself, blank lines, the bold date line
+# (`**2026-08-26 (overnight):**`), list items, and indented wrapped continuations.
+# Anything else in that region is prose this agent did not write.
+$script:RunLogBodyLineRe = '^(?:[ \t\r]*$|[ \t]*###[ \t]+Run log[ \t\r]*$|[ \t]*\*\*.*$|[ \t]*[-*+][ \t].*$|[ \t]*\d+\.[ \t].*$|[ \t]+\S.*$)'
+
+function Get-LastIndexOfPattern([string]$content, [string]$pattern) {
+  $idx = -1
+  foreach ($m in [regex]::Matches($content, $pattern)) { $idx = $m.Index }
+  return $idx
+}
+
+function Test-IsRunLogBodyOnly([string]$region) {
+  # Is this region nothing but the agent's own run-log entry? Used as a GUARD, so it must
+  # answer "no" whenever it is unsure: a false "no" costs one needless look at a settled
+  # task, a false "yes" silently swallows the user's message.
+  foreach ($line in ($region -split "`r?`n")) {
+    if ($line -notmatch $script:RunLogBodyLineRe) { return $false }
+  }
+  return $true
+}
+
 function Get-AgentEndIndex([string]$content) {
-  # End offset of the agent's LAST turn. The journal is a bottom-appended chat: agent turns
-  # are marked by `<!-- from: overnight-agent -->`, the managed `<!-- oa-state ... -->` block,
-  # or the OVERNIGHT-AGENT sentinel. The agent's last turn is whichever marker appears latest;
-  # its turn runs until the next `## ` section heading (the following, user, entry) or EOF.
-  # Anything after that end is USER content the agent hasn't answered yet -> reopen.
+  # End offset of THIS agent's last turn: the latest of its own provenance marker, the legacy
+  # managed `<!-- oa-state ... -->` block, or the OVERNIGHT-AGENT sentinel. The turn runs
+  # until the next `## ` section heading (the following entry) or EOF.
+  #
+  # NOTE the boundary is deliberately *this agent's* turn, not the last machine turn of any
+  # kind. If it were the latter, a sequence of [user reply] -> [sibling skill turn] would put
+  # the user's unanswered message ABOVE the boundary and silently swallow it.
+  $sentinelMarker = $content.LastIndexOf('OVERNIGHT-AGENT do not edit')
+  $selfMarker = -1
+  foreach ($m in [regex]::Matches($content, $script:ProvenanceRe)) {
+    if ($m.Groups[1].Value.Trim() -eq $script:SelfAuthor) { $selfMarker = $m.Index }
+  }
+
   $markers = @(
-    $content.LastIndexOf('<!-- from: overnight-agent -->'),
-    $content.LastIndexOf('<!-- oa-state'),
-    $content.LastIndexOf('OVERNIGHT-AGENT do not edit')
+    $selfMarker,
+    (Get-LastIndexOfPattern $content $script:LegacyStateRe),
+    $sentinelMarker
   )
   $agentMarker = ($markers | Measure-Object -Maximum).Maximum
   if ($agentMarker -lt 0) { return -1 }
   $nextHeading = $content.IndexOf("`n## ", $agentMarker)
+  if ($agentMarker -eq $sentinelMarker -and $nextHeading -ge 0) {
+    # The first H2 after the sentinel is the managed "Overnight Agent" heading, not a user
+    # turn. Search for the next H2 after that heading instead.
+    $headingEnd = $content.IndexOf("`n", $nextHeading + 1)
+    if ($headingEnd -lt 0) { return $content.Length }
+    $nextHeading = $content.IndexOf("`n## ", $headingEnd)
+  }
   if ($nextHeading -lt 0) { return $content.Length }
-  return $nextHeading + 1
+  $end = $nextHeading + 1
+
+  # --- Unstamped run-log recovery -------------------------------------------------------
+  # Most historical journals contain NO `<!-- from: overnight-agent -->` marker: the agent
+  # answered the user by appending a `### Run log` under their `## <date>` entry. The
+  # boundary above then lands on that user heading, so the agent's own reply sits in the
+  # "trailing" region and is mistaken for unanswered user prose -- pinning the journal at
+  # HasTrailingUser=true forever. It reads as quiet only while the file is byte-identical to
+  # the last snapshot, so any in-place edit by a sibling sweep (a dead-link rewrite, an
+  # apostrophe repair) flips `changed` and the task false-reopens with a message that was
+  # answered weeks ago.
+  #
+  # So: if this agent's `### Run log` appears AFTER the boundary, its reply is the newest
+  # turn and the boundary belongs after it. Guarded by Test-IsRunLogBodyOnly, which refuses
+  # to advance over anything that is not run-log shaped -- so raw user text appended below a
+  # run log still reopens the task.
+  $runLog = Get-LastIndexOfPattern $content $script:RunLogRe
+  if ($runLog -ge $end) {
+    $afterRunLog = $content.IndexOf("`n## ", $runLog)
+    $regionEnd = if ($afterRunLog -lt 0) { $content.Length } else { $afterRunLog + 1 }
+    $region = $content.Substring($runLog, $regionEnd - $runLog)
+    if (Test-IsRunLogBodyOnly $region) { return $regionEnd }
+  }
+
+  return $end
+}
+
+function Test-TrailingHasUser([string]$trailing) {
+  # Is there HUMAN content below this agent's last turn? Only the human reopens a task.
+  #
+  # The trailing region is a chat thread and may mix authors, because sibling skills append
+  # their own turns here too. Split it into `## ` entries and judge each one by its marker:
+  #   - `<!-- from: me -->`  -> the human spoke. Reopen.
+  #   - any other marker     -> a sibling skill's turn. NOT a reopen: there is no message for
+  #                             this agent to answer, and that skill re-appends on its own
+  #                             schedule, so treating it as user prose pins the task at
+  #                             `reopened` forever.
+  #   - no marker at all     -> genuinely ambiguous (older journals, hand edits). Treat as the
+  #                             human, which is the conservative direction: a false reopen
+  #                             costs a look, a missed one loses the user's message.
+  if ($trailing.Trim().Length -eq 0) { return $false }
+
+  # Entry boundaries are H2 headings; text before the first heading belongs to the region as-is.
+  $entries = [regex]::Split($trailing, '(?m)(?=^## )') | Where-Object { $_.Trim().Length -gt 0 }
+  foreach ($entry in $entries) {
+    $marks = [regex]::Matches($entry, $script:ProvenanceRe)
+    if ($marks.Count -eq 0) { return $true }
+    foreach ($m in $marks) {
+      if ($m.Groups[1].Value.Trim() -eq $script:HumanAuthor) { return $true }
+    }
+  }
+  return $false
 }
 
 function Parse-LegacyOaState([string]$content) {
@@ -105,7 +221,7 @@ function Get-JournalFacts([string]$path) {
     HasAgentBlock   = $hasAgentBlock
     FullHash        = Get-Sha256 $content
     AgentLeftHash   = Get-Sha256 $agentLeft     # file as the agent last left it (no trailing user prose)
-    HasTrailingUser = ($trailing.Trim().Length -gt 0)
+    HasTrailingUser = (Test-TrailingHasUser $trailing)
     Legacy          = Parse-LegacyOaState $content
   }
 }
