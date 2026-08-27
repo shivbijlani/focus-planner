@@ -83,8 +83,54 @@ if ($Capture) {
   foreach ($f in (Get-ChildItem $OaHome -File -Filter 'mutcheck-*')) {
     if ($f.Extension -in '.mjs', '.ps1') { [void]$names.Add($f.Name) }
   }
+
+  # THE SECOND REGISTRY (added 2026-08-27).
+  #
+  # run-sweeps.ps1 answers "what runs tonight, unattended". user-settings.md is
+  # the other roster -- the operating manual a future run reads and executes
+  # from -- and it names runnable files that no sweep imports and no registry
+  # lists. Measured 2026-08-27: 25 such files, every one of them untracked in
+  # every git ref, including fix-playwright-npx-slots.ps1, the apply-script Shiv
+  # is actively being asked to approve. If this laptop died, the approval he is
+  # being asked for would have pointed at nothing.
+  #
+  # This is the same defect this script was built to end, for the third time and
+  # one level up: (1) 70 files on one laptop; (2) -Capture enumerating the repo
+  # side, so a NEW check was structurally uncapturable (fixed above, 2026-08-27);
+  # (3) both halves then trusting a single registry while a second went unread.
+  #
+  # A name only counts if the file actually exists here, so the arm is grounded
+  # in what is on disk rather than in prose.
+  $settings = $env:OVERNIGHT_AGENT_SETTINGS
+  if (-not $settings -and $env:PLANNER_PATH) { $settings = Join-Path $env:PLANNER_PATH 'user-settings.md' }
+  if (-not $settings -and $env:OneDrive) { $settings = Join-Path $env:OneDrive 'Apps\Focus Planner\user-settings.md' }
+  if ($settings -and (Test-Path $settings)) {
+    $docHits = 0
+    foreach ($m in [regex]::Matches((Get-Content $settings -Raw), '([A-Za-z0-9._-]+\.(?:mjs|ps1))')) {
+      $n = $m.Groups[1].Value
+      if ($n -like '*.bak*') { continue }
+      if (Test-Path (Join-Path $OaHome $n)) { if ($names.Add($n)) { $docHits++ } }
+    }
+    Write-Host "[sync-checks] manual = $settings (+$docHits file(s) named there and nowhere else)"
+  }
+  else {
+    Write-Host '[sync-checks] WARNING: user-settings.md not found - the manual arm is not running.'
+  }
 }
 $files = $names | Sort-Object | ForEach-Object { [pscustomobject]@{ Name = $_ } }
+
+# Skill-owned files have a different home: plugins/overnight-agent/skills/overnight-agent/,
+# because the harness loads them from the skill folder. They are versioned there and
+# guarded by installed-skill-drift-sweep. Copying them into checks/ as well would create
+# a second copy of a file that already has one, which is how "which of these two is the
+# real one?" starts -- the same question this whole exercise exists to make unaskable.
+# repo-drift-sweep.mjs routes them the same way (SKILL_OWNED); this mirrors it.
+$skillOwned = @('write-turn.ps1', 'mutcheck-write-turn.ps1', 'reap-stale-mcp.ps1', 'oa-state.ps1', 'oa-state.Tests.ps1')
+$skipped = @($files | Where-Object { $skillOwned -contains $_.Name })
+if ($skipped.Count -gt 0) {
+  $files = @($files | Where-Object { $skillOwned -notcontains $_.Name })
+  Write-Host ("[sync-checks] skipping {0} skill-owned file(s) (they live in skills/overnight-agent/): {1}" -f $skipped.Count, (($skipped | ForEach-Object { $_.Name }) -join ', '))
+}
 
 if ($Restore) { $srcDir = $ChecksRepo; $dstDir = $OaHome;      $label = 'repo -> machine' }
 else          { $srcDir = $OaHome;    $dstDir = $ChecksRepo;   $label = 'machine -> repo' }
@@ -127,7 +173,14 @@ foreach ($f in $files) {
 
   if ($Confirm) {
     # Back up whatever is being overwritten, so an unattended restore is undoable.
-    if ($hd) {
+    #
+    # ...but only when the destination is the MACHINE. On -Capture the destination
+    # is the git worktree, where the backup is both redundant (git already holds
+    # every prior version) and actively harmful: it drops untracked
+    # `*.pre-sync-*` files into the repo, where the next `git add -A` commits
+    # them. Found 2026-08-27, when the first manual-arm capture left two of them
+    # next to the files it had just archived.
+    if ($hd -and -not $Capture) {
       $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
       Copy-Item $dst "$dst.pre-sync-$stamp" -Force
     }

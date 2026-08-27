@@ -83,6 +83,112 @@ const ORCHESTRATION = [
   'deploy-installed-plugin.ps1',
 ];
 
+/**
+ * THE SECOND REGISTRY (added 2026-08-27)
+ * --------------------------------------
+ * `run-sweeps.ps1` answers "what runs tonight, unattended". It is not the only
+ * roster. `user-settings.md` is the operating manual a future run reads and
+ * executes from, and it names runnable files that no sweep imports and no
+ * registry lists -- among them `fix-playwright-npx-slots.ps1`, the apply-script
+ * Shiv is explicitly being asked to approve.
+ *
+ * Measured 2026-08-27: 30 live .mjs/.ps1 files sat outside the corpus, and
+ * **25 of them were named in user-settings.md**. All 30 were untracked in every
+ * git ref and absent from the archive. The previous run had recorded these as
+ * "mostly genuine scratch (yt-*, ynab-*, cdp-*)" and deferred them as a scoping
+ * question; that assessment was wrong, and it was wrong because nobody had
+ * asked the file.
+ *
+ * This is the same defect the sweep already exists to catch, one level up, and
+ * for the third time: (1) 70 files lived on one laptop; (2) `sync-checks
+ * -Capture` enumerated the repo side, so a NEW check was structurally
+ * uncapturable; (3) both tools then treated `run-sweeps.ps1` as *the* registry
+ * while a second roster went unread.
+ *
+ * The fix applies this file's own stated principle -- derive the roster, never
+ * keep a copy of it (see readRegistry below) -- to that second roster. A
+ * filename token only counts if the file actually exists in OA home, so the
+ * arm is grounded in reality rather than in prose.
+ */
+const SKILL_DIRS = [
+  'C:\\Users\\shiv\\.copilot\\installed-plugins\\focus-planner\\overnight-agent\\skills\\overnight-agent',
+  process.env.OA_SKILL_INSTALLED,
+].filter(Boolean);
+
+const SETTINGS_CANDIDATES = [
+  process.env.OVERNIGHT_AGENT_SETTINGS,
+  process.env.PLANNER_PATH ? path.join(process.env.PLANNER_PATH, 'user-settings.md') : null,
+  process.env.OneDrive ? path.join(process.env.OneDrive, 'Apps', 'Focus Planner', 'user-settings.md') : null,
+  path.join(OA, 'user-settings.md'),
+].filter(Boolean);
+
+/**
+ * Filenames the manual tells a future run to execute.
+ *
+ * Returns three groups, because they are different defects:
+ *   present   - named and living in OA home -> part of the asset, must be versioned.
+ *   elsewhere - named and found, but outside OA home (the skill folder, a
+ *               subdirectory like planner-ui\, or secrets\). Not this sweep's
+ *               to archive -- installed-skill-drift-sweep covers the skill
+ *               folder -- but emphatically NOT a dead pointer.
+ *   dangling  - named and found nowhere. The manual points at a command that
+ *               cannot be run.
+ *
+ * ⚠️ The `elsewhere` bucket is why this arm resolves a name against more than
+ * OA home's root. The first cut checked the root only and declared 21 dangling
+ * references, of which the majority were real files one directory away --
+ * `oa-state.ps1` (the skill's own state tool, named on nearly every page),
+ * `telegram-secret.ps1` (secrets\), `cdp-step.mjs` (planner-ui\). A list that
+ * is mostly false positives trains the reader to skip it, which is precisely
+ * how the 6 crashed sweeps went unnoticed for weeks. Resolve before reporting.
+ *
+ * `dangling` is reported but never failed on: a 6,800-line file accumulated
+ * over months will legitimately mention retired one-offs, and a detector that
+ * goes red on its first night for something nobody intends to fix is a
+ * detector nobody reads on its second.
+ */
+function docsReferenced() {
+  const present = new Set();
+  const elsewhere = new Map();
+  const dangling = new Set();
+  const source = SETTINGS_CANDIDATES.find((p) => fs.existsSync(p));
+  if (!source) return { present, elsewhere, dangling, source: null };
+
+  // Index every plausible home for a named command, once.
+  const searchRoots = [OA, ...SKILL_DIRS.filter((d) => fs.existsSync(d))];
+  const index = new Map(); // basename -> dir it was found in
+  const skipDirs = new Set(['sweep-runs', 'state', 'node_modules', 'telegram-bridge', 'backups', 'logs']);
+  for (const root of searchRoots) walk(root, 0);
+
+  function walk(dir, depth) {
+    if (depth > 2) return;
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        if (skipDirs.has(e.name.toLowerCase())) continue;
+        walk(path.join(dir, e.name), depth + 1);
+      } else if (/\.(mjs|ps1)$/.test(e.name) && !e.name.includes('.bak')) {
+        if (!index.has(e.name)) index.set(e.name, dir);
+      }
+    }
+  }
+
+  const text = fs.readFileSync(source, 'utf8');
+  for (const m of text.matchAll(/([A-Za-z0-9._-]+\.(?:mjs|ps1))/g)) {
+    const name = m[1];
+    if (name.includes('.bak')) continue;
+    if (fs.existsSync(path.join(OA, name))) present.add(name);
+    else if (index.has(name)) elsewhere.set(name, index.get(name));
+    else dangling.add(name);
+  }
+  return { present, elsewhere, dangling, source };
+}
+
 function firstExisting(paths) {
   for (const p of paths) if (fs.existsSync(p)) return p;
   return null;
@@ -201,6 +307,14 @@ function main() {
   for (const m of mutchecks) corpus.add(m);
   for (const o of ORCHESTRATION) if (fs.existsSync(path.join(OA, o))) corpus.add(o);
 
+  // The second registry: everything the operating manual names as runnable.
+  const docs = docsReferenced();
+  const addedByDocs = [];
+  for (const d of docs.present) {
+    if (!corpus.has(d)) addedByDocs.push(d);
+    corpus.add(d);
+  }
+
   const unversioned = [];
   const elsewhere = [];
   const modified = [];
@@ -254,7 +368,31 @@ function main() {
 
   console.log(`corpus (from the live run-sweeps.ps1 registry): ${corpus.size} files`);
   console.log(`archive: ${CHECKS_REPO}`);
+  if (docs.source) {
+    console.log(
+      `manual: ${docs.source} -> ${docs.present.size} named runnable file(s), ${addedByDocs.length} not otherwise in the corpus`
+    );
+  } else {
+    console.log('manual: NOT FOUND - the user-settings.md arm is not running.');
+  }
   console.log(`in sync: ${ok.length}`);
+
+  if (addedByDocs.length) {
+    console.log(`\nnamed by the manual, not by any registry: ${addedByDocs.length}`);
+    for (const f of addedByDocs.sort()) console.log(`  - ${f}`);
+  }
+
+  if (docs.dangling.size) {
+    console.log(
+      `\ndangling references in the manual (named, found nowhere): ${docs.dangling.size} (informational)`
+    );
+    for (const f of [...docs.dangling].sort()) console.log(`  - ${f}`);
+  }
+  if (docs.elsewhere.size) {
+    console.log(
+      `\nnamed by the manual, resolved outside OA home: ${docs.elsewhere.size} (not this sweep's to archive)`
+    );
+  }
 
   if (elsewhere.length) {
     console.log(
