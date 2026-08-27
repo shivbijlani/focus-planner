@@ -166,6 +166,75 @@ try {
   }
   Write-Host ''
   Write-Host "passed $pass / $($pass + $fail)"
+
+  # --- Phase 2: the production sequence (seed -> mark -> user speaks -> scan) --------------
+  # Phase 1 never calls `mark`, so it cannot see the class of bug where the agent's turn is
+  # the LAST section in the file: nothing closes it, so anything appended below is absorbed
+  # into the turn. SKILL.md promises "raw text at the bottom" reopens the task, and 217 of the
+  # 239 live journals have exactly that shape, so this phase is the one that holds the promise.
+  $p2root = Join-Path $env:TEMP ("oa-mutcheck2-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+  $p2j = Join-Path $p2root 'journal'
+  $p2s = Join-Path $p2root 'state'
+  New-Item -ItemType Directory -Path $p2j -Force | Out-Null
+  New-Item -ItemType Directory -Path $p2s -Force | Out-Null
+
+  try {
+    # append -> @{ new; old; why }.  `old` = the pre-fix verdict, so -ExpectPreFix still passes
+    # and the change is provably load-bearing rather than a restatement.
+    $p2cases = [ordered]@{
+      '921' = @{ append = "`r`n## 2026-08-27`r`n`r`n<!-- from: me -->`r`napprove`r`n"; new = $true;  old = $true;  why = 'GUARD: app-written reply (## date + from: me) -> reopen' }
+      '922' = @{ append = "`r`n## 2026-08-27`r`n`r`napprove`r`n";                      new = $true;  old = $true;  why = 'GUARD: ## date entry, no marker -> reopen' }
+      '923' = @{ append = "`r`n`r`napprove - go ahead please`r`n";                     new = $true;  old = $false; why = 'raw text at EOF -> reopen (the bug)' }
+      '924' = @{ append = '';                                                          new = $false; old = $false; why = 'GUARD: untouched answered journal -> quiet (no crying wolf)' }
+    }
+    foreach ($id in $p2cases.Keys) { New-Journal -Dir $p2j -Id $id -Entries @() }
+
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath seed -JournalDir $p2j -StateDir $p2s | Out-Null
+    foreach ($id in $p2cases.Keys) {
+      & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath mark -Id $id -JournalDir $p2j -StateDir $p2s | Out-Null
+    }
+    # The user speaks only AFTER the agent finished and marked -- that ordering is the point.
+    # TrimEnd mirrors an editor that normalises trailing whitespace, so the boundary cannot
+    # rely on the file being byte-identical to what was marked.
+    foreach ($id in $p2cases.Keys) {
+      $a = $p2cases[$id].append
+      if (-not $a) { continue }
+      $f = Join-Path $p2j "task-$id.md"
+      [System.IO.File]::WriteAllText($f, ([System.IO.File]::ReadAllText($f).TrimEnd() + $a), [System.Text.UTF8Encoding]::new($false))
+    }
+
+    $raw2 = & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath scan -JournalDir $p2j -StateDir $p2s
+    $by2 = @{}
+    foreach ($r in (($raw2 -join "`n") | ConvertFrom-Json)) { $by2["$($r.id)"] = $r }
+
+    Write-Host ''
+    Write-Host ("{0,-5} {1,-9} {2,-9} {3}" -f 'case', 'expect', 'actual', 'why (seed -> mark -> append -> scan)')
+    foreach ($id in $p2cases.Keys) {
+      $expected = if ($ExpectPreFix) { $p2cases[$id].old } else { $p2cases[$id].new }
+      $actual = [bool]$by2[$id].reopened
+      $ok = ($actual -eq $expected)
+      if ($ok) { $pass++ } else { $fail++ }
+      $tag = if ($ok) { 'PASS' } else { 'FAIL' }
+      Write-Host ("{0,-5} {1,-9} {2,-9} {3}  [{4}]" -f $id, $expected, $actual, $p2cases[$id].why, $tag)
+    }
+
+    # `mark` must never stamp a turn-end over prose the user is still waiting on an answer to
+    # -- that would swallow the message permanently, which is the failure this whole mechanism
+    # exists to prevent. Assert the file itself, not just the verdict.
+    New-Journal -Dir $p2j -Id '925' -Entries @($userTurn)
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath mark -Id 925 -JournalDir $p2j -StateDir $p2s | Out-Null
+    $stamped = [System.IO.File]::ReadAllText((Join-Path $p2j 'task-925.md')) -match '/overnight-agent\s+turn-end'
+    $ok = (-not $stamped)
+    if ($ok) { $pass++ } else { $fail++ }
+    Write-Host ("{0,-5} {1,-9} {2,-9} {3}  [{4}]" -f '925', 'no-stamp', $(if ($stamped) { 'stamped' } else { 'no-stamp' }),
+      'mark must NOT stamp over an unanswered user message', $(if ($ok) { 'PASS' } else { 'FAIL' }))
+  }
+  finally {
+    Remove-Item -Recurse -Force $p2root -ErrorAction SilentlyContinue
+  }
+
+  Write-Host ''
+  Write-Host "TOTAL passed $pass / $($pass + $fail)"
   if ($fail -gt 0) { exit 1 }
   exit 0
 }

@@ -18,6 +18,21 @@
       the agent's last block (catches already-reopened tasks like #293 on the first run).
   The agent calls `mark` after it writes its turn, which re-snapshots the hash.
 
+  WHERE the agent's turn ends is answered two ways, and the ORDER matters:
+    1. EXACTLY, from the snapshot. `mark`/`seed` record `processed_len` next to
+       `processed_file_hash`, so if the file still begins with the bytes the agent
+       processed, everything past `processed_len` is provably new. Journals are
+       bottom-appended chat, so this covers the normal way they grow and needs no
+       guess about what the text looks like.
+    2. HEURISTICALLY, by locating the agent's last marker and reading to the next
+       `## ` heading. Needed for untracked journals and in-place rewrites, but it is
+       blind when the agent's turn is the last `## ` section in the file: there is no
+       closing delimiter, so a raw append at EOF used to be absorbed into the agent's
+       own turn and silently swallowed (SKILL.md promises the opposite). That shape is
+       the majority of the corpus, so (1) is what makes the promise true.
+  The two are OR'd, never AND'd: a false reopen costs one look, a missed one loses the
+  user's message.
+
   "The user" means the human, `<!-- from: me -->`, and nothing else. These journals are
   shared: sibling skills (dance-church, instagram-publisher-monitor, kranbox-backup, ...)
   append their own turns with their own `<!-- from: ... -->` stamps. Those are machine
@@ -26,6 +41,9 @@
 
 .COMMANDS
   seed   [-Force]                Initialise state for every journal (one-time / migration).
+  backfill                      Add `processed_len` to pre-existing state files that predate
+                                it, so the exact append check above works without waiting for
+                                each task's next `mark`. Idempotent; never changes status.
   scan                          Emit the per-run worklist as JSON (what changed / reopened).
   get    -Id <id>               Print one task's state JSON.
   mark   -Id <id> [-Status s] [-Version n] [-PlanId p]
@@ -42,7 +60,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('seed', 'scan', 'get', 'mark')]
+  [ValidateSet('seed', 'backfill', 'scan', 'get', 'mark')]
   [string]$Command = 'scan',
 
   [string]$Id,
@@ -94,6 +112,15 @@ $script:LegacyStateRe = '(?m)^[ \t]*<!--[ \t]*oa-state'
 # heading is simply never found on a CRLF file and the whole recovery silently no-ops.
 $script:RunLogRe = '(?m)^[ \t]*###[ \t]+Run log[ \t]*\r?$'
 
+# An EXPLICIT end-of-turn boundary, written by `mark`. The heuristic below can find where a
+# turn ENDS only when a later `## ` heading closes it; when the agent's turn is the last
+# section in the file there is no such delimiter, and the boundary is genuinely undecidable
+# from content (an agent turn can end in a plain prose paragraph that is indistinguishable
+# from a short human reply). So the agent states it outright instead of guessing. It is an
+# HTML comment, so it never renders in the journal the user reads.
+$script:TurnEndMarker = '<!-- /overnight-agent turn-end -->'
+$script:TurnEndRe = '(?m)^[ \t]*<!--[ \t]*/overnight-agent[ \t]+turn-end[ \t]*-->[ \t]*\r?$'
+
 # The shape of a run-log body: the heading itself, blank lines, the bold date line
 # (`**2026-08-26 (overnight):**`), list items, and indented wrapped continuations.
 # Anything else in that region is prose this agent did not write.
@@ -136,6 +163,20 @@ function Get-AgentEndIndex([string]$content) {
   )
   $agentMarker = ($markers | Measure-Object -Maximum).Maximum
   if ($agentMarker -lt 0) { return -1 }
+
+  # An explicit turn-end stamp at or after the agent's anchor outranks every heuristic below:
+  # the agent recorded where its own turn stopped, so there is nothing left to infer. This is
+  # what makes a raw append at EOF visible -- without it the turn has no closing delimiter and
+  # the append is absorbed into the turn (SKILL.md promises it reopens the task).
+  $stamp = $null
+  foreach ($m in [regex]::Matches($content, $script:TurnEndRe)) {
+    if ($m.Index -ge $agentMarker) { $stamp = $m }
+  }
+  if ($stamp) {
+    $eol = $content.IndexOf("`n", $stamp.Index + $stamp.Length - 1)
+    return $(if ($eol -lt 0) { $content.Length } else { $eol + 1 })
+  }
+
   $nextHeading = $content.IndexOf("`n## ", $agentMarker)
   if ($agentMarker -eq $sentinelMarker -and $nextHeading -ge 0) {
     # The first H2 after the sentinel is the managed "Overnight Agent" heading, not a user
@@ -218,6 +259,8 @@ function Get-JournalFacts([string]$path) {
   [pscustomobject]@{
     Id              = $id
     Path            = $path
+    Content         = $content
+    AgentEnd        = [Math]::Min($agentEnd, $content.Length)
     HasAgentBlock   = $hasAgentBlock
     FullHash        = Get-Sha256 $content
     AgentLeftHash   = Get-Sha256 $agentLeft     # file as the agent last left it (no trailing user prose)
@@ -225,6 +268,29 @@ function Get-JournalFacts([string]$path) {
     Legacy          = Parse-LegacyOaState $content
   }
 }
+
+function Get-AppendedSince($facts, $st) {
+  # The EXACT half of the boundary question (see .MODEL): what, if anything, has been added
+  # to this journal since the agent last processed it?
+  #
+  # `mark`/`seed` record the length of the content they hashed. If the file is longer now and
+  # still *starts with* exactly those bytes -- proven by re-hashing the prefix, not by trusting
+  # the length alone -- then the remainder is provably new text that arrived afterwards. No
+  # lexical guess is involved, so it works for the 217-of-239 journals whose agent turn is the
+  # last `## ` section and therefore has no closing delimiter for the heuristic to find.
+  #
+  # Returns $null when the question cannot be answered exactly (no recorded length, file
+  # shorter, or an in-place rewrite so the prefix no longer matches). Callers then fall back
+  # to the heuristic rather than assuming "nothing was appended".
+  if (-not $st) { return $null }
+  $len = $st.PSObject.Properties['processed_len']
+  if (-not $len -or $null -eq $len.Value) { return $null }
+  $len = [int]$len.Value
+  if ($len -lt 0 -or $len -gt $facts.Content.Length) { return $null }
+  if ((Get-Sha256 $facts.Content.Substring(0, $len)) -ne "$($st.processed_file_hash)") { return $null }
+  return $facts.Content.Substring($len)
+}
+
 
 function State-Path([string]$id) { Join-Path $StateDir "task-$id.json" }
 
@@ -259,6 +325,7 @@ function Cmd-Seed {
       version             = if ($legacy -and $legacy.version) { [int]$legacy.version } else { 0 }
       plan_id             = if ($legacy) { "$($legacy.plan_id)" } else { '' }
       processed_file_hash = $facts.AgentLeftHash
+      processed_len       = $facts.AgentEnd     # length of the content that hash covers
       has_agent_block     = $facts.HasAgentBlock
       seeded              = $true
       updated             = Now-Iso
@@ -276,7 +343,12 @@ function Cmd-Scan {
     $st = Read-State $facts.Id
     if ($st) {
       $changed = ($facts.FullHash -ne $st.processed_file_hash)
-      $reopened = $changed -and $facts.HasTrailingUser
+      # Two independent readings of "did the user speak below my last turn?", OR'd. See
+      # .MODEL: the appended-text check is exact but needs a recorded length; the trailing
+      # check is always available but cannot see a raw append at EOF. Either one is enough.
+      $appended = Get-AppendedSince $facts $st
+      $appendedHasUser = ($null -ne $appended) -and (Test-TrailingHasUser $appended)
+      $reopened = $changed -and ($facts.HasTrailingUser -or $appendedHasUser)
       $status = "$($st.status)"
     }
     else {
@@ -305,6 +377,32 @@ function Cmd-Get {
   $st | ConvertTo-Json -Depth 6
 }
 
+function Add-TurnEndStamp($facts) {
+  # Record where this turn ended, so the next scan does not have to guess. Deliberately
+  # conservative:
+  #   - SKIPPED when the journal still shows unanswered user prose. `mark` would otherwise
+  #     stamp *over* the user's message and permanently swallow it -- the exact failure this
+  #     whole mechanism exists to prevent.
+  #   - APPEND-ONLY and idempotent, so it can never disturb a byte the user wrote.
+  # Returns the new content, or $null when nothing was written.
+  if ($facts.HasTrailingUser) { return $null }
+  $content = $facts.Content
+  $trimmed = $content.TrimEnd()
+  if ($trimmed.Length -eq 0) { return $null }
+  $lastLine = ($trimmed -split "`r?`n")[-1]
+  if ($lastLine -match $script:TurnEndRe) { return $null }   # already stamped
+  $nl = if ($content -match "`r`n") { "`r`n" } else { "`n" }
+  $new = $trimmed + $nl + $nl + $script:TurnEndMarker + $nl
+  [System.IO.File]::WriteAllText($facts.Path, $new, [System.Text.UTF8Encoding]::new($false))
+  return $new
+}
+
+function Set-StateProp($st, [string]$name, $value) {
+  # State files written before a property existed simply lack it, so assigning would throw.
+  if ($st.PSObject.Properties[$name]) { $st.$name = $value }
+  else { $st | Add-Member -NotePropertyName $name -NotePropertyValue $value }
+}
+
 function Cmd-Mark {
   if (-not $Id) { throw 'mark requires -Id' }
   $path = Join-Path $JournalDir "task-$Id.md"
@@ -312,21 +410,57 @@ function Cmd-Mark {
   $facts = Get-JournalFacts $path
   $st = Read-State $Id
   if (-not $st) {
-    $st = [pscustomobject]@{ id = $Id; status = 'unknown'; version = 0; plan_id = ''; processed_file_hash = ''; has_agent_block = $true; seeded = $false; updated = $null }
+    $st = [pscustomobject]@{ id = $Id; status = 'unknown'; version = 0; plan_id = ''; processed_file_hash = ''; processed_len = $null; has_agent_block = $true; seeded = $false; updated = $null }
   }
   if ($Status) { $st.status = $Status }
   if ($Version -gt 0) { $st.version = $Version }
   if ($PlanId) { $st.plan_id = $PlanId }
-  # Re-snapshot: the agent has now processed the journal as it currently stands.
-  $st.processed_file_hash = $facts.FullHash
-  $st.has_agent_block = $facts.HasAgentBlock
-  $st.updated = Now-Iso
+  # Stamp the end of the turn FIRST, then snapshot -- the hash has to describe the file as it
+  # now stands on disk, stamp included, or the very next scan reports a phantom change.
+  if ($facts.HasAgentBlock -and (Add-TurnEndStamp $facts)) { $facts = Get-JournalFacts $path }
+  # Re-snapshot: the agent has now processed the journal as it currently stands. The length
+  # must be recorded with the hash -- it is what lets the next `scan` prove that any extra
+  # bytes are new (see Get-AppendedSince).
+  Set-StateProp $st 'processed_file_hash' $facts.FullHash
+  Set-StateProp $st 'processed_len' $facts.Content.Length
+  Set-StateProp $st 'has_agent_block' $facts.HasAgentBlock
+  Set-StateProp $st 'updated' (Now-Iso)
   Write-State $st
   $st | ConvertTo-Json -Depth 6
 }
 
+function Cmd-Backfill {
+  # State written before `processed_len` existed cannot use the exact append check, which
+  # would leave those tasks on the blind heuristic until each one happened to be marked
+  # again. Derive the missing length from the hash already stored -- only ever accepting a
+  # candidate whose prefix re-hashes to that exact value, so a wrong length is impossible.
+  $journals = Get-ChildItem $JournalDir -Filter 'task-*.md' -File | Where-Object { $_.BaseName -match '^task-\d+$' } | Sort-Object Name
+  $filled = 0; $already = 0; $undecidable = 0; $untracked = 0
+  foreach ($f in $journals) {
+    $facts = Get-JournalFacts $f.FullName
+    $st = Read-State $facts.Id
+    if (-not $st) { $untracked++; continue }
+    $p = $st.PSObject.Properties['processed_len']
+    if ($p -and $null -ne $p.Value) { $already++; continue }
+
+    # The two bases a hash could have been taken on: the whole file (`mark`) or the file as
+    # the agent left it (`seed`). Verify, never assume.
+    $len = $null
+    foreach ($cand in @($facts.Content.Length, $facts.AgentEnd)) {
+      if ($cand -lt 0 -or $cand -gt $facts.Content.Length) { continue }
+      if ((Get-Sha256 $facts.Content.Substring(0, $cand)) -eq "$($st.processed_file_hash)") { $len = $cand; break }
+    }
+    if ($null -eq $len) { $undecidable++; continue }
+    Set-StateProp $st 'processed_len' $len
+    Write-State $st
+    $filled++
+  }
+  Write-Output "backfill: filled $filled, already had it $already, undecidable $undecidable, untracked $untracked"
+}
+
 switch ($Command) {
   'seed' { Cmd-Seed }
+  'backfill' { Cmd-Backfill }
   'scan' { Cmd-Scan }
   'get' { Cmd-Get }
   'mark' { Cmd-Mark }

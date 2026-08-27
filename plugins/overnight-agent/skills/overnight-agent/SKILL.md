@@ -100,11 +100,19 @@ already processed in this journal") lives in the **skill's own working dir**, wh
   - **`get -Id <id>`** → that task's full state JSON.
   - **`mark -Id <id> [-Status <s>] [-Version <n>] [-PlanId <p>]`** → call this **after you write your
     turn into a journal**. It updates the fields and re-snapshots the journal, so next run the task reads
-    as quiet until the user touches it again.
+    as quiet until the user touches it again. It also appends an invisible
+    `<!-- /overnight-agent turn-end -->` comment marking where your turn stopped — that is what makes a
+    reply typed at the very bottom of the journal reopen the task (see below). It is skipped whenever the
+    journal still shows an unanswered user message, so it can never stamp over one.
   - **`seed [-Force]`** → one-time/migration bootstrap of state for every existing journal.
+  - **`backfill`** → one-time migration for state written before the turn-end mechanism existed. Safe to
+    re-run; it never changes a task's status.
 
 **How "the user replied" is detected (the reopen fix):** the tool remembers a hash of each journal as
-you last left it. On the next `scan`:
+you last left it, **and where your turn ended**. Knowing the end matters: in most journals your turn is
+the last section in the file, so nothing closes it, and without an explicit end marker a reply typed at
+the very bottom gets absorbed into your own turn and is never seen. `mark` therefore stamps the end of
+each turn, and `scan` reads everything past that stamp as the user speaking. On the next `scan`:
 - **`reopened: true`** means the user added content after your last turn (a new `## <date>` entry or
   raw text at the bottom) and you haven't answered it — **even if the task was `done`/`skip`.** Treat it
   as fresh input: read the newest message and act (approve→execute, new ask→re-plan). This is the rule
