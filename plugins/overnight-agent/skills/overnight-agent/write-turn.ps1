@@ -225,6 +225,39 @@ function Test-TurnBody {
     }
   }
 
+  # --- G5: the turn must be anchorable at all -------------------------------------
+  # G3 validates every H2 that IS present, but never required one. A body with no
+  # moon-anchored H2 is not a turn the bridge can see: `latestAgentTurn()` anchors on
+  # /^##\s*<moon>/, so the text is folded into the PREVIOUS turn instead of starting a
+  # new one. The previous turn's hash changes, the bridge reposts it, and the new turn
+  # has no heading of its own on any surface.
+  #
+  # Found 2026-08-27 by hitting it: a turn was written body-first (Status/Context/prose,
+  # no heading), every one of G1-G4 read clean, and it went to disk unanchorable. This is
+  # the same cost G3 exists to prevent -- G3 just could not see the case where the anchor
+  # is missing rather than malformed. Same shape as the two library bugs recorded this
+  # week: a guard on the malformed case is not a guard on the absent case.
+  #
+  # A refusal rather than an advisory, deliberately: unlike "this turn carries no ask"
+  # (which informational turns do legitimately), there is no legitimate agent turn
+  # without a heading -- the bridge structurally requires one. `-DisableGuard G5` remains
+  # the escape hatch for linting a fragment.
+  if (& $on 'G5') {
+    $anchored = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+      if ($inFence[$i]) { continue }
+      $l = $lines[$i]
+      if ($l -match '^[ \t]*##[ \t]+\S' -and $l -notmatch '^[ \t]*###') {
+        $after = ($l -replace '^[ \t]*##[ \t]+', '')
+        if ($after.StartsWith($MOON)) { $anchored = $true; break }
+      }
+    }
+    if (-not $anchored) {
+      $findings += New-Finding 'G5' 1 (($lines | Where-Object { $_.Trim() } | Select-Object -First 1)) `
+        "this turn has no '## <moon> ...' heading, so the Telegram bridge cannot anchor it -- it would be folded into the previous turn instead of starting a new one"
+    }
+  }
+
   return $findings
 }
 
@@ -235,7 +268,21 @@ if (-not (Test-Path -LiteralPath $BodyFile)) {
 $body = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $BodyFile))
 if ($body.Trim().Length -eq 0) { Write-Error 'body file is empty'; exit 3 }
 
-$findings = Test-TurnBody -Body $body -Disabled $DisableGuard
+# HOST-DEPENDENT COUNT (found 2026-08-27, by hitting it)
+# --------------------------------------------------------
+# `Test-TurnBody` returns 0, 1 or many findings. Under Windows PowerShell 5.1 a SINGLE
+# returned object is a scalar, and a scalar PSCustomObject has no `.Count` -- it evaluates
+# to $null, so `$findings.Count -gt 0` is FALSE and the refusal below is skipped entirely.
+# pwsh 7 added `.Count` to every object, so it refuses correctly there.
+#
+# Every invocation in SKILL.md and user-settings.md is `powershell` (5.1). Net effect: a
+# body with EXACTLY ONE guard violation printed "clean", exited 0, and was WRITTEN -- and
+# one violation is the common case. All four guards were unenforced in production for it,
+# while reading green anywhere the checks run under 7. Same 5.1-vs-7 split already recorded
+# for `Get-Content -Raw` on a journal (HAZARD 4); it applies to the safety tool itself.
+#
+# `@(...)` forces an array on both hosts, so `.Count` is 0/1/n everywhere.
+$findings = @(Test-TurnBody -Body $body -Disabled $DisableGuard)
 $hasAsk = Test-TurnAsk -Body $body
 
 if ($Json) {

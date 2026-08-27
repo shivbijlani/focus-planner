@@ -115,12 +115,19 @@ Apostrophes get doubled: `don''t` instead of the word you meant.
 
   # G3 -- date-first H2. The bridge anchors on `##` + moon, so this heading is not an
   # anchor and the turn gets cut here. This is the 17:00 failure, reproduced.
+  # G3 positives carry a VALID anchor heading as well, so the fixture isolates G3.
+  # Without it the body has no moon-anchored H2 at all and legitimately trips G5 too,
+  # which would make the fixture assert two defects while claiming to test one.
   @{ name = 'g3-date-first';    expect = @('G3'); nl = 'LF';   body = @'
+## MOON Overnight Agent -- 2026-08-27 reply
+
 ## 2026-08-27 -- MOON Overnight Agent reply
 
 Body text.
 '@ }
   @{ name = 'g3-crlf';          expect = @('G3'); nl = 'CRLF'; body = @'
+## MOON Overnight Agent -- 2026-08-27 reply
+
 ## 2026-08-27 -- MOON Overnight Agent reply
 
 Body text on a CRLF file.
@@ -147,12 +154,37 @@ Use the moon first instead.
 '@ }
 
   # G4 -- a provenance stamp with no heading above it severs the block.
-  @{ name = 'g4-stray-marker';  expect = @('G4'); nl = 'LF';   body = @'
+  # This one genuinely carries BOTH defects and must say so: G4 is defined by there
+  # being no heading above the marker, so giving it an anchor to isolate G4 would
+  # delete the very condition under test. Asserting both keeps the fixture honest.
+  @{ name = 'g4-stray-marker';  expect = @('G4', 'G5'); nl = 'LF';   body = @'
 <!-- from: overnight-agent -->
 
 **Status:** Proposed
 
 **Needs from you:** none
+'@ }
+
+  # G5 -- a well-formed turn that is missing only its anchor heading. This is the
+  # defect that was hit live on 2026-08-27: G1-G4 all read clean and the turn went to
+  # disk unanchorable, so the bridge folded it into the previous turn.
+  @{ name = 'g5-no-heading';    expect = @('G5'); nl = 'LF';   body = @'
+**Status:** In progress -- 2026-08-27
+
+**Context:** read the linked journals.
+
+Prose body with nothing else wrong with it.
+
+**Needs from you:** nothing.
+'@ }
+  # G5 negative: an H3-only body still has no anchor, so it must fire; but a body whose
+  # anchor sits below other prose is fine, because the bridge scans for the heading.
+  @{ name = 'g5-anchor-later';  expect = @();     nl = 'LF';   body = @'
+Some preamble the turn opens with.
+
+## MOON Overnight Agent -- 2026-08-27 reply
+
+Body text.
 '@ }
 )
 
@@ -209,7 +241,7 @@ if ($failures.Count -gt 0) {
 # --- 2. mutation: disabling guard G must change EXACTLY G's own fixtures -------------
 Write-Host ''
 Write-Host '--- mutation (disable one guard at a time) ---'
-foreach ($g in @('G1', 'G2', 'G3', 'G4')) {
+foreach ($g in @('G1', 'G2', 'G3', 'G4', 'G5')) {
   $ownFixtures = @($fixtures | Where-Object { $_.expect -contains $g })
   if ($ownFixtures.Count -eq 0) { $failures += "no fixture exercises $g"; continue }
 
@@ -236,7 +268,7 @@ Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host ''
 if ($failures.Count -eq 0) {
-  Write-Host ("PASS - {0} fixtures, 4 guards, each load-bearing." -f $fixtures.Count) -ForegroundColor Green
+  Write-Host ("PASS - {0} fixtures, 5 guards, each load-bearing." -f $fixtures.Count) -ForegroundColor Green
   exit 0
 }
 Write-Host 'FAIL' -ForegroundColor Red
