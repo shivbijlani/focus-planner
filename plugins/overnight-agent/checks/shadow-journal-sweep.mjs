@@ -59,8 +59,27 @@
 // the live journal is a superset and the shadow is redundant history; >0 means content exists
 // nowhere else.
 //
-// exit 1 = findings.
+// THE BASELINE, and why it is not a snooze button
+// -----------------------------------------------
+// The three files found on 2026-08-27 were all reviewed by hand that night and all three are
+// stale: #292 has no unique content at all, #249's is a June plan that was approved and
+// executed, and #328's is a plan for a wedding that has since happened on a task Shiv closed
+// himself. None of them needs action, and deleting files he owns is his call, not the agent's.
+//
+// So without a baseline this detector would read 3 forever. That is the exact failure this
+// run spent its time removing from `swallowed-message-sweep`, which had reported the same 5
+// settled items every single run until they were answered: a check that can never reach zero
+// gets skimmed, and the next line down is the real one. Shipping a new permanent-red check
+// would be re-introducing the bug while claiming to fix it.
+//
+// The baseline is content-addressed -- name + sha256 of the file's unique-line set. It is
+// deliberately NOT "ignore this filename":
+//   * if a baselined shadow file GAINS content, its hash changes and it becomes a finding again
+//   * a NEW shadow file is always a finding
+// So it silences exactly what was reviewed, and nothing else. Same pattern as the
+// content-addressed baseline `lost-interpolation-sweep` uses for its known-unrecoverable lines.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
 const planner = process.env.PLANNER_PATH || 'C:\\Users\\shiv\\OneDrive\\Apps\\Focus Planner';
@@ -90,6 +109,28 @@ function uniqueLines(shadowText, liveText) {
     if (l && !live.has(l)) out.push(l);
   }
   return out;
+}
+
+// The shadow files reviewed by hand on 2026-08-27 and confirmed stale. Keyed by name, valued
+// by the sha256 of the file's unique-line set, so any NEW content in one of these re-arms it.
+// Add an entry only after actually reading the unique lines and confirming nothing is owed.
+const REVIEWED = new Map([
+  ['task-328-shiv-devbox.md',
+    { on: '2026-08-27',
+      hash: 'f17214356a803ef9af5b6b3f8e2a97c5738a4bae8ac4b910b97abfafb50dbc32',
+      why: 'plan for the Aug 10-11 wedding, now past; #328 closed by Shiv 2026-08-25' }],
+  ['task-249-DESKTOP-P9116M3.md',
+    { on: '2026-08-27',
+      hash: '600e9b4c4e669e6a2c49f9544a039118c60dc0ae7bc8fea54523678857188931',
+      why: 'June 14 plan that was approved and executed on June 15; superseded' }],
+  ['task-292-DESKTOP-P9116M3.md',
+    { on: '2026-08-27',
+      hash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      why: 'no unique content -- the live journal is a strict superset' }],
+]);
+
+function uniqueHash(unique) {
+  return createHash('sha256').update((unique ?? []).join('\n'), 'utf8').digest('hex');
 }
 
 function classify(name, content) {
@@ -136,6 +177,21 @@ function runFixtures() {
     const actual = !BACKUP.test(name) && classify(name, body).length > 0;
     if (actual !== expected) failures.push({ name, expected, actual, why });
   }
+  // The baseline must silence a VERDICT, not a filename. Assert both directions directly,
+  // because "it went quiet" is indistinguishable from "it went blind" without this.
+  const anyName = [...REVIEWED.keys()][0];
+  if (anyName) {
+    const base = REVIEWED.get(anyName);
+    if (uniqueHash(base.sample ?? null) === base.hash && base.hash !== uniqueHash(null)) {
+      failures.push({ name: anyName, expected: 'hash derived from real content', actual: 'empty',
+        why: 'BASELINE: a baselined hash must come from the file, not from nothing' });
+    }
+    // Same file, one extra line of unique content => different hash => re-armed.
+    if (uniqueHash(['a new line Shiv just typed']) === base.hash) {
+      failures.push({ name: anyName, expected: 'changed content re-arms', actual: 'still silenced',
+        why: 'BASELINE: new content in a baselined file must become a finding again' });
+    }
+  }
   return failures;
 }
 
@@ -163,6 +219,16 @@ for (const name of files) {
   hits.push({ name, reasons, owner, liveExists, unique });
 }
 
+// Split what was reviewed and confirmed stale from what is genuinely new. A baselined file
+// re-arms the moment its unique content changes, so this silences a verdict, not a filename.
+const findings = [];
+const reviewed = [];
+for (const h of hits) {
+  const base = REVIEWED.get(h.name);
+  if (base && base.hash === uniqueHash(h.unique)) reviewed.push({ ...h, base });
+  else findings.push(h);
+}
+
 console.log(`journal folder: ${files.length} .md files (backups excluded)`);
 console.log(`fixtures: ${FIXTURES.length - fixtureFailures.length}/${FIXTURES.length} correct`);
 
@@ -173,19 +239,33 @@ if (fixtureFailures.length) {
   }
 }
 
-if (hits.length === 0) {
-  console.log('\nno journal-shaped file is hidden from the readers.');
+if (reviewed.length) {
+  console.log(
+    `\nknown, reviewed and confirmed stale: ${reviewed.length} ` +
+    '(reported apart from findings; each re-arms if its content changes)',
+  );
+  for (const r of reviewed) {
+    console.log(`  ${r.name} -- ${r.base.why} [reviewed ${r.base.on}]`);
+  }
+}
+
+if (findings.length === 0) {
+  console.log('\nno NEW journal-shaped file is hidden from the readers.');
   process.exit(fixtureFailures.length ? 1 : 0);
 }
 
 // Files holding content that exists nowhere else come first -- that is the only arm of this
 // that can actually lose something.
-hits.sort((a, b) => (b.unique?.length ?? 0) - (a.unique?.length ?? 0));
+findings.sort((a, b) => (b.unique?.length ?? 0) - (a.unique?.length ?? 0));
 
-console.log(`\nFINDINGS: ${hits.length} file(s) no reader will ever open`);
-for (const h of hits) {
+console.log(`\nFINDINGS: ${findings.length} file(s) no reader will ever open`);
+for (const h of findings) {
+  const base = REVIEWED.get(h.name);
   console.log(`\n  ${h.name}`);
   console.log(`    why           : ${h.reasons.join('; ')}`);
+  if (base) {
+    console.log(`    ⚠ re-armed    : reviewed ${base.on}, but its unique content has CHANGED since`);
+  }
   console.log(`    belongs to    : ${h.owner ? `#${h.owner}` : '(unknown)'}` +
     `${h.owner ? (h.liveExists ? ' (live journal exists)' : ' (NO live journal!)') : ''}`);
   if (h.unique === null) {
@@ -199,9 +279,11 @@ for (const h of hits) {
     }
     if (h.unique.length > 6) console.log(`      ... and ${h.unique.length - 6} more`);
   }
+  console.log(`    baseline hash : ${uniqueHash(h.unique)}`);
 }
 console.log(
   '\nA file with 0 unique lines is safe to leave; one with unique lines is holding content ' +
-  'that exists nowhere a reader will find it. Deleting files is Shiv\'s call, not the agent\'s.',
+  'that exists nowhere a reader will find it. Deleting files is Shiv\'s call, not the agent\'s.\n' +
+  'Once reviewed and confirmed stale, add it to REVIEWED with the baseline hash printed above.',
 );
 process.exit(1);
