@@ -56,6 +56,11 @@ $OA          = Join-Path $env:LOCALAPPDATA 'overnight-agent'
 $PlannerPath = 'C:\Users\shiv\OneDrive\Apps\Focus Planner'
 $MirrorPs1   = Join-Path $OA 'run-telegram-mirror.ps1'
 
+# The plugin the CLI actually loads. PowerShell mutation checks that take a -ScriptPath are
+# pointed here on purpose: `installed-plugins` is written by hand, so it is the only copy whose
+# behaviour is production behaviour. Guarding the repo copy would guard something nothing runs.
+$InstalledOaState = Join-Path $env:USERPROFILE '.copilot\installed-plugins\focus-planner\overnight-agent\skills\overnight-agent\oa-state.ps1'
+
 # --- Resolve the bridge pin from run-telegram-mirror.ps1 (single source of truth) ---
 # That wrapper holds the pinned worktree; deriving from it means a rollback of the
 # pin automatically applies here too, instead of drifting into a second copy.
@@ -131,6 +136,21 @@ $Suite = @(
   @{ n = 'turn-truncation-sweep';    bridge = $true  }
   @{ n = 'hidden-turn-sweep';        bridge = $true  }
   @{ n = 'closed-task-posts';        bridge = $true  }
+  # 2026-08-27 12:15 PT - this sweep's FLAGGED line could never reach zero. It flagged
+  # DISABLED unconditionally, so "Google token check (folder-bind test)" - a placeholder
+  # created 2026-07-03 (prompt: "placeholder - will configure after verifying workspace
+  # binding"), disabled, ZERO runs, never executed - sat under FLAGGED in 17 of 17
+  # archived sweep runs. That is the desensitising half of the 11:40 learning: this is
+  # the SAME detector whose flagged line was read and skipped 16 runs running while the
+  # hourly Browser watchdog was dead for 11 hours. A permanently-red line teaches every
+  # future run to skim it. Fixed with an acknowledged-inert baseline (the
+  # shadow-journal-sweep / lost-interpolation-sweep precedent): suppression needs all of
+  # enabled=0 AND zero runs ever AND a fingerprint in workflow-health-baseline.json, and
+  # it re-arms if the workflow is enabled, ever runs, or is renamed/re-prompted/
+  # re-scheduled. The 54-day "Google Workspace token check" bug this sweep exists for
+  # cannot re-hide: it had runs > 0, which defeats suppression on its own. Both
+  # directions proven by workflow-health-sweep.test.mjs (14/14), all four guards
+  # mutation-proven load-bearing.
   @{ n = 'workflow-health-sweep';    bridge = $false }
   # The RECOVERY half of the line above, added 2026-08-27. workflow-health-sweep
   # correctly flagged "Browser watchdog [OVERDUE] ... last=running" in 16 CONSECUTIVE
@@ -341,6 +361,29 @@ $Suite = @(
   # baseline case rather than a mutant, because it is matcher logic and neutering it broke 3
   # of 6 cases. Exits 1 on findings; reads 3 today (SKILL.md + the two files PR #192 carries).
   @{ n = 'installed-skill-drift-sweep'; bridge = $false }
+  # journal-encoding-invariant (added 2026-08-27 12:50 PT) — the COMPLEMENT of the line
+  # above. installed-skill-drift-sweep asks "does the live file differ from a git ref?",
+  # which is a PROXY for danger, and measured this run it is the wrong way round:
+  # origin/main has NO journal write path at all (its only write targets the state JSON),
+  # so reverting to main degrades hash stability, not data. Drift therefore fires on a
+  # SAFE state and would stay silent on a dangerous one.
+  # The actual defect is the ASYMMETRIC ENCODING PAIR — an ANSI read combined with a
+  # UTF-8 write in the same read-modify-write. Measured on this box (ACP 1252):
+  #     read ANSI -> write ANSI    lossless (cp1252 is a byte-bijection)
+  #     read ANSI -> write UTF-8   DESTROYS every non-ASCII character
+  # which is why the bug hid for so long: half the round-trips are harmless. It is the
+  # pair that cost 593 lines of task-448.md on 2026-08-27, and the shape a PARTIAL hand
+  # copy into installed-plugins reproduces — a journal write path present WITHOUT
+  # Read-JournalText. Nothing else asserts that invariant; the lost-interpolation and
+  # doubled-apostrophe sweeps read journals AFTER the fact and are forensics, not
+  # prevention.
+  # BEHAVIOURAL first: runs the INSTALLED oa-state.ps1 `mark` against an isolated
+  # synthetic journal (own -JournalDir/-StateDir, live state untouched) and asserts the
+  # bytes above the turn-end marker survive EXACTLY — a prefix comparison, so there is no
+  # magic size threshold to tune. 3 mutants killed by 3 DIFFERENT arms
+  # (mutcheck-journal-encoding.mjs), so no guard is redundant; M2 reproduces the real
+  # regression and names the 6 destroyed glyph classes. Exits 1 on findings; reads 0 today.
+  @{ n = 'journal-encoding-invariant'; bridge = $false }
   # raw-append-reopen-sweep (added 2026-08-27 01:xx PT run) — the THIRD false-reopen defect,
   # and the only one that loses data. #191 and #192 both fix false POSITIVES (a settled task
   # reads reopened). This is a false NEGATIVE: a reply the user types at the bottom of a
@@ -394,10 +437,18 @@ $Suite = @(
 )
 
 if ($IncludeMutchecks) {
-  Get-ChildItem $OA -Filter 'mutcheck-*.mjs' -File |
-    Sort-Object Name | ForEach-Object {
-      $Suite += @{ n = [IO.Path]::GetFileNameWithoutExtension($_.Name); bridge = $false; mut = $true }
-    }
+  # BOTH extensions. This glob was '.mjs'-only until 2026-08-27, which silently skipped every
+  # PowerShell mutation check on the machine -- 4 of them, including mutcheck-write-turn.ps1,
+  # the one guarding write-turn.ps1, the mandated journal writer. They were never "failing":
+  # they were never RUN, so -IncludeMutchecks reported a clean sweep of a suite it could not
+  # see. Same defect class as the six sweeps that died on an unset BRIDGE_SRC (2026-08-25
+  # 22:45) -- a roster that reports "all clean" while structurally blind to part of itself.
+  foreach ($ext in @('.mjs', '.ps1')) {
+    Get-ChildItem $OA -Filter "mutcheck-*$ext" -File |
+      Sort-Object Name | ForEach-Object {
+        $Suite += @{ n = [IO.Path]::GetFileNameWithoutExtension($_.Name); bridge = $false; mut = $true; ext = $ext }
+      }
+  }
 }
 
 # Deliberately NOT part of the standing suite. digest-audit hardcodes its imports
@@ -439,8 +490,12 @@ if ($Only) {
     elseif (Test-Path (Join-Path $OA "$o.mjs")) {
       # ad-hoc: run a sweep that is not in the standing suite (used for negative tests)
       $sel += @{ n = $o; bridge = $false; adhoc = $true }
+    }
+    elseif (Test-Path (Join-Path $OA "$o.ps1")) {
+      # Same, for a PowerShell check. Without this arm, -Only could not reach a .ps1 at all.
+      $sel += @{ n = $o; bridge = $false; adhoc = $true; ext = '.ps1' }
     } else {
-      throw "-Only '$o' matches no sweep in the suite and no $o.mjs in $OA"
+      throw "-Only '$o' matches no sweep in the suite and no $o.mjs or $o.ps1 in $OA"
     }
   }
   $Suite = $sel
@@ -465,7 +520,10 @@ if (Test-Path $runsRoot) {
 # --- Run ----------------------------------------------------------------------------
 $results = @()
 foreach ($s in $Suite) {
-  $path = Join-Path $OA "$($s.n).mjs"
+  # A suite entry is node-run .mjs unless it declares its own extension. Mutation checks may
+  # be PowerShell; resolving the extension here is what lets them run at all.
+  $ext = if ($s.ContainsKey('ext') -and $s.ext) { $s.ext } else { '.mjs' }
+  $path = Join-Path $OA "$($s.n)$ext"
   if (-not (Test-Path $path)) {
     $results += [pscustomobject]@{ name = $s.n; state = 'MISSING'; exit = $null; stdout = 0; stderr = 0; file = $null }
     continue
@@ -474,9 +532,22 @@ foreach ($s in $Suite) {
   $seF = Join-Path $OutDir "$($s.n).err.txt"
   # Per-sweep arguments. Only stuck-run-sweep uses this today (it needs --repair);
   # kept generic so the next sweep that needs a flag does not re-touch the runner.
-  $argList = @($path)
+  if ($ext -eq '.ps1') {
+    $exe = 'powershell'
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $path)
+    # Two of these declare a MANDATORY -ScriptPath and simply refuse to start without it.
+    # Point them at the plugin the CLI actually loads, so they guard PRODUCTION rather than
+    # a copy in the repo -- the installed file is hand-deployed and is what really runs.
+    # Read with an explicit UTF-8 decoder, never Get-Content -Raw (HAZARD 4).
+    $src = [IO.File]::ReadAllText($path, (New-Object Text.UTF8Encoding($false)))
+    if ($src -match '\$ScriptPath') { $argList += @('-ScriptPath', $InstalledOaState) }
+  }
+  else {
+    $exe = 'node'
+    $argList = @($path)
+  }
   if ($s.ContainsKey('args') -and $s.args) { $argList += @($s.args) }
-  $p = Start-Process -FilePath 'node' -ArgumentList $argList -NoNewWindow -Wait -PassThru `
+  $p = Start-Process -FilePath $exe -ArgumentList $argList -NoNewWindow -Wait -PassThru `
                      -RedirectStandardOutput $soF -RedirectStandardError $seF
   $so = if (Test-Path $soF) { (Get-Content $soF -Raw) } else { '' }
   $se = if (Test-Path $seF) { (Get-Content $seF -Raw) } else { '' }
