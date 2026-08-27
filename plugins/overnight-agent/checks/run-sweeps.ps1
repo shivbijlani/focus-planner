@@ -131,6 +131,21 @@ $Suite = @(
   @{ n = 'turn-truncation-sweep';    bridge = $true  }
   @{ n = 'hidden-turn-sweep';        bridge = $true  }
   @{ n = 'closed-task-posts';        bridge = $true  }
+  # 2026-08-27 12:15 PT - this sweep's FLAGGED line could never reach zero. It flagged
+  # DISABLED unconditionally, so "Google token check (folder-bind test)" - a placeholder
+  # created 2026-07-03 (prompt: "placeholder - will configure after verifying workspace
+  # binding"), disabled, ZERO runs, never executed - sat under FLAGGED in 17 of 17
+  # archived sweep runs. That is the desensitising half of the 11:40 learning: this is
+  # the SAME detector whose flagged line was read and skipped 16 runs running while the
+  # hourly Browser watchdog was dead for 11 hours. A permanently-red line teaches every
+  # future run to skim it. Fixed with an acknowledged-inert baseline (the
+  # shadow-journal-sweep / lost-interpolation-sweep precedent): suppression needs all of
+  # enabled=0 AND zero runs ever AND a fingerprint in workflow-health-baseline.json, and
+  # it re-arms if the workflow is enabled, ever runs, or is renamed/re-prompted/
+  # re-scheduled. The 54-day "Google Workspace token check" bug this sweep exists for
+  # cannot re-hide: it had runs > 0, which defeats suppression on its own. Both
+  # directions proven by workflow-health-sweep.test.mjs (14/14), all four guards
+  # mutation-proven load-bearing.
   @{ n = 'workflow-health-sweep';    bridge = $false }
   # The RECOVERY half of the line above, added 2026-08-27. workflow-health-sweep
   # correctly flagged "Browser watchdog [OVERDUE] ... last=running" in 16 CONSECUTIVE
