@@ -324,6 +324,24 @@ $Suite = @(
   # turn body, which would flag most of the corpus. Reads 5 today, all settled "Done by me"
   # completion notes, i.e. no live victim.
   @{ n = 'swallowed-message-sweep'; bridge = $false }
+  # shadow-journal-sweep (added 2026-08-27 04:xx PT run) — the same defect class as
+  # raw-append-reopen-sweep, one level OUT. That one is about the boundary being wrong INSIDE
+  # a file; this one is about the SET OF FILES being read being wrong. Every reader here —
+  # oa-state.ps1 scan, all 42 sweeps, the Telegram bridge — filters the journal folder on
+  # /^task-\d+\.md$/, which is correct for finding journals and silently doubles as the
+  # definition of "content that exists". Found live: 3 journal-shaped files nobody opens —
+  # two OneDrive sync-conflict forks (#249, #292) and task-328-shiv-devbox.md, a forked #328
+  # journal misnamed like a deliverable. The last held a COMPLETE 2026-06-27 plan ending in
+  # three direct questions to Shiv that were never surfaced anywhere. Nothing live was lost
+  # only because that wedding has passed and he closed #328 himself on 2026-08-25.
+  # Two arms on deliberately different evidence: the managed sentinel (proof the file was
+  # managed AS a journal) and the OneDrive `-DESKTOP-*`/`-LAPTOP-*` conflict suffix (catches
+  # the pre-sentinel #292 fork the first arm cannot see). H1 shape is deliberately NOT used —
+  # measured at a 60% false-positive rate on this corpus. Ranks hits by lines that exist ONLY
+  # in the shadow file, which is the only number that can represent real loss. The GUARD
+  # fixtures are load-bearing: this folder holds ~130 deliverables and a constant stream of
+  # write-turn `.bak-` backups, and flagging those would make it noise. Reads 3 today.
+  @{ n = 'shadow-journal-sweep'; bridge = $false }
 )
 
 if ($IncludeMutchecks) {
