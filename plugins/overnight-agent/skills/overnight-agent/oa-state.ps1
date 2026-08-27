@@ -83,6 +83,29 @@ $script:SelfAuthor    = 'overnight-agent'
 $script:ProvenanceRe  = '(?m)^[ \t]*<!--[ \t]*from:[ \t]*([^>\r\n]*?)[ \t]*-->'
 $script:LegacyStateRe = '(?m)^[ \t]*<!--[ \t]*oa-state'
 
+# --- The turn terminator ---------------------------------------------------------------
+# An HTML comment (invisible when the journal renders) that marks the exact END of this
+# agent's turn. `mark` writes it; `Get-AgentEndIndex` trusts it.
+#
+# WHY IT EXISTS. Without it the end of the agent's turn is found by scanning FORWARD for
+# the next `## ` heading, and when the agent's turn is the newest -- the normal state --
+# there is no such heading, so the boundary falls to EOF and the WHOLE FILE counts as the
+# agent's turn. A reply typed at the bottom with no `## <date>` heading therefore lands
+# INSIDE the agent's own turn and is never seen.
+#
+# That is the dangerous direction. A false "reopened" costs one needless look; a false
+# "already answered" silently swallows the user's message with no trace anywhere. It is
+# not hypothetical: task #426580 sat for a day with two unanswered questions
+# ("were you able to ... create the event in Google calendar?") appended exactly this way,
+# and 216 of 239 live journals were in the same shape.
+#
+# The boundary is genuinely ambiguous from CONTENT alone -- an agent turn may legitimately
+# end in a plain prose paragraph, which is indistinguishable from a short human reply. So
+# the fix is not a cleverer heuristic; it is to stop guessing and write the boundary down
+# at the moment the agent already knows it.
+$script:TurnEndMarker = '<!-- /overnight-agent turn-end -->'
+$script:TurnEndRe     = '(?m)^[ \t]*<!--[ \t]*/overnight-agent[ \t]+turn-end[ \t]*-->[ \t]*\r?$'
+
 # `### Run log` is SKILL.md's managed heading for this agent's execution record. Only this
 # agent writes it, so it is a reliable machine-turn marker even in the many historical
 # journals where the agent replied without stamping a `<!-- from: overnight-agent -->`
@@ -136,6 +159,26 @@ function Get-AgentEndIndex([string]$content) {
   )
   $agentMarker = ($markers | Measure-Object -Maximum).Maximum
   if ($agentMarker -lt 0) { return -1 }
+
+  # --- The written-down boundary wins ----------------------------------------------------
+  # If this agent has stamped a turn-end terminator at or after its last anchor, that is
+  # where its turn ends -- full stop. It was written by `mark` at the moment the agent knew
+  # the answer, so it needs no inference and cannot be fooled by a turn that happens to end
+  # in prose. Everything below it belongs to whoever wrote it next.
+  #
+  # Taking the LAST such marker is deliberate: a journal accumulates turns, and only the
+  # newest terminator describes the current boundary.
+  $turnEnd = -1
+  foreach ($m in [regex]::Matches($content, $script:TurnEndRe)) {
+    if ($m.Index -ge $agentMarker) { $turnEnd = $m.Index + $m.Length }
+  }
+  if ($turnEnd -ge 0) {
+    # Consume the newline that ends the marker line so the trailing region starts clean.
+    if ($turnEnd -lt $content.Length -and $content[$turnEnd] -eq "`r") { $turnEnd++ }
+    if ($turnEnd -lt $content.Length -and $content[$turnEnd] -eq "`n") { $turnEnd++ }
+    return $turnEnd
+  }
+
   $nextHeading = $content.IndexOf("`n## ", $agentMarker)
   if ($agentMarker -eq $sentinelMarker -and $nextHeading -ge 0) {
     # The first H2 after the sentinel is the managed "Overnight Agent" heading, not a user
@@ -305,10 +348,48 @@ function Cmd-Get {
   $st | ConvertTo-Json -Depth 6
 }
 
+function Add-TurnTerminator([string]$path) {
+  # Stamp the end of this agent's turn, so a reply typed below it can never be absorbed
+  # into the turn (see $script:TurnEndMarker for why).
+  #
+  # APPEND-ONLY, deliberately. The terminator is written only when the agent's turn already
+  # runs to EOF -- the exact shape that is blind today. When there IS trailing content below
+  # the turn, the `## ` heading already provides a working boundary and we do not need a
+  # marker, so we do not reach into the middle of the user's file to insert one. A journal in
+  # that state heals itself the next time the agent appends a turn, because that turn lands
+  # at EOF and this runs again.
+  #
+  # Returns $true if the file was modified.
+  $content = Get-Content -Raw -Path $path
+  if ($null -eq $content) { $content = '' }
+  if ($content.Length -eq 0) { return $false }
+
+  $agentEnd = Get-AgentEndIndex $content
+  if ($agentEnd -lt 0) { return $false }          # no agent block yet -- nothing to terminate
+  if ($agentEnd -lt $content.Length) { return $false }  # boundary already exists below the turn
+
+  # Already terminated? Then Get-AgentEndIndex returned the marker's end, which is only equal
+  # to the file length when the marker is the last thing in the file -- nothing to do.
+  if ([regex]::IsMatch($content, $script:TurnEndRe)) {
+    $last = $null
+    foreach ($m in [regex]::Matches($content, $script:TurnEndRe)) { $last = $m }
+    if ($null -ne $last -and $content.Substring($last.Index).Trim() -eq $script:TurnEndMarker) { return $false }
+  }
+
+  $nl = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }
+  $out = $content.TrimEnd() + $nl + $nl + $script:TurnEndMarker + $nl
+  [IO.File]::WriteAllText($path, $out, (New-Object Text.UTF8Encoding($false)))
+  return $true
+}
+
 function Cmd-Mark {
   if (-not $Id) { throw 'mark requires -Id' }
   $path = Join-Path $JournalDir "task-$Id.md"
   if (-not (Test-Path $path)) { throw "no journal at $path" }
+  # Stamp the turn boundary BEFORE snapshotting, so the hash recorded below describes the
+  # file as it now stands on disk. Doing it after would record a hash the file no longer has
+  # and every subsequent scan would report a phantom change.
+  [void](Add-TurnTerminator $path)
   $facts = Get-JournalFacts $path
   $st = Read-State $Id
   if (-not $st) {
