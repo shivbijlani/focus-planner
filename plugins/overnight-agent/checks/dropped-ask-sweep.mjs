@@ -71,27 +71,7 @@ const FIXTURE = process.env.OA_DROPPED_ASK_FIXTURE
 // the live surface is keyed by NUMBER, so the replacement verb must be tokenised or the
 // exemption can never fire. Caught by mutcheck-dropped-ask, which failed on exactly this.
 const ACTION = String.raw`merge|land|ship|approve|rebase|reopen|revert|publish|deploy|close|build|review`;
-
-// QUANTITY GUARD (2026-08-27) — `close 3 browser slots` is a COUNT, not a PR reference.
-//
-// The number alone is ambiguous: these verbs are ordinary English, so `close 3 browser
-// slots (~2.2 GB)` in #349's `Next:` line tokenised as `close:3`, and because the number
-// is resolved against the CORPUS-WIDE repo index (#446/#452 both link Resume/pull/3) it
-// was attributed to `shivbijlani/Resume#3` — a real, open, unrelated PR in a repo #349
-// has never mentioned. It was reported as a dropped ask for 5 days.
-//
-// The discriminator, measured rather than assumed: a reference is a bare number that ENDS
-// the reference (`merge 149`, `close 149 152`, `` `merge 134` ``), while a quantity is
-// followed by the noun it counts. So a bare number followed by whitespace + a lowercase
-// letter is a count. An explicit `#` is unambiguous and is always kept, which preserves
-// prose asks like "merge #134 on your approval".
-//
-// Measured against the live corpus before shipping: 223 token hits in ask regions, 18 with
-// `#`, 205 bare — and the bare-then-lowercase pattern matches exactly 2 rows, BOTH of them
-// this one false positive. No true positive is lost. Mutation-checked: reverting this to
-// the old `\s+#?(\d{1,4})\b` reintroduces `Resume#3` and nothing else.
-const rxToken = new RegExp(
-  String.raw`\b(${ACTION})\s+(?:#(\d{1,4})\b|(\d{1,4})\b(?!\s+[a-z]))`, 'gi');
+const rxToken = new RegExp(String.raw`\b(${ACTION})\s+#?(\d{1,4})\b`, 'gi');
 
 // A turn that DOCUMENTS this defect class quotes example tokens. Matching them would make
 // the sweep fire on its own postmortem — the trap recorded 2026-08-26 11:15.
@@ -104,7 +84,7 @@ function tokensIn(text) {
   if (!text) return out;
   for (const line of String(text).split('\n')) {
     if (DOC_GUARD.test(line)) continue;
-    for (const m of line.matchAll(rxToken)) out.add(`${m[1].toLowerCase()}:${m[2] || m[3]}`);
+    for (const m of line.matchAll(rxToken)) out.add(`${m[1].toLowerCase()}:${m[2]}`);
   }
   return out;
 }
