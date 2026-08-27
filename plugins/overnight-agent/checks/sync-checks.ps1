@@ -57,10 +57,34 @@ if (-not $ChecksRepo) {
 if (-not $ChecksRepo) { throw 'Could not locate the checks archive. Pass -ChecksRepo.' }
 if (-not (Test-Path $OaHome)) { throw "OA home not found: $OaHome" }
 
-# The corpus is whatever the archive holds. Deriving it from the registry here
-# would duplicate repo-drift-sweep's logic in a second place, which is the same
-# drift problem one level up.
-$files = Get-ChildItem $ChecksRepo -File | Where-Object { $_.Extension -in '.mjs', '.ps1' }
+# The corpus is the archive, PLUS -- when capturing -- everything the suite actually
+# runs. Deriving it from the archive ALONE (the original behaviour) makes -Capture
+# structurally incapable of ever adding a NEW check: a sweep written on the machine is
+# not in the archive, so it is not in the list, so it is never copied -- and the run
+# still prints "N already identical" and exits happy. That is the exact "existed on one
+# machine only" failure this script was built to end, reintroduced inside the tool meant
+# to fix it. Found 2026-08-27 while adding swallowed-message-sweep.mjs, which -Capture
+# silently declined to notice.
+#
+# Reading the names out of run-sweeps.ps1 is not a second copy of repo-drift-sweep's
+# logic: that sweep COMPARES contents, this only asks which files exist, and the
+# registry is the one authoritative answer to "what runs tonight".
+$names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+foreach ($f in (Get-ChildItem $ChecksRepo -File | Where-Object { $_.Extension -in '.mjs', '.ps1' })) {
+  [void]$names.Add($f.Name)
+}
+if ($Capture) {
+  $runner = Join-Path $OaHome 'run-sweeps.ps1'
+  if (Test-Path $runner) {
+    foreach ($m in [regex]::Matches((Get-Content $runner -Raw), "n\s*=\s*'([^']+)'")) {
+      [void]$names.Add($m.Groups[1].Value + '.mjs')
+    }
+  }
+  foreach ($f in (Get-ChildItem $OaHome -File -Filter 'mutcheck-*')) {
+    if ($f.Extension -in '.mjs', '.ps1') { [void]$names.Add($f.Name) }
+  }
+}
+$files = $names | Sort-Object | ForEach-Object { [pscustomobject]@{ Name = $_ } }
 
 if ($Restore) { $srcDir = $ChecksRepo; $dstDir = $OaHome;      $label = 'repo -> machine' }
 else          { $srcDir = $OaHome;    $dstDir = $ChecksRepo;   $label = 'machine -> repo' }

@@ -308,6 +308,22 @@ $Suite = @(
   # the Telegram fold-back both write a `## <date>` heading, and those paths (921/922) must
   # keep working while 923 is fixed. Reads 1 finding until the boundary is fixed.
   @{ n = 'raw-append-reopen-sweep'; bridge = $false }
+  # swallowed-message-sweep (added 2026-08-27 03:xx PT run) — the INCIDENCE half of the
+  # sweep above. raw-append-reopen-sweep measures EXPOSURE (216 of 239 journals COULD swallow
+  # a reply) and BEHAVIOUR (does the installed script handle each shape). Neither ever reads
+  # the bottom of a real journal, so neither can find a victim. On 2026-08-27 01:50 a run
+  # quoted the exposure audit as evidence that "no message of yours has ever been lost to
+  # it" — false when written: #426580 had held two of Shiv's questions at EOF for nine hours.
+  # user-settings.md now carries the rule ("an exposure count is not an incidence count").
+  # That incidence pass was then done BY HAND, once; this is it automated, so it runs nightly
+  # until PR #198's turn-end stamp merges AND is deployed to the installed plugin.
+  # Two arms: a CERTAIN one (a `<!-- from: me -->` block sitting inside the agent's turn
+  # region — authoritative, no heuristics) and a PROBABLE one (trailing prose with no agent
+  # house style). Reduces 239 journals to ~5 candidates; the hand pass reduced them to 19.
+  # Its GUARD fixtures are the load-bearing half — 937/938 stop it reporting the agent's own
+  # turn body, which would flag most of the corpus. Reads 5 today, all settled "Done by me"
+  # completion notes, i.e. no live victim.
+  @{ n = 'swallowed-message-sweep'; bridge = $false }
 )
 
 if ($IncludeMutchecks) {
