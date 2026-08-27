@@ -30,14 +30,25 @@ const MUTANTS = [
     find: "const TEMPLATES = new Set(['user-settings.md']);",
     repl: 'const TEMPLATES = new Set([]);',
     breaks: 'template',
-  },
-  {
-    guard: 'g2 newline-normalisation',
+  },  {
+    guard: 'g2 newline-normalisation (both sides)',
     find: "  return text.replace(/\\r\\n/g, '\\n').replace(/\\s+$/, '') + '\\n';",
     repl: '  return text;',
-    breaks: 'crlf',
+    breaks: ['crlf', 'crlfInRepo'],
+  },
+  {
+    guard: 'g3 plugin-scoping',
+    find: "  if (!installedTopDirs.has(rel.split('/')[0])) continue; // g3",
+    repl: '  if (false) continue; // g3',
+    breaks: 'scaffolding',
   },
 ];
+
+// `breaks` is a SET, not always a single case. g2 is one mechanism (norm()) that covers two
+// symmetric halves -- a CRLF working copy against an LF blob, and an LF working copy against a
+// CRLF blob. Splitting it into two "guards" to satisfy a one-case-each rule would be modelling
+// the test, not the code. The discipline is preserved by asserting EXACT set equality: the
+// mutant must break precisely the named cases, no more and no fewer.
 
 // Deliberately NOT a mutant: main-first precedence. Neutering it broke 3 of 6 cases (both,
 // crlf, onMain), because main is reachable under two ref names (origin/main and main), so any
@@ -53,6 +64,8 @@ const MUTANTS = [
 //   template      : bundled template, branch-only content          -> excluded (no verdict)
 //   crlf          : main's content, CRLF on disk                   -> MAIN   (guard g2)
 //   both          : on main AND a side branch                      -> MAIN   (guard g3)
+//   missing       : on main, ABSENT from the installed tree        -> MISSING
+//   scaffolding   : on main at the prefix ROOT, absent installed   -> excluded (guard g3)
 const CASES = {
   onMain: { file: 'skills/overnight-agent/a-on-main.ps1', expect: 'MAIN' },
   branchOnly: { file: 'skills/overnight-agent/b-branch-only.ps1', expect: 'BRANCH-ONLY' },
@@ -60,6 +73,9 @@ const CASES = {
   template: { file: 'skills/overnight-agent/user-settings.md', expect: null },
   crlf: { file: 'skills/overnight-agent/d-crlf.ps1', expect: 'MAIN' },
   both: { file: 'skills/overnight-agent/e-both.ps1', expect: 'MAIN' },
+  missing: { file: 'skills/overnight-agent/f-missing.ps1', expect: 'MISSING' },
+  scaffolding: { file: 'marketplace-note.md', expect: null },
+  crlfInRepo: { file: 'skills/overnight-agent/g-crlf-in-repo.ps1', expect: 'MAIN' },
 };
 
 function buildWorld() {
@@ -76,13 +92,22 @@ function buildWorld() {
   g(['init', '-q', '-b', 'main']);
   g(['config', 'user.email', 'mutcheck@example.invalid']);
   g(['config', 'user.name', 'mutcheck']);
+  // Control line endings explicitly: the harness needs a blob stored WITH CRLF (crlfInRepo) and
+  // blobs stored with LF. Leaving autocrlf to the machine's global config makes that
+  // non-deterministic -- and line endings are the very thing under test.
+  g(['config', 'core.autocrlf', 'false']);
 
   const repoFile = (name) => join(repo, 'plugins', 'overnight-agent', name);
 
-  // main carries: a-on-main, d-crlf, e-both
+  // main carries: a-on-main, d-crlf, e-both, f-missing (never installed), and the
+  // marketplace-level scaffolding file that must NOT be reported as MISSING.
   writeFileSync(repoFile(CASES.onMain.file), 'on main\n');
   writeFileSync(repoFile(CASES.crlf.file), 'crlf body\n');
   writeFileSync(repoFile(CASES.both.file), 'both body\n');
+  writeFileSync(repoFile(CASES.missing.file), 'merged but never deployed\n');
+  writeFileSync(repoFile(CASES.scaffolding.file), 'marketplace registry readme\n');
+  // stored in the repo WITH CRLF -- the direction the first cut of g2 could not handle.
+  writeFileSync(repoFile(CASES.crlfInRepo.file), 'crlf in repo body\r\n');
   g(['add', '-A']);
   g(['commit', '-qm', 'main content']);
 
@@ -108,6 +133,7 @@ function buildWorld() {
   inst(CASES.template.file, 'template body\n');
   inst(CASES.crlf.file, 'crlf body\r\n'); // same content, Windows line ending
   inst(CASES.both.file, 'both body\n');
+  inst(CASES.crlfInRepo.file, 'crlf in repo body\n'); // LF on disk, CRLF in the blob
 
   return { root, repo, installed };
 }
@@ -130,7 +156,7 @@ function runSweep(sweepPath, world) {
   // Parse the verdict table: "  VERDICT   path    [where]"
   const verdicts = new Map();
   for (const line of out.split('\n')) {
-    const m = /^\s{2}(MAIN|BRANCH-ONLY|UNVERSIONED)\s+(\S+)\s+\[/.exec(line);
+    const m = /^\s{2}(MAIN|BRANCH-ONLY|UNVERSIONED|MISSING)\s+(\S+)\s+\[/.exec(line);
     if (m) verdicts.set(m[2], m[1]);
   }
   return { out, verdicts };
@@ -181,7 +207,7 @@ try {
     writeFileSync(mutPath, SRC.replace(m.find, m.repl), 'utf8');
     const wrong = evaluate(world, mutPath);
     const broke = wrong.map((w) => w.id).sort();
-    const want = [m.breaks];
+    const want = (Array.isArray(m.breaks) ? m.breaks : [m.breaks]).slice().sort();
     const ok = broke.length === want.length && broke.every((b, i) => b === want[i]);
     console.log(`\nmutant (${m.guard} neutered):`);
     console.log(`  cases broken   : ${broke.join(', ') || '(none)'}`);
@@ -190,17 +216,18 @@ try {
       console.log(
         broke.length === 0
           ? '  VERDICT: NOT load-bearing -- removing it changed nothing. Dead guard.'
-          : '  VERDICT: over-broad -- it is doing more than guarding its own case.',
+          : '  VERDICT: wrong blast radius -- it does not break exactly the cases it claims.',
       );
       exit = 1;
     } else {
-      console.log('  VERDICT: load-bearing - breaks exactly its own case.');
+      console.log('  VERDICT: load-bearing - breaks exactly the cases it claims.');
     }
   }
 
   if (exit === 0) {
     console.log(
-      '\nBoth guards are load-bearing against both line endings and a 3-ref world; main-first\n' +
+      '\nAll three guards are load-bearing against both line endings, a 3-ref world, and both\n' +
+        'drift directions (installed-not-in-git AND on-main-not-installed); main-first\n' +
         'precedence is asserted by the `both` baseline case (see the note above the mutant list).',
     );
   }
