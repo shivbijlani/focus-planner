@@ -578,6 +578,17 @@ present the reversible draft and stop short of the committing action.
   task goes quiet. \*\*Mark handled instruction emails as read\*\* so you don't reprocess them.
 - **Stay in the user's space cleanly.** Never edit above the sentinel. Preserve the user's notes,
   links, and formatting. Write files as UTF-8.
+- **Write every journal turn through `write-turn.ps1`** (next to this skill), never by hand:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\write-turn.ps1 -Id <ID> -BodyFile <file.md>`.
+  Author the turn body with a **file tool** first, then pass the file. The script validates the body
+  and **refuses to write** if it finds any of the four corruption classes that have already destroyed
+  real content — a value eaten by PowerShell string interpolation (`~$150-275` → `~\-275`), a doubled
+  apostrophe from single-quote escaping (`don''t`), an H2 that is not 🌙-first (the Telegram bridge
+  anchors on `^##\s*🌙`, so any other H2 silently truncates the turn), and a stray
+  `<!-- from: overnight-agent -->` with no heading above it (severs the block and hides
+  **Needs from you**). It appends only, so it can never delete one of the user's replies, and it backs
+  the journal up first. Add `-Validate` to lint without writing. This is a **guard, not a guideline**:
+  each of these classes was documented in prose first and broken anyway.
 - **Ask narrowly, not broadly.** If you need something, put one precise question in \*\*Needs from
   you\*\* and set `blocked`; don't stall the whole run. You may also reply to the user's instruction
   email with that one question.
