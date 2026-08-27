@@ -93,6 +93,38 @@ check('empty Needs value does not beat a real Next:',
 check('no ask anywhere -> source none',
   (() => liveAsk('# Task 9: x\n\nsome prose\n').source === 'none')());
 
+// 11-13. QUOTED markers are prose, not chat entries (fixed 2026-08-27).
+//
+// Markers used to be found with raw `indexOf`, so a journal EXPLAINING the journal format
+// — quoting `<!-- from: me -->` inside a sentence — was read as if the user had spoken.
+// Live victims: #448 (the hub carrying the top three merge asks) and #267, both silenced
+// to `ask: null`; and 6 journals grew phantom turns from a quoted agent marker.
+// These three cases fail on the pre-fix library, so the guard is load-bearing.
+check('a QUOTED user marker below the newest turn is prose, not a reply',
+  (() => {
+    const r = liveAsk(`${A}\n**Needs from you:** \`merge 198\`\n\nNote: a reply arrives as a \`${U}\` entry.\n`);
+    return r.userSpokeLast === false && r.ask === '`merge 198`';
+  })(),
+  'raw indexOf reports user-spoke-last and drops the ask');
+
+check('a QUOTED agent marker does not manufacture a phantom turn',
+  (() => {
+    const r = liveAsk(`${A}\n**Needs from you:** the real ask\n\nEach turn opens with \`${A}\`.\n`);
+    return r.turnCount === 1 && r.ask === 'the real ask';
+  })(),
+  'raw indexOf splits one turn into two and reads the ask from the wrong half');
+
+check('a REAL user marker still suppresses the ask (fix is not over-broad)',
+  (() => {
+    const r = liveAsk(`${A}\n**Needs from you:** a decision\n\n## 2026-08-25\n${U}\ngo ahead\n`);
+    return r.userSpokeLast === true && r.ask === null;
+  })(),
+  'line-exact matching must still see markers that are genuinely on their own line');
+
+// 14. An indented real marker is still a real marker (trimmed comparison, not ===).
+check('an indented real marker is still a marker',
+  (() => liveAsk(`${A}\n**Needs from you:** x\n\n## 2026-08-25\n   ${U}\nok\n`).userSpokeLast === true)());
+
 console.log('\nLIVE — real journals from the backlog\n');
 
 const JOURNAL = path.join(

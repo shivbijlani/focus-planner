@@ -142,6 +142,17 @@ $Suite = @(
   # every other detector misses. Added 2026-08-26 after #293 sat blocked two months on
   # an ask whose both halves were already answered above the sentinel.
   @{ n = 'regressive-ask-sweep';     bridge = $false }
+  # The ONLY detector that looks at what is MISSING. Every other one reads what is on the
+  # page: is the current ask stale, self-answerable, gated, contradicted by history? An ask
+  # that simply STOPS BEING CARRIED leaves no text behind to inspect, so all of them read
+  # clean by construction -- including regressive-ask-sweep, whose three arms each need the
+  # ask to still be present in order to fire. Added 2026-08-27 after `merge 201` was
+  # surfaced at 07:50, was absent from the 08:00 turn, and was restored by hand at 08:30
+  # with "regressive-ask-sweep read clean, so it did not catch a drop between two agent
+  # turns". First live run: 5 targets with no live ask anywhere, oldest 36 days (#109).
+  # Guards mutation-proven (newest-turn scope, same-number supersession, stack
+  # consolidation) -- each killed real false positives on its first run: 13 -> 5.
+  @{ n = 'dropped-ask-sweep';        bridge = $false }
   # Follows the dependency SIDEWAYS across a task link. Every other detector reads a
   # single journal, so a task whose blocker lives in ANOTHER file is invisible to all of
   # them. Added 2026-08-26 after #249 sat blocked 18 days on "execute #393's export",

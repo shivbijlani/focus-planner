@@ -44,12 +44,29 @@ const rxNext = /^\s*[-*]?\s*\*{0,2}Next:\*{0,2}\s*(.*)$/i;
 const rxYourCall = /^\s*\*{0,2}Your call:\*{0,2}\s*(.*)$/i;
 const rxReplyImperative = /(?:^|\s)Reply\s+`([^`]+)`/i;
 
-function allIndexes(hay, needle) {
+// Marker offsets, matched LINE-EXACTLY: the marker must be the entire trimmed line.
+//
+// FIXED 2026-08-27. This used raw `indexOf`, so a marker QUOTED in prose — `` `<!-- from:
+// me -->` `` inside a sentence explaining the journal format — counted as a real chat
+// entry. Two live consequences, both silent:
+//   * a quoted USER marker below the newest agent turn made `liveAsk` return
+//     `userSpokeLast: true, ask: null`, hiding that task's ask from EVERY consumer.
+//     Measured on the live corpus: 6 journals quote a user marker and 2 of them flip the
+//     verdict — #448 (which carries the top three merge asks) and #267.
+//   * a quoted AGENT marker manufactures a phantom turn, shifting every turn boundary
+//     after it: 6 journals, incl. #349, #434 and #448 — the ask hubs.
+//
+// `regressive-ask-sweep` already learned exactly this ("journals legitimately quote their
+// own markers, and the tasks most likely to do so are the ones about the format itself")
+// and matches line-exactly. The shared library never got the same fix, so every caller
+// inherited the bug. #267 — the task that produced the rule "your checker must use the
+// parser's own matching semantics" — is one of the two victims.
+function markerOffsets(text, marker) {
   const out = [];
-  let i = hay.indexOf(needle);
-  while (i !== -1) {
-    out.push(i);
-    i = hay.indexOf(needle, i + needle.length);
+  let off = 0;
+  for (const line of text.split('\n')) {
+    if (line.trim() === marker) out.push(off);
+    off += line.length + 1;
   }
   return out;
 }
@@ -95,8 +112,41 @@ function askFromSlice(slice, sourcePrefix) {
  *            turnCount:number, userSpokeLast:boolean}}
  */
 export function liveAsk(text) {
-  const turns = allIndexes(text, AGENT);
-  const users = allIndexes(text, USER);
+  return liveAskImpl(text);
+}
+
+/**
+ * Every agent turn in the journal, oldest first, as {index, offset, slice}.
+ *
+ * ADDITIVE (2026-08-27). `liveAsk` answers "what is the ask NOW"; a caller asking
+ * "was this ask ever carried, and did it stop?" needs the same extraction applied to
+ * each HISTORICAL turn. Re-deriving turn boundaries in the caller is how detectors
+ * drift from the parser they are meant to model, so the boundaries live here.
+ *
+ * The final slice runs to end-of-file; earlier slices stop at the next agent marker.
+ * A user entry does NOT end a slice: `askFromSlice` scans line-wise and the digest's
+ * own dialects are agent-authored, so a quoted user reply inside the span is inert.
+ */
+export function agentTurnSlices(text) {
+  const turns = markerOffsets(text, AGENT);
+  return turns.map((offset, i) => ({
+    index: i,
+    offset,
+    slice: text.slice(offset, i + 1 < turns.length ? turns[i + 1] : text.length),
+  }));
+}
+
+/**
+ * The ask carried by ONE slice, using the digest's exact dialect priority.
+ * Returns null when that turn carried no ask in any dialect.
+ */
+export function askInSlice(slice, sourcePrefix = 'turn') {
+  return askFromSlice(slice, sourcePrefix);
+}
+
+function liveAskImpl(text) {
+  const turns = markerOffsets(text, AGENT);
+  const users = markerOffsets(text, USER);
   const lastUser = users.length ? users[users.length - 1] : -1;
   const turnCount = turns.length;
 
