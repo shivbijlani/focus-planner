@@ -1,0 +1,399 @@
+<#
+  run-sweeps.ps1 — the ONLY sanctioned way to run the sweep suite.
+
+  WHY THIS EXISTS
+  ---------------
+  6 of the 19 sweeps import the telegram-bridge source and therefore need
+  BRIDGE_SRC; all of them need PLANNER_PATH. Nothing set those for you, so every
+  run had to remember two environment variables by hand. When they were missing
+  the sweep did not degrade -- it died on the first import:
+
+      Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'undefined'
+
+  and exited 1 having measured NOTHING. That is the dangerous part, because a
+  sweep that finds problems ALSO exits 1. So "exit 1" was ambiguous, and a run
+  that skimmed exit codes could record "19 sweeps, all clean" when six of them
+  never actually ran -- including drift-sweep, the primary status-drift detector.
+
+  This is the same failure class run-telegram-mirror.ps1 exists to prevent for
+  PHASE 3: a prose warning in user-settings.md is not enough, so the wrapper
+  makes the flag impossible to omit.
+
+  WHAT IT GUARANTEES
+  ------------------
+  1. PLANNER_PATH and BRIDGE_SRC are always exported explicitly.
+  2. BRIDGE_SRC is derived from the SAME bridge pin run-telegram-mirror.ps1
+     uses, so rolling the pin back moves both in lockstep (one source of truth).
+  3. Preflight fails loudly if the planner folder or the pinned bridge src is
+     missing -- before any sweep runs.
+  4. CRASH and FINDINGS are reported as different things:
+       OK       exit 0
+       FINDINGS exit != 0, real stdout, empty stderr   <- normal, it found stuff
+       CRASH    exit != 0, empty stdout, stderr set    <- the sweep did not run
+     The script's own exit code is non-zero ONLY for CRASH.
+  5. Any *-sweep/audit/integrity/gaps .mjs -- OR any digest-* .mjs -- in the
+     folder that is not in the known list is reported as UNREGISTERED, so a
+     newly added sweep cannot be silently skipped. The digest-* prefix is in
+     the rule because digest-invisible.mjs, which user-settings.md mandates
+     "near the end of every run", matched NONE of the suffixes and so was
+     both unregistered AND invisible to the guard that exists to catch that.
+
+  Usage:
+    powershell -NoProfile -ExecutionPolicy Bypass -File run-sweeps.ps1
+                  [-IncludeMutchecks] [-Only a,b] [-Json] [-OutDir <path>]
+#>
+[CmdletBinding()]
+param(
+  [switch]$IncludeMutchecks,
+  [string[]]$Only,
+  [switch]$Json,
+  [string]$OutDir
+)
+
+$ErrorActionPreference = 'Stop'
+
+$OA          = Join-Path $env:LOCALAPPDATA 'overnight-agent'
+$PlannerPath = 'C:\Users\shiv\OneDrive\Apps\Focus Planner'
+$MirrorPs1   = Join-Path $OA 'run-telegram-mirror.ps1'
+
+# --- Resolve the bridge pin from run-telegram-mirror.ps1 (single source of truth) ---
+# That wrapper holds the pinned worktree; deriving from it means a rollback of the
+# pin automatically applies here too, instead of drifting into a second copy.
+$BridgeJs = $null
+if (Test-Path $MirrorPs1) {
+  $m = Select-String -Path $MirrorPs1 -Pattern "^\s*\`$Bridge\s*=\s*'([^']+)'" | Select-Object -First 1
+  if ($m) { $BridgeJs = $m.Matches[0].Groups[1].Value }
+}
+if (-not $BridgeJs) {
+  $BridgeJs = 'V:\repos\focus-planner.worktrees\oa-block-stray-marker\packages\telegram-bridge\bin\telegram-bridge.js'
+  Write-Warning "Could not read the bridge pin from run-telegram-mirror.ps1; using the built-in default."
+}
+
+# bin\telegram-bridge.js -> ..\src
+$BridgeSrcDir = Join-Path (Split-Path (Split-Path $BridgeJs -Parent) -Parent) 'src'
+
+# --- Preflight: fail loudly BEFORE running anything ---------------------------------
+if (-not (Test-Path $PlannerPath)) { throw "Planner folder not found: $PlannerPath" }
+if (-not (Test-Path $BridgeSrcDir)) {
+  throw "Pinned bridge src not found: $BridgeSrcDir`n" +
+        "This is what makes 6 sweeps die with ERR_MODULE_NOT_FOUND. Fix the pin in run-telegram-mirror.ps1."
+}
+
+$BridgeSrcUrl = ([uri](Resolve-Path $BridgeSrcDir).Path).AbsoluteUri
+
+$env:PLANNER_PATH = $PlannerPath
+$env:BRIDGE_SRC   = $BridgeSrcUrl
+
+# --- OA_TODAY: export it, for the same reason BRIDGE_SRC is exported -----------------
+# self-answerable-sweep.mjs and declared-unblocked-sweep.mjs both do
+#   const TODAY = process.env.OA_TODAY || '2026-08-25';
+# and NOTHING was setting OA_TODAY, so both ran pinned to a frozen 2026-08-25 date.
+#
+# That is not cosmetic. Those sweeps skip a task whose journal was last written "today"
+# so a fresh turn is never mistaken for rot. With TODAY frozen in the past the guard
+# INVERTS: journals written today have their date filtered out by the `d <= TODAY`
+# clause, so they are no longer recognised as fresh and CAN be flagged as rot, while
+# journals written on the frozen date are skipped forever. Reported ages drift low by
+# one day per day elapsed, too.
+#
+# Same failure shape as the BRIDGE_SRC bug this wrapper already exists to prevent: a
+# variable every run was expected to remember, that nothing actually set.
+$env:OA_TODAY = (Get-Date).ToString('yyyy-MM-dd')
+
+# --- The suite ----------------------------------------------------------------------
+# needsBridge is documentation, not control flow: BRIDGE_SRC is always exported.
+$Suite = @(
+  @{ n = 'drift-sweep';              bridge = $true  }
+  @{ n = 'status-sync-audit';        bridge = $false }
+  @{ n = 'self-answerable-sweep';    bridge = $false }
+  @{ n = 'reversible-gate-sweep';    bridge = $false }
+  # Companion to the line above, added 2026-08-26 after #357 (52d, the oldest ask on the
+  # board) proved reversible-gate-sweep is structurally blind to gates written into the
+  # DELIVERABLE the ask points at rather than into the ask itself.
+  @{ n = 'deliverable-gate-sweep';   bridge = $false }
+  # The first detector that leaves the filesystem (added 2026-08-26 12:30). Every other
+  # sweep reads only journals/board/state, so an ask naming a PR was never checked against
+  # whether that PR is still open, still exists, or is still MERGEABLE. It calls `gh`, so it
+  # is the slowest entry here (GitHub computes mergeability lazily and it polls for it).
+  @{ n = 'pr-ask-liveness-sweep';    bridge = $false }
+  @{ n = 'undelivered-plan-sweep';   bridge = $false }
+  @{ n = 'declared-unblocked-sweep'; bridge = $false }
+  @{ n = 'blocked-readonly-sweep';   bridge = $false }
+  @{ n = 'inprogress-stall-sweep';   bridge = $false }
+  @{ n = 'armed-trigger-sweep';      bridge = $false }
+  @{ n = 'board-gaps';               bridge = $true  }
+  @{ n = 'turn-truncation-sweep';    bridge = $true  }
+  @{ n = 'hidden-turn-sweep';        bridge = $true  }
+  @{ n = 'closed-task-posts';        bridge = $true  }
+  @{ n = 'workflow-health-sweep';    bridge = $false }
+  @{ n = 'recurring-liveness-sweep'; bridge = $false }
+  @{ n = 'stale-trigger-sweep';      bridge = $false }
+  @{ n = 'parked-age';               bridge = $false }
+  @{ n = 'urgency-staleness';        bridge = $false }
+  @{ n = 'body-header-drift';        bridge = $false }
+  @{ n = 'terminal-header-drift';    bridge = $false }
+  # Looks BACKWARDS from the block into the pre-sentinel history -- the one direction
+  # every other detector misses. Added 2026-08-26 after #293 sat blocked two months on
+  # an ask whose both halves were already answered above the sentinel.
+  @{ n = 'regressive-ask-sweep';     bridge = $false }
+  # Follows the dependency SIDEWAYS across a task link. Every other detector reads a
+  # single journal, so a task whose blocker lives in ANOTHER file is invisible to all of
+  # them. Added 2026-08-26 after #249 sat blocked 18 days on "execute #393's export",
+  # which #393 had finished the very next day.
+  @{ n = 'cross-task-dependency-sweep'; bridge = $false }
+  # The only check on the WRITE PATH. Every other detector asks whether the agent's
+  # REASONING was wrong; this one asks whether the text on disk is what the agent
+  # actually wrote. A run that writes markdown through a PowerShell double-quoted
+  # string has `$150` expanded to the EMPTY STRING - no error, no warning - leaving
+  # the markdown-escape backslash behind as a tombstone (`~\-275`). Added 2026-08-26
+  # after finding 12 files whose prices had been silently deleted, including #377,
+  # where the offer price was missing from a message Shiv was asked to approve.
+  @{ n = 'lost-interpolation-sweep';    bridge = $false }
+  # The SAME root cause as lost-interpolation-sweep -- markdown built inside a
+  # PowerShell string -- but failing in the OPPOSITE direction, which is why that
+  # sweep structurally cannot see it. Interpolation DELETES a value and leaves a
+  # tombstone (`~\-275`); single-quote escaping DUPLICATES an apostrophe and leaves
+  # none, so the text is longer, not shorter, and reads as clean. Added 2026-08-26
+  # after lost-interpolation-sweep read 0 while 50 occurrences across 6 journals
+  # (don''t, that''s, I''ll, NOAA''s) sat on disk. Proven load-bearing against
+  # synthetic fixtures: fires below the sentinel, ignores Shiv's own prose above it.
+  # Unlike its sibling this class is fully recoverable -- nothing was ever lost.
+  @{ n = 'doubled-apostrophe-sweep';    bridge = $false }
+  # The SAME write-path defect, everywhere lost-interpolation-sweep cannot look.
+  # That sweep reads exactly one directory - <planner>\journal, non-recursively - so
+  # every deliverable the agent writes into a PROJECT folder has never been checked
+  # by anything. Added 2026-08-26 08:35 PT to close a gap the 08:00 run measured and
+  # left open: a BY-HAND re-run over ~835 files found two victims it structurally
+  # could not see - `user-settings.md` itself (the file that records the rules), and
+  # a 116 KB career doc written as a raw JSON string on ONE line. A hand re-run that
+  # nobody scheduled is not a check. Adds an `undecoded-json` arm for the second.
+  @{ n = 'unsupervised-md-sweep';       bridge = $false }
+  @{ n = 'board-integrity';          bridge = $false }
+  # Added 2026-08-26 13:30 PT. Five sweeps (self-answerable, reversible-gate,
+  # undelivered-plan, declared-unblocked, terminal-header-drift) gate on
+  # `if (!active.has(id)) continue`, so a journal with no planner.md row is
+  # invisible to all of them. #280 - the clock-0 fix - sat 22 days with a live
+  # non-terminal plan while reversible-gate-sweep, the detector built for exactly
+  # that defect, reported 0. This is the complement of that gate: it looks only at
+  # journals on NEITHER board and reports the ones still carrying a live ask that
+  # were never deliberately deleted (no tombstone in a board sidecar). 30 orphans
+  # -> 27 retired on purpose -> 2 findings, which are the same two #445 found by
+  # hand (#228, #233). Exits 1 on findings.
+  @{ n = 'orphan-liveness-sweep';    bridge = $false }
+  # external-artifact-sweep (added 2026-08-26 13:30 PT run) — the agent's own side-effects
+  # outside the planner (calendar events, PRs, issues) are indexed nowhere, so a later task
+  # can ask Shiv for something an earlier task already established. #228 sat two months on
+  # "confirm destination" while #310's calendar event named Dubai with a ticketed date.
+  # cross-task-dependency-sweep read 0 and was RIGHT to: that link was never in a journal.
+  # Three gates keep it from crying wolf (entity rarity, ask kind, existing citation); all
+  # three are mutation-proven load-bearing by mutcheck-external-artifact.mjs. Exits 1 on
+  # findings. Reads 0 against the live corpus because the 13:30 run repaired #228 by hand.
+  @{ n = 'external-artifact-sweep';  bridge = $false }
+  # owned-target-gate-sweep (added 2026-08-26 14:30 PT run) — a NEW DIMENSION of the
+  # reversible-gate defect class. reversible-gate-sweep's verb list only covers verbs that
+  # CREATE an artifact (draft/write up/research/scaffold/...). It has no verb for MODIFYING
+  # one that already exists, so #403 sat 26 days gating "fold this into user-settings.md" -
+  # the agent's own config file, which it rewrites and backs up every single run. The plan
+  # even self-certified "No purchases or irreversible actions involved" and gated it anyway.
+  # A naive modify-verb scan is 12.5% precise (8 hits, 1 defect); the discriminator that makes
+  # it shippable is WHAT is being modified - an artifact the AGENT owns, vs Shiv's own
+  # documents or an external system. Like orphan-liveness-sweep, it deliberately does NOT
+  # require a board row. Guards are mutation-proven load-bearing by
+  # mutcheck-owned-target-gate.mjs, which also DELETED a dead EXTERNAL guard that would have
+  # suppressed real defects. Exits 1 on findings; reads 0 now that #403 is closed.
+  @{ n = 'owned-target-gate-sweep';  bridge = $false }
+  # Guards the reopen detector itself: a SIBLING SKILL's journal turn (dance-church,
+  # instagram-publisher-monitor, kranbox-backup, ...) must never read as a USER reopen.
+  # Journals are shared, and oa-state.ps1 originally treated any non-overnight-agent
+  # provenance marker as unanswered user prose -- an UNCLEARABLE `reopened: true`, because
+  # SKILL.md forbids skipping a reopened task even when it is done/skip, and the sibling
+  # skill re-appends on its own schedule. Live instance was #254 (Dance Church, done).
+  # BEHAVIOURAL, not textual: it runs the installed oa-state.ps1 against a synthetic journal
+  # folder (isolated -JournalDir/-StateDir), so it cannot be fooled by source that merely
+  # mentions the fix. Fixed 2026-08-26 (PR #191); reads 0.
+  @{ n = 'sibling-skill-reopen-sweep'; bridge = $false }
+  # unstamped-runlog-reopen-sweep (added 2026-08-26 17:xx PT run) — the SECOND half of the
+  # false-reopen story, and the bigger one. #191 taught oa-state.ps1 that a sibling skill's
+  # STAMPED turn is not a user reopen. This covers the journals with no stamp at all: the
+  # agent historically answered by appending a bare `### Run log` under the user's
+  # `## <date>` entry, so the turn boundary landed on the user's heading and the agent's own
+  # reply was read as unanswered user prose — pinning HasTrailingUser true forever.
+  # Such a journal reads quiet only while byte-identical to its snapshot, so any in-place
+  # repair by a sibling sweep (dead-link rewrite, apostrophe repair) flips `changed` and
+  # false-reopens it. Live instance: #367, done since 2026-07-27, reopened this run because
+  # the dead-link sweep rewrote two links at 16:53. That is the "executing in tasks that are
+  # already closed" symptom from #400.
+  # BEHAVIOURAL like its sibling above, and its negative case is the important one: raw user
+  # text below a run log must still reopen. Fixed 2026-08-26 (PR #192); reads 0.
+  @{ n = 'unstamped-runlog-reopen-sweep'; bridge = $false }
+  # dead-deliverable-sweep (added 2026-08-26 20:xx PT run) — the FIRST detector to leave
+  # the prose and ask the FILESYSTEM whether the artifact a journal points at is there.
+  # Every other sweep reasons about the text; none of them clicks the link. So a
+  # deliverable could be written, linked, and later moved or deleted, and the journal
+  # kept asserting it forever. Found 5 live losses from one 2026-08-06 folder cleanup,
+  # incl. task-258's "full 456 KB history preserved verbatim ... nothing was lost" —
+  # pointing at an archive that is not on disk, in a folder that is empty.
+  # The discriminator is TENSE: a naive "referenced file is missing" scan is 40 hits at
+  # ~20% precision, because most misses are correct ("Deliverables if approved: X" for a
+  # plan that has not run). Requiring a positive CLAIM verb takes it to 0 false positives.
+  # 5 gates (placeholder / claim / acknowledged / quoted-illustration / link-label), all
+  # mutation-proven load-bearing by mutcheck-dead-deliverable.mjs, which deletes each gate
+  # from a copy of the real source and asserts it breaks EXACTLY its own negative case.
+  # Exits 1 on findings; reads 0 after this run's repairs.
+  @{ n = 'dead-deliverable-sweep';   bridge = $false }
+  @{ n = 'terminal-next-ask';        bridge = $true  }
+  # Mandated by user-settings.md ("Run digest-invisible.mjs and board-gaps.mjs near
+  # the end of every run ... plus digest-live.mjs for slot positions"). Both are
+  # argument-free and exit 0, so they report as OK and only add signal.
+  @{ n = 'digest-invisible';         bridge = $true  }
+  @{ n = 'digest-live';              bridge = $true  }
+  # repo-drift-sweep (added 2026-08-26 18:xx PT) — the check that keeps the other
+  # 37 checks alive. Measured this run: of the 73 files making up this suite, **70
+  # existed in exactly one place** — %LOCALAPPDATA%\overnight-agent on one laptop.
+  # No git history, no backup, not in OneDrive. That included every detector, all 6
+  # shared libs, all 19 mutation checks, and BOTH safety wrappers: this file (which
+  # exists because six sweeps once silently measured nothing) and
+  # run-telegram-mirror.ps1 (which exists because forgetting it floods Shiv's
+  # Telegram irreversibly, and cannot be undone).
+  # Copying them into the repo fixes that once; it does not keep it fixed, because
+  # new sweeps get written into LOCALAPPDATA most nights. So this asks nightly:
+  # is every file the LIVE registry depends on present in git and identical?
+  # It derives the corpus from $Suite above plus a transitive import walk, so a lib
+  # can never be left behind, and it resolves "versioned" against ALL git refs —
+  # a file in an open PR is backed up, and calling it lost would be crying wolf.
+  # 3 gates mutation-proven load-bearing by mutcheck-repo-drift.mjs (19/19), which
+  # runs the real sweep as a child process against synthetic worlds and asserts
+  # each guard breaks EXACTLY its own case. Reads 0 once the archive is in place.
+  @{ n = 'repo-drift-sweep';         bridge = $false }
+)
+
+if ($IncludeMutchecks) {
+  Get-ChildItem $OA -Filter 'mutcheck-*.mjs' -File |
+    Sort-Object Name | ForEach-Object {
+      $Suite += @{ n = [IO.Path]::GetFileNameWithoutExtension($_.Name); bridge = $false; mut = $true }
+    }
+}
+
+# Deliberately NOT part of the standing suite. digest-audit hardcodes its imports
+# against the oa-digest-154 rollback worktree instead of honouring BRIDGE_SRC, so it
+# is a manual one-off audit tool, not a sweep. Listed here so it stops reporting as
+# UNREGISTERED noise while still being a conscious exclusion rather than an oversight.
+# The remaining digest-* harnesses are per-question diagnostic tools, not standing
+# health checks: digest-demoted lists the (expected, fallback-rescued) #162 class and
+# would print ~39 lines of noise every run; digest-why and digest-replay both answer
+# "why is THIS task absent?" and are only meaningful with a task id argument.
+#
+# rule-coverage is excluded for a DIFFERENT and more important reason: its number is
+# not trustworthy, and a number that is not trustworthy must never sit in a roster that
+# reports "all clean". It asks how many of the ~159 written rules in user-settings.md
+# have executable enforcement, by keyword-matching each rule against the scripts. Its
+# first cut read 157/157 = 100% COVERED -- a false green, because the corpus included
+# COMMENTS and these sweeps restate their own rule in long comment headers, so every
+# rule matched its own quotation. Stripping comments moved it only to 99%, which is
+# still far too generous: one rare word appearing anywhere in 107 files counts as
+# coverage. The finding it produced is real and is recorded in the run learnings; the
+# metric is not. Kept as a one-off diagnostic, run by hand, never as a gate.
+$Excluded = @('digest-audit', 'digest-demoted', 'digest-why', 'digest-replay', 'rule-coverage')
+
+# Capture the FULL roster before any -Only filtering. The unregistered check must
+# compare against every sweep this script knows about, not just the ones being run,
+# or a filtered run reports the whole suite as unregistered.
+$KnownNames = @($Suite | ForEach-Object { $_.n }) + $Excluded
+
+if ($Only) {
+  # PowerShell's -File passes arguments as plain strings, so `-Only a,b` arrives as a
+  # SINGLE element "a,b" rather than an array. Every script here is invoked via -File
+  # (per user-settings.md), so split on commas to make the documented usage work under
+  # both -File and direct invocation.
+  $wanted = @($Only | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  $sel = @()
+  foreach ($o in $wanted) {
+    $hit = $Suite | Where-Object { $_.n -eq $o }
+    if ($hit) { $sel += $hit }
+    elseif (Test-Path (Join-Path $OA "$o.mjs")) {
+      # ad-hoc: run a sweep that is not in the standing suite (used for negative tests)
+      $sel += @{ n = $o; bridge = $false; adhoc = $true }
+    } else {
+      throw "-Only '$o' matches no sweep in the suite and no $o.mjs in $OA"
+    }
+  }
+  $Suite = $sel
+}
+
+# A selection that resolves to nothing must never look like a clean run.
+if (-not $Suite -or @($Suite).Count -eq 0) { throw 'No sweeps selected to run.' }
+
+if (-not $OutDir) { $OutDir = Join-Path $OA ('sweep-runs\' + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
+New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+
+# Retention. The Overnight Agent workflow runs every 30 minutes, so an un-pruned
+# per-run directory is a slow disk leak of the same family as the stale-MCP leak
+# (#349). Keep the most recent 20 runs and drop the rest.
+$runsRoot = Join-Path $OA 'sweep-runs'
+if (Test-Path $runsRoot) {
+  Get-ChildItem $runsRoot -Directory -ErrorAction SilentlyContinue |
+    Sort-Object Name -Descending | Select-Object -Skip 20 |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# --- Run ----------------------------------------------------------------------------
+$results = @()
+foreach ($s in $Suite) {
+  $path = Join-Path $OA "$($s.n).mjs"
+  if (-not (Test-Path $path)) {
+    $results += [pscustomobject]@{ name = $s.n; state = 'MISSING'; exit = $null; stdout = 0; stderr = 0; file = $null }
+    continue
+  }
+  $soF = Join-Path $OutDir "$($s.n).out.txt"
+  $seF = Join-Path $OutDir "$($s.n).err.txt"
+  $p = Start-Process -FilePath 'node' -ArgumentList $path -NoNewWindow -Wait -PassThru `
+                     -RedirectStandardOutput $soF -RedirectStandardError $seF
+  $so = if (Test-Path $soF) { (Get-Content $soF -Raw) } else { '' }
+  $se = if (Test-Path $seF) { (Get-Content $seF -Raw) } else { '' }
+  if ($null -eq $so) { $so = '' }
+  if ($null -eq $se) { $se = '' }
+
+  # Classify. A sweep that produced no stdout but wrote to stderr never ran.
+  $state = if ($p.ExitCode -eq 0) { 'OK' }
+           elseif ($se.Trim().Length -gt 0 -and $so.Trim().Length -eq 0) { 'CRASH' }
+           elseif ($se.Trim().Length -gt 0) { 'CRASH' }
+           else { 'FINDINGS' }
+
+  $results += [pscustomobject]@{
+    name = $s.n; state = $state; exit = $p.ExitCode
+    stdout = $so.Trim().Length; stderr = $se.Trim().Length; file = $soF
+  }
+}
+
+# --- Unregistered sweeps (so a new one can never be silently skipped) ---------------
+$unregistered = Get-ChildItem $OA -Filter '*.mjs' -File |
+  Where-Object { ($_.BaseName -match '(sweep|audit|integrity|gaps)$' -or $_.BaseName -match '^digest-') -and $KnownNames -notcontains $_.BaseName } |
+  ForEach-Object { $_.BaseName }
+
+$crashed = @($results | Where-Object state -in 'CRASH','MISSING')
+
+if ($Json) {
+  [pscustomobject]@{
+    plannerPath = $PlannerPath; bridgeSrc = $BridgeSrcUrl; outDir = $OutDir
+    results = $results; unregistered = $unregistered; crashed = $crashed.Count
+  } | ConvertTo-Json -Depth 5
+} else {
+  Write-Host "[sweeps] planner = $PlannerPath"
+  Write-Host "[sweeps] bridge  = $BridgeSrcUrl"
+  Write-Host "[sweeps] out     = $OutDir"
+  Write-Host ''
+  foreach ($r in $results) {
+    $tag = switch ($r.state) { 'OK' { '  ok      ' } 'FINDINGS' { '  FINDINGS' } 'CRASH' { '! CRASH  ' } default { '? MISSING' } }
+    Write-Host ("{0} {1,-28} exit={2,-4} out={3,-6} err={4}" -f $tag, $r.name, $r.exit, $r.stdout, $r.stderr)
+  }
+  Write-Host ''
+  Write-Host ("[sweeps] {0} run - ok {1}, findings {2}, CRASHED {3}" -f `
+    $results.Count,
+    @($results | Where-Object state -eq 'OK').Count,
+    @($results | Where-Object state -eq 'FINDINGS').Count,
+    $crashed.Count)
+  if ($unregistered) { Write-Warning "UNREGISTERED sweeps (add to `$Suite): $($unregistered -join ', ')" }
+  if ($crashed.Count) { Write-Warning "These sweeps did NOT run: $(($crashed | ForEach-Object name) -join ', ')" }
+}
+
+exit ($(if ($crashed.Count) { 1 } else { 0 }))
