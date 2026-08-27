@@ -61,6 +61,9 @@ const SENTINEL = '<!-- OVERNIGHT-AGENT';
 // Capture the status PHRASE: everything after `Status:` up to the first separator.
 // Separators seen live: `·` (middot), `|`, an em/en dash, or end of line.
 const rxStatusLine = /^[ \t]*\*{0,2}Status:?\*{0,2}[ \t]*:?[ \t]*\*{0,2}([^\n\u00b7|]*)/m;
+// Global twin of the above, so a slice can be scanned for EVERY Status line rather than
+// just the first. Kept derived from one source so the two can never diverge.
+const rxStatusLineG = new RegExp(rxStatusLine.source, 'gm');
 const rxDate = /(\d{4}-\d{2}-\d{2})/;
 const rxHeader = /^##[ \t]+(\d{4}-\d{2}-\d{2})/gm;
 
@@ -117,11 +120,68 @@ function allIndexes(hay, needle) {
   return out;
 }
 
+/**
+ * CORRECTION 2026-08-27 — one slice can hold MORE THAN ONE agent block.
+ * ---------------------------------------------------------------------
+ * This took the FIRST `**Status:**` in the slice. But SKILL.md's loop appends further
+ * `## 🌙 Overnight Agent` blocks without necessarily emitting a new `from:` marker, so
+ * consecutive blocks pile up inside the SAME turn/block slice. First-match therefore
+ * returned whichever status happened to sit highest — the wrong-turn bug of 21:00,
+ * recurring a third level down (turn -> block -> blocks-within-a-slice).
+ *
+ * Measured live over 239 journals: 10 slices held >1 Status line and 7 were misread,
+ * 6 on the active board — #232 read `blocked` when its newest block says
+ * `Done · 2026-08-27`; #426/#460/#461 read `proposed` when they are `in-progress`;
+ * #292 read `blocked` when it is `done`. `status-sync-audit` turned two of those into
+ * `[FIX STATE]` recommendations, i.e. it would have REGRESSED correct state and pushed
+ * a finished, question-free task back into Shiv's approval queue.
+ *
+ * TWO REJECTED RULES, both falsified by the corpus rather than by argument:
+ *
+ *  1. "Take the last." The journal is bottom-appended, so later looks newer. But #239
+ *     and #254 follow their real status line with an italic prose note that also opens
+ *     with the word Status (`*Status line corrected 2026-08-25: …*`), which normalises
+ *     to nothing — last-wins turns two canonical statuses into null.
+ *  2. "Take the last CANONICAL one." This is still POSITION, and position is not time.
+ *     #362 disproves it: its top block carries `… · 2026-08-21` because SKILL.md
+ *     rewrites the block's Status line in place every run, while a *historical*
+ *     `### 🌙 Overnight Agent — 2026-07-17` sub-block sits BELOW it. Last-canonical
+ *     picked the July line and walked the task back a month. Caught by
+ *     mutcheck-status-arbitration's corpus invariant.
+ *
+ * So arbitrate within the slice the same way this file already arbitrates turn-vs-block
+ * (the 2026-08-25 22:00 rule): BY DATE, NOT BY POSITION. Newest stamp wins; a tie keeps
+ * the positionally later line (a same-date pair should agree anyway, and later is the
+ * one just written); when no candidate carries a stamp, fall back to the last canonical,
+ * which is the bottom-appended default. Slices with a single Status line — the
+ * overwhelming majority — are bit-for-bit unaffected.
+ */
 function statusFromSlice(slice, sourcePrefix) {
-  const m = rxStatusLine.exec(slice);
-  if (!m) return null;
-  const raw = m[1].trim();
-  const line = slice.slice(m.index).split(/\r?\n/)[0].trim();
+  rxStatusLineG.lastIndex = 0;
+  const cands = [];
+  let lastAny = null, m;
+  while ((m = rxStatusLineG.exec(slice)) !== null) {
+    lastAny = m;
+    const raw = m[1].trim();
+    if (normaliseStatus(raw) !== null) {
+      const line = slice.slice(m.index).split(/\r?\n/)[0].trim();
+      cands.push({ m, line, date: statusStampDate(line) });
+    }
+    if (m.index === rxStatusLineG.lastIndex) rxStatusLineG.lastIndex++;  // zero-width guard
+  }
+
+  let hit = null;
+  if (cands.length) {
+    const dated = cands.filter(c => c.date);
+    // `>=` so that among equal dates the positionally later line wins.
+    hit = dated.length
+      ? dated.reduce((best, c) => (c.date >= best.date ? c : best)).m
+      : cands[cands.length - 1].m;
+  }
+  if (!hit) hit = lastAny;
+  if (!hit) return null;
+  const raw = hit[1].trim();
+  const line = slice.slice(hit.index).split(/\r?\n/)[0].trim();
   return {
     status: normaliseStatus(raw),
     raw,
