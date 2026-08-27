@@ -248,33 +248,49 @@ function trackedAnywhere(repoRoot) {
  * Returns the commit that carries the content, or null.
  */
 function committedAtPathElsewhere(repoRoot, relPath, livePath) {
-  try {
-    const blob = execFileSync('git', ['-C', repoRoot, 'hash-object', livePath], {
+  const runGit = (args) =>
+    execFileSync('git', ['-C', repoRoot, ...args], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    });
+  try {
+    const blob = runGit(['hash-object', livePath]).trim();
     if (!blob) return null;
-    const commits = execFileSync(
-      'git',
-      ['-C', repoRoot, 'log', '--all', '--format=%H', '--', relPath],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
-    )
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    for (const c of commits) {
+
+    // Candidate (commit, path) pairs. The exact path first, then the same FILENAME
+    // anywhere under the plugin: a check legitimately lives at two paths across
+    // branches -- `mutcheck-write-turn.ps1` sits in `checks/` on one branch and in
+    // `skills/overnight-agent/` on the branch that now owns it. Searching only the
+    // path this worktree happens to use reported it as uncommitted while its bytes
+    // were committed verbatim one directory over. Same mistake as the arm above,
+    // one field narrower, so it is fixed the same way: ask git, do not assume.
+    const base = relPath.split('/').pop();
+    for (const spec of [relPath, `*/${base}`]) {
+      let out;
       try {
-        const at = execFileSync('git', ['-C', repoRoot, 'rev-parse', `${c}:${relPath}`], {
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'ignore'],
-        }).trim();
-        if (at === blob) return c;
+        out = runGit(['log', '--all', '--format=%H', '--name-only', '--', spec]);
       } catch {
-        /* path absent in that commit */
+        continue;
+      }
+      let commit = null;
+      const seen = new Set();
+      for (const raw of out.split('\n')) {
+        const line = raw.trim();
+        if (!line) continue;
+        if (/^[0-9a-f]{40}$/.test(line)) { commit = line; continue; }
+        if (!commit || line.split('/').pop() !== base) continue;
+        const key = `${commit}:${line}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        try {
+          if (runGit(['rev-parse', `${commit}:${line}`]).trim() === blob) return commit;
+        } catch {
+          /* path absent in that commit */
+        }
       }
     }
   } catch {
-    /* no git, or unreadable — fall through to reporting drift, the safe direction */
+    /* no git, or unreadable -- fall through to reporting drift, the safe direction */
   }
   return null;
 }

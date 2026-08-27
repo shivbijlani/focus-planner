@@ -272,6 +272,46 @@ console.log('\n== G6 git-aware CONTENT: live bytes committed on ANOTHER ref are 
 }
 
 // ---------------------------------------------------------------------------
+// G7 pins the cross-PATH half of G6. A check legitimately lives at two paths
+// across branches -- `mutcheck-write-turn.ps1` sits in `checks/` on one branch
+// and in `skills/overnight-agent/` on the branch that now owns it. G6's first
+// cut searched only the path this worktree uses and reported the file as
+// uncommitted while its bytes were committed verbatim one directory over.
+console.log('\n== G7 git-aware CONTENT across a RENAME: same filename, different path ==');
+{
+  const w = makeWorld('g7');
+  writeBoth(w, 'beta-sweep.mjs', 'console.log(2);\n');
+  writeBoth(w, 'gamma-sweep.mjs', 'console.log(3);\n');
+  writeBoth(w, 'alpha-sweep.mjs', 'console.log(1);\n// moved\n', {
+    archiveBody: 'console.log(1);\n',
+  });
+
+  const git = (...args) => execFileSync('git', ['-C', w.repo, ...args], { stdio: 'ignore' });
+  git('init', '-q');
+  git('config', 'user.email', 'mutcheck@example.com');
+  git('config', 'user.name', 'mutcheck');
+  git('add', '-A');
+  git('commit', '-qm', 'base');
+  // The NEW bytes are committed under skills/, never under checks/.
+  git('checkout', '-qb', 'side');
+  const skillPath = path.join(w.skill, 'alpha-sweep.mjs');
+  fs.writeFileSync(skillPath, 'console.log(1);\n// moved\n');
+  git('add', '-A');
+  git('commit', '-qm', 'alpha moved to skills/ on side branch');
+  git('checkout', '-q', '-');
+  fs.rmSync(skillPath, { force: true });
+
+  const r = run(w);
+  check('G7 exits 0', r.code === 0, `exit=${r.code}\n${r.out}`);
+  check(
+    'G7 finds the content at a DIFFERENT path on another ref',
+    /live content committed on another ref[\s\S]*alpha-sweep\.mjs/.test(r.out) &&
+      !/MODIFIED \(archived copy has diverged\)/.test(r.out),
+    r.out
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Mutation: disable each guard and assert exactly its own case breaks.
 // ---------------------------------------------------------------------------
 console.log('\n== mutation: each guard must be load-bearing ==');
