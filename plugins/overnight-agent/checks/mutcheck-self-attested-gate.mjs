@@ -84,8 +84,8 @@ check(
 
 check(
   'send is gated regardless of attestation',
-  judge('One word — **`send`** — the draft is reversible and nothing is published.') === null,
-  'sending mail is an external side effect; attestation must not unlock it',
+  judge('One word — **`send`** — it is a file copy with a backup and nothing is published.') === null,
+  'sending mail is an external side effect; even concrete evidence must not unlock it',
 );
 
 check(
@@ -114,7 +114,7 @@ check(
 
 check(
   'mixed ask is still flagged (reversible half should already be done)',
-  judge('One word — **`merge 189`** when you have looked. The `clean the rest` offer, which is reversible, still stands.') !== null,
+  judge('One word — **`merge 189`** when you have looked. The `clean the rest` offer, which is backed up first, still stands.') !== null,
   'SKILL.md: do the reversible half now and gate only the rest',
 );
 
@@ -130,6 +130,32 @@ check(
   judge(askDirect) !== null && judge(askDirect.replace(/it is a file copy with a backup, and I measured that it changes no current verdict/, 'it will take a moment')
     .replace(/nothing visible/, 'some work')) === null,
   'removing only the attestation must silence it; if not, ATTEST is not doing the work',
+);
+
+// ---------------------------------------------------------------------------------------
+// EVIDENCE vs CONCLUSION -- the #222 false positive, caught on the first live run
+// ---------------------------------------------------------------------------------------
+console.log('\nEVIDENCE vs CONCLUSION: the bare word "reversible" is not evidence');
+
+check(
+  'bare "reversible" alone -> quiet (the #222 false positive)',
+  judge("one word — **`apply`** and I'll do the three reversible YNAB write-backs.") === null,
+  'user-settings.md 2026-08-26 05:00: a standing approval travels only when the write content is ' +
+    'MECHANICAL, not inferential. #222 memos assert which trip a charge belongs to, so its gate is ' +
+    'legitimate. Flagging on the adjective alone is both a flood and simply wrong.',
+);
+
+check(
+  'bare "undoable" alone -> quiet',
+  judge('One word — **`apply it`**. It is undoable.') === null,
+  'the conclusion without the evidence is the same defect as above',
+);
+
+check(
+  'concrete evidence still flags, and carries the weak word for context',
+  (judge('One word — **`deploy it`**. It is a file copy with a backup, and it is easily reversible.') || {})
+    .attest?.some((a) => /file copy/i.test(a)) === true,
+  'evidence present means flag; the adjective is reported alongside, never alone',
 );
 
 check(

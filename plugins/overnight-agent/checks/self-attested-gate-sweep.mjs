@@ -79,15 +79,22 @@ const GATES = [
 // 2. THE ATTESTATION — the agent certifying, in the ask, that the thing it is gating is
 //    reversible. This is the discriminator; everything else is a guard around it.
 //
-//    Each alternative was taken from real agent prose, not invented. Kept to statements about
-//    REVERSIBILITY or ABSENCE OF EFFECT — never mere reassurance like "it's fine" or "safe",
-//    which the mutation check confirms would flood.
-const ATTEST = [
+//    SPLIT INTO EVIDENCE AND CONCLUSION, and only EVIDENCE counts. This was not the first
+//    design: requiring any attestation flagged #222 on the first live run, which is a FALSE
+//    POSITIVE. That ask says "the three reversible YNAB write-backs" — the bare adjective and
+//    nothing else — and its gate is legitimate, because user-settings.md (2026-08-26 05:00)
+//    establishes that a standing approval travels only when the write's CONTENT is mechanical
+//    (copied from a source document) rather than inferential. #222's memos assert which trip a
+//    charge belongs to, which is the agent's own judgement, so it must stay gated.
+//
+//    "reversible" / "undoable" is the agent's CONCLUSION. "it is a file copy with a backup and
+//    it changes no current verdict" is its EVIDENCE. A detector built on self-attestation has
+//    to require the evidence, or it fires on any ask that merely types the word — which is both
+//    a flood and, as #222 shows, wrong.
+const ATTEST_CONCRETE = [
   /\bfile\s+copy\b/i,
   /\bwith\s+a\s+backup\b/i,
   /\bbacked\s+up\b/i,
-  /\b(?:easily\s+)?reversible\b/i,
-  /\bundo(?:ne|able)?\b/i,
   /\broll(?:ing)?\s*back\b/i,
   /\brevert(?:ed|ible)?\b/i,
   /\bpurely\s+additive\b/i,
@@ -97,6 +104,12 @@ const ATTEST = [
   /\bdoes\s+not\s+change\s+anything\b/i,
   /\bno\s+external\s+(?:effect|side[- ]effect)/i,
   /\blocal(?:ly)?[^.]{0,30}\bundoable\b/i,
+];
+
+// Reported for context when a concrete attestation is present, never sufficient alone.
+const ATTEST_WEAK = [
+  /\b(?:easily\s+)?reversible\b/i,
+  /\bundo(?:ne|able)?\b/i,
 ];
 
 // 3. THE TOKEN — a short imperative the user is asked to type back, in the house format
@@ -175,8 +188,16 @@ export function judge(ask, journal = '') {
   const local = tokens.filter((t) => !EXTERNAL_TOKEN.test(t));
   if (!local.length) return null;
 
-  const hits = (text) =>
-    [...new Set(ATTEST.filter((re) => re.test(text)).map((re) => (text.match(re) || [''])[0].trim()))];
+  const hits = (text) => {
+    const concrete = [...new Set(
+      ATTEST_CONCRETE.filter((re) => re.test(text)).map((re) => (text.match(re) || [''])[0].trim()),
+    )];
+    if (!concrete.length) return [];
+    const weak = [...new Set(
+      ATTEST_WEAK.filter((re) => re.test(text)).map((re) => (text.match(re) || [''])[0].trim()),
+    )];
+    return [...concrete, ...weak];
+  };
 
   let attest = hits(ask);
   let via = 'ask';
