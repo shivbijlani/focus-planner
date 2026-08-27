@@ -30,7 +30,7 @@ function check(name, cond, detail = '') {
   failures.push(`${name}${detail ? ` — ${detail}` : ''}`);
 }
 
-// Build a throwaway planner. `cases` = [{ id, status, deliverable, date }].
+// Build a throwaway planner. `cases` = [{ id, status, deliverable, date, live }].
 function sandbox(cases) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oa-dgs-'));
   const planner = path.join(root, 'planner');
@@ -45,7 +45,8 @@ function sandbox(cases) {
 
   for (const c of cases) {
     const date = c.date || OLD;
-    // A minimal journal with a live ask in the newest agent turn.
+    // A minimal journal with a live ask in the newest agent turn. `live` injects extra
+    // prose into the agent block so the fulfilment guard can be exercised.
     const j = [
       `# Task ${c.id}: Case ${c.id}`,
       '',
@@ -59,6 +60,7 @@ function sandbox(cases) {
       '<!-- from: overnight-agent -->',
       `**Status:** ${date}`,
       '',
+      ...(c.live ? [c.live, ''] : []),
       '**Needs from you:** a decision on the shape.',
       '',
     ].join('\n');
@@ -177,6 +179,105 @@ for (const [name, line] of NEGATIVES) {
 {
   const clean = run([{ id: '913', deliverable: '# Doc\n\nNothing to see here.\n' }]);
   check('clean run reports 0', clean.flagged === 0, `flagged=${clean.flagged}`);
+}
+
+// ================================================================================
+// REGRESSION: the two false positives of 2026-08-27. Both are reproduced from the
+// real text that fooled the sweep, and each is paired with a control proving the new
+// guard is load-bearing rather than the fixture simply being inert.
+// ================================================================================
+
+// ---- FP 1 (#357): a postmortem QUOTING the retired gate, wrapped across lines. -----
+// The gate matches on line 1; every doc-guard token sits on lines 2-4. Line-scoped
+// guarding flagged the sentence that documents this sweep's own founding case.
+const POSTMORTEM = [
+  '# Doc',
+  '',
+  '*The previous version of this line said "On your approval I can open a **draft PR** … as the reversible',
+  'first step." That sentence is why this task sat for 52 days: a draft PR is the headline item on',
+  "SKILL.md's own list of things that need no approval, so the work should simply have been done and",
+  'linked. Recorded as the founding case of `deliverable-gate-sweep`.*',
+  '',
+].join('\n');
+{
+  const r = run([{ id: '920', deliverable: POSTMORTEM }]);
+  check('FP1: wrapped postmortem quoting a retired gate is suppressed', r.flagged === 0, `flagged=${r.flagged}`);
+}
+{
+  // CONTROL: identical gate sentence, same wrapping, but WITHOUT the documentation
+  // markers. Must still flag — otherwise the fix suppressed the whole shape.
+  const bare = [
+    '# Doc',
+    '',
+    'On your approval I can open a **draft PR** … as the reversible',
+    'first step for the read-only section, once the data half is settled.',
+    '',
+  ].join('\n');
+  const r = run([{ id: '921', deliverable: bare }]);
+  check('FP1 control: same wrapped gate WITHOUT doc markers still flags', r.flagged === 1, `flagged=${r.flagged}`);
+}
+{
+  // CONTROL: a doc marker must not launder a genuinely live gate in a DIFFERENT
+  // paragraph of the same file.
+  const mixedFile = [
+    '# Doc',
+    '',
+    'Background: `deliverable-gate-sweep` exists to catch approval gates in deliverables.',
+    '',
+    'On your approval I can scaffold the importer as the first step.',
+    '',
+  ].join('\n');
+  const r = run([{ id: '922', deliverable: mixedFile }]);
+  check('FP1 control: doc paragraph does not launder a live gate elsewhere in the file', r.flagged === 1, `flagged=${r.flagged}`);
+}
+
+// ---- FP 2 (#253): a gate that was SATISFIED, evidence in the journal not the file. --
+// The June offer text stays verbatim in the tracker forever; the packet was written in
+// August and the live block says so.
+const SATISFIED_GATE = "# Doc\n\nSay the word and I'll **draft one tailored application** to your pick — review-only, nothing submitted.\n";
+{
+  const r = run([{ id: '930', deliverable: SATISFIED_GATE, live: '**Status:** in-progress · **application packet drafted (both roles)**' }]);
+  check('FP2: gate whose offer the live journal reports as drafted is suppressed', r.flagged === 0, `flagged=${r.flagged}`);
+  check('FP2: the suppression is REPORTED, not silent', /suppressed — offer already fulfilled/.test(r.out), r.out.slice(0, 200));
+}
+{
+  // CONTROL: same deliverable, live block silent about drafting. Must flag — proving the
+  // suppression keys on the delivery evidence and not on the gate text.
+  const r = run([{ id: '931', deliverable: SATISFIED_GATE }]);
+  check('FP2 control: same gate with NO delivery evidence still flags', r.flagged === 1, `flagged=${r.flagged}`);
+}
+{
+  // CONTROL: the delivery must be of the SAME verb family. "Built the tracker" does not
+  // discharge an offer to *draft an application*.
+  const r = run([{ id: '932', deliverable: SATISFIED_GATE, live: '**Status:** built the tracker and researched the shortlist.' }]);
+  check('FP2 control: an unrelated verb does not discharge the offer', r.flagged === 1, `flagged=${r.flagged}`);
+}
+{
+  // CONTROL: the draft-PR family resolves through a PR link, which is how a run log
+  // actually records it.
+  const prGate = '# Doc\n\nOn your approval I can open a draft PR for the renderer.\n';
+  const withPr = run([{ id: '933', deliverable: prGate, live: 'Opened https://github.com/shivbijlani/focus-planner/pull/188 for the renderer.' }]);
+  check('FP2: draft-PR offer discharged by a real PR link', withPr.flagged === 0, `flagged=${withPr.flagged}`);
+  const withoutPr = run([{ id: '934', deliverable: prGate }]);
+  check('FP2 control: same PR offer with no PR still flags', withoutPr.flagged === 1, `flagged=${withoutPr.flagged}`);
+}
+{
+  // CONTROL: fulfilment evidence must live BELOW the sentinel (the live block). Text in
+  // the user's own notes above it must not discharge an agent offer.
+  const s = sandbox([{ id: '935', deliverable: SATISFIED_GATE }]);
+  const jf = path.join(s.planner, 'journal', 'task-935.md');
+  const j = fs.readFileSync(jf, 'utf8').replace('# Task 935: Case 935', '# Task 935: Case 935\n\nI already drafted something myself ages ago.');
+  fs.writeFileSync(jf, j, 'utf8');
+  let out = '';
+  try {
+    out = execFileSync(process.execPath, [SWEEP], {
+      encoding: 'utf8',
+      env: { ...process.env, PLANNER_PATH: s.planner, LOCALAPPDATA: s.local, OA_TODAY: TODAY },
+    });
+  } catch (e) { out = (e.stdout || '') + (e.stderr || ''); }
+  fs.rmSync(s.root, { recursive: true, force: true });
+  const m = out.match(/FLAGGED[^:]*:\s*(\d+)/);
+  check('FP2 control: delivery claim ABOVE the sentinel does not discharge the gate', Number(m?.[1]) === 1, `flagged=${m?.[1]}`);
 }
 
 console.log(`mutcheck-deliverable-gate: ${pass} passed, ${fail} failed`);

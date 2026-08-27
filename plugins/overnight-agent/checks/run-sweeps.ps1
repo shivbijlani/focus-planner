@@ -117,6 +117,12 @@ $Suite = @(
   # is the slowest entry here (GitHub computes mergeability lazily and it polls for it).
   @{ n = 'pr-ask-liveness-sweep';    bridge = $false }
   @{ n = 'undelivered-plan-sweep';   bridge = $false }
+  # Companion to the line above, and deliberately NOT folded into it. That sweep skips any
+  # journal written today, which is right for every other delivery question but makes a
+  # promise due THIS run ("nothing to start - I'll get on with it") undetectable on the only
+  # run that could have kept it. This one is self-contained within a single turn, so it needs
+  # no grace period. Found on #460, 2026-08-26.
+  @{ n = 'self-promise-sweep';       bridge = $false }
   @{ n = 'declared-unblocked-sweep'; bridge = $false }
   @{ n = 'blocked-readonly-sweep';   bridge = $false }
   @{ n = 'inprogress-stall-sweep';   bridge = $false }
