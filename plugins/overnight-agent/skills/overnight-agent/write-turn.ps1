@@ -112,6 +112,38 @@ function Remove-CodeSpans([string]$line) {
   return ($line -replace '`[^`]*`', ' ')
 }
 
+<#
+  A5 (ADVISORY, never blocking) -- can the digest actually READ an ask out of this turn?
+
+  The four guards above all ask "did this text survive the trip to disk?". None of them
+  asks the question that actually decides whether Shiv ever SEES the turn's request:
+  does it carry an ask in one of the dialects `lib-live-ask.mjs` understands?
+
+  Added 2026-08-27, immediately after the run that fixed a marker bug in that very library
+  nearly shipped its own turn with the ask lines formatted `*Reply:* **`merge 198`**`.
+  `liveAsk`'s dialects are `Needs from you:` -> ``Reply `x` `` -> `Next:` -> `Your call:`;
+  `Reply:*` matches none of them, because the colon defeats `Reply\s+`. That turn would
+  have gone to disk fully guard-clean and carrying NO parseable ask -- reproducing the
+  exact defect the run had just fixed, inside the fix's own turn. It was caught only by
+  running `liveAsk` against the draft by hand.
+
+  DELIBERATELY A WARNING, NOT A GUARD. Informational turns legitimately ask for nothing,
+  so refusing them would be wrong. It also must not change what this script DOES: 90
+  minutes before this was written, a safety writer made stricter silently broke an
+  invariant three other components depended on. So this only ever prints, and never
+  touches the exit code or the bytes written.
+#>
+function Test-TurnAsk([string]$Body) {
+  $lines = $Body -split "`r?`n"
+  foreach ($l in $lines) {
+    if ($l -match '^\s*\*{0,2}Needs from you\b[^:]*:\*{0,2}\s*\S') { return $true }
+    if ($l -match '^\s*\*{0,2}Next:\*{0,2}\s*\S')                  { return $true }
+    if ($l -match '^\s*\*{0,2}Your call:\*{0,2}\s*\S')             { return $true }
+    if ($l -match '(?:^|\s)Reply\s+`[^`]+`')                       { return $true }
+  }
+  return $false
+}
+
 function Test-TurnBody {
   param([string]$Body, [string[]]$Disabled = @())
 
@@ -204,11 +236,13 @@ $body = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $BodyFile))
 if ($body.Trim().Length -eq 0) { Write-Error 'body file is empty'; exit 3 }
 
 $findings = Test-TurnBody -Body $body -Disabled $DisableGuard
+$hasAsk = Test-TurnAsk -Body $body
 
 if ($Json) {
   [pscustomobject]@{
     ok       = ($findings.Count -eq 0)
     findings = @($findings)
+    hasAsk   = $hasAsk
     id       = $Id
   } | ConvertTo-Json -Depth 5
 } else {
@@ -218,6 +252,14 @@ if ($Json) {
       Write-Host ("  {0} line {1}: {2}" -f $f.guard, $f.line, $f.why)
       Write-Host ("      | {0}" -f $f.snippet)
     }
+  }
+  # Advisory only. Printed even on refusal, because a turn being rewritten to clear a
+  # guard is exactly when its ask line is most likely to be reformatted by accident.
+  if (-not $hasAsk) {
+    Write-Host '[write-turn] NOTE - this turn carries no ask the digest can read.' -ForegroundColor Yellow
+    Write-Host '      Fine for an informational turn. If it is meant to ask for something,'
+    Write-Host '      use one of: "**Needs from you:** ...", "Reply `word`", "**Next:** ...",'
+    Write-Host '      or "**Your call:** ...". A bare "*Reply:* **`word`**" is NOT read as an ask.'
   }
 }
 
