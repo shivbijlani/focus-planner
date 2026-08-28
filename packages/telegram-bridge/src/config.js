@@ -59,15 +59,44 @@ export async function loadConfig({ env = process.env, repoRoot } = {}) {
     (env.TELEGRAM_BRIDGE_ARCHIVE || '').trim(),
   )
 
+  // Whether to post the consolidated "waiting on you" digest. It is the ONLY
+  // thing the bridge sends to the group's General thread — every other message
+  // goes into its task's own topic. Users who want the group to be strictly
+  // one-topic-per-task therefore need a way to silence it without losing the
+  // per-task mirroring, so it is gated separately from `archiveCompleted`.
+  // Default ON to preserve existing behaviour; only an explicit
+  // off/false/0/no in TELEGRAM_BRIDGE_DIGEST disables it.
+  const digestEnabled = !/^(off|false|0|no)$/i.test(
+    (env.TELEGRAM_BRIDGE_DIGEST || '').trim(),
+  )
+
+  // WHERE the digest is posted. Turning the digest off is a blunt instrument:
+  // it silences the General thread but also costs you the only consolidated
+  // view of the approval queue, which is the one message that says what is
+  // actually blocked on you. This gives the middle option — keep the digest,
+  // but move it out of General into its own forum topic, so the group stays
+  // strictly one-topic-per-subject.
+  //
+  //   unset/empty  -> General thread (unchanged default)
+  //   numeric id   -> post into that existing topic
+  //   any name     -> find-or-create a forum topic with that name
+  //
+  // A name is resolved to a topic id once and remembered in bridge state, so
+  // re-runs reuse the same topic instead of creating a new one each night.
+  const digestTopic = (env.TELEGRAM_BRIDGE_DIGEST_TOPIC || '').trim()
+
   return {
     token,
     chatId,
     plannerPath,
     journalDir: path.join(plannerPath, 'journal'),
     completedBoardPath: path.join(plannerPath, 'planner-completed.md'),
+    boardPath: path.join(plannerPath, 'planner.md'),
     stateDir,
     taskAllowlist,
     archiveCompleted,
+    digestEnabled,
+    digestTopic,
   }
 }
 
