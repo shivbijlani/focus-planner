@@ -490,6 +490,45 @@ $Suite = @(
   # fixtures are load-bearing: this folder holds ~130 deliverables and a constant stream of
   # write-turn `.bak-` backups, and flagging those would make it noise. Reads 3 today.
   @{ n = 'shadow-journal-sweep'; bridge = $false }
+  # telegram-ask-truncation-sweep (added 2026-08-28 03:xx PT) — the delivery half of every ask.
+  # 41 sweeps verify that an ask EXISTS, is current, and is not gated; none checked that it
+  # SURVIVES the trip to the only surface Shiv reads. The bridge truncates at 4,096 chars keeping
+  # the PREFIX, and SKILL.md's own template puts `Needs from you:` / `Your call:` at the END — so
+  # following the documented style is what breaks delivery. This was measured by hand on
+  # 2026-08-27 (34 tasks) and the banner told runs to re-measure with a script that lived outside
+  # $Suite, needed two undocumented env vars, and crashed when invoked as documented — so it never
+  # ran. It also always exited 0 and so could never report FINDINGS.
+  # Why it is not merely cosmetic: the approval digest is OFF (task #441), and that digest was the
+  # only surface showing an ask outside its own topic. With it off, a truncated ask is visible
+  # NOWHERE. Measured 2026-08-28: 31 tasks, 16 of them open — the agent waiting on answers to
+  # questions never delivered. This run shortened 10 of them; reads 21 today, and 0 once #211 lands.
+  @{ n = 'telegram-ask-truncation-sweep'; bridge = $true }
+  # truncated-ask-liveness (added 2026-08-28 04:30 PT) — the TRIAGE half of the sweep above.
+  # That sweep correctly flags every truncated ask; deciding which ones MATTER was being done by
+  # eye, and got it wrong twice in a row in opposite directions. 2026-08-27 23:15 dismissed 15
+  # victims as "closed/orphaned" when 10 were live. 2026-08-28 03:23 dismissed the last 5 because
+  # their ask text "starts with nothing" — but #232 read "one word on Kiley's copy", #431 read
+  # "nothing to read the doc. One word only if you want the POC", and #450 named `rate tien`.
+  # Three real one-word decisions Shiv had never been shown, all classified benign by a heuristic.
+  # The working discriminator is neither the first word of the ask nor board membership: it is
+  # whether the ask NAMES A CHOICE. This is a classifier, not a filter — it never suppresses a
+  # finding from the sweep above (relaxing a safety writer is the failure mode this file keeps
+  # recording), it only says which victims to look at first and prints the ask text so the call is
+  # made on content. Reads 0 actionable today.
+  @{ n = 'truncated-ask-liveness'; bridge = $true }
+  # truncation-openboard-scope (added 2026-08-28 04:55 PT) — the CONTENT half of the two above.
+  # Both of those ask "does the ASK survive the 4,096 cap?" and go green when the ask LINE does.
+  # That is not the same question as "did Shiv receive an actionable message". #272 proved the gap:
+  # its ask line survived and read "the approval gate below — which to merge / build next" while the
+  # gate it pointed at sat in the 67% that was truncated away. Both sweeps called it healthy; the
+  # task had been idle 6 days on an ask that was, in the delivered message, a dangling reference.
+  # So this scopes to the population that can actually be harmed — rows on planner.md, COMPUTED
+  # from the board every run, never quoted from prose (the 04:40 learning: a benign-classification
+  # is a claim) — and flags only truncated turns whose lost tail contains actionable tokens:
+  # `merge <n>`, PR/issue numbers, deliverable links, urls, checklist items, and only when the same
+  # token does not also appear in the delivered prefix. Prose-only loss is reported, not flagged.
+  # Reads 9 truncated / 0 actionable today (was 1: #272).
+  @{ n = 'truncation-openboard-scope'; bridge = $true }
 )
 
 if ($IncludeMutchecks) {
