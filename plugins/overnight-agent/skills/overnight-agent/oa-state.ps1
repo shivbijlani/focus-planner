@@ -491,7 +491,11 @@ function Get-SnoozeFromStore {
   $map = @{}
   if (-not (Test-Path $SnoozeStore)) { return $null }   # $null = "no store", so fall back
   try {
-    $raw = Get-Content -Path $SnoozeStore -Raw -ErrorAction Stop
+    # Decode explicitly as UTF-8, for the same reason journals are (see Read-JournalText):
+    # `Get-Content -Raw` takes its decoder from the host, so a snooze store holding any
+    # non-ASCII character reads differently under powershell 5.1 and pwsh 7. This also keeps
+    # the `oa-state/no-bare-raw-journal-read` capability honest rather than merely quiet.
+    $raw = [IO.File]::ReadAllText($SnoozeStore, (New-Object Text.UTF8Encoding($false)))
     if ([string]::IsNullOrWhiteSpace($raw)) { return $map }
     $json = $raw | ConvertFrom-Json -ErrorAction Stop
   } catch {
