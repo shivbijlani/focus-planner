@@ -92,6 +92,14 @@ export async function loadConfig({ env = process.env, repoRoot } = {}) {
     journalDir: path.join(plannerPath, 'journal'),
     completedBoardPath: path.join(plannerPath, 'planner-completed.md'),
     boardPath: path.join(plannerPath, 'planner.md'),
+    // The app's per-task sync records. These carry the `deleted: true`
+    // tombstone, which is the ONLY durable signal that a task was removed in
+    // the UI — a deleted task leaves both boards, so the boards alone cannot
+    // distinguish "deleted" from "never existed".
+    syncRecordPaths: [
+      path.join(plannerPath, 'planner.md.sync.json'),
+      path.join(plannerPath, 'planner-completed.md.sync.json'),
+    ],
     stateDir,
     taskAllowlist,
     archiveCompleted,

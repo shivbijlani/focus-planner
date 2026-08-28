@@ -6,7 +6,12 @@ import fs from 'fs/promises'
 import path from 'path'
 import { taskIdFromFilename, journalFilename } from './journal.js'
 
-export function createFsIo({ journalDir, completedBoardPath, boardPath }) {
+export function createFsIo({
+  journalDir,
+  completedBoardPath,
+  boardPath,
+  syncRecordPaths = [],
+}) {
   return {
     async listJournals() {
       let entries
@@ -60,6 +65,24 @@ export function createFsIo({ journalDir, completedBoardPath, boardPath }) {
       } catch {
         return ''
       }
+    },
+
+    // Returns the raw contents of each planner sync record that exists, so the
+    // archive pass can see which tasks the user DELETED in the app. A deleted
+    // task leaves both boards, so this tombstone is the only lasting evidence
+    // that its topic should be closed. Never throws: a missing or unreadable
+    // record just means "no deletions to act on this run".
+    async readSyncRecords() {
+      const out = []
+      for (const p of syncRecordPaths) {
+        if (!p) continue
+        try {
+          out.push(await fs.readFile(p, 'utf-8'))
+        } catch {
+          // absent or locked mid-write by the app — skip it
+        }
+      }
+      return out
     },
   }
 }

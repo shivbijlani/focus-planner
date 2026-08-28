@@ -28,6 +28,7 @@ import { extractAskEntry, buildDigest, hashDigest } from './digest.js'
 import { upsertTgMetaMarker, parseTgMeta } from './deepLink.js'
 import { mdToTelegramHtml, escapeHtml } from './telegramFormat.js'
 import { parseCompletedTaskIds } from './completed.js'
+import { parseDeletedTaskIds } from './deleted.js'
 import { parseBoardOrder, boardRank, boardIndex } from './board.js'
 import { parseReplyRouting, coalesceByTask } from './routeReply.js'
 
@@ -364,15 +365,20 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     return { up, archived, down, digest }
   }
 
-  // Archive/unarchive task topics to mirror the completed board. A task that has
-  // moved to planner-completed.md gets its forum topic CLOSED (Telegram's
-  // reversible "archive": it collapses under the group's Closed section and
-  // stops new non-admin posts). A task that later leaves the completed board
-  // (reopened) gets its topic REOPENED. Both directions are idempotent — we only
-  // call Telegram when the desired archived-state differs from what we recorded,
-  // so re-runs are no-ops. A per-topic failure (e.g. the bot lacks
-  // can_manage_topics) is logged and skipped; it never aborts the run and is
-  // retried next time.
+  // Archive/unarchive task topics to mirror the board. A task that has moved to
+  // planner-completed.md — OR that the user DELETED in the app — gets its forum
+  // topic CLOSED (Telegram's reversible "archive": it collapses under the
+  // group's Closed section and stops new non-admin posts). A task that later
+  // leaves the completed board (reopened) gets its topic REOPENED. Both
+  // directions are idempotent — we only call Telegram when the desired
+  // archived-state differs from what we recorded, so re-runs are no-ops. A
+  // per-topic failure (e.g. the bot lacks can_manage_topics) is logged and
+  // skipped; it never aborts the run and is retried next time.
+  //
+  // Deleted tasks are included because a deletion removes the row from BOTH
+  // boards, so `completed.has(id)` is false for them forever and their topics
+  // used to stay open permanently. On the live planner that had accumulated 65
+  // still-open topics for tasks that no longer exist.
   async function syncArchive() {
     const archived = []
     const reopened = []
@@ -384,11 +390,26 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     const board = await io.readCompletedBoard()
     const completed = new Set(parseCompletedTaskIds(board))
 
+    // Tombstoned (deleted-in-app) tasks. Optional: an io without
+    // readSyncRecords keeps the old completed-board-only behaviour, so existing
+    // in-memory test harnesses and older callers are unaffected.
+    const deleted = new Set()
+    if (typeof io.readSyncRecords === 'function') {
+      try {
+        for (const raw of await io.readSyncRecords()) {
+          for (const id of parseDeletedTaskIds(raw)) deleted.add(id)
+        }
+      } catch (err) {
+        logger(`could not read sync records (${err.message}); archiving completed only`)
+      }
+    }
+
     for (const [taskId, task] of Object.entries(state.tasks)) {
       if (!task || task.topicId == null) continue
       if (!isAllowed(taskId)) continue
 
-      const shouldArchive = completed.has(taskId)
+      const isDeleted = deleted.has(taskId)
+      const shouldArchive = completed.has(taskId) || isDeleted
       const isArchived = !!task.archived
       if (shouldArchive === isArchived) continue
 
@@ -397,7 +418,10 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
           await client.closeForumTopic({ chatId, messageThreadId: task.topicId })
           setArchived(state, taskId, true)
           archived.push(taskId)
-          logger(`archived (closed) topic ${task.topicId} for completed task #${taskId}`)
+          logger(
+            `archived (closed) topic ${task.topicId} for ` +
+              `${isDeleted ? 'deleted' : 'completed'} task #${taskId}`,
+          )
         } else {
           await client.reopenForumTopic({ chatId, messageThreadId: task.topicId })
           setArchived(state, taskId, false)
