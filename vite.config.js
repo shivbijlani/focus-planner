@@ -13,4 +13,12 @@ export default defineConfig({
   define: {
     __APP_BUILD__: JSON.stringify(BUILD_ID),
   },
+  test: {
+    // `plugins/overnight-agent/checks/` holds the agent's standalone check scripts. A few
+    // are named `*.test.mjs` but are not vitest suites: they are self-tests that read
+    // %LOCALAPPDATA%, shell out, and call process.exit(). Collecting them makes vitest fail
+    // the whole run on the Linux CI runner, where %LOCALAPPDATA% is undefined. They are run
+    // by run-sweeps.ps1, which is the only thing that can supply their environment.
+    exclude: ['**/node_modules/**', '**/dist/**', 'plugins/**'],
+  },
 })

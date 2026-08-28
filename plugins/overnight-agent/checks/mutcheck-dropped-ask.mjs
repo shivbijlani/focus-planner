@@ -160,5 +160,36 @@ check('SILENT when the repo cannot be resolved (never guess)', (tmp) => {
   return { ok: /STILL OPEN: 0/.test(out) && /unresolved/.test(out), detail: out.slice(0, 300) };
 });
 
+check('SILENT when the number is a COUNT followed by a noun (`close 3 browser slots`)', (tmp) => {
+  // Reproduces the live false positive of 2026-08-27. These verbs are ordinary English, so
+  // an ask region reading "close 3 browser slots (~2.2 GB)" tokenised as `close:3`. The
+  // number then resolved against the CORPUS-WIDE repo index, so an UNRELATED journal's link
+  // to pull/3 attributed it to that repo, and it was reported as a dropped ask for 5 days
+  // against a task that had never mentioned the repo. The number is a quantity, not a ref.
+  //
+  // The second journal is load-bearing and must not be "simplified" away: without a link
+  // that lets `3` resolve to a repo, the sweep reports it as `unresolved` and this case
+  // passes for the wrong reason — it reads 0 because it cannot see the defect rather than
+  // because the guard suppressed it. That is exactly how this case was first written, and
+  // it passed against the unfixed sweep. Verified by mutation: with the regex reverted this
+  // case FAILS, but only while task-8 is present.
+  const counting = `# Task 7: x\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n${A}\n**Next:** three reversible wins left — close 3 browser slots (~2.2 GB), trim to 2 CDP MCP servers.\n\n${A}\n**Needs from you:** nothing.\n`;
+  const linker = `# Task 8: y\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\nBackground only, no ask: https://github.com/acme/widget/pull/3\n\n${A}\n**Needs from you:** nothing.\n`;
+  build(tmp, { 'task-7.md': counting, 'task-8.md': linker },
+    { 'acme/widget': { prs: { 3: { state: 'OPEN', title: 'an unrelated open pr', base: 'main', head: 'other' } } } });
+  const { out } = run(tmp);
+  return { ok: /STILL OPEN: 0/.test(out), detail: out.slice(0, 300) };
+});
+
+check('still FIRES on an explicit `#` reference followed by prose (guard is not too broad)', (tmp) => {
+  // The lazy fix for the case above is to drop bare numbers, or to reject any number
+  // followed by a word. Either would blind the sweep to the most common real phrasing,
+  // "merge #42 on your approval", so pin the opposite direction too.
+  const j = `# Task 7: x\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\nLinked: ${LINK}\n\n${A}\n**Next:** merge #42 on your approval.\n\n${A}\n**Needs from you:** nothing.\n`;
+  build(tmp, { 'task-7.md': j }, openPr);
+  const { out } = run(tmp);
+  return { ok: /STILL OPEN: 1/.test(out), detail: out.slice(0, 300) };
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
