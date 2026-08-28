@@ -8,13 +8,22 @@ import { dirname, resolve } from 'node:path'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SRC = resolve(__dirname, '..', 'packages', 'folder-sync', 'src')
 const DEST = resolve(__dirname, '..', 'public', 'folder-sync')
+const DIAG_SRC = resolve(__dirname, '..', 'packages', 'diagnostics', 'src')
+const DIAG_DEST = resolve(__dirname, '..', 'public', 'diagnostics', 'src')
 
 await rm(DEST, { recursive: true, force: true })
+await rm(resolve(__dirname, '..', 'public', 'diagnostics'), { recursive: true, force: true })
 await mkdir(DEST, { recursive: true })
+await mkdir(DIAG_DEST, { recursive: true })
 // Skip unit-test files — they are only relevant in the package, and copying
 // them into public/ would make Vitest discover and re-run them at the app root.
 await cp(SRC, DEST, {
   recursive: true,
   filter: (src) => !/\.(test|spec)\.[cm]?[jt]sx?$/.test(src),
 })
+await cp(DIAG_SRC, DIAG_DEST, {
+  recursive: true,
+  filter: (src) => !/\.(test|spec)\.[cm]?[jt]sx?$/.test(src),
+})
 console.log(`[copy-sw] ${SRC} -> ${DEST}`)
+console.log(`[copy-sw] ${DIAG_SRC} -> ${DIAG_DEST}`)

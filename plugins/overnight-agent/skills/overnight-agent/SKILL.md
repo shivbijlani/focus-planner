@@ -95,16 +95,36 @@ already processed in this journal") lives in the **skill's own working dir**, wh
 - **Tool:** [`oa-state.ps1`](./oa-state.ps1) (next to this skill) reads/writes that state. Run it with
   `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\oa-state.ps1 <command>`:
   - **`scan`** → your per-run worklist as JSON, one row per task: `{ id, status, changed, reopened,
-    has_agent_block, tracked }`. **Run this first, every run** (see PHASE 1/2). It is how you find work
-    without re-reading 90+ journals by hand.
+    has_agent_block, tracked, due_poll, poll_cadence }`. **Run this first, every run** (see PHASE 1/2).
+    It is how you find work without re-reading 90+ journals by hand.
   - **`get -Id <id>`** → that task's full state JSON.
   - **`mark -Id <id> [-Status <s>] [-Version <n>] [-PlanId <p>]`** → call this **after you write your
     turn into a journal**. It updates the fields and re-snapshots the journal, so next run the task reads
-    as quiet until the user touches it again.
+    as quiet until the user touches it again. It also stamps an invisible
+    `<!-- /overnight-agent turn-end -->` comment marking where your turn stopped — **that stamp is what
+    makes a reply typed at the bottom of the journal reopen the task**, so skipping `mark` after a turn
+    leaves that task blind to the user's next message.
+  - **`mark -Id <id> -Poll <cadence>` / `-PollDone` / `-PollClear`** → manage a **time-triggered poll**
+    on a task (see "Polling" below). Cadence is `hourly | daily | weekly | <N>h | <N>d | <N>m`.
   - **`seed [-Force]`** → one-time/migration bootstrap of state for every existing journal.
 
+**Polling (time-triggered tasks the user never touches):** `scan` normally only flags journals the
+**user** has changed — so a purely time-based job (e.g. "each night, check the video-backup folder and
+upload any drops") would be invisible and silently stop the moment the user stops replying. A **poll**
+fixes that: it lives only in the skill state (never in the journal, so the user sees nothing), and
+`scan` reports **`due_poll: true`** on any task whose poll is due. Lifecycle:
+- When a task commits you to a recurring self-check, arm it once:
+  `oa-state.ps1 mark -Id <ID> -Poll <cadence>` (a freshly armed poll is due on the next `scan`).
+- Every run, after the normal `scan`, **act on any row with `due_poll: true`** (do the recurring check),
+  then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone` (stamps `last_polled` and pushes `next_due`
+  forward by the cadence). When the recurring duty ends, `oa-state.ps1 mark -Id <ID> -PollClear`.
+
 **How "the user replied" is detected (the reopen fix):** the tool remembers a hash of each journal as
-you last left it. On the next `scan`:
+you last left it, **and where your turn ended**. The second half is what makes it work: in most journals
+your turn is the last section in the file, so no later `## ` heading closes it — and without an explicit
+end marker, anything typed below gets read as part of *your own turn* and is never seen. So `mark`
+writes the boundary down (the `<!-- /overnight-agent turn-end -->` stamp above) rather than inferring
+it, and `scan` treats everything past that stamp as the user speaking. On the next `scan`:
 - **`reopened: true`** means the user added content after your last turn (a new `## <date>` entry or
   raw text at the bottom) and you haven't answered it — **even if the task was `done`/`skip`.** Treat it
   as fresh input: read the newest message and act (approve→execute, new ask→re-plan). This is the rule
@@ -112,6 +132,9 @@ you last left it. On the next `scan`:
 - **`reopened: false` + `changed: false`** means you spoke last and nothing changed — leave it alone.
 - **`has_agent_block: false`** means there's no plan yet — a PHASE 2 propose candidate (subject to the
   board, below).
+- **`snoozed: true`** (+ `snooze_until`) means the user snoozed it and the date hasn't passed. **Skip it
+  entirely, in every phase** — no plan, no execution, no board/journal edit, even if status is
+  `approved`; report it only as *"skipped (snoozed until DATE)"*. Sole override: `reopened` beats it. (#391)
 
 You **do not** ask the user to tick a box or edit a marker. Approve / revise / skip are just things they
 **say** in plain English; you interpret intent (see "Reading the user's decision"). If `scan` and a
@@ -233,10 +256,33 @@ Do the phases **in this order** every time.
 
 > **Scan first (applies to PHASE 1 *and* PHASE 2):** before judging any task, run
 > `oa-state.ps1 scan` once and use its JSON as your worklist. Each row tells you what changed and
-> what's `reopened` (the user spoke after your last turn — active again, even if `done`/`skip`). Don't
+> what's `reopened` (the user spoke after your last turn — active again, even if `done`/`skip`) or
+> `snoozed` (skip it). Don't
 > reconstruct state by eyeballing 90+ journals; let the tool point you at the handful that need work.
 
 ### PHASE 0 — Check the agent inbox (do this before everything)
+
+**First, reap stale MCP servers.** Every scheduled run starts its own set of stdio MCP servers, and
+finished sessions don't always reap them. They pile up (~6 per run, 75–150 MB each) until the box runs
+out of memory and the *next* run's MCP servers die on startup — which silently breaks the inbox check
+below, so emailed instructions get dropped without anyone noticing. Run this first, every run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\reap-stale-mcp.ps1"
+```
+
+It prints one JSON line (`{scanned, matched, stale, killed, freedMB, …}`). It only ever kills a
+`node.exe` whose command line matches a known MCP server, that is **older than 20 minutes**, and that
+is not in this run's own process tree. Add `-DryRun` to preview. If it reports a non-zero `killed`,
+mention the count in the wrap-up; if the script itself fails, note it and carry on — a failed reap must
+never abort the run.
+
+⚠️ **The threshold is sized against this run's own servers, not against the run interval.** Because the
+reaper executes first, this run's servers are only 0–2 minutes old, so 20 minutes clears everything
+older while never touching them. The earlier 45-minute figure was chosen to sit "longer than the
+30-minute run interval, so the previous run is never touched" — but deliberately sparing the *previous*
+run's servers is precisely what let them accumulate, so that threshold was itself the leak (task #349).
+Don't raise it back on that reasoning.
 
 The user can leave you new instructions by emailing the agent account
 (`<agent-inbox@example.com>`, from `user-settings.md`). At the start of each run, read the inbox via the email MCP and fold any
@@ -324,6 +370,8 @@ If a linked journal is missing or empty, note it and proceed with what you have 
    `in-progress` whose next step is approved), **plus any `reopened` task whose newest user message is an
    approval** (e.g. "approve", "go ahead" appended at the bottom — interpret per "Reading the user's
    decision"). Use `oa-state.ps1 get -Id <ID>` if you need a task's full state.
+   **Also pick up any row with `due_poll: true`** — a time-triggered recurring check that's now due
+   (see "Polling"). Run its check, then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone`.
 2. For each, **execute the approved plan**:
 
    - First, **gather linked-task context** per "Gather linked-task context FIRST" above — read the
@@ -352,7 +400,10 @@ If a linked journal is missing or empty, note it and proceed with what you have 
      user can resolve (write the exact ask in **Needs from you**). `mark` re-snapshots the journal so the
      task goes quiet until the user replies again.
 
-3. Reflect completion on the board (see "Updating the planner board").
+3. **Do not move the row on the board.** Completing a task (moving its row to
+   `planner-completed.md`) is the **user's** action in the Focus Planner app — never the agent's.
+   Record `done` in agent state + the journal Run log only, and leave the board row in `planner.md`
+   for the user to complete (see "Updating the planner board").
 
 ### PHASE 1.5 — Spawn child tasks (when finishing a job needs work that isn't on the board)
 
@@ -398,9 +449,9 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
 
    Then branch:
    - **Already complete** → don't propose a plan. Set the block to `done` with a one-line Run log
-     noting how you determined it's complete ("user note says bought 2026-06-10"), and move the row
-     to `planner-completed.md` per "Updating the planner board". Surface it under **Already done** in
-     the wrap-up so the user can confirm.
+     noting how you determined it's complete ("user note says bought 2026-06-10"). **Do not move the
+     row to `planner-completed.md`** — leave it in `planner.md` for the user to complete in the app.
+     Surface it under **Already done** in the wrap-up so the user can confirm.
    - **Partially done / superseded** → propose only the *remaining* work, and say in the plan what's
      already handled and what you're skipping because of it.
    - **Genuinely not started** → propose normally.
@@ -495,11 +546,15 @@ Report back to the user a short summary:
 Be conservative with the board — it's the user's at-a-glance view.
 
 - While a task is in progress, **don't** rewrite its row; the journal holds the detail.
-- When an approved plan **completes the whole task**, move its row out of `planner.md` and into
-  `planner-completed.md`, marking it `✅` with the completion date, **matching the existing format**
-  in that file (e.g. `| 243 | ✅ | <title> | P0 | <date> |`). Keep the user's other rows untouched.
-- Do **not** reinterpret or churn the 🎯 status icons the user set (🟡/🔴/⚪/📖 etc.). Only change
-  status as part of a genuine completion move, and only for the task you actually finished.
+- **Never write to `planner-completed.md`, and never move or delete a row to mark it complete.**
+  Completion is the **user's** action in the Focus Planner app — the app is the only thing that moves a
+  row to the completed board. When the agent finishes an approved task's scope, it records `done` in its
+  own state (`oa-state.ps1 mark … -Status done`) + a journal Run log entry, and **leaves the board row
+  untouched in `planner.md`** for the user to complete. Any archive/close behavior that keys off the
+  completed board (e.g. Telegram topic archiving) then triggers only from the user's app-driven
+  completion.
+- Do **not** reinterpret or churn the 🎯 status icons the user set (🟡/🔴/⚪/📖 etc.), or otherwise
+  rewrite the user's rows.
 
 ## Reversibility — what you may do *while planning* vs. what needs approval
 
@@ -554,6 +609,17 @@ present the reversible draft and stop short of the committing action.
   task goes quiet. \*\*Mark handled instruction emails as read\*\* so you don't reprocess them.
 - **Stay in the user's space cleanly.** Never edit above the sentinel. Preserve the user's notes,
   links, and formatting. Write files as UTF-8.
+- **Write every journal turn through `write-turn.ps1`** (next to this skill), never by hand:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\write-turn.ps1 -Id <ID> -BodyFile <file.md>`.
+  Author the turn body with a **file tool** first, then pass the file. The script validates the body
+  and **refuses to write** if it finds any of the four corruption classes that have already destroyed
+  real content — a value eaten by PowerShell string interpolation (`~$150-275` → `~\-275`), a doubled
+  apostrophe from single-quote escaping (`don''t`), an H2 that is not 🌙-first (the Telegram bridge
+  anchors on `^##\s*🌙`, so any other H2 silently truncates the turn), and a stray
+  `<!-- from: overnight-agent -->` with no heading above it (severs the block and hides
+  **Needs from you**). It appends only, so it can never delete one of the user's replies, and it backs
+  the journal up first. Add `-Validate` to lint without writing. This is a **guard, not a guideline**:
+  each of these classes was documented in prose first and broken anyway.
 - **Ask narrowly, not broadly.** If you need something, put one precise question in \*\*Needs from
   you\*\* and set `blocked`; don't stall the whole run. You may also reply to the user's instruction
   email with that one question.
