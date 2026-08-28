@@ -3,6 +3,9 @@
 //
 //   node bin/telegram-bridge.js whoami       # verify the token / print bot info
 //   node bin/telegram-bridge.js baseline     # mark existing tasks already-seen (no posts)
+//   node bin/telegram-bridge.js rebaseline-turn-end
+//                                            # one-time: absorb the turn-end-stamp parse change
+//                                            # so already-delivered turns are not re-posted
 //   node bin/telegram-bridge.js sync-up      # post agent turns -> topics
 //   node bin/telegram-bridge.js sync-down    # fold replies -> journals
 //   node bin/telegram-bridge.js sync-archive # close topics for completed tasks (reopen reactivated)
@@ -74,6 +77,17 @@ async function main() {
       log(
         `baselined ${res.seen.length} task(s) as already-seen (no topics created); ` +
           `left ${res.skipped.length} already-tracked task(s) untouched`,
+      )
+      break
+    }
+    case 'rebaseline-turn-end': {
+      const { config, state, bridge } = await build()
+      const res = await bridge.rebaselineTurnEnd()
+      await saveState(config.stateDir, state)
+      log(
+        `re-baselined ${res.migrated.length} task(s) whose turn only changed by the ` +
+          `turn-end stamp (no posts sent); ${res.unchanged.length} unaffected, ` +
+          `${res.pending.length} left pending a genuine post`,
       )
       break
     }

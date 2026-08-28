@@ -8,6 +8,7 @@ import {
   journalFilename,
   hasAgentBlock,
   FROM_ME,
+  TURN_END,
 } from './journal.js'
 
 const JOURNAL = `# Task 42: Test task
@@ -111,5 +112,49 @@ describe('hasAgentBlock', () => {
   it('detects the sentinel', () => {
     expect(hasAgentBlock(JOURNAL)).toBe(true)
     expect(hasAgentBlock('# Task 1: x')).toBe(false)
+  })
+})
+
+describe('the turn-end stamp is a boundary, not content', () => {
+  // `oa-state.ps1 mark` appends this stamp AFTER the turn has been posted.
+  // Swallowing it into the body changed hashTurn() for an already-delivered
+  // turn (-> re-post) and rendered the raw comment into the user's message.
+  const stamped = `${JOURNAL}\n${TURN_END}\n`
+
+  it('stops the turn at the stamp', () => {
+    const turn = latestAgentTurn(stamped)
+    expect(turn).not.toContain('turn-end')
+    expect(turn).toContain('Done \u2014 shipped the thing.')
+  })
+
+  it('leaves the turn text byte-identical to the unstamped journal', () => {
+    // This is the property syncUp's dedupe depends on: stamping must be a no-op.
+    expect(latestAgentTurn(stamped)).toBe(latestAgentTurn(JOURNAL))
+  })
+
+  it('still ends the turn when the stamp is followed by a user reply', () => {
+    const withReply = `${stamped}\n## 2026-07-09\n\n${FROM_ME}\nthanks\n`
+    const turn = latestAgentTurn(withReply)
+    expect(turn).not.toContain('turn-end')
+    expect(turn).not.toContain('thanks')
+  })
+
+  it('does not treat a stamp mentioned inside prose as a boundary', () => {
+    // The parser matches the marker line-exactly; a quoted mention must not cut
+    // the turn short. (Same trap that produced a false positive on #267.)
+    const quoted = JOURNAL.replace(
+      'Done \u2014 shipped the thing.',
+      `Done. I write a \`${TURN_END}\` stamp at the end.\n\nstill in the turn`,
+    )
+    expect(latestAgentTurn(quoted)).toContain('still in the turn')
+  })
+
+  it('reproduces the legacy stamp-swallowing parse on request', () => {
+    // Used only by the rebaseline-turn-end migration, to recognise a turn that
+    // was already delivered under the old rule.
+    expect(latestAgentTurn(stamped, { includeTurnEnd: true })).toContain('turn-end')
+    expect(latestAgentTurn(stamped, { includeTurnEnd: true })).not.toBe(
+      latestAgentTurn(stamped),
+    )
   })
 })
