@@ -132,6 +132,9 @@ it, and `scan` treats everything past that stamp as the user speaking. On the ne
 - **`reopened: false` + `changed: false`** means you spoke last and nothing changed — leave it alone.
 - **`has_agent_block: false`** means there's no plan yet — a PHASE 2 propose candidate (subject to the
   board, below).
+- **`snoozed: true`** (+ `snooze_until`) means the user snoozed it and the date hasn't passed. **Skip it
+  entirely, in every phase** — no plan, no execution, no board/journal edit, even if status is
+  `approved`; report it only as *"skipped (snoozed until DATE)"*. Sole override: `reopened` beats it. (#391)
 
 You **do not** ask the user to tick a box or edit a marker. Approve / revise / skip are just things they
 **say** in plain English; you interpret intent (see "Reading the user's decision"). If `scan` and a
@@ -253,7 +256,8 @@ Do the phases **in this order** every time.
 
 > **Scan first (applies to PHASE 1 *and* PHASE 2):** before judging any task, run
 > `oa-state.ps1 scan` once and use its JSON as your worklist. Each row tells you what changed and
-> what's `reopened` (the user spoke after your last turn — active again, even if `done`/`skip`). Don't
+> what's `reopened` (the user spoke after your last turn — active again, even if `done`/`skip`) or
+> `snoozed` (skip it). Don't
 > reconstruct state by eyeballing 90+ journals; let the tool point you at the handful that need work.
 
 ### PHASE 0 — Check the agent inbox (do this before everything)
