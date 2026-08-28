@@ -33,6 +33,21 @@ import { parseReplyRouting, coalesceByTask } from './routeReply.js'
 
 const TELEGRAM_MAX = 4096
 
+// A turn longer than one message is SPLIT rather than truncated (see
+// `formatForTelegramParts`). Cap the split so a very long turn can't carpet-bomb
+// the phone with messages; past this we trim the middle and keep the ask.
+const MAX_PARTS = 3
+
+// Room to reserve in the header for the " (2/3)" part counter, so the budget we
+// chunk against is still right once the counter is added.
+const PART_COUNTER_RESERVE = 12
+
+// The trailing block an agent turn ends with — the part the reader is actually
+// supposed to act on. `Needs from you:` / `Your call:` come from the SKILL.md
+// block template; `Next:` is the weaker fallback used by Run log entries.
+const ASK_STRONG_RE = /^\s*\*{0,2}\s*(?:Needs from you|Your call)\b/i
+const ASK_WEAK_RE = /^\s*\*{0,2}\s*Next\b/i
+
 // Block statuses that are finished as far as the user is concerned. A task in
 // one of these must never be pulled back into the approval queue by the
 // agent-block fallback in syncDigest().
@@ -42,51 +57,150 @@ export function hashTurn(text) {
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }
 
-// Truncate markdown at a line boundary so conversion never cuts through an
-// inline `**...**`/`` `...` `` pair (those don't span lines in our converter),
-// keeping the resulting HTML tag-balanced.
-function truncateMarkdown(md, budget) {
-  if (md.length <= budget) return md
-  const cut = md.slice(0, budget)
-  const nl = cut.lastIndexOf('\n')
-  const base = nl > 0 ? cut.slice(0, nl) : cut
-  return `${base}\n\u2026`
+// Split a turn into [body, ask], where `ask` is the trailing ask block.
+//
+// Anchored on the LAST strong marker rather than the first, because `Next:`
+// (and occasionally `Needs from you:`) also appear inside earlier Run log
+// entries — anchoring on the first would classify most of the turn as "the ask"
+// and defeat the point. When both strong markers are present we start at the
+// earlier of the two final pair so `Needs from you:` and `Your call:` travel
+// together. Returns `ask === ''` when the turn has no ask at all.
+export function splitAsk(turn) {
+  const text = String(turn == null ? '' : turn)
+  const lines = text.split('\n')
+  let lastNeeds = -1
+  let lastCall = -1
+  let lastWeak = -1
+  for (let i = 0; i < lines.length; i++) {
+    if (ASK_STRONG_RE.test(lines[i])) {
+      if (/needs from you/i.test(lines[i])) lastNeeds = i
+      else lastCall = i
+    } else if (ASK_WEAK_RE.test(lines[i])) lastWeak = i
+  }
+
+  let start = -1
+  if (lastNeeds >= 0 && lastCall >= 0) start = Math.min(lastNeeds, lastCall)
+  else if (lastNeeds >= 0) start = lastNeeds
+  else if (lastCall >= 0) start = lastCall
+  else start = lastWeak
+
+  if (start < 0) return { body: text, ask: '' }
+  return {
+    body: lines.slice(0, start).join('\n').replace(/\s+$/, ''),
+    ask: lines.slice(start).join('\n').trim(),
+  }
 }
 
-// Build the HTML message: a bold task header + the agent turn rendered as
-// Telegram HTML, always tag-balanced.
+// Greedily pack whole markdown lines into chunks whose CONVERTED HTML fits
+// `room`. Converting per chunk is what keeps each one tag-balanced:
+// `mdToTelegramHtml` is line-based and closes <pre>/<blockquote> itself, so a
+// chunk boundary can never fall inside a tag.
 //
-// The 400-char allowance below used to be the ONLY guard, followed by a raw
-// `msg.slice(...)` if the result still overflowed. That slice is the bug: it cuts
-// the generated HTML at an arbitrary character, which lands inside a tag, and
-// Telegram then rejects the whole message with
-//   `Bad Request: can't parse entities: Can't find end tag corresponding to start tag "b"`
-// so the send falls back to plain text and the turn loses ALL formatting.
+// A single line longer than `room` on its own is a degenerate case (a giant
+// table row); it gets hard-trimmed rather than looping forever.
+function chunkMarkdown(md, room) {
+  const lines = String(md).split('\n')
+  const chunks = []
+  let current = []
+
+  const htmlLen = (arr) => mdToTelegramHtml(arr.join('\n')).length
+
+  for (const line of lines) {
+    if (current.length === 0) {
+      // A lone over-long line can't be packed with anything; shrink it directly.
+      if (htmlLen([line]) > room) {
+        let cut = line
+        while (cut.length > 0 && mdToTelegramHtml(cut).length > room) {
+          cut = cut.slice(0, Math.max(0, Math.floor(cut.length * 0.9) - 1))
+        }
+        chunks.push(cut)
+        continue
+      }
+      current.push(line)
+      continue
+    }
+    if (htmlLen([...current, line]) > room) {
+      chunks.push(current.join('\n'))
+      current = []
+      if (htmlLen([line]) > room) {
+        let cut = line
+        while (cut.length > 0 && mdToTelegramHtml(cut).length > room) {
+          cut = cut.slice(0, Math.max(0, Math.floor(cut.length * 0.9) - 1))
+        }
+        chunks.push(cut)
+        continue
+      }
+      current.push(line)
+      continue
+    }
+    current.push(line)
+  }
+  if (current.length) chunks.push(current.join('\n'))
+  return chunks.filter((c) => c.trim() !== '')
+}
+
+// Build the message(s) for one agent turn: a bold task header + the turn
+// rendered as Telegram HTML, always tag-balanced, and NEVER missing the ask.
 //
-// It fires whenever tag expansion exceeds the fixed allowance, which dense agent
-// turns do routinely: a real #448 turn expanded by 545 chars (bodyHtml 4147,
-// msg 4241) and was cut mid-`<b>0 reopened, 0 approved</b>`.
+// History, because two separate bugs lived here:
 //
-// Fix: shrink the MARKDOWN and re-convert until the HTML fits. Truncation then
-// always happens at a line boundary, where `mdToTelegramHtml` guarantees balance,
-// so we never hand Telegram a severed tag.
-function formatForTelegram(taskId, title, turn) {
-  const header = title
+// 1. A raw `msg.slice(...)` used to cut the generated HTML at an arbitrary
+//    character, landing inside a tag. Telegram rejected the whole message
+//    (`can't parse entities: Can't find end tag corresponding to start tag "b"`)
+//    and the send silently downgraded to plain text, losing ALL formatting.
+//    Fixed by only ever cutting markdown at a LINE boundary, where
+//    `mdToTelegramHtml` guarantees balance.
+//
+// 2. That fix still kept a PREFIX of the turn — and an agent turn puts its ask
+//    (`Needs from you:` / `Your call:`) at the END. So on any turn over the cap,
+//    the one part the reader is supposed to act on was exactly the part thrown
+//    away. Measured across 239 live journals: 55 turns truncated, 33 of them
+//    with the ask silently deleted. On the surface he actually reads, those
+//    tasks looked like commentary rather than a question. (GH #210.)
+//
+// So: SPLIT instead of truncate. The turn is chunked at line boundaries into up
+// to MAX_PARTS messages posted in order to the same topic. If it still doesn't
+// fit, the body is trimmed — but the ask is carried onto the final part with an
+// explicit "trimmed" marker, so an ask is never silently dropped.
+export function formatForTelegramParts(taskId, title, turn) {
+  const base = title
     ? `\u{1F4CB} Task #${taskId} \u2014 ${title}`
     : `\u{1F4CB} Task #${taskId}`
-  const headerHtml = `<b>${escapeHtml(header)}</b>`
-  const room = Math.max(0, TELEGRAM_MAX - headerHtml.length - 2)
+  const headerFor = (part, total) =>
+    `<b>${escapeHtml(total > 1 ? `${base} (${part}/${total})` : base)}</b>`
 
-  let budget = Math.max(0, room - 400)
-  let bodyHtml = mdToTelegramHtml(truncateMarkdown(turn, budget))
-  // Converge on a markdown budget whose HTML fits. Each pass shrinks the budget by
-  // at least 128 chars, so this terminates regardless of the expansion ratio.
-  while (bodyHtml.length > room && budget > 0) {
-    const scaled = Math.floor((budget * room) / bodyHtml.length)
-    budget = Math.max(0, Math.min(budget - 128, scaled))
-    bodyHtml = mdToTelegramHtml(truncateMarkdown(turn, budget))
+  // Budget for a single-message post.
+  const roomOne = Math.max(0, TELEGRAM_MAX - headerFor(1, 1).length - 2)
+  const wholeHtml = mdToTelegramHtml(turn)
+  if (wholeHtml.length <= roomOne) return [`${headerFor(1, 1)}\n\n${wholeHtml}`]
+
+  // Multi-part: the header now carries a counter, so budget against that.
+  const room = Math.max(0, TELEGRAM_MAX - headerFor(1, 1).length - PART_COUNTER_RESERVE - 2)
+  const { body, ask } = splitAsk(turn)
+
+  let chunks = chunkMarkdown(turn, room)
+
+  if (chunks.length > MAX_PARTS) {
+    // Too long even when split. Give the ask the LAST parts and the body what is
+    // left, so the thing the reader must act on always arrives.
+    //
+    // Subtlety worth keeping: the ask block itself can exceed one message (a turn
+    // whose ask is a checklist — #272's is 7.8k chars). Keep the ask's OPENING
+    // chunks, not its closing ones: `**Needs from you:**` is the first line of
+    // the block, so trimming from the front deletes the very marker that makes it
+    // an ask. A first cut of this did exactly that and still lost #272 and #437.
+    const trimmedNote = '\u2702\ufe0f *Trimmed for Telegram \u2014 full text is in the journal.*'
+    const askChunks = ask
+      ? chunkMarkdown(`${trimmedNote}\n\n${ask}`, room)
+      : [trimmedNote]
+    // Always leave at least one part for the body.
+    const askKeep = askChunks.slice(0, Math.max(1, Math.min(askChunks.length, MAX_PARTS - 1)))
+    const headKeep = chunkMarkdown(body, room).slice(0, Math.max(0, MAX_PARTS - askKeep.length))
+    chunks = [...headKeep, ...askKeep]
   }
-  return `${headerHtml}\n\n${bodyHtml}`
+
+  const total = chunks.length
+  return chunks.map((c, i) => `${headerFor(i + 1, total)}\n\n${mdToTelegramHtml(c)}`)
 }
 
 // Plain-text fallback (no parse_mode) for the rare case Telegram rejects our
@@ -211,22 +325,33 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
         await io.writeJournal(taskId, withMeta)
       }
 
-      try {
-        await client.sendMessage({
-          chatId,
-          text: formatForTelegram(taskId, title, turn),
-          messageThreadId: topicId,
-          parseMode: 'HTML',
-        })
-      } catch (err) {
-        // If Telegram rejects our HTML (e.g. an unexpected entity), don't lose
-        // the update — resend the same turn as plain text.
-        logger(`HTML send failed for task #${taskId} (${err.message}); retrying as plain text`)
-        await client.sendMessage({
-          chatId,
-          text: formatPlain(taskId, title, turn),
-          messageThreadId: topicId,
-        })
+      // Post the turn as one message, or as an ordered run of parts when it is
+      // too long for one. `setLastPosted` runs only after the whole run is sent,
+      // so a mid-run failure retries the turn rather than recording it as done;
+      // and the plain-text fallback is per-part, so one rejected part never
+      // costs the rest of the turn.
+      const parts = formatForTelegramParts(taskId, title, turn)
+      for (const [index, text] of parts.entries()) {
+        try {
+          await client.sendMessage({
+            chatId,
+            text,
+            messageThreadId: topicId,
+            parseMode: 'HTML',
+          })
+        } catch (err) {
+          // If Telegram rejects our HTML (e.g. an unexpected entity), don't lose
+          // the update — resend the same content as plain text.
+          logger(
+            `HTML send failed for task #${taskId} part ${index + 1}/${parts.length} ` +
+              `(${err.message}); retrying as plain text`,
+          )
+          await client.sendMessage({
+            chatId,
+            text: formatPlain(taskId, parts.length > 1 ? `${title} (${index + 1}/${parts.length})` : title, turn),
+            messageThreadId: topicId,
+          })
+        }
       }
       setLastPosted(state, taskId, hash)
       // Consume the engagement: the user's message has now been answered. A
@@ -234,7 +359,10 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       // goes quiet again, instead of the flag latching it permanently open.
       if (task && task.userEngaged) setUserEngaged(state, taskId, false)
       posted.push(taskId)
-      logger(`posted task #${taskId} to topic ${topicId}`)
+      logger(
+        `posted task #${taskId} to topic ${topicId}` +
+          (parts.length > 1 ? ` in ${parts.length} parts` : ''),
+      )
     }
 
     return { posted, created, suppressed }

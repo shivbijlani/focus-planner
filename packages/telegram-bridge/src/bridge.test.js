@@ -1024,14 +1024,17 @@ ${denseTurn}
 
     await bridge.syncUp()
 
-    expect(h.sent).toHaveLength(1)
-    const { text } = h.sent[0]
-    expect(text.length).toBeLessThanOrEqual(4096)
-    expect(firstNestingError(text)).toBeNull()
-    // It must still be a real HTML message, not silently degraded to plain text.
-    expect(text).toContain('<b>')
-    // And it must not end mid-tag.
-    expect(text).not.toMatch(/<[^>]*$/)
+    // A turn this long is now SPLIT rather than truncated (#210), so assert the
+    // tag-balance guarantee on EVERY part, not just the first.
+    expect(h.sent.length).toBeGreaterThanOrEqual(1)
+    for (const { text } of h.sent) {
+      expect(text.length).toBeLessThanOrEqual(4096)
+      expect(firstNestingError(text)).toBeNull()
+      // It must still be a real HTML message, not silently degraded to plain text.
+      expect(text).toContain('<b>')
+      // And it must not end mid-tag.
+      expect(text).not.toMatch(/<[^>]*$/)
+    }
   })
 
   it('still posts short turns whole and unpadded', async () => {
@@ -1045,6 +1048,115 @@ ${denseTurn}
     expect(text).toContain('do the thing')
     expect(text).not.toContain('\u2026')
     expect(firstNestingError(text)).toBeNull()
+  })
+})
+
+// GH #210: a turn over the 4096 cap used to be TRUNCATED to a prefix. Because an
+// agent turn puts its ask at the END, truncation deleted exactly the part the
+// reader is supposed to act on. Measured across 239 live journals: 55 turns
+// truncated, 33 of them with the ask silently removed.
+describe('long turns keep their ask (#210)', () => {
+  const ASK = '**Needs from you:** one word — `merge 198` to ship the journal-reply fix.'
+  const CALL = '**Your call:** reply below in plain English.'
+
+  // ~7.5k chars of body, then the ask in the final ~200 chars — the exact shape
+  // of the live victims (#437, #432, #462...).
+  function longJournal(taskId, bodyLines = 90) {
+    const body = Array.from(
+      { length: bodyLines },
+      (_, i) => `- **finding ${i}** about \`thing ${i}\` with a reasonably long trailing clause here`,
+    ).join('\n')
+    return `# Task ${taskId}: Long turn
+
+---
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+## \u{1F319} Overnight Agent
+
+**Status:** Proposed \u00B7 plan v1 \u00B7 2026-08-27
+
+${body}
+
+${ASK}
+
+${CALL}
+`
+  }
+
+  async function send(journal, taskId = '55') {
+    const h = makeHarness({ [taskId]: journal })
+    const bridge = createBridge({
+      client: h.client,
+      config: h.config,
+      state: emptyState(),
+      io: h.io,
+    })
+    await bridge.syncUp()
+    return h
+  }
+
+  it('delivers the ask even when the turn is far longer than one message', async () => {
+    const h = await send(longJournal(55))
+
+    // It must have been split, not squeezed into one truncated message.
+    expect(h.sent.length).toBeGreaterThan(1)
+
+    const all = h.sent.map((m) => m.text).join('\n')
+    // THE regression: before the fix this assertion fails — the ask was the part
+    // thrown away.
+    expect(all).toContain('Needs from you')
+    expect(all).toContain('merge 198')
+    expect(all).toContain('Your call')
+  })
+
+  it('keeps every part within the cap, balanced, and in the same topic', async () => {
+    const h = await send(longJournal(55))
+
+    for (const m of h.sent) {
+      expect(m.text.length).toBeLessThanOrEqual(4096)
+      expect(m.parseMode).toBe('HTML')
+      expect(m.messageThreadId).toBe(1)
+      expect(m.text).not.toMatch(/<[^>]*$/)
+    }
+    // Parts are numbered so the reader can tell there is more than one.
+    expect(h.sent[0].text).toContain('(1/')
+  })
+
+  it('keeps the ask even on a turn too long to send in full, and marks it trimmed', async () => {
+    // 400 lines blows past MAX_PARTS, so the body must be trimmed — but the ask
+    // still has to arrive.
+    const h = await send(longJournal(56, 400), '56')
+
+    const all = h.sent.map((m) => m.text).join('\n')
+    expect(all).toContain('Needs from you')
+    expect(all).toContain('merge 198')
+    // The reader is told text was left behind rather than being shown a message
+    // that just stops mid-sentence.
+    expect(all).toContain('Trimmed for Telegram')
+    // And the volume stays bounded.
+    expect(h.sent.length).toBeLessThanOrEqual(3)
+  })
+
+  it('does not repost a split turn on a second run (dedupe covers the whole turn)', async () => {
+    const journal = longJournal(55)
+    const h = makeHarness({ 55: journal })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    const firstCount = h.sent.length
+    expect(firstCount).toBeGreaterThan(1)
+
+    const second = await bridge.syncUp()
+    expect(second.posted).toEqual([])
+    expect(h.sent).toHaveLength(firstCount)
+    expect(h.created).toHaveLength(1)
+  })
+
+  it('a short turn is still a single message (no gratuitous splitting)', async () => {
+    const h = await send(AGENT_JOURNAL, '42')
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).not.toContain('(1/')
   })
 })
 
