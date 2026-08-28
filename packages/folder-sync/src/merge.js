@@ -19,8 +19,46 @@
 // A record present in `records` but missing from `meta` is treated as a
 // legacy/external write with clock 0 (loses to any explicit clock). Callers
 // should stamp a real clock via stampWrite when importing external edits.
+//
+// That fallback 0 is an *implicit* sentinel meaning "we have no record of when
+// this was written", and it is only meant to lose ties **during one merge**. It
+// must never be frozen into the sidecar as the row's durable clock — see
+// `normalizeZeroClock` on mergeCollections. An *explicit* `{clock: 0}` in meta
+// is a different thing: a deliberate "this side is weak" stamp (records.js does
+// this for a remote that has content but no sidecar yet), and is preserved.
+
+import { diag, isDiagEnabled } from '../../diagnostics/src/index.js'
 
 const SIDECAR_VERSION = 1
+
+// #371 collapse guard: the minimum number of alive meta rows that must be about
+// to be tombstoned in one pass — while the parsed record set is empty — for us
+// to treat it as a failed/empty load rather than a genuine full-board delete.
+const COLLAPSE_MIN_ALIVE = 2
+
+/**
+ * A "collapse" is the signature of a failed or empty load, NOT a user clearing
+ * their board: the parsed `records` came back empty while `meta` still holds
+ * COLLAPSE_MIN_ALIVE+ alive rows. This is exactly what the #113 IndexedDB switch
+ * triggered — a device read an empty store (`records = {}`), and the delete
+ * loops below then stamped every alive row deleted at one fresh clock, making
+ * the empty state win the last-write-wins merge and wipe the board on every
+ * device (#371). A real person deleting their whole board to zero is vanishingly
+ * rare next to a load failure, and is trivially recoverable, so we bias hard
+ * toward preserving data: when a collapse is detected, callers skip the
+ * delete-stamping pass and leave the alive rows intact.
+ *
+ * A single-row delete-to-empty (alive count 1) is left unguarded so ordinary
+ * "removed my last row" edits still tombstone normally.
+ */
+export function isCollapse(records, meta, minAlive = COLLAPSE_MIN_ALIVE) {
+  if (Object.keys(records).length > 0) return false
+  let alive = 0
+  for (const id of Object.keys(meta)) {
+    if (!meta[id].deleted && ++alive >= minAlive) return true
+  }
+  return false
+}
 
 function serialize(content) {
   if (typeof content === 'string') return content
@@ -59,7 +97,9 @@ function sideEntry(snapshot, id) {
     }
   }
   // Record exists with no meta — legacy/external write, oldest possible clock.
-  return { present: true, clock: 0, deleted: false, content: snapshot.records[id] }
+  // `implicitClock` marks this 0 as a *derived* sentinel rather than a value
+  // anyone actually stamped, so mergeCollections can avoid persisting it.
+  return { present: true, clock: 0, implicitClock: true, deleted: false, content: snapshot.records[id] }
 }
 
 // Pick the winning entry between two normalized sides. Deterministic and
@@ -82,16 +122,66 @@ function pickWinner(a, b) {
   return sa > sb ? a : b
 }
 
+function summarizeEntry(entry) {
+  if (!entry.present) return { present: false }
+  const out = {
+    present: true,
+    clock: entry.clock ?? 0,
+    deleted: !!entry.deleted,
+  }
+  const fp = entry.fp ?? (!entry.deleted && entry.content !== undefined ? fingerprint(entry.content) : undefined)
+  if (fp !== undefined) out.fp = fp
+  return out
+}
+
+function mergeDecisionReason(a, b) {
+  if (!a.present) return 'remote-only'
+  if (!b.present) return 'local-only'
+  if (a.clock !== b.clock) return 'last-write-wins'
+  if (a.deleted !== b.deleted) return 'delete-beats-live'
+  if (a.deleted && b.deleted) return 'matching-tombstones'
+  const sa = serialize(a.content)
+  const sb = serialize(b.content)
+  return sa === sb ? 'same-content' : 'content-tiebreak'
+}
+
+function logMergeDecision(id, localEntry, remoteEntry, winner) {
+  if (!isDiagEnabled()) return
+  const winnerSide = winner === localEntry ? 'local' : 'remote'
+  const droppedSide = localEntry.present && remoteEntry.present
+    ? (winnerSide === 'local' ? 'remote' : 'local')
+    : null
+  const reason = mergeDecisionReason(localEntry, remoteEntry)
+  // Identical rows/tombstones are the overwhelmingly common case. The
+  // collection summary records their count; reserve per-record events for
+  // decisions that actually explain a conflict or change.
+  if (reason === 'same-content' || reason === 'matching-tombstones') return
+  diag('folder-sync.merge', 'record-decision', {
+    id,
+    reason,
+    winner: winner.present ? winnerSide : null,
+    dropped: droppedSide,
+    droppedOnLww: reason === 'last-write-wins' ? droppedSide : null,
+    local: summarizeEntry(localEntry),
+    remote: summarizeEntry(remoteEntry),
+  })
+}
+
 /**
  * Merge two collection snapshots with per-record LWW + tombstones.
  *
  * @param {object} local  - { records, meta }
  * @param {object} remote - { records, meta }
+ * @param {object} [opts]
+ * @param {number} [opts.now] - clock used when normalizing an implicit zero (see below).
+ * @param {boolean} [opts.normalizeZeroClock=true] - set false to restore the pre-fix
+ *   behaviour of persisting the winner's clock verbatim.
  * @returns {{ records, meta, localChanged, remoteChanged }}
  *   merged snapshot plus flags indicating whether the local store and/or the
  *   remote need to be rewritten with the merged result.
  */
-export function mergeCollections(local = {}, remote = {}) {
+export function mergeCollections(local = {}, remote = {}, opts = {}) {
+  const { now = Date.now(), normalizeZeroClock = true } = opts
   const localSnap = { records: local.records ?? {}, meta: local.meta ?? {} }
   const remoteSnap = { records: remote.records ?? {}, meta: remote.meta ?? {} }
 
@@ -104,24 +194,60 @@ export function mergeCollections(local = {}, remote = {}) {
   const mergedMeta = {}
 
   for (const id of ids) {
-    const winner = pickWinner(sideEntry(localSnap, id), sideEntry(remoteSnap, id))
+    const localEntry = sideEntry(localSnap, id)
+    const remoteEntry = sideEntry(remoteSnap, id)
+    const winner = pickWinner(localEntry, remoteEntry)
+    logMergeDecision(id, localEntry, remoteEntry, winner)
     if (!winner.present) continue
     if (winner.deleted) {
       mergedMeta[id] = winner.fp !== undefined
         ? { clock: winner.clock, deleted: true, fp: winner.fp }
         : { clock: winner.clock, deleted: true }
     } else {
-      mergedMeta[id] = { clock: winner.clock, deleted: false }
+      // Zero-clock freeze (#280): `sideEntry` hands an unmetaed record an
+      // implicit clock 0 meaning "we have no record of when this was written",
+      // purely so it loses ties in THIS merge. Persisting that sentinel made it
+      // the row's permanent clock, and merge.js's own rule is that clock 0
+      // "loses to any explicit clock" — so the row was primed to lose every
+      // future merge and get dropped or double-listed by any stale replica.
+      // Measured on the live boards 2026-08-26: 14 alive rows stuck at clock 0
+      // (5 of 122 active, 9 of 53 completed) and 0 of 353 tombstones — exactly
+      // the alive-only shape this branch produces.
+      //
+      // The comparison above has already happened, so giving the winner a real
+      // clock here cannot change THIS merge's outcome; it only stops the
+      // sentinel becoming durable state. Deliberately narrow:
+      //   - alive winners only — tombstones keep their clock, so a legacy
+      //     clock-0 tombstone can never be strengthened into a resurrection;
+      //   - *implicit* zeros only — an explicitly stamped `{clock: 0}` (what
+      //     records.js writes for a remote that has content but no sidecar) is a
+      //     deliberate "this side is weak" signal and is left alone.
+      // This also just restores symmetry: the local side never reaches here,
+      // because stampLocalChanges already gives unmetaed local records `now`.
+      const clock = normalizeZeroClock && winner.implicitClock && winner.clock === 0
+        ? now
+        : winner.clock
+      mergedMeta[id] = { clock, deleted: false }
       mergedRecords[id] = winner.content
     }
   }
 
-  return {
+  const result = {
     records: mergedRecords,
     meta: mergedMeta,
     localChanged: !snapshotEqual(localSnap, { records: mergedRecords, meta: mergedMeta }),
     remoteChanged: !snapshotEqual(remoteSnap, { records: mergedRecords, meta: mergedMeta }),
   }
+  if (isDiagEnabled()) {
+    diag('folder-sync.merge', 'collections-merged', {
+      ids: ids.size,
+      records: Object.keys(result.records).length,
+      tombstones: Object.values(result.meta).filter((m) => m?.deleted).length,
+      localChanged: result.localChanged,
+      remoteChanged: result.remoteChanged,
+    })
+  }
+  return result
 }
 
 // Two snapshots are equal if their alive records and their meta (clock+deleted)
@@ -174,10 +300,13 @@ export function stampDelete(meta, id, clock = Date.now()) {
  * Note: this only detects adds and deletes. Prefer `stampLocalChanges`, which
  * also detects in-place content edits via a stored fingerprint.
  */
-export function reconcileExternal(records, meta, clock = Date.now()) {
+export function reconcileExternal(records, meta, clock = Date.now(), opts = {}) {
   for (const id of Object.keys(records)) {
     if (!meta[id] || meta[id].deleted) meta[id] = { clock, deleted: false }
   }
+  // #371: don't tombstone everything when the record set collapsed to empty —
+  // that's a failed/empty load, not a full-board delete. Preserve the alive rows.
+  if (opts.guardCollapse !== false && isCollapse(records, meta)) return meta
   for (const id of Object.keys(meta)) {
     if (!meta[id].deleted && !(id in records)) meta[id] = { clock, deleted: true }
   }
@@ -211,7 +340,7 @@ export function fingerprint(content) {
  * as a stale-file ghost: the tombstone is kept so the merge strips the row.
  * Deletes preserve the last-known fingerprint so this comparison is possible.
  */
-export function stampLocalChanges(records, meta, clock = Date.now()) {
+export function stampLocalChanges(records, meta, clock = Date.now(), opts = {}) {
   for (const id of Object.keys(records)) {
     const fp = fingerprint(records[id])
     const m = meta[id]
@@ -231,6 +360,11 @@ export function stampLocalChanges(records, meta, clock = Date.now()) {
       meta[id] = { clock, deleted: false, fp }
     }
   }
+  // #371: when the parsed records collapsed to empty while meta still holds many
+  // alive rows, this is a load failure (e.g. empty IndexedDB after the #113
+  // migration), not the user deleting their whole board. Skip the delete pass so
+  // we don't tombstone the entire board and lose it across every device.
+  if (opts.guardCollapse !== false && isCollapse(records, meta)) return meta
   for (const id of Object.keys(meta)) {
     if (!meta[id].deleted && !(id in records)) {
       // Tombstone the removed row, keeping its fingerprint so a later stale-file

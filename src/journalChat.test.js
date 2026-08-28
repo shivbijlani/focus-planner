@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseJournalChat, appendJournalMessage } from './journalChat.js'
+import { parseJournalChat, appendJournalMessage, formatCloseOutComment } from './journalChat.js'
 
 // Simplified excerpt mirroring the real journal/task-254.md structure:
 // title, an undated TODO, a thematic break, an AUTO agent marker, agent
@@ -140,5 +140,27 @@ describe('agent sentinel detection (parse)', () => {
     expect(meReply).toBeTruthy()
     // The user's reply must NOT be lumped into the agent bubble.
     expect(agent.lines.join('\n')).not.toContain('My reply below')
+  })
+})
+
+describe('formatCloseOutComment', () => {
+  it('formats both an outcome and a comment', () => {
+    expect(formatCloseOutComment('Canceled', 'Client pulled the project.')).toBe(
+      '**Outcome:** Canceled\n\nClient pulled the project.',
+    )
+  })
+
+  it('formats an outcome only', () => {
+    expect(formatCloseOutComment('Done by me', '')).toBe('**Outcome:** Done by me')
+  })
+
+  it('formats a comment only', () => {
+    expect(formatCloseOutComment('', 'Wrapped it up quickly.')).toBe('Wrapped it up quickly.')
+  })
+
+  it('returns an empty string when neither is provided', () => {
+    expect(formatCloseOutComment('', '')).toBe('')
+    expect(formatCloseOutComment('   ', '  ')).toBe('')
+    expect(formatCloseOutComment(undefined, undefined)).toBe('')
   })
 })

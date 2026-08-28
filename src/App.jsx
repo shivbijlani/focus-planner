@@ -4,7 +4,8 @@ import './App.css'
 import './mobile-board.css'
 import * as storage from './storage/storage.js'
 import { setActiveProvider, getActiveProvider, PROVIDERS, TARGET_STATUS, getProviderName } from './storage/storage.js'
-import { LocalStorageProvider } from './storage/localstorage-provider.js'
+import { IndexedDbProvider } from './storage/indexeddb-provider.js'
+import { makeSyncStatusCoalescer } from './storage/syncStatusCoalesce.js'
 import { resumePendingMigration, hasPendingMigration, makeProvider } from './storage/migrate.js'
 import {
   loadSources, migrateLegacy, getSources, getActiveSourceId, getActiveSource, setActiveSource,
@@ -19,7 +20,7 @@ import { tagMergedRows, resolveRowSourceId } from './combinedRouting.js'
 import { selfHealOutlierIds } from './selfHealIds.js'
 import { recordDeletedId, getActiveTombstoneIds } from './idTombstones.js'
 import { scrollToAndFlashTask } from './scrollToTask.js'
-import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery, boardSearchPlaceholder } from './boardSearch.js'
+import { filterRowsAndRawLines, normalizeQuery, boardSearchPlaceholder } from './boardSearch.js'
 import {
   addDaysToDateString,
   formatSnoozeDate,
@@ -31,11 +32,25 @@ import {
 } from './snooze.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
+import SkillsSection from './SkillsSection.jsx'
+import { parseSkillsSection, hasRenderableSkills } from './skillsSection.js'
+import { patchPerSourceContent } from './combinedViewPatch.js'
 import * as ops from './focusPlanOps.js'
+import { deleteJournalForTask } from './journalDelete.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
-import { parseJournalChat, formatChatDay, appendJournalMessage } from './journalChat.js'
+import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment } from './journalChat.js'
 import * as readStateService from './readState/readStateService.js'
+import { enqueueJournalLoad, waitForInitialJournalLoads } from './journalLoadQueue.js'
+import { createJournalInSource } from './journalCreate.js'
+import {
+  JOURNAL_EXISTENCE,
+  canCreateJournal,
+  journalStateFromError,
+  journalStateFromResult,
+} from './journalLoadState.js'
+import { sameFileTree } from './fileTreeEqual.js'
+import { joinSourcePath, journalReadStateId } from './sourcePath.js'
 import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
 import { SETTINGS_FILE } from './storage/settings.js'
 import { AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE } from './config/aiSettings.js'
@@ -50,6 +65,11 @@ import {
   InstallButton, InstallModal, InstallNudge,
   InstallSettingsSection, InstallSuccessToast,
 } from '../packages/install-prompt/src/index.js'
+import {
+  disableDiagnostics,
+  enableDiagnostics,
+  isDiagEnabled,
+} from '../packages/diagnostics/src/index.js'
 import '../packages/install-prompt/src/styles/install-prompt.css'
 
 // ── Multi-source path helpers ───────────────────────────────────────
@@ -65,10 +85,6 @@ function splitSourcePath(qualified) {
   const idx = qualified.indexOf('::')
   if (idx === -1) return { sourceId: null, path: qualified }
   return { sourceId: qualified.slice(0, idx), path: qualified.slice(idx + 2) }
-}
-
-function joinSourcePath(sourceId, path) {
-  return sourceId ? `${sourceId}::${path}` : path
 }
 
 function prefixTreePaths(items, sourceId) {
@@ -505,6 +521,63 @@ function LinkBridgeDialog({ incomingLinks, removedTaskName, nextTaskId, nextTask
           <button className="dialog-save-btn" onClick={onConfirm}>
             {nextTaskId ? 'Bridge Links' : 'Remove Links & Continue'}
           </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Fixed set of close-out outcomes offered when completing a task. Kept short so
+// completion stays fast; free-text notes cover anything not listed here.
+const CLOSE_OUT_OUTCOMES = ['Done by me', 'Canceled', 'Done by someone else', 'No longer needed', 'Other']
+
+// Shown when a task is moved to Completed. Lets the user optionally record how
+// the task ended (outcome) and a closing comment, both of which are written to
+// the task journal. Completion stays one action away: "Skip & Complete" (or
+// Cmd/Ctrl+Enter) finishes immediately with no notes.
+function CloseOutDialog({ taskName, onClose, onConfirm }) {
+  const [outcome, setOutcome] = useState('')
+  const [comment, setComment] = useState('')
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault()
+      onConfirm(outcome, comment)
+    }
+  }
+  return (
+    <div className="dialog-overlay" onClick={onClose}>
+      <div className="dialog closeout-dialog" onClick={e => e.stopPropagation()}>
+        <h3>✅ Complete &ldquo;{taskName}&rdquo;</h3>
+        <p className="dialog-hint">
+          Optionally capture how this ended and any closing notes — handy later for
+          reviews &amp; postmortems. Both are optional.
+        </p>
+        <label className="closeout-label">
+          Outcome
+          <select
+            className="closeout-select"
+            value={outcome}
+            onChange={e => setOutcome(e.target.value)}
+            autoFocus
+          >
+            <option value="">— none —</option>
+            {CLOSE_OUT_OUTCOMES.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </label>
+        <label className="closeout-label">
+          Closing comment
+          <textarea
+            className="closeout-textarea"
+            rows={4}
+            value={comment}
+            onChange={e => setComment(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="What was the result? Why? Anything worth remembering…"
+          />
+        </label>
+        <div className="dialog-actions">
+          <button onClick={() => onConfirm('', '')}>Skip &amp; Complete</button>
+          <button className="dialog-save-btn" onClick={() => onConfirm(outcome, comment)}>Complete</button>
         </div>
       </div>
     </div>
@@ -1127,11 +1200,18 @@ function renderIconsWithTooltips(text, keyOffset = 0) {
 }
 
 // Task row component with expandable todos
-function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup }) {
+function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, loadOrder = 0 }) {
+  const taskId = extractTaskId(row)
+  const readStateId = journalReadStateId(sourceId, taskId)
   const [todosExpanded, setTodosExpanded] = useState(false)
   const [todos, setTodos] = useState(null)
-  const [todosLoading, setTodosLoading] = useState(false)
-  const [journalPath, setJournalPath] = useState(null)
+  const [todosLoading, setTodosLoading] = useState(Boolean(taskId))
+  const [journalState, setJournalState] = useState({
+    existence: JOURNAL_EXISTENCE.UNKNOWN,
+    path: null,
+    contentStatus: 'loading',
+  })
+  const journalPath = journalState.path
   const [journalChecked, setJournalChecked] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [editText, setEditText] = useState('')
@@ -1139,61 +1219,67 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   const [telegram, setTelegram] = useState(null)
   const isMobile = useIsMobile()
   
-  const taskId = extractTaskId(row)
+  const journalProvider = sourceId ? getProvider(sourceId) : getActiveProvider()
   
-  // Check if journal exists for this task ID
+  // Check and read the journal as one queued operation. The provider is captured
+  // now and namespaces de-duplication, so a source switch cannot reuse an
+  // unfinished promise (or read through the mutable active-provider singleton).
   useEffect(() => {
-    if (taskId && !journalChecked) {
-      storage.checkJournal(taskId)
-        .then(data => {
-          if (data.exists) {
-            setJournalPath(data.path)
-          }
-          setJournalChecked(true)
-        })
-        .catch(() => setJournalChecked(true))
-    }
-  }, [taskId, journalChecked])
-  
-  // Fetch todos when journal path is known. We read the journal once and derive
-  // BOTH the todo list and the Telegram deep link (if the journal carries a
-  // tg-meta marker) from the same content — no extra round-trips.
-  useEffect(() => {
-    if (journalPath && todos === null) {
-      setTodosLoading(true)
-      storage.read(journalPath)
-        .then(content => {
+    if (!taskId || journalChecked || !journalProvider) return
+    let cancelled = false
+    const controller = new AbortController()
+    enqueueJournalLoad({
+      provider: journalProvider,
+      taskId,
+      priority: loadOrder,
+      signal: controller.signal,
+    })
+      .then(({ exists, path, content }) => {
+        if (cancelled) return
+        setJournalState(journalStateFromResult({ exists, path }))
+        if (exists) {
           setTodos(storage.parseTodos(content) || [])
           setTelegram(parseTgLink(content))
-          setTodosLoading(false)
-        })
-        .catch(() => {
-          setTodos([])
-          setTodosLoading(false)
-        })
+          readStateService.migrateSeenState(taskId, readStateId)
+          readStateService.track(readStateId, content)
+        } else {
+          readStateService.resolveInitialSeedCandidate(readStateId)
+        }
+        setTodosLoading(false)
+        setJournalChecked(true)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        setJournalState(previous => journalStateFromError(error, previous))
+        setTodos([])
+        setTodosLoading(false)
+        setJournalChecked(true)
+      })
+    return () => {
+      cancelled = true
+      controller.abort()
     }
-  }, [journalPath])
+  }, [journalChecked, journalProvider, loadOrder, readStateId, taskId])
 
-  // Journal read/unread indicator (task #311). The row holds NO business logic:
-  // it hands the raw journal content to the read-state service (which computes
-  // the signature + decides unread), renders the boolean, and fires an "opened"
-  // event when the user opens the journal. localStorage is one provider behind
-  // the service; the UI never touches it directly.
+  const retryJournalLoad = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setJournalState(previous => ({ ...previous, contentStatus: 'loading' }))
+    setTodosLoading(true)
+    setJournalChecked(false)
+  }
+
   const [isJournalUnread, setIsJournalUnread] = useState(false)
-  useEffect(() => {
-    if (!journalPath || !taskId) return
-    let cancelled = false
-    storage.read(journalPath)
-      .then(content => { if (!cancelled) readStateService.track(taskId, content) })
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [journalPath, taskId])
+
+  // Read/unread indicator (task #311): the row renders the boolean from the
+  // read-state service and re-renders when the service announces a change. The
+  // raw content is handed to the service by the single journal read above.
   useEffect(() => {
     if (!taskId) return
-    const update = () => setIsJournalUnread(readStateService.isUnread(taskId))
+    const update = () => setIsJournalUnread(readStateService.isUnread(readStateId))
     update()
-    return readStateService.subscribe(update)
-  }, [taskId])
+    return readStateService.subscribe(readStateId, update)
+  }, [readStateId, taskId])
   
   const getPriorityClass = (priority) => {
     if (priority?.includes('🔴')) return 'priority-urgent'
@@ -1211,7 +1297,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   
   const handleContextMenu = (e) => {
     e.preventDefault()
-    onContextMenu(e, rawLine, row, journalPath, taskId)
+    onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence)
   }
 
   // Mobile (#335): visible kebab opens the same row-action sheet — no hidden
@@ -1219,7 +1305,7 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
   const handleKebab = (e) => {
     e.preventDefault()
     e.stopPropagation()
-    onContextMenu(e, rawLine, row, journalPath, taskId)
+    onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence)
   }
   
   // Filter to only uncompleted todos
@@ -1428,44 +1514,74 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
                           </span>
                         )}
                         {journalPath && !isMobile && (
-                          <a
-                            href={telegram?.url || '#'}
-                            className={`journal-link${telegram?.url ? ' journal-link-tg' : ''}`}
-                            title={telegram?.url ? 'Open Telegram thread' : 'Open journal'}
-                            {...(telegram?.url ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-                            onClick={(e) => {
-                              // Telegram-active tasks: the journal icon opens the
-                              // Telegram thread instead of the journal (task #352).
-                              if (telegram?.url) { e.stopPropagation(); return }
-                              e.preventDefault()
-                              readStateService.emitJournalOpened(taskId)
-                              onNavigate(journalPath)
-                            }}
-                          >
-                            📓
-                            {/* Task #352: a single presence-style badge. The
-                                Telegram/chat badge supersedes the unread badge,
-                                so only one is ever shown. */}
-                            {telegram?.url ? (
-                              <span
-                                className="journal-badge journal-badge-tg"
-                                aria-label="Mirrored to Telegram — opens the Telegram thread"
-                                title="Mirrored to Telegram — opens the Telegram thread"
-                              >💬</span>
-                            ) : isJournalUnread ? (
-                              <span
-                                className="journal-badge journal-badge-unread"
-                                aria-label="New journal entries since you last opened this"
-                                title="New entries since you last opened this"
-                              >★</span>
-                            ) : null}
-                          </a>
+                          <span className="journal-icons">
+                            {/* #373/#389: the task list row offers two entry points —
+                                a Journal icon and a Chat icon. #389: the 📔 Journal
+                                icon opens the readable journal (chat thread) — the raw
+                                markdown source is one tap away via the in-view toggle. */}
+                            <a
+                              href="#"
+                              className="journal-link journal-link-note"
+                              title="Open Journal"
+                              onClick={(e) => {
+                                e.preventDefault()
+                                readStateService.emitJournalOpened(readStateId)
+                                onNavigate(joinSourcePath(navigationSourceId, journalPath), null, 'chat')
+                              }}
+                            >
+                              📔
+                              {/* #373: the unread (★) presence badge belongs on the
+                                  Journal icon — that's the surface with new entries —
+                                  not on 💬 Chat. Teams-style corner overlay. */}
+                              {isJournalUnread ? (
+                                <span
+                                  className="journal-badge journal-badge-unread"
+                                  aria-label="New journal entries since you last opened this"
+                                  title="New entries since you last opened this"
+                                >★</span>
+                              ) : null}
+                            </a>
+                            {/* #389: the 💬 Chat icon only exists when there is an
+                                actual chat thread to open — i.e. a Telegram deep link.
+                                With no Telegram link there is no separate chat surface
+                                (the 📔 Journal icon already opens the readable chat view),
+                                so we render nothing rather than a dead second icon. */}
+                            {telegram?.url && (
+                              <a
+                                href={telegram.url}
+                                className="journal-link journal-link-chat journal-link-tg"
+                                title="Open Telegram chat thread"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => {
+                                  // Telegram-active tasks: the Chat icon opens the
+                                  // Telegram thread instead of the in-app chat (task #352).
+                                  e.stopPropagation()
+                                }}
+                              >
+                                💬
+                                {/* #373: the Chat icon carries no presence badge — the ↗
+                                    Telegram pip was removed per feedback. The unread ★
+                                    lives on the Journal icon. */}
+                              </a>
+                            )}
+                          </span>
                         )}
                       </span>
                     )}
                   </div>
                   {!isMobile && !isEditing && leadUpPreview}
                   {todosLoading && <span className="todo-loading">...</span>}
+                  {journalState.contentStatus === 'error' && (
+                    <button
+                      type="button"
+                      className="journal-load-retry"
+                      onClick={retryJournalLoad}
+                      title="The journal could not be loaded. Retry without creating or overwriting it."
+                    >
+                      Journal unavailable — Retry
+                    </button>
+                  )}
                 </div>
               </td>
             )
@@ -1531,8 +1647,8 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
           
           return <td key={i}>{renderCellWithTooltips(cellValue, onNavigate)}</td>
         })}
-        {/* Mobile (#335): journal + kebab get their own trailing column at the
-            row's right edge — kebab all the way right, journal just before it —
+        {/* Mobile (#335): chat + kebab get their own trailing column at the
+            row's right edge — kebab all the way right, chat just before it —
             with real 40px tap targets that never overlap the task text. */}
         {isMobile && (
           <td className="row-actions-cell">
@@ -1540,37 +1656,49 @@ function TaskRow({ row, headers, onNavigate, managerPriorities, onScrollToPriori
               <>
                 <div className="row-actions">
                   {journalPath && (
-                    <a
-                      href={telegram?.url || '#'}
-                      className={`row-action-btn journal-action${telegram?.url ? ' journal-action-tg' : ''}`}
-                      aria-label={telegram?.url ? 'Open Telegram thread' : 'Open journal'}
-                      title={telegram?.url ? 'Open Telegram thread' : 'Open journal'}
-                      {...(telegram?.url ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-                      onClick={(e) => {
-                        // Telegram-active tasks: the journal icon opens the
-                        // Telegram thread instead of the journal (task #352).
-                        if (telegram?.url) { e.stopPropagation(); return }
-                        e.preventDefault()
-                        readStateService.emitJournalOpened(taskId)
-                        onNavigate(journalPath)
-                      }}
-                    >
-                      📓
-                      {/* Task #352: single presence-style badge; chat supersedes unread. */}
-                      {telegram?.url ? (
-                        <span
-                          className="journal-badge journal-badge-tg"
-                          aria-label="Mirrored to Telegram — opens the Telegram thread"
-                          title="Mirrored to Telegram — opens the Telegram thread"
-                        >💬</span>
-                      ) : isJournalUnread ? (
-                        <span
-                          className="journal-badge journal-badge-unread"
-                          aria-label="New journal entries since you last opened this"
-                          title="New entries since you last opened this"
-                        >★</span>
-                      ) : null}
-                    </a>
+                    telegram?.url ? (
+                      // #352: Telegram-active tasks show the 💬 Chat icon, which
+                      // opens the Telegram thread externally (↗ badge).
+                      <a
+                        href={telegram.url}
+                        className="row-action-btn chat-action journal-action-tg"
+                        aria-label="Open Telegram chat thread"
+                        title="Open Telegram chat thread"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => { e.stopPropagation() }}
+                      >
+                        💬
+                      </a>
+                    ) : (
+                      // #373: with no Telegram, the single mobile rail icon falls
+                      // back to 📔 Journal; #389: it opens the readable journal (chat
+                      // thread), with raw source a tap away via the in-view toggle.
+                      <a
+                        href="#"
+                        className="row-action-btn journal-action"
+                        aria-label="Open Journal"
+                        title="Open Journal"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          readStateService.emitJournalOpened(readStateId)
+                          onNavigate(joinSourcePath(navigationSourceId, journalPath), null, 'chat')
+                        }}
+                      >
+                        {/* #373: wrap glyph + pip so the ★ hugs the emoji corner (like
+                            desktop) instead of floating in the 36px tap target. */}
+                        <span className="journal-glyph">
+                          📔
+                          {isJournalUnread ? (
+                            <span
+                              className="journal-badge journal-badge-unread"
+                              aria-label="New journal entries since you last opened this"
+                              title="New entries since you last opened this"
+                            >★</span>
+                          ) : null}
+                        </span>
+                      </a>
+                    )
                   )}
                   <button
                     type="button"
@@ -1655,6 +1783,17 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
   // ops route back to the correct source even when two sources share an
   // identical row text / id. `lineSourceIds` is parallel to the data rows.
   if (lineSourceIds) tagMergedRows(rows, lineSourceIds)
+  const seedCandidateKey = rows
+    .map((row) => {
+      const taskId = extractTaskId(row)
+      if (!taskId) return null
+      return journalReadStateId(row.__sourceId || getActiveSourceId(), taskId)
+    })
+    .filter(Boolean)
+    .join('\n')
+  useEffect(() => {
+    readStateService.registerInitialSeedCandidates(seedCandidateKey.split('\n').filter(Boolean))
+  }, [seedCandidateKey])
   const [contextMenu, setContextMenu] = useState(null)
   // #346: separate state for the kebab's "Change priority" submenu.
   const [priorityMenu, setPriorityMenu] = useState(null)
@@ -1676,7 +1815,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
   const isTaskSection = title === 'Today' || title === 'Deferred'
   if (sortedRows.length === 0 && !showAddDialog && !isTaskSection) return null
   
-  const openTaskPiP = async (taskId, taskName, priority, journalPath) => {
+  const openTaskPiP = async (taskId, taskName, priority, journalPath, sourceId, navigationSourceId) => {
     const pipWindow = await documentPictureInPicture.requestWindow({
       width: 420,
       height: 320,
@@ -1716,7 +1855,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     // Double-click anywhere to jump to journal in main window
     pipWindow.document.body.addEventListener('dblclick', () => {
       if (journalPath) {
-        onNavigate(journalPath)
+        onNavigate(joinSourcePath(navigationSourceId, journalPath))
       }
       window.focus()
     })
@@ -1724,7 +1863,9 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     // Fetch and show todos if journal exists
     if (journalPath) {
       try {
-        const todos = await storage.getTodos(journalPath)
+        const todos = sourceId
+          ? await storage.getTodosFromSource(sourceId, journalPath)
+          : await storage.getTodos(journalPath)
         if (todos.length > 0) {
           const label = pipWindow.document.createElement('div')
           label.className = 'pip-section-label'
@@ -1756,8 +1897,11 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     }
   }
 
-  const handleContextMenu = (e, rawLine, row, journalPath, taskId) => {
+  const handleContextMenu = (e, rawLine, row, journalPath, taskId, telegram, journalExistence) => {
     const options = []
+    const rowSourceId = row.__sourceId || getActiveSourceId()
+    const rowReadStateId = journalReadStateId(rowSourceId, taskId)
+    const qualifiedJournalPath = joinSourcePath(row.__sourceId, journalPath)
     const currentSnoozeUntil = row.snoozeUntil || parseSnoozeUntil(rawLine)
     
     if (title === 'Today') {
@@ -1812,14 +1956,39 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       icon: '✅',
       action: () => onMoveToCompleted(rawLine, row, title)
     })
+
+    // Mobile #373: the rail shows ONE icon; its counterpart lives in the kebab.
+    // With Telegram the rail icon is 💬 Chat → Telegram, so 📔 Journal goes here.
+    // Without Telegram the rail falls back to 📔 Journal, so in-app 💬 Chat goes here.
+    if (isMobile && journalPath && taskId) {
+      if (telegram?.url) {
+        options.push({
+          label: 'Open journal',
+          icon: '📔',
+          action: () => {
+            readStateService.emitJournalOpened(rowReadStateId)
+            onNavigate(qualifiedJournalPath, null, 'chat')
+          }
+        })
+      } else {
+        options.push({
+          label: 'Open chat',
+          icon: '💬',
+          action: () => {
+            readStateService.emitJournalOpened(rowReadStateId)
+            onNavigate(qualifiedJournalPath, null, 'chat')
+          }
+        })
+      }
+    }
     
     // Add "Create Journal" option if no journal exists and we have a task ID
-    if (!journalPath && taskId) {
+    if (canCreateJournal(journalExistence) && taskId) {
       const taskName = row['Task'] || ''
       options.push({
         label: 'Create Journal',
         icon: '📓',
-        action: () => onCreateJournal(taskId, taskName)
+        action: () => onCreateJournal(taskId, taskName, row.__sourceId)
       })
     }
     
@@ -1830,7 +1999,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       options.push({
         label: 'Focus Sticky Note',
         icon: '📌',
-        action: () => openTaskPiP(taskId, taskName, priority, journalPath)
+        action: () => openTaskPiP(taskId, taskName, priority, journalPath, rowSourceId, row.__sourceId)
       })
     }
     
@@ -1940,10 +2109,15 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
               </tr>
             </thead>
             <tbody>
-              {visibleRows.map((row, i) => (
-                <TaskRow 
-                  key={`${extractTaskId(row) || 'row'}-${i}`} 
+              {visibleRows.map((row, i) => {
+                const journalSourceId = row.__sourceId || getActiveSourceId()
+                return (
+                <TaskRow
+                  key={`${journalSourceId || 'active'}-${extractTaskId(row) || 'row'}-${i}`}
                   row={row} 
+                  sourceId={journalSourceId}
+                  navigationSourceId={row.__sourceId}
+                  loadOrder={i}
                   headers={headers} 
                   onNavigate={onNavigate}
                   managerPriorities={managerPriorities}
@@ -1959,7 +2133,8 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
                   activeTaskIds={activeTaskIds}
                   linkedIdMap={linkedIdMap}
                   adoLookup={adoLookup}/>
-              ))}
+                )
+              })}
               {isSearching && matchCount === 0 && (
                 <tr className="search-no-match-row">
                   <td colSpan={headers.length + (isMobile ? 1 : 0)}>No matches in {title}</td>
@@ -2501,9 +2676,22 @@ function useCoarsePointer() {
   return coarse
 }
 
+function useCompleteInitialReadStateSeeding(ready) {
+  useEffect(() => {
+    if (!ready) return
+    let cancelled = false
+    waitForInitialJournalLoads()
+      .then(() => {
+        if (!cancelled) readStateService.completeInitialSeeding()
+      })
+    return () => { cancelled = true }
+  }, [ready])
+}
+
 function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, search: searchProp, onSearchChange, mission, syncStatus, onDataChanged }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
+  const [closeOutDialog, setCloseOutDialog] = useState(null)
   const [searchLocal, setSearchLocal] = useState('')
   // Search can be driven by a parent (e.g. the mobile header input) via props,
   // or owned locally (desktop). Props win when supplied.
@@ -2515,12 +2703,21 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
   const viewRootRef = useRef(null)
   const searchBarRef = useRef(null)
   const sections = parseFocusPlan(content)
+
+  // TaskRow effects enqueue every initial journal lookup/read during this mount.
+  // Keep first-load seeding open until that bounded queue has fully drained so
+  // slow rows are still established as seen rather than appearing newly unread.
+  useCompleteInitialReadStateSeeding(true)
   
   // Find sections
   const taskSections = sections.filter(s => 
     s.title === 'Today' || s.title === 'Deferred'
   )
   const managerPrioritiesSection = sections.find(s => isPrioritiesSection(s.title))
+
+  // Read-only `## Skills` inventory (#188). `null` when the board has no such
+  // heading, in which case nothing is rendered at all — no empty placeholder.
+  const skills = parseSkillsSection(sections)
 
   // Parse the unified Priorities section. We keep the variable name
   // `managerPriorities` for compatibility with downstream sort/lookup helpers.
@@ -2724,7 +2921,13 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
             const final = ops.opDeleteTask(bridged, rawLine)
             await onContentUpdate(final)
             if (taskId) recordDeletedId(taskId)
-            if (journalPath) await storage.remove(journalPath).catch(() => {})
+            await deleteJournalForTask({
+              journalPath,
+              taskId,
+              checkJournal: storage.checkJournal,
+              remove: storage.remove,
+              onError: (e) => console.error('Failed to delete journal:', e),
+            })
             setBridgeDialog(null)
           }
         })
@@ -2739,20 +2942,33 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     // still resurrect this task's journal (#314).
     if (taskId) recordDeletedId(taskId)
     
-    // Also delete journal if it exists
-    if (journalPath) {
-      try {
-        await storage.remove(journalPath)
-      } catch (e) {
-        console.error('Failed to delete journal:', e)
-      }
-    }
+    // Also delete the journal if the task has one. The path is resolved at
+    // delete time rather than taken from lazily-loaded row state, so deleting a
+    // row whose journal was still loading no longer orphans the file (#185).
+    await deleteJournalForTask({
+      journalPath,
+      taskId,
+      checkJournal: storage.checkJournal,
+      remove: storage.remove,
+      onError: (e) => console.error('Failed to delete journal:', e),
+    })
   }
   
   const handleMoveToCompleted = async (rawLine, row, fromSection) => {
-    // Extract task info from row
     const taskId = extractTaskId(row)
+    // Show the close-out dialog first so the user can optionally record how the
+    // task ended. Completion proceeds (with the existing link-bridge check) only
+    // after they confirm; clicking the overlay cancels the whole action.
+    setCloseOutDialog({
+      taskName: row['Task'] || (taskId ? `Task ${taskId}` : 'this task'),
+      onConfirm: async (outcome, comment) => {
+        setCloseOutDialog(null)
+        await runCompletion(rawLine, row, fromSection, taskId, { outcome, comment })
+      }
+    })
+  }
 
+  const runCompletion = async (rawLine, row, fromSection, taskId, closeout) => {
     // Check for incoming links to bridge
     if (taskId && linkedIdMap) {
       const incoming = []
@@ -2773,16 +2989,16 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
           onConfirm: async () => {
             const bridged = ops.opBridgeLinks(content, taskId, nextIdRawValue)
             setBridgeDialog(null)
-            await performMoveToCompleted(rawLine, row, fromSection, bridged)
+            await performMoveToCompleted(rawLine, row, fromSection, bridged, closeout)
           }
         })
         return
       }
     }
-    await performMoveToCompleted(rawLine, row, fromSection, content)
+    await performMoveToCompleted(rawLine, row, fromSection, content, closeout)
   }
 
-  const performMoveToCompleted = async (rawLine, row, fromSection, currentContent) => {
+  const performMoveToCompleted = async (rawLine, row, fromSection, currentContent, closeout = {}) => {
     const taskId = extractTaskId(row)
     const taskName = row['Task'] || ''
     const mngrPriority = row['Work Priority'] || row['Mngr Priority'] || '-'
@@ -2808,6 +3024,11 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     let completedTaskName = taskName.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Remove markdown links
     if (todoItems.length > 0) {
       completedTaskName += ' - ' + todoItems.join(' - ')
+    }
+    // Stamp the optional close-out outcome inline so the completed board shows it.
+    const closeOutcome = (closeout.outcome || '').replace(/\|/g, '/').trim()
+    if (closeOutcome) {
+      completedTaskName += ` · _${closeOutcome}_`
     }
     
     // Extract ID for display (simple number or keep as-is)
@@ -2892,6 +3113,21 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       await storage.write(COMPLETED_FILE, completedLines.join('\n'))
     } catch (e) {
       console.error('Failed to update completed file:', e)
+    }
+
+    // Write the optional close-out comment into the task journal so it's kept
+    // with the task's history (useful for later reviews/postmortems).
+    const closeOutText = formatCloseOutComment(closeout.outcome, closeout.comment)
+    if (taskId && closeOutText) {
+      try {
+        const journalData = await storage.checkJournal(taskId)
+        if (journalData.exists) {
+          const journalContent = await storage.read(journalData.path)
+          await storage.write(journalData.path, appendJournalMessage(journalContent, closeOutText))
+        }
+      } catch (e) {
+        console.error('Failed to write close-out to journal:', e)
+      }
     }
   }
   
@@ -3103,7 +3339,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
   
   const handleChangeLinkedId = async (rawLine, newLinkedId) => {
     const lines = content.split('\n')
-    const lineIndex = lines.findIndex(line => line === rawLine)
+    const lineIndex = lines.findIndex(line => line.trim() === rawLine.trim())
     
     if (lineIndex !== -1) {
       const parts = rawLine.split('|')
@@ -3498,6 +3734,10 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
         />
       ))}
 
+      {hasRenderableSkills(skills) && (
+        <SkillsSection headers={skills.headers} rows={skills.rows} notes={skills.notes} />
+      )}
+
       {managerPrioritiesSection && (
         <ManagerPrioritiesSection
           lines={managerPrioritiesSection.lines}
@@ -3521,6 +3761,14 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
           nextTaskName={bridgeDialog.nextTaskName}
           onClose={() => setBridgeDialog(null)}
           onConfirm={bridgeDialog.onConfirm}
+        />
+      )}
+
+      {closeOutDialog && (
+        <CloseOutDialog
+          taskName={closeOutDialog.taskName}
+          onClose={() => setCloseOutDialog(null)}
+          onConfirm={closeOutDialog.onConfirm}
         />
       )}
 
@@ -3597,6 +3845,8 @@ function CompletedTaskRow({ row, headers, priorityCol, getPriorityClass, onNavig
   const taskId = typeof idValue === 'object'
     ? idValue.id?.match(/\d+/)?.[0]
     : String(idValue).match(/\d+/)?.[0]
+  const sourceId = getActiveSourceId()
+  const readStateId = journalReadStateId(sourceId, taskId)
 
   const [journalPath, setJournalPath] = useState(null)
   useEffect(() => {
@@ -3626,7 +3876,7 @@ function CompletedTaskRow({ row, headers, priorityCol, getPriorityClass, onNavig
                   title="Open journal"
                   onClick={(e) => {
                     e.preventDefault()
-                    readStateService.emitJournalOpened(taskId)
+                    readStateService.emitJournalOpened(readStateId)
                     onNavigate(journalPath)
                   }}
                 >
@@ -3841,9 +4091,41 @@ function renderJournalLines(lines, onNavigate, onToggle, ctx) {
   return out
 }
 
+// View switcher between the Chat thread and the raw Journal (markdown source).
+// Desktop (>768px / fine pointer): a two-button segmented control with both
+// "Journal" and "Chat" always visible, active one highlighted. Mobile (<=768px
+// or coarse pointer): collapses via CSS to a single toggle showing only the
+// view you're NOT in — matching the original one-button behaviour. Both drive
+// off the same showRaw state (Journal = showRaw:true, Chat = showRaw:false).
+function JournalChatToggle({ showRaw, setShowRaw }) {
+  // #373: a single "switch to the other view" button. You never see a button
+  // for the view you're already on — on Chat you're offered Journal, and on
+  // Journal (raw) you're offered Chat. The two-icon picker lives on the task
+  // list page instead (see the board row icons).
+  return (
+    <div className="jc-view-switch" role="group" aria-label="Switch between Journal and Chat views">
+      {showRaw ? (
+        <button
+          className="jc-switch-btn"
+          onClick={() => setShowRaw(false)}
+          title="Switch to Chat thread"
+        >💬 Chat</button>
+      ) : (
+        <button
+          className="jc-switch-btn"
+          onClick={() => setShowRaw(true)}
+          title="Switch to Journal (raw markdown source)"
+        >📔 Journal</button>
+      )}
+    </div>
+  )
+}
+
 // Append a new "me" message to journal markdown, merging into today's bubble.
-function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpenSidebar }) {
-  const [showRaw, setShowRaw] = useState(false)
+function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpenSidebar, initialView = 'chat' }) {
+  // #373: the view the task list icons chose to open. 'journal' opens the raw
+  // markdown source; anything else opens the chat thread.
+  const [showRaw, setShowRaw] = useState(initialView === 'journal')
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [showAttachmentDialog, setShowAttachmentDialog] = useState(false)
@@ -3851,6 +4133,11 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
   const inputRef = useRef(null)
   const parsed = useMemo(() => parseJournalChat(content), [content])
   const taskId = taskIdFromJournalPath(filePath)
+
+  // Re-honour the requested view when the task or the caller's choice changes.
+  useEffect(() => {
+    setShowRaw(initialView === 'journal')
+  }, [filePath, initialView])
 
   useEffect(() => {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight
@@ -3934,7 +4221,7 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
         filePath={filePath}
         onContentUpdate={onContentUpdate}
         onNavigate={onNavigate}
-        headerExtra={<button className="jc-toggle-btn" onClick={() => setShowRaw(false)}>💬 Chat</button>}
+        headerExtra={<JournalChatToggle showRaw={showRaw} setShowRaw={setShowRaw} />}
       />
     )
   }
@@ -3992,7 +4279,7 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
           <div className="jc-appbar-title" title={title}>{title}</div>
           <div className="jc-appbar-sub">Notes to self</div>
         </div>
-        <button className="jc-toggle-btn" onClick={() => setShowRaw(true)} title="Edit raw markdown">✎ Raw</button>
+        <JournalChatToggle showRaw={showRaw} setShowRaw={setShowRaw} />
       </div>
 
       <div className="jc-thread" ref={threadRef}>
@@ -4445,6 +4732,7 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
   // App update (force latest service worker — fixes "stale build on mobile").
   const [updating, setUpdating] = useState(false)
   const [updateMsg, setUpdateMsg] = useState('')
+  const [diagnosticsEnabled, setDiagnosticsEnabled] = useState(isDiagEnabled())
   const oneDrive = targetStatus(syncStatus, PROVIDERS.ONEDRIVE)
   const aggregate = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
   const syncClass = aggregate.replace(/[^a-z-]/g, '')
@@ -4802,6 +5090,12 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
     }, 800)
   }
 
+  const toggleDiagnostics = () => {
+    if (diagnosticsEnabled) disableDiagnostics()
+    else enableDiagnostics()
+    setDiagnosticsEnabled(isDiagEnabled())
+  }
+
   return (
     <>
       <div className="sidebar-storage-footer">
@@ -4845,27 +5139,6 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
             <div className="settings-dialog-header">
               <h3>Settings</h3>
               <button className="settings-dialog-close" onClick={close}>✕</button>
-            </div>
-
-            <div className={`settings-dialog-section${sectionCollapsed.appVersion ? ' collapsed' : ''}`}>
-              <SettingsSectionTitle id="appVersion" label="App version" collapsed={!!sectionCollapsed.appVersion} onToggle={toggleSection} />
-              <div className="settings-update-row">
-                <div className="settings-update-info">
-                  <span className="settings-update-build">Build {storage.getBuildId()}</span>
-                  <span className="settings-update-hint">
-                    On a phone seeing stale data? Update to load the latest sync fixes.
-                  </span>
-                </div>
-                <button
-                  className="storage-footer-btn sync-target-action"
-                  onClick={handleUpdateApp}
-                  disabled={updating}
-                  title="Check for a new version and reload"
-                >
-                  {updating ? 'Updating…' : 'Update app'}
-                </button>
-              </div>
-              {updateMsg && <div className="settings-update-msg">{updateMsg}</div>}
             </div>
 
             <InstallSettingsSection onOpen={() => setInstallOpen(true)} appName={APP_NAME} />
@@ -5298,6 +5571,50 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
               </div>
             </div>
 
+            <div className={`settings-dialog-section${sectionCollapsed.appDiagnostics ? ' collapsed' : ''}`}>
+              <SettingsSectionTitle
+                id="appDiagnostics"
+                label="App version & diagnostics"
+                collapsed={!!sectionCollapsed.appDiagnostics}
+                onToggle={toggleSection}
+              />
+              <div className="settings-update-row">
+                <div className="settings-update-info">
+                  <span className="settings-update-build">Build {storage.getBuildId()}</span>
+                  <span className="settings-update-hint">
+                    On a phone seeing stale data? Update to load the latest sync fixes.
+                  </span>
+                </div>
+                <button
+                  className="storage-footer-btn sync-target-action"
+                  onClick={handleUpdateApp}
+                  disabled={updating}
+                  title="Check for a new version and reload"
+                >
+                  {updating ? 'Updating…' : 'Update app'}
+                </button>
+              </div>
+              {updateMsg && <div className="settings-update-msg">{updateMsg}</div>}
+              <div className="settings-update-row settings-diagnostics-row">
+                <div className="settings-update-info">
+                  <span className="settings-update-build">
+                    Diagnostics {diagnosticsEnabled ? 'on' : 'off'}
+                  </span>
+                  <span className="settings-update-hint">
+                    Keeps a bounded in-memory flight recorder for on-demand troubleshooting. Off by default.
+                  </span>
+                </div>
+                <button
+                  className="storage-footer-btn sync-target-action"
+                  onClick={toggleDiagnostics}
+                  aria-pressed={diagnosticsEnabled}
+                  title={`${diagnosticsEnabled ? 'Disable' : 'Enable'} diagnostics`}
+                >
+                  {diagnosticsEnabled ? 'Turn off' : 'Turn on'}
+                </button>
+              </div>
+            </div>
+
             {error && <div className="storage-footer-error">⚠️ {error}</div>}
           </div>
         </div>
@@ -5345,10 +5662,12 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
   const [perSource, setPerSource] = useState(null) // [{ source, content, sections }]
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   const [bridgeDialog, setBridgeDialog] = useState(null)
+  const [closeOutDialog, setCloseOutDialog] = useState(null)
   const [error, setError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
   const [addDialog, setAddDialog] = useState(null) // { section }
   const [moveDialog, setMoveDialog] = useState(null)
+  useCompleteInitialReadStateSeeding(perSource !== null)
 
   // Reload all sources' focus-plan.md content.
   useEffect(() => {
@@ -5521,6 +5840,12 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     const newContent = typeof result === 'string' ? result : result.content
     if (newContent === text) return
     await storage.writeToSource(sourceId, PLAN_FILE, newContent)
+    // Reflect the write immediately so the board re-renders now, instead of
+    // waiting on the reloadKey re-read below — that re-read hits the provider
+    // directly and can return stale content right after a write, which left the
+    // board stale until a full page reload (#411). The reloadKey bump still
+    // reconciles every source from storage in the background.
+    setPerSource(prev => patchPerSourceContent(prev, sourceId, newContent, parseFocusPlan))
     setReloadKey(k => k + 1)
   }
 
@@ -5576,7 +5901,13 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
             }))
             await applyOp(sid, c => ops.opDeleteTask(c, rawLine))
             if (taskId) recordDeletedId(taskId)
-            if (journalPath) await storage.removeFromSource(sid, journalPath).catch(() => {})
+            await deleteJournalForTask({
+              journalPath,
+              taskId,
+              checkJournal: (id) => storage.checkJournalFromSource(sid, id),
+              remove: (p) => storage.removeFromSource(sid, p),
+              onError: (e) => console.error('Failed to delete journal:', e),
+            })
             setBridgeDialog(null)
             setReloadKey(k => k + 1)
           }
@@ -5587,9 +5918,14 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
 
     await applyOp(sid, c => ops.opDeleteTask(c, rawLine))
     if (taskId) recordDeletedId(taskId)
-    if (journalPath) {
-      try { await storage.removeFromSource(sid, journalPath) } catch (e) { console.error('Failed to delete journal:', e) }
-    }
+    // Resolved at delete time, not from lazily-loaded row state (#185).
+    await deleteJournalForTask({
+      journalPath,
+      taskId,
+      checkJournal: (id) => storage.checkJournalFromSource(sid, id),
+      remove: (p) => storage.removeFromSource(sid, p),
+      onError: (e) => console.error('Failed to delete journal:', e),
+    })
   }
 
   const handlePromoteTodo = async (todoText, parentTaskId) => {
@@ -5606,17 +5942,15 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     await applyOp(sourceId, c => ops.opAddTask(c, { task, priority, linkedTask, section }, journalIds))
   }
 
-  const handleCreateJournal = async (taskId, taskName) => {
-    const sid = sourceForTask(taskId)
+  const handleCreateJournal = async (taskId, taskName, sourceId) => {
+    const sid = sourceId
     if (!sid) return
-    const cleanName = (taskName || '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim()
-    const journalPath = `journal/task-${taskId}.md`
     try {
-      await storage.writeToSource(sid, journalPath, `# Task ${taskId}: ${cleanName}\n\n- TODO: \n`)
+      const journalPath = await createJournalInSource(storage, sid, taskId, taskName)
       // Refresh the sidebar tree so the newly created journal appears in the
       // hamburger pane immediately (task #371).
       await onDataChanged?.()
-      onNavigate(journalPath)
+      onNavigate(joinSourcePath(sid, journalPath))
     } catch (e) {
       console.error('Failed to create journal:', e)
     }
@@ -5626,7 +5960,18 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     const sid = sourceForRow(row, rawLine)
     if (!sid) return
     const taskId = extractTaskId(row)
+    // Show the close-out dialog first; completion (and the link-bridge check)
+    // proceeds only after the user confirms.
+    setCloseOutDialog({
+      taskName: row['Task'] || (taskId ? `Task ${taskId}` : 'this task'),
+      onConfirm: async (outcome, comment) => {
+        setCloseOutDialog(null)
+        await runCompletionCombined(rawLine, row, fromSection, sid, taskId, { outcome, comment })
+      }
+    })
+  }
 
+  const runCompletionCombined = async (rawLine, row, fromSection, sid, taskId, closeout) => {
     // Check for incoming links across ALL sources to bridge
     if (taskId && linkedIdMap) {
       const incoming = []
@@ -5654,16 +5999,16 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
               }
             }))
             setBridgeDialog(null)
-            await performMoveToCompletedCombined(rawLine, row, fromSection, sid)
+            await performMoveToCompletedCombined(rawLine, row, fromSection, sid, closeout)
           }
         })
         return
       }
     }
-    await performMoveToCompletedCombined(rawLine, row, fromSection, sid)
+    await performMoveToCompletedCombined(rawLine, row, fromSection, sid, closeout)
   }
 
-  const performMoveToCompletedCombined = async (rawLine, row, fromSection, sid) => {
+  const performMoveToCompletedCombined = async (rawLine, row, fromSection, sid, closeout = {}) => {
     const taskId = extractTaskId(row)
     const taskName = row['Task'] || ''
     const priority = row['Work Priority'] || row['Mngr Priority'] || row['Priority'] || '-'
@@ -5677,16 +6022,42 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
         }
       } catch (e) { console.error('Failed to fetch journal todos:', e) }
     }
-    const completedRow = ops.buildCompletedRow({ taskId, taskName, priority, todoItems })
+    const completedRow = ops.buildCompletedRow({ taskId, taskName, priority, todoItems, outcome: closeout.outcome })
     // Write the focus-plan deletion and the completed-plan append in
     // sequence against the same source.
     const focusText = await storage.readFromSource(sid, PLAN_FILE)
-    const newFocus = ops.opRemoveTaskFromFocusPlan(focusText, rawLine, fromSection)
+    const removal = ops.opRemoveTaskFromFocusPlanResult(focusText, rawLine, fromSection)
+    if (!removal.removed) {
+      // The source row could not be located, so completing here would append to
+      // the completed board while leaving the task active — the "on both boards"
+      // corruption. Fail loudly and change nothing instead.
+      console.error('Move to completed aborted: task row not found on the plan board', { taskId, fromSection })
+      alert('Could not complete this task: its row was not found on the board. Reload and try again.')
+      return
+    }
+    const newFocus = removal.content
     let completedText = ''
     try { completedText = await storage.readFromSource(sid, COMPLETED_FILE) } catch { /* file may not exist */ }
-    const newCompleted = ops.opAppendToCompleted(completedText, completedRow)
+    const newCompleted = ops.opAppendToCompleted(completedText, completedRow, { taskId })
     await storage.writeToSource(sid, COMPLETED_FILE, newCompleted)
     await storage.writeToSource(sid, PLAN_FILE, newFocus)
+    // Reflect the completion immediately so the row disappears from the board
+    // now, instead of waiting on the async reloadKey re-read below (#411 — same
+    // stale-render class as the link path in applyOp). The reload still
+    // reconciles every source from storage in the background.
+    setPerSource(prev => patchPerSourceContent(prev, sid, newFocus, parseFocusPlan))
+
+    // Write the optional close-out comment into the task journal.
+    const closeOutText = formatCloseOutComment(closeout.outcome, closeout.comment)
+    if (taskId && closeOutText) {
+      try {
+        const j = await storage.checkJournalFromSource(sid, taskId)
+        if (j.exists) {
+          const journalContent = await storage.readFromSource(sid, j.path)
+          await storage.writeToSource(sid, j.path, appendJournalMessage(journalContent, closeOutText))
+        }
+      } catch (e) { console.error('Failed to write close-out to journal:', e) }
+    }
     setReloadKey(k => k + 1)
   }
 
@@ -6035,6 +6406,14 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
         />
       )}
 
+      {closeOutDialog && (
+        <CloseOutDialog
+          taskName={closeOutDialog.taskName}
+          onClose={() => setCloseOutDialog(null)}
+          onConfirm={closeOutDialog.onConfirm}
+        />
+      )}
+
       {addDialog && (
         <AddTaskDialog
           section={addDialog.section}
@@ -6082,6 +6461,8 @@ function App() {
   const boardScrollRef = useRef(0)
   const [pendingBoardScrollRestore, setPendingBoardScrollRestore] = useState(false)
   const [pendingScrollToTaskId, setPendingScrollToTaskId] = useState(null)
+  // #373: which view (chat|journal) the task list icons asked to open into.
+  const [journalInitialView, setJournalInitialView] = useState('chat')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   // Board search query, lifted so the mobile header can host the search input
   // (#284) while FocusPlanView still owns the filtering logic.
@@ -6112,7 +6493,7 @@ function App() {
       const liveSources = getSources()
       if (liveSources.length <= 1) {
         const data = await storage.getFiles()
-        setFiles(data)
+        setFiles(prev => sameFileTree(prev, data) ? prev : data)
         return
       }
       const perSource = await Promise.all(
@@ -6139,7 +6520,8 @@ function App() {
         path: `${source.id}::`,
         children: prefixTreePaths(tree, source.id),
       }))
-      setFiles([combinedFolder, ...sourceFolders])
+      const nextFiles = [combinedFolder, ...sourceFolders]
+      setFiles(prev => sameFileTree(prev, nextFiles) ? prev : nextFiles)
     } catch (err) {
       console.error('Failed to load files:', err)
     }
@@ -6237,11 +6619,6 @@ function App() {
     const liveSources = getSources()
     const defaultFile = liveSources.length > 1 ? `${COMBINED_ID}::${PLAN_FILE}` : PLAN_FILE
     handleSelectFile(defaultFile)
-    // Journal read/unread (task #311): once the board's initial journals have
-    // had a chance to be tracked, close the seeding window so pre-existing
-    // journals are treated as already-seen (no day-one "wall of stars") while
-    // journals that gain new content afterward will flag as unread.
-    setTimeout(() => readStateService.completeInitialSeeding(), 3000)
   }
 
   useEffect(() => {
@@ -6367,7 +6744,7 @@ function App() {
     const savedId = localStorage.getItem('fp-storage-provider')
     if (!savedId) {
       // Auto-bootstrap LocalStorage as the default first source.
-      const fallback = new LocalStorageProvider()
+      const fallback = new IndexedDbProvider()
       await fallback.restore()
       setActiveProvider(fallback)
       localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
@@ -6380,7 +6757,7 @@ function App() {
       setActiveProvider(provider)
       await initWithProvider(savedId)
     } else {
-      const fallback = new LocalStorageProvider()
+      const fallback = new IndexedDbProvider()
       await fallback.restore()
       setActiveProvider(fallback)
       localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
@@ -6389,9 +6766,18 @@ function App() {
     return true
   }
 
-  // Subscribe to sync status changes
+  // Subscribe to sync status changes. The engine fires a status object on every
+  // backup nudge; most are value-identical and rapid save cycles flip the state
+  // back and forth many times a second. Feeding each straight into React state
+  // thrashes the board and defeats Playwright's quiescence gate (#133), so route
+  // them through a coalescer that dedups identical churn and coalesces bursts.
   useEffect(() => {
-    return storage.subscribeSyncStatus((status) => setSyncStatus(status))
+    const coalescer = makeSyncStatusCoalescer({ apply: setSyncStatus })
+    const unsubscribe = storage.subscribeSyncStatus((status) => coalescer.push(status))
+    return () => {
+      coalescer.cancel()
+      unsubscribe()
+    }
   }, [])
 
   // Track the visual viewport height so the app shell (and the chat composer at
@@ -6467,8 +6853,10 @@ function App() {
     await initWithProvider(providerId)
   }
 
-  const handleNavigate = (path, scrollToTaskId) => {
+  const handleNavigate = (path, scrollToTaskId, initialView) => {
     if (scrollToTaskId) setPendingScrollToTaskId(scrollToTaskId)
+    // #373: honour the icon that was clicked (Journal vs Chat). Default to chat.
+    setJournalInitialView(initialView === 'journal' ? 'journal' : 'chat')
     handleSelectFile(path)
   }
 
@@ -6670,6 +7058,7 @@ function App() {
               onContentUpdate={handleContentUpdate}
               onNavigate={handleNavigate}
               onOpenSidebar={() => setSidebarOpen(true)}
+              initialView={journalInitialView}
             />
           ) : (
             <MarkdownView

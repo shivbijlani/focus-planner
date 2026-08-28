@@ -145,3 +145,15 @@ export function appendJournalMessage(content, text, today = localISODate()) {
   else addition = `\n\n<!-- from: me -->\n${text}`
   return `${body}${addition}\n`
 }
+
+// Build the close-out comment written to a task journal when a task is
+// completed. `outcome` is a short label (e.g. "Canceled"); `comment` is
+// optional free text. Returns '' when there is nothing to record.
+export function formatCloseOutComment(outcome, comment) {
+  const parts = []
+  const cleanOutcome = (outcome || '').trim()
+  const cleanComment = (comment || '').trim()
+  if (cleanOutcome) parts.push(`**Outcome:** ${cleanOutcome}`)
+  if (cleanComment) parts.push(cleanComment)
+  return parts.join('\n\n')
+}

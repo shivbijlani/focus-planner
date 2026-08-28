@@ -1,6 +1,7 @@
 export { loadConfig, assertRunnable } from './config.js'
 export { createTelegramClient } from './telegramClient.js'
 export { createBridge, hashTurn } from './bridge.js'
+export { extractAsk, extractAskEntry, buildDigest, hashDigest } from './digest.js'
 export { createFsIo } from './io.js'
 export {
   loadState,

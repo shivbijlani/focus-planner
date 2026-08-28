@@ -7,6 +7,8 @@ import { createHash } from 'crypto'
 import {
   hasAgentBlock,
   latestAgentTurn,
+  agentBlockText,
+  agentBlockStatus,
   parseTitle,
   topicName,
   appendUserReply,
@@ -15,42 +17,191 @@ import {
   getTask,
   setTopic,
   setLastPosted,
+  setArchived,
+  setUserEngaged,
   setOffset,
+  setLastDigest,
+  setDigestTopic,
   findTaskByTopic,
 } from './state.js'
+import { extractAskEntry, buildDigest, hashDigest } from './digest.js'
 import { upsertTgMetaMarker, parseTgMeta } from './deepLink.js'
 import { mdToTelegramHtml, escapeHtml } from './telegramFormat.js'
+import { parseCompletedTaskIds } from './completed.js'
+import { parseDeletedTaskIds } from './deleted.js'
+import { parseBoardOrder, boardRank, boardIndex } from './board.js'
+import { parseReplyRouting, coalesceByTask } from './routeReply.js'
 
 const TELEGRAM_MAX = 4096
+
+// A turn longer than one message is SPLIT rather than truncated (see
+// `formatForTelegramParts`). Cap the split so a very long turn can't carpet-bomb
+// the phone with messages; past this we trim the middle and keep the ask.
+const MAX_PARTS = 3
+
+// Room to reserve in the header for the " (2/3)" part counter, so the budget we
+// chunk against is still right once the counter is added.
+const PART_COUNTER_RESERVE = 12
+
+// The trailing block an agent turn ends with — the part the reader is actually
+// supposed to act on. `Needs from you:` / `Your call:` come from the SKILL.md
+// block template; `Next:` is the weaker fallback used by Run log entries.
+const ASK_STRONG_RE = /^\s*\*{0,2}\s*(?:Needs from you|Your call)\b/i
+const ASK_WEAK_RE = /^\s*\*{0,2}\s*Next\b/i
+
+// Block statuses that are finished as far as the user is concerned. A task in
+// one of these must never be pulled back into the approval queue by the
+// agent-block fallback in syncDigest().
+const DIGEST_TERMINAL_STATUS = new Set(['done', 'skip', 'skipped', 'complete', 'completed'])
 
 export function hashTurn(text) {
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }
 
-// Truncate markdown at a line boundary so conversion never cuts through an
-// inline `**...**`/`` `...` `` pair (those don't span lines in our converter),
-// keeping the resulting HTML tag-balanced.
-function truncateMarkdown(md, budget) {
-  if (md.length <= budget) return md
-  const cut = md.slice(0, budget)
-  const nl = cut.lastIndexOf('\n')
-  const base = nl > 0 ? cut.slice(0, nl) : cut
-  return `${base}\n\u2026`
+// Split a turn into [body, ask], where `ask` is the trailing ask block.
+//
+// Anchored on the LAST strong marker rather than the first, because `Next:`
+// (and occasionally `Needs from you:`) also appear inside earlier Run log
+// entries — anchoring on the first would classify most of the turn as "the ask"
+// and defeat the point. When both strong markers are present we start at the
+// earlier of the two final pair so `Needs from you:` and `Your call:` travel
+// together. Returns `ask === ''` when the turn has no ask at all.
+export function splitAsk(turn) {
+  const text = String(turn == null ? '' : turn)
+  const lines = text.split('\n')
+  let lastNeeds = -1
+  let lastCall = -1
+  let lastWeak = -1
+  for (let i = 0; i < lines.length; i++) {
+    if (ASK_STRONG_RE.test(lines[i])) {
+      if (/needs from you/i.test(lines[i])) lastNeeds = i
+      else lastCall = i
+    } else if (ASK_WEAK_RE.test(lines[i])) lastWeak = i
+  }
+
+  let start = -1
+  if (lastNeeds >= 0 && lastCall >= 0) start = Math.min(lastNeeds, lastCall)
+  else if (lastNeeds >= 0) start = lastNeeds
+  else if (lastCall >= 0) start = lastCall
+  else start = lastWeak
+
+  if (start < 0) return { body: text, ask: '' }
+  return {
+    body: lines.slice(0, start).join('\n').replace(/\s+$/, ''),
+    ask: lines.slice(start).join('\n').trim(),
+  }
 }
 
-// Build the HTML message: a bold task header + the agent turn rendered as
-// Telegram HTML. Leaves headroom under the 4096 char cap for tag expansion.
-function formatForTelegram(taskId, title, turn) {
-  const header = title
+// Greedily pack whole markdown lines into chunks whose CONVERTED HTML fits
+// `room`. Converting per chunk is what keeps each one tag-balanced:
+// `mdToTelegramHtml` is line-based and closes <pre>/<blockquote> itself, so a
+// chunk boundary can never fall inside a tag.
+//
+// A single line longer than `room` on its own is a degenerate case (a giant
+// table row); it gets hard-trimmed rather than looping forever.
+function chunkMarkdown(md, room) {
+  const lines = String(md).split('\n')
+  const chunks = []
+  let current = []
+
+  const htmlLen = (arr) => mdToTelegramHtml(arr.join('\n')).length
+
+  for (const line of lines) {
+    if (current.length === 0) {
+      // A lone over-long line can't be packed with anything; shrink it directly.
+      if (htmlLen([line]) > room) {
+        let cut = line
+        while (cut.length > 0 && mdToTelegramHtml(cut).length > room) {
+          cut = cut.slice(0, Math.max(0, Math.floor(cut.length * 0.9) - 1))
+        }
+        chunks.push(cut)
+        continue
+      }
+      current.push(line)
+      continue
+    }
+    if (htmlLen([...current, line]) > room) {
+      chunks.push(current.join('\n'))
+      current = []
+      if (htmlLen([line]) > room) {
+        let cut = line
+        while (cut.length > 0 && mdToTelegramHtml(cut).length > room) {
+          cut = cut.slice(0, Math.max(0, Math.floor(cut.length * 0.9) - 1))
+        }
+        chunks.push(cut)
+        continue
+      }
+      current.push(line)
+      continue
+    }
+    current.push(line)
+  }
+  if (current.length) chunks.push(current.join('\n'))
+  return chunks.filter((c) => c.trim() !== '')
+}
+
+// Build the message(s) for one agent turn: a bold task header + the turn
+// rendered as Telegram HTML, always tag-balanced, and NEVER missing the ask.
+//
+// History, because two separate bugs lived here:
+//
+// 1. A raw `msg.slice(...)` used to cut the generated HTML at an arbitrary
+//    character, landing inside a tag. Telegram rejected the whole message
+//    (`can't parse entities: Can't find end tag corresponding to start tag "b"`)
+//    and the send silently downgraded to plain text, losing ALL formatting.
+//    Fixed by only ever cutting markdown at a LINE boundary, where
+//    `mdToTelegramHtml` guarantees balance.
+//
+// 2. That fix still kept a PREFIX of the turn — and an agent turn puts its ask
+//    (`Needs from you:` / `Your call:`) at the END. So on any turn over the cap,
+//    the one part the reader is supposed to act on was exactly the part thrown
+//    away. Measured across 239 live journals: 55 turns truncated, 33 of them
+//    with the ask silently deleted. On the surface he actually reads, those
+//    tasks looked like commentary rather than a question. (GH #210.)
+//
+// So: SPLIT instead of truncate. The turn is chunked at line boundaries into up
+// to MAX_PARTS messages posted in order to the same topic. If it still doesn't
+// fit, the body is trimmed — but the ask is carried onto the final part with an
+// explicit "trimmed" marker, so an ask is never silently dropped.
+export function formatForTelegramParts(taskId, title, turn) {
+  const base = title
     ? `\u{1F4CB} Task #${taskId} \u2014 ${title}`
     : `\u{1F4CB} Task #${taskId}`
-  const headerHtml = `<b>${escapeHtml(header)}</b>`
-  // Reserve room for the header, the blank line, and tag expansion.
-  const budget = Math.max(0, TELEGRAM_MAX - headerHtml.length - 2 - 400)
-  const bodyHtml = mdToTelegramHtml(truncateMarkdown(turn, budget))
-  let msg = `${headerHtml}\n\n${bodyHtml}`
-  if (msg.length > TELEGRAM_MAX) msg = msg.slice(0, TELEGRAM_MAX - 1) + '\u2026'
-  return msg
+  const headerFor = (part, total) =>
+    `<b>${escapeHtml(total > 1 ? `${base} (${part}/${total})` : base)}</b>`
+
+  // Budget for a single-message post.
+  const roomOne = Math.max(0, TELEGRAM_MAX - headerFor(1, 1).length - 2)
+  const wholeHtml = mdToTelegramHtml(turn)
+  if (wholeHtml.length <= roomOne) return [`${headerFor(1, 1)}\n\n${wholeHtml}`]
+
+  // Multi-part: the header now carries a counter, so budget against that.
+  const room = Math.max(0, TELEGRAM_MAX - headerFor(1, 1).length - PART_COUNTER_RESERVE - 2)
+  const { body, ask } = splitAsk(turn)
+
+  let chunks = chunkMarkdown(turn, room)
+
+  if (chunks.length > MAX_PARTS) {
+    // Too long even when split. Give the ask the LAST parts and the body what is
+    // left, so the thing the reader must act on always arrives.
+    //
+    // Subtlety worth keeping: the ask block itself can exceed one message (a turn
+    // whose ask is a checklist — #272's is 7.8k chars). Keep the ask's OPENING
+    // chunks, not its closing ones: `**Needs from you:**` is the first line of
+    // the block, so trimming from the front deletes the very marker that makes it
+    // an ask. A first cut of this did exactly that and still lost #272 and #437.
+    const trimmedNote = '\u2702\ufe0f *Trimmed for Telegram \u2014 full text is in the journal.*'
+    const askChunks = ask
+      ? chunkMarkdown(`${trimmedNote}\n\n${ask}`, room)
+      : [trimmedNote]
+    // Always leave at least one part for the body.
+    const askKeep = askChunks.slice(0, Math.max(1, Math.min(askChunks.length, MAX_PARTS - 1)))
+    const headKeep = chunkMarkdown(body, room).slice(0, Math.max(0, MAX_PARTS - askKeep.length))
+    chunks = [...headKeep, ...askKeep]
+  }
+
+  const total = chunks.length
+  return chunks.map((c, i) => `${headerFor(i + 1, total)}\n\n${mdToTelegramHtml(c)}`)
 }
 
 // Plain-text fallback (no parse_mode) for the rare case Telegram rejects our
@@ -81,10 +232,31 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     return topicId
   }
 
+  // The set of task IDs currently on the completed board, read at most once per
+  // run. Returns null when the board can't be read, which callers treat as "no
+  // suppression" so a missing board never silences the mirror.
+  let completedIds
+  async function loadCompletedIds() {
+    if (completedIds !== undefined) return completedIds
+    if (typeof io.readCompletedBoard !== 'function') {
+      completedIds = null
+      return completedIds
+    }
+    try {
+      completedIds = new Set(parseCompletedTaskIds(await io.readCompletedBoard()))
+    } catch (err) {
+      logger(`could not read completed board (${err.message}); posting to all tasks`)
+      completedIds = null
+    }
+    return completedIds
+  }
+
   async function syncUp() {
     const posted = []
     const created = []
+    const suppressed = []
     const journals = await io.listJournals()
+    const completed = await loadCompletedIds()
 
     for (const { taskId } of journals) {
       if (!isAllowed(taskId)) continue
@@ -104,6 +276,27 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       // as already-seen up front by `baseline` (run once), so their first topic
       // is created only when the agent next writes to them.
       if (task && task.lastPostedHash === hash) continue
+
+      // A task that has reached the completed board is finished, and the user
+      // should not hear about it again. Posting was previously gated ONLY on the
+      // turn hash changing, which made it fire for reasons that have nothing to
+      // do with the task being worked: any maintenance edit to an old journal
+      // (reformatting a marker, repairing a block so the digest can parse it)
+      // changes the parsed turn and therefore re-posted a months-old entry into
+      // a closed topic. syncArchive() closes those topics, but the bot is a group
+      // ADMIN and Telegram lets admins post into closed topics — so the message
+      // landed anyway and the topic resurfaced, looking exactly like the agent
+      // had started working a task the user had already closed.
+      //
+      // Absorb the new hash rather than just skipping: the change is
+      // acknowledged, so the task stays quiet on later runs instead of queueing
+      // up a stale post for whenever it next becomes eligible.
+      if (completed && completed.has(taskId) && !(task && task.userEngaged)) {
+        setLastPosted(state, taskId, hash)
+        suppressed.push(taskId)
+        logger(`suppressed post for completed task #${taskId} (no user reply since it closed)`)
+        continue
+      }
 
       // Adopt an existing topic id from the journal's own tg-meta marker when our
       // local state has forgotten it. state.json is machine-local and can be lost
@@ -133,69 +326,445 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
         await io.writeJournal(taskId, withMeta)
       }
 
-      try {
-        await client.sendMessage({
-          chatId,
-          text: formatForTelegram(taskId, title, turn),
-          messageThreadId: topicId,
-          parseMode: 'HTML',
-        })
-      } catch (err) {
-        // If Telegram rejects our HTML (e.g. an unexpected entity), don't lose
-        // the update — resend the same turn as plain text.
-        logger(`HTML send failed for task #${taskId} (${err.message}); retrying as plain text`)
-        await client.sendMessage({
-          chatId,
-          text: formatPlain(taskId, title, turn),
-          messageThreadId: topicId,
-        })
+      // Post the turn as one message, or as an ordered run of parts when it is
+      // too long for one. `setLastPosted` runs only after the whole run is sent,
+      // so a mid-run failure retries the turn rather than recording it as done;
+      // and the plain-text fallback is per-part, so one rejected part never
+      // costs the rest of the turn.
+      const parts = formatForTelegramParts(taskId, title, turn)
+      for (const [index, text] of parts.entries()) {
+        try {
+          await client.sendMessage({
+            chatId,
+            text,
+            messageThreadId: topicId,
+            parseMode: 'HTML',
+          })
+        } catch (err) {
+          // If Telegram rejects our HTML (e.g. an unexpected entity), don't lose
+          // the update — resend the same content as plain text.
+          logger(
+            `HTML send failed for task #${taskId} part ${index + 1}/${parts.length} ` +
+              `(${err.message}); retrying as plain text`,
+          )
+          await client.sendMessage({
+            chatId,
+            text: formatPlain(taskId, parts.length > 1 ? `${title} (${index + 1}/${parts.length})` : title, turn),
+            messageThreadId: topicId,
+          })
+        }
       }
       setLastPosted(state, taskId, hash)
+      // Consume the engagement: the user's message has now been answered. A
+      // closed task therefore delivers one agent turn per user reply and then
+      // goes quiet again, instead of the flag latching it permanently open.
+      if (task && task.userEngaged) setUserEngaged(state, taskId, false)
       posted.push(taskId)
-      logger(`posted task #${taskId} to topic ${topicId}`)
+      logger(
+        `posted task #${taskId} to topic ${topicId}` +
+          (parts.length > 1 ? ` in ${parts.length} parts` : ''),
+      )
     }
 
-    return { posted, created }
+    return { posted, created, suppressed }
   }
 
   async function syncDown() {
     const folded = []
+    const unrouted = []
     const offset = state.updateOffset > 0 ? state.updateOffset : undefined
     const updates = await client.getUpdates({
       offset,
       allowedUpdates: ['message'],
     })
 
+    // Only paid for when an off-topic reply actually shows up.
+    let knownTaskIds = null
+    const loadKnownTaskIds = async () => {
+      if (!knownTaskIds) knownTaskIds = (await io.listJournals()).map((j) => j.taskId)
+      return knownTaskIds
+    }
+
     let maxUpdateId = state.updateOffset - 1
     for (const update of updates) {
       if (update.update_id > maxUpdateId) maxUpdateId = update.update_id
       const msg = update.message
-      if (!msg || msg.message_thread_id == null) continue
+      if (!msg) continue
       if (msg.from && msg.from.is_bot) continue
       const text = msg.text
       if (!text || !text.trim()) continue
       // Ignore the service message that opens a forum topic.
       if (msg.forum_topic_created) continue
 
-      const taskId = findTaskByTopic(state, msg.message_thread_id)
-      if (!taskId) continue
+      // A reply inside a task's topic is unambiguous — it answers that task.
+      const topicTaskId =
+        msg.message_thread_id != null ? findTaskByTopic(state, msg.message_thread_id) : null
 
-      const content = await io.readJournal(taskId)
+      // Otherwise it's an answer to a cross-task digest (General, or a topic we
+      // don't own). Previously these were dropped silently; now we route by the
+      // task IDs named in the text. See routeReply.js.
+      const routed = topicTaskId
+        ? [{ taskId: topicTaskId, text }]
+        : coalesceByTask(parseReplyRouting(text, { knownTaskIds: await loadKnownTaskIds() }))
+
+      if (!routed.length) {
+        // Nothing to file, but the user did say something — surface it instead
+        // of pretending it never arrived.
+        unrouted.push({ text, messageId: msg.message_id, threadId: msg.message_thread_id ?? null })
+        logger(`could not route reply: ${text.slice(0, 80)}`)
+        continue
+      }
+
       const day = now().toISOString().slice(0, 10)
-      const updated = appendUserReply(content, { text, date: day })
-      await io.writeJournal(taskId, updated)
-      folded.push({ taskId, text })
-      logger(`folded reply into task #${taskId}`)
+      for (const entry of routed) {
+        let content
+        try {
+          content = await io.readJournal(entry.taskId)
+        } catch {
+          content = null
+        }
+        if (content == null) {
+          // A named task with no journal file yet: don't lose the answer.
+          unrouted.push({
+            text: entry.text,
+            messageId: msg.message_id,
+            threadId: msg.message_thread_id ?? null,
+          })
+          logger(`no journal for task #${entry.taskId}; reply left unrouted`)
+          continue
+        }
+        const updated = appendUserReply(content, { text: entry.text, date: day })
+        await io.writeJournal(entry.taskId, updated)
+        // The user has spoken about this task, so it is a live conversation even
+        // if the task itself is closed. Without this, the completed-board guard
+        // in syncUp would swallow the agent's reply and the user would be left
+        // asking a question into a topic that never answers.
+        setUserEngaged(state, entry.taskId, true)
+        folded.push({ taskId: entry.taskId, text: entry.text })
+        logger(`folded reply into task #${entry.taskId}`)
+      }
+
+      // Close the loop: a batched answer is worthless if the user can't tell it
+      // registered. Ack only off-topic replies — inside a task topic the next
+      // agent turn is itself the confirmation.
+      if (!topicTaskId) {
+        await acknowledge(msg, routed)
+      }
     }
 
     if (updates.length) setOffset(state, maxUpdateId + 1)
-    return { folded }
+    return { folded, unrouted }
+  }
+
+  // Best-effort receipt for a batched reply. Never let a failed ack abort the
+  // run — the answers are already safely in the journals by this point.
+  async function acknowledge(msg, routed) {
+    const filed = routed.map((r) => `#${r.taskId}`).join(', ')
+    try {
+      await client.sendMessage({
+        chatId,
+        text: `\u2705 Filed to ${filed} \u2014 I'll pick these up on the next run.`,
+        messageThreadId: msg.message_thread_id ?? undefined,
+        replyToMessageId: msg.message_id,
+      })
+    } catch (err) {
+      logger(`ack failed: ${err.message}`)
+    }
   }
 
   async function syncOnce() {
     const up = await syncUp()
+    const archived = await syncArchive()
     const down = await syncDown()
-    return { up, down }
+    // Digest goes LAST so it reflects the turns just posted, and so a failure
+    // to compose it can never prevent the mirroring/fold-back work above from
+    // being persisted.
+    let digest = { posted: false, count: 0 }
+    if (config.digestEnabled === false) {
+      logger('digest disabled (TELEGRAM_BRIDGE_DIGEST=off); General thread left alone')
+      digest = { posted: false, count: 0, skipped: true }
+    } else {
+      try {
+        digest = await syncDigest()
+      } catch (err) {
+        logger(`digest failed (${err.message}); continuing`)
+      }
+    }
+    return { up, archived, down, digest }
+  }
+
+  // Archive/unarchive task topics to mirror the board. A task that has moved to
+  // planner-completed.md — OR that the user DELETED in the app — gets its forum
+  // topic CLOSED (Telegram's reversible "archive": it collapses under the
+  // group's Closed section and stops new non-admin posts). A task that later
+  // leaves the completed board (reopened) gets its topic REOPENED. Both
+  // directions are idempotent — we only call Telegram when the desired
+  // archived-state differs from what we recorded, so re-runs are no-ops. A
+  // per-topic failure (e.g. the bot lacks can_manage_topics) is logged and
+  // skipped; it never aborts the run and is retried next time.
+  //
+  // Deleted tasks are included because a deletion removes the row from BOTH
+  // boards, so `completed.has(id)` is false for them forever and their topics
+  // used to stay open permanently. On the live planner that had accumulated 65
+  // still-open topics for tasks that no longer exist.
+  async function syncArchive() {
+    const archived = []
+    const reopened = []
+    // Gated on the "Archive completed topics" setting (default on). When the
+    // user turns it off we neither read the board nor touch any topic.
+    if (config.archiveCompleted === false) return { archived, reopened, skipped: true }
+    if (typeof io.readCompletedBoard !== 'function') return { archived, reopened }
+
+    const board = await io.readCompletedBoard()
+    const completed = new Set(parseCompletedTaskIds(board))
+
+    // Tombstoned (deleted-in-app) tasks. Optional: an io without
+    // readSyncRecords keeps the old completed-board-only behaviour, so existing
+    // in-memory test harnesses and older callers are unaffected.
+    const deleted = new Set()
+    if (typeof io.readSyncRecords === 'function') {
+      try {
+        for (const raw of await io.readSyncRecords()) {
+          for (const id of parseDeletedTaskIds(raw)) deleted.add(id)
+        }
+      } catch (err) {
+        logger(`could not read sync records (${err.message}); archiving completed only`)
+      }
+    }
+
+    for (const [taskId, task] of Object.entries(state.tasks)) {
+      if (!task || task.topicId == null) continue
+      if (!isAllowed(taskId)) continue
+
+      const isDeleted = deleted.has(taskId)
+      const shouldArchive = completed.has(taskId) || isDeleted
+      const isArchived = !!task.archived
+      if (shouldArchive === isArchived) continue
+
+      try {
+        if (shouldArchive) {
+          await client.closeForumTopic({ chatId, messageThreadId: task.topicId })
+          setArchived(state, taskId, true)
+          archived.push(taskId)
+          logger(
+            `archived (closed) topic ${task.topicId} for ` +
+              `${isDeleted ? 'deleted' : 'completed'} task #${taskId}`,
+          )
+        } else {
+          await client.reopenForumTopic({ chatId, messageThreadId: task.topicId })
+          setArchived(state, taskId, false)
+          reopened.push(taskId)
+          logger(`reopened topic ${task.topicId} for reactivated task #${taskId}`)
+        }
+      } catch (err) {
+        logger(
+          `archive: ${shouldArchive ? 'close' : 'reopen'} failed for task #${taskId} ` +
+            `(topic ${task.topicId}): ${err.message}`,
+        )
+      }
+    }
+
+    return { archived, reopened }
+  }
+
+  // Resolve WHERE the digest should be posted.
+  //
+  // Returns the message_thread_id to post into, or undefined for the General
+  // thread (the historical behaviour, kept as the default so existing setups
+  // are unaffected).
+  //
+  // A numeric setting is used as-is. A name is resolved to a topic exactly
+  // once and cached in state — re-resolving every run would create a duplicate
+  // "Waiting on you" topic every night, which is the obvious failure mode here.
+  // Changing the configured name is treated as pointing at a different topic,
+  // so it resolves afresh rather than quietly posting into the old one.
+  async function resolveDigestThreadId() {
+    const setting = (config.digestTopic || '').trim()
+    if (!setting) return undefined
+
+    if (/^\d+$/.test(setting)) return Number(setting)
+
+    if (state.digestTopicId != null && state.digestTopicName === setting) {
+      return state.digestTopicId
+    }
+
+    const result = await client.createForumTopic({ chatId, name: setting })
+    const topicId = result.message_thread_id
+    setDigestTopic(state, topicId, setting)
+    logger(`created digest topic "${setting}" (${topicId})`)
+    return topicId
+  }
+
+  // Post ONE consolidated "waiting on you" message listing every task's open
+  // ask. It goes to the group's General thread by default, or to a dedicated
+  // forum topic when TELEGRAM_BRIDGE_DIGEST_TOPIC names one.
+  //
+  // The asks are read from each task's NEWEST agent turn via latestAgentTurn —
+  // never by grepping the journal for its last `Needs from you:` marker, which
+  // can be weeks stale (see the note at the top of digest.js). Getting this
+  // wrong would rebroadcast dead asks nightly.
+  //
+  // ⚠️ With ONE bounded exception. Journals are bottom-appended chat threads, so
+  // the "newest agent turn" is often a conversational reply — and a reply about
+  // some *other* task carries no ask marker. That silently demoted the task's
+  // real, still-open ask out of the queue entirely: measured live 2026-08-23,
+  // **38 tasks** had a properly-marked ask in their current agent block that the
+  // user never saw, including one-word wins (#405 "go", #391 `merge 120`, and
+  // the #371/#372/#388/#404 PR approvals). That is ~27% of all open asks.
+  //
+  // So when the newest turn has no ask, fall back to `agentBlockText()` — the
+  // sentinel block only, stopping at the first chat entry. That is NOT the
+  // whole-file grep the warning above forbids: it cannot reach a superseded
+  // block or a marker buried in an old Run log, and the block is by definition
+  // the agent's *current* state for the task (it holds the live Status line,
+  // rewritten every time the agent acts). Terminal statuses are excluded so a
+  // finished task can never be revived into the queue.
+  //
+  // Idempotent: the composed text is hashed and compared against the last one
+  // posted, so a run where nothing changed posts nothing at all.
+  async function syncDigest({ force = false } = {}) {
+    const entries = []
+    const journals = await io.listJournals()
+
+    for (const { taskId } of journals) {
+      if (!isAllowed(taskId)) continue
+      const content = await io.readJournal(taskId)
+      if (!hasAgentBlock(content)) continue
+      const turn = latestAgentTurn(content)
+      const block = agentBlockText(content)
+      const status = agentBlockStatus(block)
+      // An unparseable turn must NOT end the task's chances. A journal whose
+      // newest agent entry is malformed - e.g. the `<!-- from: overnight-agent
+      // -->` marker written ABOVE its `## <date>` heading, which makes the turn
+      // body parse as empty - would otherwise be dropped here, before the
+      // agent-block fallback below ever ran. Observed live on #273, a `## Today`
+      // task holding a real `**Needs from you:** just approve` in its block.
+      let ask = turn ? extractAskEntry(turn) : null
+      // A `weak` ask was salvaged from boilerplate - SKILL.md's generic
+      // `**Your call:**` line, or the remainder of a `Needs from you: none …`
+      // that opened by dismissing the user. Both survive verbatim into turns
+      // the agent has already closed, so on their own they must never drag a
+      // finished task back into the approval queue. Strong markers keep their
+      // existing behaviour and are still honoured on any status.
+      if (ask && ask.weak && DIGEST_TERMINAL_STATUS.has(status)) ask = null
+      if (!ask) {
+        if (!block || DIGEST_TERMINAL_STATUS.has(status)) continue
+        ask = extractAskEntry(block)
+        if (!ask) continue
+      }
+      entries.push({
+        taskId,
+        title: parseTitle(content),
+        ask: ask.text,
+        source: ask.source,
+      })
+    }
+
+    // The user's OWN board is the priority order — it is the thing he
+    // maintains by hand, and `## Today` / 🔴 / row position is exactly how he
+    // says what matters. So the board leads, and the ask's marker style only
+    // breaks ties between tasks sitting at the same board position.
+    //
+    // This deliberately inverts the previous key order. Ranking `needs` above
+    // `next` FIRST meant a single formatting choice inside a journal outranked
+    // every priority the user had set: a 🔴 `## Today` task whose newest turn
+    // happened to phrase its ask as `Next:` sorted below all ~81 ordinary
+    // `Needs from you:` asks and fell off the size-capped message entirely.
+    // Observed live one day after the board-order change landed: #356 (🔴),
+    // #434 (`merge 154`) and #407 (`merge 124`) were all pushed out by
+    // ordinary household rows, while the digest claimed to lead with the P0
+    // merge asks. Marker style drifts every time a journal gains a turn; the
+    // board does not, so the board has to be the stable key.
+    //
+    // Falls back to newest-first when there is no board to read.
+    let board = null
+    if (typeof io.readBoard === 'function') {
+      try {
+        board = parseBoardOrder(await io.readBoard())
+      } catch {
+        board = null
+      }
+    }
+    const rank = (e) => (e.source === 'next' ? 1 : 0)
+    entries.sort(
+      (a, b) =>
+        boardRank(board, a.taskId) - boardRank(board, b.taskId) ||
+        boardIndex(board, a.taskId) - boardIndex(board, b.taskId) ||
+        rank(a) - rank(b) ||
+        Number(b.taskId) - Number(a.taskId),
+    )
+
+    // Only surface the privacy warning when it is actually true, so it stays
+    // meaningful instead of becoming boilerplate the user learns to skip.
+    //
+    // `can_read_all_group_messages` ALONE is not sufficient, and trusting it
+    // was an active bug: Telegram delivers every group message to a bot that
+    // is a group ADMINISTRATOR regardless of the privacy flag, but `getMe`
+    // keeps reporting `can_read_all_group_messages: false` for that bot. So an
+    // admin bot printed "a message you merely type in the group is never
+    // delivered" on top of every digest — false, and it put friction on the
+    // exact channel the user chose as primary, telling him to reply-to-bot
+    // when plain typing works fine.
+    //
+    // Judge by admin status first; only fall back to the flag when membership
+    // can't be read. Any failure keeps the warning OFF, because a spurious
+    // warning is worse than a missing one.
+    let privacyModeOn = false
+    try {
+      const me = await client.getMe()
+      const flagged = !!me && me.can_read_all_group_messages === false
+      if (flagged && typeof client.getChatMember === 'function' && me.id != null) {
+        try {
+          const member = await client.getChatMember({ chatId, userId: me.id })
+          const isAdmin =
+            member &&
+            (member.status === 'administrator' || member.status === 'creator')
+          privacyModeOn = !isAdmin
+        } catch {
+          // Membership unreadable — fall back to the flag alone.
+          privacyModeOn = true
+        }
+      } else {
+        privacyModeOn = flagged
+      }
+    } catch {
+      privacyModeOn = false
+    }
+
+    const md = buildDigest(entries, {
+      date: now().toISOString().slice(0, 10),
+      privacyModeOn,
+      preserveOrder: true,
+    })
+    const hash = hashDigest(md)
+
+    if (!force && state.lastDigestHash === hash) {
+      logger(`digest unchanged (${entries.length} open asks); not posting`)
+      return { posted: false, count: entries.length, hash }
+    }
+
+    // Resolved only once we know we're actually posting, so a run with an
+    // unchanged queue never creates a topic as a side effect.
+    const messageThreadId = await resolveDigestThreadId()
+
+    try {
+      await client.sendMessage({
+        chatId,
+        text: mdToTelegramHtml(md),
+        parseMode: 'HTML',
+        messageThreadId,
+      })
+    } catch (err) {
+      logger(`HTML digest send failed (${err.message}); retrying as plain text`)
+      await client.sendMessage({ chatId, text: md, messageThreadId })
+    }
+
+    setLastDigest(state, hash)
+    logger(
+      `posted digest with ${entries.length} open ask(s)` +
+        (messageThreadId != null ? ` to topic ${messageThreadId}` : ' to General'),
+    )
+    return { posted: true, count: entries.length, hash, threadId: messageThreadId ?? null }
   }
 
   // One-time (idempotent) setup: record each existing agent-block journal's
@@ -228,5 +797,58 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     return { seen, skipped }
   }
 
-  return { ensureTopic, syncUp, syncDown, syncOnce, baseline }
+  // Migration for the TURN_END boundary fix. Changing what `latestAgentTurn()`
+  // returns changes `hashTurn()`, and syncUp dedupes on exactly that hash — so
+  // without this, shipping the fix would re-post one stale turn for every
+  // journal whose stamp used to be swallowed (36 live journals when this was
+  // written). That is the very duplicate-message symptom the fix exists to stop.
+  //
+  // It is deliberately narrow: a task is re-baselined ONLY when its stored hash
+  // matches the LEGACY parse of the journal as it stands right now. That proves
+  // the stored hash refers to this exact turn, already delivered, and that the
+  // only thing that moved is how we parse it. Any task whose stored hash matches
+  // neither parse has genuinely new content and is left alone, so a real pending
+  // post can never be silently absorbed.
+  //
+  // Idempotent: after it runs, stored === new hash, which matches no legacy hash
+  // that differs, so a second run migrates nothing.
+  async function rebaselineTurnEnd() {
+    const migrated = []
+    const unchanged = []
+    const pending = []
+    const journals = await io.listJournals()
+
+    for (const { taskId } of journals) {
+      if (!isAllowed(taskId)) continue
+      const task = getTask(state, taskId)
+      if (!task || !task.lastPostedHash) continue
+
+      const content = await io.readJournal(taskId)
+      if (!hasAgentBlock(content)) continue
+
+      const next = latestAgentTurn(content)
+      const legacy = latestAgentTurn(content, { includeTurnEnd: true })
+      if (!next || !legacy) continue
+
+      const nextHash = hashTurn(next)
+      const legacyHash = hashTurn(legacy)
+
+      if (nextHash === legacyHash) {
+        unchanged.push(taskId) // no stamp in this turn — the fix is a no-op here
+        continue
+      }
+      if (task.lastPostedHash === legacyHash) {
+        setLastPosted(state, taskId, nextHash)
+        migrated.push(taskId)
+      } else {
+        // Stored hash matches neither parse: this turn has moved on since it was
+        // posted, so it is legitimately due a post. Leave it for syncUp.
+        pending.push(taskId)
+      }
+    }
+
+    return { migrated, unchanged, pending }
+  }
+
+  return { ensureTopic, syncUp, syncDown, syncArchive, syncOnce, syncDigest, baseline, rebaselineTurnEnd }
 }

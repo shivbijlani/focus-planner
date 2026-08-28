@@ -129,18 +129,27 @@ async function ensureToken(providerConfig) {
 
 async function listRemote(providerConfig) {
   const token = await ensureToken(providerConfig)
-  const url = new URL(`${DRIVE_BASE}/files`)
-  url.searchParams.set('spaces', SPACES)
-  url.searchParams.set('fields', 'files(id,name,modifiedTime)')
-  url.searchParams.set('pageSize', '1000')
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-  if (!res.ok) throw new Error(`Google list failed: ${res.status}`)
-  const data = await res.json()
-  return (data.files || []).map(f => ({
-    name: f.name,
-    mtime: new Date(f.modifiedTime).getTime(),
-    _id: f.id,
-  }))
+  // Google Drive paginates `files.list`: each response carries at most
+  // `pageSize` files plus a `nextPageToken` for the next page. Reading only the
+  // first page silently dropped everything past the first 1000 files (the same
+  // class of bug that hid OneDrive journals past page 1), so follow the token.
+  const out = []
+  let pageToken = null
+  do {
+    const url = new URL(`${DRIVE_BASE}/files`)
+    url.searchParams.set('spaces', SPACES)
+    url.searchParams.set('fields', 'nextPageToken,files(id,name,modifiedTime)')
+    url.searchParams.set('pageSize', '1000')
+    if (pageToken) url.searchParams.set('pageToken', pageToken)
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    if (!res.ok) throw new Error(`Google list failed: ${res.status}`)
+    const data = await res.json()
+    for (const f of data.files || []) {
+      out.push({ name: f.name, mtime: new Date(f.modifiedTime).getTime(), _id: f.id })
+    }
+    pageToken = data.nextPageToken || null
+  } while (pageToken)
+  return out
 }
 
 async function findFileId(providerConfig, filename) {

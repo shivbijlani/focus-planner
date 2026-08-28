@@ -10,6 +10,7 @@ import {
   gcTombstones,
   serializeSidecar,
   parseSidecar,
+  isCollapse,
 } from './merge.js'
 
 const snap = (records = {}, meta = {}) => ({ records, meta })
@@ -125,6 +126,88 @@ describe('mergeCollections — per-record LWW with tombstones', () => {
   })
 })
 
+describe('#280 zero-clock freeze — an implicit sentinel must not become durable state', () => {
+  // Live evidence (2026-08-26): 14 alive rows across the two planner sidecars sat
+  // at {clock:0, deleted:false, fp:<real>} — 5 of 122 active, 9 of 53 completed —
+  // while 0 of 353 tombstones did. merge.js's own rule is that clock 0 "loses to
+  // any explicit clock", so those rows were primed to lose every future merge,
+  // which is how a completed task double-lists onto both boards.
+  it('THE BUG: a remote record with no meta entry is no longer persisted at clock 0', () => {
+    // The remote file gained `new` via an external edit (OneDrive web / desktop
+    // server / the agent) that never stamped the sidecar. The remote HAS a
+    // sidecar; it simply has no entry for that row.
+    const local = snap({ a: 'A' }, { a: { clock: 1000, deleted: false } })
+    const remote = snap(
+      { a: 'A', new: 'added externally' },
+      { a: { clock: 1000, deleted: false } },
+    )
+    const m = mergeCollections(local, remote, { now: 5000 })
+    expect(m.records.new).toBe('added externally')
+    expect(m.meta.new).toEqual({ clock: 5000, deleted: false })
+    // Rows that already had meta are untouched — this is why production showed a
+    // subset (5 of 122) rather than every row.
+    expect(m.meta.a).toEqual({ clock: 1000, deleted: false })
+  })
+
+  it('the sentinel still loses ties inside the merge it was created for', () => {
+    // Normalization happens when persisting the winner, after the comparison, so
+    // it cannot change who wins. The unmetaed side must still lose.
+    const local = snap({ r: 'stale-unmetaed' }, {})
+    const remote = snap({ r: 'real write' }, { r: { clock: 7, deleted: false } })
+    const m = mergeCollections(local, remote, { now: 5000 })
+    expect(m.records.r).toBe('real write')
+    expect(m.meta.r).toEqual({ clock: 7, deleted: false })
+  })
+
+  it('a tombstone is never strengthened — clock 0 deletes keep their clock', () => {
+    // Narrow by design: touching tombstones could turn a legacy clock-0 delete
+    // into something that outranks a real write, i.e. a resurrection.
+    const local = snap({}, { d: { clock: 0, deleted: true } })
+    const remote = snap({}, {})
+    const m = mergeCollections(local, remote, { now: 5000 })
+    expect(m.meta.d).toEqual({ clock: 0, deleted: true })
+  })
+
+  it('an EXPLICITLY stamped clock 0 is left weak (records.js sidecar-less remote)', () => {
+    // records.js stamps a sidecar-less remote at 0 on purpose, "so a real local
+    // edit wins ties". That deliberate signal must survive; only the implicit
+    // no-meta sentinel is normalized.
+    const local = snap({}, {})
+    const remote = snap({ r: 'legacy backup' }, { r: { clock: 0, deleted: false, fp: fingerprint('legacy backup') } })
+    const m = mergeCollections(local, remote, { now: 5000 })
+    expect(m.records.r).toBe('legacy backup')
+    expect(m.meta.r.clock).toBe(0)
+  })
+
+  it('a normalized row can no longer be beaten by a stale replica', () => {
+    // This is the whole point. Before the fix the row sat at 0 and ANY explicit
+    // clock outranked it; now it survives a stale side that predates it.
+    const frozen = snap({ r: 'v' }, { r: { clock: 0, deleted: false } })
+    const stale = snap({}, { r: { clock: 1, deleted: true } })
+    expect('r' in mergeCollections(frozen, stale, { now: 5000 }).records).toBe(false)
+
+    const repaired = snap({ r: 'v' }, { r: { clock: 5000, deleted: false } })
+    expect(mergeCollections(repaired, stale, { now: 6000 }).records.r).toBe('v')
+  })
+
+  it('is still symmetric and convergent when both sides are unmetaed', () => {
+    const local = snap({ r: 'aaa' }, {})
+    const remote = snap({ r: 'bbb' }, {})
+    const fwd = mergeCollections(local, remote, { now: 5000 })
+    const rev = mergeCollections(remote, local, { now: 5000 })
+    expect(fwd.records).toEqual(rev.records)
+    expect(fwd.meta).toEqual(rev.meta)
+    expect(fwd.meta.r).toEqual({ clock: 5000, deleted: false })
+  })
+
+  it('opts.normalizeZeroClock:false restores the previous behaviour', () => {
+    const local = snap({ a: 'A' }, { a: { clock: 1, deleted: false } })
+    const remote = snap({ a: 'A', new: 'x' }, { a: { clock: 1, deleted: false } })
+    const m = mergeCollections(local, remote, { now: 5000, normalizeZeroClock: false })
+    expect(m.meta.new).toEqual({ clock: 0, deleted: false })
+  })
+})
+
 describe('stamp helpers', () => {
   it('stampWrite / stampDelete set clock + flag', () => {
     const meta = {}
@@ -203,6 +286,65 @@ describe('stampLocalChanges — detect adds/edits/deletes via fingerprint', () =
   it('fingerprint is stable and content-sensitive', () => {
     expect(fingerprint('x')).toBe(fingerprint('x'))
     expect(fingerprint('x')).not.toBe(fingerprint('y'))
+  })
+})
+
+describe('#371 collapse guard — an empty record set must not wipe the board', () => {
+  const aliveMeta = () => ({
+    a: { clock: 100, deleted: false, fp: fingerprint('A') },
+    b: { clock: 100, deleted: false, fp: fingerprint('B') },
+    c: { clock: 100, deleted: false, fp: fingerprint('C') },
+  })
+
+  it('isCollapse: empty records + 2+ alive rows is a collapse', () => {
+    expect(isCollapse({}, aliveMeta())).toBe(true)
+    // Non-empty records is never a collapse.
+    expect(isCollapse({ a: 'A' }, aliveMeta())).toBe(false)
+    // A single alive row deleting to empty is an ordinary edit, not a collapse.
+    expect(isCollapse({}, { a: { clock: 1, deleted: false } })).toBe(false)
+    // Only tombstones alive → nothing to protect.
+    expect(isCollapse({}, { a: { clock: 1, deleted: true } })).toBe(false)
+  })
+
+  it('stampLocalChanges does NOT tombstone all rows when records collapse to empty', () => {
+    const meta = aliveMeta()
+    stampLocalChanges({}, meta, 1784733503532)
+    // Every row stays alive at its original clock — the wipe is refused.
+    expect(meta.a.deleted).toBe(false)
+    expect(meta.b.deleted).toBe(false)
+    expect(meta.c.deleted).toBe(false)
+    expect(meta.a.clock).toBe(100)
+  })
+
+  it('reconcileExternal does NOT tombstone all rows when records collapse to empty', () => {
+    const meta = aliveMeta()
+    reconcileExternal({}, meta, 1784733503532)
+    expect(meta.a.deleted).toBe(false)
+    expect(meta.b.deleted).toBe(false)
+    expect(meta.c.deleted).toBe(false)
+  })
+
+  it('the guard is opt-out so a genuine full clear can still be stamped', () => {
+    const meta = aliveMeta()
+    stampLocalChanges({}, meta, 300, { guardCollapse: false })
+    expect(meta.a.deleted).toBe(true)
+    expect(meta.b.deleted).toBe(true)
+    expect(meta.c.deleted).toBe(true)
+  })
+
+  it('still tombstones a normal single-row removal (not a collapse)', () => {
+    const meta = { a: { clock: 100, deleted: false, fp: fingerprint('A') } }
+    stampLocalChanges({}, meta, 300)
+    expect(meta.a).toEqual({ clock: 300, deleted: true, fp: fingerprint('A') })
+  })
+
+  it('still tombstones the one row that was actually removed from a multi-row board', () => {
+    const meta = aliveMeta()
+    // b and c remain; only a was removed → records is non-empty, so no collapse.
+    stampLocalChanges({ b: 'B', c: 'C' }, meta, 300)
+    expect(meta.a.deleted).toBe(true)
+    expect(meta.b.deleted).toBe(false)
+    expect(meta.c.deleted).toBe(false)
   })
 })
 

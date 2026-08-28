@@ -28,8 +28,51 @@ export function setLastPosted(state, taskId, hash) {
   return state
 }
 
+// Track whether a task's forum topic is currently archived (closed). Used so
+// syncArchive only calls closeForumTopic/reopenForumTopic when the desired
+// state actually changes — making the archive pass idempotent across runs.
+export function setArchived(state, taskId, archived) {
+  const prev = state.tasks[taskId] || {}
+  state.tasks[taskId] = { ...prev, archived: !!archived }
+  return state
+}
+
+// Remember that the user has spoken about this task since we last posted. syncUp
+// stays silent on tasks that have reached the completed board, but that must not
+// swallow a genuine conversation: once the user replies about a finished task,
+// they are owed the agent's answer even though the task is closed. This flag is
+// what distinguishes "the agent touched an old journal" from "the user reopened
+// the conversation". It is cleared as soon as that answer goes out, so a closed
+// task delivers exactly one agent turn per user message and cannot drift back
+// into posting unprompted.
+export function setUserEngaged(state, taskId, engaged) {
+  const prev = state.tasks[taskId] || {}
+  state.tasks[taskId] = { ...prev, userEngaged: !!engaged }
+  return state
+}
+
 export function setOffset(state, offset) {
   state.updateOffset = offset
+  return state
+}
+
+// Content hash of the last "waiting on you" digest we posted. Stored so an
+// unchanged approval queue is not re-posted on every run — the digest is meant
+// to fire every run, which is only tolerable if a no-change run stays silent.
+export function setLastDigest(state, hash) {
+  state.lastDigestHash = hash
+  return state
+}
+
+// Remember the forum topic the digest is posted into, when the user has asked
+// for a dedicated topic by NAME rather than by id. Persisting the resolved id
+// is what makes that safe to re-run: without it, every night would create
+// another "Waiting on you" topic. The name is stored alongside so that renaming
+// the setting is detected and resolved to a fresh topic rather than silently
+// continuing to post into the old one.
+export function setDigestTopic(state, topicId, name) {
+  state.digestTopicId = topicId
+  state.digestTopicName = name
   return state
 }
 
