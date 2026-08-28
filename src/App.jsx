@@ -20,7 +20,7 @@ import { tagMergedRows, resolveRowSourceId } from './combinedRouting.js'
 import { selfHealOutlierIds } from './selfHealIds.js'
 import { recordDeletedId, getActiveTombstoneIds } from './idTombstones.js'
 import { scrollToAndFlashTask } from './scrollToTask.js'
-import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery, boardSearchPlaceholder } from './boardSearch.js'
+import { filterRowsAndRawLines, normalizeQuery, boardSearchPlaceholder } from './boardSearch.js'
 import {
   addDaysToDateString,
   formatSnoozeDate,
