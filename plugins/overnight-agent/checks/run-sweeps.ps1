@@ -529,6 +529,27 @@ $Suite = @(
   # token does not also appear in the delivered prefix. Prose-only loss is reported, not flagged.
   # Reads 9 truncated / 0 actionable today (was 1: #272).
   @{ n = 'truncation-openboard-scope'; bridge = $true }
+  # external-surface-sweep (added 2026-08-28 09:xx PT) — a WHOLE DIMENSION every other detector
+  # here is blind to. All 50 sweeps below read journals and the two boards. `oa-state.ps1 scan`
+  # hashes journals too. So when a task's ask points Shiv at a surface OUTSIDE that set, his reply
+  # lands somewhere nothing looks, and the board reports perfect health while the task is answered.
+  # #459 proved it: he left two comments on a Google Doc on 2026-08-27 and no run noticed for a
+  # DAY, against 239 journals reading 0 reopened / 0 changed / 0 approved. The 08:45 run read them
+  # by hand and wrote "I have not fixed the watching part"; this is that sentence turned into a
+  # mechanism, per the standing #423 lesson that a promise recorded in prose is not a mechanism.
+  # It found a SECOND live instance on its first run: #446, where six comments from 2026-08-27 had
+  # gone equally unseen.
+  # Distinct from external-artifact-sweep, which asks "is this task asking for a fact ANOTHER TASK
+  # already established?" — journals only, subject is the agent's own past side-effects. This asks
+  # "is Shiv's ANSWER going to land where I never look?" and emits a poll worklist.
+  # Four gates keep it narrow (non-terminal + live ask, non-dismissive, an action that leaves a
+  # TRACE on a NAMED surface, and a resolvable identifier); "read the doc" is excluded by design.
+  # SELF-CLEARING, which is the property user-settings.md faults the #198 probe for lacking:
+  # record-surface-poll.ps1 stamps a poll, the row goes quiet for OA_SURFACE_MAX_AGE_HOURS (6),
+  # and a newer ask re-arms it because a stamp predating the ask never counts as covering it.
+  # 17 assertions, all 4 guards mutation-proven load-bearing by mutcheck-external-surface.mjs
+  # (auto-globbed by -IncludeMutchecks). Exits 1 on findings.
+  @{ n = 'external-surface-sweep'; bridge = $false }
 )
 
 if ($IncludeMutchecks) {
