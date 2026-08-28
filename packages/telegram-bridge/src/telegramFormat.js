@@ -47,7 +47,10 @@ function inline(text) {
   // Strikethrough.
   s = s.replace(/~~([^~\n]+)~~/g, '<s>$1</s>')
 
-  // Restore inline code (escaping its own contents).
+  // Restore inline code (escaping its own contents). The NUL bytes are the
+  // deliberate placeholder sentinel written above, chosen because NUL cannot
+  // appear in journal markdown and so can never collide with real content.
+  // eslint-disable-next-line no-control-regex -- NUL is the intentional sentinel, not stray input
   s = s.replace(/\u0000C(\d+)\u0000/g, (_, i) => `<code>${escapeHtml(codes[Number(i)])}</code>`)
   return s
 }
