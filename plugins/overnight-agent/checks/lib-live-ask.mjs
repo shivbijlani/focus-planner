@@ -37,6 +37,10 @@
 const AGENT = '<!-- from: overnight-agent -->';
 const USER = '<!-- from: me -->';
 const SENTINEL = '<!-- OVERNIGHT-AGENT';
+// EXACT copy of the bridge's AGENT_HEADER (journal.js:8). `latestAgentTurn()` accepts
+// this heading as a turn start "whichever appears later", so to the bridge an unstamped
+// turn IS a turn. See the unstamped-turn note in liveAskImpl for why that matters here.
+const AGENT_HEADER = '## \u{1F319} Overnight Agent';
 
 // EXACT copies of the bridge's markers - do not tighten.
 const rxNeeds = /^\s*\*{0,2}Needs from you\b[^:]*:\*{0,2}\s*(.*)$/i;
@@ -66,6 +70,20 @@ function markerOffsets(text, marker) {
   let off = 0;
   for (const line of text.split('\n')) {
     if (line.trim() === marker) out.push(off);
+    off += line.length + 1;
+  }
+  return out;
+}
+
+// Offsets of agent-block headings. Matched with `startsWith`, which is EXACTLY what the
+// bridge's latestAgentTurn() does (journal.js:127) — headings legitimately carry a suffix
+// (`## 🌙 Overnight Agent — the PARs doc, and why …`), and a line-exact match would miss
+// those. Same rule as everywhere else in this file: model the parser, don't re-invent it.
+function headerOffsets(text) {
+  const out = [];
+  let off = 0;
+  for (const line of text.split('\n')) {
+    if (line.startsWith(AGENT_HEADER)) out.push(off);
     off += line.length + 1;
   }
   return out;
@@ -149,6 +167,37 @@ function liveAskImpl(text) {
   const users = markerOffsets(text, USER);
   const lastUser = users.length ? users[users.length - 1] : -1;
   const turnCount = turns.length;
+  const lastMarker = turnCount ? turns[turnCount - 1] : -1;
+
+  // UNSTAMPED TURN (found 2026-08-28, measured on 5 live tasks incl. #448, #446, #462)
+  // ---------------------------------------------------------------------------------
+  // `write-turn.ps1` appends the turn body verbatim and does not add the provenance
+  // marker — it only refuses a STRAY one. So a turn authored as `## 🌙 Overnight Agent`
+  // with the marker omitted is a real, delivered agent reply that carries no marker.
+  //
+  // To the BRIDGE that turn exists: latestAgentTurn() accepts the heading as a turn start,
+  // so it posts to Telegram normally. To THIS function it did not exist — the marker scan
+  // saw the user's message as the newest thing and returned `userSpokeLast: true,
+  // ask: null`. Every consumer keyed on liveAsk (~15 sweeps) then skipped the task
+  // entirely, because they all begin `if (!ask) continue`.
+  //
+  // Measured impact when found: 5 active non-terminal tasks invisible, including #448 —
+  // which carries the top merge asks — #446 (🔴) and #462. This is the same OUTCOME as the
+  // quoted-marker bug recorded above (an ask hidden from every consumer at once) reached
+  // by a different cause, and it is exactly the divergence this file's own header warns
+  // about: "re-deriving turn boundaries in the caller is how detectors drift from the
+  // parser they are meant to model."
+  //
+  // Deliberately ADDITIVE: this only fires when an unstamped turn sits below the user's
+  // last message AND that turn actually carries an ask. If it carries none we fall through
+  // to the original `user-spoke-last` verdict, so the change can only ever restore a
+  // hidden ask — never remove or reinterpret one that was already being reported.
+  const heads = headerOffsets(text);
+  const lastHead = heads.length ? heads[heads.length - 1] : -1;
+  if (lastUser > lastMarker && lastHead > lastUser) {
+    const hit = askFromSlice(text.slice(lastHead), 'unstamped-turn');
+    if (hit) return { ...hit, turnIndex: turnCount, turnCount, userSpokeLast: false };
+  }
 
   // The user spoke after the agent's last turn: the agent owes a REPLY, not an ask.
   if (turnCount && lastUser > turns[turnCount - 1]) {
