@@ -517,12 +517,11 @@ Rules:
 - **It's idempotent and safe to re-run.** The bridge dedupes by a hash of each turn and persists its
   topic-map/offset in `%LOCALAPPDATA%\overnight-agent\telegram-bridge\state.json`, so re-runs never repost
   unchanged content or make duplicate topics.
-- **Respect the allowlist.** If `Telegram → Tasks` names specific IDs, set
-  `$env:TELEGRAM_BRIDGE_TASKS = '<comma-separated ids>'` before the call so only those are mirrored.
-- **Honor the archive setting.** `Telegram → Archive completed topics` (default **on** once Telegram is
-  added) controls whether a task's topic is closed when it reaches the completed board (and reopened if it
-  leaves). It's on by default; only when that row is `off` set `$env:TELEGRAM_BRIDGE_ARCHIVE = 'off'`
-  before the call.
+- **Map settings → env vars (per the bridge README).** For any non-default `Telegram → …` row in
+  `user-settings.md`, set the matching `TELEGRAM_BRIDGE_*` variable before the call; the bridge README's
+  env table is the authoritative list (e.g. `Tasks` → `$env:TELEGRAM_BRIDGE_TASKS = '<ids>'`,
+  `Archive completed topics = off` → `$env:TELEGRAM_BRIDGE_ARCHIVE = 'off'`). Defaults hold when a var is
+  unset, so a new toggle is a README row + a `user-settings.md` row — **no change here**.
 - **Never print the token** in your summary. If the vault lookup or the CLI fails (e.g. no token, network),
   note it briefly in the wrap-up and carry on — a failed mirror must never abort the run.
 
