@@ -217,6 +217,7 @@ export async function reconcileRecordsFile({ path, codec, local, remote, now = D
   const merged = mergeCollections(
     { records: localRecords, meta: localMeta },
     { records: remoteRecords, meta: remoteMeta },
+    { now },
   )
 
   // Guard: never let an empty/structureless frame win. The FRAME record merges

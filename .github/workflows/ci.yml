@@ -38,12 +38,14 @@ jobs:
         run: npm run build
 
   lint:
-    name: Lint (non-blocking)
+    name: Lint
     runs-on: ubuntu-latest
-    # main currently has pre-existing lint errors. Reporting them is useful;
-    # blocking every open PR on them is not, so this job never fails the run.
-    # Flip to blocking once main is lint-clean.
-    continue-on-error: true
+    # main is lint-clean as of the change that added this comment, so this job
+    # now blocks. It was previously non-blocking because two pre-existing errors
+    # on main (an intentional NUL sentinel regex in telegramFormat.js, and a
+    # leftover unused import in App.jsx) made it red on every PR — a permanently
+    # failing check that everyone learned to ignore. Both are fixed; keeping the
+    # job blocking is what stops them coming back.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
