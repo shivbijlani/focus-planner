@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildCompletedRow,
+  completedRowExistsForTask,
   opApplySnoozeTransitions,
+  opAppendToCompleted,
   opBridgeLinks,
   opChangeLinkedId,
   opMoveLinesBetweenSections,
+  opRemoveTaskFromFocusPlan,
+  opRemoveTaskFromFocusPlanResult,
   opSetTaskSnooze,
   opSnoozeTask,
 } from './focusPlanOps.js'
@@ -236,5 +240,95 @@ describe('opBridgeLinks', () => {
   it('handles non-existent removedId gracefully', () => {
     const out = opBridgeLinks(table, '99', '100')
     expect(out).toBe(table)
+  })
+})
+
+describe('opRemoveTaskFromFocusPlanResult', () => {
+  it('removes the row and reports removed:true', () => {
+    const r = opRemoveTaskFromFocusPlanResult(plan, '| 2 | 🟡 | B |', 'Today')
+    expect(r.removed).toBe(true)
+    expect(r.content).not.toContain('| 2 | 🟡 | B |')
+    expect(r.content).toContain('| 3 | 🟡 | C |')
+  })
+
+  it('reports removed:false when the row is not on the board', () => {
+    const r = opRemoveTaskFromFocusPlanResult(plan, '| 77 | 🟡 | Nope |', 'Today')
+    expect(r.removed).toBe(false)
+    expect(r.content).toBe(plan)
+  })
+
+  it('reports removed:false when the row is in a different section', () => {
+    const r = opRemoveTaskFromFocusPlanResult(plan, '| 9 | ⚪ | X |', 'Today')
+    expect(r.removed).toBe(false)
+  })
+
+  it('still matches when the source row has CRLF line endings', () => {
+    const crlf = plan.split('\n').join('\r\n')
+    const r = opRemoveTaskFromFocusPlanResult(crlf, '| 2 | 🟡 | B |', 'Today')
+    expect(r.removed).toBe(true)
+    expect(r.content).not.toContain('| 2 | 🟡 | B |')
+  })
+
+  it('still matches when cell padding differs', () => {
+    const r = opRemoveTaskFromFocusPlanResult(plan, '|2|🟡|B|', 'Today')
+    expect(r.removed).toBe(true)
+  })
+
+  it('keeps the legacy string-returning wrapper working', () => {
+    expect(opRemoveTaskFromFocusPlan(plan, '| 2 | 🟡 | B |', 'Today')).not.toContain('| 2 | 🟡 | B |')
+    expect(opRemoveTaskFromFocusPlan(plan, '| 77 | 🟡 | Nope |', 'Today')).toBe(plan)
+  })
+})
+
+describe('completedRowExistsForTask', () => {
+  const completed = [
+    '# Completed Tasks',
+    '',
+    '## Week of 1/1/2026',
+    '',
+    '| # | 🎯 | Task | Work Priority | Completed Date |',
+    '|---|---|------|---------------|----------------|',
+    '| 42 | ✅ | Ship it | P1 | 2026-01-02 |',
+  ].join('\n')
+
+  it('finds an existing task id', () => {
+    expect(completedRowExistsForTask(completed, '42')).toBe(true)
+  })
+
+  it('does not match a different id', () => {
+    expect(completedRowExistsForTask(completed, '4')).toBe(false)
+  })
+
+  it('ignores blank and placeholder ids', () => {
+    expect(completedRowExistsForTask(completed, '')).toBe(false)
+    expect(completedRowExistsForTask(completed, '-')).toBe(false)
+  })
+})
+
+describe('opAppendToCompleted', () => {
+  const completed = [
+    '# Completed Tasks',
+    '',
+    '## Week of 1/1/2026',
+    '',
+    '| # | 🎯 | Task | Work Priority | Completed Date |',
+    '|---|---|------|---------------|----------------|',
+    '| 42 | ✅ | Ship it | P1 | 2026-01-02 |',
+  ].join('\n')
+
+  it('appends a row for a new task', () => {
+    const out = opAppendToCompleted(completed, '| 43 | ✅ | New | P1 | 2026-01-03 |', { taskId: '43' })
+    expect(out).toContain('| 43 | ✅ | New | P1 | 2026-01-03 |')
+  })
+
+  it('does not duplicate a task that is already on the completed board', () => {
+    const out = opAppendToCompleted(completed, '| 42 | ✅ | Ship it again | P1 | 2026-01-09 |', { taskId: '42' })
+    expect(out).toBe(completed)
+    expect(out.split('\n').filter(l => l.startsWith('| 42 |')).length).toBe(1)
+  })
+
+  it('appends when no taskId is supplied (legacy call shape)', () => {
+    const out = opAppendToCompleted(completed, '| 44 | ✅ | Legacy | P2 | 2026-01-04 |')
+    expect(out).toContain('| 44 | ✅ | Legacy | P2 | 2026-01-04 |')
   })
 })

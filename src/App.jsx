@@ -20,7 +20,7 @@ import { tagMergedRows, resolveRowSourceId } from './combinedRouting.js'
 import { selfHealOutlierIds } from './selfHealIds.js'
 import { recordDeletedId, getActiveTombstoneIds } from './idTombstones.js'
 import { scrollToAndFlashTask } from './scrollToTask.js'
-import { filterRowsAndRawLines, taskRowMatchesSearch, normalizeQuery, boardSearchPlaceholder } from './boardSearch.js'
+import { filterRowsAndRawLines, normalizeQuery, boardSearchPlaceholder } from './boardSearch.js'
 import {
   addDaysToDateString,
   formatSnoozeDate,
@@ -32,8 +32,11 @@ import {
 } from './snooze.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
+import SkillsSection from './SkillsSection.jsx'
+import { parseSkillsSection, hasRenderableSkills } from './skillsSection.js'
 import { patchPerSourceContent } from './combinedViewPatch.js'
 import * as ops from './focusPlanOps.js'
+import { deleteJournalForTask } from './journalDelete.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment } from './journalChat.js'
@@ -2712,6 +2715,10 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
   )
   const managerPrioritiesSection = sections.find(s => isPrioritiesSection(s.title))
 
+  // Read-only `## Skills` inventory (#188). `null` when the board has no such
+  // heading, in which case nothing is rendered at all — no empty placeholder.
+  const skills = parseSkillsSection(sections)
+
   // Parse the unified Priorities section. We keep the variable name
   // `managerPriorities` for compatibility with downstream sort/lookup helpers.
   const managerPriorities = managerPrioritiesSection
@@ -2914,7 +2921,13 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
             const final = ops.opDeleteTask(bridged, rawLine)
             await onContentUpdate(final)
             if (taskId) recordDeletedId(taskId)
-            if (journalPath) await storage.remove(journalPath).catch(() => {})
+            await deleteJournalForTask({
+              journalPath,
+              taskId,
+              checkJournal: storage.checkJournal,
+              remove: storage.remove,
+              onError: (e) => console.error('Failed to delete journal:', e),
+            })
             setBridgeDialog(null)
           }
         })
@@ -2929,14 +2942,16 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     // still resurrect this task's journal (#314).
     if (taskId) recordDeletedId(taskId)
     
-    // Also delete journal if it exists
-    if (journalPath) {
-      try {
-        await storage.remove(journalPath)
-      } catch (e) {
-        console.error('Failed to delete journal:', e)
-      }
-    }
+    // Also delete the journal if the task has one. The path is resolved at
+    // delete time rather than taken from lazily-loaded row state, so deleting a
+    // row whose journal was still loading no longer orphans the file (#185).
+    await deleteJournalForTask({
+      journalPath,
+      taskId,
+      checkJournal: storage.checkJournal,
+      remove: storage.remove,
+      onError: (e) => console.error('Failed to delete journal:', e),
+    })
   }
   
   const handleMoveToCompleted = async (rawLine, row, fromSection) => {
@@ -3718,6 +3733,10 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
           onMoveToSource={handleMoveToSource}
         />
       ))}
+
+      {hasRenderableSkills(skills) && (
+        <SkillsSection headers={skills.headers} rows={skills.rows} notes={skills.notes} />
+      )}
 
       {managerPrioritiesSection && (
         <ManagerPrioritiesSection
@@ -5882,7 +5901,13 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
             }))
             await applyOp(sid, c => ops.opDeleteTask(c, rawLine))
             if (taskId) recordDeletedId(taskId)
-            if (journalPath) await storage.removeFromSource(sid, journalPath).catch(() => {})
+            await deleteJournalForTask({
+              journalPath,
+              taskId,
+              checkJournal: (id) => storage.checkJournalFromSource(sid, id),
+              remove: (p) => storage.removeFromSource(sid, p),
+              onError: (e) => console.error('Failed to delete journal:', e),
+            })
             setBridgeDialog(null)
             setReloadKey(k => k + 1)
           }
@@ -5893,9 +5918,14 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
 
     await applyOp(sid, c => ops.opDeleteTask(c, rawLine))
     if (taskId) recordDeletedId(taskId)
-    if (journalPath) {
-      try { await storage.removeFromSource(sid, journalPath) } catch (e) { console.error('Failed to delete journal:', e) }
-    }
+    // Resolved at delete time, not from lazily-loaded row state (#185).
+    await deleteJournalForTask({
+      journalPath,
+      taskId,
+      checkJournal: (id) => storage.checkJournalFromSource(sid, id),
+      remove: (p) => storage.removeFromSource(sid, p),
+      onError: (e) => console.error('Failed to delete journal:', e),
+    })
   }
 
   const handlePromoteTodo = async (todoText, parentTaskId) => {
@@ -5996,10 +6026,19 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     // Write the focus-plan deletion and the completed-plan append in
     // sequence against the same source.
     const focusText = await storage.readFromSource(sid, PLAN_FILE)
-    const newFocus = ops.opRemoveTaskFromFocusPlan(focusText, rawLine, fromSection)
+    const removal = ops.opRemoveTaskFromFocusPlanResult(focusText, rawLine, fromSection)
+    if (!removal.removed) {
+      // The source row could not be located, so completing here would append to
+      // the completed board while leaving the task active — the "on both boards"
+      // corruption. Fail loudly and change nothing instead.
+      console.error('Move to completed aborted: task row not found on the plan board', { taskId, fromSection })
+      alert('Could not complete this task: its row was not found on the board. Reload and try again.')
+      return
+    }
+    const newFocus = removal.content
     let completedText = ''
     try { completedText = await storage.readFromSource(sid, COMPLETED_FILE) } catch { /* file may not exist */ }
-    const newCompleted = ops.opAppendToCompleted(completedText, completedRow)
+    const newCompleted = ops.opAppendToCompleted(completedText, completedRow, { taskId })
     await storage.writeToSource(sid, COMPLETED_FILE, newCompleted)
     await storage.writeToSource(sid, PLAN_FILE, newFocus)
     // Reflect the completion immediately so the row disappears from the board
@@ -6781,6 +6820,33 @@ function App() {
       treeTimer = setTimeout(() => { loadFiles().catch(() => {}) }, 400)
     })
     return () => { clearTimeout(treeTimer); unsub() }
+  }, [])
+
+  // Refresh the sidebar tree when the tab regains focus/visibility. External
+  // processes (e.g. the overnight agent, or OneDrive/Drive sync from another
+  // device) can add journals to the folder while this tab is open. The browser
+  // cannot observe those filesystem writes — `onLocalChange` only fires for the
+  // app's own writes and sync pulls — so without this, externally-added files
+  // (e.g. an agent-created journal) stay invisible in the sidebar until a manual
+  // reload. Re-fetching the tree on focus/visibility picks them up as soon as
+  // the user returns to the tab. Debounced so a focus+visibility burst triggers
+  // only one reload. (task #371)
+  useEffect(() => {
+    let refreshTimer = null
+    const scheduleRefresh = () => {
+      clearTimeout(refreshTimer)
+      refreshTimer = setTimeout(() => { loadFiles().catch(() => {}) }, 300)
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') scheduleRefresh()
+    }
+    window.addEventListener('focus', scheduleRefresh)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      clearTimeout(refreshTimer)
+      window.removeEventListener('focus', scheduleRefresh)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [])
 
   const handleStorageReady = async (providerId) => {
