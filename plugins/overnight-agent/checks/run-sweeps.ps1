@@ -56,6 +56,11 @@ $OA          = Join-Path $env:LOCALAPPDATA 'overnight-agent'
 $PlannerPath = 'C:\Users\shiv\OneDrive\Apps\Focus Planner'
 $MirrorPs1   = Join-Path $OA 'run-telegram-mirror.ps1'
 
+# The plugin the CLI actually loads. PowerShell mutation checks that take a -ScriptPath are
+# pointed here on purpose: `installed-plugins` is written by hand, so it is the only copy whose
+# behaviour is production behaviour. Guarding the repo copy would guard something nothing runs.
+$InstalledOaState = Join-Path $env:USERPROFILE '.copilot\installed-plugins\focus-planner\overnight-agent\skills\overnight-agent\oa-state.ps1'
+
 # --- Resolve the bridge pin from run-telegram-mirror.ps1 (single source of truth) ---
 # That wrapper holds the pinned worktree; deriving from it means a rollback of the
 # pin automatically applies here too, instead of drifting into a second copy.
@@ -432,10 +437,18 @@ $Suite = @(
 )
 
 if ($IncludeMutchecks) {
-  Get-ChildItem $OA -Filter 'mutcheck-*.mjs' -File |
-    Sort-Object Name | ForEach-Object {
-      $Suite += @{ n = [IO.Path]::GetFileNameWithoutExtension($_.Name); bridge = $false; mut = $true }
-    }
+  # BOTH extensions. This glob was '.mjs'-only until 2026-08-27, which silently skipped every
+  # PowerShell mutation check on the machine -- 4 of them, including mutcheck-write-turn.ps1,
+  # the one guarding write-turn.ps1, the mandated journal writer. They were never "failing":
+  # they were never RUN, so -IncludeMutchecks reported a clean sweep of a suite it could not
+  # see. Same defect class as the six sweeps that died on an unset BRIDGE_SRC (2026-08-25
+  # 22:45) -- a roster that reports "all clean" while structurally blind to part of itself.
+  foreach ($ext in @('.mjs', '.ps1')) {
+    Get-ChildItem $OA -Filter "mutcheck-*$ext" -File |
+      Sort-Object Name | ForEach-Object {
+        $Suite += @{ n = [IO.Path]::GetFileNameWithoutExtension($_.Name); bridge = $false; mut = $true; ext = $ext }
+      }
+  }
 }
 
 # Deliberately NOT part of the standing suite. digest-audit hardcodes its imports
@@ -477,8 +490,12 @@ if ($Only) {
     elseif (Test-Path (Join-Path $OA "$o.mjs")) {
       # ad-hoc: run a sweep that is not in the standing suite (used for negative tests)
       $sel += @{ n = $o; bridge = $false; adhoc = $true }
+    }
+    elseif (Test-Path (Join-Path $OA "$o.ps1")) {
+      # Same, for a PowerShell check. Without this arm, -Only could not reach a .ps1 at all.
+      $sel += @{ n = $o; bridge = $false; adhoc = $true; ext = '.ps1' }
     } else {
-      throw "-Only '$o' matches no sweep in the suite and no $o.mjs in $OA"
+      throw "-Only '$o' matches no sweep in the suite and no $o.mjs or $o.ps1 in $OA"
     }
   }
   $Suite = $sel
@@ -503,7 +520,10 @@ if (Test-Path $runsRoot) {
 # --- Run ----------------------------------------------------------------------------
 $results = @()
 foreach ($s in $Suite) {
-  $path = Join-Path $OA "$($s.n).mjs"
+  # A suite entry is node-run .mjs unless it declares its own extension. Mutation checks may
+  # be PowerShell; resolving the extension here is what lets them run at all.
+  $ext = if ($s.ContainsKey('ext') -and $s.ext) { $s.ext } else { '.mjs' }
+  $path = Join-Path $OA "$($s.n)$ext"
   if (-not (Test-Path $path)) {
     $results += [pscustomobject]@{ name = $s.n; state = 'MISSING'; exit = $null; stdout = 0; stderr = 0; file = $null }
     continue
@@ -512,9 +532,22 @@ foreach ($s in $Suite) {
   $seF = Join-Path $OutDir "$($s.n).err.txt"
   # Per-sweep arguments. Only stuck-run-sweep uses this today (it needs --repair);
   # kept generic so the next sweep that needs a flag does not re-touch the runner.
-  $argList = @($path)
+  if ($ext -eq '.ps1') {
+    $exe = 'powershell'
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $path)
+    # Two of these declare a MANDATORY -ScriptPath and simply refuse to start without it.
+    # Point them at the plugin the CLI actually loads, so they guard PRODUCTION rather than
+    # a copy in the repo -- the installed file is hand-deployed and is what really runs.
+    # Read with an explicit UTF-8 decoder, never Get-Content -Raw (HAZARD 4).
+    $src = [IO.File]::ReadAllText($path, (New-Object Text.UTF8Encoding($false)))
+    if ($src -match '\$ScriptPath') { $argList += @('-ScriptPath', $InstalledOaState) }
+  }
+  else {
+    $exe = 'node'
+    $argList = @($path)
+  }
   if ($s.ContainsKey('args') -and $s.args) { $argList += @($s.args) }
-  $p = Start-Process -FilePath 'node' -ArgumentList $argList -NoNewWindow -Wait -PassThru `
+  $p = Start-Process -FilePath $exe -ArgumentList $argList -NoNewWindow -Wait -PassThru `
                      -RedirectStandardOutput $soF -RedirectStandardError $seF
   $so = if (Test-Path $soF) { (Get-Content $soF -Raw) } else { '' }
   $se = if (Test-Path $seF) { (Get-Content $seF -Raw) } else { '' }
