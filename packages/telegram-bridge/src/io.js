@@ -6,7 +6,12 @@ import fs from 'fs/promises'
 import path from 'path'
 import { taskIdFromFilename, journalFilename } from './journal.js'
 
-export function createFsIo({ journalDir, completedBoardPath }) {
+export function createFsIo({
+  journalDir,
+  completedBoardPath,
+  boardPath,
+  syncRecordPaths = [],
+}) {
   return {
     async listJournals() {
       let entries
@@ -46,6 +51,38 @@ export function createFsIo({ journalDir, completedBoardPath }) {
       } catch {
         return ''
       }
+    },
+
+    // Returns the raw ACTIVE board markdown (planner.md), or '' if it isn't
+    // configured or doesn't exist. Used to order the approval digest by the
+    // user's own board (section + row order + urgency) rather than by task-ID
+    // magnitude. Never throws — a missing board just means "no ranking signal",
+    // and the digest falls back to newest-first.
+    async readBoard() {
+      if (!boardPath) return ''
+      try {
+        return await fs.readFile(boardPath, 'utf-8')
+      } catch {
+        return ''
+      }
+    },
+
+    // Returns the raw contents of each planner sync record that exists, so the
+    // archive pass can see which tasks the user DELETED in the app. A deleted
+    // task leaves both boards, so this tombstone is the only lasting evidence
+    // that its topic should be closed. Never throws: a missing or unreadable
+    // record just means "no deletions to act on this run".
+    async readSyncRecords() {
+      const out = []
+      for (const p of syncRecordPaths) {
+        if (!p) continue
+        try {
+          out.push(await fs.readFile(p, 'utf-8'))
+        } catch {
+          // absent or locked mid-write by the app — skip it
+        }
+      }
+      return out
     },
   }
 }

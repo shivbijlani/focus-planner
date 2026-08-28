@@ -32,6 +32,8 @@ import {
 } from './snooze.js'
 import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
+import SkillsSection from './SkillsSection.jsx'
+import { parseSkillsSection, hasRenderableSkills } from './skillsSection.js'
 import { patchPerSourceContent } from './combinedViewPatch.js'
 import * as ops from './focusPlanOps.js'
 import { deleteJournalForTask } from './journalDelete.js'
@@ -2716,6 +2718,10 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
   )
   const managerPrioritiesSection = sections.find(s => isPrioritiesSection(s.title))
 
+  // Read-only `## Skills` inventory (#188). `null` when the board has no such
+  // heading, in which case nothing is rendered at all — no empty placeholder.
+  const skills = parseSkillsSection(sections)
+
   // Parse the unified Priorities section. We keep the variable name
   // `managerPriorities` for compatibility with downstream sort/lookup helpers.
   const managerPriorities = managerPrioritiesSection
@@ -3730,6 +3736,10 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
           onMoveToSource={handleMoveToSource}
         />
       ))}
+
+      {hasRenderableSkills(skills) && (
+        <SkillsSection headers={skills.headers} rows={skills.rows} notes={skills.notes} />
+      )}
 
       {managerPrioritiesSection && (
         <ManagerPrioritiesSection
