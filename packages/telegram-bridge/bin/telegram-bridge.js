@@ -9,7 +9,9 @@
 //   node bin/telegram-bridge.js sync-up      # post agent turns -> topics
 //   node bin/telegram-bridge.js sync-down    # fold replies -> journals
 //   node bin/telegram-bridge.js sync-archive # close topics for completed tasks (reopen reactivated)
-//   node bin/telegram-bridge.js once         # sync-up, sync-archive, then sync-down (default)
+//   node bin/telegram-bridge.js digest       # post the consolidated "waiting on you" queue
+//   node bin/telegram-bridge.js digest --force  # ...even if unchanged since last run
+//   node bin/telegram-bridge.js once         # sync-up, sync-archive, sync-down, then digest (default)
 //   node bin/telegram-bridge.js watch [secs] # loop `once` every N seconds
 //
 // Config comes from env (see packages/telegram-bridge/README.md):
@@ -35,6 +37,7 @@ async function build() {
   const io = createFsIo({
     journalDir: config.journalDir,
     completedBoardPath: config.completedBoardPath,
+    boardPath: config.boardPath,
   })
   const state = await loadState(config.stateDir)
   const bridge = createBridge({ client, config, state, io, logger: log })
@@ -43,14 +46,16 @@ async function build() {
 
 async function runOnce() {
   const { config, state, bridge } = await build()
-  const { up, archived, down } = await bridge.syncOnce()
+  const { up, archived, down, digest } = await bridge.syncOnce()
   await saveState(config.stateDir, state)
   log(
     `up: posted ${up.posted.length}, new topics ${up.created.length}; ` +
       `archive: closed ${archived.archived.length}, reopened ${archived.reopened.length}; ` +
-      `down: folded ${down.folded.length} repl${down.folded.length === 1 ? 'y' : 'ies'}`,
+      `down: folded ${down.folded.length} repl${down.folded.length === 1 ? 'y' : 'ies'}` +
+      (down.unrouted && down.unrouted.length ? `, ${down.unrouted.length} unrouted` : '') +
+      `; digest: ${digest.posted ? `posted (${digest.count} open)` : `unchanged (${digest.count} open)`}`,
   )
-  return { up, archived, down }
+  return { up, archived, down, digest }
 }
 
 async function main() {
@@ -95,7 +100,10 @@ async function main() {
       const { config, state, bridge } = await build()
       const down = await bridge.syncDown()
       await saveState(config.stateDir, state)
-      log(`folded ${down.folded.length}`)
+      log(
+        `folded ${down.folded.length}` +
+          (down.unrouted && down.unrouted.length ? `, ${down.unrouted.length} unrouted` : ''),
+      )
       break
     }
     case 'sync-archive': {
@@ -103,6 +111,17 @@ async function main() {
       const res = await bridge.syncArchive()
       await saveState(config.stateDir, state)
       log(`archived ${res.archived.length}, reopened ${res.reopened.length}`)
+      break
+    }
+    case 'digest': {
+      const { config, state, bridge } = await build()
+      const res = await bridge.syncDigest({ force: arg === '--force' })
+      await saveState(config.stateDir, state)
+      log(
+        res.posted
+          ? `posted digest with ${res.count} open ask(s)`
+          : `digest unchanged (${res.count} open ask(s)); nothing posted`,
+      )
       break
     }
     case 'once':
