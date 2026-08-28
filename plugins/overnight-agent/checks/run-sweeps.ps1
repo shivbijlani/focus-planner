@@ -361,6 +361,25 @@ $Suite = @(
   # baseline case rather than a mutant, because it is matcher logic and neutering it broke 3
   # of 6 cases. Exits 1 on findings; reads 3 today (SKILL.md + the two files PR #192 carries).
   @{ n = 'installed-skill-drift-sweep'; bridge = $false }
+  # installed-capability-sweep (added 2026-08-28 01:45 PT) — closes the BACKWARD direction the
+  # comment 6 lines above names but that installed-skill-drift-sweep structurally cannot see.
+  # MEASURED TONIGHT, not hypothesised: the plugin was reinstalled at 2026-08-27 21:06
+  # (focus-planner/overnight-agent v1.3.1). That overwrote the hand-deployed oa-state.ps1 with
+  # origin/main's copy — no UTF-8 decoder, no resnapshot, because the fix is in the still-OPEN
+  # PR #198. Harm on the next scan: 207 of 239 journals flipped to `changed`, and `reopened`
+  # read 0 while 16 tasks had trailing user content. The agent was blind to user replies.
+  # installed-skill-drift-sweep reported "no drift" on those exact bytes, and that is not a bug
+  # in it: its health criterion is "installed == origin/main" -> verdict MAIN -> fine. When the
+  # required fix is NOT YET ON MAIN, reverting *to* main is a regression that scores as perfect
+  # health. Provenance was perfect while capability was broken.
+  # So the two are complements and both must run:
+  #   installed-skill-drift-sweep : can we NAME the bytes we are running?
+  #   installed-capability-sweep  : can the bytes we are running DO the job?
+  # 3 guards, all mutation-proven load-bearing by mutcheck-installed-capability.mjs (3/3),
+  # and each kill lands on the right fixture — notably g1 (ref-independence): adding a
+  # "matches origin/main -> OK" bypass makes it miss the reverted build, which is precisely
+  # how the drift sweep is blind. Reads 0 on a healthy tree.
+  @{ n = 'installed-capability-sweep'; bridge = $false }
   # journal-encoding-invariant (added 2026-08-27 12:50 PT) — the COMPLEMENT of the line
   # above. installed-skill-drift-sweep asks "does the live file differ from a git ref?",
   # which is a PROXY for danger, and measured this run it is the wrong way round:
