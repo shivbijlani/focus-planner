@@ -503,6 +503,19 @@ $Suite = @(
   # NOWHERE. Measured 2026-08-28: 31 tasks, 16 of them open — the agent waiting on answers to
   # questions never delivered. This run shortened 10 of them; reads 21 today, and 0 once #211 lands.
   @{ n = 'telegram-ask-truncation-sweep'; bridge = $true }
+  # truncated-ask-liveness (added 2026-08-28 04:30 PT) — the TRIAGE half of the sweep above.
+  # That sweep correctly flags every truncated ask; deciding which ones MATTER was being done by
+  # eye, and got it wrong twice in a row in opposite directions. 2026-08-27 23:15 dismissed 15
+  # victims as "closed/orphaned" when 10 were live. 2026-08-28 03:23 dismissed the last 5 because
+  # their ask text "starts with nothing" — but #232 read "one word on Kiley's copy", #431 read
+  # "nothing to read the doc. One word only if you want the POC", and #450 named `rate tien`.
+  # Three real one-word decisions Shiv had never been shown, all classified benign by a heuristic.
+  # The working discriminator is neither the first word of the ask nor board membership: it is
+  # whether the ask NAMES A CHOICE. This is a classifier, not a filter — it never suppresses a
+  # finding from the sweep above (relaxing a safety writer is the failure mode this file keeps
+  # recording), it only says which victims to look at first and prints the ask text so the call is
+  # made on content. Reads 0 actionable today.
+  @{ n = 'truncated-ask-liveness'; bridge = $true }
 )
 
 if ($IncludeMutchecks) {
