@@ -179,6 +179,30 @@ for (const cap of MANIFEST) {
   }
 }
 
+// --json exists so capability-floor.ps1 can DERIVE the guarded file list instead of keeping a
+// second copy of it. A restore tool with its own hand-maintained list would drift from the
+// manifest the moment a capability is added here -- and it would drift silently, restoring an
+// out-of-date set while reporting success. Same reason deploy-installed-plugin.ps1 delegates
+// classification to the drift sweep rather than reimplementing it.
+if (process.argv.includes('--json')) {
+  console.log(
+    JSON.stringify(
+      {
+        installed: INSTALLED,
+        count: MANIFEST.length,
+        findings: findings.length,
+        capabilities: rows.map((r) => {
+          const cap = MANIFEST.find((c) => c.id === r.id);
+          return { id: r.id, file: cap.file, verdict: r.verdict, detail: r.detail };
+        }),
+      },
+      null,
+      2,
+    ),
+  );
+  process.exit(findings.length ? 1 : 0);
+}
+
 console.log(`installed plugin: ${INSTALLED}`);
 console.log(`capabilities asserted: ${MANIFEST.length}   (ref-independent: git is never consulted)`);
 console.log('');

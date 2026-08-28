@@ -105,6 +105,43 @@ $env:BRIDGE_SRC   = $BridgeSrcUrl
 # variable every run was expected to remember, that nothing actually set.
 $env:OA_TODAY = (Get-Date).ToString('yyyy-MM-dd')
 
+# --- Capability floor: REPAIR the running agent before measuring it ------------------
+# installed-capability-sweep (below) DETECTS a reverted plugin. Detection alone left the
+# recovery as a three-step manual procedure -- copy the file from a worktree, resnapshot,
+# re-verify -- that an UNATTENDED 3 AM run has to remember to perform correctly. That is
+# precisely the step that never happens, which is why run-sweeps.ps1 and
+# run-telegram-mirror.ps1 exist at all: a prose instruction in user-settings.md is not a
+# mechanism.
+#
+# Ordering matters and is deliberate: this runs BEFORE the suite, so the sweeps measure a
+# repaired agent rather than faithfully reporting a broken one. On a green tree it simply
+# refreshes the floor, so a legitimate forward improvement becomes the new known-good and
+# the floor can never go stale while things are healthy.
+#
+# Why this file is NOT in the plugin: a plugin reinstall is the failure being repaired, so
+# the repair tool must live somewhere the reinstall cannot touch. %LOCALAPPDATA% is that
+# place. A copy inside installed-plugins would be reverted by the very event it exists for.
+#
+# Never fatal. A repair tool that can abort the run is a bigger hazard than the fault it
+# fixes, so a failure here is reported and the suite continues -- the capability sweep will
+# then report the unrepaired state through the normal FINDINGS path.
+$FloorPs1 = Join-Path $OA 'capability-floor.ps1'
+if (Test-Path $FloorPs1) {
+  try {
+    $floorOut = & powershell -NoProfile -ExecutionPolicy Bypass -File $FloorPs1 ensure 2>&1
+    $floorCode = $LASTEXITCODE
+    if ($floorCode -ne 0) {
+      Write-Host '[sweeps] capability-floor: COULD NOT REPAIR - see installed-capability-sweep below.'
+      ($floorOut | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Host "           $_" }
+    } else {
+      $line = (($floorOut | Out-String) -split "`r?`n" | Where-Object { $_ -match 'snapshot OK|restore VERIFIED|nothing to restore' } | Select-Object -First 1)
+      if ($line) { Write-Host "[sweeps] capability-floor: $($line.Trim())" }
+    }
+  } catch {
+    Write-Host "[sweeps] capability-floor: errored ($($_.Exception.Message)) - continuing."
+  }
+}
+
 # --- The suite ----------------------------------------------------------------------
 # needsBridge is documentation, not control flow: BRIDGE_SRC is always exported.
 $Suite = @(
