@@ -24,6 +24,7 @@ function makeHarness(files) {
   const closed = []
   const reopened = []
   let completedBoard = ''
+  let syncRecords = []
   let updatesQueue = []
 
   const client = {
@@ -64,6 +65,9 @@ function makeHarness(files) {
     async readCompletedBoard() {
       return completedBoard
     },
+    async readSyncRecords() {
+      return syncRecords
+    },
   }
 
   const config = { chatId: '-100', taskAllowlist: [] }
@@ -78,6 +82,9 @@ function makeHarness(files) {
     config,
     setCompletedBoard: (md) => {
       completedBoard = md
+    },
+    setSyncRecords: (records) => {
+      syncRecords = records
     },
     queueUpdates: (u) => {
       updatesQueue = u
@@ -498,6 +505,91 @@ describe('syncUp does not disturb tasks the user has already closed', () => {
 
 describe('syncArchive (mirror completed board -> closed topics)', () => {
   const COMPLETED = `| # | 🎯 | Task | WP | Date |\n|---|---|---|---|---|\n| 42 | ✅ | done | - | 2026-08-02 |\n`
+  const DELETED = JSON.stringify({
+    version: 1,
+    entries: { 42: { clock: 1787621820553, deleted: true, fp: -1 } },
+  })
+
+  // A task DELETED in the app leaves both boards, so the completed board can
+  // never mention it again. Before this, `shouldArchive` was completed-only and
+  // its topic stayed open forever: 65 such topics had piled up in the live
+  // forum, and #434 (deleted 2026-08-24) was still there four days later.
+  it('closes the topic of a task the user deleted in the app', async () => {
+    const h = makeHarness({})
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42' }
+    h.setCompletedBoard('') // deleted, so it is on NEITHER board
+    h.setSyncRecords([DELETED])
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.archived).toEqual(['42'])
+    expect(h.closed).toEqual([7])
+    expect(state.tasks['42'].archived).toBe(true)
+  })
+
+  // THE bug that made a manual close useless: with completed-only logic, a
+  // topic closed by hand looked like "archived but shouldn't be", so the very
+  // next run reopened it.
+  it('does not reopen a deleted task that is already closed', async () => {
+    const h = makeHarness({})
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42', archived: true }
+    h.setCompletedBoard('')
+    h.setSyncRecords([DELETED])
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.reopened).toEqual([])
+    expect(h.reopened).toHaveLength(0)
+    expect(state.tasks['42'].archived).toBe(true)
+  })
+
+  it('unions the two sync records, so a tombstone in either counts', async () => {
+    const h = makeHarness({})
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42' }
+    state.tasks['43'] = { topicId: 8, name: '#43' }
+    h.setCompletedBoard('')
+    h.setSyncRecords([
+      JSON.stringify({ entries: { 42: { deleted: true } } }),
+      JSON.stringify({ entries: { 43: { deleted: true } } }),
+    ])
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.archived.sort()).toEqual(['42', '43'])
+    expect(h.closed.sort()).toEqual([7, 8])
+  })
+
+  // The safety property: a live task must never lose its topic because a sync
+  // file was unreadable, half-written, or simply says deleted:false.
+  it('never closes a live task when the sync record is junk or says not-deleted', async () => {
+    const h = makeHarness({})
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42' }
+    h.setCompletedBoard('')
+    h.setSyncRecords(['{"entries":{"42":{"deleted":fal', JSON.stringify({ entries: { 42: { deleted: false } } })])
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.archived).toEqual([])
+    expect(h.closed).toHaveLength(0)
+    expect(state.tasks['42'].archived).toBeUndefined()
+  })
+
+  it('still works against an io that has no readSyncRecords (back-compat)', async () => {
+    const h = makeHarness({})
+    delete h.io.readSyncRecords
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42' }
+    h.setCompletedBoard(COMPLETED)
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.archived).toEqual(['42'])
+    expect(h.closed).toEqual([7])
+  })
 
   it('does nothing when archiveCompleted is disabled', async () => {
     const h = makeHarness({})

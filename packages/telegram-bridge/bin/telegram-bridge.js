@@ -38,6 +38,7 @@ async function build() {
     journalDir: config.journalDir,
     completedBoardPath: config.completedBoardPath,
     boardPath: config.boardPath,
+    syncRecordPaths: config.syncRecordPaths,
   })
   const state = await loadState(config.stateDir)
   const bridge = createBridge({ client, config, state, io, logger: log })
