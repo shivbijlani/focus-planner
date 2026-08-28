@@ -490,6 +490,19 @@ $Suite = @(
   # fixtures are load-bearing: this folder holds ~130 deliverables and a constant stream of
   # write-turn `.bak-` backups, and flagging those would make it noise. Reads 3 today.
   @{ n = 'shadow-journal-sweep'; bridge = $false }
+  # telegram-ask-truncation-sweep (added 2026-08-28 03:xx PT) — the delivery half of every ask.
+  # 41 sweeps verify that an ask EXISTS, is current, and is not gated; none checked that it
+  # SURVIVES the trip to the only surface Shiv reads. The bridge truncates at 4,096 chars keeping
+  # the PREFIX, and SKILL.md's own template puts `Needs from you:` / `Your call:` at the END — so
+  # following the documented style is what breaks delivery. This was measured by hand on
+  # 2026-08-27 (34 tasks) and the banner told runs to re-measure with a script that lived outside
+  # $Suite, needed two undocumented env vars, and crashed when invoked as documented — so it never
+  # ran. It also always exited 0 and so could never report FINDINGS.
+  # Why it is not merely cosmetic: the approval digest is OFF (task #441), and that digest was the
+  # only surface showing an ask outside its own topic. With it off, a truncated ask is visible
+  # NOWHERE. Measured 2026-08-28: 31 tasks, 16 of them open — the agent waiting on answers to
+  # questions never delivered. This run shortened 10 of them; reads 21 today, and 0 once #211 lands.
+  @{ n = 'telegram-ask-truncation-sweep'; bridge = $true }
 )
 
 if ($IncludeMutchecks) {
