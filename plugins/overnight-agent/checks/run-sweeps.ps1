@@ -131,6 +131,21 @@ $Suite = @(
   @{ n = 'turn-truncation-sweep';    bridge = $true  }
   @{ n = 'hidden-turn-sweep';        bridge = $true  }
   @{ n = 'closed-task-posts';        bridge = $true  }
+  # 2026-08-27 12:15 PT - this sweep's FLAGGED line could never reach zero. It flagged
+  # DISABLED unconditionally, so "Google token check (folder-bind test)" - a placeholder
+  # created 2026-07-03 (prompt: "placeholder - will configure after verifying workspace
+  # binding"), disabled, ZERO runs, never executed - sat under FLAGGED in 17 of 17
+  # archived sweep runs. That is the desensitising half of the 11:40 learning: this is
+  # the SAME detector whose flagged line was read and skipped 16 runs running while the
+  # hourly Browser watchdog was dead for 11 hours. A permanently-red line teaches every
+  # future run to skim it. Fixed with an acknowledged-inert baseline (the
+  # shadow-journal-sweep / lost-interpolation-sweep precedent): suppression needs all of
+  # enabled=0 AND zero runs ever AND a fingerprint in workflow-health-baseline.json, and
+  # it re-arms if the workflow is enabled, ever runs, or is renamed/re-prompted/
+  # re-scheduled. The 54-day "Google Workspace token check" bug this sweep exists for
+  # cannot re-hide: it had runs > 0, which defeats suppression on its own. Both
+  # directions proven by workflow-health-sweep.test.mjs (14/14), all four guards
+  # mutation-proven load-bearing.
   @{ n = 'workflow-health-sweep';    bridge = $false }
   # The RECOVERY half of the line above, added 2026-08-27. workflow-health-sweep
   # correctly flagged "Browser watchdog [OVERDUE] ... last=running" in 16 CONSECUTIVE
@@ -341,6 +356,29 @@ $Suite = @(
   # baseline case rather than a mutant, because it is matcher logic and neutering it broke 3
   # of 6 cases. Exits 1 on findings; reads 3 today (SKILL.md + the two files PR #192 carries).
   @{ n = 'installed-skill-drift-sweep'; bridge = $false }
+  # journal-encoding-invariant (added 2026-08-27 12:50 PT) — the COMPLEMENT of the line
+  # above. installed-skill-drift-sweep asks "does the live file differ from a git ref?",
+  # which is a PROXY for danger, and measured this run it is the wrong way round:
+  # origin/main has NO journal write path at all (its only write targets the state JSON),
+  # so reverting to main degrades hash stability, not data. Drift therefore fires on a
+  # SAFE state and would stay silent on a dangerous one.
+  # The actual defect is the ASYMMETRIC ENCODING PAIR — an ANSI read combined with a
+  # UTF-8 write in the same read-modify-write. Measured on this box (ACP 1252):
+  #     read ANSI -> write ANSI    lossless (cp1252 is a byte-bijection)
+  #     read ANSI -> write UTF-8   DESTROYS every non-ASCII character
+  # which is why the bug hid for so long: half the round-trips are harmless. It is the
+  # pair that cost 593 lines of task-448.md on 2026-08-27, and the shape a PARTIAL hand
+  # copy into installed-plugins reproduces — a journal write path present WITHOUT
+  # Read-JournalText. Nothing else asserts that invariant; the lost-interpolation and
+  # doubled-apostrophe sweeps read journals AFTER the fact and are forensics, not
+  # prevention.
+  # BEHAVIOURAL first: runs the INSTALLED oa-state.ps1 `mark` against an isolated
+  # synthetic journal (own -JournalDir/-StateDir, live state untouched) and asserts the
+  # bytes above the turn-end marker survive EXACTLY — a prefix comparison, so there is no
+  # magic size threshold to tune. 3 mutants killed by 3 DIFFERENT arms
+  # (mutcheck-journal-encoding.mjs), so no guard is redundant; M2 reproduces the real
+  # regression and names the 6 destroyed glyph classes. Exits 1 on findings; reads 0 today.
+  @{ n = 'journal-encoding-invariant'; bridge = $false }
   # raw-append-reopen-sweep (added 2026-08-27 01:xx PT run) — the THIRD false-reopen defect,
   # and the only one that loses data. #191 and #192 both fix false POSITIVES (a settled task
   # reads reopened). This is a false NEGATIVE: a reply the user types at the bottom of a
