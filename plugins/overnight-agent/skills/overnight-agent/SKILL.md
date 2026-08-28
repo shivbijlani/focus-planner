@@ -255,11 +255,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\reap-stale-mcp.ps1"
 ```
 
 It prints one JSON line (`{scanned, matched, stale, killed, freedMB, …}`). It only ever kills a
-`node.exe` whose command line matches a known MCP server, that is **older than 45 minutes** (longer
-than the 30-minute run interval, so the current and previous runs are never touched), and that is not
-in this run's own process tree. Add `-DryRun` to preview. If it reports a non-zero `killed`, mention
-the count in the wrap-up; if the script itself fails, note it and carry on — a failed reap must never
-abort the run.
+`node.exe` whose command line matches a known MCP server, that is **older than 20 minutes**, and that
+is not in this run's own process tree. Add `-DryRun` to preview. If it reports a non-zero `killed`,
+mention the count in the wrap-up; if the script itself fails, note it and carry on — a failed reap must
+never abort the run.
+
+⚠️ **The threshold is sized against this run's own servers, not against the run interval.** Because the
+reaper executes first, this run's servers are only 0–2 minutes old, so 20 minutes clears everything
+older while never touching them. The earlier 45-minute figure was chosen to sit "longer than the
+30-minute run interval, so the previous run is never touched" — but deliberately sparing the *previous*
+run's servers is precisely what let them accumulate, so that threshold was itself the leak (task #349).
+Don't raise it back on that reasoning.
 
 The user can leave you new instructions by emailing the agent account
 (`<agent-inbox@example.com>`, from `user-settings.md`). At the start of each run, read the inbox via the email MCP and fold any
