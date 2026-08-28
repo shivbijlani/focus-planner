@@ -100,11 +100,18 @@ already processed in this journal") lives in the **skill's own working dir**, wh
   - **`get -Id <id>`** → that task's full state JSON.
   - **`mark -Id <id> [-Status <s>] [-Version <n>] [-PlanId <p>]`** → call this **after you write your
     turn into a journal**. It updates the fields and re-snapshots the journal, so next run the task reads
-    as quiet until the user touches it again.
+    as quiet until the user touches it again. It also stamps an invisible
+    `<!-- /overnight-agent turn-end -->` comment marking where your turn stopped — **that stamp is what
+    makes a reply typed at the bottom of the journal reopen the task**, so skipping `mark` after a turn
+    leaves that task blind to the user's next message.
   - **`seed [-Force]`** → one-time/migration bootstrap of state for every existing journal.
 
 **How "the user replied" is detected (the reopen fix):** the tool remembers a hash of each journal as
-you last left it. On the next `scan`:
+you last left it, **and where your turn ended**. The second half is what makes it work: in most journals
+your turn is the last section in the file, so no later `## ` heading closes it — and without an explicit
+end marker, anything typed below gets read as part of *your own turn* and is never seen. So `mark`
+writes the boundary down (the `<!-- /overnight-agent turn-end -->` stamp above) rather than inferring
+it, and `scan` treats everything past that stamp as the user speaking. On the next `scan`:
 - **`reopened: true`** means the user added content after your last turn (a new `## <date>` entry or
   raw text at the bottom) and you haven't answered it — **even if the task was `done`/`skip`.** Treat it
   as fresh input: read the newest message and act (approve→execute, new ask→re-plan). This is the rule
@@ -248,11 +255,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\reap-stale-mcp.ps1"
 ```
 
 It prints one JSON line (`{scanned, matched, stale, killed, freedMB, …}`). It only ever kills a
-`node.exe` whose command line matches a known MCP server, that is **older than 45 minutes** (longer
-than the 30-minute run interval, so the current and previous runs are never touched), and that is not
-in this run's own process tree. Add `-DryRun` to preview. If it reports a non-zero `killed`, mention
-the count in the wrap-up; if the script itself fails, note it and carry on — a failed reap must never
-abort the run.
+`node.exe` whose command line matches a known MCP server, that is **older than 20 minutes**, and that
+is not in this run's own process tree. Add `-DryRun` to preview. If it reports a non-zero `killed`,
+mention the count in the wrap-up; if the script itself fails, note it and carry on — a failed reap must
+never abort the run.
+
+⚠️ **The threshold is sized against this run's own servers, not against the run interval.** Because the
+reaper executes first, this run's servers are only 0–2 minutes old, so 20 minutes clears everything
+older while never touching them. The earlier 45-minute figure was chosen to sit "longer than the
+30-minute run interval, so the previous run is never touched" — but deliberately sparing the *previous*
+run's servers is precisely what let them accumulate, so that threshold was itself the leak (task #349).
+Don't raise it back on that reasoning.
 
 The user can leave you new instructions by emailing the agent account
 (`<agent-inbox@example.com>`, from `user-settings.md`). At the start of each run, read the inbox via the email MCP and fold any
@@ -578,6 +591,17 @@ present the reversible draft and stop short of the committing action.
   task goes quiet. \*\*Mark handled instruction emails as read\*\* so you don't reprocess them.
 - **Stay in the user's space cleanly.** Never edit above the sentinel. Preserve the user's notes,
   links, and formatting. Write files as UTF-8.
+- **Write every journal turn through `write-turn.ps1`** (next to this skill), never by hand:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\write-turn.ps1 -Id <ID> -BodyFile <file.md>`.
+  Author the turn body with a **file tool** first, then pass the file. The script validates the body
+  and **refuses to write** if it finds any of the four corruption classes that have already destroyed
+  real content — a value eaten by PowerShell string interpolation (`~$150-275` → `~\-275`), a doubled
+  apostrophe from single-quote escaping (`don''t`), an H2 that is not 🌙-first (the Telegram bridge
+  anchors on `^##\s*🌙`, so any other H2 silently truncates the turn), and a stray
+  `<!-- from: overnight-agent -->` with no heading above it (severs the block and hides
+  **Needs from you**). It appends only, so it can never delete one of the user's replies, and it backs
+  the journal up first. Add `-Validate` to lint without writing. This is a **guard, not a guideline**:
+  each of these classes was documented in prose first and broken anyway.
 - **Ask narrowly, not broadly.** If you need something, put one precise question in \*\*Needs from
   you\*\* and set `blocked`; don't stall the whole run. You may also reply to the user's instruction
   email with that one question.
