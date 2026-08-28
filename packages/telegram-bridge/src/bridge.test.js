@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { createBridge } from './bridge.js'
+import { createBridge, hashTurn } from './bridge.js'
 import { emptyState } from './state.js'
-import { FROM_ME } from './journal.js'
+import { FROM_ME, TURN_END, latestAgentTurn } from './journal.js'
 
 const AGENT_JOURNAL = `# Task 42: Demo
 
@@ -445,5 +445,110 @@ ${denseTurn}
     expect(text).toContain('do the thing')
     expect(text).not.toContain('\u2026')
     expect(firstNestingError(text)).toBeNull()
+  })
+})
+
+describe('turn-end stamp does not re-post an already-delivered turn', () => {
+  // Live mechanism: syncUp posts the turn, then `oa-state.ps1 mark` appends the
+  // stamp. Under the old parse that changed hashTurn(), so the NEXT syncUp saw
+  // a "new" turn and sent a duplicate. Measured at 90/90 of the open-board
+  // journals a mark would touch.
+  it('stays silent after mark stamps the journal', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(1)
+
+    // What `mark` does: append the stamp at EOF.
+    h.store['42'] = `${h.store['42'].replace(/\s+$/, '')}\n\n${TURN_END}\n`
+
+    const second = await bridge.syncUp()
+    expect(second.posted).toEqual([])
+    expect(h.sent).toHaveLength(1)
+  })
+
+  it('never renders the raw stamp into the message the user reads', async () => {
+    const h = makeHarness({ 42: `${AGENT_JOURNAL.replace(/\s+$/, '')}\n\n${TURN_END}\n` })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).not.toContain('turn-end')
+    expect(h.sent[0].text).toContain('do the thing')
+  })
+})
+
+describe('rebaseline-turn-end migration', () => {
+  const STAMPED = `${AGENT_JOURNAL.replace(/\s+$/, '')}\n\n${TURN_END}\n`
+
+  function legacyHashOf(journal) {
+    return hashTurn(latestAgentTurn(journal, { includeTurnEnd: true }))
+  }
+
+  it('absorbs the parse change so the fix itself sends no duplicates', async () => {
+    const h = makeHarness({ 42: STAMPED })
+    const state = emptyState()
+    // State as it exists in the wild: hashed under the OLD, stamp-swallowing parse.
+    state.tasks['42'] = { topicId: 7, name: '#42', lastPostedHash: legacyHashOf(STAMPED) }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.rebaselineTurnEnd()
+    expect(res.migrated).toEqual(['42'])
+    expect(h.sent).toHaveLength(0) // migration never posts
+
+    const up = await bridge.syncUp()
+    expect(up.posted).toEqual([])
+    expect(h.sent).toHaveLength(0)
+  })
+
+  it('is idempotent', async () => {
+    const h = makeHarness({ 42: STAMPED })
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42', lastPostedHash: legacyHashOf(STAMPED) }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.rebaselineTurnEnd()
+    const again = await bridge.rebaselineTurnEnd()
+    expect(again.migrated).toEqual([])
+  })
+
+  it('leaves a genuinely new turn pending, so a real post is never absorbed', async () => {
+    const h = makeHarness({ 42: STAMPED })
+    const state = emptyState()
+    // Stored hash matches neither parse: the journal moved on since it was posted.
+    state.tasks['42'] = { topicId: 7, name: '#42', lastPostedHash: 'something-older' }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.rebaselineTurnEnd()
+    expect(res.migrated).toEqual([])
+    expect(res.pending).toEqual(['42'])
+
+    const up = await bridge.syncUp()
+    expect(up.posted).toEqual(['42'])
+  })
+
+  it('ignores tasks with no stamp in their turn', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42', lastPostedHash: legacyHashOf(AGENT_JOURNAL) }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.rebaselineTurnEnd()
+    expect(res.migrated).toEqual([])
+    expect(res.unchanged).toEqual(['42'])
+  })
+
+  it('does not touch a task that was never posted', async () => {
+    const h = makeHarness({ 42: STAMPED })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.rebaselineTurnEnd()
+    expect(res.migrated).toEqual([])
+    expect(res.unchanged).toEqual([])
+    expect(res.pending).toEqual([])
   })
 })
