@@ -11,32 +11,62 @@
   (so it can't hit the planner's sync-conflict bug). The user never sees or edits any of it.
 
 .MODEL
-  "Has the user changed this journal since I last wrote to it?"  ==  reopen.
+  "Has the USER changed this journal since I last wrote to it?"  ==  reopen.
   We answer it by hashing the journal and remembering the hash the agent left behind:
     - reopened = current-file-hash != processed_file_hash   (the user/app edited it)
     - on first sight of a journal (no state yet), reopened = there is user prose AFTER
       the agent's last block (catches already-reopened tasks like #293 on the first run).
   The agent calls `mark` after it writes its turn, which re-snapshots the hash.
 
+  "The user" means the human, `<!-- from: me -->`, and nothing else. These journals are
+  shared: sibling skills (dance-church, instagram-publisher-monitor, kranbox-backup, ...)
+  append their own turns with their own `<!-- from: ... -->` stamps. Those are machine
+  turns. Counting one as user prose pins the task at `reopened` permanently -- there is no
+  human message to answer, and the sibling skill re-appends on its own schedule.
+
 .COMMANDS
   seed   [-Force]                Initialise state for every journal (one-time / migration).
-  scan                          Emit the per-run worklist as JSON (what changed / reopened).
+  scan                          Emit the per-run worklist as JSON (what changed / reopened /
+                                due_poll).
   get    -Id <id>               Print one task's state JSON.
   mark   -Id <id> [-Status s] [-Version n] [-PlanId p]
                                 Record that the agent has processed the journal as it now
                                 stands (re-snapshots processed_file_hash + updates fields).
+         [-Poll <cadence>]      Register/update a recurring poll on the task so `scan` surfaces
+                                it on a timer even when the journal is untouched. Cadence is one
+                                of: hourly | daily | weekly | <N>h | <N>d | <N>m. A freshly
+                                registered poll is due immediately (next scan reports due_poll).
+         [-PollDone]            Record that the poll just ran: stamp last_polled = now and push
+                                next_due forward by the cadence interval.
+         [-PollClear]           Remove the poll from the task.
+  resnapshot                    One-time migration after a change to how journals are decoded
+                                or hashed: re-baseline processed_file_hash for tasks with
+                                nothing pending. SKIPS any journal with trailing user content,
+                                so a real unanswered reply is never baselined away. Never
+                                writes to a journal.
+
+.POLLING (why this exists)
+  `scan` only flags journals the USER has touched, so a purely time-triggered job (e.g. #400's
+  daily "check the video-backup folder and upload any drops") is invisible to it — if the user
+  never replies, the agent never gets reminded and the poll silently stops. A poll lives in the
+  skill's own state (never in the journal), so the agent can register it once, then every run:
+  read `scan`, act on any row with `due_poll: true`, and `mark -PollDone` to re-arm it. The user
+  sees nothing about it.
 
 .EXAMPLES
   pwsh oa-state.ps1 seed
   pwsh oa-state.ps1 scan
   pwsh oa-state.ps1 get  -Id 293
   pwsh oa-state.ps1 mark -Id 305 -Status proposed -Version 1 -PlanId t305-v1
+  pwsh oa-state.ps1 mark -Id 400 -Poll daily          # arm a daily poll on #400
+  pwsh oa-state.ps1 mark -Id 400 -PollDone            # after running it this run
+  pwsh oa-state.ps1 mark -Id 400 -PollClear           # stop polling #400
 #>
 
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('seed', 'scan', 'get', 'mark')]
+  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot')]
   [string]$Command = 'scan',
 
   [string]$Id,
@@ -44,6 +74,11 @@ param(
   [int]$Version,
   [string]$PlanId,
   [switch]$Force,
+
+  # Polling (time-triggered worklist). See .POLLING in the header.
+  [string]$Poll,
+  [switch]$PollDone,
+  [switch]$PollClear,
 
   # Overridable so the skill stays shareable; defaults match user-settings.md.
   [string]$JournalDir = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\journal",
@@ -72,22 +107,233 @@ function Get-Sha256([string]$text) {
   finally { $sha.Dispose() }
 }
 
+# A journal turn is stamped with a provenance marker, `<!-- from: <author> -->`. Exactly ONE
+# author is the human -- `me`. Every other author is a machine: this agent
+# (`overnight-agent`) and the sibling skills that also append turns to these same journals
+# (`dance-church`, `instagram-publisher-monitor`, `kranbox-backup`, ...).
+#
+# Markers are matched at the START OF A LINE, because journals legitimately *discuss* these
+# markers in prose; a quoted marker must not be mistaken for a real turn boundary.
+$script:HumanAuthor   = 'me'
+$script:SelfAuthor    = 'overnight-agent'
+$script:ProvenanceRe  = '(?m)^[ \t]*<!--[ \t]*from:[ \t]*([^>\r\n]*?)[ \t]*-->'
+$script:LegacyStateRe = '(?m)^[ \t]*<!--[ \t]*oa-state'
+
+# --- The turn terminator ---------------------------------------------------------------
+# An HTML comment (invisible when the journal renders) that marks the exact END of this
+# agent's turn. `mark` writes it; `Get-AgentEndIndex` trusts it.
+#
+# WHY IT EXISTS. Without it the end of the agent's turn is found by scanning FORWARD for
+# the next `## ` heading, and when the agent's turn is the newest -- the normal state --
+# there is no such heading, so the boundary falls to EOF and the WHOLE FILE counts as the
+# agent's turn. A reply typed at the bottom with no `## <date>` heading therefore lands
+# INSIDE the agent's own turn and is never seen.
+#
+# That is the dangerous direction. A false "reopened" costs one needless look; a false
+# "already answered" silently swallows the user's message with no trace anywhere. It is
+# not hypothetical: task #426580 sat for a day with two unanswered questions
+# ("were you able to ... create the event in Google calendar?") appended exactly this way,
+# and 216 of 239 live journals were in the same shape.
+#
+# The boundary is genuinely ambiguous from CONTENT alone -- an agent turn may legitimately
+# end in a plain prose paragraph, which is indistinguishable from a short human reply. So
+# the fix is not a cleverer heuristic; it is to stop guessing and write the boundary down
+# at the moment the agent already knows it.
+$script:TurnEndMarker = '<!-- /overnight-agent turn-end -->'
+$script:TurnEndRe     = '(?m)^[ \t]*<!--[ \t]*/overnight-agent[ \t]+turn-end[ \t]*-->[ \t]*\r?$'
+
+# `### Run log` is SKILL.md's managed heading for this agent's execution record. Only this
+# agent writes it, so it is a reliable machine-turn marker even in the many historical
+# journals where the agent replied without stamping a `<!-- from: overnight-agent -->`
+# provenance marker at all.
+#
+# The trailing `\r?` is load-bearing: these journals round-trip through OneDrive and the
+# planner web app, so CRLF is common. `$` in .NET multiline mode matches before the `\n`,
+# which leaves the `\r` unconsumed -- and `[ \t]` does not match `\r`. Without it the
+# heading is simply never found on a CRLF file and the whole recovery silently no-ops.
+$script:RunLogRe = '(?m)^[ \t]*###[ \t]+Run log[ \t]*\r?$'
+
+# The shape of a run-log body: the heading itself, blank lines, the bold date line
+# (`**2026-08-26 (overnight):**`), list items, and indented wrapped continuations.
+# Anything else in that region is prose this agent did not write.
+$script:RunLogBodyLineRe = '^(?:[ \t\r]*$|[ \t]*###[ \t]+Run log[ \t\r]*$|[ \t]*\*\*.*$|[ \t]*[-*+][ \t].*$|[ \t]*\d+\.[ \t].*$|[ \t]+\S.*$)'
+
+# `## <moon> Overnight Agent` is SKILL.md's managed heading for one of THIS agent's turns.
+# Only this agent writes it, so it can never be a user turn -- which makes it a boundary the
+# walk in Get-AgentEndIndex must step OVER rather than stop at.
+#
+# WARNING: match the ASCII phrase, NOT the moon glyph. These journals are UTF-8 with NO BOM,
+# Windows PowerShell's default decoding for a BOM-less file is the ANSI codepage -- so the
+# same heading arrives as `## <moon> Overnight Agent` in one invocation and as the Latin-1
+# mojibake `## AdYS Overnight Agent` in another. A glyph-based pattern therefore matches or
+# silently fails depending on how the file happened to be decoded, which is the worst kind of
+# bug: it no-ops with exit code 0 and the guard it protects reads clean. `Overnight Agent` is
+# pure ASCII, so it is byte-identical under both decodings and cannot drift.
+#
+# The dated heading the planner app writes above a user reply (`## 2026-08-27`) never
+# contains this phrase, so the discrimination stays exact.
+$script:ManagedHeadingRe = '^##[^\r\n]*Overnight Agent'
+
+function Get-LastIndexOfPattern([string]$content, [string]$pattern) {
+  $idx = -1
+  foreach ($m in [regex]::Matches($content, $pattern)) { $idx = $m.Index }
+  return $idx
+}
+
+function Test-IsRunLogBodyOnly([string]$region) {
+  # Is this region nothing but the agent's own run-log entry? Used as a GUARD, so it must
+  # answer "no" whenever it is unsure: a false "no" costs one needless look at a settled
+  # task, a false "yes" silently swallows the user's message.
+  foreach ($line in ($region -split "`r?`n")) {
+    if ($line -notmatch $script:RunLogBodyLineRe) { return $false }
+  }
+  return $true
+}
+
 function Get-AgentEndIndex([string]$content) {
-  # End offset of the agent's LAST turn. The journal is a bottom-appended chat: agent turns
-  # are marked by `<!-- from: overnight-agent -->`, the managed `<!-- oa-state ... -->` block,
-  # or the OVERNIGHT-AGENT sentinel. The agent's last turn is whichever marker appears latest;
-  # its turn runs until the next `## ` section heading (the following, user, entry) or EOF.
-  # Anything after that end is USER content the agent hasn't answered yet -> reopen.
+  # End offset of THIS agent's last turn: the latest of its own provenance marker, the legacy
+  # managed `<!-- oa-state ... -->` block, or the OVERNIGHT-AGENT sentinel. The turn runs
+  # until the next `## ` section heading (the following entry) or EOF.
+  #
+  # NOTE the boundary is deliberately *this agent's* turn, not the last machine turn of any
+  # kind. If it were the latter, a sequence of [user reply] -> [sibling skill turn] would put
+  # the user's unanswered message ABOVE the boundary and silently swallow it.
+  $sentinelMarker = $content.LastIndexOf('OVERNIGHT-AGENT do not edit')
+  $selfMarker = -1
+  foreach ($m in [regex]::Matches($content, $script:ProvenanceRe)) {
+    if ($m.Groups[1].Value.Trim() -eq $script:SelfAuthor) { $selfMarker = $m.Index }
+  }
+
   $markers = @(
-    $content.LastIndexOf('<!-- from: overnight-agent -->'),
-    $content.LastIndexOf('<!-- oa-state'),
-    $content.LastIndexOf('OVERNIGHT-AGENT do not edit')
+    $selfMarker,
+    (Get-LastIndexOfPattern $content $script:LegacyStateRe),
+    $sentinelMarker
   )
   $agentMarker = ($markers | Measure-Object -Maximum).Maximum
   if ($agentMarker -lt 0) { return -1 }
-  $nextHeading = $content.IndexOf("`n## ", $agentMarker)
-  if ($nextHeading -lt 0) { return $content.Length }
-  return $nextHeading + 1
+
+  # --- The written-down boundary ----------------------------------------------------------
+  # If this agent has stamped a turn-end terminator at or after its last anchor, that is
+  # where its turn ended. It was written by `mark` at the moment the agent knew the answer,
+  # so it needs no inference and cannot be fooled by a turn that happens to end in prose.
+  #
+  # Taking the LAST such marker is deliberate: a journal accumulates turns, and only the
+  # newest terminator describes the current boundary.
+  #
+  # It is a starting point rather than the final answer, because the agent can append a
+  # NEWER turn below it (see the managed-heading walk); a terminator with one of this
+  # agent's own turn headings underneath it is simply stale.
+  $turnEnd = -1
+  foreach ($m in [regex]::Matches($content, $script:TurnEndRe)) {
+    if ($m.Index -ge $agentMarker) { $turnEnd = $m.Index + $m.Length }
+  }
+  if ($turnEnd -ge 0) {
+    # Consume the newline that ends the marker line so the trailing region starts clean.
+    if ($turnEnd -lt $content.Length -and $content[$turnEnd] -eq "`r") { $turnEnd++ }
+    if ($turnEnd -lt $content.Length -and $content[$turnEnd] -eq "`n") { $turnEnd++ }
+  }
+
+  # --- Walk past MANAGED headings ---------------------------------------------------------
+  # An H2 heading only ends the agent's turn if a *human* could have written it. Two shapes
+  # are managed by this agent and must be stepped over instead:
+  #
+  #   1. `## <moon> Overnight Agent` -- SKILL.md's turn heading. When the agent writes another
+  #      turn it opens one of these, so the previous turn's anchor is followed by a heading
+  #      that is the agent's OWN newer turn. Stopping there puts that whole turn in the
+  #      "trailing" region, where the no-marker branch of Test-TrailingHasUser reads it as
+  #      user prose and pins the task at reopened with no message in it to answer.
+  #   2. The first H2 after the sentinel, which is that same managed heading in older
+  #      journals written before the <moon> convention existed.
+  #
+  # Anything else -- notably `## 2026-08-27`, the dated heading the planner app writes above
+  # a user reply -- is a genuine boundary and stops the walk, so a real reply still reopens.
+  #
+  # Matching with `(?m)^` rather than IndexOf("`n## ") is load-bearing: after a terminator the
+  # search resumes exactly at the start of a line, and a heading sitting flush at that offset
+  # has no preceding newline inside the search region for IndexOf to find.
+  $from = if ($turnEnd -ge 0) { $turnEnd } else { $agentMarker }
+  $boundary = -1
+  $sawManaged = $false
+  $isFirstHeading = $true
+  foreach ($h in [regex]::Matches($content, '(?m)^##[ \t][^\r\n]*')) {
+    if ($h.Index -lt $from) { continue }
+    $managed = $h.Value -match $script:ManagedHeadingRe
+    # Older journals opened the managed block with a heading that predates the naming
+    # convention. Only the FIRST heading after the sentinel gets that benefit of the doubt --
+    # consuming the allowance here, rather than on the first *unmanaged* heading, is what
+    # stops it being spent on the user's `## <date>` reply further down.
+    if (-not $managed -and $isFirstHeading -and $turnEnd -lt 0 -and
+        $agentMarker -eq $sentinelMarker -and $h.Index -gt $agentMarker) {
+      $managed = $true
+    }
+    $isFirstHeading = $false
+    if (-not $managed) { $boundary = $h.Index; break }
+    $sawManaged = $true
+  }
+
+  if ($boundary -lt 0) {
+    # Nothing human below: either the agent's newest managed turn runs to EOF, or the
+    # written-down boundary is still the last word.
+    if ($sawManaged) { return $content.Length }
+    if ($turnEnd -ge 0) { return $turnEnd }
+    return $content.Length
+  }
+  # A terminator with no newer managed turn under it stands: everything below it belongs to
+  # whoever wrote it next. (When there IS a newer managed turn, that terminator is stale and
+  # the heading boundary below wins instead.)
+  if (-not $sawManaged -and $turnEnd -ge 0) { return $turnEnd }
+  $end = $boundary
+
+  # --- Unstamped run-log recovery -------------------------------------------------------
+  # Most historical journals contain NO `<!-- from: overnight-agent -->` marker: the agent
+  # answered the user by appending a `### Run log` under their `## <date>` entry. The
+  # boundary above then lands on that user heading, so the agent's own reply sits in the
+  # "trailing" region and is mistaken for unanswered user prose -- pinning the journal at
+  # HasTrailingUser=true forever. It reads as quiet only while the file is byte-identical to
+  # the last snapshot, so any in-place edit by a sibling sweep (a dead-link rewrite, an
+  # apostrophe repair) flips `changed` and the task false-reopens with a message that was
+  # answered weeks ago.
+  #
+  # So: if this agent's `### Run log` appears AFTER the boundary, its reply is the newest
+  # turn and the boundary belongs after it. Guarded by Test-IsRunLogBodyOnly, which refuses
+  # to advance over anything that is not run-log shaped -- so raw user text appended below a
+  # run log still reopens the task.
+  $runLog = Get-LastIndexOfPattern $content $script:RunLogRe
+  if ($runLog -ge $end) {
+    $afterRunLog = $content.IndexOf("`n## ", $runLog)
+    $regionEnd = if ($afterRunLog -lt 0) { $content.Length } else { $afterRunLog + 1 }
+    $region = $content.Substring($runLog, $regionEnd - $runLog)
+    if (Test-IsRunLogBodyOnly $region) { return $regionEnd }
+  }
+
+  return $end
+}
+
+function Test-TrailingHasUser([string]$trailing) {
+  # Is there HUMAN content below this agent's last turn? Only the human reopens a task.
+  #
+  # The trailing region is a chat thread and may mix authors, because sibling skills append
+  # their own turns here too. Split it into `## ` entries and judge each one by its marker:
+  #   - `<!-- from: me -->`  -> the human spoke. Reopen.
+  #   - any other marker     -> a sibling skill's turn. NOT a reopen: there is no message for
+  #                             this agent to answer, and that skill re-appends on its own
+  #                             schedule, so treating it as user prose pins the task at
+  #                             `reopened` forever.
+  #   - no marker at all     -> genuinely ambiguous (older journals, hand edits). Treat as the
+  #                             human, which is the conservative direction: a false reopen
+  #                             costs a look, a missed one loses the user's message.
+  if ($trailing.Trim().Length -eq 0) { return $false }
+
+  # Entry boundaries are H2 headings; text before the first heading belongs to the region as-is.
+  $entries = [regex]::Split($trailing, '(?m)(?=^## )') | Where-Object { $_.Trim().Length -gt 0 }
+  foreach ($entry in $entries) {
+    $marks = [regex]::Matches($entry, $script:ProvenanceRe)
+    if ($marks.Count -eq 0) { return $true }
+    foreach ($m in $marks) {
+      if ($m.Groups[1].Value.Trim() -eq $script:HumanAuthor) { return $true }
+    }
+  }
+  return $false
 }
 
 function Parse-LegacyOaState([string]$content) {
@@ -97,8 +343,30 @@ function Parse-LegacyOaState([string]$content) {
   try { return ($m[$m.Count - 1].Groups[1].Value | ConvertFrom-Json) } catch { return $null }
 }
 
+function Read-JournalText([string]$path) {
+  # ALWAYS decode journals as UTF-8, explicitly. Never `Get-Content -Raw`.
+  #
+  # These journals are UTF-8 with NO BOM, and the default decoder is host-dependent: Windows
+  # PowerShell 5.1 falls back to the ANSI codepage, PowerShell 7 defaults to UTF-8. So the
+  # SAME journal read by `Get-Content -Raw` yields different strings depending on which host
+  # is running -- an em-dash arrives as one character under pwsh and as three under
+  # powershell.exe.
+  #
+  # Two concrete harms, both observed live:
+  #   1. CORRUPTION. Add-TurnTerminator does a read-modify-write. Under 5.1 it read mojibake
+  #      and wrote it back as UTF-8, making the damage permanent. task-448.md lost 593 lines
+  #      of correct text this way (1,487 sequences, damaged twice) before this was found.
+  #   2. PHANTOM CHANGES. The processed_file_hash is computed from this string, so a journal
+  #      hashed under one host and re-hashed under the other looks edited when nothing
+  #      touched it -- which reads as the user having replied.
+  #
+  # Encoding is part of the read, not an ambient setting to inherit.
+  if (-not (Test-Path $path)) { return '' }
+  return [IO.File]::ReadAllText($path, (New-Object Text.UTF8Encoding($false)))
+}
+
 function Get-JournalFacts([string]$path) {
-  $content = Get-Content -Raw -Path $path
+  $content = Read-JournalText $path
   if ($null -eq $content) { $content = '' }
   $id = [System.IO.Path]::GetFileNameWithoutExtension($path) -replace '^task-', ''
   $agentEnd = Get-AgentEndIndex $content
@@ -112,7 +380,7 @@ function Get-JournalFacts([string]$path) {
     HasAgentBlock   = $hasAgentBlock
     FullHash        = Get-Sha256 $content
     AgentLeftHash   = Get-Sha256 $agentLeft     # file as the agent last left it (no trailing user prose)
-    HasTrailingUser = ($trailing.Trim().Length -gt 0)
+    HasTrailingUser = (Test-TrailingHasUser $trailing)
     Legacy          = Parse-LegacyOaState $content
   }
 }
@@ -131,6 +399,42 @@ function Write-State($obj) {
 }
 
 function Now-Iso { (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK') }
+
+function Set-Member($obj, [string]$name, $value) {
+  # PSCustomObjects from ConvertFrom-Json can't take a new property via `$o.x = ...`; add it.
+  if ($obj.PSObject.Properties[$name]) { $obj.$name = $value }
+  else { $obj | Add-Member -NotePropertyName $name -NotePropertyValue $value }
+}
+
+function Parse-PollMinutes([string]$spec) {
+  # Cadence -> interval in minutes. Accepts hourly|daily|weekly|<N>h|<N>d|<N>m (case-insensitive).
+  switch -regex ($spec.Trim().ToLower()) {
+    '^hourly$' { return 60 }
+    '^daily$' { return 1440 }
+    '^weekly$' { return 10080 }
+    '^(\d+)\s*h$' { return [int]$Matches[1] * 60 }
+    '^(\d+)\s*d$' { return [int]$Matches[1] * 1440 }
+    '^(\d+)\s*m$' { return [int]$Matches[1] }
+    default { throw "invalid -Poll cadence '$spec' (use hourly|daily|weekly|<N>h|<N>d|<N>m)" }
+  }
+}
+
+function New-PollObject([string]$cadence, [int]$minutes, [string]$lastPolled, [datetime]$nextDue) {
+  [pscustomobject]@{
+    cadence          = $cadence
+    interval_minutes = $minutes
+    last_polled      = $lastPolled
+    next_due         = $nextDue.ToString('yyyy-MM-ddTHH:mm:ssK')
+  }
+}
+
+function Test-PollDue($poll) {
+  # A poll with no next_due (freshly armed / malformed) is treated as due now.
+  if (-not $poll) { return $false }
+  if (-not $poll.next_due) { return $true }
+  try { return ([datetime]::Parse($poll.next_due) -le (Get-Date)) }
+  catch { return $true }
+}
 
 function Cmd-Seed {
   Ensure-StateDir
@@ -249,10 +553,12 @@ function Cmd-Scan {
   $rows = foreach ($f in $journals) {
     $facts = Get-JournalFacts $f.FullName
     $st = Read-State $facts.Id
+    $poll = $null
     if ($st) {
       $changed = ($facts.FullHash -ne $st.processed_file_hash)
       $reopened = $changed -and $facts.HasTrailingUser
       $status = "$($st.status)"
+      if ($st.PSObject.Properties['poll']) { $poll = $st.poll }
     }
     else {
       # No memory yet: a task is "reopened/active" only if the user has left prose below the
@@ -271,6 +577,8 @@ function Cmd-Scan {
       tracked       = [bool]$st
       snoozed       = [bool]$snoozeUntil
       snooze_until  = $snoozeUntil
+      due_poll      = [bool](Test-PollDue $poll)
+      poll_cadence  = if ($poll) { "$($poll.cadence)" } else { $null }
     }
   }
   $rows | ConvertTo-Json -Depth 4
@@ -283,10 +591,94 @@ function Cmd-Get {
   $st | ConvertTo-Json -Depth 6
 }
 
+function Add-TurnTerminator([string]$path) {
+  # Stamp the end of this agent's turn, so a reply typed below it can never be absorbed
+  # into the turn (see $script:TurnEndMarker for why).
+  #
+  # APPEND-ONLY, deliberately. The terminator is written only when the agent's turn already
+  # runs to EOF -- the exact shape that is blind today. When there IS trailing content below
+  # the turn, the `## ` heading already provides a working boundary and we do not need a
+  # marker, so we do not reach into the middle of the user's file to insert one. A journal in
+  # that state heals itself the next time the agent appends a turn, because that turn lands
+  # at EOF and this runs again.
+  #
+  # Returns $true if the file was modified.
+  #
+  # The read MUST be Read-JournalText, not `Get-Content -Raw`. This is a read-modify-write on
+  # one of the user's files, so a wrong decode here does not merely misread -- it re-encodes
+  # the misreading and writes it back, destroying the original characters. See the note on
+  # Read-JournalText for the 593 lines this cost before it was pinned.
+  $content = Read-JournalText $path
+  if ($null -eq $content) { $content = '' }
+  if ($content.Length -eq 0) { return $false }
+
+  $agentEnd = Get-AgentEndIndex $content
+  if ($agentEnd -lt 0) { return $false }          # no agent block yet -- nothing to terminate
+  if ($agentEnd -lt $content.Length) { return $false }  # boundary already exists below the turn
+
+  # Already terminated? Then Get-AgentEndIndex returned the marker's end, which is only equal
+  # to the file length when the marker is the last thing in the file -- nothing to do.
+  if ([regex]::IsMatch($content, $script:TurnEndRe)) {
+    $last = $null
+    foreach ($m in [regex]::Matches($content, $script:TurnEndRe)) { $last = $m }
+    if ($null -ne $last -and $content.Substring($last.Index).Trim() -eq $script:TurnEndMarker) { return $false }
+  }
+
+  $nl = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }
+  $out = $content.TrimEnd() + $nl + $nl + $script:TurnEndMarker + $nl
+  [IO.File]::WriteAllText($path, $out, (New-Object Text.UTF8Encoding($false)))
+  return $true
+}
+
+function Cmd-Resnapshot {
+  # One-time migration: re-record processed_file_hash for tasks that have NOTHING pending.
+  #
+  # Why this is needed. The hash is computed from the decoded journal text, so any change to
+  # HOW the journal is decoded changes every hash at once -- even though not one byte on disk
+  # moved. Pinning the decoder to UTF-8 (see Read-JournalText) is exactly such a change: the
+  # first scan afterwards reports every non-ASCII journal as `changed`, and each one that has
+  # trailing prose then reports `reopened`. That is a queue flood of phantom replies.
+  #
+  # The guard is the whole point: a journal with trailing USER content is SKIPPED. Those are
+  # the ones that might hold a real unanswered message, and re-snapshotting one would mark it
+  # answered -- silently, with no trace. Quiet journals are safe to re-baseline because there
+  # is nothing under the agent's turn to lose.
+  #
+  # Idempotent, and it never writes to a journal -- only to the state store.
+  $journals = Get-ChildItem $JournalDir -Filter 'task-*.md' -File |
+    Where-Object { $_.BaseName -match '^task-\d+$' } | Sort-Object Name
+  $updated = 0; $skipped = 0; $untracked = 0
+  foreach ($f in $journals) {
+    $facts = Get-JournalFacts $f.FullName
+    $st = Read-State $facts.Id
+    if (-not $st) { $untracked++; continue }
+    if ($facts.FullHash -eq $st.processed_file_hash) { continue }
+    if ($facts.HasTrailingUser) {
+      # Something is below the agent's turn. Leave it visible rather than baselining over it.
+      $skipped++
+      continue
+    }
+    $st.processed_file_hash = $facts.FullHash
+    $st.has_agent_block = $facts.HasAgentBlock
+    $st.updated = Now-Iso
+    Write-State $st
+    $updated++
+  }
+  [pscustomobject]@{
+    rebaselined       = $updated
+    left_for_review   = $skipped
+    untracked         = $untracked
+  } | ConvertTo-Json -Depth 4
+}
+
 function Cmd-Mark {
   if (-not $Id) { throw 'mark requires -Id' }
   $path = Join-Path $JournalDir "task-$Id.md"
   if (-not (Test-Path $path)) { throw "no journal at $path" }
+  # Stamp the turn boundary BEFORE snapshotting, so the hash recorded below describes the
+  # file as it now stands on disk. Doing it after would record a hash the file no longer has
+  # and every subsequent scan would report a phantom change.
+  [void](Add-TurnTerminator $path)
   $facts = Get-JournalFacts $path
   $st = Read-State $Id
   if (-not $st) {
@@ -295,6 +687,23 @@ function Cmd-Mark {
   if ($Status) { $st.status = $Status }
   if ($Version -gt 0) { $st.version = $Version }
   if ($PlanId) { $st.plan_id = $PlanId }
+
+  # --- Polling -------------------------------------------------------------------
+  $existingPoll = if ($st.PSObject.Properties['poll']) { $st.poll } else { $null }
+  if ($PollClear) {
+    Set-Member $st 'poll' $null
+  }
+  elseif ($Poll) {
+    # (Re)arm: due immediately so the very next scan picks it up.
+    $mins = Parse-PollMinutes $Poll
+    Set-Member $st 'poll' (New-PollObject $Poll.Trim().ToLower() $mins '' (Get-Date))
+  }
+  elseif ($PollDone) {
+    if (-not $existingPoll) { throw "task $Id has no poll to mark done (arm one with -Poll first)" }
+    $mins = [int]$existingPoll.interval_minutes
+    Set-Member $st 'poll' (New-PollObject "$($existingPoll.cadence)" $mins (Now-Iso) (Get-Date).AddMinutes($mins))
+  }
+
   # Re-snapshot: the agent has now processed the journal as it currently stands.
   $st.processed_file_hash = $facts.FullHash
   $st.has_agent_block = $facts.HasAgentBlock
@@ -308,4 +717,5 @@ switch ($Command) {
   'scan' { Cmd-Scan }
   'get' { Cmd-Get }
   'mark' { Cmd-Mark }
+  'resnapshot' { Cmd-Resnapshot }
 }

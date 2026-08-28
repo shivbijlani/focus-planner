@@ -270,6 +270,7 @@ async function readLocal(name) {
 }
 async function writeLocal(name, content) {
   await idbSet(META_STORE, `local:${name}`, { content, mtime: Date.now() })
+  if (isSidecarPath(name)) return
   // Notify clients so they can refresh their in-memory state / re-read via adapter.
   // Use `includeUncontrolled: true` because the SW's scope is narrow
   // (`/folder-sync/`) and the app page may not be controlled by this SW.
@@ -281,6 +282,7 @@ async function deleteLocal(name) {
   // active store. The engine's `remote-update` handler sees the tombstone
   // (mirror reads null) and calls the local adapter's deleteFile.
   await idbSet(META_STORE, `local:${name}`, { deleted: true, mtime: Date.now() })
+  if (isSidecarPath(name)) return
   const clients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' })
   for (const c of clients) c.postMessage({ type: 'remote-update', name })
 }

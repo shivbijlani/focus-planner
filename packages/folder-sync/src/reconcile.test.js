@@ -1,8 +1,15 @@
 import { describe, it, expect } from 'vitest'
-import { filesToDeleteLocally, mtimeKeysForProvider, planPlainPush, shouldPullRemote, isMassDeletion, planMirrorSync, isValidRemotePath } from './reconcile.js'
+import { filesToDeleteLocally, isConsumerVisibleMirrorPath, mtimeKeysForProvider, planPlainPush, shouldPullRemote, isMassDeletion, planMirrorSync, isValidRemotePath } from './reconcile.js'
 
 const isSidecar = (n) => n.endsWith('.sync.json')
 const isRecord = (n) => n === 'focus-plan.md' || n === 'focus-plan-completed.md'
+
+describe('isConsumerVisibleMirrorPath', () => {
+  it('keeps sync sidecars inside the engine while exposing user files', () => {
+    expect(isConsumerVisibleMirrorPath('planner.md.sync.json')).toBe(false)
+    expect(isConsumerVisibleMirrorPath('journal/task-1.md')).toBe(true)
+  })
+})
 
 describe('filesToDeleteLocally', () => {
   it('deletes a synced file that vanished from the remote listing', () => {

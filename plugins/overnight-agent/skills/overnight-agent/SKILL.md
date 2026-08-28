@@ -95,16 +95,36 @@ already processed in this journal") lives in the **skill's own working dir**, wh
 - **Tool:** [`oa-state.ps1`](./oa-state.ps1) (next to this skill) reads/writes that state. Run it with
   `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\oa-state.ps1 <command>`:
   - **`scan`** → your per-run worklist as JSON, one row per task: `{ id, status, changed, reopened,
-    has_agent_block, tracked }`. **Run this first, every run** (see PHASE 1/2). It is how you find work
-    without re-reading 90+ journals by hand.
+    has_agent_block, tracked, due_poll, poll_cadence }`. **Run this first, every run** (see PHASE 1/2).
+    It is how you find work without re-reading 90+ journals by hand.
   - **`get -Id <id>`** → that task's full state JSON.
   - **`mark -Id <id> [-Status <s>] [-Version <n>] [-PlanId <p>]`** → call this **after you write your
     turn into a journal**. It updates the fields and re-snapshots the journal, so next run the task reads
-    as quiet until the user touches it again.
+    as quiet until the user touches it again. It also stamps an invisible
+    `<!-- /overnight-agent turn-end -->` comment marking where your turn stopped — **that stamp is what
+    makes a reply typed at the bottom of the journal reopen the task**, so skipping `mark` after a turn
+    leaves that task blind to the user's next message.
+  - **`mark -Id <id> -Poll <cadence>` / `-PollDone` / `-PollClear`** → manage a **time-triggered poll**
+    on a task (see "Polling" below). Cadence is `hourly | daily | weekly | <N>h | <N>d | <N>m`.
   - **`seed [-Force]`** → one-time/migration bootstrap of state for every existing journal.
 
+**Polling (time-triggered tasks the user never touches):** `scan` normally only flags journals the
+**user** has changed — so a purely time-based job (e.g. "each night, check the video-backup folder and
+upload any drops") would be invisible and silently stop the moment the user stops replying. A **poll**
+fixes that: it lives only in the skill state (never in the journal, so the user sees nothing), and
+`scan` reports **`due_poll: true`** on any task whose poll is due. Lifecycle:
+- When a task commits you to a recurring self-check, arm it once:
+  `oa-state.ps1 mark -Id <ID> -Poll <cadence>` (a freshly armed poll is due on the next `scan`).
+- Every run, after the normal `scan`, **act on any row with `due_poll: true`** (do the recurring check),
+  then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone` (stamps `last_polled` and pushes `next_due`
+  forward by the cadence). When the recurring duty ends, `oa-state.ps1 mark -Id <ID> -PollClear`.
+
 **How "the user replied" is detected (the reopen fix):** the tool remembers a hash of each journal as
-you last left it. On the next `scan`:
+you last left it, **and where your turn ended**. The second half is what makes it work: in most journals
+your turn is the last section in the file, so no later `## ` heading closes it — and without an explicit
+end marker, anything typed below gets read as part of *your own turn* and is never seen. So `mark`
+writes the boundary down (the `<!-- /overnight-agent turn-end -->` stamp above) rather than inferring
+it, and `scan` treats everything past that stamp as the user speaking. On the next `scan`:
 - **`reopened: true`** means the user added content after your last turn (a new `## <date>` entry or
   raw text at the bottom) and you haven't answered it — **even if the task was `done`/`skip`.** Treat it
   as fresh input: read the newest message and act (approve→execute, new ask→re-plan). This is the rule
@@ -242,6 +262,28 @@ Do the phases **in this order** every time.
 
 ### PHASE 0 — Check the agent inbox (do this before everything)
 
+**First, reap stale MCP servers.** Every scheduled run starts its own set of stdio MCP servers, and
+finished sessions don't always reap them. They pile up (~6 per run, 75–150 MB each) until the box runs
+out of memory and the *next* run's MCP servers die on startup — which silently breaks the inbox check
+below, so emailed instructions get dropped without anyone noticing. Run this first, every run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\reap-stale-mcp.ps1"
+```
+
+It prints one JSON line (`{scanned, matched, stale, killed, freedMB, …}`). It only ever kills a
+`node.exe` whose command line matches a known MCP server, that is **older than 20 minutes**, and that
+is not in this run's own process tree. Add `-DryRun` to preview. If it reports a non-zero `killed`,
+mention the count in the wrap-up; if the script itself fails, note it and carry on — a failed reap must
+never abort the run.
+
+⚠️ **The threshold is sized against this run's own servers, not against the run interval.** Because the
+reaper executes first, this run's servers are only 0–2 minutes old, so 20 minutes clears everything
+older while never touching them. The earlier 45-minute figure was chosen to sit "longer than the
+30-minute run interval, so the previous run is never touched" — but deliberately sparing the *previous*
+run's servers is precisely what let them accumulate, so that threshold was itself the leak (task #349).
+Don't raise it back on that reasoning.
+
 The user can leave you new instructions by emailing the agent account
 (`<agent-inbox@example.com>`, from `user-settings.md`). At the start of each run, read the inbox via the email MCP and fold any
 new instructions into the run.
@@ -328,6 +370,8 @@ If a linked journal is missing or empty, note it and proceed with what you have 
    `in-progress` whose next step is approved), **plus any `reopened` task whose newest user message is an
    approval** (e.g. "approve", "go ahead" appended at the bottom — interpret per "Reading the user's
    decision"). Use `oa-state.ps1 get -Id <ID>` if you need a task's full state.
+   **Also pick up any row with `due_poll: true`** — a time-triggered recurring check that's now due
+   (see "Polling"). Run its check, then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone`.
 2. For each, **execute the approved plan**:
 
    - First, **gather linked-task context** per "Gather linked-task context FIRST" above — read the
@@ -566,6 +610,17 @@ present the reversible draft and stop short of the committing action.
   task goes quiet. \*\*Mark handled instruction emails as read\*\* so you don't reprocess them.
 - **Stay in the user's space cleanly.** Never edit above the sentinel. Preserve the user's notes,
   links, and formatting. Write files as UTF-8.
+- **Write every journal turn through `write-turn.ps1`** (next to this skill), never by hand:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\write-turn.ps1 -Id <ID> -BodyFile <file.md>`.
+  Author the turn body with a **file tool** first, then pass the file. The script validates the body
+  and **refuses to write** if it finds any of the four corruption classes that have already destroyed
+  real content — a value eaten by PowerShell string interpolation (`~$150-275` → `~\-275`), a doubled
+  apostrophe from single-quote escaping (`don''t`), an H2 that is not 🌙-first (the Telegram bridge
+  anchors on `^##\s*🌙`, so any other H2 silently truncates the turn), and a stray
+  `<!-- from: overnight-agent -->` with no heading above it (severs the block and hides
+  **Needs from you**). It appends only, so it can never delete one of the user's replies, and it backs
+  the journal up first. Add `-Validate` to lint without writing. This is a **guard, not a guideline**:
+  each of these classes was documented in prose first and broken anyway.
 - **Ask narrowly, not broadly.** If you need something, put one precise question in \*\*Needs from
   you\*\* and set `blocked`; don't stall the whole run. You may also reply to the user's instruction
   email with that one question.

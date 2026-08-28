@@ -7,7 +7,8 @@
 import { enqueue, peekAll } from './queue.js'
 import { getTokens, clearTokens } from './auth/tokenStore.js'
 import { idbSet, idbGet, idbKeys, idbDel } from './idb.js'
-import { mtimeKeysForProvider, planMirrorSync } from './reconcile.js'
+import { isConsumerVisibleMirrorPath, mtimeKeysForProvider, planMirrorSync } from './reconcile.js'
+import { diag } from '../../diagnostics/src/index.js'
 
 const CHANNEL = 'folder-sync'
 const META_STORE = 'meta'
@@ -126,9 +127,17 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     try {
       const keys = await idbKeys(META_STORE)
       const changed = []
+      let scanned = 0
+      let skipped = 0
+      let writes = 0
+      let deletes = 0
       for (const k of keys) {
         if (typeof k !== 'string' || !k.startsWith('local:')) continue
         const name = k.slice('local:'.length)
+        // Sidecars are service-worker merge metadata. Copying their routine
+        // rewrites into the app store only triggers a no-op file-tree refresh.
+        if (!isConsumerVisibleMirrorPath(name)) continue
+        scanned++
         const rec = await idbGet(META_STORE, k)
         if (!rec) continue
         let activeContent = ''
@@ -139,10 +148,25 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
           activeContent,
         })
         try {
-          if (action === 'write') { await localAdapter.writeFile(name, rec.content); changed.push(name) }
-          else if (action === 'delete') { await localAdapter.deleteFile(name); changed.push(name) }
+          if (action === 'write') {
+            await localAdapter.writeFile(name, rec.content)
+            changed.push(name)
+            writes++
+          } else if (action === 'delete') {
+            await localAdapter.deleteFile(name)
+            changed.push(name)
+            deletes++
+          } else {
+            skipped++
+          }
         } catch { /* ignore a single file failure */ }
       }
+      diag('folder-sync.reconcile', 'mirror-reconcile-summary', {
+        scanned,
+        skipped,
+        writes,
+        deletes,
+      })
       // Notify listeners so the UI re-reads affected files and refreshes the
       // tree. Use a strictly increasing timestamp so per-file dedupe downstream
       // (storage.onLocalChange tracks the last `at`) fires for every change.
