@@ -33,7 +33,57 @@ Windows Credential Manager before invoking the CLI.
 | `PLANNER_PATH` | — | Planner folder. Defaults to `planner-config.json`'s `plannerPath`, else `../planner`. |
 | `TELEGRAM_BRIDGE_TASKS` | — | Comma-separated allowlist of task IDs to mirror. Empty = all tasks with an agent block. |
 | `TELEGRAM_BRIDGE_ARCHIVE` | — | Archive (close) a task's topic when it lands on the completed board, and reopen it if the task leaves. Default **on**; set to `off`/`false`/`0`/`no` to disable. |
+| `TELEGRAM_BRIDGE_DIGEST` | — | Post the consolidated "waiting on you" approval digest. Default **on**; set to `off`/`false`/`0`/`no` to disable. |
+| `TELEGRAM_BRIDGE_DIGEST_TOPIC` | — | Where the digest is posted. Empty = the group's **General** thread (default). A **number** posts into that existing topic id. Any other value is treated as a **topic name**, created once and reused. |
 | `TELEGRAM_BRIDGE_STATE_DIR` | — | State dir. Defaults to `%LOCALAPPDATA%\overnight-agent\telegram-bridge`. |
+
+### Where the approval digest goes
+
+The digest is the **only** message the bridge sends outside a task's own topic — everything else is
+mirrored into that task's thread. So in a group run as strictly one-topic-per-task, it is the sole source
+of General-thread traffic.
+
+That leaves three options rather than two:
+
+| You want | Set |
+| --- | --- |
+| Digest in General (original behaviour) | nothing |
+| No digest at all | `TELEGRAM_BRIDGE_DIGEST=off` |
+| Digest, but out of General | `TELEGRAM_BRIDGE_DIGEST_TOPIC="Waiting on you"` |
+
+The third option exists because switching the digest off entirely is a blunt fix: it quiets General but
+also removes the one consolidated view of what is actually blocked on you, leaving the queue scattered
+across every task topic.
+
+
+### How the digest is ordered
+
+The digest has a hard Telegram size cap, so a large queue does not fit: the message keeps as many whole
+entries as it can and collapses the rest into `…and N more`. That makes the **order** the feature —
+whatever leads the message is, in practice, the only part that gets read.
+
+Entries are sorted by:
+
+1. **Formal asks before soft ones** — an explicit `**Needs from you:**` outranks a bare `Next:` line,
+   which often describes agent-side continuation rather than a decision you owe.
+2. **Your own board** (`planner.md`) — `## Today` before `## Deferred`, and within each, rows marked
+   🔴 or `P0` first, then your top-to-bottom row order.
+3. **Newest first**, as a tie-break.
+
+Ranking by the board rather than by task-ID magnitude fixes two real failure modes: malformed six-digit
+IDs used to sort above every genuine task and permanently occupy the top slot, and a true P0 could sit
+below whatever happened to be filed most recently. Anything not on the board at all — orphans, completed
+rows, broken IDs — sorts last.
+
+If `planner.md` cannot be read, ordering falls back to newest-first and the digest still posts.
+
+A **name** is resolved to a forum topic once and cached in bridge state, so re-runs reuse that topic
+instead of creating a new one each night; changing the name resolves a fresh topic. Resolution happens
+only when a digest is actually being posted, so a run with an unchanged queue creates nothing.
+
+Batched replies still work from the dedicated topic: it is not a *task* topic, so a reply inside it falls
+through to the same by-task-id routing used for General (`routeReply.js`), and the acknowledgement is
+threaded back into that topic.
 
 ### Supplying the token (Windows Credential Manager)
 
@@ -55,9 +105,30 @@ node bin/telegram-bridge.js baseline      # mark existing tasks already-seen (no
 node bin/telegram-bridge.js sync-up       # post NEW agent turns -> topics
 node bin/telegram-bridge.js sync-archive  # close topics of completed tasks (reopen if un-completed)
 node bin/telegram-bridge.js sync-down     # fold replies -> journals
-node bin/telegram-bridge.js once          # sync-up, sync-archive, then sync-down (default)
+node bin/telegram-bridge.js digest        # post the consolidated "waiting on you" queue
+node bin/telegram-bridge.js digest --force  # ...even if it hasn't changed
+node bin/telegram-bridge.js once          # sync-up, sync-archive, sync-down, then digest (default)
 node bin/telegram-bridge.js watch [secs]  # loop `once` every N seconds (min 10, default 60)
 ```
+
+**The approval digest.** `digest` posts a single message to the group's **General** thread listing every
+task's open ask, so the whole approval queue can be answered in **one reply** instead of one reply per
+topic. It runs automatically at the end of `once`, and is **idempotent**: the composed text is hashed and
+compared against the last one posted, so a run where nothing changed posts nothing at all (use `--force`
+to override). When the bot's privacy mode is on, the message also tells you to *reply* to it — with
+privacy mode on, a message you merely **type** in the group is never delivered to the bot, so an answer
+that isn't a reply is silently lost.
+
+> ⚠️ **The ask is read from each task's newest agent turn**, never by grepping the journal for its last
+> `**Needs from you:**` line. Journals are bottom-appended chat threads and later turns often restate a
+> blocker in prose without re-emitting the marker, so a file-wide grep can surface an ask that newer turns
+> already invalidated (this really happened: task #250's marker was written 2026-07-01, superseded on
+> 07-07, and still got acted on). A digest built that way would rebroadcast dead asks every night. See the
+> regression tests in `src/digest.test.js`.
+>
+> Formal `**Needs from you:**` asks are treated as blocking; a bare `Next:` line is a weaker fallback
+> (it often describes what the *agent* does next, e.g. "keep polling on future overnight runs") and is
+> ranked below them, so when the message has to be trimmed it is the soft ones that fall off.
 
 **Archive on complete.** `sync-archive` reads the completed board (`planner-completed.md`) and, for any
 task whose topic exists, **closes** the forum topic (Telegram collapses it under the group's *Closed*
