@@ -645,5 +645,58 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     return { seen, skipped }
   }
 
-  return { ensureTopic, syncUp, syncDown, syncArchive, syncOnce, syncDigest, baseline }
+  // Migration for the TURN_END boundary fix. Changing what `latestAgentTurn()`
+  // returns changes `hashTurn()`, and syncUp dedupes on exactly that hash — so
+  // without this, shipping the fix would re-post one stale turn for every
+  // journal whose stamp used to be swallowed (36 live journals when this was
+  // written). That is the very duplicate-message symptom the fix exists to stop.
+  //
+  // It is deliberately narrow: a task is re-baselined ONLY when its stored hash
+  // matches the LEGACY parse of the journal as it stands right now. That proves
+  // the stored hash refers to this exact turn, already delivered, and that the
+  // only thing that moved is how we parse it. Any task whose stored hash matches
+  // neither parse has genuinely new content and is left alone, so a real pending
+  // post can never be silently absorbed.
+  //
+  // Idempotent: after it runs, stored === new hash, which matches no legacy hash
+  // that differs, so a second run migrates nothing.
+  async function rebaselineTurnEnd() {
+    const migrated = []
+    const unchanged = []
+    const pending = []
+    const journals = await io.listJournals()
+
+    for (const { taskId } of journals) {
+      if (!isAllowed(taskId)) continue
+      const task = getTask(state, taskId)
+      if (!task || !task.lastPostedHash) continue
+
+      const content = await io.readJournal(taskId)
+      if (!hasAgentBlock(content)) continue
+
+      const next = latestAgentTurn(content)
+      const legacy = latestAgentTurn(content, { includeTurnEnd: true })
+      if (!next || !legacy) continue
+
+      const nextHash = hashTurn(next)
+      const legacyHash = hashTurn(legacy)
+
+      if (nextHash === legacyHash) {
+        unchanged.push(taskId) // no stamp in this turn — the fix is a no-op here
+        continue
+      }
+      if (task.lastPostedHash === legacyHash) {
+        setLastPosted(state, taskId, nextHash)
+        migrated.push(taskId)
+      } else {
+        // Stored hash matches neither parse: this turn has moved on since it was
+        // posted, so it is legitimately due a post. Leave it for syncUp.
+        pending.push(taskId)
+      }
+    }
+
+    return { migrated, unchanged, pending }
+  }
+
+  return { ensureTopic, syncUp, syncDown, syncArchive, syncOnce, syncDigest, baseline, rebaselineTurnEnd }
 }

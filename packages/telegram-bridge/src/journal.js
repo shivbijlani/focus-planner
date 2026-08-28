@@ -7,6 +7,12 @@ export const FROM_ME = '<!-- from: me -->'
 export const FROM_AGENT = '<!-- from: overnight-agent -->'
 export const AGENT_HEADER = '## \u{1F319} Overnight Agent' // "## 🌙 Overnight Agent"
 
+// Written by `oa-state.ps1 mark` (skill side) to stamp where the agent's turn
+// ended, so a reply typed underneath can never be absorbed into the turn. It is
+// agent bookkeeping, NOT content: the reader must treat it as a boundary, the
+// same way it treats a `<!-- from: … -->` marker or a date header.
+export const TURN_END = '<!-- /overnight-agent turn-end -->'
+
 const DATE_HEADER = /^##\s+\d{4}-\d{2}-\d{2}/
 
 /** `task-352.md` -> `352` (null if it doesn't match). */
@@ -113,8 +119,23 @@ export function agentBlockStatus(block) {
  * The most recent agent-authored message in the journal — either the latest
  * `<!-- from: overnight-agent -->` chat entry or the managed plan block,
  * whichever appears later. Returns the trimmed text, or null if none.
+ *
+ * The turn ends at the `TURN_END` stamp. Not honouring it had two costs, both
+ * measured live against 124 open board rows:
+ *   1. `mark` appends the stamp AFTER the turn was posted, so the turn text —
+ *      and therefore `hashTurn()`, which is syncUp's only dedupe key — changed
+ *      for an already-delivered turn and the bridge re-posted it. 90/90 of the
+ *      journals `mark` would touch flipped hash.
+ *   2. The raw stamp fell inside the body and was rendered into the message, so
+ *      the user literally read `<!-- /overnight-agent turn-end -->` at the
+ *      bottom of 36 journals' Telegram messages.
+ *
+ * `includeTurnEnd` reproduces the old, stamp-swallowing parse. It exists for
+ * ONE caller — the `rebaseline-turn-end` migration, which needs the legacy hash
+ * to recognise a turn that was already delivered under the old rule. Nothing
+ * else should set it.
  */
-export function latestAgentTurn(content) {
+export function latestAgentTurn(content, { includeTurnEnd = false } = {}) {
   const lines = content.split(/\r?\n/)
   let startLine = -1
   let startKind = null
@@ -139,6 +160,7 @@ export function latestAgentTurn(content) {
     const raw = lines[j]
     const trimmed = raw.trim()
     if (trimmed === FROM_ME || trimmed === FROM_AGENT) break
+    if (!includeTurnEnd && trimmed === TURN_END) break
     if (DATE_HEADER.test(raw)) break
     if (startKind === 'marker' && /^##\s/.test(raw)) break
     if (startKind === 'plan' && /^##\s/.test(raw) && !raw.startsWith(AGENT_HEADER))
