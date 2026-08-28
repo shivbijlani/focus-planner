@@ -24,6 +24,15 @@
   PHASE 3 itself runs at the END of the run. Use `-SyncDownOnly` for that early call so
   the pre-scan fold still goes through this wrapper rather than a hand-rolled command
   line (which is exactly how the General-thread flood keeps happening).
+
+  WHY $Bridge POINTS AT main, NOT AT A WORKTREE
+  --------------------------------------------
+  This used to pin the bridge to the `oa-block-stray-marker` worktree, because that
+  branch carried digest/ordering fixes that `main` did not have. Those fixes are now
+  merged: `git diff origin/main oa-block-stray-marker -- packages/telegram-bridge/src`
+  is EMPTY, so the pin bought nothing and cost a second, invisible deploy target — a
+  merge into `main` (e.g. the #210/#211 ask-truncation split, #219) would not reach the
+  running bridge at all. Keep this pointed at the checkout so "merged" means "running".
 #>
 [CmdletBinding()]
 param(
@@ -38,7 +47,7 @@ $PlannerPath = 'C:\Users\shiv\OneDrive\Apps\Focus Planner'
 $Settings    = Join-Path $PlannerPath 'user-settings.md'
 $ChatId      = '-1004310604015'
 $SecretTool  = Join-Path $env:LOCALAPPDATA 'overnight-agent\secrets\telegram-secret.ps1'
-$Bridge      = 'V:\repos\focus-planner.worktrees\oa-block-stray-marker\packages\telegram-bridge\bin\telegram-bridge.js'
+$Bridge      = 'V:\repos\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js'
 
 if (-not (Test-Path $Settings)) { throw "user-settings.md not found at $Settings" }
 if (-not (Test-Path $Bridge))   { throw "bridge CLI not found at $Bridge" }
