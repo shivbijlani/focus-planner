@@ -39,6 +39,15 @@
          [-PollDone]            Record that the poll just ran: stamp last_polled = now and push
                                 next_due forward by the cadence interval.
          [-PollClear]           Remove the poll from the task.
+         [-Recheck <cadence>]   Register/update a recurring recheck of a BLOCKED task's
+                                prerequisite, so `scan` surfaces it on a timer (due_recheck).
+                                Same cadence grammar as -Poll. Freshly armed = due immediately.
+         [-RecheckKind <kind>]  Free-text note of WHAT to recheck (e.g. 'oauth', 'ci', 'date',
+                                'browser-slot'). Echoed back by scan so a run can pick only the
+                                checks it can actually perform. Optional.
+         [-RecheckDone]         Record that the recheck just ran: stamp last_rechecked = now and
+                                push next_due forward by the cadence interval.
+         [-RecheckClear]        Remove the recheck from the task (e.g. once it is unblocked).
   resnapshot                    One-time migration after a change to how journals are decoded
                                 or hashed: re-baseline processed_file_hash for tasks with
                                 nothing pending. SKIPS any journal with trailing user content,
@@ -53,6 +62,27 @@
   read `scan`, act on any row with `due_poll: true`, and `mark -PollDone` to re-arm it. The user
   sees nothing about it.
 
+.RECHECKING BLOCKED TASKS (#395 / #400)
+  A `blocked` task has the same invisibility problem, for a worse reason: it is waiting on a
+  PREREQUISITE, not on the user, so nothing about it will ever change the journal. It therefore
+  never appears in a worklist again and parks indefinitely — which is exactly how tasks sat for
+  40-59 days. `-Recheck` arms the same timer machinery against the blocker, so `scan` re-surfaces
+  the task when its prerequisite is worth re-testing.
+
+  Only blockers with a MACHINE-CHECKABLE prerequisite should be armed (an OAuth token that may
+  have been renewed, a CI result that may have gone green, a browser slot that may now be signed
+  in, a date that may have arrived). A blocker that needs a human decision must stay a question in
+  **Needs from you** — re-asking it on a timer is noise, not progress.
+
+  A due recheck grants NO new permission: it is a read-only look at whether the blocker is gone.
+  Acting on the result still obeys the reversibility gate.
+
+.SNOOZE PRECEDENCE
+  Snooze is the user's explicit "not until <date>", so it outranks both timers: a snoozed task
+  reports `due_poll: false` and `due_recheck: false` regardless of how overdue the timer is. The
+  timer itself is left untouched and simply fires again once the snooze lapses — snoozing does not
+  silently disarm a poll.
+
 .EXAMPLES
   pwsh oa-state.ps1 seed
   pwsh oa-state.ps1 scan
@@ -61,6 +91,9 @@
   pwsh oa-state.ps1 mark -Id 400 -Poll daily          # arm a daily poll on #400
   pwsh oa-state.ps1 mark -Id 400 -PollDone            # after running it this run
   pwsh oa-state.ps1 mark -Id 400 -PollClear           # stop polling #400
+  pwsh oa-state.ps1 mark -Id 357 -Status blocked -Recheck 12h -RecheckKind ci
+  pwsh oa-state.ps1 mark -Id 357 -RecheckDone         # still blocked; re-arm the timer
+  pwsh oa-state.ps1 mark -Id 357 -RecheckClear        # prerequisite cleared
 #>
 
 [CmdletBinding()]
@@ -79,6 +112,12 @@ param(
   [string]$Poll,
   [switch]$PollDone,
   [switch]$PollClear,
+
+  # Blocked-task rechecks (time-triggered re-test of a blocker). See .RECHECKING in the header.
+  [string]$Recheck,
+  [string]$RecheckKind,
+  [switch]$RecheckDone,
+  [switch]$RecheckClear,
 
   # Overridable so the skill stays shareable; defaults match user-settings.md.
   [string]$JournalDir = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\journal",
@@ -415,7 +454,7 @@ function Parse-PollMinutes([string]$spec) {
     '^(\d+)\s*h$' { return [int]$Matches[1] * 60 }
     '^(\d+)\s*d$' { return [int]$Matches[1] * 1440 }
     '^(\d+)\s*m$' { return [int]$Matches[1] }
-    default { throw "invalid -Poll cadence '$spec' (use hourly|daily|weekly|<N>h|<N>d|<N>m)" }
+    default { throw "invalid cadence '$spec' (use hourly|daily|weekly|<N>h|<N>d|<N>m)" }
   }
 }
 
@@ -424,6 +463,18 @@ function New-PollObject([string]$cadence, [int]$minutes, [string]$lastPolled, [d
     cadence          = $cadence
     interval_minutes = $minutes
     last_polled      = $lastPolled
+    next_due         = $nextDue.ToString('yyyy-MM-ddTHH:mm:ssK')
+  }
+}
+
+function New-RecheckObject([string]$cadence, [int]$minutes, [string]$kind, [string]$lastRechecked, [datetime]$nextDue) {
+  # Same timer shape as a poll (so Test-PollDue serves both), plus `kind` so a run can select
+  # only the rechecks it is actually able to perform this pass.
+  [pscustomobject]@{
+    cadence          = $cadence
+    interval_minutes = $minutes
+    kind             = $kind
+    last_rechecked   = $lastRechecked
     next_due         = $nextDue.ToString('yyyy-MM-ddTHH:mm:ssK')
   }
 }
@@ -558,11 +609,13 @@ function Cmd-Scan {
     $facts = Get-JournalFacts $f.FullName
     $st = Read-State $facts.Id
     $poll = $null
+    $recheck = $null
     if ($st) {
       $changed = ($facts.FullHash -ne $st.processed_file_hash)
       $reopened = $changed -and $facts.HasTrailingUser
       $status = "$($st.status)"
       if ($st.PSObject.Properties['poll']) { $poll = $st.poll }
+      if ($st.PSObject.Properties['recheck']) { $recheck = $st.recheck }
     }
     else {
       # No memory yet: a task is "reopened/active" only if the user has left prose below the
@@ -572,6 +625,10 @@ function Cmd-Scan {
       $status = if ($facts.HasAgentBlock) { 'unknown' } else { 'none' }
     }
     $snoozeUntil = if ($snooze.ContainsKey($facts.Id)) { $snooze[$facts.Id] } else { $null }
+    # Snooze is the user's explicit "not until <date>", so it outranks both timers. Suppress the
+    # DUE verdict only -- the timer object itself is left armed, so it fires again on its own once
+    # the snooze lapses rather than being silently disarmed by it.
+    $isSnoozed = [bool]$snoozeUntil
     [pscustomobject]@{
       id            = $facts.Id
       status        = $status
@@ -579,10 +636,13 @@ function Cmd-Scan {
       reopened      = $reopened
       has_agent_block = $facts.HasAgentBlock
       tracked       = [bool]$st
-      snoozed       = [bool]$snoozeUntil
+      snoozed       = $isSnoozed
       snooze_until  = $snoozeUntil
-      due_poll      = [bool](Test-PollDue $poll)
+      due_poll      = [bool]((Test-PollDue $poll) -and -not $isSnoozed)
       poll_cadence  = if ($poll) { "$($poll.cadence)" } else { $null }
+      due_recheck   = [bool]((Test-PollDue $recheck) -and -not $isSnoozed)
+      recheck_cadence = if ($recheck) { "$($recheck.cadence)" } else { $null }
+      recheck_kind  = if ($recheck) { "$($recheck.kind)" } else { $null }
     }
   }
   $rows | ConvertTo-Json -Depth 4
@@ -706,6 +766,30 @@ function Cmd-Mark {
     if (-not $existingPoll) { throw "task $Id has no poll to mark done (arm one with -Poll first)" }
     $mins = [int]$existingPoll.interval_minutes
     Set-Member $st 'poll' (New-PollObject "$($existingPoll.cadence)" $mins (Now-Iso) (Get-Date).AddMinutes($mins))
+  }
+
+  # --- Blocked-task rechecks (#395) ----------------------------------------------
+  # Same timer machinery as a poll, aimed at the BLOCKER rather than at recurring work, so a
+  # blocked task re-enters the worklist on a cadence instead of parking forever.
+  $existingRecheck = if ($st.PSObject.Properties['recheck']) { $st.recheck } else { $null }
+  if ($RecheckClear) {
+    Set-Member $st 'recheck' $null
+  }
+  elseif ($Recheck) {
+    # (Re)arm: due immediately so the very next scan picks it up.
+    $rmins = Parse-PollMinutes $Recheck
+    $kind = if ($RecheckKind) { $RecheckKind.Trim() } elseif ($existingRecheck) { "$($existingRecheck.kind)" } else { '' }
+    Set-Member $st 'recheck' (New-RecheckObject $Recheck.Trim().ToLower() $rmins $kind '' (Get-Date))
+  }
+  elseif ($RecheckDone) {
+    if (-not $existingRecheck) { throw "task $Id has no recheck to mark done (arm one with -Recheck first)" }
+    $rmins = [int]$existingRecheck.interval_minutes
+    $kind = if ($RecheckKind) { $RecheckKind.Trim() } else { "$($existingRecheck.kind)" }
+    Set-Member $st 'recheck' (New-RecheckObject "$($existingRecheck.cadence)" $rmins $kind (Now-Iso) (Get-Date).AddMinutes($rmins))
+  }
+  elseif ($RecheckKind -and $existingRecheck) {
+    # Retag an armed recheck without disturbing its timer.
+    Set-Member $st 'recheck' (New-RecheckObject "$($existingRecheck.cadence)" ([int]$existingRecheck.interval_minutes) $RecheckKind.Trim() "$($existingRecheck.last_rechecked)" ([datetime]::Parse($existingRecheck.next_due)))
   }
 
   # Re-snapshot: the agent has now processed the journal as it currently stands.
