@@ -30,8 +30,8 @@ const SCAFFOLD_PLAN = `## Today
 
 ## Deferred
 
-| ID | 🎯 | Task | Priority | Added | Linked ID |
-|---|---|------|----------|-------|-----------|
+| ID | 🎯 | Task | Priority | Added | Wake | Linked ID |
+|---|---|------|----------|-------|------|-----------|
 
 ## Priorities
 

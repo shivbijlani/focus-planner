@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildCompletedRow,
   completedRowExistsForTask,
+  nextWakeTimeoutMs,
   opApplySnoozeTransitions,
   opAppendToCompleted,
   opBridgeLinks,
@@ -139,13 +140,13 @@ describe('snooze section moves', () => {
     '',
     '## Deferred',
     '',
-    '| ID | 🎯 | Task | Work Priority | Added | Linked ID |',
-    '|---|---|------|---------------|-------|-----------|',
-    '| 9 | ⚪ | Later | - | 2026-06-30 | |',
+    '| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |',
+    '|---|---|------|---------------|-------|------|-----------|',
+    '| 9 | ⚪ | Later | - | 2026-06-30 |  | |',
     '',
   ].join('\n')
 
-  it('snoozes by adding a marker and moving Today to Deferred', () => {
+  it('snoozes by populating Wake and moving Today to Deferred', () => {
     const out = opSnoozeTask(
       snoozePlan,
       '| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 |',
@@ -156,11 +157,11 @@ describe('snooze section moves', () => {
     const deferredBlock = lines.slice(lines.indexOf('## Deferred')).join('\n')
 
     expect(todayBlock).not.toContain('Weekend blocker')
-    expect(deferredBlock).toContain('| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 | <!-- snooze:2026-07-11 -->')
+    expect(deferredBlock).toContain('| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 2026-07-11 | 1 |')
     expect(deferredBlock.indexOf('Weekend blocker')).toBeLessThan(deferredBlock.indexOf('Later'))
   })
 
-  it('auto-returns expired Deferred snoozes to Today and clears the marker', () => {
+  it('auto-returns expired Deferred snoozes to Today and drops the Wake cell', () => {
     const planWithExpired = opSnoozeTask(
       snoozePlan,
       '| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 |',
@@ -173,6 +174,7 @@ describe('snooze section moves', () => {
 
     expect(todayBlock).toContain('| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 |')
     expect(todayBlock).not.toContain('snooze:')
+    expect(todayBlock).not.toContain('2026-07-09 | 1')
     expect(deferredBlock).not.toContain('Weekend blocker')
   })
 
@@ -182,7 +184,22 @@ describe('snooze section moves', () => {
     expect(out).toBe(snoozePlan)
   })
 
-  it('un-snoozes by clearing the marker and moving Deferred back to Today', () => {
+  it('defers future-dated Today snoozes into Deferred using the Wake column', () => {
+    const todayWithLegacySnooze = snoozePlan.replace(
+      '| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 |',
+      '| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 | <!-- snooze:2026-07-11 -->',
+    )
+    const out = opApplySnoozeTransitions(todayWithLegacySnooze, '2026-07-10')
+    const lines = out.split('\n')
+    const todayBlock = lines.slice(lines.indexOf('## Today'), lines.indexOf('## Deferred')).join('\n')
+    const deferredBlock = lines.slice(lines.indexOf('## Deferred')).join('\n')
+
+    expect(todayBlock).not.toContain('Weekend blocker')
+    expect(deferredBlock).toContain('| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 2026-07-11 | 1 |')
+    expect(deferredBlock).not.toContain('snooze:')
+  })
+
+  it('un-snoozes by clearing Wake and moving Deferred back to Today', () => {
     const planWithSnooze = opSnoozeTask(
       snoozePlan,
       '| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 |',
@@ -190,7 +207,7 @@ describe('snooze section moves', () => {
     )
     const out = opSnoozeTask(
       planWithSnooze,
-      '| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 | <!-- snooze:2026-07-11 -->',
+      '| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 2026-07-11 | 1 |',
       null,
     )
     const lines = out.split('\n')
@@ -200,6 +217,24 @@ describe('snooze section moves', () => {
     expect(todayBlock).toContain('| 2 | 🔴 | Weekend blocker | Ship | 2026-07-02 | 1 |')
     expect(todayBlock).not.toContain('snooze:')
     expect(deferredBlock).not.toContain('Weekend blocker')
+  })
+
+  it('computes the next future Wake timeout and ignores expired wakes', () => {
+    const content = [
+      '# Focus Plan',
+      '',
+      '## Deferred',
+      '',
+      '| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |',
+      '|---|---|------|---------------|-------|------|-----------|',
+      '| 1 | ⚪ | Expired | - | 2026-07-01 | 2026-07-03 | |',
+      '| 2 | ⚪ | Future | - | 2026-07-01 | 2026-07-05 | |',
+      '| 3 | ⚪ | Later | - | 2026-07-01 | 2026-07-08 | |',
+      '',
+    ].join('\n')
+
+    expect(nextWakeTimeoutMs(content, new Date(2026, 6, 4, 12, 0, 0))).toBe(12 * 60 * 60 * 1000)
+    expect(nextWakeTimeoutMs(content, new Date(2026, 6, 8, 1, 0, 0))).toBeNull()
   })
 })
 

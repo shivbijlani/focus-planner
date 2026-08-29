@@ -1,6 +1,32 @@
 const SNOOZE_COMMENT_RE = /\s*<!--\s*snooze:(\d{4}-\d{2}-\d{2})\s*-->\s*$/i
+const WAKE_COLUMN = 'Wake'
 
-export function parseSnoozeUntil(rawLine) {
+function parseCells(rawLine) {
+  const s = String(rawLine || '').trim()
+  if (!s.startsWith('|')) return []
+  return s.split('|').slice(1, -1).map(c => c.trim())
+}
+
+function wakeColumnIndex(headers) {
+  if (!Array.isArray(headers)) return -1
+  return headers.findIndex(h => String(h || '').trim() === WAKE_COLUMN)
+}
+
+function formatCells(cells) {
+  return `| ${cells.join(' | ')} |`
+}
+
+export function parseSnoozeUntil(rawLine, headers = null) {
+  const cells = parseCells(rawLine)
+  const explicitWakeIndex = wakeColumnIndex(headers)
+  if (explicitWakeIndex !== -1) {
+    const wake = normalizeDateOnly(cells[explicitWakeIndex])
+    if (wake) return wake
+  } else if (cells.length >= 7) {
+    const inferredWake = normalizeDateOnly(cells[cells.length - 2])
+    if (inferredWake) return inferredWake
+  }
+
   const match = String(rawLine || '').match(SNOOZE_COMMENT_RE)
   return match ? match[1] : null
 }
@@ -21,13 +47,27 @@ export function normalizeDateOnly(value) {
   return s
 }
 
-export function clearSnoozeUntilFromLine(rawLine) {
-  return String(rawLine || '').replace(SNOOZE_COMMENT_RE, '').trimEnd()
+export function clearSnoozeUntilFromLine(rawLine, headers = null) {
+  const cleanLine = String(rawLine || '').replace(SNOOZE_COMMENT_RE, '').trimEnd()
+  const wakeIndex = wakeColumnIndex(headers)
+  if (wakeIndex === -1) return cleanLine
+  const cells = parseCells(cleanLine)
+  if (cells.length <= wakeIndex) return cleanLine
+  cells[wakeIndex] = ''
+  return formatCells(cells)
 }
 
-export function setSnoozeUntilOnLine(rawLine, snoozeUntil) {
-  const cleanLine = clearSnoozeUntilFromLine(rawLine)
+export function setSnoozeUntilOnLine(rawLine, snoozeUntil, headers = null) {
+  const cleanLine = clearSnoozeUntilFromLine(rawLine, headers)
   const date = normalizeDateOnly(snoozeUntil)
+  const wakeIndex = wakeColumnIndex(headers)
+  if (wakeIndex !== -1) {
+    const cells = parseCells(cleanLine)
+    if (cells.length > wakeIndex) {
+      cells[wakeIndex] = date || ''
+      return formatCells(cells)
+    }
+  }
   return date ? `${cleanLine} <!-- snooze:${date} -->` : cleanLine
 }
 

@@ -12,29 +12,38 @@ import {
 
 describe('snooze row markers', () => {
   const row = '| 1 | 🟡 | Plan weekend work | - | 2026-07-03 | 192 |'
+  const deferredHeaders = ['ID', '🎯', 'Task', 'Work Priority', 'Added', 'Wake', 'Linked ID']
+  const deferredRow = '| 1 | 🟡 | Plan weekend work | - | 2026-07-03 |  | 192 |'
 
-  it('sets and parses a trailing HTML comment without changing table cells', () => {
-    const snoozed = setSnoozeUntilOnLine(row, '2026-07-06')
+  it('sets and parses a Wake column without changing other table cells', () => {
+    const snoozed = setSnoozeUntilOnLine(deferredRow, '2026-07-06', deferredHeaders)
 
-    expect(snoozed).toBe(`${row} <!-- snooze:2026-07-06 -->`)
-    expect(parseSnoozeUntil(snoozed)).toBe('2026-07-06')
+    expect(snoozed).toBe('| 1 | 🟡 | Plan weekend work | - | 2026-07-03 | 2026-07-06 | 192 |')
+    expect(parseSnoozeUntil(snoozed, deferredHeaders)).toBe('2026-07-06')
     expect(snoozed.split('|').slice(1, -1).map(c => c.trim())).toEqual([
       '1',
       '🟡',
       'Plan weekend work',
       '-',
       '2026-07-03',
+      '2026-07-06',
       '192',
     ])
   })
 
-  it('replaces and clears an existing marker', () => {
-    const first = setSnoozeUntilOnLine(row, '2026-07-06')
-    const second = setSnoozeUntilOnLine(first, '2026-07-10')
+  it('replaces and clears an existing Wake value', () => {
+    const first = setSnoozeUntilOnLine(deferredRow, '2026-07-06', deferredHeaders)
+    const second = setSnoozeUntilOnLine(first, '2026-07-10', deferredHeaders)
 
-    expect(second).toBe(`${row} <!-- snooze:2026-07-10 -->`)
-    expect(clearSnoozeUntilFromLine(second)).toBe(row)
-    expect(setSnoozeUntilOnLine(second, null)).toBe(row)
+    expect(second).toBe('| 1 | 🟡 | Plan weekend work | - | 2026-07-03 | 2026-07-10 | 192 |')
+    expect(clearSnoozeUntilFromLine(second, deferredHeaders)).toBe(deferredRow)
+    expect(setSnoozeUntilOnLine(second, null, deferredHeaders)).toBe(deferredRow)
+  })
+
+  it('falls back to parsing the legacy trailing HTML comment', () => {
+    const legacy = `${row} <!-- snooze:2026-07-06 -->`
+
+    expect(parseSnoozeUntil(legacy)).toBe('2026-07-06')
   })
 
   it('treats future snoozes as active and expired snoozes as inactive', () => {

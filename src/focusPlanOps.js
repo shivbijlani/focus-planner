@@ -13,16 +13,121 @@ import { isPrioritiesSection } from './focusPlanShared.js'
 import {
   clearSnoozeUntilFromLine,
   isSnoozeActive,
+  normalizeDateOnly,
   parseSnoozeUntil,
   setSnoozeUntilOnLine,
 } from './snooze.js'
 
 const PRIORITY_HEADING = '## Priorities'
+const WAKE_COLUMN = 'Wake'
+const MAX_TIMEOUT_MS = 2_147_483_647
+
+function rowCells(line) {
+  return String(line || '').trim().split('|').slice(1, -1).map(c => c.trim())
+}
+
+function formatRow(cells) {
+  return `| ${cells.join(' | ')} |`
+}
+
+function isTableSeparatorCells(cells) {
+  return cells.length > 0 && cells.every(c => /^[-:]+$/.test(c))
+}
+
+function findSectionTable(lines, section) {
+  let currentSection = null
+  let headerIndex = -1
+  let separatorIndex = -1
+  let endIndex = lines.length
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (line.startsWith('## ')) {
+      if (currentSection === section) {
+        endIndex = i
+        break
+      }
+      currentSection = line.replace('## ', '').trim()
+      continue
+    }
+    if (currentSection !== section) continue
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('|')) continue
+    const cells = rowCells(trimmed)
+    if (headerIndex === -1 && !isTableSeparatorCells(cells)) {
+      headerIndex = i
+    } else if (headerIndex !== -1 && separatorIndex === -1 && isTableSeparatorCells(cells)) {
+      separatorIndex = i
+    }
+  }
+
+  const headers = headerIndex === -1 ? [] : rowCells(lines[headerIndex])
+  return { headerIndex, separatorIndex, endIndex, headers }
+}
+
+function shouldHaveWakeColumn(section, headers) {
+  return section === 'Deferred' && headers.includes('Added') && headers.some(h => h.includes('Linked'))
+}
+
+function wakeInsertIndex(headers) {
+  const linkedIndex = headers.findIndex(h => h.includes('Linked'))
+  return linkedIndex === -1 ? headers.length : linkedIndex
+}
+
+function ensureWakeColumn(lines, section) {
+  const table = findSectionTable(lines, section)
+  if (!shouldHaveWakeColumn(section, table.headers) || table.headers.includes(WAKE_COLUMN)) {
+    return table
+  }
+
+  const insertIndex = wakeInsertIndex(table.headers)
+  const headers = [...table.headers]
+  headers.splice(insertIndex, 0, WAKE_COLUMN)
+  lines[table.headerIndex] = formatRow(headers)
+
+  if (table.separatorIndex !== -1) {
+    const separator = rowCells(lines[table.separatorIndex])
+    separator.splice(insertIndex, 0, '----')
+    lines[table.separatorIndex] = formatRow(separator)
+  }
+
+  for (let i = table.separatorIndex + 1; i < table.endIndex; i++) {
+    if (!lines[i]?.trim().startsWith('|')) continue
+    const cells = rowCells(lines[i])
+    if (isTableSeparatorCells(cells) || cells[0] === 'ID' || cells[0] === '#') continue
+    if (cells.length === table.headers.length) {
+      cells.splice(insertIndex, 0, '')
+      lines[i] = formatRow(cells)
+    }
+  }
+
+  return findSectionTable(lines, section)
+}
+
+function transformRowForSection(rawLine, fromHeaders, toHeaders, { wakeUntil = null } = {}) {
+  const cleanLine = clearSnoozeUntilFromLine(rawLine, fromHeaders)
+  const sourceCells = rowCells(cleanLine)
+  if (!Array.isArray(fromHeaders) || fromHeaders.length === 0
+      || !Array.isArray(toHeaders) || toHeaders.length === 0) {
+    return cleanLine
+  }
+
+  const sourceByHeader = new Map()
+  fromHeaders.forEach((header, index) => sourceByHeader.set(header, sourceCells[index] || ''))
+  const cells = toHeaders.map(header => {
+    if (header === WAKE_COLUMN) return normalizeDateOnly(wakeUntil) || sourceByHeader.get(WAKE_COLUMN) || ''
+    return sourceByHeader.get(header) || ''
+  })
+  return formatRow(cells)
+}
 
 // ── Section moves / row mutations ────────────────────────────────────
 
-export function opMoveBetweenSections(content, rawLine, fromSection, toSection) {
+export function opMoveBetweenSections(content, rawLine, fromSection, toSection, options = {}) {
   const lines = content.split('\n')
+  if (toSection === 'Deferred') ensureWakeColumn(lines, toSection)
+  const fromTable = findSectionTable(lines, fromSection)
+  const toTable = findSectionTable(lines, toSection)
   let inFromSection = false
   let inToSection = false
   let toSectionInsertIndex = -1
@@ -44,7 +149,7 @@ export function opMoveBetweenSections(content, rawLine, fromSection, toSection) 
   if (lineToRemoveIndex === -1 || toSectionInsertIndex === -1) return content
   const removed = lines.splice(lineToRemoveIndex, 1)[0]
   if (lineToRemoveIndex < toSectionInsertIndex) toSectionInsertIndex--
-  lines.splice(toSectionInsertIndex, 0, removed)
+  lines.splice(toSectionInsertIndex, 0, transformRowForSection(removed, fromTable.headers, toTable.headers, options))
   return lines.join('\n')
 }
 
@@ -63,6 +168,9 @@ export function opMoveLinesBetweenSections(content, rawLines, fromSection, toSec
   if (targets.size === 0) return content
 
   const lines = content.split('\n')
+  if (toSection === 'Deferred') ensureWakeColumn(lines, toSection)
+  const fromTable = findSectionTable(lines, fromSection)
+  const toTable = findSectionTable(lines, toSection)
   let currentSection = null
   let toSectionInsertIndex = -1
   const removeIndices = []
@@ -98,6 +206,7 @@ export function opMoveLinesBetweenSections(content, rawLines, fromSection, toSec
   const orderedRemoved = rawLines
     .map(l => removedByLine.get(l.trim()))
     .filter(v => v !== undefined)
+    .map(line => transformRowForSection(line, fromTable.headers, toTable.headers))
   lines.splice(toSectionInsertIndex, 0, ...orderedRemoved)
   return lines.join('\n')
 }
@@ -113,9 +222,13 @@ export function opChangePriority(content, rawLine, oldPriority, newPriority) {
 
 export function opSetTaskSnooze(content, rawLine, snoozeUntil) {
   const lines = content.split('\n')
-  const lineIndex = lines.findIndex(line => line.trim() === rawLine)
-  if (lineIndex === -1) return content
-  lines[lineIndex] = setSnoozeUntilOnLine(lines[lineIndex], snoozeUntil)
+  const found = findTaskRow(content, rawLine)
+  if (found.lineIndex === -1) return content
+  if (found.section === 'Deferred') {
+    ensureWakeColumn(lines, 'Deferred')
+  }
+  const table = findSectionTable(lines, found.section)
+  lines[found.lineIndex] = setSnoozeUntilOnLine(lines[found.lineIndex], snoozeUntil, table.headers)
   return lines.join('\n')
 }
 
@@ -138,25 +251,28 @@ export function opSnoozeTask(content, rawLine, snoozeUntil) {
   const { lines, lineIndex, section } = findTaskRow(content, rawLine)
   if (lineIndex === -1) return content
 
-  const nextLine = snoozeUntil
-    ? setSnoozeUntilOnLine(lines[lineIndex], snoozeUntil)
-    : clearSnoozeUntilFromLine(lines[lineIndex])
-  lines[lineIndex] = nextLine
-  let updated = lines.join('\n')
-
   if (snoozeUntil && section === 'Today') {
-    updated = opMoveBetweenSections(updated, nextLine.trim(), 'Today', 'Deferred')
-  } else if (!snoozeUntil && section === 'Deferred') {
-    updated = opMoveBetweenSections(updated, nextLine.trim(), 'Deferred', 'Today')
+    return opMoveBetweenSections(content, rawLine, 'Today', 'Deferred', { wakeUntil: snoozeUntil })
   }
 
-  return updated
+  if (!snoozeUntil && section === 'Deferred') {
+    return opMoveBetweenSections(content, rawLine, 'Deferred', 'Today')
+  }
+
+  if (section === 'Deferred') ensureWakeColumn(lines, 'Deferred')
+  const table = findSectionTable(lines, section)
+  const nextLine = snoozeUntil
+    ? setSnoozeUntilOnLine(lines[lineIndex], snoozeUntil, table.headers)
+    : clearSnoozeUntilFromLine(lines[lineIndex], table.headers)
+  lines[lineIndex] = nextLine
+  return lines.join('\n')
 }
 
 export function opApplySnoozeTransitions(content, today) {
   let updated = content
   const lines = content.split('\n')
   let section = null
+  let headers = []
   const activeToday = []
   const expiredDeferred = []
 
@@ -168,8 +284,12 @@ export function opApplySnoozeTransitions(content, today) {
     const trimmed = line.trim()
     if (!trimmed.startsWith('|')) continue
     const cells = trimmed.split('|').slice(1, -1).map(c => c.trim())
-    if (cells[0] === 'ID' || cells.every(c => /^[-:]+$/.test(c))) continue
-    const snoozeUntil = parseSnoozeUntil(trimmed)
+    if (cells[0] === 'ID' || cells[0] === '#') {
+      headers = cells
+      continue
+    }
+    if (cells.every(c => /^[-:]+$/.test(c))) continue
+    const snoozeUntil = parseSnoozeUntil(trimmed, headers)
     if (!snoozeUntil) continue
     if (section === 'Deferred' && !isSnoozeActive(snoozeUntil, today)) {
       expiredDeferred.push(trimmed)
@@ -187,6 +307,41 @@ export function opApplySnoozeTransitions(content, today) {
   }
 
   return updated
+}
+
+export function nextWakeTimeoutMs(content, now = new Date()) {
+  const nowDate = now instanceof Date ? now : new Date(now)
+  if (Number.isNaN(nowDate.getTime())) return null
+
+  let section = null
+  let headers = []
+  let nextWakeAt = null
+  for (const line of String(content || '').split('\n')) {
+    if (line.startsWith('## ')) {
+      section = line.replace('## ', '').trim()
+      headers = []
+      continue
+    }
+    if (section !== 'Deferred') continue
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('|')) continue
+    const cells = rowCells(trimmed)
+    if (cells[0] === 'ID' || cells[0] === '#') {
+      headers = cells
+      continue
+    }
+    if (isTableSeparatorCells(cells)) continue
+    const wake = parseSnoozeUntil(trimmed, headers)
+    const normalized = normalizeDateOnly(wake)
+    if (!normalized) continue
+    const [year, month, day] = normalized.split('-').map(Number)
+    const wakeAt = new Date(year, month - 1, day).getTime()
+    if (wakeAt > nowDate.getTime() && (nextWakeAt === null || wakeAt < nextWakeAt)) {
+      nextWakeAt = wakeAt
+    }
+  }
+  if (nextWakeAt === null) return null
+  return Math.min(MAX_TIMEOUT_MS, Math.max(0, nextWakeAt - nowDate.getTime()))
 }
 
 export function opDeleteTask(content, rawLine) {
@@ -296,23 +451,33 @@ export function allocateNextId(contentMaxId, existingJournalIds) {
 
 export function opAddTask(content, { task, priority, linkedTask, section }, existingJournalIds = new Set()) {
   const lines = content.split('\n')
+  if (section === 'Deferred') ensureWakeColumn(lines, 'Deferred')
   const { insertIndex, maxId } = findInsertAndMaxId(lines, section)
   if (insertIndex === -1) return content
   const newId = allocateNextId(maxId, existingJournalIds)
   const today = new Date().toISOString().split('T')[0]
   const trimmedLinked = linkedTask ? linkedTask.trim() : ''
   const isUrl = /^https?:\/\//.test(trimmedLinked)
-  let row
+  let idCell
+  let linkedCell = ''
   if (isUrl) {
     const adoId = extractTicketIdFromUrl(trimmedLinked)
     if (adoId) {
-      row = `| ${newId},[${adoId}](${trimmedLinked.replace(/\/$/, '')}) | ${priority} | ${task} | - | ${today} | |`
+      idCell = `${newId},[${adoId}](${trimmedLinked.replace(/\/$/, '')})`
     } else {
-      row = `| ${newId} | ${priority} | ${task} | - | ${today} | ${trimmedLinked} |`
+      idCell = String(newId)
+      linkedCell = trimmedLinked
     }
   } else {
-    row = `| ${newId} | ${priority} | ${task} | - | ${today} | ${trimmedLinked} |`
+    idCell = String(newId)
+    linkedCell = trimmedLinked
   }
+  const table = findSectionTable(lines, section)
+  const row = transformRowForSection(
+    formatRow([idCell, priority, task, '-', today, linkedCell]),
+    ['ID', '🎯', 'Task', table.headers.find(h => h.includes('Priority')) || 'Priority', 'Added', 'Linked ID'],
+    table.headers,
+  )
   lines.splice(insertIndex, 0, row)
   return { content: lines.join('\n'), newId }
 }

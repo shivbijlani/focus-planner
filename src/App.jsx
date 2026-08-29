@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useLayoutEffect } from 'react'
+import { useState, useEffect, useRef, useMemo, useLayoutEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import './App.css'
 import './mobile-board.css'
@@ -667,9 +667,9 @@ function PriorityDropdown({ currentPriority, isNeededForUrgent, onChangePriority
   const [isOpen, setIsOpen] = useState(false)
   const dropdownRef = useRef(null)
   const isMobile = useIsMobile()
-  
+
   const priorities = PRIORITY_CHOICES
-  
+
   useEffect(() => {
     // On mobile the menu is a portaled bottom sheet with its own backdrop,
     // so the click-outside-to-close handler only applies to the desktop popover.
@@ -684,12 +684,12 @@ function PriorityDropdown({ currentPriority, isNeededForUrgent, onChangePriority
       return () => document.removeEventListener('mousedown', handleClickOutside)
     }
   }, [isOpen, isMobile])
-  
+
   const handleSelect = (icon) => {
     onChangePriority(icon)
     setIsOpen(false)
   }
-  
+
   return (
     <div className="priority-dropdown" ref={dropdownRef}>
       <span 
@@ -753,7 +753,7 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
     : (taskLookup || {})
   // Use activeTaskIds when available (single source view), otherwise fall back to keys of current lookup
   const effectiveTaskIds = activeTaskIds || Object.keys(effectiveTaskLookup)
-  
+
   useEffect(() => {
     inputRef.current?.focus()
     const handleClickOutside = (e) => {
@@ -771,7 +771,7 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
       document.removeEventListener('keydown', handleEscape)
     }
   }, [onClose])
-  
+
   const handleSubmit = (e) => {
     e.preventDefault()
     if (task.trim()) {
@@ -964,15 +964,17 @@ function parseMarkdownTable(lines) {
   let headerParsed = false
   let headers = []
   let linkedIdIndex = -1
-  
+  let wakeIndex = -1
+
   for (const line of lines) {
     const trimmed = line.trim()
     if (!trimmed.startsWith('|')) continue
-    
+
     const cells = trimmed.split('|').slice(1, -1).map(c => c.trim())
-    
+
     if (!headerParsed) {
       headers = cells
+      wakeIndex = headers.indexOf('Wake')
       // Find and remove "Linked ID" column
       linkedIdIndex = headers.findIndex(h => h.includes('Linked'))
       if (linkedIdIndex !== -1) {
@@ -986,15 +988,16 @@ function parseMarkdownTable(lines) {
       headerParsed = true
       continue
     }
-    
+
     // Skip separator row
     if (cells.every(c => /^[-:]+$/.test(c))) continue
-    
+
     const row = {}
-    const snoozeUntil = parseSnoozeUntil(trimmed)
+    const wakeValue = wakeIndex !== -1 ? normalizeDateOnly(cells[wakeIndex]) : null
+    const snoozeUntil = wakeValue || parseSnoozeUntil(trimmed)
     let cellIndex = 0
     const linkedIdValue = linkedIdIndex !== -1 ? cells[linkedIdIndex] : ''
-    
+
     for (let i = 0; i < headers.length; i++) {
       const h = headers[i]
       if (h === 'Age') {
@@ -1045,27 +1048,27 @@ function parseMarkdownTable(lines) {
     rows.push(row)
     rawLines.push(trimmed)
   }
-  
+
   return { headers, rows, rawLines }
 }
 
 // Parse markdown links and render as clickable
 function parseLinks(text, onNavigate) {
   if (!text) return text
-  
+
   const parts = []
   let lastIndex = 0
   const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g
   let match
-  
+
   while ((match = linkRegex.exec(text)) !== null) {
     if (match.index > lastIndex) {
       parts.push(text.slice(lastIndex, match.index))
     }
-    
+
     const linkText = match[1]
     const href = match[2]
-    
+
     // Check if it's an internal journal link
     if (href.startsWith('journal/') || href.endsWith('.md')) {
       parts.push(
@@ -1094,14 +1097,14 @@ function parseLinks(text, onNavigate) {
         </a>
       )
     }
-    
+
     lastIndex = match.index + match[0].length
   }
-  
+
   if (lastIndex < text.length) {
     parts.push(text.slice(lastIndex))
   }
-  
+
   return parts.length > 0 ? parts : text
 }
 
@@ -1119,29 +1122,29 @@ const iconTooltips = {
 // Render cell content with icon tooltips and links
 function renderCellWithTooltips(content, onNavigate) {
   if (!content) return content
-  
+
   // Check if content is a single icon
   const trimmed = content.trim()
   if (iconTooltips[trimmed]) {
     return <span title={iconTooltips[trimmed]}>{content}</span>
   }
-  
+
   // First parse links, then handle icons in the remaining text
   const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g
   const parts = []
   let lastIndex = 0
   let match
-  
+
   while ((match = linkRegex.exec(content)) !== null) {
     if (match.index > lastIndex) {
       // Add text before the link (with icon tooltips)
       const textBefore = content.slice(lastIndex, match.index)
       parts.push(...renderIconsWithTooltips(textBefore, lastIndex))
     }
-    
+
     const linkText = match[1]
     const href = match[2]
-    
+
     // Check if it's an internal link
     if (href.startsWith('journal/') || href.endsWith('.md')) {
       parts.push(
@@ -1170,15 +1173,15 @@ function renderCellWithTooltips(content, onNavigate) {
         </a>
       )
     }
-    
+
     lastIndex = match.index + match[0].length
   }
-  
+
   // Add remaining text after last link
   if (lastIndex < content.length) {
     parts.push(...renderIconsWithTooltips(content.slice(lastIndex), lastIndex))
   }
-  
+
   return parts.length > 0 ? parts : content
 }
 
@@ -1188,7 +1191,7 @@ function renderIconsWithTooltips(text, keyOffset = 0) {
   if (!iconPattern.test(text)) {
     return [text]
   }
-  
+
   iconPattern.lastIndex = 0 // Reset regex
   const parts = text.split(iconPattern)
   return parts.map((part, i) => {
@@ -1289,12 +1292,12 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
     if (priority?.includes('✅')) return 'priority-done'
     return ''
   }
-  
+
   const priorityCol = headers.find(h => h.includes('🎯')) || '🎯'
   const currentPriority = row[priorityCol] || '⚪'
   const mngrPriorityCol = headers.find(h => h.includes('Mngr') || h.includes('Work') || h.includes('Priority')) || 'Work Priority'
   const activeSnoozeUntil = isSnoozeActive(row.snoozeUntil) ? row.snoozeUntil : null
-  
+
   const handleContextMenu = (e) => {
     e.preventDefault()
     onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence)
@@ -1307,7 +1310,7 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
     e.stopPropagation()
     onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence)
   }
-  
+
   // Filter to only uncompleted todos
   const uncompletedTodos = todos ? todos.filter(t => !t.done) : []
   const hasUncompletedTodos = uncompletedTodos.length > 0
@@ -1367,7 +1370,7 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
       >
         {headers.map((h, i) => {
           const cellValue = row[h]
-          
+
           // Special handling for ID column (with linked ID arrow)
           if (h === 'ID' && typeof cellValue === 'object') {
             const { id, linkedId, adoLink } = cellValue
@@ -1468,26 +1471,26 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
               </td>
             )
           }
-          
+
           // Special handling for Task column - add journal link and todo expander
           if (h === 'Task') {
             const startEditing = () => {
               setEditText(cellValue || '')
               setIsEditing(true)
             }
-            
+
             const saveEdit = () => {
               if (editText.trim() && editText !== cellValue) {
                 onRenameTask(rawLine, editText.trim(), row.__sourceId)
               }
               setIsEditing(false)
             }
-            
+
             const cancelEdit = () => {
               setIsEditing(false)
               setEditText('')
             }
-            
+
             return (
               <td key={i}>
                 <div className="task-with-todos">
@@ -1586,12 +1589,12 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
               </td>
             )
           }
-          
+
           // Special handling for Work Priority column — read-only, derived from linked ID chain
           if (h === mngrPriorityCol) {
             const resolved = resolveManagerPriority(taskId, linkedIdMap || {}, managerPriorities)
             const isSelfPriority = taskId && managerPriorities[taskId]
-            
+
             if (isSelfPriority) {
               return (
                 <td key={i}>
@@ -1605,7 +1608,7 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
                 </td>
               )
             }
-            
+
             if (resolved) {
               const resolvedName = taskLookup ? taskLookup[resolved.id] : resolved.id
               return (
@@ -1621,10 +1624,10 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
                 </td>
               )
             }
-            
+
             return <td key={i}>-</td>
           }
-          
+
           // Special handling for Priority column - clickable dropdown
           if (h === priorityCol) {
             const isNeededForUrgent = !currentPriority.includes('🔴') && taskId && isNeededForUrgentTask(taskId, linkedIdMap || {}, taskPriorityLookup || {})
@@ -1638,13 +1641,13 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
               </td>
             )
           }
-          
+
           // Age column shows Added date on hover
           if (h === 'Age') {
             const addedDate = row['Added'] || ''
             return <td key={i} title={addedDate ? `Added: ${addedDate}` : ''} style={{cursor: addedDate ? 'default' : undefined}}>{cellValue}</td>
           }
-          
+
           return <td key={i}>{renderCellWithTooltips(cellValue, onNavigate)}</td>
         })}
         {/* Mobile (#335): chat + kebab get their own trailing column at the
@@ -1801,7 +1804,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
   const isMobile = useIsMobile()
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [adoLinkDialog, setAdoLinkDialog] = useState(null)
-  
+
   // Sort rows: urgent first, then manager priority, then dependency depth, then eisenhower icon
   const { sortedRows, sortedRawLines } = sortTasksByPriority(rows, rawLines, headers, linkedIdMap, managerPriorities)
 
@@ -1811,7 +1814,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     filterRowsAndRawLines(sortedRows, sortedRawLines, searchQuery)
   // While searching, force the section open so matches are visible.
   const effectiveOpen = isSearching ? true : isOpen
-  
+
   const isTaskSection = title === 'Today' || title === 'Deferred'
   if (sortedRows.length === 0 && !showAddDialog && !isTaskSection) return null
   
@@ -1820,7 +1823,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       width: 420,
       height: 320,
     })
-    
+
     const style = pipWindow.document.createElement('style')
     style.textContent = `
       * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1841,7 +1844,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       .pip-empty { color: #64748b; font-style: italic; font-size: 0.85rem; margin-top: 8px; }
     `
     pipWindow.document.head.appendChild(style)
-    
+
     const container = pipWindow.document.createElement('div')
     container.innerHTML = `
       <div class="pip-header">
@@ -1851,7 +1854,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       </div>
     `
     pipWindow.document.body.appendChild(container)
-    
+
     // Double-click anywhere to jump to journal in main window
     pipWindow.document.body.addEventListener('dblclick', () => {
       if (journalPath) {
@@ -1859,7 +1862,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       }
       window.focus()
     })
-    
+
     // Fetch and show todos if journal exists
     if (journalPath) {
       try {
@@ -1903,7 +1906,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     const rowReadStateId = journalReadStateId(rowSourceId, taskId)
     const qualifiedJournalPath = joinSourcePath(row.__sourceId, journalPath)
     const currentSnoozeUntil = row.snoozeUntil || parseSnoozeUntil(rawLine)
-    
+
     if (title === 'Today') {
       options.push({
         label: 'Defer',
@@ -1949,7 +1952,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
         })
       }
     }
-    
+
     // Add "Move to Completed" option for both Today and Deferred
     options.push({
       label: 'Move to Completed',
@@ -1981,7 +1984,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
         })
       }
     }
-    
+
     // Add "Create Journal" option if no journal exists and we have a task ID
     if (canCreateJournal(journalExistence) && taskId) {
       const taskName = row['Task'] || ''
@@ -1991,7 +1994,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
         action: () => onCreateJournal(taskId, taskName, row.__sourceId)
       })
     }
-    
+
     // Add "Focus Sticky Note" option
     if ('documentPictureInPicture' in window) {
       const taskName = row['Task'] || ''
@@ -2002,7 +2005,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
         action: () => openTaskPiP(taskId, taskName, priority, journalPath, rowSourceId, row.__sourceId)
       })
     }
-    
+
     // Add "Promote/Remove Priority" option (unified — was Work + Personal)
     if (taskId) {
       if (managerPriorities[taskId]) {
@@ -2019,7 +2022,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
         })
       }
     }
-    
+
     // Add "Link to Bug DB" option
     const idObj = row['ID']
     const currentAdoLink = typeof idObj === 'object' ? idObj.adoLink : null
@@ -2028,7 +2031,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       icon: '🔗',
       action: () => setAdoLinkDialog({ rawLine, currentUrl: currentAdoLink ? currentAdoLink.url : '', sourceId: row.__sourceId })
     })
-    
+
     // Add "Move to {source}" options when there are multiple sources.
     if (otherSources && otherSources.length > 0 && taskId) {
       for (const src of otherSources) {
@@ -2063,12 +2066,12 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       icon: '🗑️',
       action: () => onDeleteTask(rawLine, title, journalPath, taskId, row)
     })
-    
+
     if (options.length > 0) {
       setContextMenu({ x: e.clientX, y: e.clientY, options })
     }
   }
-  
+
   return (
     <div className="task-section">
       <h2 
@@ -2221,15 +2224,15 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
   }
   const priorities = parseManagerPriorities(lines)
   const priorityList = Object.entries(priorities).sort((a, b) => a[1] - b[1])
-  
+
   const toggleExpanded = (id) => {
     setExpandedPriorities(prev => ({ ...prev, [id]: !prev[id] }))
   }
-  
+
   const scrollToTask = (taskId) => {
     scrollToAndFlashTask(taskId)
   }
-  
+
   const handleAdd = () => {
     const text = newPriority.trim()
     if (!text) return
@@ -2250,7 +2253,7 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
     setNewPriority('')
     setIsAdding(false)
   }
-  
+
   const handleDelete = (id) => {
     const newLines = lines.filter(line => {
       const match = line.trim().match(/^\d+\.\s+(.+)$/)
@@ -2266,25 +2269,25 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
     })
     onUpdate(renumbered)
   }
-  
+
   const handleMove = (id, direction) => {
     const idx = priorityList.findIndex(([n]) => n === id)
     if (direction === 'up' && idx <= 0) return
     if (direction === 'down' && idx >= priorityList.length - 1) return
-    
+
     const newList = [...priorityList]
     const swapIdx = direction === 'up' ? idx - 1 : idx + 1
     ;[newList[idx], newList[swapIdx]] = [newList[swapIdx], newList[idx]]
-    
+
     const newLines = lines.filter(line => !/^\d+\.\s+/.test(line.trim()))
     newList.forEach(([n], i) => {
       newLines.push(`${i + 1}. ${n}`)
     })
     onUpdate(newLines)
   }
-  
+
   const allTaskIds = taskLookup ? Object.keys(taskLookup) : []
-  
+
   return (
     <div className="task-section manager-priorities-section" id={sectionId}>
       <h2
@@ -2317,7 +2320,7 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
               const isExpanded = expandedPriorities[id] || false
               const firstTask = tasks[0]
               const taskName = taskLookup[id] || `Task ${id}`
-              
+
               return (
                 <li key={id} className="priority-item" onContextMenu={(e) => handlePriorityContextMenu(e, id, taskName)}>
                   <div className="priority-item-header">
@@ -2416,7 +2419,7 @@ function parseFocusPlan(content) {
   const sections = []
   let currentSection = null
   let currentLines = []
-  
+
   for (const line of lines) {
     if (line.startsWith('## ')) {
       if (currentSection) {
@@ -2428,11 +2431,11 @@ function parseFocusPlan(content) {
       currentLines.push(line)
     }
   }
-  
+
   if (currentSection) {
     sections.push({ title: currentSection, lines: currentLines })
   }
-  
+
   return sections
 }
 
@@ -2763,7 +2766,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       }
     }
   }
-  
+
   // Fetch completed tasks for linked ID lookup
   useEffect(() => {
     storage.read(COMPLETED_FILE)
@@ -2811,12 +2814,12 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [coarsePointer])
+  }, [coarsePointer, setSearch])
 
   // Merge lookups: current tasks take priority (full lookup for display, active-only for dropdowns)
   const taskLookup = { ...completedTaskLookup, ...currentTaskLookup }
   const activeTaskIds = Object.keys(currentTaskLookup)
-  
+
   const scrollToPriorities = () => {
     const el = document.getElementById('priorities')
     if (el) {
@@ -2835,39 +2838,39 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     let inToSection = false
     let toSectionInsertIndex = -1
     let lineToRemoveIndex = -1
-    
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]
-      
+
       if (line.startsWith('## ')) {
         const sectionName = line.replace('## ', '').trim()
         inFromSection = sectionName === fromSection
         inToSection = sectionName === toSection
       }
-      
+
       // Find where to insert in target section (after header row and separator)
       if (inToSection && line.trim().startsWith('|') && line.includes('---')) {
         toSectionInsertIndex = i + 1
       }
-      
+
       // Find the line to remove
       if (inFromSection && line.trim() === rawLine) {
         lineToRemoveIndex = i
       }
     }
-    
+
     if (lineToRemoveIndex !== -1 && toSectionInsertIndex !== -1) {
       // Remove from source
       const removedLine = lines.splice(lineToRemoveIndex, 1)[0]
-      
+
       // Adjust insert index if removal was before it
       if (lineToRemoveIndex < toSectionInsertIndex) {
         toSectionInsertIndex--
       }
-      
+
       // Insert into target
       lines.splice(toSectionInsertIndex, 0, removedLine)
-      
+
       const newContent = lines.join('\n')
       await onContentUpdate(newContent)
     }
@@ -2880,7 +2883,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     const newContent = ops.opMoveLinesBetweenSections(content, rawLines, 'Today', 'Deferred')
     if (newContent !== content) await onContentUpdate(newContent)
   }
-  
+
   const handleChangePriority = async (rawLine, oldPriority, newPriority) => {
     // Replace the priority in the raw line
     const newLine = rawLine.replace(oldPriority, newPriority)
@@ -2897,7 +2900,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     const newContent = ops.opSnoozeTask(content, rawLine, snoozeUntil)
     if (newContent !== content) await onContentUpdate(newContent)
   }
-   
+
   const handleDeleteTask = async (rawLine, fromSection, journalPath, taskId, row) => {
     // Check for incoming links to bridge
     if (taskId && linkedIdMap) {
@@ -2953,7 +2956,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       onError: (e) => console.error('Failed to delete journal:', e),
     })
   }
-  
+
   const handleMoveToCompleted = async (rawLine, row, fromSection) => {
     const taskId = extractTaskId(row)
     // Show the close-out dialog first so the user can optionally record how the
@@ -3002,10 +3005,10 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     const taskId = extractTaskId(row)
     const taskName = row['Task'] || ''
     const mngrPriority = row['Work Priority'] || row['Mngr Priority'] || '-'
-    
+
     // Get today's date
     const today = new Date().toISOString().split('T')[0]
-    
+
     // Fetch journal todos if journal exists
     let todoItems = []
     if (taskId) {
@@ -3019,7 +3022,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
         console.error('Failed to fetch journal todos:', e)
       }
     }
-    
+
     // Build the completed task description: Task name - item1 - item2 ...
     let completedTaskName = taskName.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Remove markdown links
     if (todoItems.length > 0) {
@@ -3030,18 +3033,18 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     if (closeOutcome) {
       completedTaskName += ` · _${closeOutcome}_`
     }
-    
+
     // Extract ID for display (simple number or keep as-is)
     const displayId = taskId || '-'
-    
+
     // Build the completed row
     const completedRow = `| ${displayId} | ✅ | ${completedTaskName} | ${mngrPriority} | ${today} |`
-    
+
     // Remove from focus-plan.md
     const focusLines = content.split('\n')
     let inFromSection = false
     let lineToRemoveIndex = -1
-    
+
     for (let i = 0; i < focusLines.length; i++) {
       const line = focusLines[i]
       if (line.startsWith('## ')) {
@@ -3052,7 +3055,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
         break
       }
     }
-    
+
     if (lineToRemoveIndex !== -1) {
       focusLines.splice(lineToRemoveIndex, 1)
       // Use the potentially bridged content as the base
@@ -3063,12 +3066,12 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       }
       await onContentUpdate(finalFocusLines.join('\n'))
     }
-    
+
     // Add to focus-plan-completed.md under the current week
     try {
       const completedContent = await storage.read(COMPLETED_FILE).catch(() => '# Completed Tasks\n')
       const completedLines = completedContent.split('\n')
-      
+
       // Compute Monday of the current week (M/D/YYYY format)
       const now = new Date()
       const dayOfWeek = now.getDay()
@@ -3076,7 +3079,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7))
       const weekLabel = `${monday.getMonth() + 1}/${monday.getDate()}/${monday.getFullYear()}`
       const weekHeader = `## Week of ${weekLabel}`
-      
+
       // Find if this week's section already exists
       let insertIndex = -1
       for (let i = 0; i < completedLines.length; i++) {
@@ -3092,7 +3095,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
           break
         }
       }
-      
+
       // If week section doesn't exist, create it after the "# Completed Tasks" heading
       if (insertIndex === -1) {
         let headerIndex = completedLines.findIndex(l => l.startsWith('# Completed Tasks'))
@@ -3109,7 +3112,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       } else {
         completedLines.splice(insertIndex, 0, completedRow)
       }
-      
+
       await storage.write(COMPLETED_FILE, completedLines.join('\n'))
     } catch (e) {
       console.error('Failed to update completed file:', e)
@@ -3130,7 +3133,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       }
     }
   }
-  
+
   const handleAddTask = async ({ task, priority, linkedTask, section }) => {
     const lines = content.split('\n')
     let inTargetSection = false
@@ -3140,7 +3143,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     // Existing journal IDs are only a collision-skip set — numbering is driven
     // by the planner's own rows so a stray/foreign high journal ID can't inflate it.
     const journalIds = await getJournalIds()
-    
+
     // Check if linkedTask is a URL with an extractable ticket/incident ID
     const extractTicketId = (url) => {
       const endMatch = url.match(/\/(\d+)\/?(?:[?#].*)?$/)
@@ -3152,20 +3155,20 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     const trimmedLinked = linkedTask ? linkedTask.trim() : ''
     const isUrl = /^https?:\/\//.test(trimmedLinked)
     const adoUrlMatch = isUrl ? { id: extractTicketId(trimmedLinked), url: trimmedLinked } : null
-    
+
     // Find the target section, locate insert point, and track max ID
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]
-      
+
       if (line.startsWith('## ')) {
         inTargetSection = line.replace('## ', '').trim() === section
       }
-      
+
       // Find the separator row (|---|---|...) in target section
       if (inTargetSection && insertIndex === -1 && line.trim().startsWith('|') && line.includes('---')) {
         insertIndex = i + 1
       }
-      
+
       // Track max ID from all table rows
       if (line.trim().startsWith('|')) {
         const cells = line.split('|').slice(1, -1).map(c => c.trim())
@@ -3177,7 +3180,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
         }
       }
     }
-    
+
     if (insertIndex !== -1) {
       let newId = maxId + 1
       while (journalIds.has(newId)) newId++
@@ -3195,7 +3198,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       scrollToNewTaskAfterRender(newId)
     }
   }
-  
+
   const handleAddAndPrioritize = async (taskName, prioritySectionTitle) => {
     const lines = content.split('\n')
     const journalIds = await getJournalIds()
@@ -3259,22 +3262,22 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     let inTodaySection = false
     let insertIndex = -1
     let maxId = 0
-    
+
     const journalIds = await getJournalIds()
-    
+
     // Find max ID and the Today section to insert the new task
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]
-      
+
       if (line.startsWith('## ')) {
         inTodaySection = line.replace('## ', '').trim() === 'Today'
       }
-      
+
       // Find the separator row in Today section
       if (inTodaySection && insertIndex === -1 && line.trim().startsWith('|') && line.includes('---')) {
         insertIndex = i + 1
       }
-      
+
       // Track max ID from all table rows
       if (line.trim().startsWith('|')) {
         const cells = line.split('|').slice(1, -1).map(c => c.trim())
@@ -3287,7 +3290,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
         }
       }
     }
-    
+
     if (insertIndex !== -1) {
       let newId = maxId + 1
       while (journalIds.has(newId)) newId++
@@ -3301,13 +3304,13 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       scrollToNewTaskAfterRender(newId)
     }
   }
-  
+
   const handleCreateJournal = async (taskId, taskName) => {
     // Clean task name for title (remove markdown links and special chars)
     const cleanTaskName = taskName.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim()
     const journalContent = `# Task ${taskId}: ${cleanTaskName}\n\n- TODO: \n`
     const journalPath = `journal/task-${taskId}.md`
-    
+
     try {
       await storage.write(journalPath, journalContent)
       // Refresh the sidebar tree so the newly created journal appears in the
@@ -3321,11 +3324,11 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       console.error('Failed to create journal:', e)
     }
   }
-  
+
   const handleRenameTask = async (rawLine, newTaskName) => {
     const lines = content.split('\n')
     const lineIndex = lines.findIndex(line => line === rawLine)
-    
+
     if (lineIndex !== -1) {
       // Parse the line and replace the Task column (3rd column, index 2)
       const parts = rawLine.split('|')
@@ -3336,7 +3339,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       }
     }
   }
-  
+
   const handleChangeLinkedId = async (rawLine, newLinkedId) => {
     const lines = content.split('\n')
     const lineIndex = lines.findIndex(line => line.trim() === rawLine.trim())
@@ -3350,11 +3353,11 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       }
     }
   }
-  
+
   const handleLinkToAdoBugDb = async (rawLine, adoLink) => {
     const lines = content.split('\n')
     const lineIndex = lines.findIndex(line => line === rawLine)
-    
+
     if (lineIndex !== -1) {
       const parts = rawLine.split('|')
       if (parts.length >= 3) {
@@ -3362,7 +3365,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
         // Extract local ID (before comma if present)
         const commaIdx = currentId.indexOf(',[')
         const localId = commaIdx !== -1 ? currentId.substring(0, commaIdx) : currentId
-        
+
         if (adoLink) {
           parts[1] = ` ${localId},[${adoLink.id}](${adoLink.url}) `
         } else {
@@ -3374,7 +3377,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
       }
     }
   }
-  
+
   const updateNamedSection = async (sectionName, newLines) => {
     const lines = content.split('\n')
     let inSection = false
@@ -3447,7 +3450,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     }
     await handleUpdateManagerPriorities(mpLines)
   }
-  
+
   const handleRemoveFromManagerPriority = async (taskId) => {
     if (!managerPrioritiesSection) return
     const mpLines = managerPrioritiesSection.lines.filter(line => {
@@ -3575,7 +3578,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sea
     } catch {
       // Target may not have a focus-plan yet — start with a minimal one.
       targetContent =
-        '# Focus Plan\n\n## Today\n\n| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |\n|---|---|------|---------------|-------|-----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |\n|---|---|------|---------------|-------|-----------|\n'
+        '# Focus Plan\n\n## Today\n\n| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |\n|---|---|------|---------------|-------|-----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Mngr Priority | Added | Wake | Linked ID |\n|---|---|------|---------------|-------|------|-----------|\n'
     }
 
     const tLines = targetContent.split('\n')
@@ -4344,7 +4347,7 @@ function MarkdownView({ content, filePath, onContentUpdate, onNavigate, headerEx
   const [isDirty, setIsDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const textareaRef = useRef(null)
-  
+
   // Update local state when content prop changes
   useEffect(() => {
     let cancelled = false
@@ -4355,12 +4358,12 @@ function MarkdownView({ content, filePath, onContentUpdate, onNavigate, headerEx
     })
     return () => { cancelled = true }
   }, [content])
-  
+
   const handleChange = (e) => {
     setEditedContent(e.target.value)
     setIsDirty(true)
   }
-  
+
   const handleSave = async () => {
     if (!isDirty) return
     setSaving(true)
@@ -4368,14 +4371,14 @@ function MarkdownView({ content, filePath, onContentUpdate, onNavigate, headerEx
     setIsDirty(false)
     setSaving(false)
   }
-  
+
   // Auto-save on blur
   const handleBlur = () => {
     if (isDirty) {
       handleSave()
     }
   }
-  
+
   // Ctrl+S to save
   const handleKeyDown = (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -4383,7 +4386,7 @@ function MarkdownView({ content, filePath, onContentUpdate, onNavigate, headerEx
       handleSave()
     }
   }
-  
+
   return (
     <div className="markdown-view editable">
       <div className="editor-header">
@@ -4436,28 +4439,28 @@ async function ensureUniqueIds(content, updateFile) {
   const lines = content.split(/\r?\n/)  // Handle both Unix and Windows line endings
   let maxId = 0
   const linesToUpdate = []
-  
+
   // Existing journal IDs are only a collision-skip set (see allocateNextId);
   // numbering is driven by the planner's own rows, so a stray/foreign high
   // journal ID can't inflate it.
   const journalIds = await getJournalIds()
-  
+
   // First pass: find max ID in content and lines needing IDs
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     if (!line.trim().startsWith('|')) continue
-    
+
     const cells = line.split('|').slice(1, -1).map(c => c.trim())
     if (cells.length < 2) continue
-    
+
     // Skip header row
     if (cells[0] === 'ID') continue
-    
+
     // Skip separator rows (must have multiple dashes/colons, not just one dash)
     if (cells[0].length > 1 && /^[-:]+$/.test(cells[0])) continue
-    
+
     const idCell = cells[0]
-    
+
     // Check if it has a numeric ID (plain number or number before comma-separated ADO link)
     const numMatch = idCell.match(/^(\d+)/)
     if (numMatch) {
@@ -4467,7 +4470,7 @@ async function ensureUniqueIds(content, updateFile) {
       linesToUpdate.push(i)
     }
   }
-  
+
   // Second pass: assign new IDs
   if (linesToUpdate.length > 0) {
     for (const lineIndex of linesToUpdate) {
@@ -4485,12 +4488,12 @@ async function ensureUniqueIds(content, updateFile) {
       }
       lines[lineIndex] = parts.join('|')
     }
-    
+
     const newContent = lines.join('\n')
     await updateFile(newContent)
     return newContent
   }
-  
+
   return content
 }
 
@@ -5667,6 +5670,29 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
   const [reloadKey, setReloadKey] = useState(0)
   const [addDialog, setAddDialog] = useState(null) // { section }
   const [moveDialog, setMoveDialog] = useState(null)
+  const snoozeSweepInFlightRef = useRef(false)
+  const [snoozeTimerNonce, setSnoozeTimerNonce] = useState(0)
+
+  const sweepAllSourceSnoozes = useCallback(async () => {
+    if (snoozeSweepInFlightRef.current) return
+    snoozeSweepInFlightRef.current = true
+    try {
+      let changed = false
+      await Promise.all(sources.map(async (s) => {
+        try {
+          const text = await storage.readFromSource(s.id, PLAN_FILE)
+          const nextContent = ops.opApplySnoozeTransitions(text, getTodayDateString())
+          if (nextContent !== text) {
+            await storage.writeToSource(s.id, PLAN_FILE, nextContent)
+            changed = true
+          }
+        } catch { /* ignore sources that are temporarily unavailable */ }
+      }))
+      if (changed) setReloadKey(k => k + 1)
+    } finally {
+      snoozeSweepInFlightRef.current = false
+    }
+  }, [sources])
   useCompleteInitialReadStateSeeding(perSource !== null)
 
   // Reload all sources' focus-plan.md content.
@@ -5715,6 +5741,39 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     })()
     return () => { cancelled = true }
   }, [sources, reloadKey])
+
+  useEffect(() => {
+    let debounceTimer = null
+    const scheduleSweep = () => {
+      clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        if (document.visibilityState && document.visibilityState !== 'visible') return
+        sweepAllSourceSnoozes()
+      }, 150)
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') scheduleSweep()
+    }
+    window.addEventListener('focus', scheduleSweep)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      clearTimeout(debounceTimer)
+      window.removeEventListener('focus', scheduleSweep)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [sweepAllSourceSnoozes])
+
+  useEffect(() => {
+    if (!perSource) return
+    const delays = perSource
+      .map(({ content }) => ops.nextWakeTimeoutMs(content, new Date()))
+      .filter(delay => delay !== null)
+    if (delays.length === 0) return
+    const timer = setTimeout(() => {
+      Promise.resolve(sweepAllSourceSnoozes()).finally(() => setSnoozeTimerNonce(k => k + 1))
+    }, Math.min(...delays))
+    return () => clearTimeout(timer)
+  }, [perSource, snoozeTimerNonce, sweepAllSourceSnoozes])
 
   // Pull completed-task labels from every source so linked-id chains can
   // resolve names that have already been archived.
@@ -5783,8 +5842,12 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
         if (localId) taskIdToSource.set(localId, source.id)
       }
     }
-    if (!header) header = '| ID | 🎯 | Task | Priority | Added | Linked ID |'
-    if (!separator) separator = '|---|---|------|----------|-------|-----------|'
+    if (!header) header = title === 'Deferred'
+      ? '| ID | 🎯 | Task | Priority | Added | Wake | Linked ID |'
+      : '| ID | 🎯 | Task | Priority | Added | Linked ID |'
+    if (!separator) separator = title === 'Deferred'
+      ? '|---|---|------|----------|-------|------|-----------|'
+      : '|---|---|------|----------|-------|-----------|'
     // `sourceIds` is parallel to the data rows (not the header/separator) so the
     // combined view can tag each rendered row with its owning source (#39).
     return { lines: [header, separator, ...dataLines], sourceIds: dataSourceIds }
@@ -6165,7 +6228,7 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     let targetContent = ''
     try { targetContent = await storage.readFromSource(target.id, PLAN_FILE) }
     catch {
-      targetContent = '# Focus Plan\n\n## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|-----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|-----------|\n'
+      targetContent = '# Focus Plan\n\n## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|-----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Wake | Linked ID |\n|---|---|------|----------|-------|------|-----------|\n'
     }
     const tLines = targetContent.split('\n')
     // Renumber moving tasks into the target's own sequence (no foreign IDs).
@@ -6479,6 +6542,34 @@ function App() {
   // sourcesVersion is the explicit reactivity trigger.
   void sourcesVersion
   const sources = getSources()
+  const snoozeSweepInFlightRef = useRef(false)
+  const contentWriteInFlightRef = useRef(false)
+  const [snoozeTimerNonce, setSnoozeTimerNonce] = useState(0)
+
+  const sweepCurrentPlanSnoozes = useCallback(async () => {
+    const { sourceId, path } = splitSourcePath(selectedFile)
+    const target = path || selectedFile
+    if (sourceId === COMBINED_ID || target !== PLAN_FILE) return
+    if (snoozeSweepInFlightRef.current || contentWriteInFlightRef.current) return
+    snoozeSweepInFlightRef.current = true
+    try {
+      const text = await storage.read(target)
+      const nextContent = ops.opApplySnoozeTransitions(text, getTodayDateString())
+      if (nextContent !== text) {
+        contentWriteInFlightRef.current = true
+        try {
+          await storage.write(target, nextContent)
+          setContent(nextContent)
+        } finally {
+          contentWriteInFlightRef.current = false
+        }
+      }
+    } catch (e) {
+      console.error('Failed to apply snooze transitions:', e)
+    } finally {
+      snoozeSweepInFlightRef.current = false
+    }
+  }, [selectedFile])
 
   /**
    * Build the sidebar tree.
@@ -6780,6 +6871,39 @@ function App() {
     }
   }, [])
 
+  useEffect(() => {
+    let debounceTimer = null
+    const scheduleSweep = () => {
+      clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        if (document.visibilityState && document.visibilityState !== 'visible') return
+        sweepCurrentPlanSnoozes()
+      }, 150)
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') scheduleSweep()
+    }
+    window.addEventListener('focus', scheduleSweep)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      clearTimeout(debounceTimer)
+      window.removeEventListener('focus', scheduleSweep)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [sweepCurrentPlanSnoozes])
+
+  useEffect(() => {
+    const { sourceId, path } = splitSourcePath(selectedFile)
+    const target = path || selectedFile
+    if (sourceId === COMBINED_ID || target !== PLAN_FILE || !content) return
+    const delay = ops.nextWakeTimeoutMs(content, new Date())
+    if (delay === null) return
+    const timer = setTimeout(() => {
+      Promise.resolve(sweepCurrentPlanSnoozes()).finally(() => setSnoozeTimerNonce(k => k + 1))
+    }, delay)
+    return () => clearTimeout(timer)
+  }, [content, selectedFile, snoozeTimerNonce, sweepCurrentPlanSnoozes])
+
   // Track the visual viewport height so the app shell (and the chat composer at
   // its bottom) stays above the on-screen keyboard on mobile. visualViewport
   // shrinks when the keyboard opens; we mirror its height into a CSS variable
@@ -6906,10 +7030,13 @@ function App() {
     const { path, sourceId } = splitSourcePath(selectedFile)
     if (sourceId === COMBINED_ID) return // Combined view is read-only
     try {
+      contentWriteInFlightRef.current = true
       await storage.write(path || selectedFile, newContent)
       setContent(newContent)
     } catch (err) {
       console.error('Failed to update file:', err)
+    } finally {
+      contentWriteInFlightRef.current = false
     }
   }
 
