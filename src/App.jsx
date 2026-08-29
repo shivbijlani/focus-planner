@@ -63,6 +63,7 @@ import {
   moveTaskSettingsEntries,
   withTaskSettingsMutationLock,
 } from './storage/taskSettings.js'
+import { gatherDiagnostics, formatDiagnosticsReport } from './storage/diagnostics.js'
 import { AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE } from './config/aiSettings.js'
 import { groupSettingsForm, serializeSettingsForm, hasSettingsForm } from './config/userSettingsForm.js'
 import {
@@ -4852,6 +4853,12 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
   const [updating, setUpdating] = useState(false)
   const [updateMsg, setUpdateMsg] = useState('')
   const [diagnosticsEnabled, setDiagnosticsEnabled] = useState(isDiagEnabled())
+  // Diagnostics report (Settings → App version & diagnostics): a copyable
+  // snapshot of storage/sync state. Complements the capture toggle above —
+  // the toggle decides whether events are recorded, this renders the report.
+  const [diagText, setDiagText] = useState('')
+  const [diagBusy, setDiagBusy] = useState(false)
+  const [diagMsg, setDiagMsg] = useState('')
   const oneDrive = targetStatus(syncStatus, PROVIDERS.ONEDRIVE)
   const aggregate = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
   const syncClass = aggregate.replace(/[^a-z-]/g, '')
@@ -5207,6 +5214,25 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
     setTimeout(() => {
       try { window.location.reload() } catch { /* ignore */ }
     }, 800)
+  }
+
+  const runDiagnostics = async () => {
+    setDiagBusy(true)
+    setDiagMsg('')
+    try {
+      const data = await gatherDiagnostics()
+      const text = formatDiagnosticsReport(data)
+      setDiagText(text)
+      let copied = false
+      try { await navigator.clipboard.writeText(text); copied = true } catch { /* clipboard may be blocked */ }
+      let saved = false
+      try { await storage.write('diagnostics.md', text); saved = true } catch { /* ignore */ }
+      setDiagMsg(`${copied ? 'Copied to clipboard' : 'Ready below'}${saved ? ' · saved as diagnostics.md' : ''}`)
+    } catch (e) {
+      setDiagMsg('Failed: ' + (e?.message || e))
+    } finally {
+      setDiagBusy(false)
+    }
   }
 
   const toggleDiagnostics = () => {
@@ -5731,6 +5757,33 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
                 >
                   {diagnosticsEnabled ? 'Turn off' : 'Turn on'}
                 </button>
+              </div>
+              <div className="settings-diagnostics">
+                <div className="settings-update-hint">
+                  A copyable snapshot of storage &amp; sync state (files, size, quota, journal
+                  coverage, token expiry). Safe to share — it never includes your tokens.
+                </div>
+                <div className="settings-diagnostics-actions">
+                  <button
+                    className="storage-footer-btn sync-target-action"
+                    onClick={runDiagnostics}
+                    disabled={diagBusy}
+                    title="Gather diagnostics, copy to clipboard, and save as diagnostics.md"
+                  >
+                    {diagBusy ? 'Gathering…' : 'Copy diagnostics'}
+                  </button>
+                  {diagMsg && <span className="settings-diagnostics-msg">{diagMsg}</span>}
+                </div>
+                {diagText && (
+                  <textarea
+                    className="settings-diagnostics-output"
+                    readOnly
+                    value={diagText}
+                    rows={12}
+                    onFocus={(e) => e.target.select()}
+                    aria-label="Diagnostics report"
+                  />
+                )}
               </div>
             </div>
 
