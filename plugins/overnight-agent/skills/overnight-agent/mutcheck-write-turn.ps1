@@ -21,12 +21,33 @@
   Exit: 0 all assertions hold - 1 a guard is not doing what it claims.
 #>
 [CmdletBinding()]
-param([switch]$Verbose_)
+param([switch]$Verbose_, [string]$Target)
 
 $ErrorActionPreference = 'Stop'
-$here   = Split-Path -Parent $MyInvocation.MyCommand.Path
-$target = Join-Path $here 'write-turn.ps1'
-if (-not (Test-Path $target)) { throw "write-turn.ps1 not found beside this script" }
+
+# Resolve write-turn.ps1 by SEARCH, not by "beside me" alone (#251).
+#
+# "Beside me" holds in the two layouts this file legitimately lives in (the skill folder
+# and the flat OA home), but it is a positional accident rather than a statement of
+# intent: a copy of this script anywhere else threw `not found beside this script` and
+# was simply skipped by whichever sweep invoked it -- a guard that is absent and a guard
+# that is passing look identical from the outside. The order is explicit and the resolved
+# path is printed, so what was measured is auditable.
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$candidates = @(
+  $Target,
+  (Join-Path $here 'write-turn.ps1'),
+  (Join-Path $here '..\skills\overnight-agent\write-turn.ps1'),
+  (Join-Path $env:LOCALAPPDATA 'overnight-agent\write-turn.ps1')
+)
+$target = $null
+foreach ($c in $candidates) {
+  if ($c -and (Test-Path $c)) { $target = (Resolve-Path $c).Path; break }
+}
+if (-not $target) {
+  throw ("write-turn.ps1 not found. Tried:`n  " + (($candidates | Where-Object { $_ }) -join "`n  "))
+}
+Write-Host "target: $target"
 
 $MOON = [char]::ConvertFromUtf32(0x1F319)
 $tmp  = Join-Path ([IO.Path]::GetTempPath()) ("wt-mut-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))

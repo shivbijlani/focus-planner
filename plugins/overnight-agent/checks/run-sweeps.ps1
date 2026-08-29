@@ -359,6 +359,19 @@ $Suite = @(
   # argument-free and exit 0, so they report as OK and only add signal.
   @{ n = 'digest-invisible';         bridge = $true  }
   @{ n = 'digest-live';              bridge = $true  }
+  # basename-collision-sweep (added 2026-08-29, #251) - the SOURCE-layer detector for a
+  # defect that the deploy layer can only ever report as a symptom. sync-oa-home.ps1
+  # deploys into a flat directory, so it indexes by basename and REFUSES when one name
+  # resolves to two repo paths. That refusal is correct and it is also permanent: a
+  # collision cannot resolve itself, so those files freeze in the OA home and a merged
+  # fix can never reach the copy that runs. Measured 2026-08-29: mutcheck-turn-ask.ps1
+  # and mutcheck-write-turn.ps1 were both refused on EVERY run - two guards, silently
+  # unupdatable, still reporting green against whichever version happened to be live.
+  # Deliberately NOT solved by escalating sync-oa-home's exit code: an unresolvable
+  # condition that escalates every cycle pins the code at 2 forever and trains the
+  # reader to ignore it. Here it is a repo defect with a real fix, so it belongs here.
+  # 3 guards, mutation-proven by mutcheck-basename-collision.mjs. Exits 1 on findings.
+  @{ n = 'basename-collision-sweep'; bridge = $false }
   # repo-drift-sweep (added 2026-08-26 18:xx PT) — the check that keeps the other
   # 37 checks alive. Measured this run: of the 73 files making up this suite, **70
   # existed in exactly one place** — %LOCALAPPDATA%\overnight-agent on one laptop.

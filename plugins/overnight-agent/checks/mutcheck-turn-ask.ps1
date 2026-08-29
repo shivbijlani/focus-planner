@@ -1,4 +1,11 @@
-﻿# Case 1: the EXACT shape that nearly shipped on 2026-08-27 — Reply with a colon.
+﻿# mutcheck-turn-ask.ps1 -- proves write-turn.ps1's ask detection is load-bearing.
+#
+# -Target lets a caller name the write-turn.ps1 under test explicitly; when omitted it is
+# located by search (see below), so this runs from the repo and from the flat OA home.
+[CmdletBinding()]
+param([string]$Target)
+
+# Case 1: the EXACT shape that nearly shipped on 2026-08-27 — Reply with a colon.
 $bad = @'
 ## 🌙 Overnight Agent
 
@@ -37,7 +44,33 @@ Recorded for the archive. Nothing needed.
 '@
 
 $enc = New-Object Text.UTF8Encoding($false)
-$script = Join-Path $env:LOCALAPPDATA 'overnight-agent\write-turn.ps1'
+
+# Resolve write-turn.ps1 by SEARCH, not by one hard-coded home (#251).
+#
+# This used to point only at the OA home. That is not merely inflexible: run from the
+# repo it silently graded the *installed* copy, so a change to the repo's write-turn.ps1
+# could be proven green by a check that never opened it. Verifying the wrong artifact is
+# the failure class this repo keeps closing, so the order below is explicit and the
+# resolved path is printed -- a check that will not say which file it measured cannot be
+# audited.
+#
+# Order: -Target -> beside me (flat OA home) -> the skill folder (repo) -> OA home.
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$candidates = @(
+  $Target,
+  (Join-Path $here 'write-turn.ps1'),
+  (Join-Path $here '..\skills\overnight-agent\write-turn.ps1'),
+  (Join-Path $env:LOCALAPPDATA 'overnight-agent\write-turn.ps1')
+)
+$script = $null
+foreach ($c in $candidates) {
+  if ($c -and (Test-Path $c)) { $script = (Resolve-Path $c).Path; break }
+}
+if (-not $script) {
+  throw ("write-turn.ps1 not found. Tried:`n  " + (($candidates | Where-Object { $_ }) -join "`n  "))
+}
+Write-Host "target: $script"
+
 $pass = 0; $fail = 0
 
 function Check($name, $cond, $detail) {
