@@ -68,7 +68,7 @@ export class OneDriveProvider {
 
   async scaffold() {
     const files = [
-      [PLAN_FILE, `## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Priorities\n\n`],
+      [PLAN_FILE, `## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Wake | Linked ID |\n|---|---|------|----------|-------|------|----------|\n\n## Priorities\n\n`],
       [COMPLETED_FILE, '# Completed Tasks\n'],
     ]
     for (const [name, content] of files) {
@@ -78,10 +78,15 @@ export class OneDriveProvider {
     await scaffoldAgentsDoc((p) => this.read(p), (p, c) => this.write(p, c))
   }
 
-  async read(path) {
-    await this._ensureToken()
+  async read(path, { signal } = {}) {
+    await this._ensureToken({ signal })
     const url = `${APPROOT}:/${path}:/content`
-    const res = await fetch(url, { headers: this._authHeader() })
+    // `cache: 'no-store'` is required for read-your-writes: Graph's :/content
+    // endpoint redirects to a cacheable CDN URL, so a default fetch can serve a
+    // stale body immediately after a write. The Combined view re-reads a source
+    // right after writing to it (link/mark handlers -> applyOp), so a cached read
+    // left the board showing stale content until a full page reload (#411).
+    const res = await fetch(url, { headers: this._authHeader(), cache: 'no-store', signal })
     if (res.status === 404) return ''
     if (!res.ok) throw new Error(`OneDrive read failed: ${res.status}`)
     return res.text()
@@ -139,11 +144,9 @@ export class OneDriveProvider {
     const url = subPath
       ? `${APPROOT}:/${subPath}:/children?$select=name,lastModifiedDateTime,eTag,folder`
       : `${APPROOT}/children?$select=name,lastModifiedDateTime,eTag,folder`
-    const res = await fetch(url, { headers: this._authHeader() })
-    if (!res.ok) return []
-    const data = await res.json()
+    const value = await this._listAllChildren(url)
     const entries = []
-    for (const item of data.value ?? []) {
+    for (const item of value) {
       const name = item.name
       const path = prefix ? `${prefix}/${name}` : name
       if (item.folder) {
@@ -156,27 +159,25 @@ export class OneDriveProvider {
     return entries
   }
 
-  async checkJournal(taskId) {
-    await this._ensureToken()
+  async checkJournal(taskId, { signal } = {}) {
+    await this._ensureToken({ signal })
     const path = `journal/task-${taskId}.md`
     // Check item metadata rather than content: a journal that exists but is
     // empty must still be reported as present (read() returns '' for both a
     // 404 and an empty file, so it can't distinguish them).
     const url = `${APPROOT}:/${path}`
-    const res = await fetch(url, { headers: this._authHeader() })
-    if (!res.ok) return { exists: false }
+    const res = await fetch(url, { headers: this._authHeader(), signal })
+    if (res.status === 404) return { exists: false, path }
+    if (!res.ok) throw new Error(`OneDrive journal check failed: ${res.status}`)
     return { exists: true, path }
   }
 
   async maxJournalId() {
     await this._ensureToken()
     try {
-      const url = `${APPROOT}:/journal:/children`
-      const res = await fetch(url, { headers: this._authHeader() })
-      if (!res.ok) return 0
-      const data = await res.json()
+      const value = await this._listAllChildren(`${APPROOT}:/journal:/children`)
       let max = 0
-      for (const item of data.value ?? []) {
+      for (const item of value) {
         const m = item.name.match(/^task-(\d+)\.md$/)
         if (m) max = Math.max(max, parseInt(m[1], 10))
       }
@@ -188,11 +189,8 @@ export class OneDriveProvider {
     await this._ensureToken()
     const ids = new Set()
     try {
-      const url = `${APPROOT}:/journal:/children`
-      const res = await fetch(url, { headers: this._authHeader() })
-      if (!res.ok) return ids
-      const data = await res.json()
-      for (const item of data.value ?? []) {
+      const value = await this._listAllChildren(`${APPROOT}:/journal:/children`)
+      for (const item of value) {
         const m = item.name.match(/^task-(\d+)\.md$/)
         if (m) ids.add(parseInt(m[1], 10))
       }
@@ -202,15 +200,33 @@ export class OneDriveProvider {
 
   // ── Private helpers ──────────────────────────────────
 
+  /**
+   * List all children of a Graph folder URL, following @odata.nextLink so
+   * folders with more than one page are fully enumerated. Graph defaults to
+   * 200 items per page; without paging, journals silently disappear from
+   * listings once a folder crosses that limit — and a reload never recovers
+   * them, because every reload re-fetches only the first page.
+   */
+  async _listAllChildren(url) {
+    const items = []
+    let next = url
+    while (next) {
+      const res = await fetch(next, { headers: this._authHeader() })
+      if (!res.ok) break
+      const data = await res.json()
+      for (const item of data.value ?? []) items.push(item)
+      next = data['@odata.nextLink'] ?? null
+    }
+    return items
+  }
+
   async _listRecursive(subPath, prefix = '') {
     const url = subPath
       ? `${APPROOT}:/${subPath}:/children`
       : `${APPROOT}/children`
-    const res = await fetch(url, { headers: this._authHeader() })
-    if (!res.ok) return []
-    const data = await res.json()
+    const value = await this._listAllChildren(url)
     const items = []
-    for (const item of data.value ?? []) {
+    for (const item of value) {
       const name = item.name
       const path = prefix ? `${prefix}/${name}` : name
       if (item.folder) {
@@ -289,7 +305,7 @@ export class OneDriveProvider {
     return true
   }
 
-  async _refreshAccessToken() {
+  async _refreshAccessToken({ signal } = {}) {
     if (!this._refreshToken) return false
     const body = new URLSearchParams({
       client_id: CLIENT_ID,
@@ -301,6 +317,7 @@ export class OneDriveProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
+      signal,
     })
     if (!res.ok) { this._clearTokens(); return false }
     this._saveTokens(await res.json())
@@ -315,10 +332,10 @@ export class OneDriveProvider {
     return !this._isTokenValid() && !this._refreshToken
   }
 
-  async _ensureToken() {
+  async _ensureToken({ signal } = {}) {
     if (this._isTokenValid()) return
     if (this._refreshToken) {
-      const ok = await this._refreshAccessToken()
+      const ok = await this._refreshAccessToken({ signal })
       if (ok) return
     }
     // Do NOT redirect automatically here — throw so callers can handle gracefully.

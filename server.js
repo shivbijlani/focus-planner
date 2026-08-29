@@ -93,7 +93,7 @@ app.get('/api/file', async (req, res) => {
 
     const content = await fs.readFile(fullPath, 'utf-8');
     res.json({ path: filePath, content });
-  } catch (error) {
+  } catch {
     res.status(404).json({ error: 'File not found' });
   }
 });
@@ -197,7 +197,7 @@ app.get('/api/todos', async (req, res) => {
     }
     
     res.json({ path: filePath, todos });
-  } catch (error) {
+  } catch {
     res.status(404).json({ error: 'File not found', todos: [] });
   }
 });

@@ -1,0 +1,186 @@
+# @focus/telegram-bridge
+
+A one-way-per-direction bridge between **Focus Planner task journals** and a **Telegram
+forum group**, so the Overnight Agent's per-task chat can be read and answered from your
+phone — without opening the planner.
+
+> **Augment, not replace.** This mirrors the journal chat into Telegram and folds your
+> Telegram replies back into the journals. The journal `.md` files remain the source of
+> truth; the `oa-state.ps1` reopen loop still drives the agent. Telegram is just a nicer
+> phone surface on top.
+
+## How it maps
+
+- **1 task = 1 forum topic.** Each `journal/task-<ID>.md` gets its own Telegram topic named
+  `#<ID> · <task title>`. The topic's `message_thread_id` is stored in bridge state.
+- **syncUp** (journals → Telegram): posts each task's *latest agent turn* (the newest
+  `<!-- from: overnight-agent -->` chat entry, or the current plan block) into its topic.
+  Deduplicated by a SHA-256 of the turn text, so re-runs never repost unchanged content.
+- **syncDown** (Telegram → journals): reads `getUpdates`, and for every non-bot text reply in
+  a mapped topic, appends a dated `<!-- from: me -->` entry to the bottom of that task's
+  journal — exactly the shape the Focus Planner app appends. The agent's normal
+  `oa-state.ps1 scan` then sees the task as `reopened` and picks it up next run.
+
+## Configuration (environment)
+
+The bot token is **never** read from a file in the repo. The launcher must export it from the
+Windows Credential Manager before invoking the CLI.
+
+| Env var | Required | Purpose |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | ✅ | Bot API token. Populate from the OS vault (see below) — never commit it. |
+| `TELEGRAM_CHAT_ID` | ✅ | The forum supergroup chat id (e.g. `-1004310604015`). |
+| `PLANNER_PATH` | — | Planner folder. Defaults to `planner-config.json`'s `plannerPath`, else `../planner`. |
+| `TELEGRAM_BRIDGE_TASKS` | — | Comma-separated allowlist of task IDs to mirror. Empty = all tasks with an agent block. |
+| `TELEGRAM_BRIDGE_ARCHIVE` | — | Archive (close) a task's topic when it lands on the completed board, and reopen it if the task leaves. Default **on**; set to `off`/`false`/`0`/`no` to disable. |
+| `TELEGRAM_BRIDGE_DIGEST` | — | Post the consolidated "waiting on you" approval digest. Default **on**; set to `off`/`false`/`0`/`no` to disable. |
+| `TELEGRAM_BRIDGE_DIGEST_TOPIC` | — | Where the digest is posted. Empty = the group's **General** thread (default). A **number** posts into that existing topic id. Any other value is treated as a **topic name**, created once and reused. |
+| `TELEGRAM_BRIDGE_STATE_DIR` | — | State dir. Defaults to `%LOCALAPPDATA%\overnight-agent\telegram-bridge`. |
+
+### Where the approval digest goes
+
+The digest is the **only** message the bridge sends outside a task's own topic — everything else is
+mirrored into that task's thread. So in a group run as strictly one-topic-per-task, it is the sole source
+of General-thread traffic.
+
+That leaves three options rather than two:
+
+| You want | Set |
+| --- | --- |
+| Digest in General (original behaviour) | nothing |
+| No digest at all | `TELEGRAM_BRIDGE_DIGEST=off` |
+| Digest, but out of General | `TELEGRAM_BRIDGE_DIGEST_TOPIC="Waiting on you"` |
+
+The third option exists because switching the digest off entirely is a blunt fix: it quiets General but
+also removes the one consolidated view of what is actually blocked on you, leaving the queue scattered
+across every task topic.
+
+
+### How the digest is ordered
+
+The digest has a hard Telegram size cap, so a large queue does not fit: the message keeps as many whole
+entries as it can and collapses the rest into `…and N more`. That makes the **order** the feature —
+whatever leads the message is, in practice, the only part that gets read.
+
+Entries are sorted by:
+
+1. **Formal asks before soft ones** — an explicit `**Needs from you:**` outranks a bare `Next:` line,
+   which often describes agent-side continuation rather than a decision you owe.
+2. **Your own board** (`planner.md`) — `## Today` before `## Deferred`, and within each, rows marked
+   🔴 or `P0` first, then your top-to-bottom row order.
+3. **Newest first**, as a tie-break.
+
+Ranking by the board rather than by task-ID magnitude fixes two real failure modes: malformed six-digit
+IDs used to sort above every genuine task and permanently occupy the top slot, and a true P0 could sit
+below whatever happened to be filed most recently. Anything not on the board at all — orphans, completed
+rows, broken IDs — sorts last.
+
+If `planner.md` cannot be read, ordering falls back to newest-first and the digest still posts.
+
+A **name** is resolved to a forum topic once and cached in bridge state, so re-runs reuse that topic
+instead of creating a new one each night; changing the name resolves a fresh topic. Resolution happens
+only when a digest is actually being posted, so a run with an unchanged queue creates nothing.
+
+Batched replies still work from the dedicated topic: it is not a *task* topic, so a reply inside it falls
+through to the same by-task-id routing used for General (`routeReply.js`), and the acknowledgement is
+threaded back into that topic.
+
+### Supplying the token (Windows Credential Manager)
+
+The token lives in the credential vault via
+`C:\Users\shiv\AppData\Local\overnight-agent\secrets\telegram-secret.ps1` (`get`/`set`/`test`/`clear`).
+The launcher does:
+
+```powershell
+$env:TELEGRAM_BOT_TOKEN = & "$env:LOCALAPPDATA\overnight-agent\secrets\telegram-secret.ps1" get
+$env:TELEGRAM_CHAT_ID   = '-1004310604015'
+node packages/telegram-bridge/bin/telegram-bridge.js once
+```
+
+## CLI
+
+```bash
+node bin/telegram-bridge.js whoami        # verify the token / print bot info
+node bin/telegram-bridge.js baseline      # mark existing tasks already-seen (no posts) — run once
+node bin/telegram-bridge.js sync-up       # post NEW agent turns -> topics
+node bin/telegram-bridge.js sync-archive  # close topics of completed tasks (reopen if un-completed)
+node bin/telegram-bridge.js sync-down     # fold replies -> journals
+node bin/telegram-bridge.js digest        # post the consolidated "waiting on you" queue
+node bin/telegram-bridge.js digest --force  # ...even if it hasn't changed
+node bin/telegram-bridge.js once          # sync-up, sync-archive, sync-down, then digest (default)
+node bin/telegram-bridge.js watch [secs]  # loop `once` every N seconds (min 10, default 60)
+```
+
+**The approval digest.** `digest` posts a single message to the group's **General** thread listing every
+task's open ask, so the whole approval queue can be answered in **one reply** instead of one reply per
+topic. It runs automatically at the end of `once`, and is **idempotent**: the composed text is hashed and
+compared against the last one posted, so a run where nothing changed posts nothing at all (use `--force`
+to override). When the bot's privacy mode is on, the message also tells you to *reply* to it — with
+privacy mode on, a message you merely **type** in the group is never delivered to the bot, so an answer
+that isn't a reply is silently lost.
+
+> ⚠️ **The ask is read from each task's newest agent turn**, never by grepping the journal for its last
+> `**Needs from you:**` line. Journals are bottom-appended chat threads and later turns often restate a
+> blocker in prose without re-emitting the marker, so a file-wide grep can surface an ask that newer turns
+> already invalidated (this really happened: task #250's marker was written 2026-07-01, superseded on
+> 07-07, and still got acted on). A digest built that way would rebroadcast dead asks every night. See the
+> regression tests in `src/digest.test.js`.
+>
+> Formal `**Needs from you:**` asks are treated as blocking; a bare `Next:` line is a weaker fallback
+> (it often describes what the *agent* does next, e.g. "keep polling on future overnight runs") and is
+> ranked below them, so when the message has to be trimmed it is the soft ones that fall off.
+
+**Archive on complete.** `sync-archive` reads the completed board (`planner-completed.md`) and, for any
+task whose topic exists, **closes** the forum topic (Telegram collapses it under the group's *Closed*
+section) once the task appears there — the reversible equivalent of archiving, since the bot has no
+per-topic archive primitive. If a task later leaves the completed board, its topic is **reopened**. The
+pass is idempotent (it tracks an `archived` flag per task in state) and each per-topic call is best-effort:
+a failure is logged and retried next run, never aborting the sync. The bot must be able to manage topics —
+it can always close/reopen topics **it created**, or grant it the `can_manage_topics` admin right.
+
+**Natural (incremental) mirroring — no backfill.** `sync-up` only mirrors a task when its *latest agent
+turn changes*; unchanged tasks are skipped entirely, so no topic is created for them. Run `baseline` **once**
+on first setup to record the current backlog as already-seen — after that, a task gets its topic the first
+time the agent writes a new turn to it, not in a bulk dump. Messages are sent as **Telegram HTML** (bold,
+italics, code, links), so journal markdown renders as formatting instead of raw `**stars**`.
+
+State (topic map, last-posted hashes, update offset) is persisted after every run, so the CLI
+is safe to run on a schedule.
+
+## 🔗 Per-task deep links (`tg-meta` marker)
+
+Once a task's forum topic exists, `syncUp` stamps a hidden marker into that task's
+journal so the planner web app can link straight to the thread:
+
+```markdown
+<!-- tg-meta chatId=-1004310604015 threadId=17 -->
+```
+
+The topic's `message_thread_id` is assigned by Telegram at `createForumTopic` time —
+it can't be derived from the task id — so persisting it in the journal is what lets
+the mapping travel with the synced markdown (the CLI's `state.json` lives only on
+this machine). The pure helpers in `src/deepLink.js` (`telegramDeepLink`,
+`parseTgLink`, `upsertTgMetaMarker`) build the link:
+
+- Private supergroup: strip the leading `-100` → `https://t.me/c/<internalId>/<threadId>`
+- Public supergroup: `https://t.me/<username>/<threadId>`
+
+The web app parses the marker from the same journal read it already does for todos
+and shows an ✈️ "Open in Telegram" link on each task row — no extra config needed.
+
+## ⚠️ Bot privacy mode
+
+@shivb_nemo_bot currently has **privacy mode ON** in BotFather. In that mode a group bot only
+receives messages that are commands or that @mention it. Replies *inside a forum topic* still
+arrive as normal messages the bot can read, which is what `syncDown` relies on — but if you
+find replies aren't being folded in, disable privacy mode in BotFather
+(`/setprivacy` → Disable) so the bot sees all topic messages.
+
+## Testing
+
+Pure and offline. The Telegram client (`fetchImpl`), filesystem (`io`), and clock (`now`) are
+all injectable, so the unit tests run without network or disk:
+
+```bash
+npx vitest run packages/telegram-bridge
+```

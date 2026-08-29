@@ -72,7 +72,10 @@ export function sortTasksByPriority(rows, rawLines, headers, linkedIdMap, manage
     return Object.keys(priorityOrder).find(icon => val.includes(icon)) || '⚪'
   }
 
-  const paired = rows.map((row, i) => ({ row, rawLine: rawLines[i] }))
+  const paired = rows.map((row, i) => ({
+    row,
+    rawLine: rawLines[i],
+  }))
 
   paired.sort((a, b) => {
     const aIcon = getIcon(a.row)

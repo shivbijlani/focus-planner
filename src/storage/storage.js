@@ -8,9 +8,10 @@ import {
   oneDriveProvider,
   googleDriveProvider,
 } from '../../packages/folder-sync/src/index.js'
-import { LocalStorageProvider } from './localstorage-provider.js'
+import { IndexedDbProvider } from './indexeddb-provider.js'
 import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
 import { getActiveTombstoneIds } from '../idTombstones.js'
+import { recordDiagnosticEvent } from './diagnostics.js'
 
 // Merge recently-deleted task IDs (tombstones) into a journal-ID skip set so a
 // freed ID is not reused while it could still be resurrected by sync (#314).
@@ -92,7 +93,18 @@ const localAdapter = {
   },
   async writeFile(name, content) {
     if (!_provider) throw new Error('No provider set')
-    await _provider.write(name, content)
+    try {
+      await _provider.write(name, content)
+    } catch (e) {
+      // Surface quota/write failures in Diagnostics. QuotaExceededError here is
+      // the classic "journals silently dropped because localStorage is full".
+      const quota = e?.name === 'QuotaExceededError' || /quota/i.test(e?.message || '')
+      recordDiagnosticEvent(
+        quota ? 'quota' : 'write',
+        `write failed: ${name}${quota ? ' (quota exceeded)' : ''} — ${e?.name || ''} ${e?.message || e}`.trim(),
+      )
+      throw e
+    }
     return { mtime: Date.now() }
   },
   async deleteFile(name) {
@@ -113,6 +125,21 @@ function getEngine() {
   // Constructing the engine kicks off connected-flag refresh and OAuth-redirect
   // completion, and wires online/visibility nudges to the service worker.
   _engine = createSyncEngine({ localAdapter, providers })
+  // Record provider error transitions into Diagnostics (deduped per provider so
+  // a stuck error doesn't spam the buffer). No-op unless diagnostics are enabled.
+  try {
+    const lastError = {}
+    _engine.subscribe(s => {
+      const provs = s?.providers || {}
+      for (const [id, p] of Object.entries(provs)) {
+        const msg = p?.state === 'error' ? (p.error || 'error') : ''
+        if (msg && lastError[id] !== msg) {
+          recordDiagnosticEvent('sync', `sync error [${id}]: ${msg}`)
+        }
+        lastError[id] = msg
+      }
+    })
+  } catch { /* diagnostics must never break sync setup */ }
   return _engine
 }
 
@@ -156,7 +183,7 @@ export function getActiveProvider() { return _provider }
 export function hasProvider() { return _provider !== null }
 
 export function configureLocalFirstStorage() {
-  const provider = new LocalStorageProvider()
+  const provider = new IndexedDbProvider()
   setActiveProvider(provider)
   localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
   return provider
@@ -170,9 +197,43 @@ export function getSyncStatus() {
   return mapEngineStatus(getEngine().status)
 }
 
+// Structural equality for the mapped status shape produced by mapEngineStatus:
+// `{ aggregate, folders: { [id]: { targets: { [t]: { status, message } } } } }`.
+// Used to dedupe the status stream (see subscribeSyncStatus).
+export function syncStatusEqual(a, b) {
+  if (a === b) return true
+  if (!a || !b) return false
+  if (a.aggregate !== b.aggregate) return false
+  const fa = a.folders || {}
+  const fb = b.folders || {}
+  const folderIds = new Set([...Object.keys(fa), ...Object.keys(fb)])
+  for (const fid of folderIds) {
+    const ta = fa[fid]?.targets || {}
+    const tb = fb[fid]?.targets || {}
+    const targetIds = new Set([...Object.keys(ta), ...Object.keys(tb)])
+    for (const tid of targetIds) {
+      if ((ta[tid]?.status || '') !== (tb[tid]?.status || '')) return false
+      if ((ta[tid]?.message || '') !== (tb[tid]?.message || '')) return false
+    }
+  }
+  return true
+}
+
 export function subscribeSyncStatus(listener) {
+  // The service worker re-emits status on every sync nudge/retry, and
+  // mapEngineStatus builds a fresh object each time. Forwarding those verbatim
+  // makes React re-render the whole board on every tick; while a provider is
+  // stuck in `syncing` ("Backing up…") this becomes a re-render storm that
+  // keeps list rows from ever settling, so clicks and edits never land (#400).
+  // Dedupe by value so the listener only fires when the meaningful status
+  // actually changes. (Remote-change refreshes flow via onLocalChange, which
+  // subscribes to the engine separately and is unaffected.)
+  let prev = null
   return getEngine().subscribe(s => {
-    try { listener(mapEngineStatus(s)) } catch { /* ignore */ }
+    const mapped = mapEngineStatus(s)
+    if (prev !== null && syncStatusEqual(prev, mapped)) return
+    prev = mapped
+    try { listener(mapped) } catch { /* ignore */ }
   })
 }
 
@@ -218,7 +279,13 @@ export function onLocalChange(listener) {
  */
 export async function registerSyncWorker() {
   const base = (import.meta.env?.BASE_URL || '/').replace(/\/$/, '')
-  return registerServiceWorker(`${base}/folder-sync/sw.js`, { type: 'module', scope: `${base}/folder-sync/` })
+  return registerServiceWorker(`${base}/folder-sync/sw.js`, {
+    type: 'module',
+    scope: `${base}/folder-sync/`,
+    // Diagnostics and sync behavior live in imported modules. Bypass the HTTP
+    // cache during update checks so a deployment cannot strand an older graph.
+    updateViaCache: 'none',
+  })
 }
 
 /** Build identifier injected at build time (see vite.config.js). */
@@ -351,7 +418,8 @@ export async function readFromSource(sourceId, path) {
 }
 
 export async function writeToSource(sourceId, path, content) {
-  const { getProvider } = await import('./sources.js')
+  const { getActiveSourceId, getProvider } = await import('./sources.js')
+  if (sourceId === getActiveSourceId()) return write(path, content)
   const p = getProvider(sourceId)
   if (!p) throw new Error(`No provider for source ${sourceId}`)
   return p.write(path, content)

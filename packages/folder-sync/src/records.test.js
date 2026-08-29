@@ -202,6 +202,48 @@ describe('reconcileRecordsFile — end-to-end record sync', () => {
     await syncOnce(d2, remote, 6000)
     expect(remote.get(PATH)).toContain('3. 204')
   })
+
+  it('#280: a row added to the remote without a sidecar stamp is not frozen at clock 0', async () => {
+    // Reproduces the live shape measured on 2026-08-26: 14 alive rows sitting at
+    // {clock:0, deleted:false, fp:<real>} across the two planner sidecars while
+    // every one of the 353 tombstones carried a real clock.
+    const local = store({ [PATH]: plan(row(1, 'A')) })
+    const remote = store({})
+    await syncOnce(local, remote, 1000)
+
+    // Someone edits the REMOTE file directly — OneDrive web, the desktop server,
+    // or the agent — adding a row without touching the sidecar. The sidecar is
+    // still there and still correct for row 1; it just has no entry for row 2.
+    remote.files.set(PATH, plan(row(1, 'A'), row(2, 'added externally')))
+
+    await syncOnce(local, remote, 2000)
+
+    const meta = JSON.parse(remote.get(sidecarPath(PATH))).entries
+    expect(local.get(PATH)).toContain('added externally')
+    expect(meta['2'].deleted).toBe(false)
+    expect(meta['2'].clock).toBe(2000)   // was 0 before the fix
+    expect(meta['1'].clock).toBe(1000)   // untouched
+
+    // And the repaired row now survives a stale replica that deletes it with an
+    // older clock — which at clock 0 it could never do.
+    const stale = store({ [PATH]: plan(row(1, 'A')) })
+    await syncOnce(stale, remote, 1500)
+    expect(remote.get(PATH)).toContain('added externally')
+  })
+
+  it('#280: the repair converges — a second sync reports no further change', async () => {
+    const local = store({ [PATH]: plan(row(1, 'A')) })
+    const remote = store({})
+    await syncOnce(local, remote, 1000)
+    remote.files.set(PATH, plan(row(1, 'A'), row(2, 'B')))
+
+    await syncOnce(local, remote, 2000)
+    const second = await syncOnce(local, remote, 3000)
+    expect(second.changedLocal).toBe(false)
+    expect(second.changedRemote).toBe(false)
+    const meta = JSON.parse(remote.get(sidecarPath(PATH))).entries
+    expect(meta['2'].clock).toBe(2000)  // not re-stamped every sync
+  })
 })
 
 describe('frameHasStructure', () => {

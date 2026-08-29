@@ -17,7 +17,7 @@ export function InstallSettingsSection({ onOpen, appName = 'this app', sectionCl
         <div className="install-prompt-card-main">
           <span className="install-prompt-card-icon" aria-hidden="true">📱</span>
           <div>
-            <div className="install-prompt-card-name">Install on {platformLabel}</div>
+            <div className="install-prompt-card-name">Install {appName} on {platformLabel}</div>
             <div className="install-prompt-card-status">
               Home-screen icon, faster launch, full-screen view, and offline access.
             </div>

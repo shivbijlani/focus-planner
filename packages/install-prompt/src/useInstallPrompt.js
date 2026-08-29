@@ -49,8 +49,8 @@ export function useInstallPrompt() {
   useEffect(() => {
     // Surface a one-time welcome when running as installed PWA for the first time.
     if (installed && !localStorage.getItem(WELCOME_SHOWN_KEY)) {
-      setShowWelcome(true)
       localStorage.setItem(WELCOME_SHOWN_KEY, String(Date.now()))
+      queueMicrotask(() => setShowWelcome(true))
     }
 
     if (installed) return
@@ -64,7 +64,9 @@ export function useInstallPrompt() {
 
     const dismissedAt = parseInt(localStorage.getItem(DISMISS_KEY) || '0', 10)
     const dismissedRecently = dismissedAt && (Date.now() - dismissedAt) < DISMISS_REMIND_MS
-    if (!dismissedRecently && visits >= VISIT_THRESHOLD) setEligible(true)
+    if (!dismissedRecently && visits >= VISIT_THRESHOLD) {
+      queueMicrotask(() => setEligible(true))
+    }
 
     const onBeforeInstall = (e) => { e.preventDefault(); setDeferred(e) }
     const onInstalled = () => {

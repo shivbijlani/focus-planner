@@ -3,7 +3,7 @@
  * Copies all files from one provider to another, including journal subdir.
  */
 import { PROVIDERS, setActiveProvider } from './storage.js'
-import { LocalStorageProvider } from './localstorage-provider.js'
+import { IndexedDbProvider } from './indexeddb-provider.js'
 import { FSAProvider } from './fsa-provider.js'
 import { OneDriveProvider } from './onedrive-provider.js'
 import { GoogleDriveProvider } from './google-drive-provider.js'
@@ -12,7 +12,7 @@ const MIGRATION_KEY = 'fp-pending-migration'
 
 export function makeProvider(id, opts = {}) {
   switch (id) {
-    case PROVIDERS.LOCAL_STORAGE: return new LocalStorageProvider()
+    case PROVIDERS.LOCAL_STORAGE: return new IndexedDbProvider()
     case PROVIDERS.FSA: return new FSAProvider()
     case PROVIDERS.ONEDRIVE: return new OneDriveProvider()
     case PROVIDERS.GOOGLE_DRIVE: return new GoogleDriveProvider(opts.folderName || null)
@@ -31,7 +31,7 @@ function flattenTree(tree, out = []) {
 export async function snapshotFiles(provider) {
   let paths
   if (provider.listAllPaths) {
-    paths = provider.listAllPaths()
+    paths = await provider.listAllPaths()
   } else {
     const tree = await provider.getFiles()
     paths = flattenTree(tree)
@@ -84,7 +84,7 @@ export async function migrate(fromProvider, toId, opts = {}) {
       sessionStorage.removeItem(MIGRATION_KEY)
       setActiveProvider(target)
       localStorage.setItem('fp-storage-provider', toId)
-      if (opts.deleteSource && fromProvider.clear) fromProvider.clear()
+      if (opts.deleteSource && fromProvider.clear) await fromProvider.clear()
       return { ok: true }
     }
     // restore() returned null — pick() was needed but we didn't trigger auth yet
@@ -103,7 +103,7 @@ export async function migrate(fromProvider, toId, opts = {}) {
   await restoreFiles(target, payload)
   setActiveProvider(target)
   localStorage.setItem('fp-storage-provider', toId)
-  if (opts.deleteSource && fromProvider.clear) fromProvider.clear()
+  if (opts.deleteSource && fromProvider.clear) await fromProvider.clear()
   return { ok: true }
 }
 
@@ -120,7 +120,7 @@ export async function resumePendingMigration() {
   setActiveProvider(target)
   localStorage.setItem('fp-storage-provider', pending.toId)
   if (pending.deleteSource && pending.fromId === PROVIDERS.LOCAL_STORAGE) {
-    new LocalStorageProvider().clear()
+    await new IndexedDbProvider().clear()
   }
   clearPendingMigration()
   return pending.toId

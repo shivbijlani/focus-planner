@@ -1,0 +1,16 @@
+{
+  "name": "@focus/mcp-cred-vault",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Portable, user-agnostic Windows launcher that reads MCP secrets from Windows Credential Manager (DPAPI) and injects them into stdio MCP servers, with a bootstrap to reproduce the setup on any machine.",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "setup": "powershell -NoProfile -ExecutionPolicy Bypass -File bin/setup.ps1",
+    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File bin/build.ps1",
+    "test": "vitest run"
+  }
+}
