@@ -78,7 +78,6 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function Write-Note([string]$msg) { if (-not $Json) { Write-Host "[auto-deploy] $msg" } }
-
 function Get-NormHash([byte[]]$bytes) {
   # The classifier compares NORMALISED content (CRLF and LF are the same file), so this
   # has to normalise identically or a CRLF-stored blob could never match its LF twin.
@@ -150,6 +149,41 @@ $sweep    = Join-Path $env:LOCALAPPDATA 'overnight-agent\installed-skill-drift-s
 if (-not (Test-Path $Repo))     { throw "repo not found: $Repo" }
 if (-not (Test-Path $deployer)) { throw "deployer not found: $deployer" }
 if (-not (Test-Path $sweep))    { throw "classifier not found: $sweep" }
+
+# --- 0. SELF-BOOTSTRAP ----------------------------------------------------------------
+# The running copy of this script decides whether the running copy gets updated. That is
+# a loop with a trap in it, and the trap sprang on the very first upgrade: #240's build
+# had no supersede check, so when #241 improved this file, the INSTALLED (old) build
+# classified its own newer self as a branch-only live fix and refused. It could not
+# adopt the fix that would have let it adopt the fix.
+#
+# The escalation path would eventually have surfaced that to a human, but with actively
+# misleading advice ("merge the branch that carries it"), so leaving it to escalation is
+# not good enough. The repo copy is authoritative and always at least as new as the
+# installed one, so when they differ, hand the decision to the newer code and let IT
+# judge. OA_AUTODEPLOY_REEXEC bounds this to a single hop.
+if (-not $env:OA_AUTODEPLOY_REEXEC -and $PSCommandPath) {
+  $selfRepo = Join-Path $Repo "$RepoPrefix\overnight-agent\checks\auto-deploy-plugin.ps1"
+  if (Test-Path $selfRepo) {
+    $here = (Resolve-Path $PSCommandPath).Path
+    $there = (Resolve-Path $selfRepo).Path
+    if ($here -ne $there -and
+        (Get-NormHash ([IO.File]::ReadAllBytes($there))) -ne (Get-NormHash ([IO.File]::ReadAllBytes($here)))) {
+      Write-Note 'repo copy of this script differs - re-executing it so the NEWER logic decides.'
+      $fwd = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$there,
+               '-Ref',$Ref,'-Repo',$Repo,'-Installed',$Installed,'-RepoPrefix',$RepoPrefix,
+               '-EscalateAfterCycles',$EscalateAfterCycles,'-StatePath',$StatePath)
+      if ($WhatIf)    { $fwd += '-WhatIf' }
+      if ($Json)      { $fwd += '-Json' }
+      if ($SkipFetch) { $fwd += '-SkipFetch' }
+      $env:OA_AUTODEPLOY_REEXEC = '1'
+      try {
+        & powershell @fwd
+        exit $LASTEXITCODE
+      } finally { Remove-Item Env:\OA_AUTODEPLOY_REEXEC -ErrorAction SilentlyContinue }
+    }
+  }
+}
 
 # --- 1. FETCH ------------------------------------------------------------------------
 # Without this the whole run is measured against a cached ref. A deploy that ships a

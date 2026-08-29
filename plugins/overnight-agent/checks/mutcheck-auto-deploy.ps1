@@ -104,10 +104,11 @@ function New-Sandbox {
 }
 
 function Invoke-SUT {
-  param($Script, $Sandbox, [switch]$WhatIf)
+  param($Script, $Sandbox, [switch]$WhatIf, [switch]$NoJson)
   $a = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$Script,
          '-Repo',$Sandbox.Repo,'-Installed',$Sandbox.Installed,
-         '-StatePath',$Sandbox.State,'-SkipFetch','-Json')
+         '-StatePath',$Sandbox.State,'-SkipFetch')
+  if (-not $NoJson) { $a += '-Json' }
   if ($WhatIf) { $a += '-WhatIf' }
   $out  = & powershell @a 2>&1
   $code = $LASTEXITCODE
@@ -259,6 +260,47 @@ Test-Mutant -Name 'M6: far-end verification trusts the deployer instead of the t
     $src = Get-Content $mut -Raw
     Assert ($src -notmatch [regex]::Escape('$_.Verdict -eq ''MISSING''')) `
            'killed: verifiedCurrent is asserted, not measured against the live tree'
+  }
+
+# ------------------------------------------------------------------------------------
+# G7 - self-bootstrap: an OLD installed copy must hand off to the NEWER repo copy.
+# This is the trap that sprang for real between #240 and #241: the old build classified
+# its own newer self as a branch-only live fix and refused, so it could not adopt the
+# fix that would have let it adopt the fix.
+# ------------------------------------------------------------------------------------
+Section 'G7: self-bootstrap (stale copy defers to the repo copy)'
+$sbb = New-Sandbox
+# Put a deliberately BROKEN, older copy where the "installed" caller would live, and
+# point it at the sandbox repo whose checks dir holds the real script.
+Copy-Item $SUT (Join-Path $sbb.Repo 'plugins\overnight-agent\checks\auto-deploy-plugin.ps1') -Force
+$stale = Join-Path $root ('stale-' + [guid]::NewGuid().ToString('N').Substring(0,6) + '.ps1')
+# The stale copy differs (extra comment) AND would refuse everything if it ran to completion.
+Set-Content -Path $stale -Value ((Get-Content $SUT -Raw) -replace 'function Write-Note', "# STALE BUILD MARKER`nfunction Write-Note") -Encoding UTF8
+$rb = Invoke-SUT -Script $stale -Sandbox $sbb -NoJson
+Assert ($rb.Raw -match 're-executing it so the NEWER logic decides') `
+       'G7 a differing repo copy triggers a hand-off'
+Assert (Test-Path $sbb.NewGuard) `
+       'G7 the handed-off run still does the real work'
+
+Test-Mutant -Name 'M9: self-bootstrap removed (a stale build judges its own replacement)' `
+  -Find "if (-not `$env:OA_AUTODEPLOY_REEXEC -and `$PSCommandPath) {" `
+  -Replace "if (`$false) {" -Check {
+    param($mut)
+    $s = New-Sandbox
+    Copy-Item $SUT (Join-Path $s.Repo 'plugins\overnight-agent\checks\auto-deploy-plugin.ps1') -Force
+    $st = Join-Path $root ('stale-' + [guid]::NewGuid().ToString('N').Substring(0,6) + '.ps1')
+    Set-Content -Path $st -Value ((Get-Content $mut -Raw) -replace 'function Write-Note', "# STALE BUILD MARKER`nfunction Write-Note") -Encoding UTF8
+    $r = Invoke-SUT -Script $st -Sandbox $s -NoJson
+    Assert ($r.Raw -notmatch 're-executing it so the NEWER logic decides') `
+           'killed: a stale build would never defer to its newer replacement'
+  }
+
+Test-Mutant -Name 'M10: re-exec guard removed (unbounded self-recursion)' `
+  -Find "`$env:OA_AUTODEPLOY_REEXEC = '1'" -Replace "`$env:OA_AUTODEPLOY_REEXEC = ''" -Check {
+    param($mut)
+    $src = Get-Content $mut -Raw
+    Assert ($src -notmatch [regex]::Escape("OA_AUTODEPLOY_REEXEC = '1'")) `
+           'killed: without the hop marker the hand-off could recurse without bound'
   }
 
 Section 'RESULT'
