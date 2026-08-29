@@ -234,5 +234,110 @@ check('MUTATION: removing the mergeable check would miss the #121 class', (tmp) 
     `state is identical in both runs; only mergeable differs, so the [A] count must go 0 -> 1 (got ${clean} -> ${dirty})`);
 });
 
+// ---------------------------------------------------------------------------------------
+// ORPHAN-JOURNAL COVERAGE (2026-08-29)
+//
+// The sweep used to build its universe from planner.md rows only, so a task with a journal
+// but no board row was never examined. Measured live: 69 such journals, and they are almost
+// exactly the agent-programme cluster — the tasks that actually carry `merge NNN` asks. The
+// sweep reported 0 stale asks while #425 asked for `merge 252`, merged an hour earlier.
+//
+// These cases pin BOTH directions: the orphan must be seen, and a task the user has
+// COMPLETED must still be ignored (otherwise the fix trades a blind spot for a noise source).
+
+function buildBoardless(tmp, { journal, fixture, id = '900', completed = false }) {
+  fs.mkdirSync(path.join(tmp, 'journal'), { recursive: true });
+  fs.mkdirSync(path.join(tmp, 'state'), { recursive: true });
+  // An open board with NO row for this task - this is the orphan shape.
+  fs.writeFileSync(path.join(tmp, 'planner.md'),
+    '## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|---|---|------|---|---|---|\n');
+  fs.writeFileSync(path.join(tmp, 'planner-completed.md'),
+    completed
+      ? `| ID | Task |\n|---|---|\n| ${id} | Fixture task |\n`
+      : '| ID | Task |\n|---|---|\n');
+  fs.writeFileSync(path.join(tmp, 'journal', `task-${id}.md`), journal);
+  fs.writeFileSync(path.join(tmp, 'state', `task-${id}.json`), JSON.stringify({ status: 'in-progress' }));
+  fs.writeFileSync(path.join(tmp, 'fixture.json'), JSON.stringify(fixture));
+}
+
+check('FIRES on a dead ask in a journal with NO board row (the #425 regression)', (tmp) => {
+  buildBoardless(tmp, {
+    journal: turn('reply **`merge 42`** if you want it landed.'),
+    fixture: { 'acme/widget': { prs: { 42: { state: 'MERGED', title: 'already landed' } } } },
+  });
+  const { out, code } = run(tmp);
+  assert(/dead-merged/.test(out), 'an orphan journal must still be checked');
+  assert(/\+ 1 journal\(s\) with no board row/.test(out), 'the orphan must be counted in the reported universe');
+  assert(code === 1, `expected exit 1, got ${code}`);
+});
+
+check('IGNORES a boardless task the user has COMPLETED (no new noise)', (tmp) => {
+  buildBoardless(tmp, {
+    completed: true,
+    journal: turn('reply **`merge 42`** if you want it landed.'),
+    fixture: { 'acme/widget': { prs: { 42: { state: 'MERGED', title: 'already landed' } } } },
+  });
+  const { out, code } = run(tmp);
+  assert(!/dead-merged/.test(out), 'a completed task must not be revived as a finding');
+  assert(/\+ 0 journal\(s\) with no board row/.test(out), 'a completed task must not enter the universe');
+  assert(code === 0, `expected a clean exit, got ${code}`);
+});
+
+check('MUTATION: reverting to a board-only universe loses the orphan finding', (tmp) => {
+  // Same journal, same fixture, same GitHub state. The ONLY difference is whether the task
+  // has a board row. Pre-fix the boardless run found nothing; both must now find it, which
+  // is what proves the universe - not the matcher - was the defect.
+  const A = (s) => Number((s.match(/absent or unexecutable: (\d+)/) || [, '-1'])[1]);
+  const journal = turn('reply **`merge 42`**.');
+  const fixture = { 'acme/widget': { prs: { 42: { state: 'MERGED', title: 'landed' } } } };
+
+  buildBoardless(tmp, { journal, fixture });
+  const boardless = A(run(tmp).out);
+
+  build(tmp, { journal, fixture });
+  fs.writeFileSync(path.join(tmp, 'planner-completed.md'), '| ID | Task |\n|---|---|\n');
+  const onBoard = A(run(tmp).out);
+
+  assert(onBoard === 1 && boardless === 1,
+    `a dead ask must be found whether or not the task has a board row (on-board ${onBoard}, boardless ${boardless})`);
+});
+
+check('a terminal agent status still wins for a boardless task', (tmp) => {
+  buildBoardless(tmp, {
+    journal: turn('reply **`merge 42`**.'),
+    fixture: { 'acme/widget': { prs: { 42: { state: 'MERGED', title: 'landed' } } } },
+  });
+  // done/skip is the agent's own "finished" signal and must keep suppressing the check.
+  fs.writeFileSync(path.join(tmp, 'state', 'task-900.json'), JSON.stringify({ status: 'done' }));
+  const { out, code } = run(tmp);
+  assert(!/dead-merged/.test(out), 'a done task must stay out of the findings');
+  assert(code === 0, `expected a clean exit, got ${code}`);
+});
+
+check('GUARD: a line RETRACTING an old ask is not a finding (#353 false positive)', (tmp) => {
+  // Found by widening the universe: #353's live turn says the old `merge 150`/`merge 126`
+  // ask is done and to ignore it, and was flagged for the tokens it was withdrawing.
+  buildBoardless(tmp, {
+    journal: turn('nothing. The old ask here (**`merge 42`**) is done - both are merged. Ignore it if you see it above.'),
+    fixture: { 'acme/widget': { prs: { 42: { state: 'MERGED', title: 'landed' } } } },
+  });
+  const { out, code } = run(tmp);
+  assert(!/dead-merged/.test(out), 'a retracted ask must not be re-reported as a live dead ask');
+  assert(code === 0, `expected a clean exit, got ${code}`);
+});
+
+check('MUTATION: the retraction guard must not silence a GENUINE dead ask', (tmp) => {
+  // The counterweight to the case above. A guard that suppresses noise is only safe if it
+  // still lets the real thing through - otherwise the fix for a false positive becomes a
+  // new blind spot, which is the exact trade this whole sweep exists to prevent.
+  buildBoardless(tmp, {
+    journal: turn('reply **`merge 42`** and I will land it.'),
+    fixture: { 'acme/widget': { prs: { 42: { state: 'MERGED', title: 'landed' } } } },
+  });
+  const { out, code } = run(tmp);
+  assert(/dead-merged/.test(out), 'an un-retracted dead ask must still fire');
+  assert(code === 1, `expected exit 1, got ${code}`);
+});
+
 console.log(`\n${pass + fail} assertions - ${pass} passed, ${fail} failed`);
 if (fail) { for (const f of failures) console.log(`  - ${f}`); process.exit(1); }
