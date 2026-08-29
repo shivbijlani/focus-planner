@@ -550,6 +550,26 @@ $Suite = @(
   # 17 assertions, all 4 guards mutation-proven load-bearing by mutcheck-external-surface.mjs
   # (auto-globbed by -IncludeMutchecks). Exits 1 on findings.
   @{ n = 'external-surface-sweep'; bridge = $false }
+  # postmortem-reviewer (added 2026-08-29, task #425) — Dream mode's learning loop:
+  # read COMPLETED-task postmortems, notice work likely to repeat, and DRAFT a skill
+  # refinement, a helper script, or a new skill. It writes nothing; every output is a
+  # proposal for a human.
+  # ⚠️ IT IS OFF BY DEFAULT AND REGISTERED ANYWAY. Unset, it prints one line and exits
+  # 0. `OA_DREAM_POSTMORTEM=on` enables it. Registered-and-disabled is deliberate: the
+  # UNREGISTERED guard above exists so a new .mjs cannot be silently skipped, and a
+  # detector that is both disabled AND unregistered is one nobody will ever switch on.
+  # WHY THE GATES ARE THE FEATURE — measured, not assumed. Against the live corpus of
+  # 52 completed journals this accepted **1,417** candidates on its first run, proposing
+  # `extract-script -> there.mjs`, `still.mjs` and `real.mjs`. Two calibrations fixed it:
+  #   - entity rarity (>4 journals = ambient vocabulary, the same cap
+  #     external-artifact-sweep already established here)      1,417 -> 195
+  #   - route A requires evidence SHIV wrote, in >= 2 separate tasks; the agent's own
+  #     procedure text may not vouch for recurrence (#227, relocated)  195 -> 1
+  # The surviving candidate is a real one: `checklist`, from four travel tasks, evidenced
+  # by his own note that a missing pre-departure checklist left the cards at home.
+  # 6 gates, all mutation-proven load-bearing by mutcheck-postmortem.mjs (20 assertions,
+  # 6 mutations, each killed and each breaking EXACTLY its own case).
+  @{ n = 'postmortem-reviewer'; bridge = $false }
 )
 
 if ($IncludeMutchecks) {
