@@ -26,6 +26,10 @@
     3. NO LIVE OWNING SESSION remains in its ancestor chain -- see Test-HasLiveOwner. This is the
        real protection: age says "old", it does not say "abandoned". An owner counts as live only
        while it is ACTIVE; one that is resident but silent past -OwnerIdleMinutes does not veto.
+    3b. ...OR its owner is live but has moved on to a NEWER session -- see Test-IsSupersededCohort.
+       A copilot.exe host is pooled and reused, so one live host can hold several runs' worth of
+       servers; only the newest start-time cohort is in use. Without this, ownership spares the
+       rest forever (measured: 17 servers / 1164 MB, +436 MB per run, `killed 0`).
     4. It has been running longer than -MinAgeMinutes (default 20) -- a secondary floor, not the
        safety mechanism.
     5. It is not in the current tool-shell's own ancestor/descendant tree (Get-ProtectedPidSet).
@@ -70,6 +74,36 @@
 
   Do not restore the old reasoning. If a future change needs the age gate to be load-bearing
   again, measure the premise first.
+
+  ...AND THE CORRECTION ITSELF WAS HALF-WRONG, WHICH IS WHY THE LEAK SURVIVED IT (GH #177).
+  "Each session has its own copilot.exe" was measured on a host that happened to be serving one
+  session, and generalised. Re-measured 2026-08-28 23:15 on the SAME host named above:
+
+      copilot.exe 6236 -> 24 MCP children in 4 start-time cohorts, 1704 MB, 1 live tool-shell
+        21:33   5 servers  292 MB     22:12   6 servers  436 MB
+        22:36   6 servers  436 MB     23:10   6 servers  439 MB  <- the only live one
+
+  Both statements are half true, and the missing distinction is CONCURRENT vs SUCCESSIVE:
+  github.exe keeps a POOL of `copilot.exe --server --stdio` hosts; two sessions running at the
+  same time land on DIFFERENT hosts (which is what the #178 measurement saw), but a session that
+  starts later REUSES a free one (which is what the retracted sentence half-saw). So a busy host
+  accumulates one full set of MCP servers per run and sheds none of them.
+
+  The consequence is that ownership -- the fix above -- could not collect the dominant leak on
+  this box, because the owner is genuinely active on behalf of its NEWEST cohort and therefore
+  vetoes every older one forever. The reaper reported `killed 0, sparedLiveOwner 29` while 17
+  servers / 1164 MB sat unreachable and grew by ~436 MB per run. Perfect health, nothing
+  collected -- the same "provenance, not capability" trap this project has hit before.
+
+  Hence the cohort rule (Test-IsSupersededCohort): under one host, only the newest start-time
+  cohort is in use. Verified on the live box with the age floor dropped to 1 minute, so only the
+  rule could decide: the 10 servers of the live cohort were SPARED and the 29 belonging to three
+  finished runs were collected; `-NoCohortVeto` reproduced the old `killed 0 / spared 29` exactly.
+
+  THE REUSABLE LESSON, AND IT IS THE SAME ONE AGAIN.
+  A premise that rules a fix out must be measured -- but so must the REPLACEMENT premise. This
+  one was measured once, on an unrepresentative sample, written down as settled fact, and then
+  inherited by the very guard it was used to justify. Measure the correction too.
 
   The original default of 45 minutes was chosen to be longer than the 30-minute schedule so that
   neither the current run's servers nor "those of the run immediately before it" were candidates.
@@ -123,6 +157,15 @@
   How long an owning session may be silent before it stops counting as live (default 240).
   Set 0 to disable the activity check and revert to pure presence-based ownership.
 
+.PARAMETER CohortGapMinutes
+  Minimum gap, in minutes, between two MCP spawn times for them to count as different sessions
+  (default 15). Servers under one live host are grouped into start-time cohorts; every cohort
+  except the newest is treated as a finished run's leftovers. Set 0, or pass -NoCohortVeto, to
+  disable and keep pure per-host ownership.
+
+.PARAMETER NoCohortVeto
+  Disable the cohort rule only, keeping the ownership veto. -IgnoreOwnership disables both.
+
 .PARAMETER SessionLogDir
   Where session logs live (default ~\.copilot\logs). Overridable so the wedged-owner behaviour
   is testable without a real profile.
@@ -132,8 +175,9 @@
 
 .OUTPUTS
   A single JSON line:
-  { scanned, matched, stale, killed, failed, sparedLiveOwner, reapedWedgedOwner, freedMB,
-    dryRun, minAgeMinutes, ownerIdleMinutes, ownershipVeto, details }
+  { scanned, matched, stale, killed, failed, sparedLiveOwner, reapedWedgedOwner,
+    reapedSupersededCohort, freedMB, dryRun, minAgeMinutes, ownerIdleMinutes, ownershipVeto,
+    cohortVeto, cohortGapMinutes, details }
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File reap-stale-mcp.ps1 -DryRun
@@ -169,8 +213,24 @@ param(
     # continuously) so no busy session can be caught; it exists to collect hosts that have been
     # silent for hours. Set 0 to disable and restore pure presence-based ownership.
     [int] $OwnerIdleMinutes = 240,
+    # How far apart two MCP spawn times must be before they count as DIFFERENT sessions. GH #177.
+    #
+    # A copilot.exe host is pooled and reused by successive runs, so one live host accumulates a
+    # fresh cohort of servers per run (measured: 4 cohorts / 24 servers / 1704 MB under a single
+    # host). Ownership alone cannot separate them -- the host is genuinely active, serving the
+    # NEWEST cohort, so it vetoes every older one forever. Cohorts are recovered from start-time
+    # clustering: servers of one session are spawned within seconds of each other, while a new
+    # session arrives a run-interval later. Observed gaps between cohorts were 39 / 24 / 34 min;
+    # gaps WITHIN a cohort were <= 5 s, and a mid-session MCP restart landed 4 min after its own
+    # cohort. The default sits above any observed intra-session respawn and far below the
+    # smallest observed inter-cohort gap, so a restart joins its live cohort instead of orphaning
+    # it. Set 0 (or -NoCohortVeto) to disable.
+    [int] $CohortGapMinutes = 15,
     # Where session logs live. Overridable so the behaviour is testable without a real profile.
     [string] $SessionLogDir = (Join-Path $env:USERPROFILE '.copilot\logs'),
+    # Escape hatch for the cohort rule alone, so it can be switched off without also giving up the
+    # ownership veto (-IgnoreOwnership turns off both).
+    [switch] $NoCohortVeto,
     # Escape hatch: fall back to the old age-only behaviour. Exists so the ownership veto can
     # be switched off in one flag if it ever mis-protects, rather than by editing the script
     # under pressure. It is NOT the default, because age-only is the defect.
@@ -412,6 +472,135 @@ function Test-HasLiveOwner {
     return $false
 }
 
+function Resolve-OwnerPid {
+    <#
+      Which session process owns this MCP server? Returns the owner's PID, or 0 when the chain is
+      orphaned. Deliberately a SEPARATE, self-contained walk rather than a refactor of
+      Test-HasLiveOwner: that function is extracted by name and evaluated standalone by
+      mutcheck-reaper-ownership.ps1, so making it call a helper would silently break the check
+      that proves the veto is load-bearing.
+
+      Liveness is NOT decided here -- Test-HasLiveOwner still owns that question. This only
+      answers "whose tree is it in", which is what lets servers be grouped per host so successive
+      runs sharing one pooled host can be told apart. GH #177.
+    #>
+    param(
+        [hashtable] $Table,
+        [int] $StartPid,
+        [datetime] $ChildStarted,
+        [string[]] $OwnerNames
+    )
+
+    $ownerSet = [System.Collections.Generic.HashSet[string]]::new(
+        [string[]]($OwnerNames | ForEach-Object { $_.ToLowerInvariant() })
+    )
+
+    $seen    = [System.Collections.Generic.HashSet[int]]::new()
+    $cur     = $StartPid
+    $childAt = $ChildStarted
+    $guard   = 0
+
+    while ($cur -gt 0 -and $guard -lt 64) {
+        $guard++
+        if (-not $seen.Add($cur)) { break }
+        if (-not $Table.ContainsKey($cur)) { return 0 }
+
+        $node = $Table[$cur]
+
+        # Same PID-reuse guard as Test-HasLiveOwner: a "parent" that started after its child is
+        # not the real parent, so the chain is gone rather than owned.
+        if ($node.Started -and $childAt -and $node.Started -gt $childAt) { return 0 }
+
+        if ($ownerSet.Contains($node.Name.ToLowerInvariant())) { return $cur }
+
+        if ($node.Parent -le 0 -or $node.Parent -eq $cur) { break }
+        $childAt = $node.Started
+        $cur     = $node.Parent
+    }
+
+    return 0
+}
+
+function Test-IsSupersededCohort {
+    <#
+      Is this server part of a cohort that a LATER session has already replaced?
+
+      WHY THIS EXISTS (GH #177)
+        The ownership veto assumes "one live host == one live session". That is false for a
+        POOLED host. Measured on this box: github.exe keeps a pool of `copilot.exe --server
+        --stdio` hosts; concurrent sessions land on DIFFERENT hosts, but SUCCESSIVE sessions
+        REUSE one. So a busy host accumulates a full set of MCP servers per run and never sheds
+        the old ones -- they are children of a process that is genuinely active, so the veto
+        spares them forever:
+
+            copilot.exe 6236, 4 cohorts, 24 MCP children, 1704 MB, 1 live tool-shell
+              21:33  5 servers   292 MB   <- finished run
+              22:12  6 servers   436 MB   <- finished run
+              22:36  6 servers   436 MB   <- finished run
+              23:10  6 servers   439 MB   <- the live session
+            reaper verdict that night: killed 0, sparedLiveOwner 29.
+
+        17 servers / 1164 MB were unreachable by every existing rule, growing ~436 MB per run.
+        The reaper reported perfect health while collecting nothing -- the same "provenance, not
+        capability" failure this project has hit before.
+
+      THE SIGNAL
+        Session start is observable in the spawn times. A session's servers appear within seconds
+        of each other; the next session appears a run-interval later. So cluster the start times
+        of everything under one owner, separating clusters at gaps greater than $GapMinutes, and
+        keep only the NEWEST cluster. Anything older belonged to a run that has ended.
+
+      WHY CLUSTERING, NOT "IS ANYTHING NEWER THAN ME"
+        A naive "a newer sibling exists" test would orphan a live session the moment one of its
+        own servers restarted. Measured: a mid-session email-mcp respawn arrived 4 minutes after
+        its cohort. Clustering absorbs that restart into the live cohort; the simpler test would
+        have killed the session's other five servers out from under it.
+
+      FAILURE DIRECTION IS ONE-WAY
+        With a single cohort no member can be older than that cohort's own first spawn, so the
+        comparison below returns $false and a host serving one session is never affected. The
+        newest cohort is never superseded, for the same reason. A gap of 0 disables the rule.
+        Missing or unusable evidence can therefore only spare a server, never kill one.
+
+      EVERY BEHAVIOURAL LINE HERE IS LOAD-BEARING, BY MEASUREMENT
+        An earlier draft also carried explicit "fewer than two siblings" and "no cut was made"
+        early-returns. mutcheck-reaper-cohort.ps1 deleted each of them and NOTHING FAILED: the
+        final comparison already covers both cases. They were removed rather than kept as
+        reassurance, because a guard whose mutant survives is not protecting anything -- it only
+        makes the real logic harder to find.
+
+        The empty-input guard below is the one deliberate exception, and it is recorded rather
+        than hidden: its mutant SURVIVES too, because with no siblings $newestCohortStart is
+        $null and PowerShell evaluates `$Started -lt $null` as $false. So the guard changes no
+        behaviour today -- it exists to state the intent explicitly instead of resting on a
+        surprising null-comparison rule that a later edit could silently invert.
+    #>
+    param(
+        [datetime] $Started,
+        [datetime[]] $SiblingStarts,
+        [int] $GapMinutes
+    )
+
+    if ($GapMinutes -le 0) { return $false }
+    # Intent-documentation, not a behavioural guard -- see the note above.
+    if (-not $SiblingStarts -or $SiblingStarts.Count -eq 0) { return $false }
+
+    $sorted = @($SiblingStarts | Sort-Object)
+
+    # Walk the sorted starts and cut a new cohort wherever the gap exceeds the threshold. What
+    # survives is the first spawn of the NEWEST cohort; everything strictly older than it belongs
+    # to a run that has ended. With one cohort no cut is made, so this stays at $sorted[0] and
+    # nothing can be older than it.
+    $newestCohortStart = $sorted[0]
+    for ($i = 1; $i -lt $sorted.Count; $i++) {
+        if (($sorted[$i] - $sorted[$i - 1]).TotalMinutes -gt $GapMinutes) {
+            $newestCohortStart = $sorted[$i]
+        }
+    }
+
+    return ($Started -lt $newestCohortStart)
+}
+
 $cutoff       = (Get-Date).AddMinutes(-$MinAgeMinutes)
 $protected    = Get-ProtectedPidSet
 $activityMap  = Get-SessionActivityMap -LogDir $SessionLogDir
@@ -428,8 +617,28 @@ $killed  = 0
 $failed  = 0
 $ownedLive = 0
 $wedgedOwner = 0
+$staleCohort = 0
 $freedKB = 0
 $details = New-Object System.Collections.ArrayList
+
+# PRE-PASS: group every matching server's spawn time by the session host that owns it. The cohort
+# rule needs to see a candidate's SIBLINGS, which the per-candidate loop below cannot -- it visits
+# one process at a time. Built once here rather than re-walked per candidate. GH #177.
+$cohortStarts = @{}
+$cohortVetoOn = (-not $IgnoreOwnership) -and (-not $NoCohortVeto) -and ($CohortGapMinutes -gt 0)
+if ($cohortVetoOn) {
+    foreach ($p in $candidates) {
+        $cmd = $p.CommandLine
+        if ([string]::IsNullOrWhiteSpace($cmd)) { continue }
+        if ($cmd -notmatch $combined) { continue }
+        $st = ConvertTo-ProcessStartTime $p.CreationDate
+        if (-not $st) { continue }
+        $ownerPid = Resolve-OwnerPid -Table $procTable -StartPid ([int]$p.ProcessId) -ChildStarted $st -OwnerNames $OwnerNames
+        if ($ownerPid -le 0) { continue }
+        if (-not $cohortStarts.ContainsKey($ownerPid)) { $cohortStarts[$ownerPid] = New-Object System.Collections.ArrayList }
+        [void]$cohortStarts[$ownerPid].Add($st)
+    }
+}
 
 foreach ($p in $candidates) {
     $cmd = $p.CommandLine
@@ -451,23 +660,42 @@ foreach ($p in $candidates) {
     if (-not $IgnoreOwnership) {
         $now = Get-Date
         if (Test-HasLiveOwner -Table $procTable -StartPid $procId -ChildStarted $started -OwnerNames $OwnerNames -OwnerIdleMinutes $OwnerIdleMinutes -Now $now) {
-            $ownedLive++
-            [void]$details.Add([ordered]@{
-                pid    = $procId
-                ageMin = [math]::Round(((Get-Date) - $started).TotalMinutes)
-                mb     = [math]::Round(($p.WorkingSetSize / 1KB) / 1KB)
-                action = 'spared-live-owner'
-            })
-            continue
-        }
 
-        # Reapable. Was it the wedged-owner rule that decided that? Re-ask with the activity
-        # check switched off: if presence alone WOULD have spared it, the owner is resident but
-        # silent -- exactly GH #200 criterion 5. Counted separately so the case is observable in
-        # the JSON rather than hiding inside the ordinary orphan count.
-        if ($OwnerIdleMinutes -gt 0 -and
-            (Test-HasLiveOwner -Table $procTable -StartPid $procId -ChildStarted $started -OwnerNames $OwnerNames -OwnerIdleMinutes 0 -Now $now)) {
-            $wedgedOwner++
+            # The owner is live -- but "live host" is not "live session" once a host is POOLED and
+            # reused by successive runs. Ask the second question before sparing: is this server part
+            # of a cohort that a LATER session has already replaced? Only the newest cohort under a
+            # host is in use; older ones are a finished run's leftovers that ownership alone can
+            # never collect. GH #177.
+            $superseded = $false
+            if ($cohortVetoOn) {
+                $ownerPid = Resolve-OwnerPid -Table $procTable -StartPid $procId -ChildStarted $started -OwnerNames $OwnerNames
+                if ($ownerPid -gt 0 -and $cohortStarts.ContainsKey($ownerPid)) {
+                    $superseded = Test-IsSupersededCohort -Started $started -SiblingStarts ([datetime[]]$cohortStarts[$ownerPid].ToArray()) -GapMinutes $CohortGapMinutes
+                }
+            }
+
+            if (-not $superseded) {
+                $ownedLive++
+                [void]$details.Add([ordered]@{
+                    pid    = $procId
+                    ageMin = [math]::Round(((Get-Date) - $started).TotalMinutes)
+                    mb     = [math]::Round(($p.WorkingSetSize / 1KB) / 1KB)
+                    action = 'spared-live-owner'
+                })
+                continue
+            }
+
+            $staleCohort++
+        }
+        else {
+            # Reapable. Was it the wedged-owner rule that decided that? Re-ask with the activity
+            # check switched off: if presence alone WOULD have spared it, the owner is resident but
+            # silent -- exactly GH #200 criterion 5. Counted separately so the case is observable in
+            # the JSON rather than hiding inside the ordinary orphan count.
+            if ($OwnerIdleMinutes -gt 0 -and
+                (Test-HasLiveOwner -Table $procTable -StartPid $procId -ChildStarted $started -OwnerNames $OwnerNames -OwnerIdleMinutes 0 -Now $now)) {
+                $wedgedOwner++
+            }
         }
     }
 
@@ -510,10 +738,18 @@ foreach ($p in $candidates) {
     # longer than -OwnerIdleMinutes. Before GH #200 these were immortal: presence alone vetoed
     # them forever, so a wedged session's servers accumulated with nothing able to collect them.
     reapedWedgedOwner = $wedgedOwner
+    # Of the reaped servers, how many belonged to a host that IS live and active but had already
+    # moved on to a newer session. These are invisible to every other rule here: the owner is
+    # genuinely working, so the ownership veto spares them, and the wedged-owner check never fires
+    # because the host is not silent. Measured on this box before the fix: 17 servers / 1164 MB
+    # under one host, growing by a full ~436 MB set every run. GH #177.
+    reapedSupersededCohort = $staleCohort
     freedMB = [math]::Round($freedKB / 1KB)
     dryRun  = [bool]$DryRun
     minAgeMinutes = $MinAgeMinutes
     ownerIdleMinutes = $OwnerIdleMinutes
     ownershipVeto = (-not [bool]$IgnoreOwnership)
+    cohortVeto = [bool]$cohortVetoOn
+    cohortGapMinutes = $CohortGapMinutes
     details = $details
 } | ConvertTo-Json -Depth 4 -Compress
