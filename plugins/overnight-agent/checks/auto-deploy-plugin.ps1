@@ -125,7 +125,15 @@ function Test-IsSupersededByRef {
   foreach ($c in $commits) {
     $sha = ([string]$c).Trim()
     if (-not $sha) { continue }
-    $oid = (& git -C $Repo rev-parse "${sha}:${RepoPath}" 2>$null)
+    # --verify --quiet, NOT a bare rev-parse. A bare `rev-parse <sha>:<path>` on a path
+    # that does not exist at that commit writes "fatal: path ... exists on disk, but not
+    # in <sha>" to stderr, and Windows PowerShell 5.1 - which is what `powershell` resolves
+    # to here - turns native stderr into a terminating NativeCommandError under
+    # $ErrorActionPreference = 'Stop'. `2>$null` does NOT suppress that (it does under
+    # pwsh 7, which is why this is invisible when tested by hand in the agent's own shell).
+    # So the moment any commit DELETED this path, the whole deploy aborted with exit 1.
+    # --verify --quiet exits 1 with no stderr and no output, on both hosts.
+    $oid = (& git -C $Repo rev-parse --verify --quiet "${sha}:${RepoPath}" 2>$null)
     if ($LASTEXITCODE -ne 0 -or -not $oid) { continue }
     $oid = ([string]$oid).Trim()
     if ($seen.ContainsKey($oid)) { continue }
@@ -142,6 +150,32 @@ function Test-IsSupersededByRef {
     } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
   }
   return $false
+}
+
+function Test-PathIsOnRefTip {
+  <#
+    Does this path exist AT the ref tip at all?
+
+    This is the question the classifier never asks. `installed-skill-drift-sweep.mjs`
+    compares CONTENT and answers "which ref carries these bytes", so a file the ref has
+    since DELETED looks exactly like a live fix on a side branch: neither is at the tip,
+    and both come back BRANCH-ONLY -> REFUSED.
+
+    They are opposite situations, and the difference is decidable in one call. Refusing
+    both is not the safe default - it means a file removed from the ref can never be
+    removed from the live tree, so it lingers forever, is refused every cycle, and (per
+    step 4) escalates to exit 2 permanently. That pins the exit code at "a human is
+    needed" for a condition no human can clear, which is exactly the trained-to-ignore
+    failure #253's own PR body warned about at the deploy layer.
+
+    Measured 2026-08-29: merging #253 deleted two guard scripts from main. The next
+    deploy refused all five paths and then ABORTED (see the --verify note above). The
+    two orphans were the wrong-version copies #253 deliberately removed - still live,
+    still being run by run-sweeps.
+  #>
+  param([string]$Repo, [string]$RefName, [string]$RepoPath)
+  & git -C $Repo rev-parse --verify --quiet "${RefName}:${RepoPath}" 2>$null | Out-Null
+  return ($LASTEXITCODE -eq 0)
 }
 
 $deployer = Join-Path $Repo "$RepoPrefix\overnight-agent\checks\deploy-installed-plugin.ps1"
@@ -236,14 +270,45 @@ if ($deployExit -ne 0) {
 # the classifier. Separate them by asking whether the ref's history already contains the
 # installed content: if it does, the ref supersedes it and deploying loses nothing.
 $superseded = @()
+$removed = @()
 $stillRefused = @()
 foreach ($rel in $refused) {
   $instFile = Join-Path $Installed ($rel -replace '/', '\')
   $repoPath = "$RepoPrefix/$rel"
-  if (Test-IsSupersededByRef -Repo $Repo -RefName $Ref -RepoPath $repoPath -InstalledFile $instFile) {
-    $superseded += $rel
-  } else {
-    $stillRefused += $rel
+  $inHistory = Test-IsSupersededByRef -Repo $Repo -RefName $Ref -RepoPath $repoPath -InstalledFile $instFile
+  $onTip     = Test-PathIsOnRefTip     -Repo $Repo -RefName $Ref -RepoPath $repoPath
+
+  if (-not $onTip) {
+    # The ref does not have this path at all. Two sub-cases, and only one is safe:
+    #   content IS in the ref's history -> the ref DELETED a file we still carry. The
+    #     live bytes are a real historical version, so they are provably not a live fix.
+    #     Remove it (after backup) - that is what "the ref supersedes it" means when the
+    #     ref's decision was a deletion.
+    #   content is NOT in the ref's history -> a live-only file that was hand-deployed
+    #     and never committed. Refuse: deleting it would destroy the only copy.
+    if ($inHistory) { $removed += $rel } else { $stillRefused += $rel }
+  }
+  elseif ($inHistory) { $superseded += $rel }
+  else { $stillRefused += $rel }
+}
+
+if ($removed.Count -gt 0) {
+  Write-Note ("{0} refused file(s) were DELETED on $Ref and the live bytes are a known historical version - removing." -f $removed.Count)
+  $bkRoot = Join-Path $env:LOCALAPPDATA ('overnight-agent\backups\auto-deploy-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+  foreach ($rel in $removed) {
+    Write-Note ("  REMOVE   {0}" -f $rel)
+    if ($WhatIf) { continue }
+
+    $dst = Join-Path $Installed ($rel -replace '/', '\')
+    $bk  = Join-Path $bkRoot ($rel -replace '/', '\')
+    $bkParent = Split-Path $bk -Parent
+    try {
+      if (-not (Test-Path $bkParent)) { New-Item -ItemType Directory -Force -Path $bkParent | Out-Null }
+      if (Test-Path $dst) { Copy-Item $dst $bk -Force; Remove-Item $dst -Force }
+    } catch {
+      Write-Note ("  FAILED   {0}: {1}" -f $rel, $_.Exception.Message)
+      $stillRefused += $rel
+    }
   }
 }
 
@@ -400,6 +465,7 @@ if ($Json) {
     deployed        = @($written)
     refused         = @($refused)
     superseded      = @($superseded)
+    removed         = @($removed)
     escalate        = @($escalate)
     residual        = @($residual | ForEach-Object { "$($_.Verdict) $($_.Rel)" })
     verifiedCurrent = $verified
@@ -408,8 +474,8 @@ if ($Json) {
   } | ConvertTo-Json -Depth 5 -Compress
 } else {
   Write-Host ''
-  Write-Note ("deployed {0}, refused {1}, residual drift {2}, verified-current {3}" -f `
-              $written.Count, $refused.Count, $residual.Count, $verified)
+  Write-Note ("deployed {0}, removed {1}, refused {2}, residual drift {3}, verified-current {4}" -f `
+              $written.Count, $removed.Count, $refused.Count, $residual.Count, $verified)
 
   if ($escalate.Count -gt 0) {
     Write-Host ''

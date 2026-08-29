@@ -203,8 +203,16 @@ foreach ($f in $live) {
   foreach ($c in $commits) {
     $c = "$c".Trim()
     if (-not $c) { continue }
-    $blob = & git -C $Repo rev-parse "${c}:$repoPath" 2>$null
-    if ($LASTEXITCODE -ne 0) { continue }
+    # --verify --quiet, NOT a bare rev-parse: on a commit where this path does not exist
+    # (any commit before it was added, or after it was deleted) a bare rev-parse writes
+    # "fatal: path ... exists on disk, but not in <sha>" to stderr, and Windows
+    # PowerShell 5.1 turns native stderr into a TERMINATING error under
+    # $ErrorActionPreference='Stop'. `2>$null` does not suppress that on 5.1 - only on
+    # pwsh 7 - so this aborts the whole sync on the host it actually runs on. Same defect
+    # and same fix as auto-deploy-plugin.ps1's Test-IsSupersededByRef; it took the live
+    # deploy down on 2026-08-29 the first time a merge deleted a file.
+    $blob = & git -C $Repo rev-parse --verify --quiet "${c}:$repoPath" 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $blob) { continue }
     $blob = "$blob".Trim()
     $txt = & git -C $Repo cat-file blob $blob 2>$null | Out-String
     if ((Get-Sha256 (($txt -replace "`r`n", "`n").TrimEnd("`n"))) -eq $liveHash) { $match = $c; break }
