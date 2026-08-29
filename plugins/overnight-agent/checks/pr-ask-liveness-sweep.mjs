@@ -59,6 +59,18 @@ const ACTION = String.raw`merge|land|ship|build|close|approve|review|rebase|reop
 const rxToken = new RegExp(String.raw`\b(${ACTION})\s+#?(\d{1,4})\b`, 'gi');
 const DOC_GUARD = /(pr-ask-liveness|falsified premise|postmortem|this sweep|dead ask|never surface|detector)/i;
 
+// RETRACTION GUARD (2026-08-29). A line that NAMES an old ask in order to WITHDRAW it is
+// documentation, not a live ask. Widening the universe to boardless journals surfaced this
+// immediately: #353 says "The old ask here (`merge 150` then `merge 126`) is done - both are
+// merged. Ignore it if you see it above." and was flagged for the very tokens it retracts.
+//
+// Telling the user about a dead ask their own journal already declares dead is pure noise,
+// and noise is how a detector gets ignored. Kept deliberately NARROW - phrases that only
+// occur when withdrawing an ask - because a loose guard here would silence real findings.
+// Notably absent: a bare "is done", which appears in legitimate asks ("merge 42 once review
+// is done") and would suppress them.
+const RETRACTION_GUARD = /(the old ask|already (?:merged|landed|shipped)|both are merged|ignore it if|ask (?:is|was) (?:dead|retired|already)|no longer (?:needed|blocking|open))/i;
+
 function sleep(sec) {
   const end = Date.now() + sec * 1000;
   while (Date.now() < end) { /* deliberate spin: keeps the sweep dependency-free */ }
@@ -109,11 +121,44 @@ function mergeability(repo, tries = 6) {
   return { nodes, unknown: nodes.filter((n) => n.mergeable === 'UNKNOWN').length };
 }
 
-const board = fs.readFileSync(path.join(PLANNER, 'planner.md'), 'utf8');
-const active = new Set();
-for (const line of board.split(/\r?\n/)) {
-  const m = line.match(/^\|\s*(\d+)\s*[,|]/);
-  if (m) active.add(m[1]);
+// ---- The universe of tasks to check -------------------------------------------------------
+// It used to be "rows on planner.md", which quietly made this detector blind to the tasks most
+// likely to carry a `merge NNN` ask. 69 journals have no board row at all, and they are almost
+// exactly the agent-programme cluster (#425, #442, #443, #399, #395, #379, #434, #439 ...) —
+// i.e. the tasks that TALK ABOUT PRs. Measured 2026-08-29: this sweep reported 0 stale asks
+// while #425 sat asking for `merge 252`, a PR that had been merged an hour earlier. It was not
+// a matcher bug; the task was never looked at.
+//
+// A board row is a presentation choice, not a liveness signal. The signal for "finished" is the
+// COMPLETED board (the user's own completion action) plus the terminal agent status filtered
+// below. So the universe is: every journal, minus anything the user has completed.
+function boardIds(file) {
+  const ids = new Set();
+  let text;
+  try { text = fs.readFileSync(path.join(PLANNER, file), 'utf8'); } catch { return ids; }
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^\|\s*(\d+)\s*[,|]/);
+    if (m) ids.add(m[1]);
+  }
+  return ids;
+}
+
+const openBoard = boardIds('planner.md');
+const completedBoard = boardIds('planner-completed.md');
+
+let journalIds = [];
+try {
+  journalIds = fs.readdirSync(JOURNAL)
+    .map((f) => (f.match(/^task-(\d+)\.md$/) || [])[1])
+    .filter(Boolean);
+} catch { /* no journal dir */ }
+
+const active = new Set(openBoard);
+let orphansAdded = 0;
+for (const id of journalIds) {
+  if (active.has(id) || completedBoard.has(id)) continue;
+  active.add(id);
+  orphansAdded += 1;
 }
 
 // ---- Dimension B: repo-wide mergeability (also reused by A) -------------------------------
@@ -156,7 +201,7 @@ for (const id of [...active].sort((a, b) => Number(a) - Number(b))) {
 
   const tokens = [];
   for (const line of `${ask}\n${context}`.split(/\r?\n/)) {
-    if (DOC_GUARD.test(line)) continue;
+    if (DOC_GUARD.test(line) || RETRACTION_GUARD.test(line)) continue;
     for (const m of line.matchAll(rxToken)) tokens.push({ verb: m[1].toLowerCase(), num: Number(m[2]), raw: m[0] });
   }
   if (!tokens.length) continue;
@@ -186,6 +231,7 @@ for (const id of [...active].sort((a, b) => Number(a) - Number(b))) {
 }
 
 // ---- Report ---------------------------------------------------------------------------------
+console.log(`[A] task universe: ${openBoard.size} open-board row(s) + ${orphansAdded} journal(s) with no board row`);
 console.log(`[A] active non-terminal tasks whose live ask names an action on a PR/issue: ${considered}`);
 console.log(`[A] references resolved to a repo and checked against GitHub: ${refsChecked}`);
 console.log(`[A] unresolved (no URL in the journal ties the number to a repo): ${unresolved.length}`);
