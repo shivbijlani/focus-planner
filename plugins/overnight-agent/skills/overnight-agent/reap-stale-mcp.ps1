@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-  Reap stale MCP stdio server processes left behind by finished Copilot sessions.
+  Reap stale MCP stdio server processes left behind by finished Copilot sessions, and collect
+  session hosts that were never spoken to.
 
 .DESCRIPTION
   Every scheduled Copilot run (the Overnight Agent workflow fires every 30 minutes) starts a
@@ -74,6 +75,24 @@
 
   Do not restore the old reasoning. If a future change needs the age gate to be load-bearing
   again, measure the premise first.
+
+  ...AND THE COLLECTOR COULD NOT SEE THE HOST ITSELF (GH #237).
+  Everything above is about MCP *servers*. Nothing collected a leaked *session host*. A
+  `copilot.exe --server --stdio` whose client goes away before it is ever driven waits for
+  requests forever, and it is invisible to the scan by construction -- it is not in
+  -ProcessNames, and -Patterns matches MCP command lines, which a host does not have. So no rule
+  here could ever reach it and a device restart was the only remedy, which is exactly the
+  "we keep having to reap processes, and restart the device" complaint this script answers.
+
+  Measured live on 2026-08-29, and still resident 8 hours after they were first reported:
+
+      copilot.exe 11664  age 484 min  111 MB  log 392 bytes  last line "waiting for requests"
+      copilot.exe 12848  age 483 min  124 MB  log 392 bytes  last line "waiting for requests"
+
+  The rate is low; the RETENTION is unbounded, which is what makes it a leak. Collected by a
+  separate pass (see Test-IsStillbornHost) keyed on "never served a request" rather than on age,
+  because a host waiting on the user is indistinguishable from one waiting on a dead client by
+  age alone -- reaping hosts on age would reintroduce the very defect #178 removed.
 
   ...AND THE CORRECTION ITSELF WAS HALF-WRONG, WHICH IS WHY THE LEAK SURVIVED IT (GH #177).
   "Each session has its own copilot.exe" was measured on a host that happened to be serving one
@@ -170,14 +189,29 @@
   Where session logs live (default ~\.copilot\logs). Overridable so the wedged-owner behaviour
   is testable without a real profile.
 
+.PARAMETER HostNames
+  Image names that count as a SESSION HOST rather than an MCP server (default copilot.exe).
+  Collected by a separate pass with its own rules -- see GH #237 and Test-IsStillbornHost.
+
+.PARAMETER HostCommandPatterns
+  Fragments that must ALL appear in a host's command line before it is even considered
+  (default --server, --stdio). An interactive foreground copilot.exe carries neither.
+
+.PARAMETER HostMinAgeMinutes
+  Minimum age before a never-served host is collectable (default 20).
+
+.PARAMETER NoHostReap
+  Skip the stillborn-host pass entirely, keeping MCP reaping unchanged.
+
 .PARAMETER DryRun
   Report what would be killed without killing anything.
 
 .OUTPUTS
   A single JSON line:
   { scanned, matched, stale, killed, failed, sparedLiveOwner, reapedWedgedOwner,
-    reapedSupersededCohort, freedMB, dryRun, minAgeMinutes, ownerIdleMinutes, ownershipVeto,
-    cohortVeto, cohortGapMinutes, details }
+    reapedSupersededCohort, hostsScanned, hostsSparedServed, hostsStillborn, hostsKilled,
+    hostsFailed, hostsFreedMB, hostMinAgeMinutes, hostReap, freedMB, dryRun, minAgeMinutes,
+    ownerIdleMinutes, ownershipVeto, cohortVeto, cohortGapMinutes, details }
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File reap-stale-mcp.ps1 -DryRun
@@ -228,6 +262,22 @@ param(
     [int] $CohortGapMinutes = 15,
     # Where session logs live. Overridable so the behaviour is testable without a real profile.
     [string] $SessionLogDir = (Join-Path $env:USERPROFILE '.copilot\logs'),
+    # --- Stillborn session hosts (GH #237) -------------------------------------------------
+    # Image names that count as a SESSION HOST, as opposed to an MCP server. These are collected
+    # by a separate pass with its own rules; they are deliberately NOT added to -ProcessNames,
+    # because the -Patterns match is on MCP command lines and would never apply to a host, and
+    # matching a host on age alone would reintroduce the age-only defect GH #178 removed.
+    [string[]] $HostNames = @('copilot.exe'),
+    # A host only qualifies when its command line shows it is a stdio server -- i.e. something
+    # else was supposed to drive it. ALL of these must be present. An interactive foreground
+    # copilot.exe has no --server/--stdio and is therefore never even considered.
+    [string[]] $HostCommandPatterns = @('--server', '--stdio'),
+    # Minimum age before a never-served host is collectable. Separate from -MinAgeMinutes so the
+    # two floors can move independently; a host legitimately spends its first seconds waiting to
+    # be driven, so this must be comfortably above normal client-attach latency.
+    [int] $HostMinAgeMinutes = 20,
+    # Escape hatch: skip the stillborn-host pass entirely, keeping MCP reaping.
+    [switch] $NoHostReap,
     # Escape hatch for the cohort rule alone, so it can be switched off without also giving up the
     # ownership veto (-IgnoreOwnership turns off both).
     [switch] $NoCohortVeto,
@@ -359,6 +409,108 @@ function Get-SessionActivityMap {
     catch { return @{} }
 
     return $map
+}
+
+function Read-SessionLogText {
+    <#
+      Read a session log that its OWNING PROCESS STILL HAS OPEN FOR WRITING.
+
+      THE SHARE MODE IS THE WHOLE FUNCTION, AND GETTING IT WRONG IS SILENT (GH #237).
+      Every live copilot.exe holds its own log open with write access. [IO.File]::ReadAllText
+      opens with FileShare.Read, which does not permit a concurrent writer, so it throws
+      "because it is being used by another process" on EVERY log that matters. Measured on this
+      box, against both a stillborn host and a busy one:
+
+          ReadAllText  -> FAIL (sharing violation)   on pid 11664 AND pid 9956
+          FileShare.ReadWrite -> OK (392 chars)      on pid 11664
+          FileShare.ReadWrite -> OK (11576 chars)    on pid 9956
+
+      Combined with the fail-safe rule below -- unreadable evidence means SPARE -- a reader that
+      gets this wrong does not error out. It returns $null for every host, every host is spared,
+      and the collector becomes a permanent no-op that reports a healthy `0`. That is the
+      "structurally blind detector" failure this project has hit repeatedly, so the share mode is
+      asserted by mutcheck-reaper-stillborn.ps1 rather than left to a comment.
+
+      Returns $null on ANY failure (missing, locked beyond reading, unreadable, bad encoding).
+      Callers must treat $null as "no evidence" and spare.
+    #>
+    param([string] $Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+
+    $fs = $null
+    $sr = $null
+    try {
+        # FileShare.ReadWrite is load-bearing -- see above. Do not "tidy" this to ReadAllText.
+        $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        $sr = New-Object IO.StreamReader($fs, (New-Object Text.UTF8Encoding($false)))
+        return $sr.ReadToEnd()
+    }
+    catch { return $null }
+    finally {
+        if ($sr) { $sr.Dispose() }
+        elseif ($fs) { $fs.Dispose() }
+    }
+}
+
+function Test-IsStillbornHost {
+    <#
+      Is this session host one that came up, announced readiness, and was NEVER SPOKEN TO?
+
+      WHY THIS EXISTS (GH #237)
+        reap-stale-mcp collects leaked MCP *servers*. Nothing collected a leaked *session host*.
+        A `copilot.exe --server --stdio` whose client dies before it is ever driven sits in
+        "waiting for requests" forever. It is invisible to the scan above by construction: the
+        scan matches -ProcessNames (node/uv/python) and -Patterns against MCP command lines, and
+        a copilot.exe matches neither. So nothing on the box could ever collect it and a device
+        restart was the only remedy -- precisely the "we keep having to reap processes, and
+        restart the device" complaint this script exists to answer.
+
+        Measured live, and still resident 8 hours later when this fix was written:
+            pid 11664  age 484 min  111 MB  log 392 bytes, 5 lines
+            pid 12848  age 483 min  124 MB  log 392 bytes, 5 lines
+        Both logs end at "Server started, waiting for requests" and stop.
+
+      THE DISCRIMINATOR IS "NEVER SERVED", NOT "OLD" (criterion 3)
+        This is the hard constraint: a host waiting on SHIV looks identical from the outside to
+        one waiting on a dead client. Age cannot separate them, and reaping on age would
+        reintroduce the exact defect GH #178 removed. What separates them is that a host which
+        has been spoken to at all keeps writing to its log. A connected-but-idle interactive
+        session is therefore NOT stillborn -- measured on the live host serving this very run,
+        whose log had already moved past the banner (11,576 chars) before any user message:
+
+            2026-08-29T08:31:42Z [INFO] --- Start of group: configured settings: ---
+
+        So the test is: the readiness banner is still the LAST thing the host ever logged.
+        "Last line", not "contains" -- a busy host's log contains the banner too, which is why
+        an any-line match is a mutant this rule must survive.
+
+      FAILURE DIRECTION IS ONE-WAY, DELIBERATELY
+        No log, unreadable log, empty log, or a log whose last line is anything else -> SPARE.
+        Missing evidence can only ever spare a host, never kill one. A truncated or rotated log
+        is the one way this could read "stillborn" wrongly, which is what $HasLiveChildren is
+        for: a host with MCP servers under it has demonstrably been driven, whatever its log
+        says, so it is spared on a second, independent signal.
+    #>
+    param(
+        [AllowNull()] [string] $LogText,
+        [string] $ReadyMarker = 'Server started, waiting for requests',
+        [bool] $HasLiveChildren = $false
+    )
+
+    # No readable evidence -> never a candidate. See FAILURE DIRECTION above.
+    if ([string]::IsNullOrWhiteSpace($LogText)) { return $false }
+
+    # Independent of the log entirely: a host with MCP servers under it has been driven. This
+    # covers the one case the log signal can get wrong (truncation/rotation).
+    if ($HasLiveChildren) { return $false }
+
+    $lines = @($LogText -split "`r?`n" | Where-Object { $_ -match '\S' })
+    if ($lines.Count -eq 0) { return $false }
+
+    # LAST line, not any line -- a host that served requests logged past its own banner.
+    return ($lines[$lines.Count - 1] -match [regex]::Escape($ReadyMarker))
 }
 
 function Get-ProcessTable {
@@ -723,6 +875,136 @@ foreach ($p in $candidates) {
     }
 }
 
+$hostsScanned      = 0
+$hostsStillborn    = 0
+$hostsKilled       = 0
+$hostsSparedServed = 0
+$hostsFailed       = 0
+$hostFreedKB       = 0
+
+# ---------------------------------------------------------------------------------------------
+# STILLBORN SESSION HOSTS (GH #237)
+#
+# A separate pass, on purpose. The loop above is "an MCP server whose session has gone"; this is
+# "a session host that never had a client". They share no rule: ownership, cohorts and -Patterns
+# are all meaningless for a host, and a host is nobody's child in the sense the veto understands.
+# Folding it into the loop above would have required weakening exactly the guards that make that
+# loop safe -- which is why the issue says, explicitly, do not just add copilot.exe to
+# -ProcessNames.
+#
+# Every guard here can only PREVENT a kill. A host is collected only when ALL hold:
+#   1. its image name is in -HostNames;
+#   2. its command line contains every -HostCommandPatterns fragment (a stdio server);
+#   3. it is not in this run's own protected tree (never kill ourselves or our host);
+#   4. its start time is known and older than -HostMinAgeMinutes;
+#   5. its log is present and readable (unreadable -> spare);
+#   6. it has no live child processes other than the console host; and
+#   7. the readiness banner is still the LAST line it ever logged (Test-IsStillbornHost).
+# ---------------------------------------------------------------------------------------------
+if (-not $NoHostReap) {
+    $hostCutoff = (Get-Date).AddMinutes(-$HostMinAgeMinutes)
+
+    # Children of each pid, from the SAME WMI snapshot the rest of the script used, so this pass
+    # can never disagree with the ownership walk about what was running at this instant.
+    $childCount = @{}
+    foreach ($node in $procTable.Values) {
+        $parentPid = $node.Parent
+        if ($parentPid -le 0) { continue }
+        # conhost.exe is attached by Windows to any console process and says nothing about
+        # whether the host was ever driven -- both stillborn hosts measured had exactly one.
+        if ($node.Name -and $node.Name.ToLowerInvariant() -eq 'conhost.exe') { continue }
+        if (-not $childCount.ContainsKey($parentPid)) { $childCount[$parentPid] = 0 }
+        $childCount[$parentPid]++
+    }
+
+    # pid -> log path, from the same directory listing convention Get-SessionActivityMap uses.
+    $logPathByPid = @{}
+    if (-not [string]::IsNullOrWhiteSpace($SessionLogDir) -and (Test-Path -LiteralPath $SessionLogDir)) {
+        try {
+            Get-ChildItem -LiteralPath $SessionLogDir -Filter 'process-*.log' -File -ErrorAction Stop |
+                ForEach-Object {
+                    if ($_.Name -match '-(\d+)\.log$') {
+                        $logPid = [int]$Matches[1]
+                        if (-not $logPathByPid.ContainsKey($logPid) -or
+                            $logPathByPid[$logPid].Written -lt $_.LastWriteTime) {
+                            $logPathByPid[$logPid] = [pscustomobject]@{
+                                Path    = $_.FullName
+                                Written = $_.LastWriteTime
+                            }
+                        }
+                    }
+                }
+        }
+        catch { $logPathByPid = @{} }   # unreadable log dir -> no evidence -> spare everything
+    }
+
+    $hostFilter = ($HostNames | ForEach-Object { "Name='$($_ -replace "'", "''")'" }) -join ' OR '
+    $hostProcs  = @(Get-CimInstance Win32_Process -Filter $hostFilter -ErrorAction SilentlyContinue)
+
+    foreach ($h in $hostProcs) {
+        $hostsScanned++
+
+        $hcmd = $h.CommandLine
+        if ([string]::IsNullOrWhiteSpace($hcmd)) { continue }
+
+        # (2) EVERY fragment must be present -- a stdio server, not an interactive session.
+        $isStdioServer = $true
+        foreach ($frag in $HostCommandPatterns) {
+            if ($hcmd -notmatch [regex]::Escape($frag)) { $isStdioServer = $false; break }
+        }
+        if (-not $isStdioServer) { continue }
+
+        $hostPid = [int]$h.ProcessId
+
+        # (3) never collect the host this run is executing inside.
+        if ($protected.Contains($hostPid)) { continue }
+
+        # (4) unknown age is never a candidate, same rule as the MCP loop.
+        $hStarted = ConvertTo-ProcessStartTime $h.CreationDate
+        if (-not $hStarted) { continue }
+        if ($hStarted -gt $hostCutoff) { continue }
+
+        # (5) read the log through a share-tolerant reader -- see Read-SessionLogText.
+        $logText = $null
+        if ($logPathByPid.ContainsKey($hostPid)) {
+            $logText = Read-SessionLogText -Path $logPathByPid[$hostPid].Path
+        }
+
+        # (6) MCP servers (or anything else) under this host prove it was driven.
+        $hasKids = $childCount.ContainsKey($hostPid) -and $childCount[$hostPid] -gt 0
+
+        # (7) the readiness banner is still the last thing it logged.
+        if (-not (Test-IsStillbornHost -LogText $logText -HasLiveChildren $hasKids)) {
+            # Counted only once a process got far enough to be a real stdio-server candidate, so
+            # this means "hosts checked and found in use", not "every process scanned".
+            $hostsSparedServed++
+            continue
+        }
+
+        $hostsStillborn++
+        $hAgeMin = [math]::Round(((Get-Date) - $hStarted).TotalMinutes)
+        $hKB     = [int]($h.WorkingSetSize / 1KB)
+
+        if ($DryRun) {
+            $hostsKilled++
+            $hostFreedKB += $hKB
+            [void]$details.Add([ordered]@{ pid = $hostPid; ageMin = $hAgeMin; mb = [math]::Round($hKB / 1KB); action = 'would-kill-stillborn-host' })
+            continue
+        }
+
+        try {
+            Stop-Process -Id $hostPid -Force -ErrorAction Stop
+            $hostsKilled++
+            $hostFreedKB += $hKB
+            [void]$details.Add([ordered]@{ pid = $hostPid; ageMin = $hAgeMin; mb = [math]::Round($hKB / 1KB); action = 'killed-stillborn-host' })
+        }
+        catch {
+            $hostsFailed++
+            [void]$details.Add([ordered]@{ pid = $hostPid; ageMin = $hAgeMin; mb = [math]::Round($hKB / 1KB); action = 'failed-stillborn-host'; error = $_.Exception.Message })
+        }
+    }
+}
+
 [ordered]@{
     scanned = $scanned
     matched = $matched
@@ -744,6 +1026,24 @@ foreach ($p in $candidates) {
     # because the host is not silent. Measured on this box before the fix: 17 servers / 1164 MB
     # under one host, growing by a full ~436 MB set every run. GH #177.
     reapedSupersededCohort = $staleCohort
+    # --- stillborn session hosts (GH #237). Additive: every field above keeps its meaning, so
+    # existing consumers that read `killed`/`freedMB` are unaffected by this pass.
+    # How many host processes were looked at at all.
+    hostsScanned = $hostsScanned
+    # Stdio-server hosts that were checked and found to be IN USE -- they had served a request,
+    # had children, or their log could not be read. A high number here next to hostsKilled 0 is
+    # the healthy steady state, and it is reported so "collected nothing" can be told apart from
+    # "could not see anything", which is the failure mode this pass is most likely to regress to.
+    hostsSparedServed = $hostsSparedServed
+    # Hosts that came up, announced readiness and were never spoken to. Before GH #237 these were
+    # immortal: no rule in this script could see a copilot.exe, so a device restart was the only
+    # way they were ever collected. Measured live: 2 hosts / 235 MB, still resident after 8 hours.
+    hostsStillborn = $hostsStillborn
+    hostsKilled = $hostsKilled
+    hostsFailed = $hostsFailed
+    hostsFreedMB = [math]::Round($hostFreedKB / 1KB)
+    hostMinAgeMinutes = $HostMinAgeMinutes
+    hostReap = (-not [bool]$NoHostReap)
     freedMB = [math]::Round($freedKB / 1KB)
     dryRun  = [bool]$DryRun
     minAgeMinutes = $MinAgeMinutes
