@@ -64,8 +64,8 @@ import {
   withTaskSettingsMutationLock,
 } from './storage/taskSettings.js'
 import { gatherDiagnostics, formatDiagnosticsReport } from './storage/diagnostics.js'
-import { AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE } from './config/aiSettings.js'
-import { groupSettingsForm, serializeSettingsForm, hasSettingsForm } from './config/userSettingsForm.js'
+import { AI_SETTINGS_FILE } from './config/aiSettings.js'
+import AgentSettingsEditor from './AgentSettingsEditor.jsx'
 import {
   attachmentFolderPath,
   formatAttachmentFolderMarkdown,
@@ -4811,7 +4811,7 @@ function SettingsSectionTitle({ id, label, collapsed, onToggle, className = '' }
   )
 }
 
-function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged }) {
+function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged, onOpenFile }) {
   const [open, setOpen] = useState(false)
   const [tourOpen, setTourOpen] = useState(false)
   const [installOpen, setInstallOpen] = useState(false)
@@ -4839,16 +4839,6 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
   // Mission statement editor (Settings → Mission).
   const [mission, setMissionInput] = useState(getMissionStatement())
   useEffect(() => subscribeMissionStatement(setMissionInput), [])
-  // AI agent settings editor (Settings → AI). Reads/writes user-settings.md in
-  // the active source — the same file the overnight-agent plugin reads.
-  const [aiText, setAiText] = useState(null)      // null = not loaded; string = file content ('' if empty)
-  const [aiLoaded, setAiLoaded] = useState(false)
-  const [aiExists, setAiExists] = useState(false)
-  const [aiBusy, setAiBusy] = useState(false)
-  const [aiMsg, setAiMsg] = useState('')
-  // 'form' = structured field-per-setting editor; 'raw' = markdown textarea.
-  // Both edit the same aiText, so switching never loses work.
-  const [aiMode, setAiMode] = useState('form')
   // App update (force latest service worker — fixes "stale build on mobile").
   const [updating, setUpdating] = useState(false)
   const [updateMsg, setUpdateMsg] = useState('')
@@ -4898,58 +4888,9 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
   }, [open, activeId, sources.length])
 
   const close = () => { setOpen(false); setError(''); setRemoveConfirm(null) }
-
-  // Load user-settings.md from the active source when the dialog opens or the
-  // active source changes. null content -> file doesn't exist yet.
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
-    setAiLoaded(false)
-    setAiMsg('')
-    ;(async () => {
-      try {
-        const raw = await storage.read(AI_SETTINGS_FILE)
-        if (cancelled) return
-        setAiExists(raw != null)
-        setAiText(raw != null ? raw : '')
-      } catch {
-        if (cancelled) return
-        setAiExists(false)
-        setAiText('')
-      } finally {
-        if (!cancelled) setAiLoaded(true)
-      }
-    })()
-    return () => { cancelled = true }
-  }, [open, activeId])
-
-  const seedAiSettings = async () => {
-    setAiBusy(true)
-    setAiMsg('')
-    try {
-      await storage.write(AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE)
-      setAiText(AI_SETTINGS_TEMPLATE)
-      setAiExists(true)
-      setAiMsg('Created — fill in your values and save.')
-    } catch (e) {
-      setAiMsg(`Couldn't create the file: ${e?.message || e}`)
-    } finally {
-      setAiBusy(false)
-    }
-  }
-
-  const saveAiSettings = async () => {
-    setAiBusy(true)
-    setAiMsg('')
-    try {
-      await storage.write(AI_SETTINGS_FILE, aiText ?? '')
-      setAiExists(true)
-      setAiMsg('Saved.')
-    } catch (e) {
-      setAiMsg(`Couldn't save: ${e?.message || e}`)
-    } finally {
-      setAiBusy(false)
-    }
+  const openAgentSettingsFile = () => {
+    close()
+    onOpenFile?.(AI_SETTINGS_FILE)
   }
 
   const askRemoveSource = (sourceId, name, isCloud = false, isFolder = false) => {
@@ -5306,117 +5247,17 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged 
               />
             </div>
 
-            <div className={`settings-dialog-section${sectionCollapsed.aiSettings ? ' collapsed' : ''}`}>
-              <SettingsSectionTitle id="aiSettings" label="AI agent settings" collapsed={!!sectionCollapsed.aiSettings} onToggle={toggleSection} />
-              <div className="settings-mission-hint">
-                Config for the overnight agent, saved as <code>{AI_SETTINGS_FILE}</code> in
-                your active source (next to <code>{PLAN_FILE}</code>). The agent reads this
-                file on every run.
-              </div>
-              {!aiLoaded ? (
-                <div className="settings-update-msg">Loading…</div>
-              ) : !aiExists && (aiText === '' || aiText == null) ? (
-                <div className="settings-update-row">
-                  <div className="settings-update-info">
-                    <span className="settings-update-hint">
-                      No settings file yet. Create one from a starter template, then fill in your values.
-                    </span>
-                  </div>
-                  <button
-                    className="storage-footer-btn sync-target-action"
-                    onClick={seedAiSettings}
-                    disabled={aiBusy}
-                    title={`Create ${AI_SETTINGS_FILE} from a template`}
-                  >
-                    {aiBusy ? 'Creating…' : 'Create from template'}
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <div className="settings-ai-modes" role="tablist" aria-label="Settings editor mode">
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={aiMode === 'form'}
-                      className={`settings-ai-mode-btn${aiMode === 'form' ? ' is-active' : ''}`}
-                      onClick={() => setAiMode('form')}
-                      disabled={!hasSettingsForm(aiText)}
-                      title={hasSettingsForm(aiText) ? 'Edit each setting in its own field' : 'No structured rows to edit — use Raw'}
-                    >
-                      Form
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={aiMode === 'raw'}
-                      className={`settings-ai-mode-btn${aiMode === 'raw' ? ' is-active' : ''}`}
-                      onClick={() => setAiMode('raw')}
-                      title="Edit the raw markdown"
-                    >
-                      Raw
-                    </button>
-                  </div>
-                  {aiMode === 'form' && hasSettingsForm(aiText) ? (
-                    <div className="settings-ai-form">
-                      {groupSettingsForm(aiText).map((group) => (
-                        <fieldset className="settings-ai-form-group" key={group.section || 'ungrouped'}>
-                          {group.section && (
-                            <legend className="settings-ai-form-legend">{group.section}</legend>
-                          )}
-                          {group.rows.map((row) => (
-                            <label className="settings-ai-field" key={row.index}>
-                              <span className="settings-ai-field-label">{row.label}</span>
-                              <input
-                                type="text"
-                                className="settings-ai-field-input"
-                                spellCheck={false}
-                                value={row.value}
-                                onChange={(e) => {
-                                  const values = groupSettingsForm(aiText)
-                                    .flatMap((g) => g.rows)
-                                    .sort((a, b) => a.index - b.index)
-                                    .map((r) => r.value)
-                                  values[row.index] = e.target.value
-                                  setAiText(serializeSettingsForm(aiText, values))
-                                  if (aiMsg) setAiMsg('')
-                                }}
-                              />
-                            </label>
-                          ))}
-                        </fieldset>
-                      ))}
-                      <div className="settings-ai-form-hint">
-                        Prose-only settings (the <code>## Preferences</code> notes) aren’t shown here — switch to <strong>Raw</strong> to edit those.
-                      </div>
-                    </div>
-                  ) : (
-                    <textarea
-                      className="settings-ai-input"
-                      rows={12}
-                      spellCheck={false}
-                      placeholder={`# Overnight Agent — user settings\n\nFill in your paths, accounts and preferences…`}
-                      value={aiText ?? ''}
-                      onChange={(e) => { setAiText(e.target.value); if (aiMsg) setAiMsg('') }}
-                    />
-                  )}
-                  <div className="settings-update-row">
-                    <div className="settings-update-info">
-                      <span className="settings-update-hint">
-                        Keep real paths and email addresses out of any public repo.
-                      </span>
-                    </div>
-                    <button
-                      className="storage-footer-btn sync-target-action"
-                      onClick={saveAiSettings}
-                      disabled={aiBusy}
-                      title={`Save ${AI_SETTINGS_FILE}`}
-                    >
-                      {aiBusy ? 'Saving…' : 'Save'}
-                    </button>
-                  </div>
-                </>
-              )}
-              {aiMsg && <div className="settings-update-msg">{aiMsg}</div>}
+            <div className="settings-dialog-subtle settings-agent-settings-hint">
+              <span>
+                Agent settings now live in <code>{AI_SETTINGS_FILE}</code>. Open that file to use the full-page editor.
+              </span>
+              <button
+                type="button"
+                className="settings-link-button"
+                onClick={openAgentSettingsFile}
+              >
+                Open {AI_SETTINGS_FILE}
+              </button>
             </div>
 
             {isMulti && (
@@ -7306,6 +7147,7 @@ function App() {
   const localPath = selPath || selectedFile
   const isFocusPlan = !isCombinedFocusPlan && localPath === PLAN_FILE
   const isCompletedPlan = !isCombinedFocusPlan && localPath === COMPLETED_FILE
+  const isAgentSettingsFile = selSourceId !== COMBINED_ID && localPath === AI_SETTINGS_FILE
   const isJournal = !isCombinedFocusPlan && !isFocusPlan && !isCompletedPlan &&
     /(^|\/)journal\//.test(localPath) && localPath.endsWith('.md')
 
@@ -7335,6 +7177,7 @@ function App() {
           syncStatus={syncStatus}
           failedSourceIds={failedSourceIds}
           onDataChanged={loadFiles}
+          onOpenFile={handleSelectFile}
         />
       </aside>
       <main ref={contentRef} className={`content${isJournal ? ' content-chat' : ''}`}>
@@ -7405,13 +7248,21 @@ function App() {
             </div>
           )}
         </div>
-        {mission && !isJournal && !isFocusPlan && (
+        {mission && !isJournal && !isFocusPlan && !isAgentSettingsFile && (
           <div className="mission-banner" role="note" aria-label="Mission statement">
             <span className="mission-banner-icon" aria-hidden="true">✦</span>
             <p className="mission-banner-text">{mission}</p>
           </div>
         )}
-        {isCombinedFocusPlan ? (
+        {isAgentSettingsFile ? (
+          <AgentSettingsEditor
+            activeSourceId={getActiveSourceId()}
+            onSaved={(text) => {
+              setContent(text)
+              loadFiles().catch(() => {})
+            }}
+          />
+        ) : isCombinedFocusPlan ? (
           <CombinedFocusPlanView sources={sources} onNavigate={handleNavigate} onDataChanged={loadFiles} />
         ) : content ? (
           isFocusPlan ? (
