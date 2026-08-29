@@ -104,10 +104,17 @@ function New-Sandbox {
 }
 
 function Invoke-SUT {
-  param($Script, $Sandbox, [switch]$WhatIf, [switch]$NoJson)
+  param($Script, $Sandbox, [switch]$WhatIf, [switch]$NoJson, [switch]$WithOaHome)
+  # -NoOaHome by default: these assertions are about the plugin-deploy contract
+  # (classification, refusal, streaks, hand-off). The OA-home sync is a separate
+  # subsystem with its own mutcheck, and letting it run here would fold its exit code
+  # into $needsAttention and mask the escalation mutants - which is exactly what it
+  # did on first wiring: M3 ("streak never accumulates") survived because the run
+  # exited 2 for an unrelated reason. Isolate the unit; cover the seam separately.
   $a = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$Script,
          '-Repo',$Sandbox.Repo,'-Installed',$Sandbox.Installed,
          '-StatePath',$Sandbox.State,'-SkipFetch')
+  if (-not $WithOaHome) { $a += '-NoOaHome' }
   if (-not $NoJson) { $a += '-Json' }
   if ($WhatIf) { $a += '-WhatIf' }
   $out  = & powershell @a 2>&1
@@ -302,6 +309,31 @@ Test-Mutant -Name 'M10: re-exec guard removed (unbounded self-recursion)' `
     Assert ($src -notmatch [regex]::Escape("OA_AUTODEPLOY_REEXEC = '1'")) `
            'killed: without the hop marker the hand-off could recurse without bound'
   }
+
+Section 'G8: the OA-home seam (second deploy target)'
+# The reason this section exists: on first wiring, the sub-tool was resolved as
+# "next to me" only. The OA home is exactly where a brand-new check has NOT landed,
+# so the copy most in need of repair silently skipped its own sync and still printed
+# verified-current True. A missing sub-tool and a clean sync produced identical
+# output - a detector wired to nothing.
+$s = New-Sandbox
+$r = Invoke-SUT -Script $SUT -Sandbox $s
+Assert ($r.Json -and $r.Json.oaHomeExit -eq 0) `
+       'G8a -NoOaHome leaves the seam clean and reports it'
+
+# Run a copy from a directory where sync-oa-home.ps1 is absent AND point -Repo at a
+# sandbox that has no checks dir, so no candidate root can resolve it.
+$isolated = Join-Path $root ('iso-' + [guid]::NewGuid().ToString('N').Substring(0,6))
+New-Item -ItemType Directory -Path $isolated -Force | Out-Null
+$copy = Join-Path $isolated 'auto-deploy-plugin.ps1'
+Copy-Item $SUT $copy -Force
+$s2 = New-Sandbox
+$a = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$copy,
+       '-Repo',$s2.Repo,'-Installed',$s2.Installed,'-StatePath',$s2.State,
+       '-SkipFetch','-Json')
+$out = & powershell @a 2>&1 | Out-String
+Assert ($out -match 'NOT FOUND' -or $out -match '"oaHomeExit":\s*2') `
+       'G8b an unresolvable sub-tool is reported, never silently skipped'
 
 Section 'RESULT'
 if (-not $KeepSandbox) { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }

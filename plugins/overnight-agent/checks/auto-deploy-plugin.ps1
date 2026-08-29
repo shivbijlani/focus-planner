@@ -351,10 +351,22 @@ if (-not $WhatIf) {
 # the thing that gets skipped.
 $oaHomeExit = 0
 if (-not $NoOaHome) {
-  $syncScript = Join-Path $PSScriptRoot 'sync-oa-home.ps1'
-  if (Test-Path $syncScript) {
+  # Resolve the sub-tool from several roots, not just "next to me". This script is
+  # deliberately deployed to BOTH targets, so $PSScriptRoot is sometimes the flat OA
+  # home - where a brand-new check has not landed yet, because the OA home only
+  # updates files it already has and never gains new ones. Anchoring on $PSScriptRoot
+  # alone therefore made the OA home the one place the sync could not run: the copy
+  # most likely to be stale silently skipped its own repair and still reported
+  # success. Caught by verifying the far end after the first deploy of this feature.
+  $syncCandidates = @(
+    (Join-Path $PSScriptRoot 'sync-oa-home.ps1'),
+    (Join-Path $Repo 'plugins\overnight-agent\checks\sync-oa-home.ps1'),
+    (Join-Path $Installed 'overnight-agent\checks\sync-oa-home.ps1')
+  )
+  $syncScript = $syncCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+  if ($syncScript) {
     Write-Host ''
-    Write-Note 'syncing the OA home (second deploy target)'
+    Write-Note "syncing the OA home (second deploy target) via $syncScript"
     try {
       $syncArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $syncScript,
                     '-Ref', $Ref, '-Repo', $Repo, '-SkipFetch')
@@ -367,6 +379,13 @@ if (-not $NoOaHome) {
       Write-Host "  | sync-oa-home failed: $_"
       $oaHomeExit = 2
     }
+  } else {
+    # Never fail silently. A missing sub-tool and a clean sync produced the same
+    # output before this branch existed, which is the "detector wired to nothing"
+    # shape this repo keeps rediscovering.
+    Write-Host ''
+    Write-Note 'sync-oa-home.ps1 NOT FOUND in any known root - the OA home was NOT synced.'
+    $oaHomeExit = 2
   }
 }
 
