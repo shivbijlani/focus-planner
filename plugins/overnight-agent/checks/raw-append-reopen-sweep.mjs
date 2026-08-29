@@ -196,7 +196,7 @@ if (probeError) {
   process.exit(1);
 }
 
-if (failures.length === 0) {
+if (failures.length === 0 && exposed.length === 0) {
   console.log(
     `\nbehavioural probe: ${CASES.length}/${CASES.length} correct - every shape of user reply ` +
       'reopens the task, and an untouched journal stays quiet.',
@@ -204,8 +204,31 @@ if (failures.length === 0) {
   process.exit(0);
 }
 
-console.log(`\nFINDINGS: ${failures.length} of ${CASES.length} behavioural cases wrong`);
-for (const f of failures) {
-  console.log(`  case ${f.id}: expected reopened=${f.expected}, got ${f.actual} -- ${f.why}`);
+// The live count MUST affect the verdict, and for a long time it did not.
+//
+// The probe above calls `mark` on every fixture before appending (it models the production
+// sequence, correctly). But `mark` is exactly what writes the turn-end stamp -- so the probe
+// only ever tested the world where the stamp EXISTS. Meanwhile 157 of 238 real journals were
+// in the other world, unmarked since the stamp shipped and therefore blind to a raw append.
+// The sweep printed "157" and exited 0 on every run.
+//
+// That is the "a detector that cannot see and a system that is healthy produce the same
+// number" failure: the one signal that would have caught the live gap was the one signal
+// wired to nothing. A passing probe proves the CODE is right; only this count proves the
+// CORPUS is. Both have to be able to fail.
+if (exposed.length > 0) {
+  console.log(
+    `\nFINDINGS: ${exposed.length} live journal(s) would silently swallow a raw reply typed ` +
+      'at the bottom -- the agent turn runs to EOF with no turn-end stamp.',
+  );
+  console.log(`  exposed: ${exposed.slice(0, 40).join(', ')}${exposed.length > 40 ? ', ...' : ''}`);
+  console.log('  fix: powershell -File plugins/overnight-agent/checks/backfill-turn-end.ps1');
+}
+
+if (failures.length) {
+  console.log(`\nFINDINGS: ${failures.length} of ${CASES.length} behavioural cases wrong`);
+  for (const f of failures) {
+    console.log(`  case ${f.id}: expected reopened=${f.expected}, got ${f.actual} -- ${f.why}`);
+  }
 }
 process.exit(1);
