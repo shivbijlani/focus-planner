@@ -44,6 +44,12 @@ if (-not (Test-Path $NodeExe))    { Fail "node.exe not found: $NodeExe" }
 $raw  = Get-Content $ConfigPath -Raw
 $json = $raw | ConvertFrom-Json
 
+# Record the ORIGINAL file's byte prefix so the patched file can be written back in
+# the same encoding state it arrived in, rather than assuming "no BOM". GH #212 (4).
+# Assuming is what caused the original defect in the other direction.
+$srcBytes  = [IO.File]::ReadAllBytes($ConfigPath)
+$srcHadBom = ($srcBytes.Length -ge 3 -and $srcBytes[0] -eq 0xEF -and $srcBytes[1] -eq 0xBB -and $srcBytes[2] -eq 0xBF)
+
 # --- find every slot still on the npx path -------------------------------------
 $targets = @()
 foreach ($name in $json.mcpServers.PSObject.Properties.Name) {
@@ -84,23 +90,53 @@ if ($PSCmdlet.ShouldProcess($ConfigPath, "repoint $($targets.Count) slots to dir
         $json.mcpServers.$t.args    = @($Cli) + $kept
     }
 
-    # Write UTF-8 WITHOUT a BOM. `Set-Content -Encoding UTF8` emits a BOM under
-    # PowerShell 5.1, and mcp-config.json has none -- so patching the file used to
-    # silently change its encoding as a side effect of changing its contents.
-    # Node's JSON.parse (what the MCP client actually uses) REJECTS a leading BOM,
-    # so the config became unloadable while every check here still passed. GH #212.
+    # Write UTF-8, preserving the source file's BOM state (GH #212 (4)). The original
+    # defect was `Set-Content -Encoding UTF8`, which prepends a BOM under PowerShell
+    # 5.1 -- so patching the file silently changed its encoding as a side effect of
+    # changing its contents, and Node's JSON.parse (what the MCP client actually uses)
+    # REJECTS a leading BOM.
     $out = $json | ConvertTo-Json -Depth 20
-    [IO.File]::WriteAllText($ConfigPath, $out, (New-Object Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText($ConfigPath, $out, (New-Object Text.UTF8Encoding($srcHadBom)))
 
-    # --- validate JSON round-trips ---------------------------------------------
-    # A byte check FIRST: PowerShell's ConvertFrom-Json happily accepts a BOM, so
-    # the parse below cannot detect the exact corruption this script used to cause.
-    # Assert the far end (the bytes) rather than trusting a tolerant parser. GH #212.
-    $head = [IO.File]::ReadAllBytes($ConfigPath) | Select-Object -First 3
-    if ($head.Count -ge 3 -and $head[0] -eq 0xEF -and $head[1] -eq 0xBB -and $head[2] -eq 0xBF) {
-        Copy-Item $backup $ConfigPath -Force
-        Fail "config was written with a UTF-8 BOM (Node's JSON.parse would reject it) - rolled back."
+    # --- validate with the REAL consumer, not with PowerShell --------------------
+    # This gate is the load-bearing one (GH #212 (2), proven by mutcheck-playwright-slots.ps1).
+    #
+    # Why a PowerShell check cannot do this job: ConvertFrom-Json is TOLERANT -- it
+    # strips a BOM during decoding and parses happily. Node's JSON.parse is STRICT and
+    # throws. So every validation performed in PowerShell is structurally blind to the
+    # exact corruption this script used to cause, and the script could report complete
+    # success on a config the MCP client refuses to load.
+    #
+    # The previous fix checked for the three UTF-8 BOM bytes by hand. That is a
+    # hardcoded signature for ONE known corruption -- it still passes on a UTF-16 BOM,
+    # on trailing garbage, or on any other byte-level damage a future edit introduces.
+    # Asking the actual parser is the general form: it asserts the capability at the
+    # far end instead of pattern-matching the artefact.
+    $probe = @'
+// argv[0]=node, argv[1]=this probe, argv[2]=the config under test.
+try {
+  const fs = require('fs');
+  JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+  console.log('PARSE_OK');
+} catch (e) {
+  console.log('PARSE_FAIL ' + e.message);
+  process.exit(1);
+}
+'@
+    $probeFile = Join-Path ([IO.Path]::GetTempPath()) "mcp-config-parse-$([guid]::NewGuid().ToString('N')).js"
+    [IO.File]::WriteAllText($probeFile, $probe, (New-Object Text.UTF8Encoding($false)))
+    try {
+        $parseOut = & $NodeExe $probeFile $ConfigPath 2>&1
+        $parseOk  = ($LASTEXITCODE -eq 0) -and (($parseOut -join ' ') -match 'PARSE_OK')
+    } finally {
+        Remove-Item $probeFile -Force -ErrorAction SilentlyContinue
     }
+    if (-not $parseOk) {
+        Copy-Item $backup $ConfigPath -Force
+        Fail "config is not parseable by Node (the real MCP consumer): $($parseOut -join ' ') - rolled back."
+    }
+
+    # Belt-and-braces: PowerShell must be able to read it back too.
     try { $null = Get-Content $ConfigPath -Raw | ConvertFrom-Json }
     catch { Copy-Item $backup $ConfigPath -Force; Fail "config became invalid JSON - rolled back." }
 

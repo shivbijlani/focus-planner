@@ -120,8 +120,19 @@ function Write-Manifest($entries) {
     takenUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     files    = $entries
   }
-  # ASCII-safe: these are paths and hex hashes, never journal prose.
-  $doc | ConvertTo-Json -Depth 6 | Set-Content -Path $ManifestPath -Encoding UTF8
+  # Write UTF-8 with NO BOM. `Set-Content -Encoding UTF8` prepends a BOM under
+  # Windows PowerShell 5.1 -- which is what `powershell.exe` resolves to, and what
+  # run-sweeps.ps1 invokes this script with -- and Node's JSON.parse REJECTS a
+  # leading BOM while PowerShell's ConvertFrom-Json silently strips it. So the
+  # manifest parsed green in every check written here and was unreadable to the
+  # strict parser. GH #212 (same defect, first found in fix-playwright-npx-slots.ps1).
+  #
+  # The old comment here read "ASCII-safe: these are paths and hex hashes, never
+  # journal prose" -- that reasoning is what hid the bug. The BOM is prepended by
+  # the ENCODER regardless of how ASCII the content is; it is a property of the
+  # write, not of the payload.
+  $json = $doc | ConvertTo-Json -Depth 6
+  [IO.File]::WriteAllText($ManifestPath, $json, (New-Object Text.UTF8Encoding($false)))
 }
 
 function Invoke-Snapshot {
