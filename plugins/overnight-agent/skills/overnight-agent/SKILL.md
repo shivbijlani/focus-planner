@@ -426,7 +426,22 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
 1. Choose candidate tasks. **Default: every task in `## Today`.** Expand to `## Deferred` / others as
    capacity allows, preferring higher 🎯 urgency and set `Work Priority` (P0 > P1 > P2). Honor the
    `## Priorities` list at the bottom of planner.md.
-2. Use the `scan` worklist to triage:
+2. **Also collect from Google Tasks (if a Google account is connected).** If `user-settings.md` names a
+   **Google account** (→ "Google account (Tasks)") that's consented in the Google Workspace MCP, pull that
+   account's open Google Tasks as *extra* candidates each run — this automates the manual reconcile from
+   task #329 so todos captured in Google Tasks surface in the planner without the user re-typing them:
+   - **Read-only first:** call `list_tasks` for that account (each list, e.g. `@default`) to get the open
+     backlog. Listing is reversible, so it needs no approval.
+   - **Dedupe against the planner** before proposing anything: match each Google Task against existing
+     `planner.md` rows and their journals (title overlap + the `Linked ID` theme map established in #329).
+     Split into *already-tracked* (fold — don't re-add) vs *genuinely new*.
+   - For the **genuinely-new** ones, treat each as a PHASE 2 candidate: propose a planner row under the
+     best `Linked ID` (per #329's theme→parent map) as a single reconciled list in the #329 journal (or a
+     dedicated journal), rather than silently adding rows. Importing planner rows is reversible;
+     **completing or deleting the task back in Google is irreversible → stays gated** on an explicit OK.
+   - If no Google account is set, or the MCP isn't consented for it, **skip this step silently** — don't
+     block the run. (Alexa/other external to-do sources: only if a corresponding MCP is available.)
+3. Use the `scan` worklist to triage:
    - **`reopened: true`** → the user replied after your last turn; pick it up as new input (approval →
      PHASE 1; new ask → re-plan as a new version per "Revise → replace"). **Never skip a reopened task,
      even if its status is `done`/`skip`/`proposed`.**
@@ -435,7 +450,7 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
      the user or settled); don't spam a new plan.
    - **stored status `revise`** → (re)propose, overwriting in place + bumping version per "Revise →
      replace".
-3. **Assess current status BEFORE planning (do this for every candidate).** A task may already be
+4. **Assess current status BEFORE planning (do this for every candidate).** A task may already be
    handled, partly handled, or obsolete — don't propose work that's already done. Read the evidence:
 
    - The user's notes at the **top** of the journal (they may say "done", "bought it", "fixed",
@@ -458,7 +473,7 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
    - **Can't tell** → propose a short **first step that verifies status** (and, if needed, set
      `blocked` with a one-line question instead of guessing).
 
-4. **Gather linked-task context, then plan.** For each task you *do* plan, first pull in its upstream
+5. **Gather linked-task context, then plan.** For each task you *do* plan, first pull in its upstream
    context per "Gather linked-task context FIRST" (read the linked journal(s) + their deliverables).
    Then write a concrete, right-sized plan into the agent block (status `proposed`) that **explicitly
    builds on those upstream decisions** and adds a one-line **Context:** trace. A good plan:
@@ -473,7 +488,7 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
      deliverable for the user to review. Leave the irreversible finish (**merging**) for the approved
      EXECUTE run.
 
-5. After writing a plan, record it: `oa-state.ps1 mark -Id <ID> -Status proposed -Version <n> -PlanId
+6. After writing a plan, record it: `oa-state.ps1 mark -Id <ID> -Status proposed -Version <n> -PlanId
    t<ID>-v<n>`. No checkboxes, no notes field — the user just replies in plain English under your block.
 
 ### PHASE 3 — Mirror to Telegram (do this after you've finished writing journals)
