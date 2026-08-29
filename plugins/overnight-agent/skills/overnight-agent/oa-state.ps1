@@ -29,6 +29,9 @@
   scan                          Emit the per-run worklist as JSON (what changed / reopened /
                                 due_poll).
   get    -Id <id>               Print one task's state JSON.
+  consent -Id <id>              Print the CONSENT verdict for one task's journal as it stands
+                                now: has the HUMAN provably authorized something? Fail-CLOSED
+                                (see .CONSENT below). Ask this before any irreversible action.
   mark   -Id <id> [-Status s] [-Version n] [-PlanId p]
                                 Record that the agent has processed the journal as it now
                                 stands (re-snapshots processed_file_hash + updates fields).
@@ -77,6 +80,28 @@
   A due recheck grants NO new permission: it is a read-only look at whether the blocker is gone.
   Acting on the result still obeys the reversibility gate.
 
+.CONSENT (#227 -- why this is NOT the same read as `reopened`)
+  Approval for an irreversible action must not be inferable from text the agent can write.
+  The journal is a MULTI-WRITER surface: this agent, sibling skills, and the Telegram bridge
+  all append to it, and the bridge stamps `<!-- from: me -->` on the human's behalf. So the
+  reopen reader's `no marker -> treat as the human` default -- which is CORRECT for reopen,
+  because losing a user's message is worse than an extra look -- is exactly wrong as a consent
+  boundary: it attributes ANY unmarked prose below the turn-end stamp to the human.
+
+  Hence two readers with opposite defaults:
+
+    reopened   (Test-TrailingHasUser)     FAIL OPEN   unmarked prose counts AS the human
+    consent_ok (Test-TrailingHasConsent)  FAIL CLOSED unmarked prose is NOT the human
+
+  Consent requires an affirmative phrase inside a segment POSITIVELY attributed to the human.
+  Attribution is positional -- a marker owns the text following it -- so agent text under a
+  user's heading cannot inherit the user's provenance. A writer that forgets its marker fails
+  closed, which is the guarantee a stamping convention cannot give.
+
+  This is a floor, not the whole story: the marker is still written by software. Carrying
+  consent on an identity the agent cannot forge (e.g. the Telegram `from_user` id captured at
+  fold time) is the follow-up; this makes the reader stop treating absence as permission.
+
 .SNOOZE PRECEDENCE
   Snooze is the user's explicit "not until <date>", so it outranks both timers: a snoozed task
   reports `due_poll: false` and `due_recheck: false` regardless of how overdue the timer is. The
@@ -87,6 +112,7 @@
   pwsh oa-state.ps1 seed
   pwsh oa-state.ps1 scan
   pwsh oa-state.ps1 get  -Id 293
+  pwsh oa-state.ps1 consent -Id 276                    # may I take the irreversible step on #276?
   pwsh oa-state.ps1 mark -Id 305 -Status proposed -Version 1 -PlanId t305-v1
   pwsh oa-state.ps1 mark -Id 400 -Poll daily          # arm a daily poll on #400
   pwsh oa-state.ps1 mark -Id 400 -PollDone            # after running it this run
@@ -99,7 +125,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot')]
+  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent')]
   [string]$Command = 'scan',
 
   [string]$Id,
@@ -157,6 +183,16 @@ $script:HumanAuthor   = 'me'
 $script:SelfAuthor    = 'overnight-agent'
 $script:ProvenanceRe  = '(?m)^[ \t]*<!--[ \t]*from:[ \t]*([^>\r\n]*?)[ \t]*-->'
 $script:LegacyStateRe = '(?m)^[ \t]*<!--[ \t]*oa-state'
+
+# --- Consent (#227) --------------------------------------------------------------------
+# The affirmative vocabulary SKILL.md tells the agent to read as approval. Kept here, next
+# to the provenance markers, because consent is (phrase AND author) and the two halves must
+# not drift apart in different files.
+#
+# Word-bounded on both sides so `go` does not fire inside `going` and `do it` does not fire
+# inside `redo it`. Phrase precision is deliberately NOT the subject of #227 -- authorship is
+# -- so this list mirrors SKILL.md rather than trying to improve on it.
+$script:ConsentAffirmRe = '(?i)(?<![\w-])(approved?|approve it|yes|yep|yeah|go ahead|go for it|go|lgtm|ship it|do it|vibe it|send it|make it so|proceed)(?![\w-])'
 
 # --- The turn terminator ---------------------------------------------------------------
 # An HTML comment (invisible when the journal renders) that marks the exact END of this
@@ -375,6 +411,115 @@ function Test-TrailingHasUser([string]$trailing) {
   return $false
 }
 
+# --- Consent authorship (#227) ---------------------------------------------------------
+# TWO DIFFERENT QUESTIONS, TWO OPPOSITE DEFAULTS. This is the whole point of #227.
+#
+#   "Did the user speak?"      -> Test-TrailingHasUser. Unmarked prose counts AS the human.
+#                                 FAIL OPEN, because the cost of being wrong is an extra look,
+#                                 and the cost of the other error is losing the user's message.
+#
+#   "Did the human authorize   -> Test-TrailingHasConsent (below). Unmarked prose counts as
+#    this irreversible act?"      NOT the human. FAIL CLOSED, because the cost of being wrong
+#                                 is an action nobody sanctioned.
+#
+# Re-using the reopen reader for consent is the P9 violation: `<!-- from: me -->` is written by
+# software the agent runs (the Telegram bridge folds phone replies under that marker), and the
+# `no marker -> human` default means ANY unmarked text below the turn-end stamp is attributed to
+# the human. A crash mid-write, a new sibling skill, or a refactor of write-turn.ps1 that drops
+# its stamp all produce text this reader would otherwise read as consent.
+#
+# The boundary is enforced HERE, in the reader, not by asking every writer to remember to stamp
+# itself. A writer that forgets its marker fails closed (its text is `unknown`, which is not the
+# human), which is the requirement a convention cannot give.
+
+function Get-AuthorSegments([string]$region) {
+  # Split a region into (author, text) segments by provenance marker.
+  #
+  # Attribution is POSITIONAL, not per-entry: a marker owns the text that FOLLOWS it, up to the
+  # next marker. Text before the first marker has no attribution and is reported as 'unknown'.
+  #
+  # Positional beats per-`## ` entry here because a single heading block can legitimately hold
+  # two authors (the agent answering inline under a user's heading). Judging the whole block by
+  # "does it contain a human marker anywhere" would let agent-authored text inherit the human's
+  # provenance, which is precisely the hole being closed.
+  if ($null -eq $region) { return @() }
+  $segments = @()
+  $marks = [regex]::Matches($region, $script:ProvenanceRe)
+  if ($marks.Count -eq 0) {
+    if ($region.Trim().Length -gt 0) {
+      $segments += [pscustomobject]@{ Author = 'unknown'; Text = $region }
+    }
+    return $segments
+  }
+
+  $preamble = $region.Substring(0, $marks[0].Index)
+  if ($preamble.Trim().Length -gt 0) {
+    $segments += [pscustomobject]@{ Author = 'unknown'; Text = $preamble }
+  }
+  for ($i = 0; $i -lt $marks.Count; $i++) {
+    $start = $marks[$i].Index + $marks[$i].Length
+    $end = if ($i + 1 -lt $marks.Count) { $marks[$i + 1].Index } else { $region.Length }
+    $text = $region.Substring($start, $end - $start)
+    $segments += [pscustomobject]@{ Author = $marks[$i].Groups[1].Value.Trim(); Text = $text }
+  }
+  return $segments
+}
+
+function Get-ConsentFacts([string]$trailing) {
+  # Verdict on whether the trailing region carries HUMAN consent, plus the evidence for it.
+  #
+  # `consent_ok` is true only when an affirmative phrase sits inside a segment positively
+  # attributed to the human. Everything else -- unmarked prose, a sibling skill's turn, the
+  # agent's own text, an empty region -- is NOT consent.
+  #
+  # `affirmative_unattributed` is the smoking gun the issue is about: an approval word that
+  # exists but cannot be attributed to the human. It is surfaced rather than silently dropped
+  # so a run can tell "nobody approved" apart from "something approved and it wasn't provably
+  # you" -- the second is worth reporting, the first is just a quiet task.
+  $result = [ordered]@{
+    consent_ok               = $false
+    human_segments           = 0
+    affirmative_phrase       = $null
+    affirmative_author       = $null
+    affirmative_unattributed = $false
+    reason                   = 'no-trailing-content'
+  }
+  if ([string]::IsNullOrWhiteSpace($trailing)) { return [pscustomobject]$result }
+
+  $segments = @(Get-AuthorSegments $trailing)
+  $result.human_segments = @($segments | Where-Object { $_.Author -eq $script:HumanAuthor }).Count
+
+  foreach ($seg in $segments) {
+    $m = [regex]::Match($seg.Text, $script:ConsentAffirmRe)
+    if (-not $m.Success) { continue }
+    if ($seg.Author -eq $script:HumanAuthor) {
+      $result.consent_ok = $true
+      $result.affirmative_phrase = $m.Value
+      $result.affirmative_author = $seg.Author
+      $result.reason = 'human-authored-affirmative'
+      return [pscustomobject]$result
+    }
+    # Remember the first non-human affirmative, but keep scanning: a later segment may be the
+    # genuine human approval, and finding one must win over having seen a machine one first.
+    if (-not $result.affirmative_unattributed) {
+      $result.affirmative_unattributed = $true
+      $result.affirmative_phrase = $m.Value
+      $result.affirmative_author = $seg.Author
+    }
+  }
+
+  $result.reason = if ($result.affirmative_unattributed) {
+    'affirmative-not-attributable-to-human'
+  }
+  elseif ($result.human_segments -gt 0) { 'human-spoke-but-no-affirmative' }
+  else { 'no-human-authored-content' }
+  return [pscustomobject]$result
+}
+
+function Test-TrailingHasConsent([string]$trailing) {
+  return [bool](Get-ConsentFacts $trailing).consent_ok
+}
+
 function Parse-LegacyOaState([string]$content) {
   # Read the LAST in-journal oa-state JSON, if any, to bootstrap status on migration.
   $m = [regex]::Matches($content, 'oa-state\s*\r?\n\s*(\{.*?\})\s*\r?\n\s*-->', 'Singleline')
@@ -420,6 +565,8 @@ function Get-JournalFacts([string]$path) {
     FullHash        = Get-Sha256 $content
     AgentLeftHash   = Get-Sha256 $agentLeft     # file as the agent last left it (no trailing user prose)
     HasTrailingUser = (Test-TrailingHasUser $trailing)
+    Consent         = (Get-ConsentFacts $trailing)   # #227: fail-CLOSED authorship verdict
+    Trailing        = $trailing
     Legacy          = Parse-LegacyOaState $content
   }
 }
@@ -643,6 +790,11 @@ function Cmd-Scan {
       due_recheck   = [bool]((Test-PollDue $recheck) -and -not $isSnoozed)
       recheck_cadence = if ($recheck) { "$($recheck.cadence)" } else { $null }
       recheck_kind  = if ($recheck) { "$($recheck.kind)" } else { $null }
+      # #227: does the trailing region carry consent the HUMAN provably authored? Distinct from
+      # `reopened`, which counts unmarked prose as the user on purpose. Never infer approval for
+      # an irreversible action from `reopened` -- read this instead.
+      consent_ok    = [bool]$facts.Consent.consent_ok
+      consent_reason = "$($facts.Consent.reason)"
     }
   }
   $rows | ConvertTo-Json -Depth 4
@@ -653,6 +805,38 @@ function Cmd-Get {
   $st = Read-State $Id
   if (-not $st) { Write-Output "{}"; return }
   $st | ConvertTo-Json -Depth 6
+}
+
+function Cmd-Consent {
+  # #227: the consent channel, read fail-CLOSED. Ask this BEFORE any irreversible action.
+  #
+  # Deliberately a separate command rather than a field on `get`: consent is a property of the
+  # journal as it stands RIGHT NOW, not of the stored state. Reading it from state would let a
+  # stale `status: approved` -- which the agent itself wrote -- stand in for the user's word,
+  # which is the same self-authored-consent hole one level up.
+  if (-not $Id) { throw 'consent requires -Id' }
+  $path = Join-Path $JournalDir "task-$Id.md"
+  if (-not (Test-Path $path)) {
+    [pscustomobject]@{
+      id = $Id; consent_ok = $false; reason = 'journal-not-found'; path = $path
+    } | ConvertTo-Json -Depth 4
+    return
+  }
+  $facts = Get-JournalFacts $path
+  $c = $facts.Consent
+  [pscustomobject]@{
+    id                       = $facts.Id
+    consent_ok               = [bool]$c.consent_ok
+    reason                   = "$($c.reason)"
+    human_segments           = [int]$c.human_segments
+    affirmative_phrase       = $c.affirmative_phrase
+    affirmative_author       = $c.affirmative_author
+    affirmative_unattributed = [bool]$c.affirmative_unattributed
+    # `reopened` uses the opposite default on purpose; both are reported so the difference is
+    # visible at the call site instead of being a footnote in a comment.
+    trailing_has_user        = [bool]$facts.HasTrailingUser
+    path                     = $facts.Path
+  } | ConvertTo-Json -Depth 4
 }
 
 function Add-TurnTerminator([string]$path) {
@@ -806,4 +990,5 @@ switch ($Command) {
   'get' { Cmd-Get }
   'mark' { Cmd-Mark }
   'resnapshot' { Cmd-Resnapshot }
+  'consent' { Cmd-Consent }
 }
