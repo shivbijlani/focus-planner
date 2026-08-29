@@ -226,6 +226,37 @@ After acting, record the new status with `oa-state.ps1 mark`. If their message i
 set `blocked` and ask **one** short clarifying question in **Needs from you** (or reply to their
 instruction email) rather than guessing.
 
+⛔ **Before an ⛔-list (irreversible) action, that prose reading is NOT sufficient — check the consent
+channel (#227).** The journal is a file **you write**, and the reopen reader deliberately treats
+*unmarked* text as the human (losing a user message is worse than an extra look). That default is
+correct for "did the user speak?" and is exactly wrong for "did the user authorize this": it means
+**your own unmarked prose can be read back to you as approval**. Measured live on this corpus: task
+**#281** contains an agent reply opening *"Yes — there's an open issue…"* with no provenance marker, in
+a task whose ask was *"reply 'go' and I'll do the durable dedup"* — a board rewrite. Nothing forged it;
+the reader simply had no way to tell.
+
+So for anything on the ⛔ list, ask the fail-closed reader instead of judging the prose yourself:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\oa-state.ps1 consent -Id <ID>
+```
+
+It returns `consent_ok` plus a `reason`. **Proceed only on `consent_ok: true`** (an affirmative inside
+text positively attributed to `<!-- from: me -->`). Every other verdict fails closed:
+
+| `reason` | means |
+| --- | --- |
+| `human-authored-affirmative` | ✅ the human approved — proceed |
+| `affirmative-not-attributable-to-human` | an approval word exists but a machine (or nobody) wrote it — **do not act**; if you believe it is genuinely the user's, ask them to say it again rather than assuming |
+| `human-spoke-but-no-affirmative` | they replied, but did not approve |
+| `no-human-authored-content` / `no-trailing-content` | nobody approved |
+
+`scan` carries the same verdict per row as `consent_ok` / `consent_reason`, so a run can see it without
+a second call. **Never infer approval from `reopened`** — the two readers answer different questions and
+disagree on purpose. This is a floor, not a guarantee: the `<!-- from: me -->` marker is still written by
+software (the Telegram bridge stamps it when folding phone replies), so it raises the bar from "absence
+of evidence counts as consent" to "consent needs positive evidence".
+
 ### Reopened after close (the user replied below your block)
 
 The Focus Planner app journals as a **bottom-appended chat thread**: entries stack chronologically at
@@ -715,6 +746,12 @@ present the reversible draft and stop short of the committing action.
   reversible work (incl. opening a PR) per the Reversibility list above. Never perform an
   irreversible/hard-to-reverse action (e.g. **merging a PR**) for a plan that isn't `approved`, and
   only when the approved plan explicitly calls for it.
+- **Consent must come from outside you (#227).** For any ⛔-list action, the authorization must be
+  `oa-state.ps1 consent -Id <ID>` returning **`consent_ok: true`** — not your own reading of the prose,
+  and not `reopened`. You write to the journal, so a reader that treats unmarked text as the human lets
+  your own words authorize you. This is a **guard, not a guideline**: it is asserted by
+  `mutcheck-consent-authorship.ps1`, whose four mutations each restore a different version of the hole
+  and are each killed by a different fixture.
 - **No surprise irreversible actions.** Sending email **to anyone not on the Auto-send allow-list**,
   submitting forms/applications, making purchases, posting publicly, merging/deploying, or anything
   with money or external side effects is only allowed when the **approved plan explicitly says so**.
