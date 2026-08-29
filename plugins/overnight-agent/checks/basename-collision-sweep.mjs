@@ -63,10 +63,38 @@ const PREFIX = 'plugins/overnight-agent';
 // (g3) -- see the header.
 const DEPLOYABLE = new Set(['.ps1', '.mjs', '.js']);
 
+// Locate the repo. This sweep runs from two places -- the repo checkout and the flat OA
+// home (%LOCALAPPDATA%\overnight-agent), which is not a git repo at all -- so "walk up from
+// me" alone is wrong in exactly the same way the hard-coded paths this sweep exists to
+// police are wrong. Order: explicit env, then walk up for a .git, then the known checkout.
+// The candidate must actually contain plugins/overnight-agent, so a wrong guess fails loudly
+// here rather than reporting a clean tree it never read.
+function hasPrefix(root) {
+  return !!root && fs.existsSync(path.join(root, PREFIX.split('/').join(path.sep)));
+}
+
+function walkUpForRepo(start) {
+  let dir = start;
+  for (let i = 0; i < 8; i += 1) {
+    if (fs.existsSync(path.join(dir, '.git')) && hasPrefix(dir)) return dir;
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return null;
+}
+
 function repoRoot() {
-  if (process.env.OA_REPO) return process.env.OA_REPO;
-  // checks/ -> overnight-agent/ -> plugins/ -> repo root
-  return path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..', '..');
+  const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+  const candidates = [
+    process.env.OA_REPO,
+    walkUpForRepo(here),
+    'V:\\repos\\focus-planner',
+  ];
+  for (const c of candidates) {
+    if (hasPrefix(c)) return c;
+  }
+  return null;
 }
 
 function trackedFiles(root) {
@@ -88,6 +116,10 @@ function normalised(root, rel) {
 
 function main() {
   const root = repoRoot();
+  if (!root) {
+    console.error(`[basename-collision] cannot locate a checkout containing ${PREFIX}/. Set OA_REPO.`);
+    process.exit(1);
+  }
   let files;
   try {
     files = trackedFiles(root);
