@@ -85,6 +85,38 @@ function Add-AmbiguousName {
   } finally { Pop-Location }
 }
 
+function Add-Roster {
+  <#
+    Gives the fixture a run-sweeps.ps1 carrying a `$Suite` literal, plus the files that
+    literal implies. This is what the forward direction reads, so without it the
+    required set is empty and no MISSING can exist.
+
+      newsweep.mjs        rostered, imports ./lib-helper.mjs
+      lib-helper.mjs      NOT rostered - only reachable through the import closure.
+                          This is the postmortem-reviewer -> lib-postmortem shape: a
+                          roster can never name it, and shipping the entry point alone
+                          produces a file that dies on its first import.
+      diagnostic-tool.mjs neither rostered nor imported - the over-deploy control. #>
+  param([string]$Repo)
+  $chk = Join-Path $Repo 'plugins\overnight-agent\checks'
+  $roster = @"
+# synthetic roster
+`$Suite = @(
+  @{ n = 'newsweep'; bridge = `$false }
+)
+"@
+  Set-Content -LiteralPath (Join-Path $chk 'run-sweeps.ps1') -Value $roster -Encoding utf8
+  Set-Content -LiteralPath (Join-Path $chk 'newsweep.mjs') -Value "import { helper } from './lib-helper.mjs';`nhelper();" -NoNewline -Encoding utf8
+  Set-Content -LiteralPath (Join-Path $chk 'lib-helper.mjs') -Value "export function helper() { return 1; }" -NoNewline -Encoding utf8
+  Set-Content -LiteralPath (Join-Path $chk 'diagnostic-tool.mjs') -Value "// one-off, not a standing check" -NoNewline -Encoding utf8
+  Push-Location $Repo
+  try {
+    & git add -A 2>&1 | Out-Null
+    & git commit --quiet -m 'roster' 2>&1 | Out-Null
+    & git branch -f main HEAD 2>&1 | Out-Null
+  } finally { Pop-Location }
+}
+
 function Invoke-Subject {
   param([string]$ScriptPath, $Fx, [switch]$WhatIf)
   $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath,
@@ -168,6 +200,49 @@ $r = Invoke-Subject $Script $fx -WhatIf
 $after = Get-Content (Join-Path $fx.Home 'probe.ps1') -Raw
 Assert ($after -match 'v1') 'T_WHATIF' '-WhatIf leaves the file alone'
 
+# --- THE FORWARD DIRECTION (GH #254) -------------------------------------------------
+# Everything above starts from a file that is already on the machine. These start from a
+# file that is NOT - the case that was invisible by construction, because a classifier
+# that enumerates the home can only ever classify what the home already contains.
+$fxF = New-Fixture 'forward'
+Add-Roster $fxF.Repo
+$rF = Invoke-Subject $Script $fxF
+
+Assert ((Get-Class $rF 'newsweep.mjs') -eq 'MISSING') 'T_MISSING' 'a rostered file absent from the home is MISSING'
+Assert (Test-Path (Join-Path $fxF.Home 'newsweep.mjs')) 'T_MISSING_WRITE' 'and is actually deployed'
+
+# The library no roster would name. Deploying the entry point without it turns a silent
+# MISSING into a loud CRASH, which is not a fix.
+Assert ((Get-Class $rF 'lib-helper.mjs') -eq 'MISSING') 'T_CLOSURE' 'an imported-but-unrostered dependency is pulled in'
+Assert (Test-Path (Join-Path $fxF.Home 'lib-helper.mjs')) 'T_CLOSURE_WRITE' 'and is deployed alongside its importer'
+
+# The other half of the rule. #254 is explicit that deploying everything is its own
+# failure, so a repo file that is neither rostered nor reachable must stay put.
+Assert (-not (Test-Path (Join-Path $fxF.Home 'diagnostic-tool.mjs'))) 'T_NO_OVERDEPLOY' 'an unrostered one-off is NOT deployed'
+Assert ((Get-Class $rF 'diagnostic-tool.mjs') -eq '<absent>') 'T_NO_OVERDEPLOY_QUIET' 'and generates no noise'
+
+# ENTRY: run-sweeps.ps1 is named directly, so it deploys even though nothing imports it.
+Assert ((Get-Class $rF 'run-sweeps.ps1') -eq 'MISSING') 'T_ENTRY' 'a named entry point is required even when unreferenced'
+
+# --- T_MISSING_AMBIGUOUS: required, but the basename maps to two repo paths ----------
+# A flat home cannot say which path was meant. Same answer as for a live file: refuse.
+$fxA = New-Fixture 'forward-ambiguous'
+Add-Roster $fxA.Repo
+Add-AmbiguousName $fxA.Repo 'newsweep.mjs'
+$rA = Invoke-Subject $Script $fxA
+Assert ((Get-Class $rA 'newsweep.mjs') -eq 'MISSING-AMBIGUOUS') 'T_MISSING_AMBIGUOUS' 'a required file with an ambiguous basename is refused'
+Assert (-not (Test-Path (Join-Path $fxA.Home 'newsweep.mjs'))) 'T_MISSING_AMBIGUOUS_NOWRITE' 'and nothing is guessed onto the machine'
+
+# --- T_FORWARD_VERIFIED: the claim that was true-but-wrong ---------------------------
+# Before #254 a run with a merged-but-absent file printed `verified-current True`,
+# because every file it looked at was fine. Under -WhatIf nothing is written, so the
+# pending work must be what makes the claim false.
+$fxV = New-Fixture 'forward-verified'
+Add-Roster $fxV.Repo
+$rV = Invoke-Subject $Script $fxV -WhatIf
+Assert ($rV.Json.verifiedCurrent -eq $false) 'T_FORWARD_VERIFIED' 'verified-current is False while a required file is absent'
+Assert (-not (Test-Path (Join-Path $fxV.Home 'newsweep.mjs'))) 'T_FORWARD_WHATIF' 'and -WhatIf still writes nothing'
+
 Write-Host ''
 Write-Host '[mutants] each must FLIP the case it protects'
 
@@ -230,6 +305,61 @@ Add-AmbiguousName $fx.Repo 'dupe.ps1'
 Set-Content -LiteralPath (Join-Path $fx.Home 'dupe.ps1') -Value "# something else" -NoNewline -Encoding utf8
 $r = Invoke-Subject $m4 $fx
 Assert ((Get-Class $r 'dupe.ps1') -ne 'AMBIGUOUS') 'M4' 'without the guard, an ambiguous basename is acted on'
+
+# --- mutants for the forward direction (GH #254) -------------------------------------
+
+# M5 - blind the roster read. The required set collapses to the entry points, so a
+#      merged-and-rostered sweep is invisible again: no MISSING, no refusal, no count.
+#      This restores the exact bug - `verified-current True` over a guard that has never
+#      executed once.
+$m5find = @'
+  $text = Get-RefText $Sha $RosterPath
+  if (-not $text) { return @() }
+'@
+$m5repl = @'
+  $text = Get-RefText $Sha $RosterPath
+  return @()
+'@
+$m5 = New-Mutant 'M5' $m5find.TrimEnd("`r","`n") $m5repl.TrimEnd("`r","`n")
+$fx = New-Fixture 'm5'
+Add-Roster $fx.Repo
+$r = Invoke-Subject $m5 $fx
+Assert ((Get-Class $r 'newsweep.mjs') -ne 'MISSING') 'M5' 'without the roster, a merged sweep is invisible again'
+
+# M6 - keep the roster, delete the import closure. The entry point still deploys, so the
+#      run looks fixed, but its dependency does not - converting a silent MISSING into a
+#      crash on first import. This is why the closure is not belt-and-braces.
+$m6 = New-Mutant 'M6' '      [void]$required.Add($dep)' '      if ($false) { [void]$required.Add($dep) }'
+$fx = New-Fixture 'm6'
+Add-Roster $fx.Repo
+$r = Invoke-Subject $m6 $fx
+Assert ((Get-Class $r 'newsweep.mjs') -eq 'MISSING') 'M6_ENTRY_STILL_OK' 'the entry point still deploys (so this mutant is narrow)'
+Assert (-not (Test-Path (Join-Path $fx.Home 'lib-helper.mjs'))) 'M6' 'without the closure, the importer ships without its library'
+
+# M7 - drop the ambiguity refusal on the forward path only. The tool now guesses which
+#      of two repo paths a required basename meant, and writes it.
+$m7find = @'
+    if ($paths.Count -gt 1) {
+      # Same reasoning as AMBIGUOUS above: a flat home cannot say which path was meant.
+'@
+$m7repl = @'
+    if ($false) {
+'@
+$m7 = New-Mutant 'M7' $m7find.TrimEnd("`r","`n") $m7repl.TrimEnd("`r","`n")
+$fx = New-Fixture 'm7'
+Add-Roster $fx.Repo
+Add-AmbiguousName $fx.Repo 'newsweep.mjs'
+$r = Invoke-Subject $m7 $fx
+Assert ((Get-Class $r 'newsweep.mjs') -ne 'MISSING-AMBIGUOUS') 'M7' 'without the guard, an ambiguous required file is guessed at'
+
+# M8 - restore the old verified-current arithmetic. Nothing was written under -WhatIf, so
+#      residual is 0, so the line reads True while a required file is absent. Every
+#      number in it is correct and the conclusion is wrong - #254 in one sentence.
+$m8 = New-Mutant 'M8' '$pending = if ($WhatIf) { $toWrite.Count } else { 0 }' '$pending = 0'
+$fx = New-Fixture 'm8'
+Add-Roster $fx.Repo
+$r = Invoke-Subject $m8 $fx -WhatIf
+Assert ($r.Json.verifiedCurrent -ne $false) 'M8' 'without the pending term, a missing file still reports verified-current True'
 
 Write-Host ''
 Write-Host ("[mutcheck-sync-oa-home] {0} passed, {1} failed" -f $script:pass, $script:fail)
