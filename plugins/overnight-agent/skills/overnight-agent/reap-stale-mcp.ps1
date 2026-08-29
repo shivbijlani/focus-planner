@@ -23,14 +23,30 @@
   Safety model -- this only ever kills a process that satisfies ALL of:
     1. Its image name is in -ProcessNames (node.exe / uv.exe / python.exe by default).
     2. Its command line matches a known MCP server pattern (-Patterns).
-    3. It has been running longer than -MinAgeMinutes (default 45).
-    4. It is not in the current tool-shell's own ancestor/descendant tree. The upward walk stops at
-       the session host (copilot.exe / github.exe) -- see Get-ProtectedPidSet. It must not climb
-       past it: one copilot.exe hosts many successive runs, so protecting its whole descendant tree
-       would protect every run's servers and make this script a permanent no-op.
+    3. NO LIVE OWNING SESSION remains in its ancestor chain -- see Test-HasLiveOwner. This is the
+       real protection: age says "old", it does not say "abandoned".
+    4. It has been running longer than -MinAgeMinutes (default 20) -- a secondary floor, not the
+       safety mechanism.
+    5. It is not in the current tool-shell's own ancestor/descendant tree (Get-ProtectedPidSet).
 
-  The age gate is the important one, and it must be sized against *when this script runs*, not
-  against the schedule interval.
+  THE PREMISE THIS FILE USED TO STATE IS FALSE, AND IT COST WEEKS (GH #178).
+  Every version of this docstring before 2026-08-28 asserted that "one copilot.exe hosts many
+  successive runs, so protecting its whole descendant tree would protect every run's servers and
+  make this script a permanent no-op". That sentence rules the correct fix out, so ownership was
+  never attempted and the age gate stayed as the only guard. It had never been measured. It is
+  wrong: EACH SESSION HAS ITS OWN copilot.exe, with its MCP servers as direct children --
+
+      copilot.exe 12708 (21:42) -> 4 MCP children
+      copilot.exe  6236 (19:54) -> 3 MCP children
+
+  One Get-CimInstance settled it. So "orphan" has an exact meaning (no live owner remains), and
+  the ownership veto is both possible and cheap. Measured the same night, dry-run, veto off vs on:
+  age-only would have killed 9 servers / 621 MB, all aged 24 min, ALL of them in use by live
+  sessions -- including the session doing the measuring. A slot dying mid-run leaves no log trace,
+  which is why this was never attributed to the reaper.
+
+  Do not restore the old reasoning. If a future change needs the age gate to be load-bearing
+  again, measure the premise first.
 
   The original default of 45 minutes was chosen to be longer than the 30-minute schedule so that
   neither the current run's servers nor "those of the run immediately before it" were candidates.
@@ -58,15 +74,16 @@
 .PARAMETER MinAgeMinutes
   Minimum process age, in minutes, before a matching process is considered stale. Default 20.
 
-  This is the only thing protecting the *currently executing* run's own MCP servers: they are
-  siblings of this script (both hang off the same copilot.exe), not descendants of it, so the
-  ancestor/descendant pass cannot single them out.
+  This is a SECONDARY FLOOR, not the protection. The ownership veto (Test-HasLiveOwner) is what
+  keeps a concurrent session's servers alive, at any age. Before that veto existed this gate was
+  the only guard, and it was structurally too small: it sits below the real runtime of at least
+  one scheduled workflow, so overlapping runs killed each other's tools (GH #200).
 
   Size it against how old the current run's servers are when this script executes -- which, when the
   script is run first as intended, is 0-2 minutes -- NOT against the schedule interval. Do not raise
   it above the interval "to be safe": that is what caused the leak documented above. Passing a very
-  low value (e.g. -MinAgeMinutes 1) will reap the live run's servers; if you ever invoke this script
-  mid-run rather than at the start, raise it to comfortably exceed the elapsed run time instead.
+  low value (e.g. -MinAgeMinutes 1) still cannot reap a live run's servers while the veto is on,
+  because their owner is alive; with -IgnoreOwnership it can, so pair that flag with a sane age.
 
 .PARAMETER ProcessNames
   Image names to scan. Defaults to node.exe (npx-launched servers) plus uv.exe / python.exe
@@ -151,15 +168,16 @@ function Get-ProtectedPidSet {
     # can reach services.exe or the System process on some hosts; the descendant pass below would
     # then mark literally every process on the box as protected and the reaper would be a no-op.
     #
-    # copilot.exe / github.exe are the *session host* boundary and are the important entries here.
-    # A single long-lived copilot.exe hosts many successive agent runs, and every run's MCP servers
-    # are spawned as its descendants (copilot.exe -> cmd.exe -> npx node -> cmd.exe -> node MCP).
-    # Measured on 2026-08-22: the 03:30 run's 8 servers and the 04:03 run's servers shared one
-    # copilot.exe (PID 12940), which itself hangs off a single github.exe shared by *every* Copilot
-    # session on the box. Climbing above copilot.exe therefore marks all 20 matched MCP processes
-    # protected, so `matched: 20` collapsed to `stale: 0` at every age gate -- the reaper could
-    # never fire. Stopping here leaves only the current tool-shell subtree protected; the current
-    # run's own servers stay safe via -MinAgeMinutes, which is what that gate is for.
+    # copilot.exe / github.exe are the *session host* boundary. Stopping here keeps this pass scoped
+    # to the current tool-shell subtree; without a stop-list the walk can reach services.exe or the
+    # System process on some hosts, and the descendant pass below would then mark every process on
+    # the box as protected, making the reaper a no-op.
+    #
+    # NOTE: this pass is NOT what protects the current run's own MCP servers. They are siblings of
+    # this script rather than descendants of it, so it cannot single them out. They are protected by
+    # the ownership veto (Test-HasLiveOwner), which spares any candidate whose owning session is
+    # still alive -- this run's owner included. See the header for why the old "one copilot.exe
+    # hosts every run" claim was false and what it cost.
     $stopAt = @('services.exe', 'wininit.exe', 'winlogon.exe', 'svchost.exe', 'system', 'smss.exe', 'csrss.exe', 'explorer.exe', 'copilot.exe', 'github.exe')
 
     $ancestors = [System.Collections.Generic.HashSet[int]]::new()
