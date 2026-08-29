@@ -24,10 +24,33 @@
     1. Its image name is in -ProcessNames (node.exe / uv.exe / python.exe by default).
     2. Its command line matches a known MCP server pattern (-Patterns).
     3. NO LIVE OWNING SESSION remains in its ancestor chain -- see Test-HasLiveOwner. This is the
-       real protection: age says "old", it does not say "abandoned".
+       real protection: age says "old", it does not say "abandoned". An owner counts as live only
+       while it is ACTIVE; one that is resident but silent past -OwnerIdleMinutes does not veto.
     4. It has been running longer than -MinAgeMinutes (default 20) -- a secondary floor, not the
        safety mechanism.
     5. It is not in the current tool-shell's own ancestor/descendant tree (Get-ProtectedPidSet).
+
+  PRESENCE IS NOT LIVENESS -- THE VETO NEEDED A SECOND HALF (GH #200, criterion 5).
+  The ownership veto in (3) fixed the reaper killing servers a live run still needed. But it asked
+  only "does the owner process still exist?", and a WEDGED session exists forever while doing
+  nothing. Its servers were therefore permanently unreapable: the guard against over-collection had
+  become a guarantee of under-collection, which is the same leak in the opposite direction.
+
+  The signal that separates the two is activity, and the session already emits it -- it appends to
+  ~\.copilot\logs\process-<epoch>-<pid>.log while it works. Measured on 2026-08-28:
+
+      copilot.exe 6236  age 165 min, last wrote   3 min ago  <- 11 MCP children, working
+      copilot.exe 11664 age 307 min, last wrote 307 min ago  <- wedged, silent since start
+      copilot.exe 12848 age 305 min, last wrote 305 min ago  <- wedged, silent since start
+
+  Idle time separates working from wedged cleanly and does NOT track run length, so a long run is
+  never mistaken for a stuck one. Verified end to end against the live box: at the shipped default
+  behaviour is byte-identical to before (19 spared, 0 reaped); forcing -OwnerIdleMinutes 1 makes the
+  same 19 servers / 1403 MB collectable and attributes them to reapedWedgedOwner, so the check is a
+  decision rather than a constant. -OwnerIdleMinutes 0 restores pure presence-based ownership.
+
+  The failure direction is one-way on purpose: an owner whose activity cannot be determined still
+  vetoes. Missing evidence can only spare a server, never kill one.
 
   THE PREMISE THIS FILE USED TO STATE IS FALSE, AND IT COST WEEKS (GH #178).
   Every version of this docstring before 2026-08-28 asserted that "one copilot.exe hosts many
@@ -96,11 +119,21 @@
   because uv puts the entry point in the child's own command line, e.g.
   `...\python.exe "...\Scripts\better-telegram-mcp.exe"`.
 
+.PARAMETER OwnerIdleMinutes
+  How long an owning session may be silent before it stops counting as live (default 240).
+  Set 0 to disable the activity check and revert to pure presence-based ownership.
+
+.PARAMETER SessionLogDir
+  Where session logs live (default ~\.copilot\logs). Overridable so the wedged-owner behaviour
+  is testable without a real profile.
+
 .PARAMETER DryRun
   Report what would be killed without killing anything.
 
 .OUTPUTS
-  A single JSON line: { scanned, matched, stale, killed, failed, freedMB, dryRun, details }
+  A single JSON line:
+  { scanned, matched, stale, killed, failed, sparedLiveOwner, reapedWedgedOwner, freedMB,
+    dryRun, minAgeMinutes, ownerIdleMinutes, ownershipVeto, details }
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File reap-stale-mcp.ps1 -DryRun
@@ -121,6 +154,23 @@ param(
     # A candidate whose owning session process is STILL ALIVE is never reaped, at any age.
     # These are the process names that count as "a session that owns MCP servers". GH #178.
     [string[]] $OwnerNames = @('copilot.exe'),
+    # How long an owning session may be SILENT before it stops counting as live. GH #200 (5).
+    #
+    # The ownership veto asks "is the owner process still resident?". That is necessary but not
+    # sufficient: a wedged session is resident forever while doing nothing, so its servers become
+    # permanently unreapable and the veto turns into the leak it was meant to prevent. Liveness
+    # therefore needs an ACTIVITY signal, not just a presence one -- and the session already emits
+    # one, because it appends to ~\.copilot\logs\process-<epoch>-<pid>.log while it works.
+    #
+    # Measured on this box: a session 165 minutes into real work had written to its log 3 minutes
+    # ago, while two wedged hosts had not written for 306 minutes -- i.e. idle time separates
+    # working from wedged cleanly, and it does NOT track run length. The default is deliberately
+    # far above any observed working gap (the longest recorded run is ~139 min, and even that logs
+    # continuously) so no busy session can be caught; it exists to collect hosts that have been
+    # silent for hours. Set 0 to disable and restore pure presence-based ownership.
+    [int] $OwnerIdleMinutes = 240,
+    # Where session logs live. Overridable so the behaviour is testable without a real profile.
+    [string] $SessionLogDir = (Join-Path $env:USERPROFILE '.copilot\logs'),
     # Escape hatch: fall back to the old age-only behaviour. Exists so the ownership veto can
     # be switched off in one flag if it ever mis-protects, rather than by editing the script
     # under pressure. It is NOT the default, because age-only is the defect.
@@ -215,17 +265,60 @@ function Get-ProtectedPidSet {
     return $protected
 }
 
+function Get-SessionActivityMap {
+    <#
+      pid -> last write time of that session's log, for every process-<epoch>-<pid>.log present.
+
+      This is the activity signal behind the wedged-owner check (GH #200, criterion 5). A session
+      appends to its log while it works, so the file's mtime answers "is this host doing anything?"
+      -- which process presence alone cannot.
+
+      Deliberately fail-safe: any error here yields an EMPTY map, and an owner missing from the map
+      is treated as active by Test-HasLiveOwner. So a log that is absent, renamed, locked or on a
+      host that names them differently can only ever SPARE a server, never cause a kill.
+    #>
+    param([string] $LogDir)
+
+    $map = @{}
+    if ([string]::IsNullOrWhiteSpace($LogDir)) { return $map }
+    if (-not (Test-Path -LiteralPath $LogDir)) { return $map }
+
+    try {
+        Get-ChildItem -LiteralPath $LogDir -Filter 'process-*.log' -File -ErrorAction Stop |
+            ForEach-Object {
+                # process-<epoch>-<pid>.log -- the trailing group is the owning process id.
+                if ($_.Name -match '-(\d+)\.log$') {
+                    $logPid = [int]$Matches[1]
+                    # Keep the most recent write when a pid has been reused across sessions.
+                    if (-not $map.ContainsKey($logPid) -or $map[$logPid] -lt $_.LastWriteTime) {
+                        $map[$logPid] = $_.LastWriteTime
+                    }
+                }
+            }
+    }
+    catch { return @{} }
+
+    return $map
+}
+
 function Get-ProcessTable {
     # One WMI pass, reused by both the protected-set walk and the ownership check, so the two
     # can never disagree about what was running at this instant.
+    param([hashtable] $ActivityMap = @{})
+
     $table = @{}
     Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, Name, CreationDate |
         ForEach-Object {
-            $table[[int]$_.ProcessId] = [pscustomobject]@{
-                Pid     = [int]$_.ProcessId
-                Parent  = [int]$_.ParentProcessId
-                Name    = [string]$_.Name
-                Started = ConvertTo-ProcessStartTime $_.CreationDate
+            $procId = [int]$_.ProcessId
+            # Set on every node (null when unknown) so Set-StrictMode never trips on the lookup.
+            $activity = $null
+            if ($ActivityMap.ContainsKey($procId)) { $activity = $ActivityMap[$procId] }
+            $table[$procId] = [pscustomobject]@{
+                Pid          = $procId
+                Parent       = [int]$_.ParentProcessId
+                Name         = [string]$_.Name
+                Started      = ConvertTo-ProcessStartTime $_.CreationDate
+                LastActivity = $activity
             }
         }
     return $table
@@ -259,12 +352,27 @@ function Test-HasLiveOwner {
         recycled PID resurrect a dead owner and protect a genuine orphan forever. A parent only
         counts if it started NO LATER than its child; otherwise the real parent is gone and the
         chain is treated as orphaned.
+
+      PRESENCE IS NOT LIVENESS (GH #200, criterion 5)
+        "Owner process exists" and "owner session is doing something" are different claims, and
+        only the second one justifies keeping a server alive. A wedged host -- resident, idle for
+        hours, heartbeat only -- satisfies the first forever, which makes its servers permanently
+        unreapable and turns the veto into the leak it was introduced to stop. Criterion 5 of
+        #200 names this case explicitly.
+
+        So a matching owner must ALSO be active: its session log must have been written within
+        $OwnerIdleMinutes. Direction of failure is deliberate and one-way -- an owner whose
+        activity is UNKNOWN (no log, unreadable dir, $OwnerIdleMinutes 0) still vetoes. Missing
+        evidence can therefore only spare a server, never kill one, which is the property that
+        makes this safe to ship to an unattended job.
     #>
     param(
         [hashtable] $Table,
         [int] $StartPid,
         [datetime] $ChildStarted,
-        [string[]] $OwnerNames
+        [string[]] $OwnerNames,
+        [int] $OwnerIdleMinutes = 0,
+        [datetime] $Now = (Get-Date)
     )
 
     $ownerSet = [System.Collections.Generic.HashSet[string]]::new(
@@ -286,7 +394,15 @@ function Test-HasLiveOwner {
         # PID reuse: a "parent" that started after its child is not the real parent.
         if ($node.Started -and $childAt -and $node.Started -gt $childAt) { return $false }
 
-        if ($ownerSet.Contains($node.Name.ToLowerInvariant())) { return $true }  # live owner
+        if ($ownerSet.Contains($node.Name.ToLowerInvariant())) {
+            # Owner found. It only vetoes if the session is still ACTIVE -- see PRESENCE IS NOT
+            # LIVENESS above. Unknown activity keeps the veto, so this can only remove protection
+            # from a host that is provably silent.
+            if ($OwnerIdleMinutes -gt 0 -and $node.LastActivity -is [datetime]) {
+                if (($Now - $node.LastActivity).TotalMinutes -gt $OwnerIdleMinutes) { return $false }
+            }
+            return $true
+        }
 
         if ($node.Parent -le 0 -or $node.Parent -eq $cur) { break }
         $childAt = $node.Started
@@ -296,10 +412,11 @@ function Test-HasLiveOwner {
     return $false
 }
 
-$cutoff    = (Get-Date).AddMinutes(-$MinAgeMinutes)
-$protected = Get-ProtectedPidSet
-$procTable = Get-ProcessTable
-$combined  = ($Patterns -join '|')
+$cutoff       = (Get-Date).AddMinutes(-$MinAgeMinutes)
+$protected    = Get-ProtectedPidSet
+$activityMap  = Get-SessionActivityMap -LogDir $SessionLogDir
+$procTable    = Get-ProcessTable -ActivityMap $activityMap
+$combined     = ($Patterns -join '|')
 
 $nameFilter = ($ProcessNames | ForEach-Object { "Name='$($_ -replace "'", "''")'" }) -join ' OR '
 $candidates = @(Get-CimInstance Win32_Process -Filter $nameFilter -ErrorAction SilentlyContinue)
@@ -310,6 +427,7 @@ $stale   = 0
 $killed  = 0
 $failed  = 0
 $ownedLive = 0
+$wedgedOwner = 0
 $freedKB = 0
 $details = New-Object System.Collections.ArrayList
 
@@ -331,7 +449,8 @@ foreach ($p in $candidates) {
     # Only reap when no live owning session remains. This can only ever PREVENT a kill, never
     # cause one, which is the property that makes it safe to ship to an unattended job.
     if (-not $IgnoreOwnership) {
-        if (Test-HasLiveOwner -Table $procTable -StartPid $procId -ChildStarted $started -OwnerNames $OwnerNames) {
+        $now = Get-Date
+        if (Test-HasLiveOwner -Table $procTable -StartPid $procId -ChildStarted $started -OwnerNames $OwnerNames -OwnerIdleMinutes $OwnerIdleMinutes -Now $now) {
             $ownedLive++
             [void]$details.Add([ordered]@{
                 pid    = $procId
@@ -340,6 +459,15 @@ foreach ($p in $candidates) {
                 action = 'spared-live-owner'
             })
             continue
+        }
+
+        # Reapable. Was it the wedged-owner rule that decided that? Re-ask with the activity
+        # check switched off: if presence alone WOULD have spared it, the owner is resident but
+        # silent -- exactly GH #200 criterion 5. Counted separately so the case is observable in
+        # the JSON rather than hiding inside the ordinary orphan count.
+        if ($OwnerIdleMinutes -gt 0 -and
+            (Test-HasLiveOwner -Table $procTable -StartPid $procId -ChildStarted $started -OwnerNames $OwnerNames -OwnerIdleMinutes 0 -Now $now)) {
+            $wedgedOwner++
         }
     }
 
@@ -378,9 +506,14 @@ foreach ($p in $candidates) {
     # tools it would have taken away mid-task. Reported so the saving is observable rather
     # than asserted. GH #178.
     sparedLiveOwner = $ownedLive
+    # Of the reaped servers, how many belonged to a host that was still RESIDENT but silent for
+    # longer than -OwnerIdleMinutes. Before GH #200 these were immortal: presence alone vetoed
+    # them forever, so a wedged session's servers accumulated with nothing able to collect them.
+    reapedWedgedOwner = $wedgedOwner
     freedMB = [math]::Round($freedKB / 1KB)
     dryRun  = [bool]$DryRun
     minAgeMinutes = $MinAgeMinutes
+    ownerIdleMinutes = $OwnerIdleMinutes
     ownershipVeto = (-not [bool]$IgnoreOwnership)
     details = $details
 } | ConvertTo-Json -Depth 4 -Compress
