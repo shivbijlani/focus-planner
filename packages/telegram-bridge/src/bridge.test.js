@@ -24,6 +24,7 @@ function makeHarness(files) {
   const closed = []
   const reopened = []
   let completedBoard = ''
+  let activeBoard = ''
   let syncRecords = []
   let updatesQueue = []
 
@@ -65,6 +66,9 @@ function makeHarness(files) {
     async readCompletedBoard() {
       return completedBoard
     },
+    async readBoard() {
+      return activeBoard
+    },
     async readSyncRecords() {
       return syncRecords
     },
@@ -82,6 +86,9 @@ function makeHarness(files) {
     config,
     setCompletedBoard: (md) => {
       completedBoard = md
+    },
+    setActiveBoard: (md) => {
+      activeBoard = md
     },
     setSyncRecords: (records) => {
       syncRecords = records
@@ -406,7 +413,7 @@ describe('syncUp does not disturb tasks the user has already closed', () => {
     expect(h.sent).toHaveLength(0)
   })
 
-  it('absorbs the new hash so the stale post is not merely queued for later', async () => {
+  it('remembers the suppressed turn without recording it as posted', async () => {
     const h = makeHarness({ 42: AGENT_JOURNAL })
     h.setCompletedBoard(COMPLETED)
     const state = emptyState()
@@ -414,13 +421,37 @@ describe('syncUp does not disturb tasks the user has already closed', () => {
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     await bridge.syncUp()
-    expect(state.tasks['42'].lastPostedHash).not.toBe('stale')
+    // The declined hash is remembered separately, so re-runs stay quiet...
+    expect(state.tasks['42'].suppressedHash).toBe(hashTurn(latestAgentTurn(AGENT_JOURNAL)))
+    // ...but it is NOT passed off as delivered. Marking an unsent turn as sent
+    // is what made the loss permanent (#186): the unchanged-turn check reads
+    // `lastPostedHash` first, so an absorbed turn could never be sent later.
+    expect(state.tasks['42'].lastPostedHash).toBe('stale')
 
-    // Even if the task is later reopened, the absorbed edit must not fire.
-    h.setCompletedBoard('')
     const again = await bridge.syncUp()
     expect(again.posted).toEqual([])
+    expect(again.suppressed).toEqual(['42'])
     expect(h.sent).toHaveLength(0)
+  })
+
+  // The other half of that contract: a task that genuinely LEAVES the completed
+  // board is live again, and the turn it was owed must actually arrive.
+  it('delivers the pending turn if the task is later reopened', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    h.setCompletedBoard(COMPLETED)
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42', lastPostedHash: 'stale', archived: true }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    expect((await bridge.syncUp()).suppressed).toEqual(['42'])
+
+    // A fresh bridge = the next run, which re-reads the boards (the read is
+    // memoised for the lifetime of one run, by design).
+    h.setCompletedBoard('')
+    const next = createBridge({ client: h.client, config: h.config, state, io: h.io })
+    const again = await next.syncUp()
+    expect(again.posted).toEqual(['42'])
+    expect(h.sent).toHaveLength(1)
   })
 
   it('never creates a forum topic for a completed task', async () => {
@@ -500,6 +531,102 @@ describe('syncUp does not disturb tasks the user has already closed', () => {
 
     const res = await bridge.syncUp()
     expect(res.posted).toEqual(['42'])
+  })
+})
+
+// A row can sit on planner.md and planner-completed.md at the SAME time — the
+// planner's sync layer produces exactly that, and five live tasks were in it.
+// Treating "on the completed board" as "finished" therefore silenced tasks the
+// user was actively working, and because the guard absorbed the turn hash into
+// `lastPostedHash` the turn could never be delivered afterwards. (#186)
+describe('syncUp dual-board tasks (active board wins)', () => {
+  const COMPLETED = `| # | 🎯 | Task | WP | Date |\n|---|---|---|---|---|\n| 42 | ✅ | done | - | 2026-08-02 |\n`
+  const ACTIVE = `## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|---|---|---|---|---|---|\n| 42 | 🔴 | Demo | P0 | 2026-08-02 |  |\n`
+
+  it('posts a task listed on BOTH boards instead of suppressing it', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    h.setCompletedBoard(COMPLETED)
+    h.setActiveBoard(ACTIVE)
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncUp()
+    expect(res.posted).toEqual(['42'])
+    expect(res.suppressed).toEqual([])
+  })
+
+  it('still suppresses a task that is ONLY on the completed board (#170 holds)', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    h.setCompletedBoard(COMPLETED)
+    h.setActiveBoard(`## Today\n\n| ID | 🎯 | Task | Work Priority | Added |\n|---|---|---|---|---|\n| 99 | 🟡 | other | P2 | 2026-08-02 |\n`)
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncUp()
+    expect(res.posted).toEqual([])
+    expect(res.suppressed).toEqual(['42'])
+  })
+
+  // The permanence half of the bug: suppression used to write the declined hash
+  // into `lastPostedHash`, and the unchanged-turn check reads that field FIRST.
+  it('does not record a suppressed turn as posted', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    h.setCompletedBoard(COMPLETED)
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(state.tasks['42'].lastPostedHash).toBeFalsy()
+    expect(state.tasks['42'].suppressedHash).toBe(hashTurn(latestAgentTurn(AGENT_JOURNAL)))
+  })
+
+  it('delivers the pending turn once the task becomes eligible', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    h.setCompletedBoard(COMPLETED)
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    expect((await bridge.syncUp()).suppressed).toEqual(['42'])
+
+    // The user replies in the topic — syncDown sets this. The SAME turn, never
+    // edited since, must now go out rather than being skipped as unchanged.
+    state.tasks['42'].userEngaged = true
+    const second = await bridge.syncUp()
+    expect(second.posted).toEqual(['42'])
+    expect(state.tasks['42'].suppressedHash).toBeFalsy()
+  })
+
+  it('falls back to completed-only when the active board is empty or unreadable', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    h.setCompletedBoard(COMPLETED)
+    delete h.io.readBoard
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    expect((await bridge.syncUp()).suppressed).toEqual(['42'])
+  })
+
+  it('recover-suppressed releases only dual-board tasks whose turn was absorbed', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL, 99: AGENT_JOURNAL.replace('Task 42', 'Task 99') })
+    h.setCompletedBoard(
+      `| # | 🎯 | Task | WP | Date |\n|---|---|---|---|---|\n| 42 | ✅ | done | - | 2026-08-02 |\n| 99 | ✅ | done | - | 2026-08-02 |\n`,
+    )
+    h.setActiveBoard(ACTIVE) // only 42 is still live
+    const state = emptyState()
+    // Both look "posted" because the OLD guard absorbed their hashes.
+    state.tasks['42'] = { topicId: 7, lastPostedHash: hashTurn(latestAgentTurn(h.store['42'])) }
+    state.tasks['99'] = { topicId: 8, lastPostedHash: hashTurn(latestAgentTurn(h.store['99'])) }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.recoverSuppressed()
+    expect(res.released).toEqual(['42'])
+    expect(state.tasks['99'].lastPostedHash).toBeTruthy() // genuinely completed: untouched
+
+    // And the released turn actually reaches its EXISTING topic — no new one.
+    const up = await bridge.syncUp()
+    expect(up.posted).toEqual(['42'])
+    expect(up.created).toEqual([])
+    expect(h.sent.at(-1).messageThreadId).toBe(7)
   })
 })
 
@@ -696,6 +823,38 @@ describe('syncArchive (mirror completed board -> closed topics)', () => {
     const res = await bridge.syncArchive()
     expect(res.archived).toEqual([])
     expect(res.reopened).toEqual([])
+  })
+
+  // Closing a dual-board task's topic would collapse the thread the user is
+  // still talking in, so the same active-wins rule applies here. (#186)
+  it('leaves a dual-board task’s topic open', async () => {
+    const h = makeHarness({})
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42' }
+    h.setCompletedBoard(COMPLETED)
+    h.setActiveBoard(
+      `## Today\n\n| ID | 🎯 | Task | Work Priority | Added |\n|---|---|---|---|---|\n| 42 | 🔴 | Demo | P0 | 2026-08-02 |\n`,
+    )
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.archived).toEqual([])
+    expect(h.closed).toEqual([])
+  })
+
+  it('reopens a topic when the task returns to the active board', async () => {
+    const h = makeHarness({})
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42', archived: true }
+    h.setCompletedBoard(COMPLETED)
+    h.setActiveBoard(
+      `## Today\n\n| ID | 🎯 | Task | Work Priority | Added |\n|---|---|---|---|---|\n| 42 | 🔴 | Demo | P0 | 2026-08-02 |\n`,
+    )
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.reopened).toEqual(['42'])
+    expect(h.reopened).toEqual([7])
   })
 })
 

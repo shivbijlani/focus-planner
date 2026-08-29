@@ -28,6 +28,21 @@ export function setLastPosted(state, taskId, hash) {
   return state
 }
 
+// Remember the turn hash we DECLINED to post because the task looked finished.
+//
+// Deliberately a separate field from `lastPostedHash`: recording a suppressed
+// turn as "posted" is what made suppression permanent (#186). syncUp's
+// unchanged-turn check reads `lastPostedHash` and fires BEFORE the completed
+// guard, so a turn absorbed into that field could never be delivered later —
+// not even once the task became eligible again. Keeping the two apart means a
+// suppression is a pause, not a delete: the turn is still pending, and the day
+// the task is active or the user replies, it goes out.
+export function setSuppressedHash(state, taskId, hash) {
+  const prev = state.tasks[taskId] || {}
+  state.tasks[taskId] = { ...prev, suppressedHash: hash }
+  return state
+}
+
 // Track whether a task's forum topic is currently archived (closed). Used so
 // syncArchive only calls closeForumTopic/reopenForumTopic when the desired
 // state actually changes — making the archive pass idempotent across runs.
