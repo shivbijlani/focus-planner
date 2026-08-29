@@ -17,6 +17,7 @@ import {
   getTask,
   setTopic,
   setLastPosted,
+  setSuppressedHash,
   setArchived,
   setUserEngaged,
   setOffset,
@@ -251,12 +252,54 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     return completedIds
   }
 
+  // The set of task IDs currently on the ACTIVE board (planner.md), read at most
+  // once per run. Returns null when the board can't be read.
+  //
+  // This exists because "is on the completed board" was being used as a synonym
+  // for "is finished", and it isn't: a row can sit on BOTH boards at once. The
+  // planner's sync layer produces exactly that (`clock:0` rows are, in the
+  // board-integrity sweep's words, "primed to double-list"), and five live tasks
+  // were in that state. For them the completed guard fired on a task the user
+  // was actively working, so the mirror went silent on a live conversation.
+  //
+  // Active membership WINS: a task the user still has on their board is not
+  // finished, whatever the completed board also says.
+  let activeIds
+  async function loadActiveIds() {
+    if (activeIds !== undefined) return activeIds
+    if (typeof io.readBoard !== 'function') {
+      activeIds = null
+      return activeIds
+    }
+    try {
+      const board = parseBoardOrder(await io.readBoard())
+      // An empty board is indistinguishable from an unreadable one here, and
+      // treating "no rows" as "nothing is active" would suppress every
+      // completed-board task on a transient read failure. Fall back to null
+      // (= no active-board signal) instead.
+      activeIds = board.size > 0 ? new Set(board.keys()) : null
+    } catch (err) {
+      logger(`could not read active board (${err.message}); using completed board alone`)
+      activeIds = null
+    }
+    return activeIds
+  }
+
+  // Is this task finished, for the purposes of staying quiet? Only when the
+  // completed board lists it AND the active board does not.
+  function isFinished(completed, active, taskId) {
+    if (!completed || !completed.has(taskId)) return false
+    if (active && active.has(taskId)) return false // dual-board: still live
+    return true
+  }
+
   async function syncUp() {
     const posted = []
     const created = []
     const suppressed = []
     const journals = await io.listJournals()
     const completed = await loadCompletedIds()
+    const active = await loadActiveIds()
 
     for (const { taskId } of journals) {
       if (!isAllowed(taskId)) continue
@@ -288,13 +331,20 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       // landed anyway and the topic resurfaced, looking exactly like the agent
       // had started working a task the user had already closed.
       //
-      // Absorb the new hash rather than just skipping: the change is
-      // acknowledged, so the task stays quiet on later runs instead of queueing
-      // up a stale post for whenever it next becomes eligible.
-      if (completed && completed.has(taskId) && !(task && task.userEngaged)) {
-        setLastPosted(state, taskId, hash)
+      // `isFinished` requires the task to be absent from the ACTIVE board too: a
+      // dual-board row is still live and must post normally (#186).
+      //
+      // Record the declined hash in `suppressedHash`, NOT `lastPostedHash`.
+      // Writing it to `lastPostedHash` marked an unsent turn as sent, and the
+      // unchanged-turn check above fires first — so the turn could never be
+      // delivered afterwards, even once the task became eligible. Suppression is
+      // a pause, not a delete.
+      if (isFinished(completed, active, taskId) && !(task && task.userEngaged)) {
+        if (!task || task.suppressedHash !== hash) {
+          setSuppressedHash(state, taskId, hash)
+          logger(`suppressed post for completed task #${taskId} (no user reply since it closed)`)
+        }
         suppressed.push(taskId)
-        logger(`suppressed post for completed task #${taskId} (no user reply since it closed)`)
         continue
       }
 
@@ -355,6 +405,10 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
         }
       }
       setLastPosted(state, taskId, hash)
+      // The pending-suppression marker has served its purpose once the turn is
+      // out; clearing it keeps state from carrying a stale "we owe this task a
+      // post" flag forever.
+      if (task && task.suppressedHash) setSuppressedHash(state, taskId, null)
       // Consume the engagement: the user's message has now been answered. A
       // closed task therefore delivers one agent turn per user reply and then
       // goes quiet again, instead of the flag latching it permanently open.
@@ -517,6 +571,9 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
 
     const board = await io.readCompletedBoard()
     const completed = new Set(parseCompletedTaskIds(board))
+    // Same active-wins rule as syncUp: a task on BOTH boards is live, so its
+    // topic must not be closed underneath an ongoing conversation (#186).
+    const active = await loadActiveIds()
 
     // Tombstoned (deleted-in-app) tasks. Optional: an io without
     // readSyncRecords keeps the old completed-board-only behaviour, so existing
@@ -537,7 +594,7 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       if (!isAllowed(taskId)) continue
 
       const isDeleted = deleted.has(taskId)
-      const shouldArchive = completed.has(taskId) || isDeleted
+      const shouldArchive = isFinished(completed, active, taskId) || isDeleted
       const isArchived = !!task.archived
       if (shouldArchive === isArchived) continue
 
@@ -850,5 +907,59 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     return { migrated, unchanged, pending }
   }
 
-  return { ensureTopic, syncUp, syncDown, syncArchive, syncOnce, syncDigest, baseline, rebaselineTurnEnd }
+  // One-time repair for the turns the old completed-guard destroyed (#186).
+  //
+  // Before the fix, suppression wrote the declined hash into `lastPostedHash`,
+  // which marks an UNSENT turn as sent. For a dual-board task — live on
+  // planner.md and also listed on planner-completed.md — that guard fired every
+  // run, so its current turn is recorded as delivered while the user never saw
+  // it. Fixing the guard alone does not release those turns: the unchanged-turn
+  // check still matches the absorbed hash and skips them forever.
+  //
+  // Scope is deliberately narrow: ONLY tasks the active board still lists AND
+  // the completed board also lists. A task that is genuinely completed is left
+  // alone, so #170 cannot regress into re-posting closed work.
+  async function recoverSuppressed() {
+    const released = []
+    const journals = await io.listJournals()
+    const completed = await loadCompletedIds()
+    const active = await loadActiveIds()
+    if (!completed || !active) return { released, skipped: 'no board signal' }
+
+    for (const { taskId } of journals) {
+      if (!isAllowed(taskId)) continue
+      if (!completed.has(taskId) || !active.has(taskId)) continue
+
+      const task = getTask(state, taskId)
+      if (!task || !task.lastPostedHash) continue
+
+      const content = await io.readJournal(taskId)
+      if (!hasAgentBlock(content)) continue
+      const turn = latestAgentTurn(content)
+      if (!turn) continue
+
+      // Only release when the stored hash IS the current turn — that is the
+      // absorbed state. If they differ, the task already has a newer turn that
+      // syncUp will post on its own and nothing needs clearing.
+      if (task.lastPostedHash !== hashTurn(turn)) continue
+
+      setLastPosted(state, taskId, null)
+      released.push(taskId)
+      logger(`released suppressed turn for dual-board task #${taskId}`)
+    }
+
+    return { released }
+  }
+
+  return {
+    ensureTopic,
+    syncUp,
+    syncDown,
+    syncArchive,
+    syncOnce,
+    syncDigest,
+    baseline,
+    rebaselineTurnEnd,
+    recoverSuppressed,
+  }
 }

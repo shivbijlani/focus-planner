@@ -6,6 +6,9 @@
 //   node bin/telegram-bridge.js rebaseline-turn-end
 //                                            # one-time: absorb the turn-end-stamp parse change
 //                                            # so already-delivered turns are not re-posted
+//   node bin/telegram-bridge.js recover-suppressed
+//                                            # one-time: release turns the old completed-guard
+//                                            # absorbed for tasks live on BOTH boards (#186)
 //   node bin/telegram-bridge.js sync-up      # post agent turns -> topics
 //   node bin/telegram-bridge.js sync-down    # fold replies -> journals
 //   node bin/telegram-bridge.js sync-archive # close topics for completed tasks (reopen reactivated)
@@ -95,6 +98,21 @@ async function main() {
           `turn-end stamp (no posts sent); ${res.unchanged.length} unaffected, ` +
           `${res.pending.length} left pending a genuine post`,
       )
+      break
+    }
+    case 'recover-suppressed': {
+      const { config, state, bridge } = await build()
+      const res = await bridge.recoverSuppressed()
+      await saveState(config.stateDir, state)
+      if (res.skipped) {
+        log(`recover-suppressed: ${res.skipped}; nothing released`)
+      } else {
+        log(
+          `released ${res.released.length} dual-board task(s) whose turn was ` +
+            `absorbed by the old completed-guard` +
+            (res.released.length ? `: ${res.released.map((t) => `#${t}`).join(', ')}` : ''),
+        )
+      }
       break
     }
     case 'sync-down': {
