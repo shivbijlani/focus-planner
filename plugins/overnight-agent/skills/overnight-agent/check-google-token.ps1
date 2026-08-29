@@ -18,10 +18,16 @@
     exit 2  status=expired  refresh token expired/revoked -> RE-AUTH NEEDED
     exit 3  status=error     transient/unknown error (do not false-alarm)
     exit 4  status=missing   credential file not found
+
+.NOTES
+  When -CredPath is omitted the script auto-discovers the credential JSON in
+  %USERPROFILE%\.google_workspace_mcp\credentials (the Google Workspace MCP's
+  own store), ignoring the MCP's internal oauth_states.json bookkeeping file.
+  Pass -CredPath explicitly when more than one account is authorized.
 #>
 [CmdletBinding()]
 param(
-  [string]$CredPath = "$env:USERPROFILE\.google_workspace_mcp\credentials\<your-google-account>.json"
+  [string]$CredPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,8 +37,36 @@ function Out-Result([hashtable]$o) {
 }
 
 $now = (Get-Date).ToString('o')
+$CredDir = Join-Path $env:USERPROFILE '.google_workspace_mcp\credentials'
 
-if (-not (Test-Path $CredPath)) {
+if (-not $CredPath) {
+  if (-not (Test-Path -LiteralPath $CredDir)) {
+    Out-Result @{ status = 'missing'; email = $null; message = "Credentials directory not found: $CredDir"; checked_at = $now }
+    exit 4
+  }
+
+  # The MCP stores one <account>.json per authorized account alongside its own
+  # oauth_states.json, which is bookkeeping rather than a credential.
+  $found = @(Get-ChildItem -LiteralPath $CredDir -Filter '*.json' -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -ne 'oauth_states.json' })
+
+  if ($found.Count -eq 0) {
+    Out-Result @{ status = 'missing'; email = $null; message = "No credential JSON found in $CredDir"; checked_at = $now }
+    exit 4
+  }
+  if ($found.Count -gt 1) {
+    Out-Result @{ status = 'error'; email = $null; message = "Multiple credentials in ${CredDir}: $(($found.Name) -join ', '). Re-run with -CredPath."; checked_at = $now }
+    exit 3
+  }
+
+  $CredPath = $found[0].FullName
+}
+
+# Test-Path throws on paths containing illegal characters, so never let a bad
+# -CredPath surface as an unhandled crash instead of a structured result.
+try { $credExists = Test-Path -LiteralPath $CredPath } catch { $credExists = $false }
+
+if (-not $credExists) {
   Out-Result @{ status = 'missing'; email = $null; message = "Credential file not found: $CredPath"; checked_at = $now }
   exit 4
 }
