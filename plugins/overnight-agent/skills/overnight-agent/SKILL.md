@@ -298,6 +298,35 @@ was chosen to sit "longer than the 30-minute run interval, so the previous run i
 deliberately sparing the *previous* run's servers is precisely what let them accumulate, so that threshold
 was itself the leak (task #349). Don't raise it back on that reasoning.
 
+**Second, close the loop from "merged" to "running" (GH #196).** Merging does not deploy. Nothing
+copies `main` into `~\.copilot\installed-plugins\focus-planner`, so a fix can be committed, reviewed,
+CI-green and merged — and still not be what the agent executes tonight. This has bitten twice with
+receipts: PR #151 merged 21 Aug and was still not installed on 26 Aug (the live `SKILL.md` was missing
+the entire reaper section above), and on 2026-08-28 `mutcheck-reaper-cohort.ps1` was on `main` and
+**absent** from the installed tree — a reliability guard that had merged and never once run. Run this
+second, every run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\..\..\checks\auto-deploy-plugin.ps1"
+```
+
+It fetches `origin` first (deploying an unfetched `origin/main` ships a *cached* ref, which is the same
+stale-artefact class as a stale CI tick), deploys only files that are plainly behind `main`, and
+**re-classifies the live tree afterwards** so the result is what is *true* rather than what the deployer
+*did*.
+
+- ✅ **It never passes `-Force`.** A live fix that exists only on a side branch is always **refused**,
+  never overwritten. That refusal is what keeps this from being a blind "copy main over production",
+  which would revert live fixes while looking like a repair.
+- ⚠️ **Exit codes carry the meaning: `0` clean, `1` a write failed, `2` needs a human.** A `2` means
+  either a refusal has now repeated across cycles, or drift survived the deploy. **Surface a `2` as an
+  ask in the wrap-up** — do not let it pass as a log line. The underlying deploy tool exits `0` on a
+  refusal, so a blocked deploy used to be indistinguishable from a clean one; that seam is exactly how
+  #151 sat unnoticed for five days.
+- A first refusal is information and does not escalate; the *same* refusal on the next cycle is a
+  decision nobody is making, and that is what gets surfaced.
+- Add `-WhatIf` to see what it would do without writing. A failed deploy must never abort the run.
+
 The user can leave you new instructions by emailing the agent account
 (`<agent-inbox@example.com>`, from `user-settings.md`). At the start of each run, read the inbox via the email MCP and fold any
 new instructions into the run.
