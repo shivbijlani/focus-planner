@@ -3,16 +3,55 @@
 
 const API_BASE = 'https://api.telegram.org'
 
-export function createTelegramClient({ token, fetchImpl = fetch, apiBase = API_BASE }) {
+// Node's global fetch has NO default timeout, so a stalled connection (as opposed
+// to a refused one) hangs forever. The bridge is invoked inside every agent run --
+// PHASE 3 and the pre-scan `sync-down` -- so one hung request hangs the whole run,
+// with no error and no log line. That is the "await with no deadline" failure mode.
+// Every request therefore carries an explicit deadline and fails LOUDLY, naming the
+// method and the elapsed time, because a named failure is worth far more than a
+// silent one when diagnosing this after the fact.
+const DEFAULT_TIMEOUT_MS = 30000
+
+export function createTelegramClient({
+  token,
+  fetchImpl = fetch,
+  apiBase = API_BASE,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+}) {
   if (!token) throw new Error('createTelegramClient: token is required')
 
   async function call(method, params = {}) {
     const url = `${apiBase}/bot${token}/${method}`
-    const res = await fetchImpl(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(params),
-    })
+
+    // `getUpdates` supports Telegram-side long polling via a `timeout` field in
+    // SECONDS. The transport deadline must outlive it, or we would abort a request
+    // that is behaving exactly as asked. Budget = long-poll window + our own margin.
+    const longPollMs = Number.isFinite(params.timeout) ? Math.max(0, params.timeout) * 1000 : 0
+    const budgetMs = longPollMs + timeoutMs
+
+    const started = Date.now()
+    let res
+    try {
+      res = await fetchImpl(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(params),
+        // AbortSignal.timeout is Node 18+, the same floor global fetch already needs.
+        ...(typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? { signal: AbortSignal.timeout(budgetMs) }
+          : {}),
+      })
+    } catch (err) {
+      // An abort is indistinguishable from a network error to the caller unless we
+      // say so. Name the operation and the stage that stalled.
+      if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        throw new Error(
+          `Telegram ${method}: timed out after ${Date.now() - started} ms (budget ${budgetMs} ms)`,
+        )
+      }
+      throw err
+    }
+
     let data
     try {
       data = await res.json()
