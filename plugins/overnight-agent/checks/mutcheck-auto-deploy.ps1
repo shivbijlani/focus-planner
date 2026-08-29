@@ -61,6 +61,7 @@ function New-Sandbox {
 
     Set-Content -Path (Join-Path $chk 'livefix.ps1')   -Value '# v1 live fix' -Encoding UTF8 -NoNewline
     Set-Content -Path (Join-Path $chk 'divergent.ps1') -Value '# main v1'     -Encoding UTF8 -NoNewline
+    Set-Content -Path (Join-Path $chk 'gone.ps1')      -Value '# doomed v1'   -Encoding UTF8 -NoNewline
     & git add -A 2>&1 | Out-Null
     & git commit -m v1 --quiet 2>&1 | Out-Null
     & git branch sidefix 2>&1 | Out-Null
@@ -68,6 +69,7 @@ function New-Sandbox {
     # sidefix gains content that never reaches main -> genuine divergence
     & git checkout --quiet sidefix 2>&1 | Out-Null
     Set-Content -Path (Join-Path $chk 'divergent.ps1') -Value '# ONLY on the branch' -Encoding UTF8 -NoNewline
+    Set-Content -Path (Join-Path $chk 'stray.ps1')     -Value '# only ever on sidefix' -Encoding UTF8 -NoNewline
     & git add -A 2>&1 | Out-Null
     & git commit -m side --quiet 2>&1 | Out-Null
     & git checkout --quiet main 2>&1 | Out-Null
@@ -75,6 +77,8 @@ function New-Sandbox {
     Set-Content -Path (Join-Path $chk 'livefix.ps1')   -Value '# v2 from main' -Encoding UTF8 -NoNewline
     Set-Content -Path (Join-Path $chk 'divergent.ps1') -Value '# main v2'      -Encoding UTF8 -NoNewline
     Set-Content -Path (Join-Path $chk 'newguard.ps1')  -Value '# merged but not deployed' -Encoding UTF8 -NoNewline
+    # main DELETES gone.ps1 - the case that crashed the deploy on 2026-08-29 (#253)
+    & git rm --quiet (Join-Path $chk 'gone.ps1') 2>&1 | Out-Null
     & git add -A 2>&1 | Out-Null
     & git commit -m v2 --quiet 2>&1 | Out-Null
     & git update-ref refs/remotes/origin/main HEAD 2>&1 | Out-Null
@@ -92,6 +96,12 @@ function New-Sandbox {
   New-Item -ItemType Directory -Force -Path $idst | Out-Null
   Set-Content -Path (Join-Path $idst 'livefix.ps1')   -Value '# v1 live fix'        -Encoding UTF8 -NoNewline
   Set-Content -Path (Join-Path $idst 'divergent.ps1') -Value '# ONLY on the branch' -Encoding UTF8 -NoNewline
+  # gone.ps1: main deleted it, and these bytes ARE the pre-deletion blob -> removable.
+  # stray.ps1: also absent from main's tip, but its bytes exist only on sidefix and at
+  # NO point in main's history -> must survive. Both are BRANCH-ONLY to the classifier,
+  # which is the whole reason both are here.
+  Set-Content -Path (Join-Path $idst 'gone.ps1')      -Value '# doomed v1'          -Encoding UTF8 -NoNewline
+  Set-Content -Path (Join-Path $idst 'stray.ps1')     -Value '# only ever on sidefix' -Encoding UTF8 -NoNewline
 
   [pscustomobject]@{
     Repo      = $repo
@@ -100,6 +110,8 @@ function New-Sandbox {
     LiveFix   = (Join-Path $idst 'livefix.ps1')
     Divergent = (Join-Path $idst 'divergent.ps1')
     NewGuard  = (Join-Path $idst 'newguard.ps1')
+    Gone      = (Join-Path $idst 'gone.ps1')
+    Stray     = (Join-Path $idst 'stray.ps1')
   }
 }
 
@@ -117,8 +129,22 @@ function Invoke-SUT {
   if (-not $WithOaHome) { $a += '-NoOaHome' }
   if (-not $NoJson) { $a += '-Json' }
   if ($WhatIf) { $a += '-WhatIf' }
-  $out  = & powershell @a 2>&1
-  $code = $LASTEXITCODE
+  $out  = $null
+  $code = $null
+  # A mutant is ALLOWED to crash - that is what several mutations prove. Native stderr
+  # becomes a terminating error under $ErrorActionPreference='Stop' on Windows PowerShell
+  # 5.1, so leaving it set here would take the harness down with the subject and report a
+  # mutation as a harness failure. The measurement is the exit code and the JSON; the
+  # stderr text is not evidence either way.
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $out  = & powershell @a 2>&1
+    $code = $LASTEXITCODE
+  } catch {
+    $out  = @("harness caught: $($_.Exception.Message)")
+    $code = 1
+  } finally { $ErrorActionPreference = $prevEap }
   $jsonLine = ($out | Where-Object { ([string]$_).TrimStart().StartsWith('{') } | Select-Object -Last 1)
   $obj = $null
   if ($jsonLine) { try { $obj = ([string]$jsonLine | ConvertFrom-Json) } catch { } }
@@ -150,6 +176,25 @@ Assert ((Get-Content $sb.Divergent -Raw) -eq '# ONLY on the branch') `
 Assert ($r1.Exit -eq 0) 'G4 a FIRST refusal does not escalate (exit 0)'
 Assert (@($r1.Json.escalate).Count -eq 0) 'G4 nothing is named for escalation on cycle 1'
 
+# --- the deleted-path pair (added 2026-08-29 after merging #253 broke the live deploy) ---
+# G9 and G10 are the two halves of one decision and must be read together: BOTH files are
+# absent from the ref tip and BOTH classify as BRANCH-ONLY, so a rule that keys on either
+# of those facts alone gets one of them wrong. The separator is whether the ref's history
+# ever contained these exact bytes.
+Assert ($r1.Json.removed -contains 'overnight-agent/checks/gone.ps1') `
+       'G9 a file DELETED on the ref, whose live bytes are a known historical version, is removed'
+Assert (-not (Test-Path $sb.Gone)) 'G9 the removed file physically left the installed tree'
+Assert ($r1.Json.refused -notcontains 'overnight-agent/checks/gone.ps1') `
+       'G9 a removed file does not stay on the refusal pile (it would escalate forever)'
+
+Assert ($r1.Json.removed -notcontains 'overnight-agent/checks/stray.ps1') `
+       'G10 a live-only file the ref never carried is NOT removed'
+Assert (Test-Path $sb.Stray) 'G10 the live-only file survived'
+Assert ((Get-Content $sb.Stray -Raw) -eq '# only ever on sidefix') `
+       'G10 the live-only file was not modified either'
+Assert ($r1.Json.refused -contains 'overnight-agent/checks/stray.ps1') `
+       'G10 it is refused instead - deleting it would destroy the only copy'
+
 # second cycle: same refusal, now persistent
 $r2 = Invoke-SUT -Script $SUT -Sandbox $sb
 Assert ($r2.Exit -eq 2) 'G3 a refusal repeated across cycles escalates (exit 2)'
@@ -157,6 +202,8 @@ Assert ($r2.Json.escalate -contains 'overnight-agent/checks/divergent.ps1') `
        'G3 the persistently-refused file is named'
 Assert ($r2.Json.escalate -notcontains 'overnight-agent/checks/livefix.ps1') `
        'G6 a rescued file never enters the escalation queue'
+Assert ($r2.Json.escalate -notcontains 'overnight-agent/checks/gone.ps1') `
+       'G9 a removed file never enters the escalation queue'
 Assert ($r2.Json.verifiedCurrent -eq $true) `
        'G5 far-end verify: no MISSING survives after the deploy'
 
@@ -165,6 +212,7 @@ $sbw = New-Sandbox
 $rw = Invoke-SUT -Script $SUT -Sandbox $sbw -WhatIf
 Assert (-not (Test-Path $sbw.NewGuard)) 'G5 -WhatIf wrote no files'
 Assert (-not (Test-Path $sbw.State))    'G5 -WhatIf recorded no state'
+Assert (Test-Path $sbw.Gone)            'G9 -WhatIf deleted no files'
 
 # ------------------------------------------------------------------------------------
 # Mutations — each must BREAK the test that claims to guard it
@@ -267,6 +315,48 @@ Test-Mutant -Name 'M6: far-end verification trusts the deployer instead of the t
     $src = Get-Content $mut -Raw
     Assert ($src -notmatch [regex]::Escape('$_.Verdict -eq ''MISSING''')) `
            'killed: verifiedCurrent is asserted, not measured against the live tree'
+  }
+
+# --- the deleted-path mutations (2026-08-29) -----------------------------------------
+# M11 is the one that matters most: it restores the EXACT line that took the live deploy
+# down after #253 merged, and it fails in the most expensive way a guard can - the run
+# aborts before it reports anything, so "PHASE 0 deployed cleanly" and "PHASE 0 died"
+# produce the same silence. Note it can only be observed on Windows PowerShell 5.1,
+# where native stderr becomes a terminating error; under pwsh 7 the mutant survives.
+# That is precisely why it went unnoticed: it was hand-tested in the agent's own shell.
+Test-Mutant -Name 'M11: bare rev-parse restored (a deleted path aborts the whole deploy)' `
+  -Find 'rev-parse --verify --quiet "${sha}:${RepoPath}"' `
+  -Replace 'rev-parse "${sha}:${RepoPath}"' -Check {
+    param($mut)
+    $s = New-Sandbox
+    $b = Invoke-SUT -Script $mut -Sandbox $s
+    Assert ($b.Json -eq $null -or $b.Exit -ne 0) `
+           'killed: a ref that deleted a file would crash the deploy instead of handling it'
+  }
+
+Test-Mutant -Name 'M12: no delete path (a file removed on the ref is refused forever)' `
+  -Find 'if ($inHistory) { $removed += $rel } else { $stillRefused += $rel }' `
+  -Replace 'if ($false) { $removed += $rel } else { $stillRefused += $rel }' -Check {
+    param($mut)
+    $s = New-Sandbox
+    $b = Invoke-SUT -Script $mut -Sandbox $s
+    Assert (Test-Path $s.Gone) 'mutant did leave the orphan in place'
+    Assert ($b.Json.refused -contains 'overnight-agent/checks/gone.ps1') `
+           'killed: a file deleted on the ref would linger and escalate on every cycle'
+  }
+
+# M13 is the safety direction, and it is the one a careless fix gets wrong: "not on the
+# tip" is NOT sufficient grounds to delete. Without the history check this destroys the
+# only copy of a hand-deployed live fix - unrecoverable, and exactly the class of harm
+# the refuse-by-default design exists to prevent.
+Test-Mutant -Name 'M13: delete anything absent from the tip (destroys a live-only file)' `
+  -Find 'if ($inHistory) { $removed += $rel } else { $stillRefused += $rel }' `
+  -Replace 'if ($true) { $removed += $rel } else { $stillRefused += $rel }' -Check {
+    param($mut)
+    $s = New-Sandbox
+    Invoke-SUT -Script $mut -Sandbox $s | Out-Null
+    Assert (-not (Test-Path $s.Stray)) `
+           'killed: a live-only file would be deleted on the strength of absence alone'
   }
 
 # ------------------------------------------------------------------------------------
