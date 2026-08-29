@@ -1,16 +1,36 @@
-// truncation-openboard-scope.mjs -- WHICH truncated turns are on the OPEN board?
+// truncation-openboard-scope.mjs -- which OPEN-board turns lose actionable content on the way out?
 //
-// WHY (2026-08-28 04:55 PT): telegram-ask-truncation-sweep answers "does the ASK survive?" and is
-// green when it does. But a turn can keep its ask line and still lose deliverable links, PR numbers,
-// options tables and run-log results below it. On a CLOSED task that is moot; on an OPEN one Shiv is
-// reading a message with content silently missing.
+// WHY (2026-08-28 04:55 PT): the ask sweep answers "does the ASK arrive?" and is green when it
+// does. But a turn can keep its ask line and still lose deliverable links, PR numbers and run-log
+// results below it. On a CLOSED task that is moot; on an OPEN one Shiv is reading a message with
+// content silently missing. So compute the population -- open board rows -- and report loss
+// against it.
 //
-// This is the scope half of tonight's learning: the metric was right, its population came from prose.
-// So compute the population -- open board rows -- and report loss against it.
+// REWRITTEN 2026-08-29 -- IT WAS MEASURING A DELETED CODE PATH, AND WAS GREEN FOR THE WRONG REASON
+// ------------------------------------------------------------------------------------------------
+// This file hand-copied the bridge's old truncate-a-prefix budget loop, which PR #211 deleted when
+// it replaced truncation with splitting. Two consequences, and the quiet one is the serious one:
 //
-// Uses the SHIPPED parser + formatter (same imports as the ask sweep), never a reimplementation.
-import { readFileSync, readdirSync } from 'fs'
+//   1. "Lost" was computed as `body.slice(kept.length)` -- everything past a prefix cut. With
+//      splitting there IS no prefix cut, so that definition describes nothing that happens.
+//   2. It read `ok`. Not because content was arriving, but because it never called the splitter at
+//      all. It would have kept reading `ok` if the splitter regressed to truncation -- the exact
+//      failure it exists to catch. A guard that grades the wrong artifact is not a weak guard, it
+//      is a decoration.
+//
+// The header used to claim "Uses the SHIPPED parser + formatter, never a reimplementation". It also
+// named PR #211 as the "durable fix" in its own remediation text -- while not using it. The fix is
+// now structural: loss is TOKENS PRESENT IN THE TURN BUT ABSENT FROM WHAT THE BRIDGE ACTUALLY
+// POSTS, compared against the real output of formatForTelegramParts.
+//
+// Comparing tokens rather than lengths matters. A split delivery is legitimately shorter than its
+// source in characters (the header and part counters cost room) while losing nothing at all, so a
+// length-based test would now report loss on every long turn.
+import { readFileSync } from 'fs'
 import { join } from 'path'
+import {
+  loadShippedDelivery, deliveryFor, eachTurn, lostSignals,
+} from './lib-telegram-delivery.mjs'
 
 const SRC = process.env.BRIDGE_SRC
 const PLANNER = process.env.PLANNER_PATH
@@ -19,30 +39,7 @@ if (!PLANNER) { console.error('PLANNER_PATH is not set'); process.exit(2) }
 
 const JOURNALS = join(PLANNER, 'journal')
 const { latestAgentTurn } = await import(`${SRC}/journal.js`)
-const { mdToTelegramHtml, escapeHtml } = await import(`${SRC}/telegramFormat.js`)
-
-const TELEGRAM_MAX = 4096
-
-function truncateMarkdown(md, budget) {
-  if (md.length <= budget) return md
-  const cut = md.slice(0, budget)
-  const nl = cut.lastIndexOf('\n')
-  return nl > 0 ? cut.slice(0, nl) : cut
-}
-
-function keptMarkdown(taskId, title, turn) {
-  const header = title ? `\u{1F4CB} Task #${taskId} \u2014 ${title}` : `\u{1F4CB} Task #${taskId}`
-  const headerHtml = `<b>${escapeHtml(header)}</b>`
-  const room = Math.max(0, TELEGRAM_MAX - headerHtml.length - 2)
-  let budget = Math.max(0, room - 400)
-  let bodyHtml = mdToTelegramHtml(truncateMarkdown(turn, budget))
-  while (bodyHtml.length > room && budget > 0) {
-    const scaled = Math.floor((budget * room) / bodyHtml.length)
-    budget = Math.max(0, Math.min(budget - 128, scaled))
-    bodyHtml = mdToTelegramHtml(truncateMarkdown(turn, budget))
-  }
-  return truncateMarkdown(turn, budget)
-}
+const shipped = await loadShippedDelivery(SRC)
 
 // --- population: ids with a row on the OPEN board (computed, never quoted) ---
 const openIds = new Set()
@@ -51,66 +48,34 @@ for (const line of readFileSync(join(PLANNER, 'planner.md'), 'utf8').split(/\r?\
   if (m) openIds.add(m[1])
 }
 
-// Markers that indicate real, actionable content rather than prose.
-const SIGNALS = [
-  [/\bmerge\s+\d+/gi, 'merge <n>'],
-  [/\bPR\s*#\d+/gi, 'PR #<n>'],
-  [/\bissue\s*#\d+/gi, 'issue #<n>'],
-  [/\]\(\.\/[^)]+\)/g, 'deliverable link'],
-  [/https?:\/\/\S+/g, 'url'],
-  [/^\s*[-*]\s*\[\s\]/gm, 'checklist item'],
-]
-
 const rows = []
-for (const f of readdirSync(JOURNALS)) {
-  const m = f.match(/^task-(\d+)\.md$/)
-  if (!m) continue
-  const id = m[1]
-  if (!openIds.has(id)) continue            // scope: open board only
-  const content = readFileSync(join(JOURNALS, f), 'utf8')
-  let turn
-  try { turn = latestAgentTurn(content) } catch { continue }
-  if (!turn) continue
-  const body = typeof turn === 'string' ? turn : turn.text || turn.body || ''
-  if (!body) continue
-  const kept = keptMarkdown(id, '', body)
-  if (kept.length >= body.length) continue  // not truncated
-  const lost = body.slice(kept.length)
+eachTurn(JOURNALS, latestAgentTurn, (id, turn) => {
+  if (!openIds.has(id)) return                 // scope: open board only
+  const delivery = deliveryFor(shipped, id, '', turn)
+  const lost = lostSignals(turn, delivery)
+  if (!lost.length && delivery.parts.length === 1) return
+  rows.push({ id, chars: turn.length, parts: delivery.parts.length, lost })
+})
 
-  const lostSignals = []
-  for (const [re, label] of SIGNALS) {
-    const inLost = (lost.match(re) || []).length
-    const inKept = (kept.match(re) || []).length
-    // only count a signal as lost if it does NOT also appear in the delivered part
-    if (inLost > 0 && inKept === 0) lostSignals.push(`${label}x${inLost}`)
-  }
-  rows.push({
-    id,
-    total: body.length,
-    kept: kept.length,
-    pct: Math.round(((body.length - kept.length) / body.length) * 100),
-    lostSignals,
-  })
-}
-
-rows.sort((a, b) => b.pct - a.pct)
-const withSignal = rows.filter(r => r.lostSignals.length > 0)
+const withSignal = rows.filter((r) => r.lost.length > 0)
 
 console.log(`open-board rows                       : ${openIds.size}`)
-console.log(`...whose newest turn is TRUNCATED     : ${rows.length}`)
+console.log(`...whose turn the bridge SPLITS       : ${rows.filter((r) => r.parts > 1).length}`)
 console.log(`...losing actionable content with it  : ${withSignal.length}`)
 console.log('')
+
 if (rows.length) {
-  console.log('open + truncated (task, turn chars, delivered, % lost, actionable content lost):')
+  console.log('open + multi-part (task, turn chars, messages, actionable content lost):')
   for (const r of rows) {
-    const sig = r.lostSignals.length ? r.lostSignals.join(', ') : '(prose only)'
-    console.log(`  #${r.id}\t${r.total}\t${r.kept}\t${r.pct}%\t${sig}`)
+    const sig = r.lost.length ? r.lost.map((l) => `${l.label}:${l.token}`).join(', ') : '(nothing lost)'
+    console.log(`  #${r.id}\t${r.chars}\t${r.parts}\t${sig}`)
   }
+  console.log('')
 }
-console.log('')
+
 if (withSignal.length) {
-  console.log('FIX: shorten these turns ask-first to <~3,400 chars, moving depth into a linked')
-  console.log('     deliverable file. Durable fix is PR #211 / issue #210 (split, do not truncate).')
+  console.log('FIX: content is being dropped past the 3-message split cap. Either shorten the turn')
+  console.log('     by moving depth into a linked deliverable file, or raise MAX_PARTS in bridge.js.')
   process.exit(1)
 }
-console.log('no findings: no open-board task is losing actionable content to the cap.')
+console.log('no findings: no open-board task is losing actionable content on delivery.')
