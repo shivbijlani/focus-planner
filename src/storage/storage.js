@@ -391,7 +391,8 @@ export async function readFromSource(sourceId, path) {
 }
 
 export async function writeToSource(sourceId, path, content) {
-  const { getProvider } = await import('./sources.js')
+  const { getActiveSourceId, getProvider } = await import('./sources.js')
+  if (sourceId === getActiveSourceId()) return write(path, content)
   const p = getProvider(sourceId)
   if (!p) throw new Error(`No provider for source ${sourceId}`)
   return p.write(path, content)
