@@ -705,6 +705,69 @@ describe('syncArchive (mirror completed board -> closed topics)', () => {
     expect(state.tasks['42'].archived).toBeUndefined()
   })
 
+  // REGRESSION (found live 2026-08-29): `readSyncRecords` returns EVERY planner
+  // sync record, and a task that is live on the ACTIVE board is legitimately
+  // absent from `planner-completed.md` — so that board's record tombstones it
+  // as `deleted: true`. Unioning both records loses which board the tombstone
+  // came from, so "not a row in the completed file" was read as "the user
+  // deleted this task" and `|| isDeleted` bypassed the active-wins rule
+  // entirely. Measured on the live planner: 37 active-board tasks carried such
+  // a tombstone and 33 had their topic closed underneath them, including #276
+  // on the Today board.
+  it('never closes a live active-board task tombstoned by the COMPLETED record', async () => {
+    const h = makeHarness({})
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42' }
+    h.setCompletedBoard('') // not completed...
+    h.setActiveBoard(
+      `## Today\n\n| ID | 🎯 | Task | Work Priority | Added |\n|---|---|---|---|---|\n| 42 | 🔴 | live | P0 | 2026-08-02 |\n`,
+    ) // ...it is LIVE on the board
+    h.setSyncRecords([DELETED]) // completed-board record says deleted:true
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.archived).toEqual([])
+    expect(h.closed).toHaveLength(0)
+  })
+
+  // The recovery half: the topics already closed by the bug must come back on
+  // the next run, otherwise the fix only stops new damage and leaves the 33
+  // live tasks silently muted forever.
+  it('reopens an active-board task that a completed-record tombstone had closed', async () => {
+    const h = makeHarness({})
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42', archived: true }
+    h.setCompletedBoard('')
+    h.setActiveBoard(
+      `## Today\n\n| ID | 🎯 | Task | Work Priority | Added |\n|---|---|---|---|---|\n| 42 | 🔴 | live | P0 | 2026-08-02 |\n`,
+    )
+    h.setSyncRecords([DELETED])
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.reopened).toEqual(['42'])
+    expect(h.reopened).toEqual([7])
+    expect(state.tasks['42'].archived).toBe(false)
+  })
+
+  // The genuine deletion (#434) must still be archived: a task the user really
+  // deleted leaves BOTH boards, so the active-board rescue cannot reach it.
+  it('still closes a genuinely deleted task, which is on neither board', async () => {
+    const h = makeHarness({})
+    const state = emptyState()
+    state.tasks['42'] = { topicId: 7, name: '#42' }
+    h.setCompletedBoard('')
+    h.setActiveBoard(
+      `## Today\n\n| ID | 🎯 | Task | Work Priority | Added |\n|---|---|---|---|---|\n| 99 | 🟡 | other | P2 | 2026-08-02 |\n`,
+    )
+    h.setSyncRecords([DELETED])
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncArchive()
+    expect(res.archived).toEqual(['42'])
+    expect(h.closed).toEqual([7])
+  })
+
   it('still works against an io that has no readSyncRecords (back-compat)', async () => {
     const h = makeHarness({})
     delete h.io.readSyncRecords

@@ -593,7 +593,18 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       if (!task || task.topicId == null) continue
       if (!isAllowed(taskId)) continue
 
-      const isDeleted = deleted.has(taskId)
+      // Active membership WINS over a tombstone too, not just over the
+      // completed board. `readSyncRecords` returns EVERY planner sync record,
+      // and a task that is live on the active board is legitimately absent from
+      // `planner-completed.md`, so that record tombstones it as `deleted: true`.
+      // Unioning both records loses which board a tombstone came from, turning
+      // "not a row in the completed file" into "the user deleted this task".
+      // Measured on the live planner: 37 active-board tasks carried such a
+      // tombstone and 33 had their topic closed underneath them — including
+      // #276, a task on the Today board. A genuine deletion leaves BOTH boards,
+      // so it is still archived (#434) — this only rescues tasks the user can
+      // still see.
+      const isDeleted = deleted.has(taskId) && !(active && active.has(taskId))
       const shouldArchive = isFinished(completed, active, taskId) || isDeleted
       const isArchived = !!task.archived
       if (shouldArchive === isArchived) continue
