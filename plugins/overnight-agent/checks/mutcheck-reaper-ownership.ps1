@@ -81,8 +81,8 @@ function Assert($name, $cond, $detail) {
   else       { $script:Fail++; Write-Host ("  FAIL  {0}  {1}" -f $name, $detail) -ForegroundColor Red }
 }
 
-function New-Node($processId, $parent, $name, $started) {
-  [pscustomobject]@{ Pid = $processId; Parent = $parent; Name = $name; Started = $started }
+function New-Node($processId, $parent, $name, $started, $lastActivity = $null) {
+  [pscustomobject]@{ Pid = $processId; Parent = $parent; Name = $name; Started = $started; LastActivity = $lastActivity }
 }
 
 $t0 = Get-Date '2026-08-28T20:00:00'
@@ -123,11 +123,35 @@ $tblCycle = @{
   61  = New-Node 61  62 'a.exe'    $t0
   62  = New-Node 62  61 'b.exe'    $t0
 }
+# --- wedged-owner fixtures (GH #200, criterion 5) --------------------------
+# The owner is RESIDENT in all three. Only its last activity differs, which is the whole point:
+# presence is identical, liveness is not.
+#
+# T7 wedged: owner alive but silent for 300 minutes -> must NOT veto (else immortal servers)
+$tblWedged = @{
+  700 = New-Node 700 70 'node.exe'     $t0.AddMinutes(5)
+  70  = New-Node 70  4  'copilot.exe'  $t0                     $t0.AddMinutes(-300)
+  4   = New-Node 4   0  'explorer.exe' $t0.AddMinutes(-60)
+}
+# T8 busy: owner started long ago but wrote 2 minutes ago -> must veto. This is the case that
+# proves the check keys on IDLE TIME and not on how long the session has been running.
+$tblBusy = @{
+  800 = New-Node 800 80 'node.exe'     $t0.AddMinutes(5)
+  80  = New-Node 80  4  'copilot.exe'  $t0.AddMinutes(-165)    $t0.AddMinutes(-2)
+  4   = New-Node 4   0  'explorer.exe' $t0.AddMinutes(-60)
+}
+# T9 unknown activity (no log found) -> must veto. Fail-safe direction: missing evidence spares.
+$tblUnknownActivity = @{
+  900 = New-Node 900 90 'node.exe'     $t0.AddMinutes(5)
+  90  = New-Node 90  4  'copilot.exe'  $t0                     $null
+  4   = New-Node 4   0  'explorer.exe' $t0.AddMinutes(-60)
+}
 
 function Invoke-Case {
-  param([string]$FnSource, [hashtable]$Table, [int]$StartPid, [datetime]$Started)
-  $sb = [scriptblock]::Create($FnSource + "`nTest-HasLiveOwner -Table `$args[0] -StartPid `$args[1] -ChildStarted `$args[2] -OwnerNames @('copilot.exe')")
-  return [bool](& $sb $Table $StartPid $Started)
+  param([string]$FnSource, [hashtable]$Table, [int]$StartPid, [datetime]$Started,
+        [int]$OwnerIdleMinutes = 0, [datetime]$Now = $t0)
+  $sb = [scriptblock]::Create($FnSource + "`nTest-HasLiveOwner -Table `$args[0] -StartPid `$args[1] -ChildStarted `$args[2] -OwnerNames @('copilot.exe') -OwnerIdleMinutes `$args[3] -Now `$args[4]")
+  return [bool](& $sb $Table $StartPid $Started $OwnerIdleMinutes $Now)
 }
 
 Write-Host "`nmutcheck-reaper-ownership -- ownership veto" -ForegroundColor Cyan
@@ -147,6 +171,20 @@ Assert 'T3 recycled PID -> ORPHAN (reapable)'     ($T3 -eq $false) "got $T3"
 Assert 'T4 nested chain to owner -> SPARED'       ($T4 -eq $true)  "got $T4"
 Assert 'T5 no owner in chain -> ORPHAN'           ($T5 -eq $false) "got $T5"
 Assert 'T6 cycle terminates -> ORPHAN'            ($T6 -eq $false) "got $T6"
+
+# --- wedged owner (GH #200, criterion 5) -----------------------------------
+# All three run with the activity check ENABLED (240 min), which is the shipped default.
+Write-Host "`nbaseline: wedged-owner check (OwnerIdleMinutes 240)" -ForegroundColor Cyan
+$T7 = Invoke-Case $fnSrc $tblWedged          700 $t0.AddMinutes(5) 240 $t0
+$T8 = Invoke-Case $fnSrc $tblBusy            800 $t0.AddMinutes(5) 240 $t0
+$T9 = Invoke-Case $fnSrc $tblUnknownActivity 900 $t0.AddMinutes(5) 240 $t0
+# And the same wedged host with the check DISABLED must revert to the old "presence = live".
+$T10 = Invoke-Case $fnSrc $tblWedged         700 $t0.AddMinutes(5) 0   $t0
+
+Assert 'T7 owner resident but silent 300m -> REAPABLE'   ($T7 -eq $false) "got $T7"
+Assert 'T8 owner running 165m, wrote 2m ago -> SPARED'   ($T8 -eq $true)  "got $T8"
+Assert 'T9 activity unknown -> SPARED (fail-safe)'       ($T9 -eq $true)  "got $T9"
+Assert 'T10 check disabled -> wedged owner SPARED again' ($T10 -eq $true) "got $T10"
 
 # ---------------------------------------------------------------------------
 # M1: delete the PID-reuse guard.
@@ -190,7 +228,44 @@ if ($m3 -ne $fnSrc) {
   Assert 'M3 killed: ownerless chain spared forever'   ($m3T5 -eq $true) "T5 still $m3T5"
 }
 
+# ---------------------------------------------------------------------------
+# M4: delete the wedged-owner activity check (GH #200, criterion 5).
+#
+# This is the mutant that matters most, because the pre-#200 script IS this mutant: it is the
+# exact code that shipped before, and it passed every test above. A wedged host stayed "live"
+# forever, so its servers could never be collected by anything. T7 must flip; T8/T9 must NOT,
+# or the check is simply killing everything rather than discriminating on idle time.
+# ---------------------------------------------------------------------------
+Write-Host "`nM4: wedged-owner activity check deleted (= the pre-#200 script)" -ForegroundColor Cyan
+$m4 = $fnSrc -replace '(?m)^\s*if \(\$OwnerIdleMinutes -gt 0 -and \$node\.LastActivity -is \[datetime\]\) \{\s*$', '            if ($false) {'
+Assert 'M4 mutation applied' ($m4 -ne $fnSrc) 'activity guard did not match -- update this mutcheck'
+if ($m4 -ne $fnSrc) {
+  $m4T7 = Invoke-Case $m4 $tblWedged          700 $t0.AddMinutes(5) 240 $t0
+  $m4T8 = Invoke-Case $m4 $tblBusy            800 $t0.AddMinutes(5) 240 $t0
+  $m4T9 = Invoke-Case $m4 $tblUnknownActivity 900 $t0.AddMinutes(5) 240 $t0
+  Assert 'M4 killed: wedged owner spared forever again' ($m4T7 -eq $true) "T7 still $m4T7 -- the activity check is not load-bearing"
+  Assert 'M4 busy owner unaffected'                     ($m4T8 -eq $true) "got $m4T8"
+  Assert 'M4 unknown-activity owner unaffected'         ($m4T9 -eq $true) "got $m4T9"
+}
+
+# ---------------------------------------------------------------------------
+# M5: invert the fail-safe. Treat UNKNOWN activity as wedged rather than as live.
+#
+# Guards the direction of failure, which is the property that makes this safe to run unattended.
+# If a missing/renamed/unreadable log made a server reapable, a logging change on this box would
+# silently turn the reaper on the whole fleet. T9 must flip.
+# ---------------------------------------------------------------------------
+Write-Host "`nM5: unknown activity treated as wedged (fail-safe inverted)" -ForegroundColor Cyan
+$m5 = $fnSrc -replace '\$node\.LastActivity -is \[datetime\]', '(-not ($node.LastActivity -is [datetime]) -or $true)'
+$m5 = $m5 -replace '\(\$Now - \$node\.LastActivity\)\.TotalMinutes -gt \$OwnerIdleMinutes', '(-not ($node.LastActivity -is [datetime])) -or (($Now - $node.LastActivity).TotalMinutes -gt $OwnerIdleMinutes)'
+Assert 'M5 mutation applied' ($m5 -ne $fnSrc) 'activity expression did not match -- update this mutcheck'
+if ($m5 -ne $fnSrc) {
+  $m5T9 = Invoke-Case $m5 $tblUnknownActivity 900 $t0.AddMinutes(5) 240 $t0
+  $m5T8 = Invoke-Case $m5 $tblBusy            800 $t0.AddMinutes(5) 240 $t0
+  Assert 'M5 killed: unknown activity would become reapable' ($m5T9 -eq $false) "T9 still $m5T9 -- the fail-safe direction is not enforced"
+  Assert 'M5 busy owner still spared'                        ($m5T8 -eq $true)  "got $m5T8"
+}
+
 Write-Host ""
-Write-Host ("mutcheck-reaper-ownership: {0} passed, {1} failed" -f $script:Pass, $script:Fail) -ForegroundColor $(if ($script:Fail) { 'Red' } else { 'Green' })
 if ($script:Fail -gt 0) { exit 1 }
 exit 0
