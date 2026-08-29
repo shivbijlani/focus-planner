@@ -487,15 +487,38 @@ Run the bundled bridge **once** (it posts new agent turns to each task's forum t
 stamps a `<!-- tg-meta … -->` deep-link marker into the journal the first time it sees a task, and folds any
 phone replies back into the journals):
 
+> 🚦 **If `user-settings.md` names a PHASE 3 wrapper script, run *that* and skip this code block.**
+> A wrapper exists precisely so the flags below cannot be forgotten. Only fall back to the raw
+> command when no wrapper is configured.
+
 ```powershell
 # Token from the OS credential vault — never from a file.
 $env:TELEGRAM_BOT_TOKEN = & "$env:LOCALAPPDATA\overnight-agent\secrets\telegram-secret.ps1" get
 $env:TELEGRAM_CHAT_ID   = '<Telegram chat id from user-settings.md>'
 $env:PLANNER_PATH       = '<planner folder>'   # same folder planner.md lives in
+
+# ⚠️ FAIL-OPEN — you MUST set this explicitly, every run. An ABSENT variable means
+# "digest enabled", and an absent *_TOPIC means "post it to the General thread".
+# Omitting these is strictly WORSE than setting them. Copy the value from the
+# "Approval digest" row of user-settings.md ('on' or 'off').
+$env:TELEGRAM_BRIDGE_DIGEST = '<on|off — from user-settings.md>'
+# Only when the digest is 'on': keeps it out of General by giving it its own topic.
+# $env:TELEGRAM_BRIDGE_DIGEST_TOPIC = '<topic name or id from user-settings.md>'
+
 # Honor the "Archive completed topics" user-setting (default on). Only set this
 # to 'off' when that row says off; otherwise leave it unset so the default holds.
 # $env:TELEGRAM_BRIDGE_ARCHIVE = 'off'
-$bridge = "<dev drive>\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js"
+
+# ⚠️ RESOLVE THIS FROM user-settings.md → "Bridge CLI" — do NOT assume the default
+# repo path below. That row exists so the bridge can be PINNED (e.g. to a worktree)
+# while the main checkout sits on an unrelated or known-buggy branch. Using the
+# default path when the row names another one runs a DIFFERENT BUILD than the one
+# the user validated — and `sync-down` on a stale build can silently destroy the
+# user's phone replies (it reads an update, skips it, and still advances the
+# Telegram offset, which is not redeliverable).
+$bridge = "<path from user-settings.md -> Bridge CLI; fall back to the line below>"
+# Fallback only when no Bridge CLI row exists:
+# $bridge = "<dev drive>\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js"
 
 # FIRST-TIME SETUP ONLY: if the bridge has never run (no state.json yet), baseline
 # so it starts from "now" and does NOT backfill a topic for every historical task.
@@ -503,6 +526,8 @@ if (-not (Test-Path "$env:LOCALAPPDATA\overnight-agent\telegram-bridge\state.jso
   node "$bridge" baseline
 }
 
+# Fold the user's phone replies in BEFORE posting, so this run sees them.
+node "$bridge" sync-down
 node "$bridge" once
 ```
 
@@ -521,7 +546,33 @@ Rules:
   `user-settings.md`, set the matching `TELEGRAM_BRIDGE_*` variable before the call; the bridge README's
   env table is the authoritative list (e.g. `Tasks` → `$env:TELEGRAM_BRIDGE_TASKS = '<ids>'`,
   `Archive completed topics = off` → `$env:TELEGRAM_BRIDGE_ARCHIVE = 'off'`). Defaults hold when a var is
-  unset, so a new toggle is a README row + a `user-settings.md` row — **no change here**.
+  unset, so a new toggle is a README row + a `user-settings.md` row — **no change here**. ⚠️ **One
+  documented exception: `TELEGRAM_BRIDGE_DIGEST` is fail-OPEN**, so "unset" is *not* its default-safe
+  state — see the digest bullet below and always export it explicitly.
+- ⚠️ **Resolve the bridge path from `user-settings.md` → "Bridge CLI"; never hard-code the repo default.**
+  That row is how a user pins the bridge to a *specific, validated* build — typically a worktree, while the
+  main checkout sits on some other branch. Running the default path in that situation executes a **different
+  build** than the one they verified. This is not hypothetical: it is the same "an operative line told the
+  agent to do the dangerous thing while the warning lived elsewhere" shape as the fail-open gate above, and
+  it bites hardest on `sync-down`, because a stale build can **permanently destroy the user's phone replies**
+  — it reads a batched update, skips it, and still advances the Telegram offset, and Telegram never
+  redelivers a confirmed update. **If a wrapper script is configured, prefer it for `sync-down` too** (it
+  pins the path *and* sets the fail-open digest flag), rather than hand-rolling `node "$bridge" sync-down`.
+- ⚠️ **Fold phone replies BEFORE `oa-state.ps1 scan`, not just before `once`.** The `sync-down` in the block
+  above protects *this* phase, but the scan in PHASE 1/2 has already run by then. `oa-state.ps1 mark`
+  snapshots each journal's hash, and a fold that lands *after* the mark leaves every answered task with a
+  stale hash — so the next run reports it `reopened` and re-answers it, writing new turns to tasks that were
+  already finished. Run a `sync-down` pass **early**, before the scan, and treat the one here as a no-op
+  safety net; if this one ever reports `folded > 0`, that reply arrived mid-run and is **next** run's work —
+  do not reopen finished tasks to chase it.
+- ⚠️ **The approval digest is FAIL-OPEN — always pass `TELEGRAM_BRIDGE_DIGEST` explicitly.** The bridge
+  treats an **absent** variable as *enabled*, and an absent `TELEGRAM_BRIDGE_DIGEST_TOPIC` as *post to
+  the **General** thread*. So "just leave it unset" does **not** mean "stay quiet" — it means dump the
+  entire approval queue into General, which is the one place users most often ask the bot to stay out
+  of. Read the desired value from the `Approval digest` row of `user-settings.md` and export it on every
+  run, even when it is `off`. **The bridge does not persist the digest's message id, so a wrongly-sent
+  digest can never be deleted afterwards** — this mistake is permanent, which is why it is called out
+  here and not left to the code comment alone.
 - **Never print the token** in your summary. If the vault lookup or the CLI fails (e.g. no token, network),
   note it briefly in the wrap-up and carry on — a failed mirror must never abort the run.
 
