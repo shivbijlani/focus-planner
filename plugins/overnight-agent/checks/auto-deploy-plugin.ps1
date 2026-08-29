@@ -79,6 +79,71 @@ $ErrorActionPreference = 'Stop'
 
 function Write-Note([string]$msg) { if (-not $Json) { Write-Host "[auto-deploy] $msg" } }
 
+function Get-NormHash([byte[]]$bytes) {
+  # The classifier compares NORMALISED content (CRLF and LF are the same file), so this
+  # has to normalise identically or a CRLF-stored blob could never match its LF twin.
+  $text = (New-Object Text.UTF8Encoding($false)).GetString($bytes)
+  $text = $text -replace "`r`n", "`n"
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try { return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text))) }
+  finally { $sha.Dispose() }
+}
+
+function Test-IsSupersededByRef {
+  <#
+    Is this installed file simply BEHIND the ref, or genuinely DIVERGED from it?
+
+    The classifier answers neither question. It reports BRANCH-ONLY whenever the
+    installed bytes match some ref that is not the deploy ref -- but "an older commit of
+    main" and "a live fix that only exists on a side branch" both satisfy that, and they
+    are OPPOSITE situations. Issue #196 names this directly: "'Behind main' and
+    'diverged from main' look identical in a size comparison and are opposite
+    situations."
+
+    Treating them alike is wrong in both directions. Deploy blindly and a live fix is
+    reverted; refuse blindly and an ordinary stale file can NEVER auto-deploy, which
+    defeats the whole point of the wire.
+
+    The distinction is decidable and exact: if the installed content equals the content
+    this path had at ANY commit reachable from the ref, then the ref's history already
+    contains it and the ref strictly supersedes it -- safe. If it matches no point in
+    that history, it is real divergence -- refuse.
+
+    Measured on the case that prompted this (2026-08-28): the installed SKILL.md hashed
+    to blob 5b35b7d, exactly the blob at d895007, the parent of the merge commit. It was
+    main-minus-one-commit and would otherwise have been refused forever.
+  #>
+  param([string]$Repo, [string]$RefName, [string]$RepoPath, [string]$InstalledFile, [int]$MaxCommits = 400)
+
+  if (-not (Test-Path $InstalledFile)) { return $false }
+  $want = Get-NormHash ([IO.File]::ReadAllBytes($InstalledFile))
+
+  $commits = & git -C $Repo rev-list -n $MaxCommits $RefName -- $RepoPath 2>$null
+  if ($LASTEXITCODE -ne 0 -or -not $commits) { return $false }
+
+  $seen = @{}
+  foreach ($c in $commits) {
+    $sha = ([string]$c).Trim()
+    if (-not $sha) { continue }
+    $oid = (& git -C $Repo rev-parse "${sha}:${RepoPath}" 2>$null)
+    if ($LASTEXITCODE -ne 0 -or -not $oid) { continue }
+    $oid = ([string]$oid).Trim()
+    if ($seen.ContainsKey($oid)) { continue }
+    $seen[$oid] = $true
+
+    # Go through git's own byte stream. `git show > file` in PowerShell re-encodes, which
+    # is the documented hazard that has silently corrupted files in this repo before.
+    $tmp = [IO.Path]::GetTempFileName()
+    try {
+      & cmd /c "cd /d `"$Repo`" && git cat-file blob $oid > `"$tmp`"" 2>&1 | Out-Null
+      if (Test-Path $tmp) {
+        if ((Get-NormHash ([IO.File]::ReadAllBytes($tmp))) -eq $want) { return $true }
+      }
+    } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+  }
+  return $false
+}
+
 $deployer = Join-Path $Repo "$RepoPrefix\overnight-agent\checks\deploy-installed-plugin.ps1"
 $sweep    = Join-Path $env:LOCALAPPDATA 'overnight-agent\installed-skill-drift-sweep.mjs'
 
@@ -129,6 +194,54 @@ if ($deployExit -ne 0) {
   if ($Json) { [pscustomobject]@{ ok=$false; reason='deployer-failed'; exit=$deployExit } | ConvertTo-Json -Compress }
   exit 1
 }
+
+# --- 2b. RESCUE THE MERELY-STALE FROM THE REFUSAL PILE --------------------------------
+# The deployer refuses every BRANCH-ONLY file, which is right when the installed copy is
+# a live fix and wrong when it is just an older commit of the ref. Both look identical to
+# the classifier. Separate them by asking whether the ref's history already contains the
+# installed content: if it does, the ref supersedes it and deploying loses nothing.
+$superseded = @()
+$stillRefused = @()
+foreach ($rel in $refused) {
+  $instFile = Join-Path $Installed ($rel -replace '/', '\')
+  $repoPath = "$RepoPrefix/$rel"
+  if (Test-IsSupersededByRef -Repo $Repo -RefName $Ref -RepoPath $repoPath -InstalledFile $instFile) {
+    $superseded += $rel
+  } else {
+    $stillRefused += $rel
+  }
+}
+
+if ($superseded.Count -gt 0) {
+  Write-Note ("{0} refused file(s) are provably older commits of $Ref, not live fixes - deploying." -f $superseded.Count)
+  foreach ($rel in $superseded) {
+    Write-Note ("  BEHIND   {0}" -f $rel)
+    if ($WhatIf) { $written += $rel; continue }
+
+    $dst = Join-Path $Installed ($rel -replace '/', '\')
+    $repoPath = "$RepoPrefix/$rel"
+    $bkRoot = Join-Path $env:LOCALAPPDATA ('overnight-agent\backups\auto-deploy-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    $bk = Join-Path $bkRoot ($rel -replace '/', '\')
+    $bkParent = Split-Path $bk -Parent
+    if (-not (Test-Path $bkParent)) { New-Item -ItemType Directory -Force -Path $bkParent | Out-Null }
+    if (Test-Path $dst) { Copy-Item $dst $bk -Force }
+
+    $tmp = [IO.Path]::GetTempFileName()
+    try {
+      & cmd /c "cd /d `"$Repo`" && git cat-file blob $Ref`:$repoPath > `"$tmp`"" 2>&1 | Out-Null
+      $want = [int](& git -C $Repo cat-file -s "$Ref`:$repoPath")
+      if ((Get-Item $tmp).Length -ne $want) { throw "size mismatch for $repoPath" }
+      Copy-Item $tmp $dst -Force
+      $written += $rel
+    } catch {
+      Write-Note ("  FAILED   {0}: {1}" -f $rel, $_.Exception.Message)
+      $stillRefused += $rel
+    } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+  }
+}
+
+# From here on, only genuine divergence counts as a refusal.
+$refused = $stillRefused
 
 # --- 3. VERIFY AT THE FAR END --------------------------------------------------------
 # The deployer reports what it did. This asks the live tree what is true. Re-classifying
@@ -195,6 +308,7 @@ if ($Json) {
     ref             = $refSha
     deployed        = @($written)
     refused         = @($refused)
+    superseded      = @($superseded)
     escalate        = @($escalate)
     residual        = @($residual | ForEach-Object { "$($_.Verdict) $($_.Rel)" })
     verifiedCurrent = $verified
