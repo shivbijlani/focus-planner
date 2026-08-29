@@ -39,7 +39,13 @@ New-Item -ItemType Directory -Force -Path $root | Out-Null
 function New-Sandbox {
   <# A repo whose origin/main carries v2 of a file plus one extra file, and a side
      branch carrying v1. The installed tree gets v1 -> BRANCH-ONLY; the extra file is
-     left out -> MISSING. That is one of each interesting verdict in one fixture. #>
+     left out -> MISSING. That is one of each interesting verdict in one fixture.
+
+     `divergent.ps1` is the control: its installed content exists on the side branch and
+     at NO point in origin/main's history, so it is genuine divergence and must stay
+     refused. `livefix.ps1`'s installed content IS an ancestor commit of origin/main, so
+     it is merely behind and must be rescued. The two are indistinguishable to the
+     classifier - both are BRANCH-ONLY - which is the whole reason the fixture has both. #>
   $sb  = Join-Path $root ('sb-' + [guid]::NewGuid().ToString('N').Substring(0,6))
   $repo = Join-Path $sb 'repo'
   $inst = Join-Path $sb 'installed'
@@ -53,13 +59,22 @@ function New-Sandbox {
     & git config user.email 'mut@test'  2>&1 | Out-Null
     & git config user.name  'mut'       2>&1 | Out-Null
 
-    Set-Content -Path (Join-Path $chk 'livefix.ps1') -Value '# v1 live fix' -Encoding UTF8 -NoNewline
+    Set-Content -Path (Join-Path $chk 'livefix.ps1')   -Value '# v1 live fix' -Encoding UTF8 -NoNewline
+    Set-Content -Path (Join-Path $chk 'divergent.ps1') -Value '# main v1'     -Encoding UTF8 -NoNewline
     & git add -A 2>&1 | Out-Null
     & git commit -m v1 --quiet 2>&1 | Out-Null
     & git branch sidefix 2>&1 | Out-Null
 
-    Set-Content -Path (Join-Path $chk 'livefix.ps1') -Value '# v2 from main' -Encoding UTF8 -NoNewline
-    Set-Content -Path (Join-Path $chk 'newguard.ps1') -Value '# merged but not deployed' -Encoding UTF8 -NoNewline
+    # sidefix gains content that never reaches main -> genuine divergence
+    & git checkout --quiet sidefix 2>&1 | Out-Null
+    Set-Content -Path (Join-Path $chk 'divergent.ps1') -Value '# ONLY on the branch' -Encoding UTF8 -NoNewline
+    & git add -A 2>&1 | Out-Null
+    & git commit -m side --quiet 2>&1 | Out-Null
+    & git checkout --quiet main 2>&1 | Out-Null
+
+    Set-Content -Path (Join-Path $chk 'livefix.ps1')   -Value '# v2 from main' -Encoding UTF8 -NoNewline
+    Set-Content -Path (Join-Path $chk 'divergent.ps1') -Value '# main v2'      -Encoding UTF8 -NoNewline
+    Set-Content -Path (Join-Path $chk 'newguard.ps1')  -Value '# merged but not deployed' -Encoding UTF8 -NoNewline
     & git add -A 2>&1 | Out-Null
     & git commit -m v2 --quiet 2>&1 | Out-Null
     & git update-ref refs/remotes/origin/main HEAD 2>&1 | Out-Null
@@ -71,16 +86,19 @@ function New-Sandbox {
   Copy-Item (Join-Path $PSScriptRoot 'deploy-installed-plugin.ps1') `
             (Join-Path $chk 'deploy-installed-plugin.ps1') -Force
 
-  # installed carries v1 (matches sidefix, not origin/main) and lacks newguard.ps1
+  # installed carries the v1 (ancestor-of-main) livefix, the branch-only divergent file,
+  # and lacks newguard.ps1
   $idst = Join-Path $inst 'overnight-agent\checks'
   New-Item -ItemType Directory -Force -Path $idst | Out-Null
-  Set-Content -Path (Join-Path $idst 'livefix.ps1') -Value '# v1 live fix' -Encoding UTF8 -NoNewline
+  Set-Content -Path (Join-Path $idst 'livefix.ps1')   -Value '# v1 live fix'        -Encoding UTF8 -NoNewline
+  Set-Content -Path (Join-Path $idst 'divergent.ps1') -Value '# ONLY on the branch' -Encoding UTF8 -NoNewline
 
   [pscustomobject]@{
     Repo      = $repo
     Installed = $inst
     State     = (Join-Path $sb 'state.json')
     LiveFix   = (Join-Path $idst 'livefix.ps1')
+    Divergent = (Join-Path $idst 'divergent.ps1')
     NewGuard  = (Join-Path $idst 'newguard.ps1')
   }
 }
@@ -111,18 +129,26 @@ Assert ($r1.Json -ne $null) 'G0 emits parseable JSON'
 Assert ($r1.Json.deployed -contains 'overnight-agent/checks/newguard.ps1') `
        'G1 a MISSING file (on the ref, absent installed) is deployed'
 Assert (Test-Path $sb.NewGuard) 'G1 the missing file physically landed'
-Assert ($r1.Json.refused -contains 'overnight-agent/checks/livefix.ps1') `
-       'G2 a BRANCH-ONLY live fix is refused'
-Assert ((Get-Content $sb.LiveFix -Raw) -eq '# v1 live fix') `
-       'G2 the refused file was NOT overwritten'
+
+Assert ($r1.Json.superseded -contains 'overnight-agent/checks/livefix.ps1') `
+       'G6 a BRANCH-ONLY file whose content IS in the ref history is rescued as "behind"'
+Assert ((Get-Content $sb.LiveFix -Raw) -eq '# v2 from main') `
+       'G6 the merely-stale file was updated to the ref version'
+
+Assert ($r1.Json.refused -contains 'overnight-agent/checks/divergent.ps1') `
+       'G2 a genuinely divergent live fix is still refused'
+Assert ((Get-Content $sb.Divergent -Raw) -eq '# ONLY on the branch') `
+       'G2 the divergent file was NOT overwritten'
 Assert ($r1.Exit -eq 0) 'G4 a FIRST refusal does not escalate (exit 0)'
 Assert (@($r1.Json.escalate).Count -eq 0) 'G4 nothing is named for escalation on cycle 1'
 
 # second cycle: same refusal, now persistent
 $r2 = Invoke-SUT -Script $SUT -Sandbox $sb
 Assert ($r2.Exit -eq 2) 'G3 a refusal repeated across cycles escalates (exit 2)'
-Assert ($r2.Json.escalate -contains 'overnight-agent/checks/livefix.ps1') `
+Assert ($r2.Json.escalate -contains 'overnight-agent/checks/divergent.ps1') `
        'G3 the persistently-refused file is named'
+Assert ($r2.Json.escalate -notcontains 'overnight-agent/checks/livefix.ps1') `
+       'G6 a rescued file never enters the escalation queue'
 Assert ($r2.Json.verifiedCurrent -eq $true) `
        'G5 far-end verify: no MISSING survives after the deploy'
 
@@ -164,8 +190,32 @@ Test-Mutant -Name 'M2: -Force passed (refusal defeated, live fix reverted)' `
     param($mut)
     $s = New-Sandbox
     Invoke-SUT -Script $mut -Sandbox $s | Out-Null
-    Assert ((Get-Content $s.LiveFix -Raw) -ne '# v1 live fix') `
-           'killed: the branch-only live fix would be overwritten by main'
+    Assert ((Get-Content $s.Divergent -Raw) -ne '# ONLY on the branch') `
+           'killed: the divergent live fix would be overwritten by main'
+  }
+
+Test-Mutant -Name 'M7: supersede check always true (divergence treated as merely stale)' `
+  -Find '  return $false
+}' -Replace '  return $true
+}' -Check {
+    param($mut)
+    $s = New-Sandbox
+    Invoke-SUT -Script $mut -Sandbox $s | Out-Null
+    Assert ((Get-Content $s.Divergent -Raw) -ne '# ONLY on the branch') `
+           'killed: a branch-only live fix would be silently reverted as "behind"'
+  }
+
+Test-Mutant -Name 'M8: supersede check always false (a merely-stale file can never deploy)' `
+  -Find 'if ((Get-NormHash ([IO.File]::ReadAllBytes($tmp))) -eq $want) { return $true }' `
+  -Replace 'if ($false) { return $true }' -Check {
+    param($mut)
+    $s = New-Sandbox
+    $a = Invoke-SUT -Script $mut -Sandbox $s
+    Assert ((Get-Content $s.LiveFix -Raw) -eq '# v1 live fix') `
+           'killed: an ordinary stale file would be refused forever, defeating the wire'
+    $b = Invoke-SUT -Script $mut -Sandbox $s
+    Assert ($b.Json.escalate -contains 'overnight-agent/checks/livefix.ps1') `
+           'killed: it would then escalate to a human every cycle for nothing'
   }
 
 Test-Mutant -Name 'M3: streak never accumulates (every cycle looks like the first)' `
