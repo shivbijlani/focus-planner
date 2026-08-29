@@ -101,6 +101,13 @@ param(
         'better-telegram-mcp',
         'workspace-mcp'
     ),
+    # A candidate whose owning session process is STILL ALIVE is never reaped, at any age.
+    # These are the process names that count as "a session that owns MCP servers". GH #178.
+    [string[]] $OwnerNames = @('copilot.exe'),
+    # Escape hatch: fall back to the old age-only behaviour. Exists so the ownership veto can
+    # be switched off in one flag if it ever mis-protects, rather than by editing the script
+    # under pressure. It is NOT the default, because age-only is the defect.
+    [switch] $IgnoreOwnership,
     [switch] $DryRun
 )
 
@@ -190,8 +197,90 @@ function Get-ProtectedPidSet {
     return $protected
 }
 
+function Get-ProcessTable {
+    # One WMI pass, reused by both the protected-set walk and the ownership check, so the two
+    # can never disagree about what was running at this instant.
+    $table = @{}
+    Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, Name, CreationDate |
+        ForEach-Object {
+            $table[[int]$_.ProcessId] = [pscustomobject]@{
+                Pid     = [int]$_.ProcessId
+                Parent  = [int]$_.ParentProcessId
+                Name    = [string]$_.Name
+                Started = ConvertTo-ProcessStartTime $_.CreationDate
+            }
+        }
+    return $table
+}
+
+function Test-HasLiveOwner {
+    <#
+      Is this MCP server still owned by a session that is RUNNING?
+
+      WHY THIS EXISTS (GH #178)
+        The reaper's only protection used to be an age gate, and the protected set covered just
+        THIS process's ancestors and descendants. A *sibling* Copilot session's servers are in
+        neither -- so once they aged past the cutoff they were killed while that session was
+        still working. The Overnight Agent is scheduled every 30 minutes and a run regularly
+        takes longer than that, so runs overlap by design and this fired routinely. The symptom
+        is invisible: a slot dying mid-run leaves no trace in the logs, so it was never pinned
+        on the reaper.
+
+      WHY OWNERSHIP IS KNOWABLE
+        It was previously assumed that "all runs share one copilot.exe", which would make an
+        owner check equivalent to protecting everything. That is false, and measuring it is what
+        unblocked this: each session has its OWN copilot.exe, and its MCP servers are children
+        of it. Two live sessions on this box at the time of writing:
+            copilot.exe 12708 (21:42) -> 4 MCP children
+            copilot.exe  6236 (19:54) -> 3 MCP children
+        So "orphan" has an exact meaning: no live owner remains in the ancestor chain.
+
+      PID REUSE IS HANDLED, AND IT MATTERS
+        Windows does not re-parent orphans -- a dead parent's PID stays recorded on the child and
+        may later be handed to an unrelated process. Trusting the PID alone would therefore let a
+        recycled PID resurrect a dead owner and protect a genuine orphan forever. A parent only
+        counts if it started NO LATER than its child; otherwise the real parent is gone and the
+        chain is treated as orphaned.
+    #>
+    param(
+        [hashtable] $Table,
+        [int] $StartPid,
+        [datetime] $ChildStarted,
+        [string[]] $OwnerNames
+    )
+
+    $ownerSet = [System.Collections.Generic.HashSet[string]]::new(
+        [string[]]($OwnerNames | ForEach-Object { $_.ToLowerInvariant() })
+    )
+
+    $seen    = [System.Collections.Generic.HashSet[int]]::new()
+    $cur     = $StartPid
+    $childAt = $ChildStarted
+    $guard   = 0
+
+    while ($cur -gt 0 -and $guard -lt 64) {
+        $guard++
+        if (-not $seen.Add($cur)) { break }          # cycle -> stop
+        if (-not $Table.ContainsKey($cur)) { return $false }   # parent gone -> orphan
+
+        $node = $Table[$cur]
+
+        # PID reuse: a "parent" that started after its child is not the real parent.
+        if ($node.Started -and $childAt -and $node.Started -gt $childAt) { return $false }
+
+        if ($ownerSet.Contains($node.Name.ToLowerInvariant())) { return $true }  # live owner
+
+        if ($node.Parent -le 0 -or $node.Parent -eq $cur) { break }
+        $childAt = $node.Started
+        $cur     = $node.Parent
+    }
+
+    return $false
+}
+
 $cutoff    = (Get-Date).AddMinutes(-$MinAgeMinutes)
 $protected = Get-ProtectedPidSet
+$procTable = Get-ProcessTable
 $combined  = ($Patterns -join '|')
 
 $nameFilter = ($ProcessNames | ForEach-Object { "Name='$($_ -replace "'", "''")'" }) -join ' OR '
@@ -202,6 +291,7 @@ $matched = 0
 $stale   = 0
 $killed  = 0
 $failed  = 0
+$ownedLive = 0
 $freedKB = 0
 $details = New-Object System.Collections.ArrayList
 
@@ -217,6 +307,24 @@ foreach ($p in $candidates) {
     $started = ConvertTo-ProcessStartTime $p.CreationDate
     if (-not $started) { continue }   # unknown age -> never a candidate
     if ($started -gt $cutoff) { continue }
+
+    # OWNERSHIP VETO (GH #178). Age says "old"; it does not say "abandoned". A sibling run that
+    # has been working for 40 minutes has 40-minute-old servers and needs every one of them.
+    # Only reap when no live owning session remains. This can only ever PREVENT a kill, never
+    # cause one, which is the property that makes it safe to ship to an unattended job.
+    if (-not $IgnoreOwnership) {
+        if (Test-HasLiveOwner -Table $procTable -StartPid $procId -ChildStarted $started -OwnerNames $OwnerNames) {
+            $ownedLive++
+            [void]$details.Add([ordered]@{
+                pid    = $procId
+                ageMin = [math]::Round(((Get-Date) - $started).TotalMinutes)
+                mb     = [math]::Round(($p.WorkingSetSize / 1KB) / 1KB)
+                action = 'spared-live-owner'
+            })
+            continue
+        }
+    }
+
     $stale++
 
     $ageMin = [math]::Round(((Get-Date) - $started).TotalMinutes)
@@ -247,8 +355,14 @@ foreach ($p in $candidates) {
     stale   = $stale
     killed  = $killed
     failed  = $failed
+    # How many aged-out servers were spared because their session is still running. A non-zero
+    # value here is a kill the old age-only reaper would have made -- i.e. a live run whose
+    # tools it would have taken away mid-task. Reported so the saving is observable rather
+    # than asserted. GH #178.
+    sparedLiveOwner = $ownedLive
     freedMB = [math]::Round($freedKB / 1KB)
     dryRun  = [bool]$DryRun
     minAgeMinutes = $MinAgeMinutes
+    ownershipVeto = (-not [bool]$IgnoreOwnership)
     details = $details
 } | ConvertTo-Json -Depth 4 -Compress
