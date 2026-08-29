@@ -84,9 +84,23 @@ if ($PSCmdlet.ShouldProcess($ConfigPath, "repoint $($targets.Count) slots to dir
         $json.mcpServers.$t.args    = @($Cli) + $kept
     }
 
-    $json | ConvertTo-Json -Depth 20 | Set-Content $ConfigPath -Encoding UTF8
+    # Write UTF-8 WITHOUT a BOM. `Set-Content -Encoding UTF8` emits a BOM under
+    # PowerShell 5.1, and mcp-config.json has none -- so patching the file used to
+    # silently change its encoding as a side effect of changing its contents.
+    # Node's JSON.parse (what the MCP client actually uses) REJECTS a leading BOM,
+    # so the config became unloadable while every check here still passed. GH #212.
+    $out = $json | ConvertTo-Json -Depth 20
+    [IO.File]::WriteAllText($ConfigPath, $out, (New-Object Text.UTF8Encoding($false)))
 
     # --- validate JSON round-trips ---------------------------------------------
+    # A byte check FIRST: PowerShell's ConvertFrom-Json happily accepts a BOM, so
+    # the parse below cannot detect the exact corruption this script used to cause.
+    # Assert the far end (the bytes) rather than trusting a tolerant parser. GH #212.
+    $head = [IO.File]::ReadAllBytes($ConfigPath) | Select-Object -First 3
+    if ($head.Count -ge 3 -and $head[0] -eq 0xEF -and $head[1] -eq 0xBB -and $head[2] -eq 0xBF) {
+        Copy-Item $backup $ConfigPath -Force
+        Fail "config was written with a UTF-8 BOM (Node's JSON.parse would reject it) - rolled back."
+    }
     try { $null = Get-Content $ConfigPath -Raw | ConvertFrom-Json }
     catch { Copy-Item $backup $ConfigPath -Force; Fail "config became invalid JSON - rolled back." }
 
