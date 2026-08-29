@@ -95,16 +95,36 @@ already processed in this journal") lives in the **skill's own working dir**, wh
 - **Tool:** [`oa-state.ps1`](./oa-state.ps1) (next to this skill) reads/writes that state. Run it with
   `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\oa-state.ps1 <command>`:
   - **`scan`** → your per-run worklist as JSON, one row per task: `{ id, status, changed, reopened,
-    has_agent_block, tracked }`. **Run this first, every run** (see PHASE 1/2). It is how you find work
-    without re-reading 90+ journals by hand.
+    has_agent_block, tracked, due_poll, poll_cadence }`. **Run this first, every run** (see PHASE 1/2).
+    It is how you find work without re-reading 90+ journals by hand.
   - **`get -Id <id>`** → that task's full state JSON.
   - **`mark -Id <id> [-Status <s>] [-Version <n>] [-PlanId <p>]`** → call this **after you write your
     turn into a journal**. It updates the fields and re-snapshots the journal, so next run the task reads
-    as quiet until the user touches it again.
+    as quiet until the user touches it again. It also stamps an invisible
+    `<!-- /overnight-agent turn-end -->` comment marking where your turn stopped — **that stamp is what
+    makes a reply typed at the bottom of the journal reopen the task**, so skipping `mark` after a turn
+    leaves that task blind to the user's next message.
+  - **`mark -Id <id> -Poll <cadence>` / `-PollDone` / `-PollClear`** → manage a **time-triggered poll**
+    on a task (see "Polling" below). Cadence is `hourly | daily | weekly | <N>h | <N>d | <N>m`.
   - **`seed [-Force]`** → one-time/migration bootstrap of state for every existing journal.
 
+**Polling (time-triggered tasks the user never touches):** `scan` normally only flags journals the
+**user** has changed — so a purely time-based job (e.g. "each night, check the video-backup folder and
+upload any drops") would be invisible and silently stop the moment the user stops replying. A **poll**
+fixes that: it lives only in the skill state (never in the journal, so the user sees nothing), and
+`scan` reports **`due_poll: true`** on any task whose poll is due. Lifecycle:
+- When a task commits you to a recurring self-check, arm it once:
+  `oa-state.ps1 mark -Id <ID> -Poll <cadence>` (a freshly armed poll is due on the next `scan`).
+- Every run, after the normal `scan`, **act on any row with `due_poll: true`** (do the recurring check),
+  then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone` (stamps `last_polled` and pushes `next_due`
+  forward by the cadence). When the recurring duty ends, `oa-state.ps1 mark -Id <ID> -PollClear`.
+
 **How "the user replied" is detected (the reopen fix):** the tool remembers a hash of each journal as
-you last left it. On the next `scan`:
+you last left it, **and where your turn ended**. The second half is what makes it work: in most journals
+your turn is the last section in the file, so no later `## ` heading closes it — and without an explicit
+end marker, anything typed below gets read as part of *your own turn* and is never seen. So `mark`
+writes the boundary down (the `<!-- /overnight-agent turn-end -->` stamp above) rather than inferring
+it, and `scan` treats everything past that stamp as the user speaking. On the next `scan`:
 - **`reopened: true`** means the user added content after your last turn (a new `## <date>` entry or
   raw text at the bottom) and you haven't answered it — **even if the task was `done`/`skip`.** Treat it
   as fresh input: read the newest message and act (approve→execute, new ask→re-plan). This is the rule
@@ -112,6 +132,9 @@ you last left it. On the next `scan`:
 - **`reopened: false` + `changed: false`** means you spoke last and nothing changed — leave it alone.
 - **`has_agent_block: false`** means there's no plan yet — a PHASE 2 propose candidate (subject to the
   board, below).
+- **`snoozed: true`** (+ `snooze_until`) means the user snoozed it and the date hasn't passed. **Skip it
+  entirely, in every phase** — no plan, no execution, no board/journal edit, even if status is
+  `approved`; report it only as *"skipped (snoozed until DATE)"*. Sole override: `reopened` beats it. (#391)
 
 You **do not** ask the user to tick a box or edit a marker. Approve / revise / skip are just things they
 **say** in plain English; you interpret intent (see "Reading the user's decision"). If `scan` and a
@@ -233,10 +256,33 @@ Do the phases **in this order** every time.
 
 > **Scan first (applies to PHASE 1 *and* PHASE 2):** before judging any task, run
 > `oa-state.ps1 scan` once and use its JSON as your worklist. Each row tells you what changed and
-> what's `reopened` (the user spoke after your last turn — active again, even if `done`/`skip`). Don't
+> what's `reopened` (the user spoke after your last turn — active again, even if `done`/`skip`) or
+> `snoozed` (skip it). Don't
 > reconstruct state by eyeballing 90+ journals; let the tool point you at the handful that need work.
 
 ### PHASE 0 — Check the agent inbox (do this before everything)
+
+**First, reap stale MCP servers.** Every scheduled run starts its own set of stdio MCP servers, and
+finished sessions don't always reap them. They pile up (~6 per run, 75–150 MB each) until the box runs
+out of memory and the *next* run's MCP servers die on startup — which silently breaks the inbox check
+below, so emailed instructions get dropped without anyone noticing. Run this first, every run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\reap-stale-mcp.ps1"
+```
+
+It prints one JSON line (`{scanned, matched, stale, killed, freedMB, …}`). It only ever kills a
+`node.exe` whose command line matches a known MCP server, that is **older than 20 minutes**, and that
+is not in this run's own process tree. Add `-DryRun` to preview. If it reports a non-zero `killed`,
+mention the count in the wrap-up; if the script itself fails, note it and carry on — a failed reap must
+never abort the run.
+
+⚠️ **The threshold is sized against this run's own servers, not against the run interval.** Because the
+reaper executes first, this run's servers are only 0–2 minutes old, so 20 minutes clears everything
+older while never touching them. The earlier 45-minute figure was chosen to sit "longer than the
+30-minute run interval, so the previous run is never touched" — but deliberately sparing the *previous*
+run's servers is precisely what let them accumulate, so that threshold was itself the leak (task #349).
+Don't raise it back on that reasoning.
 
 The user can leave you new instructions by emailing the agent account
 (`<agent-inbox@example.com>`, from `user-settings.md`). At the start of each run, read the inbox via the email MCP and fold any
@@ -324,6 +370,8 @@ If a linked journal is missing or empty, note it and proceed with what you have 
    `in-progress` whose next step is approved), **plus any `reopened` task whose newest user message is an
    approval** (e.g. "approve", "go ahead" appended at the bottom — interpret per "Reading the user's
    decision"). Use `oa-state.ps1 get -Id <ID>` if you need a task's full state.
+   **Also pick up any row with `due_poll: true`** — a time-triggered recurring check that's now due
+   (see "Polling"). Run its check, then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone`.
 2. For each, **execute the approved plan**:
 
    - First, **gather linked-task context** per "Gather linked-task context FIRST" above — read the
@@ -439,15 +487,38 @@ Run the bundled bridge **once** (it posts new agent turns to each task's forum t
 stamps a `<!-- tg-meta … -->` deep-link marker into the journal the first time it sees a task, and folds any
 phone replies back into the journals):
 
+> 🚦 **If `user-settings.md` names a PHASE 3 wrapper script, run *that* and skip this code block.**
+> A wrapper exists precisely so the flags below cannot be forgotten. Only fall back to the raw
+> command when no wrapper is configured.
+
 ```powershell
 # Token from the OS credential vault — never from a file.
 $env:TELEGRAM_BOT_TOKEN = & "$env:LOCALAPPDATA\overnight-agent\secrets\telegram-secret.ps1" get
 $env:TELEGRAM_CHAT_ID   = '<Telegram chat id from user-settings.md>'
 $env:PLANNER_PATH       = '<planner folder>'   # same folder planner.md lives in
+
+# ⚠️ FAIL-OPEN — you MUST set this explicitly, every run. An ABSENT variable means
+# "digest enabled", and an absent *_TOPIC means "post it to the General thread".
+# Omitting these is strictly WORSE than setting them. Copy the value from the
+# "Approval digest" row of user-settings.md ('on' or 'off').
+$env:TELEGRAM_BRIDGE_DIGEST = '<on|off — from user-settings.md>'
+# Only when the digest is 'on': keeps it out of General by giving it its own topic.
+# $env:TELEGRAM_BRIDGE_DIGEST_TOPIC = '<topic name or id from user-settings.md>'
+
 # Honor the "Archive completed topics" user-setting (default on). Only set this
 # to 'off' when that row says off; otherwise leave it unset so the default holds.
 # $env:TELEGRAM_BRIDGE_ARCHIVE = 'off'
-$bridge = "<dev drive>\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js"
+
+# ⚠️ RESOLVE THIS FROM user-settings.md → "Bridge CLI" — do NOT assume the default
+# repo path below. That row exists so the bridge can be PINNED (e.g. to a worktree)
+# while the main checkout sits on an unrelated or known-buggy branch. Using the
+# default path when the row names another one runs a DIFFERENT BUILD than the one
+# the user validated — and `sync-down` on a stale build can silently destroy the
+# user's phone replies (it reads an update, skips it, and still advances the
+# Telegram offset, which is not redeliverable).
+$bridge = "<path from user-settings.md -> Bridge CLI; fall back to the line below>"
+# Fallback only when no Bridge CLI row exists:
+# $bridge = "<dev drive>\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js"
 
 # FIRST-TIME SETUP ONLY: if the bridge has never run (no state.json yet), baseline
 # so it starts from "now" and does NOT backfill a topic for every historical task.
@@ -455,6 +526,8 @@ if (-not (Test-Path "$env:LOCALAPPDATA\overnight-agent\telegram-bridge\state.jso
   node "$bridge" baseline
 }
 
+# Fold the user's phone replies in BEFORE posting, so this run sees them.
+node "$bridge" sync-down
 node "$bridge" once
 ```
 
@@ -469,12 +542,37 @@ Rules:
 - **It's idempotent and safe to re-run.** The bridge dedupes by a hash of each turn and persists its
   topic-map/offset in `%LOCALAPPDATA%\overnight-agent\telegram-bridge\state.json`, so re-runs never repost
   unchanged content or make duplicate topics.
-- **Respect the allowlist.** If `Telegram → Tasks` names specific IDs, set
-  `$env:TELEGRAM_BRIDGE_TASKS = '<comma-separated ids>'` before the call so only those are mirrored.
-- **Honor the archive setting.** `Telegram → Archive completed topics` (default **on** once Telegram is
-  added) controls whether a task's topic is closed when it reaches the completed board (and reopened if it
-  leaves). It's on by default; only when that row is `off` set `$env:TELEGRAM_BRIDGE_ARCHIVE = 'off'`
-  before the call.
+- **Map settings → env vars (per the bridge README).** For any non-default `Telegram → …` row in
+  `user-settings.md`, set the matching `TELEGRAM_BRIDGE_*` variable before the call; the bridge README's
+  env table is the authoritative list (e.g. `Tasks` → `$env:TELEGRAM_BRIDGE_TASKS = '<ids>'`,
+  `Archive completed topics = off` → `$env:TELEGRAM_BRIDGE_ARCHIVE = 'off'`). Defaults hold when a var is
+  unset, so a new toggle is a README row + a `user-settings.md` row — **no change here**. ⚠️ **One
+  documented exception: `TELEGRAM_BRIDGE_DIGEST` is fail-OPEN**, so "unset" is *not* its default-safe
+  state — see the digest bullet below and always export it explicitly.
+- ⚠️ **Resolve the bridge path from `user-settings.md` → "Bridge CLI"; never hard-code the repo default.**
+  That row is how a user pins the bridge to a *specific, validated* build — typically a worktree, while the
+  main checkout sits on some other branch. Running the default path in that situation executes a **different
+  build** than the one they verified. This is not hypothetical: it is the same "an operative line told the
+  agent to do the dangerous thing while the warning lived elsewhere" shape as the fail-open gate above, and
+  it bites hardest on `sync-down`, because a stale build can **permanently destroy the user's phone replies**
+  — it reads a batched update, skips it, and still advances the Telegram offset, and Telegram never
+  redelivers a confirmed update. **If a wrapper script is configured, prefer it for `sync-down` too** (it
+  pins the path *and* sets the fail-open digest flag), rather than hand-rolling `node "$bridge" sync-down`.
+- ⚠️ **Fold phone replies BEFORE `oa-state.ps1 scan`, not just before `once`.** The `sync-down` in the block
+  above protects *this* phase, but the scan in PHASE 1/2 has already run by then. `oa-state.ps1 mark`
+  snapshots each journal's hash, and a fold that lands *after* the mark leaves every answered task with a
+  stale hash — so the next run reports it `reopened` and re-answers it, writing new turns to tasks that were
+  already finished. Run a `sync-down` pass **early**, before the scan, and treat the one here as a no-op
+  safety net; if this one ever reports `folded > 0`, that reply arrived mid-run and is **next** run's work —
+  do not reopen finished tasks to chase it.
+- ⚠️ **The approval digest is FAIL-OPEN — always pass `TELEGRAM_BRIDGE_DIGEST` explicitly.** The bridge
+  treats an **absent** variable as *enabled*, and an absent `TELEGRAM_BRIDGE_DIGEST_TOPIC` as *post to
+  the **General** thread*. So "just leave it unset" does **not** mean "stay quiet" — it means dump the
+  entire approval queue into General, which is the one place users most often ask the bot to stay out
+  of. Read the desired value from the `Approval digest` row of `user-settings.md` and export it on every
+  run, even when it is `off`. **The bridge does not persist the digest's message id, so a wrongly-sent
+  digest can never be deleted afterwards** — this mistake is permanent, which is why it is called out
+  here and not left to the code comment alone.
 - **Never print the token** in your summary. If the vault lookup or the CLI fails (e.g. no token, network),
   note it briefly in the wrap-up and carry on — a failed mirror must never abort the run.
 
@@ -562,6 +660,17 @@ present the reversible draft and stop short of the committing action.
   task goes quiet. \*\*Mark handled instruction emails as read\*\* so you don't reprocess them.
 - **Stay in the user's space cleanly.** Never edit above the sentinel. Preserve the user's notes,
   links, and formatting. Write files as UTF-8.
+- **Write every journal turn through `write-turn.ps1`** (next to this skill), never by hand:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\write-turn.ps1 -Id <ID> -BodyFile <file.md>`.
+  Author the turn body with a **file tool** first, then pass the file. The script validates the body
+  and **refuses to write** if it finds any of the four corruption classes that have already destroyed
+  real content — a value eaten by PowerShell string interpolation (`~$150-275` → `~\-275`), a doubled
+  apostrophe from single-quote escaping (`don''t`), an H2 that is not 🌙-first (the Telegram bridge
+  anchors on `^##\s*🌙`, so any other H2 silently truncates the turn), and a stray
+  `<!-- from: overnight-agent -->` with no heading above it (severs the block and hides
+  **Needs from you**). It appends only, so it can never delete one of the user's replies, and it backs
+  the journal up first. Add `-Validate` to lint without writing. This is a **guard, not a guideline**:
+  each of these classes was documented in prose first and broken anyway.
 - **Ask narrowly, not broadly.** If you need something, put one precise question in \*\*Needs from
   you\*\* and set `blocked`; don't stall the whole run. You may also reply to the user's instruction
   email with that one question.
