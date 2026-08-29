@@ -13,6 +13,7 @@
     "copy:sw": "node scripts/copy-sw.mjs",
     "lint": "eslint .",
     "test": "vitest run",
+    "merge-queue": "node scripts/merge-queue.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
