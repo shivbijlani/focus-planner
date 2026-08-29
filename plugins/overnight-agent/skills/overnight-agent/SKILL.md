@@ -315,6 +315,16 @@ stale-artefact class as a stale CI tick), deploys only files that are plainly be
 **re-classifies the live tree afterwards** so the result is what is *true* rather than what the deployer
 *did*.
 
+- ✅ **It syncs BOTH deploy targets.** `installed-plugins` is not the only place the running code lives,
+  and it is not the copy most of `user-settings.md` actually invokes — those rows name
+  `%LOCALAPPDATA%\overnight-agent\<script>` verbatim. That flat **OA home** was unsynced, so a fix could
+  be merged, deployed, reported *"verified-current True"*, and still not be what the next run executed.
+  Measured 2026-08-29, seconds after a clean deploy: the live `reap-stale-mcp.ps1` was **300 lines
+  behind** `main`, missing #237's wedged-session-host collection — the fix for the standing *"we keep
+  having to restart the device"* complaint. Merged, deployed, and not running. `sync-oa-home.ps1` now
+  runs as part of this step (`-NoOaHome` opts out) using the same refuse-a-live-fix safety model, so
+  "merged means running" covers every target rather than the one that happened to be wired.
+
 - ✅ **It never passes `-Force`.** A live fix that exists only on a side branch is always **refused**,
   never overwritten. That refusal is what keeps this from being a blind "copy main over production",
   which would revert live fixes while looking like a repair.

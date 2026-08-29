@@ -72,7 +72,8 @@ param(
   [string]$RepoPrefix = 'plugins',
   [int]$EscalateAfterCycles = 2,
   [string]$StatePath = "$env:LOCALAPPDATA\overnight-agent\auto-deploy-state.json",
-  [switch]$SkipFetch
+  [switch]$SkipFetch,
+  [switch]$NoOaHome
 )
 
 $ErrorActionPreference = 'Stop'
@@ -332,8 +333,45 @@ if (-not $WhatIf) {
   } | ConvertTo-Json -Depth 5) | Set-Content -Path $StatePath -Encoding UTF8
 }
 
+# --- 4.5 THE SECOND DEPLOY TARGET ----------------------------------------------------
+# `installed-plugins` is not the only place the running code lives, and it is not the
+# copy most of user-settings.md actually invokes. Those rows name
+# `%LOCALAPPDATA%\overnight-agent\<script>` verbatim - the flat OA home - so a file can
+# be merged, deployed here, reported "verified-current True", and still not be what the
+# next run executes.
+#
+# Measured 2026-08-29, seconds after this script reported a clean tree: the live
+# `reap-stale-mcp.ps1` was 16,360 bytes (300 lines) behind main, missing #237's
+# wedged-session-host collection - the fix for the standing "we keep having to restart
+# the device" complaint. Merged, deployed, and not running.
+#
+# So this step is part of the same contract, not an extra: "merged means running" is
+# false while any deploy target is unsynced. It is invoked here rather than added as a
+# line in SKILL.md because this file's own history is that a separate instruction is
+# the thing that gets skipped.
+$oaHomeExit = 0
+if (-not $NoOaHome) {
+  $syncScript = Join-Path $PSScriptRoot 'sync-oa-home.ps1'
+  if (Test-Path $syncScript) {
+    Write-Host ''
+    Write-Note 'syncing the OA home (second deploy target)'
+    try {
+      $syncArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $syncScript,
+                    '-Ref', $Ref, '-Repo', $Repo, '-SkipFetch')
+      if ($WhatIf) { $syncArgs += '-WhatIf' }
+      & powershell @syncArgs 2>&1 | ForEach-Object { Write-Host ("  | " + $_) }
+      $oaHomeExit = $LASTEXITCODE
+    } catch {
+      # A failed sync must never abort the run - it degrades to "not synced", which is
+      # the status quo it replaces, and is reported rather than thrown.
+      Write-Host "  | sync-oa-home failed: $_"
+      $oaHomeExit = 2
+    }
+  }
+}
+
 # --- 5. REPORT -----------------------------------------------------------------------
-$needsAttention = ($escalate.Count -gt 0) -or (-not $verified)
+$needsAttention = ($escalate.Count -gt 0) -or (-not $verified) -or ($oaHomeExit -ne 0)
 
 if ($Json) {
   [pscustomobject]@{
@@ -346,6 +384,7 @@ if ($Json) {
     escalate        = @($escalate)
     residual        = @($residual | ForEach-Object { "$($_.Verdict) $($_.Rel)" })
     verifiedCurrent = $verified
+    oaHomeExit      = $oaHomeExit
     whatIf          = [bool]$WhatIf
   } | ConvertTo-Json -Depth 5 -Compress
 } else {
@@ -367,6 +406,13 @@ if ($Json) {
     Write-Host '  DRIFT SURVIVED THE DEPLOY - a file on the ref is still absent from the'
     Write-Host '  installed tree. This is the "merged but dead" case; investigate before'
     Write-Host '  trusting the running agent.'
+  }
+  if ($oaHomeExit -ne 0) {
+    Write-Host ''
+    Write-Host '  THE OA HOME IS NOT CLEAN - see the sync-oa-home lines above. The copies'
+    Write-Host '  under %LOCALAPPDATA%\overnight-agent are what user-settings.md actually'
+    Write-Host '  invokes, so a file left behind there is not running no matter what the'
+    Write-Host '  installed tree says.'
   }
 }
 
