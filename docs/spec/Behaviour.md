@@ -1,7 +1,7 @@
 # Behaviour
 
 This page is the acceptance suite: every statement below is derived from an actual test
-name in the repository's 62 test files (723 individual test cases). A rebuilt
+name in the repository's 66 test files (790 individual test cases). A rebuilt
 implementation is correct only if it satisfies every statement here. Per-module detail and
 rationale live on each domain page; this page groups requirements by functional area so
 they can be checked off independently of which file implements them.
@@ -82,6 +82,12 @@ they can be checked off independently of which file implements them.
   it must apply the first real change immediately, collapse a rapid burst to its final
   state, and never re-apply when a burst ends where it began
   (`src/storage/syncStatus.test.js`, `src/storage/syncStatusCoalesce.test.js`).
+- Per-task AI-assistance settings must normalize a missing/malformed file to an empty,
+  version-1 document; a task absent from the file must read as both opt-ins off; a
+  read-modify-write of one task's setting must leave every other task's entry untouched
+  and must serialize concurrent toggles so neither is lost; and a write must refuse to
+  replace a file that parses as JSON but fails the schema, protecting a malformed sidecar
+  from being silently overwritten (`src/storage/taskSettings.test.js`).
 
 ## Record-level sync (folder-sync)
 
@@ -153,6 +159,17 @@ they can be checked off independently of which file implements them.
   missing version/required field/invalid env-var name/duplicate server or target, and
   throw with every violation listed, not just the first
   (`packages/mcp-cred-vault/src/schema.test.js`).
+
+## Release tooling
+
+- The verified PR merge queue must start with the fix that unblocks the suite, respect
+  known stacking order between PRs, contain no duplicates, never queue an excluded PR, and
+  show a non-decreasing expected test count as PRs land; planning one step must merge an
+  open/mergeable PR, ready a draft first, skip an already-merged or closed-without-merging
+  PR (so a stopped run is resumable), and stop rather than guess on a conflicting or
+  not-found PR; planning the whole queue must halt at the first blocker, resume from a
+  given PR, and carry a label through for readable output
+  (`scripts/merge-queue.test.js`, see [Domain-scripts](Domain-scripts)).
 
 ## Overnight Agent self-verification
 

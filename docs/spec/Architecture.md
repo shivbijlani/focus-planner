@@ -10,16 +10,16 @@ shared packages consumed by the app; `scripts` and `root` are build/dev tooling.
 
 | Domain | Modules | Principal module(s) | Runs in |
 | --- | --- | --- | --- |
-| `app` | 30 | `src/App.jsx`, `src/focusPlanOps.js`, `src/journalChat.js` | Browser (React) |
-| `config` | 4 | `src/config/agentsDoc.js`, `src/config/userSettingsForm.js` | Browser |
-| `storage` | 10 | `src/storage/storage.js`, `src/storage/sources.js` | Browser |
+| `app` | 31 | `src/App.jsx`, `src/focusPlanOps.js`, `src/journalChat.js` | Browser (React) |
+| `config` | 5 | `src/config/agentsDoc.js`, `src/config/userSettingsForm.js` | Browser |
+| `storage` | 12 | `src/storage/storage.js`, `src/storage/sources.js` | Browser |
 | `folder-sync` | 16 | `packages/folder-sync/src/engine.js`, `packages/folder-sync/src/merge.js`, `packages/folder-sync/src/sw.js` | Browser main thread + Service Worker |
 | `diagnostics` | 1 | `packages/diagnostics/src/index.js` | Browser (both contexts) |
 | `install-prompt` | 8 | `packages/install-prompt/src/useInstallPrompt.js`, `packages/install-prompt/src/InstallModal.jsx` | Browser |
 | `telegram-bridge` | 16 | `packages/telegram-bridge/src/bridge.js`, `packages/telegram-bridge/bin/telegram-bridge.js` | Node (standalone CLI/daemon) |
-| `overnight-agent` | 116 | `plugins/overnight-agent/skills/overnight-agent/SKILL.md`, `plugins/overnight-agent/checks/repo-drift-sweep.mjs` | Copilot CLI plugin (Node checks + PowerShell skill scripts) |
+| `overnight-agent` | 127 | `plugins/overnight-agent/skills/overnight-agent/SKILL.md`, `plugins/overnight-agent/checks/repo-drift-sweep.mjs` | Copilot CLI plugin (Node checks + PowerShell skill scripts) |
 | `mcp-cred-vault` | 2 | `packages/mcp-cred-vault/src/schema.js` | Windows PowerShell/.NET launcher (JS surface only validates its pointer file) |
-| `scripts` | 5 | `scripts/copy-sw.mjs`, `scripts/spec/collect.mjs` | Node (dev/CI tooling) |
+| `scripts` | 6 | `scripts/copy-sw.mjs`, `scripts/spec/collect.mjs`, `scripts/merge-queue.mjs` | Node (dev/CI tooling) |
 | `root` | 3 | `server.js`, `vite.config.js`, `eslint.config.js` | Node (dev server) / build config |
 
 Composition is **file-mediated, not API-mediated**, between the browser app and the two
@@ -50,7 +50,7 @@ conventions the app writes, but do not import any `src/` module. The one excepti
 dependency-free specifically so it is safe to import from both the Node bridge and the
 browser app (for rendering a task's Telegram deep link inside the journal chat UI).
 
-`overnight-agent`'s 116 modules are almost entirely `checks/*.mjs` — read-only "sweeps"
+`overnight-agent`'s 127 modules are almost entirely `checks/*.mjs` — read-only "sweeps"
 that audit the same markdown files plus the agent's own SQLite session-state store, and
 "mutcheck" tests that verify each sweep still fails when the bug it guards is
 reintroduced. Like `telegram-bridge`, this domain has no import dependency on `src/`; it

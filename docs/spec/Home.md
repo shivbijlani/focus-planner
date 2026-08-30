@@ -55,8 +55,9 @@ buys three things the design leans on hard:
 - **Consent is explicit and structural where it matters.** The Overnight Agent
   distinguishes *proposing* a plan (always allowed) from *executing* one (gated on human
   approval recorded in the journal). This split is deliberately conservative even where it
-  is not yet fully enforced — see [Roadmap](Roadmap) for the known gap where approval can
-  currently be inferred from unmarked prose (issue #227).
+  is not yet fully enforced — see [Roadmap](Roadmap) for the known gap where the `from: me`
+  marker that attests consent is itself written by software the agent runs, not by an
+  unforgeable channel (issue #250).
 - **Assert the artifact, not the exit code.** The overnight-agent's "sweep" and
   "mutcheck" checks (see [Domain-overnight-agent](Domain-overnight-agent)) and this very spec's own
   `scripts/spec/verify.mjs` gate share one discipline: a green check must mean the actual
