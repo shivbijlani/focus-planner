@@ -279,7 +279,53 @@ regenerating the table from parsed data: this file is the Overnight Agent's real
 security-relevant configuration (paths, accounts, email allow-lists), and a lossy
 round-trip would corrupt it silently.
 
-## 9. Folder self-description — `AGENTS.md`
+## 9. Small planner-owned JSON sidecars — `settings.json` and `task-settings.json`
+
+Two small JSON files live next to `planner.md` in the active source for machine-owned
+metadata that does not belong in journal prose. Both follow the same shape convention: a
+`version` field plus one payload field, normalized leniently on read (malformed or
+missing input never breaks the board) and written back as pretty-printed JSON with a
+trailing newline.
+
+`settings.json` (`src/storage/settings.js`, `SETTINGS_FILE`) holds the single
+mission-statement string shown in the app:
+
+```json
+{
+  "version": 1,
+  "missionStatement": "Ship the Sydney rollout without dropping anything else."
+}
+```
+
+`task-settings.json` (`src/storage/taskSettings.js`, `TASK_SETTINGS_FILE`) holds two
+per-task AI-assistance opt-ins, keyed by the task's stable numeric id:
+
+```json
+{
+  "version": 1,
+  "tasks": {
+    "70": { "aiAssisted": true, "persistentSession": false },
+    "254": { "aiAssisted": false, "persistentSession": true }
+  }
+}
+```
+
+**Invariants:**
+- A task absent from `tasks` is treated as both opt-ins being off
+  (`DEFAULT_TASK_SETTINGS`), so every task that existed before this file was introduced
+  keeps its old behavior with zero migration.
+- Each task entry is an **open object**: `normalizeTaskEntry` coerces the two known keys
+  to booleans but preserves any other keys already present, so a future third opt-in can
+  be added to the schema without a file-format migration or data loss for entries
+  written by a newer app build.
+- `setTaskSetting` performs a read-modify-write of a single task's entry and serializes
+  concurrent toggles so neither update is lost; a write refuses to overwrite a file that
+  parses as JSON but fails the schema check (`strict` mode), protecting a malformed
+  sidecar from being silently replaced by an empty settings map.
+- When a task is renumbered (moved between sources, see `src/moveTask.js`), the matching
+  entry in `task-settings.json` moves with it under the new id rather than being dropped.
+
+## 10. Folder self-description — `AGENTS.md`
 
 Scaffolded by `src/config/agentsDoc.js`'s `scaffoldAgentsDoc(read, write)` into every
 connected folder (local FSA, OneDrive, Google Drive, or browser storage) the first time

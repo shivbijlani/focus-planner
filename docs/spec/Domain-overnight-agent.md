@@ -7,10 +7,10 @@ Focus Planner tasks overnight under a **plan → approve → execute** loop: it 
 plan inside a task's journal (always allowed), waits for the human to approve or request
 revisions, and only executes a plan that was approved. Approval is the system's safety
 gate. The skill instructions live in
-`plugins/overnight-agent/skills/overnight-agent/SKILL.md`; the 116 modules catalogued
+`plugins/overnight-agent/skills/overnight-agent/SKILL.md`; the 127 modules catalogued
 here are almost entirely the **verification suite** that keeps the agent's own behaviour
 honest — this is, by a wide margin, the largest and most heavily self-audited domain in
-the repository (116 of 211 total modules).
+the repository (127 of 227 total modules).
 
 ## Principal modules and the check taxonomy
 
@@ -36,8 +36,9 @@ the one design decision everything else in this domain exists to protect. It is 
 enforced by SKILL.md convention and audited by `self-attested-gate-sweep.mjs` and its
 siblings (`reversible-gate-sweep.mjs`, `owned-target-gate-sweep.mjs`,
 `deliverable-gate-sweep.mjs`) rather than by a structural boundary the agent cannot
-write around — see [Roadmap](Roadmap) issue #227 for the known gap and its rejected
-"just trust the convention" alternative.
+write around — see [Roadmap](Roadmap) issue #250 for the known gap (the `from: me`
+attribution marker is written by software the agent itself runs, not by an unforgeable
+channel) and its rejected "just trust the convention" alternative.
 
 ## Design decision: assert the artifact, never the exit code
 
@@ -105,5 +106,6 @@ rather than as part of CI.
   non-terminal tasks (24.5%) were mis-attributed") specifically to avoid shipping a
   detector built only on imagined failure cases.
 - See [Roadmap](Roadmap) for the currently-open gaps this domain has itself filed against
-  its own design, including the self-authored-approval boundary (issue #227) and the
+  its own design, including the still-forgeable consent marker (issue #250, a follow-up to
+  the now-closed predecessor issue) and the
   supervision-cannot-detect-its-own-absence gap (issue #226).
