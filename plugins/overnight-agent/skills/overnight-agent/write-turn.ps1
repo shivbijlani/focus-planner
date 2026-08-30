@@ -333,7 +333,32 @@ $existing = [IO.File]::ReadAllText($journal)
 # planner web app, so a mixed-ending file is routine and CRLF is common.
 $nl  = if ($existing -match "`r`n") { "`r`n" } else { "`n" }
 $sep = if ($existing.EndsWith("`n")) { $nl } else { $nl + $nl }
-$out = $existing + $sep + ($body.TrimEnd() -replace "`r?`n", $nl) + $nl
+
+# G6 missing sentinel -- the Telegram bridge gates EVERY task on
+# `hasAgentBlock()`, which is a literal search for the sentinel line below
+# (`journal.js`). No sentinel means the bridge skips the task outright: no
+# topic, no post, no digest entry. The turn is written perfectly to disk and
+# is simply never delivered to the surface Shiv actually reads.
+#
+# This script had no concept of the sentinel, so a journal whose FIRST turn it
+# wrote was born invisible. Found 2026-08-30 on #451 ("Report hit and run") --
+# a red Today task carrying a statutory 4-day filing deadline, whose packet had
+# been written and had reached nobody. A sweep of all 239 journals found 7 in
+# this shape.
+#
+# Append-only, like the rest of this script: when the marker is absent we emit
+# it immediately above the new turn, which opens the managed block here and
+# leaves every byte above untouched.
+$sentinelLine = '<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->'
+$prefix = ''
+if ($existing -notmatch [regex]::Escape('<!-- OVERNIGHT-AGENT do not edit this line')) {
+  $prefix = '---' + $nl + $sentinelLine + $nl + $nl
+  if (-not $Json) {
+    Write-Host '[write-turn] journal had no OVERNIGHT-AGENT sentinel - adding it (the Telegram bridge skips tasks without one).' -ForegroundColor Yellow
+  }
+}
+
+$out = $existing + $sep + $prefix + ($body.TrimEnd() -replace "`r?`n", $nl) + $nl
 
 [IO.File]::WriteAllText($journal, $out, (New-Object Text.UTF8Encoding($false)))
 if (-not $Json) {
