@@ -1,4 +1,4 @@
-<#
+﻿<#
   build.ps1 — compile the native MCP credential launcher.
 
   Compiles src/mcp-cred-launch.cs into a single self-contained .exe using the

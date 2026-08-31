@@ -1,4 +1,4 @@
-<#
+﻿<#
   deploy-installed-plugin.ps1 — write a git ref's plugin files into installed-plugins.
 
   WHY THIS EXISTS

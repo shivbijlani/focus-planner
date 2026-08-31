@@ -1,4 +1,4 @@
-<#
+﻿<#
   sync-oa-home.ps1 - close the loop from "merged" to "running" for the SECOND deploy
   target: the flat OA home at %LOCALAPPDATA%\overnight-agent. (follow-up to GH #196)
 

@@ -1,4 +1,4 @@
-<#
+﻿<#
   setup.ps1 — bootstrap the portable MCP credential vault on this machine.
 
   Idempotent. Safe to re-run. Steps:

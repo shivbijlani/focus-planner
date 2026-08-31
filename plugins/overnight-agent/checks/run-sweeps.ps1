@@ -1,4 +1,4 @@
-<#
+﻿<#
   run-sweeps.ps1 — the ONLY sanctioned way to run the sweep suite.
 
   WHY THIS EXISTS
@@ -590,6 +590,24 @@ $Suite = @(
   # 6 gates, all mutation-proven load-bearing by mutcheck-postmortem.mjs (20 assertions,
   # 6 mutations, each killed and each breaking EXACTLY its own case).
   @{ n = 'postmortem-reviewer'; bridge = $false }
+  # ps1-encoding-sweep (added 2026-08-30, after the write-turn fixture incident) — a BOM-less
+  # .ps1 containing non-ASCII is silently mangled by PowerShell 5.1 BEFORE the script runs,
+  # because 5.1 decodes a BOM-less file as the ANSI codepage while pwsh 7 decodes it as UTF-8.
+  # This is HAZARD 4 aimed one layer down: at the SCRIPT FILE, where there is no decoder to
+  # pin — only the BOM.
+  # WHY IT IS A SWEEP AND NOT A PARAGRAPH: on 2026-08-30 it manufactured a FALSE TEST FAILURE.
+  # A new mutation check built its fixtures from a here-string containing a moon glyph; under
+  # 5.1 the fixtures arrived corrupted, tripped write-turn.ps1's own heading guard, and the
+  # check reported `got 0`. It read exactly like "the fix does not work" — the fix was fine and
+  # the fixtures were destroyed on the way in. The postmortem closed with "this is unaudited
+  # across the repo ... worth a sweep", and unaudited findings are how this file's defects live
+  # for weeks. First run: 14 of 40 .ps1 files affected, all COMMENT-ONLY — i.e. nothing was
+  # broken YET, which is exactly when it is cheap to fix.
+  # Severity is a decision, not a label: LOAD-BEARING (non-ASCII inside a literal on a line that
+  # also compares/matches — the class that silently breaks guards) > LITERAL (mojibake output) >
+  # COMMENT-ONLY (latent trap). 11 assertions, 5 mutations, each killed by a DIFFERENT assertion
+  # (mutcheck-ps1-encoding.mjs, auto-globbed by -IncludeMutchecks). Exits 1 on findings.
+  @{ n = 'ps1-encoding-sweep'; bridge = $false }
 )
 
 if ($IncludeMutchecks) {

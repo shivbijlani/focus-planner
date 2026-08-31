@@ -1,4 +1,4 @@
-<#
+﻿<#
   auto-deploy-plugin.ps1 — close the loop from "merged" to "running". (GH #196)
 
   WHY THIS EXISTS

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Health-check for the Google Workspace MCP OAuth token.
 

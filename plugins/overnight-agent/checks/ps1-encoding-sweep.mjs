@@ -1,0 +1,169 @@
+// ps1-encoding-sweep.mjs -- a BOM-less .ps1 containing non-ASCII is silently mangled under
+// Windows PowerShell 5.1, and the damage lands BEFORE any code runs.
+//
+// PowerShell 5.1 decodes a script file with no BOM as the ANSI codepage, so a literal in the
+// *script source* is corrupted on the way in. PowerShell 7 decodes the same bytes as UTF-8.
+// Measured on the live box with one identical line saved both ways:
+//
+//   no BOM   -> 35 35 32 195 176 197 184 197 146 226 132 162   (mangled; C3 B0 C5 B8)
+//   with BOM -> 35 35 32 240 159 140 153 32 116 101 115 116     (correct)
+//
+// This is HAZARD 4 (user-settings.md) applied one layer down. HAZARD 4 says to read *journals*
+// with an explicit UTF-8 decoder. Here the corrupted artefact is the *script file itself*, where
+// there is no decoder to pin -- only the BOM.
+//
+// Why it is worth a sweep rather than a paragraph: on 2026-08-30 it produced a FALSE TEST
+// FAILURE. A new mutation check built its fixtures from a here-string containing `## <moon>`;
+// under 5.1 the fixtures arrived corrupted, failed write-turn.ps1's own heading guard, and the
+// check reported `got 0` on its positive assertions. It read exactly like "the fix does not
+// work". The fix worked; the fixtures were destroyed on the way in. Adding the BOM turned 6
+// failures into 15/15 green with no change to the code under test. The postmortem closed with
+// "this is unaudited across the repo ... worth a sweep" -- this is that sweep.
+//
+// SEVERITY IS THE POINT. Not every occurrence is equal, and reporting them as if they were is
+// how a real defect gets lost in 60 lines of cosmetic noise:
+//
+//   LOAD-BEARING  non-ASCII inside a string literal on a line that also compares/matches
+//                 (-eq, -match, -replace, -split, [regex], Select-String ...). Under 5.1 the
+//                 comparison runs against mojibake, so the logic silently changes. This is the
+//                 class that breaks guards.
+//   LITERAL       non-ASCII inside a string literal that is not obviously a comparison, e.g. an
+//                 emoji in console output. Prints as mojibake under 5.1; cosmetic, but it is one
+//                 edit away from becoming LOAD-BEARING.
+//   COMMENT-ONLY  non-ASCII only in comments. Harmless today, still a trap: the next person to
+//                 move that character into a literal inherits a silent bug.
+//
+// All three are findings, because the fix is identical and free (save with a BOM) and the
+// severity only decides how loudly to say it.
+//
+// Scope: the repo's own tracked .ps1 files. The deploy targets (installed-plugins, the OA home)
+// are byte-exact copies of these, so fixing the source fixes every target; and scanning the OA
+// home directly would drown in its historical backups/ tree, which is deliberately frozen.
+import fs from 'node:fs';
+import path from 'node:path';
+
+const HERE = import.meta.dirname;
+// checks -> overnight-agent -> plugins -> repo root
+const REPO = process.env.PS1_SWEEP_ROOT || path.resolve(HERE, '..', '..', '..');
+
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage']);
+
+function walk(dir, out = []) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of entries) {
+    if (e.isDirectory()) {
+      if (SKIP_DIRS.has(e.name)) continue;
+      walk(path.join(dir, e.name), out);
+    } else if (e.isFile() && e.name.toLowerCase().endsWith('.ps1')) {
+      out.push(path.join(dir, e.name));
+    }
+  }
+  return out;
+}
+
+function hasBom(buf) {
+  return buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf;
+}
+
+// Quoted spans on one line. Naive but deliberately so: it tracks single/double quotes and
+// stops at an unquoted '#'. It cannot see here-strings (@' ... '@), which is stated rather
+// than hidden -- a here-string body is reported as COMMENT-ONLY at worst, never as a false
+// LOAD-BEARING, so the blind spot can only under-report severity, never invent it.
+function quotedSpans(line) {
+  const spans = [];
+  let quote = null;
+  let start = -1;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === quote) { spans.push([start, i]); quote = null; start = -1; }
+    } else if (c === '"' || c === "'") {
+      quote = c; start = i;
+    } else if (c === '#') {
+      break; // rest of the line is a comment
+    }
+  }
+  if (quote && start >= 0) spans.push([start, line.length]); // unterminated: treat as literal
+  return spans;
+}
+
+const rxCompare = /(-match|-imatch|-cmatch|-notmatch|-eq|-ieq|-ceq|-ne|-like|-notlike|-replace|-split|-contains|-notcontains|-in|-notin|\[regex\]|Select-String)/i;
+
+function isNonAscii(ch) { return ch.codePointAt(0) > 127; }
+
+function classify(text) {
+  const lines = text.split(/\r?\n/);
+  let comment = 0;
+  const literal = [];
+  const loadBearing = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    let found = false;
+    for (const ch of line) { if (isNonAscii(ch)) { found = true; break; } }
+    if (!found) continue;
+
+    const spans = quotedSpans(line);
+    let inLiteral = false;
+    for (let c = 0; c < line.length; c++) {
+      if (!isNonAscii(line[c])) continue;
+      if (spans.some(([s, e]) => c > s && c < e)) { inLiteral = true; break; }
+    }
+
+    if (!inLiteral) { comment += 1; continue; }
+    const entry = { line: i + 1, text: line.trim().slice(0, 140) };
+    if (rxCompare.test(line)) loadBearing.push(entry); else literal.push(entry);
+  }
+  return { comment, literal, loadBearing };
+}
+
+const files = walk(REPO);
+const findings = [];
+
+for (const f of files) {
+  let buf;
+  try { buf = fs.readFileSync(f); } catch { continue; }
+  if (hasBom(buf)) continue;
+
+  const text = buf.toString('utf8');
+  let nonAscii = false;
+  for (const ch of text) { if (isNonAscii(ch)) { nonAscii = true; break; } }
+  if (!nonAscii) continue;
+
+  const c = classify(text);
+  const severity = c.loadBearing.length ? 'LOAD-BEARING' : (c.literal.length ? 'LITERAL' : 'COMMENT-ONLY');
+  findings.push({ file: path.relative(REPO, f).replace(/\\/g, '/'), severity, ...c });
+}
+
+const order = { 'LOAD-BEARING': 0, LITERAL: 1, 'COMMENT-ONLY': 2 };
+findings.sort((a, b) => order[a.severity] - order[b.severity] || a.file.localeCompare(b.file));
+
+const loadBearing = findings.filter((f) => f.severity === 'LOAD-BEARING');
+
+console.log(`.ps1 files scanned                        : ${files.length}`);
+console.log(`BOM-less files containing non-ASCII       : ${findings.length}`);
+console.log(`  of those, LOAD-BEARING (logic at risk)  : ${loadBearing.length}`);
+console.log(`  of those, LITERAL (mojibake output)     : ${findings.filter((f) => f.severity === 'LITERAL').length}`);
+console.log(`  of those, COMMENT-ONLY (latent trap)    : ${findings.filter((f) => f.severity === 'COMMENT-ONLY').length}`);
+
+if (!findings.length) {
+  console.log('\nclean - every .ps1 carrying non-ASCII is saved UTF-8 with BOM.');
+  process.exit(0);
+}
+
+console.log('\nFINDINGS: a BOM-less .ps1 with non-ASCII is mangled by PowerShell 5.1 before it runs.\n');
+for (const f of findings) {
+  console.log(`  [${f.severity}] ${f.file}`);
+  console.log(`      comment-only lines: ${f.comment}   string literals: ${f.literal.length + f.loadBearing.length}`);
+  for (const e of f.loadBearing) console.log(`      !! L${e.line}: ${e.text}`);
+  for (const e of f.literal.slice(0, 3)) console.log(`       . L${e.line}: ${e.text}`);
+  if (f.literal.length > 3) console.log(`       . ... and ${f.literal.length - 3} more literal line(s)`);
+}
+
+console.log('\nFix: re-save each file as UTF-8 **with** BOM. The bytes of the code do not change;');
+console.log('only the 3-byte prefix that tells PowerShell 5.1 how to decode the rest.');
+if (loadBearing.length) {
+  console.log('\n\u26a0 LOAD-BEARING findings change behaviour under 5.1, not just output. Fix those first.');
+}
+process.exit(1);
