@@ -258,6 +258,17 @@ disagree on purpose. This is a floor, not a guarantee: the `<!-- from: me -->` m
 software (the Telegram bridge stamps it when folding phone replies), so it raises the bar from "absence
 of evidence counts as consent" to "consent needs positive evidence".
 
+⚠️ **A `## ` heading ends a marker's ownership (#272, fixed 2026-08-30).** Attribution is positional — a
+marker owns the text below it — and until this fix that ownership ran to the *next marker*. An agent turn
+appended without its own `<!-- from: overnight-agent -->` stamp adds no marker, so the user's marker above
+kept owning it, and the agent's own `approve`/`yes` came back as **`human-authored-affirmative`**. Measured
+live on #442: a 15,473-char "human-authored" region of which 15,400 chars were the agent's own turn.
+Ownership now stops at the next `## ` heading, so an unstamped turn reads as `unknown` and fails closed.
+The narrow half matters as much: an approval typed under `<!-- from: me -->` with no heading between is
+untouched, so a genuine `approve` still reads as one. **The verdict now means what the table says it
+means** — but it only stays true while every turn stamps itself, which is why `write-turn.ps1` **G7**
+refuses to write one that does not, and `unstamped-turn-sweep` reports the ones already on disk.
+
 ### Reopened after close (the user replied below your block)
 
 The Focus Planner app journals as a **bottom-appended chat thread**: entries stack chronologically at
@@ -775,7 +786,7 @@ present the reversible draft and stop short of the committing action.
   `oa-state.ps1 consent -Id <ID>` returning **`consent_ok: true`** — not your own reading of the prose,
   and not `reopened`. You write to the journal, so a reader that treats unmarked text as the human lets
   your own words authorize you. This is a **guard, not a guideline**: it is asserted by
-  `mutcheck-consent-authorship.ps1`, whose four mutations each restore a different version of the hole
+  `mutcheck-consent-authorship.ps1`, whose six mutations each restore a different version of the hole
   and are each killed by a different fixture.
 - **No surprise irreversible actions.** Sending email **to anyone not on the Auto-send allow-list**,
   submitting forms/applications, making purchases, posting publicly, merging/deploying, or anything
@@ -793,12 +804,17 @@ present the reversible draft and stop short of the committing action.
 - **Write every journal turn through `write-turn.ps1`** (next to this skill), never by hand:
   `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\write-turn.ps1 -Id <ID> -BodyFile <file.md>`.
   Author the turn body with a **file tool** first, then pass the file. The script validates the body
-  and **refuses to write** if it finds any of the four corruption classes that have already destroyed
-  real content — a value eaten by PowerShell string interpolation (`~$150-275` → `~\-275`), a doubled
+  and **refuses to write** if it finds any of the five corruption classes that have already destroyed
+  real content or broken a safety gate — a value eaten by PowerShell string interpolation
+  (`~$150-275` → `~\-275`), a doubled
   apostrophe from single-quote escaping (`don''t`), an H2 that is not 🌙-first (the Telegram bridge
-  anchors on `^##\s*🌙`, so any other H2 silently truncates the turn), and a stray
+  anchors on `^##\s*🌙`, so any other H2 silently truncates the turn), a stray
   `<!-- from: overnight-agent -->` with no heading above it (severs the block and hides
-  **Needs from you**). It appends only, so it can never delete one of the user's replies, and it backs
+  **Needs from you**), and — **G7** — a `## 🌙` heading with **no** `<!-- from: overnight-agent -->`
+  beneath it, which is the inverse of the last one and the one that fails *open*: an unstamped turn is
+  attributed to whoever spoke last, so your own words can be read back as the user's approval (#272).
+  **So every turn body you author must carry its provenance marker directly under the 🌙 heading.**
+  It appends only, so it can never delete one of the user's replies, and it backs
   the journal up first. Add `-Validate` to lint without writing. This is a **guard, not a guideline**:
   each of these classes was documented in prose first and broken anyway.
 - **Ask narrowly, not broadly.** If you need something, put one precise question in \*\*Needs from

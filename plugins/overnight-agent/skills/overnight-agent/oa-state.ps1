@@ -498,15 +498,37 @@ function Get-AuthorSegments([string]$region) {
   # Split a region into (author, text) segments by provenance marker.
   #
   # Attribution is POSITIONAL, not per-entry: a marker owns the text that FOLLOWS it, up to the
-  # next marker. Text before the first marker has no attribution and is reported as 'unknown'.
+  # next marker OR the next `## ` heading, whichever comes first.
   #
   # Positional beats per-`## ` entry here because a single heading block can legitimately hold
   # two authors (the agent answering inline under a user's heading). Judging the whole block by
   # "does it contain a human marker anywhere" would let agent-authored text inherit the human's
   # provenance, which is precisely the hole being closed.
+  #
+  # A `## ` HEADING ALSO ENDS OWNERSHIP (#272, added 2026-08-30 after the gate failed OPEN live).
+  # ------------------------------------------------------------------------------------------
+  # Running a marker's ownership to the *next marker* alone is what broke the gate: an agent turn
+  # appended WITHOUT its `<!-- from: overnight-agent -->` stamp inserts no new marker, so the
+  # human's marker above kept owning it -- all the way to the end of the region. Measured on #442:
+  # Shiv's entire contribution was "should watchdog agent be doing reaps?" (a question, no
+  # affirmative) and the following 15,400 characters were an unmarked agent turn containing
+  # `approve`, `approved` and `yes` x2. The verdict came back `human-authored-affirmative`: the
+  # agent had authorised itself, which is the exact direction #227 exists to prevent.
+  #
+  # A `## ` heading starts a NEW entry. An entry that does not carry its own provenance marker is
+  # therefore not attributable to anyone, so its text becomes 'unknown' -- and 'unknown' is not the
+  # human, so it fails closed. This keeps the guarantee in the reader (where it is enforced) rather
+  # than in a convention every writer must remember; 114 of 238 journals prove the convention does
+  # not hold. G7 in write-turn.ps1 closes the authoring half.
+  #
+  # It is deliberately narrow: text under a marker with NO intervening heading is untouched, so a
+  # genuine approval still reads as one. Verified against the true positive #443, where `approve`
+  # sits between `<!-- from: me -->` and the next `## ` -- it must keep returning consent_ok, or
+  # this "fix" has merely broken the gate in the other direction.
   if ($null -eq $region) { return @() }
   $segments = @()
   $marks = [regex]::Matches($region, $script:ProvenanceRe)
+  $headings = [regex]::Matches($region, '(?m)^[ \t]*##[ \t]+\S')
   if ($marks.Count -eq 0) {
     if ($region.Trim().Length -gt 0) {
       $segments += [pscustomobject]@{ Author = 'unknown'; Text = $region }
@@ -521,8 +543,24 @@ function Get-AuthorSegments([string]$region) {
   for ($i = 0; $i -lt $marks.Count; $i++) {
     $start = $marks[$i].Index + $marks[$i].Length
     $end = if ($i + 1 -lt $marks.Count) { $marks[$i + 1].Index } else { $region.Length }
-    $text = $region.Substring($start, $end - $start)
+
+    # Clamp this marker's ownership at the first `## ` heading inside its span (#272). Anything
+    # from that heading to `$end` is a new, unmarked entry: it belongs to whoever wrote it, which
+    # we cannot know, so it is emitted as 'unknown' rather than inherited by this author.
+    $cut = $end
+    foreach ($h in $headings) {
+      if ($h.Index -ge $start -and $h.Index -lt $end) { $cut = $h.Index; break }
+    }
+
+    $text = $region.Substring($start, $cut - $start)
     $segments += [pscustomobject]@{ Author = $marks[$i].Groups[1].Value.Trim(); Text = $text }
+
+    if ($cut -lt $end) {
+      $orphan = $region.Substring($cut, $end - $cut)
+      if ($orphan.Trim().Length -gt 0) {
+        $segments += [pscustomobject]@{ Author = 'unknown'; Text = $orphan }
+      }
+    }
   }
   return $segments
 }

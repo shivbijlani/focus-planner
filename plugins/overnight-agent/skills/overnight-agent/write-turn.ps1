@@ -258,6 +258,48 @@ function Test-TurnBody {
     }
   }
 
+  # --- G7: the turn must stamp its own provenance ---------------------------------
+  # A `## <moon> ...` heading with no `<!-- from: overnight-agent -->` beneath it is what
+  # broke the CONSENT gate (#272). `Get-AuthorSegments` attributes text positionally, so a
+  # turn that inserts no marker of its own is inherited by whoever spoke last -- and when
+  # that is the user, the agent's own prose is read back as the user's approval.
+  #
+  # Measured live 2026-08-30 on #442: the reader treated 15,473 chars as human-authored;
+  # Shiv's share was one question, and the other 15,400 chars were an unmarked agent turn
+  # containing `approve`, `approved` and `yes` x2. `consent_ok` came back TRUE. Across all
+  # 238 journals, 114 newest turns carried no marker and 5 were in that trapped shape.
+  #
+  # This is G4's exact inverse: G4 catches a marker with no heading above it, G7 catches a
+  # heading with no marker below it. Both sever attribution; only this one fails OPEN.
+  #
+  # A refusal, not an injection: the marker is the evidence the gate rests on, and silently
+  # manufacturing evidence is the wrong instinct for a safety guard even when the guess would
+  # be right. `Add-TurnTerminator` cannot repair this after the fact either (it declines to
+  # stamp once the boundary sits below the turn), so the only place it can be fixed is here,
+  # before the write.
+  if (& $on 'G7') {
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+      if ($inFence[$i]) { continue }
+      $l = $lines[$i]
+      if ($l -notmatch '^[ \t]*##[ \t]+\S' -or $l -match '^[ \t]*###') { continue }
+      if (-not (($l -replace '^[ \t]*##[ \t]+', '').StartsWith($MOON))) { continue }
+
+      # Scan forward for this heading's marker, stopping at the next H2 -- a marker that
+      # belongs to a LATER heading must not satisfy this one.
+      $stamped = $false
+      for ($k = $i + 1; $k -lt $lines.Count; $k++) {
+        if ($inFence[$k]) { continue }
+        $n = $lines[$k]
+        if ($n -match '^[ \t]*##[ \t]+\S' -and $n -notmatch '^[ \t]*###') { break }
+        if ($n -match '^[ \t]*<!--[ \t]*from:[ \t]*overnight-agent[ \t]*-->') { $stamped = $true; break }
+      }
+      if (-not $stamped) {
+        $findings += New-Finding 'G7' ($i + 1) $l.Trim() `
+          'this turn has no "<!-- from: overnight-agent -->" under its heading, so the consent reader attributes it to whoever spoke last -- the agent''s own words can then be read back as the user''s approval (#272)'
+      }
+    }
+  }
+
   return $findings
 }
 
