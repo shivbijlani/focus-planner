@@ -98,6 +98,22 @@
                    absolute path out of the flat home. They are normally present (so
                    the live walk covers them), but naming them makes the rule explicit
                    rather than a side effect of what happens to be on disk.
+    4. MUTCHECKS - every `mutcheck-*.ps1|.mjs` on the ref. This is not belt-and-braces
+                   either: `run-sweeps.ps1 -IncludeMutchecks` DISCOVERS mutation checks
+                   by globbing THIS FLAT HOME, not the repo. So the runner can only ever
+                   run the ones that happen to be here, and nothing put them here - they
+                   are named by no roster (they are found by glob, by design) and reached
+                   by no import edge (they are entry points). A merged guard therefore
+                   arrived only when a human remembered to copy it.
+
+                   MEASURED 2026-08-30, immediately after this rule was written: 47
+                   mutation checks on main, 36 on the machine - 11 that had never run
+                   once, including `mutcheck-consent-authorship.ps1` (the #227 gate that
+                   SKILL.md calls "a guard, not a guideline") and
+                   `mutcheck-write-turn-sentinel.ps1`, merged EARLIER THE SAME DAY as
+                   PR #264. This is exactly #254's forward direction one category over:
+                   #254 closed the hole for rostered sweeps and left it open for the
+                   files the runner globs, which is the larger half.
 
   Anything else in the repo stays out, and any file already live keeps its existing
   classification - so legitimately local-only files and deliberately excluded
@@ -376,6 +392,19 @@ if (-not $NoForward) {
   $required = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
   foreach ($n in (Get-RosterNames $refSha)) { [void]$required.Add($n) }
   foreach ($n in $AlwaysRequired)           { [void]$required.Add($n) }
+
+  # MUTCHECKS (rule 4): `run-sweeps.ps1 -IncludeMutchecks` finds mutation checks by
+  # globbing the flat home, so a guard that is not HERE cannot run, no matter that it is
+  # merged, registered in a comment, or green in CI. They are named by no roster (found by
+  # glob, deliberately) and reached by no import edge (they are entry points), so before
+  # this they were required by nothing and arrived only if a human copied them.
+  # Matching the runner's own discovery semantics -- `mutcheck-*` with either extension --
+  # keeps the two in step, which is the property that failed here: the runner's rule and
+  # the deployer's rule disagreed, and the disagreement was silent in the safe-looking
+  # direction ("all clean" over a suite it could not see).
+  foreach ($n in $byName.Keys) {
+    if ($n -match '^mutcheck-.*\.(ps1|mjs)$') { [void]$required.Add($n) }
+  }
 
   # Transitive closure over relative imports. A queue rather than recursion so a cyclic
   # import graph terminates instead of blowing the stack.
