@@ -83,12 +83,16 @@ $fixtures = @(
   @{ name = 'g1-tombstone';     expect = @('G1'); nl = 'LF';   body = @'
 ## MOON Overnight Agent -- 2026-08-27 reply
 
+<!-- from: overnight-agent -->
+
 The two shortlisted options land around ~\-275 all in.
 '@ }
   # G1 negative: a real dollar range must survive untouched. If this fires, the guard is
   # unusable -- prices are ordinary content in these journals.
   @{ name = 'g1-real-price';    expect = @();     nl = 'LF';   body = @'
 ## MOON Overnight Agent -- 2026-08-27 reply
+
+<!-- from: overnight-agent -->
 
 The two shortlisted options land around ~$150-275 all in, versus $1,035 for two.
 '@ }
@@ -99,6 +103,8 @@ The two shortlisted options land around ~$150-275 all in, versus $1,035 for two.
   @{ name = 'g1-quoted';        expect = @();     nl = 'LF';   body = @'
 ## MOON Overnight Agent -- 2026-08-27 reply
 
+<!-- from: overnight-agent -->
+
 Writing a price inside a shell command can drop it and leave `~\-275` behind, and the
 sentence around it still reads fine.
 '@ }
@@ -106,6 +112,8 @@ sentence around it still reads fine.
   # prose OUTSIDE it is not, and must still fire.
   @{ name = 'g1-fence-plus-prose'; expect = @('G1'); nl = 'LF'; body = @'
 ## MOON Overnight Agent -- 2026-08-27 reply
+
+<!-- from: overnight-agent -->
 
 Here is the shape it leaves:
 
@@ -120,16 +128,22 @@ The quote came out at ~\-275 all in.
   @{ name = 'g2-apostrophe';    expect = @('G2'); nl = 'LF';   body = @'
 ## MOON Overnight Agent -- 2026-08-27 reply
 
+<!-- from: overnight-agent -->
+
 I don''t think that''s the right trade here.
 '@ }
   @{ name = 'g2-crlf';          expect = @('G2'); nl = 'CRLF'; body = @'
 ## MOON Overnight Agent -- 2026-08-27 reply
+
+<!-- from: overnight-agent -->
 
 It''s the same defect on a CRLF file.
 '@ }
   # G2 negative: the same text quoted as an example must be writable.
   @{ name = 'g2-quoted';        expect = @();     nl = 'LF';   body = @'
 ## MOON Overnight Agent -- 2026-08-27 reply
+
+<!-- from: overnight-agent -->
 
 Apostrophes get doubled: `don''t` instead of the word you meant.
 '@ }
@@ -142,12 +156,16 @@ Apostrophes get doubled: `don''t` instead of the word you meant.
   @{ name = 'g3-date-first';    expect = @('G3'); nl = 'LF';   body = @'
 ## MOON Overnight Agent -- 2026-08-27 reply
 
+<!-- from: overnight-agent -->
+
 ## 2026-08-27 -- MOON Overnight Agent reply
 
 Body text.
 '@ }
   @{ name = 'g3-crlf';          expect = @('G3'); nl = 'CRLF'; body = @'
 ## MOON Overnight Agent -- 2026-08-27 reply
+
+<!-- from: overnight-agent -->
 
 ## 2026-08-27 -- MOON Overnight Agent reply
 
@@ -157,6 +175,8 @@ Body text on a CRLF file.
   @{ name = 'g3-h3-ok';         expect = @();     nl = 'LF';   body = @'
 ## MOON Overnight Agent -- 2026-08-27 reply
 
+<!-- from: overnight-agent -->
+
 ### Run log
 - did the thing
 '@ }
@@ -164,6 +184,8 @@ Body text on a CRLF file.
   # Without this the tool could not document its own rule.
   @{ name = 'g3-fenced-example'; expect = @();    nl = 'LF';   body = @'
 ## MOON Overnight Agent -- 2026-08-27 reply
+
+<!-- from: overnight-agent -->
 
 This heading shape is the one that truncates the turn:
 
@@ -205,7 +227,46 @@ Some preamble the turn opens with.
 
 ## MOON Overnight Agent -- 2026-08-27 reply
 
+<!-- from: overnight-agent -->
+
 Body text.
+'@ }
+
+  # G7 -- a moon-anchored turn with NO provenance stamp under it. This is the shape that
+  # broke the CONSENT gate (#272): with no marker of its own, the turn is inherited by
+  # whoever spoke last, so on a journal where the user replied above it the agent's own
+  # prose is read back as the user's approval. Measured live on #442, where 15,400 chars
+  # of agent text containing `approve`/`yes` produced `consent_ok: true`.
+  @{ name = 'g7-no-stamp';      expect = @('G7'); nl = 'LF';   body = @'
+## MOON Overnight Agent -- 2026-08-27 reply
+
+**Status:** In progress
+
+Body text with no provenance stamp anywhere in it.
+
+**Needs from you:** nothing.
+'@ }
+  # CRLF, because a marker regex anchored with `$` silently misses `\r` -- the same defect
+  # class this file already records for G2/G3.
+  @{ name = 'g7-crlf';          expect = @('G7'); nl = 'CRLF'; body = @'
+## MOON Overnight Agent -- 2026-08-27 reply
+
+Body text on a CRLF file, still unstamped.
+'@ }
+  # G7 positive, and the property that makes the guard correct rather than merely present:
+  # a stamp belonging to a LATER heading must not satisfy an earlier one. Scanning to
+  # end-of-body instead of stopping at the next H2 would let one stamp launder every turn
+  # above it.
+  @{ name = 'g7-later-stamp';   expect = @('G7'); nl = 'LF';   body = @'
+## MOON Overnight Agent -- first turn, unstamped
+
+Body of the first turn.
+
+## MOON Overnight Agent -- second turn, stamped
+
+<!-- from: overnight-agent -->
+
+Body of the second turn.
 '@ }
 )
 
@@ -262,7 +323,7 @@ if ($failures.Count -gt 0) {
 # --- 2. mutation: disabling guard G must change EXACTLY G's own fixtures -------------
 Write-Host ''
 Write-Host '--- mutation (disable one guard at a time) ---'
-foreach ($g in @('G1', 'G2', 'G3', 'G4', 'G5')) {
+foreach ($g in @('G1', 'G2', 'G3', 'G4', 'G5', 'G7')) {
   $ownFixtures = @($fixtures | Where-Object { $_.expect -contains $g })
   if ($ownFixtures.Count -eq 0) { $failures += "no fixture exercises $g"; continue }
 
@@ -289,7 +350,7 @@ Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host ''
 if ($failures.Count -eq 0) {
-  Write-Host ("PASS - {0} fixtures, 5 guards, each load-bearing." -f $fixtures.Count) -ForegroundColor Green
+  Write-Host ("PASS - {0} fixtures, 6 guards, each load-bearing." -f $fixtures.Count) -ForegroundColor Green
   exit 0
 }
 Write-Host 'FAIL' -ForegroundColor Red

@@ -130,6 +130,40 @@ yes, ship it
 $humanNoGo      = "## 2026-08-29`n`n<!-- from: me -->`nI am going to think about it. Undo it for now."
 $humanNegative  = "## 2026-08-29`n`n<!-- from: me -->`nPlease hold off, do not send that yet."
 
+# THE #272 CASE -- the gate failing OPEN, measured live on #442 (2026-08-30).
+# The human asks a QUESTION, then an agent turn is appended under its own `## ` heading with no
+# provenance marker. Marker-to-marker ownership hands that turn to the human, so the agent's own
+# affirmatives are read back as the user's approval. A `## ` heading must end ownership.
+$trappedAgentTurn = @'
+## 2026-08-29
+
+<!-- from: me -->
+should watchdog agent be doing reaps?
+
+## Overnight Agent
+
+**Status:** In progress
+
+Short answer: yes, I approve this approach and it is approved on my side.
+'@
+
+# The other half of #272, and the one that makes it a discrimination rather than a blanket "no".
+# The human's approval sits in HIS OWN segment, above the heading -- the real shape of #443, where
+# Shiv genuinely typed `approve`. Clamping at the heading must not touch this: a fix that closes
+# the false positive by also closing the true positive has broken the gate, not repaired it.
+$humanApproveThenAgentTurn = @'
+## 2026-08-29
+
+<!-- from: me -->
+approve
+
+## Overnight Agent
+
+**Status:** Done
+
+Your approve is drained; nothing here needs a decision.
+'@
+
 # id -> expectations. `reopened` is asserted alongside `consent_ok` so a mutation that
 # collapses one into the other is caught rather than silently passing.
 $cases = [ordered]@{
@@ -144,6 +178,8 @@ $cases = [ordered]@{
   '948' = @{ entries = @($humanNoGo);        consent = $false; reopened = $true;  why = 'word boundary: "going"/"Undo it" are not affirmatives' }
   '949' = @{ entries = @($humanNegative);    consent = $false; reopened = $true;  why = 'explicit refusal -> no consent' }
   '950' = @{ entries = @($mixedAgentAffirm); consent = $false; reopened = $false; why = 'agent answered inline; its own "approve" is not consent' }
+  '951' = @{ entries = @($trappedAgentTurn); consent = $false; reopened = $true;  why = '#272: unmarked agent turn under its own heading -> NOT the human''s approval' }
+  '952' = @{ entries = @($humanApproveThenAgentTurn); consent = $true; reopened = $true; why = '#272 narrowness: human approved above the heading -> still CONSENT' }
 }
 
 function Invoke-Scan([string]$Script) {
@@ -211,6 +247,14 @@ $mutations = @(
   @{
     name  = 'M4: consent inherits provenance from the region (human spoke somewhere -> any affirmative counts)'
     apply = { param($s) $s -replace [regex]::Escape('if ($seg.Author -eq $script:HumanAuthor) {'), 'if ($result.human_segments -gt 0) {' }
+  },
+  @{
+    name  = 'M5: #272 -- ownership runs to the next MARKER again, so an unmarked agent turn is inherited by the human'
+    apply = { param($s) $s -replace [regex]::Escape('if ($h.Index -ge $start -and $h.Index -lt $end) { $cut = $h.Index; break }'), 'if ($false) { $cut = $h.Index; break }' }
+  },
+  @{
+    name  = 'M6: #272 -- the heading clamp swallows the human''s own segment too (over-correction)'
+    apply = { param($s) $s -replace [regex]::Escape('if ($h.Index -ge $start -and $h.Index -lt $end) { $cut = $h.Index; break }'), 'if ($h.Index -lt $end) { $cut = $start; break }' }
   }
 )
 

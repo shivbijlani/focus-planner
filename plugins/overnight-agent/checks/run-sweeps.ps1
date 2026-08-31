@@ -247,6 +247,19 @@ $Suite = @(
   # synthetic fixtures: fires below the sentinel, ignores Shiv's own prose above it.
   # Unlike its sibling this class is fully recoverable -- nothing was ever lost.
   @{ n = 'doubled-apostrophe-sweep';    bridge = $false }
+  # The third member of the "a turn was written wrong and nothing noticed" family, and the
+  # only one whose failure reaches the CONSENT gate rather than the text. An agent turn
+  # appended with no `<!-- from: overnight-agent -->` stamp inserts no attribution boundary,
+  # so `oa-state.ps1` hands it to whoever spoke last -- and when that is Shiv, the agent's
+  # own `approve`/`yes` is read back as HIS approval for an irreversible action. Measured
+  # live 2026-08-30 on #442: 15,400 chars of agent prose inside a 15,473-char region the
+  # reader called human-authored, verdict `consent_ok: true`. Added with #272's other two
+  # halves (write-turn.ps1 G7 refuses new ones; oa-state.ps1 now ends ownership at a `## `
+  # heading). This sweep owns the BACKLOG: the ones already on disk, which neither of those
+  # can reach. Exits 1 only on the trapped subset -- an unstamped turn sitting below a user
+  # reply -- and reports the wider unstamped population as context, because reporting only
+  # the dangerous five would hide the population they are drawn from.
+  @{ n = 'unstamped-turn-sweep';        bridge = $false }
   # The SAME write-path defect, everywhere lost-interpolation-sweep cannot look.
   # That sweep reads exactly one directory - <planner>\journal, non-recursively - so
   # every deliverable the agent writes into a PROJECT folder has never been checked
