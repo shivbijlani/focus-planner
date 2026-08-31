@@ -972,6 +972,21 @@ function Test-Workable($row) {
   # all 3 polled and both recheck tasks are awaiting_reply, so without this they would all stop.
   # It yields only the park, never the status gate below.
   if ($row.awaiting_reply -and -not $row.due_poll -and -not $row.due_recheck) { return $false }
+  # A DUE RECHECK must also yield the `blocked` STATUS gate, not merely the awaiting-reply park
+  # above. `-Recheck` is documented as, and exists only for, "a recurring recheck of a BLOCKED
+  # task's blocker" -- so every task carrying one is `blocked` by construction. Leaving `blocked`
+  # in the gate below therefore made the entire feature INERT: the timer computed `due_recheck`
+  # correctly and the verdict was then discarded one line later, every time.
+  #
+  # This is the same silent-starvation shape as the awaiting_reply bug above, one layer down, and
+  # it survived for the same reason that one did -- the guard asserted the SIGNAL (`due_recheck`)
+  # and never the CONSEQUENCE (`eligible`), so a fired-and-ignored timer read as healthy.
+  # Measured live 2026-08-31: all three armed rechecks (#236, #393, #416) reported
+  # `due_recheck: true` with `eligible: false`. Not one had ever been able to run.
+  #
+  # `done`/`skip` are deliberately NOT yielded: re-surfacing a closed task is the #170
+  # "agent executes in closed tasks" bug, and a recheck must never be able to reopen one.
+  if ($row.due_recheck -and "$($row.status)".ToLowerInvariant() -eq 'blocked') { return $true }
   return ($script:NonWorkableStatus -notcontains "$($row.status)".ToLowerInvariant())
 }
 
