@@ -20,7 +20,7 @@
 // same defect the sweep hunts, one layer up: a fixture corrupted on the way in reads exactly
 // like a broken implementation.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -134,6 +134,70 @@ const cases = [
   },
 ];
 
+// --- ROOT RESOLUTION -------------------------------------------------------------------
+// The sweep's first live run scanned 1,004 .ps1 files instead of 40, because it derived its
+// root from its OWN location -- correct in the repo, and C:\Users\<name> once deployed to the
+// flat OA home, where sweeps actually execute. These two cases pin the contract that replaced
+// it: an unresolvable root must say so and scan NOTHING, rather than fall back to some
+// arbitrary ancestor directory. A detector that invents a corpus is worse than one that is
+// absent, because its findings look real.
+function runSweepRaw(env) {
+  try {
+    const out = execFileSync('node', [sweep], { encoding: 'utf8', env: { ...process.env, ...env } });
+    return { code: 0, out };
+  } catch (err) {
+    return { code: err.status ?? -1, out: `${err.stdout ?? ''}${err.stderr ?? ''}` };
+  }
+}
+
+// The deployed shape, reproduced exactly: a COPY of the sweep sitting in a directory that is
+// not the repo, with a decoy BOM-less .ps1 planted three levels above it. That decoy is the
+// whole point -- it is the "wrong corpus" marker. Resolving the root from the file's own
+// location finds the decoy tree; resolving it from OA_CHECKS_REPO finds the repo. Only the
+// second is correct once deployed, and without this case the difference is invisible, because
+// running in place the two agree.
+function runDeployedCopy() {
+  const root = mkdtempSync(join(tmpdir(), 'ps1-flat-'));
+  try {
+    writeFileSync(join(root, 'decoy.ps1'), `# ${WARN} not ours to re-save\n`, 'utf8');
+    const deep = join(root, 'a', 'b', 'c');
+    mkdirSync(deep, { recursive: true });
+    const copy = join(deep, 'ps1-encoding-sweep.mjs');
+    copyFileSync(sweep, copy);
+    try {
+      const out = execFileSync('node', [copy], {
+        encoding: 'utf8',
+        env: { ...process.env, PS1_SWEEP_ROOT: '', OA_CHECKS_REPO: import.meta.dirname },
+      });
+      return { code: 0, out };
+    } catch (err) {
+      return { code: err.status ?? -1, out: `${err.stdout ?? ''}${err.stderr ?? ''}` };
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const rootCases = [
+  {
+    name: 'ROOT: an unresolvable root scans nothing and exits 0 (never a guessed corpus)',
+    env: { PS1_SWEEP_ROOT: join(tmpdir(), 'ps1-sweep-absent-' + Date.now()), OA_CHECKS_REPO: '' },
+    expectCode: 0,
+    expectText: 'no repo root found',
+    reject: null,
+  },
+  {
+    name: 'ROOT: OA_CHECKS_REPO resolves the repo 3 levels up (how the DEPLOYED copy finds it)',
+    // Exit code is deliberately not asserted: it depends on whether the repo currently has a
+    // finding, which is not what this case is about. What matters is that the root RESOLVED --
+    // a scan happened, and it was not the "I gave up" path.
+    env: { PS1_SWEEP_ROOT: '', OA_CHECKS_REPO: import.meta.dirname },
+    expectCode: null,
+    expectText: '.ps1 files scanned',
+    reject: 'no repo root found',
+  },
+];
+
 let failed = 0;
 for (const c of cases) {
   const r = runSweep(c.files);
@@ -149,5 +213,36 @@ for (const c of cases) {
   }
 }
 
-console.log(`\n${cases.length - failed}/${cases.length} assertions passed`);
+for (const c of rootCases) {
+  const r = runSweepRaw(c.env);
+  const codeOk = c.expectCode === null || r.code === c.expectCode;
+  const ok = codeOk && r.out.includes(c.expectText) && (!c.reject || !r.out.includes(c.reject));
+  if (!ok) {
+    failed += 1;
+    console.log(`FAIL  ${c.name}`);
+    console.log(`      expected ${c.expectCode === null ? 'any exit' : `exit ${c.expectCode}`} containing ${JSON.stringify(c.expectText)}`);
+    if (c.reject) console.log(`      and NOT containing ${JSON.stringify(c.reject)}`);
+    console.log(`      got exit ${r.code}`);
+    console.log(`      ${r.out.trim().split('\n').slice(0, 8).join('\n      ')}`);
+  } else {
+    console.log(`ok    ${c.name}`);
+  }
+}
+
+const total = cases.length + rootCases.length + 1;
+
+{
+  const r = runDeployedCopy();
+  const name = 'ROOT: a DEPLOYED copy scans the repo, not its own ancestors (the live regression)';
+  if (r.out.includes('decoy.ps1')) {
+    failed += 1;
+    console.log(`FAIL  ${name}`);
+    console.log('      the sweep resolved its root from its own location and scanned the wrong tree');
+    console.log(`      ${r.out.trim().split('\n').slice(0, 8).join('\n      ')}`);
+  } else {
+    console.log(`ok    ${name}`);
+  }
+}
+
+console.log(`\n${total - failed}/${total} assertions passed`);
 process.exit(failed ? 1 : 0);
