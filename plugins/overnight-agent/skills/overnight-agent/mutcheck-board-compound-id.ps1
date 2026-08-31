@@ -1,4 +1,4 @@
-<#
+﻿<#
   mutcheck-board-compound-id.ps1 -- mutation check for the compound board-ID fix.
 
   The planner board's ID column is not always a bare integer. It carries the task id
