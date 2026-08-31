@@ -291,6 +291,19 @@ Do the phases **in this order** every time.
 > `snoozed` (skip it). Don't
 > reconstruct state by eyeballing 90+ journals; let the tool point you at the handful that need work.
 
+> **Work the rows in the order `scan` gives you (#223).** The scan output is already sorted, and
+> ordering is **data, not judgement** — do not re-derive it in your head. Each row carries
+> `order` (its rank this run), `section` (`today`/`deferred`/`other`), `work_priority`, `urgency`,
+> `priorities_rank`, and — the one that actually gates you — **`eligible`**.
+>
+> - **Never work a row with `eligible: false`.** A Deferred row stays ineligible while *any*
+>   Today row is still workable, which is what stops a P2 Deferred item eating a run while a
+>   Today item sits untouched.
+> - The sort is: `reopened` first (a live reply always wins), then Today before Deferred, then
+>   `Work Priority` (P0 > P1 > P2 > unset), then urgency icon, then the `## Priorities` list,
+>   then board row order, then task id.
+> - **Report the order you worked in** in the wrap-up, so the selection is auditable afterwards.
+
 ### PHASE 0 — Check the agent inbox (do this before everything)
 
 **First, reap stale MCP servers.** Every scheduled run starts its own set of stdio MCP servers, and
@@ -450,7 +463,8 @@ If a linked journal is missing or empty, note it and proceed with what you have 
 
 ### PHASE 1 — Execute approved plans
 
-1. From the `scan` worklist, collect tasks whose stored `status` is `approved` (also continue any
+1. From the `scan` worklist — **taken in the order it returned, skipping `eligible: false` rows** —
+   collect tasks whose stored `status` is `approved` (also continue any
    `in-progress` whose next step is approved), **plus any `reopened` task whose newest user message is an
    approval** (e.g. "approve", "go ahead" appended at the bottom — interpret per "Reading the user's
    decision"). Use `oa-state.ps1 get -Id <ID>` if you need a task's full state.
@@ -507,9 +521,11 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
 
 ### PHASE 2 — Propose plans (for tasks without a current one)
 
-1. Choose candidate tasks. **Default: every task in `## Today`.** Expand to `## Deferred` / others as
-   capacity allows, preferring higher 🎯 urgency and set `Work Priority` (P0 > P1 > P2). Honor the
-   `## Priorities` list at the bottom of planner.md.
+1. Choose candidate tasks **in the order `scan` returned them** (see "Work the rows in the order
+   `scan` gives you" above). Skip any row with `eligible: false` — that is the Today-before-Deferred
+   gate, and it is computed for you. Do **not** restate the heuristic from the board yourself; the
+   scan already joined `section`, `work_priority`, `urgency` and the `## Priorities` list into a
+   single `order`, so the board and the worklist cannot drift apart.
 2. **Also collect from Google Tasks (if a Google account is connected).** If `user-settings.md` names a
    **Google account** (→ "Google account (Tasks)") that's consented in the Google Workspace MCP, pull that
    account's open Google Tasks as *extra* candidates each run — this automates the manual reconcile from
