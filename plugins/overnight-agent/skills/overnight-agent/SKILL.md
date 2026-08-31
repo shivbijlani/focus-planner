@@ -312,13 +312,28 @@ Do the phases **in this order** every time.
 >   Today row is still workable, which is what stops a P2 Deferred item eating a run while a
 >   Today item sits untouched.
 > - **`awaiting_reply: true` means the agent spoke last and its newest turn still asks you
->   something** — the same waiting state `proposed` encodes, reached from `in-progress`. Such a
->   row is **not workable**, so it neither gets a stacked turn nor holds the Today→Deferred gate
->   shut. Without this, one unanswered Today row froze the entire Deferred backlog: measured
->   2026-08-30, **#451 alone made all 55 workable Deferred rows ineligible**, leaving the run
->   with no permitted work anywhere. A reply (`reopened`) or a **due `poll`/`recheck`** un-parks
->   it immediately — a timer is read-only agent work that needs no reply, so it must never be
->   silenced by waiting on the user.
+>   something it actually needs** — the same waiting state `proposed` encodes, reached from
+>   `in-progress`. Such a row is **not workable**, so it neither gets a stacked turn nor holds the
+>   Today→Deferred gate shut. Without this, one unanswered Today row froze the entire Deferred
+>   backlog: measured 2026-08-30, **#451 alone made all 55 workable Deferred rows ineligible**,
+>   leaving the run with no permitted work anywhere. A reply (`reopened`) or a **due
+>   `poll`/`recheck`** un-parks it immediately — a timer is read-only agent work that needs no
+>   reply, so it must never be silenced by waiting on the user.
+> - ⚠️ **"Asks you something" is deliberately NARROWER than `has_open_ask`, and conflating the two
+>   starved the board (fixed 2026-08-31).** `has_open_ask` feeds the Telegram digest, whose job is
+>   *visibility*, so it reads generously — anything you could answer counts. The gate's job is the
+>   opposite: a false positive parks a task the agent could have worked. Feeding the generous
+>   reading into the gate made it a **ratchet**, because the agent writes the text the gate reads
+>   and it ends nearly every turn with a courtesy offer (*"nothing needed — say the word and I'll
+>   pick it up"*). Every turn written therefore parked its own task, and only a human reply ever
+>   released it. Measured live 2026-08-31: **186 of 238 rows parked, every other row terminal, and
+>   0 eligible rows** — the run had no permitted work anywhere on the board, and the single Today
+>   row (#448) was parked by its own previous turn's closing line. Now a `**Needs from you:**` that
+>   opens dismissively (`none`/`nothing`/…) does **not** park: that is the agent stating it is not
+>   blocked, and what follows the clause break is an *offer* you may decline by silence. A
+>   non-dismissive `Needs from you:` and a bare `**Your call:**` still park. The digest still shows
+>   all of them — `has_open_ask` is unchanged. Guarded by arms **L1/L2/Q/R** of
+>   `mutcheck-awaiting-reply.ps1`.
 > - The sort is: `reopened` first (a live reply always wins), then Today before Deferred, then
 >   `Work Priority` (P0 > P1 > P2 > unset), then urgency icon, then the `## Priorities` list,
 >   then board row order, then task id.

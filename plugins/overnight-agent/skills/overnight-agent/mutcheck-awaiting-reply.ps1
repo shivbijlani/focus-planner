@@ -41,6 +41,18 @@
     P  a CONSUMED reply un-parks    (kills: awaiting_reply ignoring that the user has since
                                     spoken -- the task would be stranded with no route back,
                                     because it is no longer `reopened` either)
+    Q  a declared-unblocked board   (kills: THE RATCHET. The gate reading the digest's generous
+       still yields work            ask vocabulary, so the agent's own closing courtesy
+                                    ("nothing needed - say the word") parks its own task. Every
+                                    turn written then makes the board strictly less workable and
+                                    only a human reply releases it. Measured live 2026-08-31:
+                                    186/238 rows parked, all others terminal, ZERO eligible rows
+                                    anywhere. This arm asserts a board of declared-unblocked
+                                    rows is not zero-eligible.)
+    R  declared-unblocked + an      (kills: over-correcting Q by dropping the `Your call:` park
+       explicit `Your call:` STILL   as well. A direct hand-back makes no claim of
+       parks                         self-sufficiency, so it must keep parking -- otherwise the
+                                     run stacks a turn on a live question.)
 
   NOTE: no literal non-ASCII anywhere in this file. A BOM-less .ps1 is decoded as the ANSI
   codepage by Windows PowerShell 5.1, so a literal dash or emoji would be corrupted on the way
@@ -131,12 +143,23 @@ A later turn that closed the question out.
 '@
 [IO.File]::WriteAllText((Join-Path $jdir 'task-860.md'), $superseded, $utf8)
 
+# 880: declared-unblocked AND an explicit `Your call:` -> must STILL park (arm R). A direct
+# hand-back makes no claim of self-sufficiency, so the dismissive opener beside it must not
+# license stacking a turn on a live question.
+[IO.File]::WriteAllText((Join-Path $jdir 'task-880.md'), (New-Journal '880' 'nothing to act on' '**Your call:** ship it or hold it'), $utf8)
+
+# 890/891/892: tonight's live shape in miniature -- every row's newest turn ends with the
+# agent's own closing courtesy. Under the shared ask vocabulary the whole board parks itself.
+[IO.File]::WriteAllText((Join-Path $jdir 'task-890.md'), (New-Journal '890' 'nothing. Both items above are optional; say the word on either and I will pick it up.'), $utf8)
+[IO.File]::WriteAllText((Join-Path $jdir 'task-891.md'), (New-Journal '891' 'nothing to unblock it. Two optional calls when you are ready:'), $utf8)
+[IO.File]::WriteAllText((Join-Path $jdir 'task-892.md'), (New-Journal '892' 'none to start. One word if you want it faster.'), $utf8)
+
 $sb = New-Object Text.StringBuilder
 [void]$sb.AppendLine('## Today')
 [void]$sb.AppendLine('')
 [void]$sb.AppendLine('| ID | U | Task | Work Priority | Added | Linked ID |')
 [void]$sb.AppendLine('|---|---|------|---------------|-------|-----------|')
-foreach ($id in 810, 811, 830, 840, 850, 860, 870) {
+foreach ($id in 810, 811, 830, 840, 850, 860, 870, 880) {
   [void]$sb.AppendLine("| $id |  | today $id | - | 2026-08-30 |  |")
 }
 [void]$sb.AppendLine('')
@@ -172,7 +195,7 @@ function Check([string]$name, [scriptblock]$body) {
 }
 
 # Every task starts in-progress so the ONLY thing that can park one is the awaiting state.
-foreach ($id in 810, 811, 820, 830, 840, 850, 860, 870) {
+foreach ($id in 810, 811, 820, 830, 840, 850, 860, 870, 880, 890, 891, 892) {
   [void](Invoke-Oa @('mark', '-Id', "$id", '-Status', 'in-progress'))
 }
 
@@ -232,10 +255,25 @@ Check 'K dismissive ask does not park' {
   ($null -ne $r) -and ($r.awaiting_reply -eq $false) -and ($r.eligible -eq $true)
 }
 
-# L: a dismissive clause dismisses only ITSELF -- text after the clause break is a real ask.
-Check 'L qualified dismissal parks' {
+# L1 + L2: `none - but tell me X` is TWO facts, and they belong to two different surfaces.
+#
+#   L1 (visibility, unchanged): the digest must still SHOW it. This is the arm that kills the
+#      old `if (starts with none) return null` precedence error -- a dismissive clause dismisses
+#      only ITSELF, so the question after the clause break must remain visible to the user.
+#
+#   L2 (gate, changed 2026-08-31): it must NOT park the run. The dismissive opener is the agent
+#      stating about its own state that it is not blocked; what follows is an OFFER, and silence
+#      is a valid answer to an offer. Parking on it is what produced a zero-eligible board.
+#
+# The original single assertion conflated the two, which is precisely how the digest's
+# deliberately generous reading became the scheduler's starvation condition.
+Check 'L1 qualified dismissal stays VISIBLE' {
   $r = Get-Row $rows '830'
-  ($null -ne $r) -and ($r.awaiting_reply -eq $true) -and ($r.eligible -eq $false)
+  ($null -ne $r) -and ($r.has_open_ask -eq $true)
+}
+Check 'L2 qualified dismissal does NOT park the gate' {
+  $r = Get-Row $rows '830'
+  ($null -ne $r) -and ($r.awaiting_reply -eq $false) -and ($r.eligible -eq $true)
 }
 
 # O: scoping. An ask that a LATER turn closed out must not park the task forever.
@@ -262,6 +300,44 @@ Check 'N due poll beats the park' {
   $r = Get-Row $rowsN '850'
   ($null -ne $r) -and ($r.due_poll -eq $true) -and ($r.awaiting_reply -eq $true) -and ($r.eligible -eq $true)
 }
+
+# R: over-correction guard for Q. Loosening the dismissive case must NOT also drop the
+# `**Your call:**` park -- that is a direct hand-back with no claim of self-sufficiency beside
+# it, so the run would be stacking a turn on a live question.
+Check 'R declared-unblocked + Your call still parks' {
+  $r = Get-Row $rows '880'
+  ($null -ne $r) -and ($r.awaiting_reply -eq $true) -and ($r.eligible -eq $false)
+}
+
+# Q: THE ANTI-STARVATION INVARIANT, and the check that would have caught this on its own.
+# A board whose every row carries the agent's own "nothing needed, but here's an option"
+# sign-off must still yield work. Asserted on a board built ONLY from that shape, because that
+# is the live shape: on 2026-08-31 it produced 0 eligible rows out of 238.
+$sbQ = New-Object Text.StringBuilder
+[void]$sbQ.AppendLine('## Today')
+[void]$sbQ.AppendLine('')
+[void]$sbQ.AppendLine('| ID | U | Task | Work Priority | Added | Linked ID |')
+[void]$sbQ.AppendLine('|---|---|------|---------------|-------|-----------|')
+[void]$sbQ.AppendLine('| 890 |  | today 890 | - | 2026-08-31 |  |')
+[void]$sbQ.AppendLine('')
+[void]$sbQ.AppendLine('## Deferred')
+[void]$sbQ.AppendLine('')
+[void]$sbQ.AppendLine('| ID | U | Task | Work Priority | Added | Wake | Linked ID |')
+[void]$sbQ.AppendLine('| --- | --- | ------ | --------------- | ------- | ---- | ----------- |')
+[void]$sbQ.AppendLine('| 891 |  | deferred 891 | - | 2026-08-31 |  |  |')
+[void]$sbQ.AppendLine('| 892 |  | deferred 892 | - | 2026-08-31 |  |  |')
+[IO.File]::WriteAllText($board, $sbQ.ToString(), $utf8)
+$rowsQ = Get-Rows
+Check 'Q declared-unblocked board is not zero-eligible' {
+  $elig = @($rowsQ | Where-Object { $_.eligible })
+  $today = Get-Row $rowsQ '890'
+  # Not merely "something is eligible": the TODAY row must be the one that is, and the
+  # Deferred rows must stay held behind it. A fix that opened the gate instead of un-parking
+  # the row would satisfy a bare count and still be wrong.
+  ($elig.Count -ge 1) -and ($null -ne $today) -and ($today.eligible -eq $true) -and
+  (@($rowsQ | Where-Object { $_.section -eq 'deferred' -and $_.eligible }).Count -eq 0)
+}
+[IO.File]::WriteAllText($board, $sb.ToString(), $utf8)   # restore the mixed board
 
 # --- report ---------------------------------------------------------------------------
 $pass = 0; $fail = 0

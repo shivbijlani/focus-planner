@@ -286,6 +286,29 @@ function Test-IsRunLogBodyOnly([string]$region) {
 # surfaces cannot drift: `**Your call:**` is always an ask, and `**Needs from you:**` is an ask
 # unless it is purely dismissive. A dismissive clause dismisses only ITSELF -- `none - but tell
 # me X` is still an ask -- which is the precedence error the bridge already had to fix once.
+#
+# ...BUT THE TWO SURFACES WANT OPPOSITE SAFE DEFAULTS, AND SHARING ONE READING STARVED THE BOARD
+# (measured 2026-08-31 00:50 PT). The digest asks "should the user SEE this?" -- a miss there
+# hides a question, so it is right to read generously. The gate asks "may the run PROCEED?" -- a
+# false yes parks a task the agent could have worked, which `Test-AskTextIsOpen` says in its own
+# comment. Feeding the generous reading into the gate turns the digest's deliberate generosity
+# into the scheduler's starvation condition.
+#
+# It is a RATCHET, which is why it ends in total starvation rather than in a slow leak: the agent
+# writes the text the gate reads, and it ends nearly every turn politely offering an optional
+# extra ("nothing needed - say the word and I'll pick it up"). Under the shared reading that
+# closing courtesy is an open ask, so EVERY turn the agent writes parks its own task, and only a
+# human reply ever releases it. Measured on the live board that night: 186 of 238 rows parked,
+# every remaining row terminal, and therefore ZERO eligible rows -- no permitted work anywhere.
+# 71 of the 186 were parked by a turn in which the agent had explicitly said it needed nothing.
+# The single Today row (#448) was parked by its own previous turn's closing line.
+#
+# The fix keeps `has_open_ask` exactly as it was -- the digest must keep showing these -- and
+# gives the GATE a stricter question: is this ask BLOCKING? A dismissive opener is the agent
+# stating, about its own state, that it is not blocked; anything after the clause break is an
+# OFFER, not a blocker, and silence is a valid answer to an offer. A non-dismissive
+# `Needs from you:` still parks, and `**Your call:**` still parks, so the gate only loosens for
+# turns that declared themselves unblocked.
 $script:NeedsFromYouRe  = '(?im)^[ \t]*\*\*[ \t]*Needs from you[ \t]*:?[ \t]*\*\*[ \t]*:?(.*)$'
 $script:YourCallRe      = '(?im)^[ \t]*\*\*[ \t]*Your call[ \t]*:?[ \t]*\*\*[ \t]*:?(.*)$'
 $script:DismissiveAskRe = '(?i)^[ \t]*(none|nothing|nada|n/a|no)\b'
@@ -318,11 +341,39 @@ function Test-AskTextIsOpen([string]$value) {
 }
 
 function Test-HasOpenAsk([string]$agentLeft) {
+  # VISIBILITY reading (`has_open_ask`, consumed by the digest surface). Deliberately generous:
+  # anything the user could reasonably answer counts, so the queue never hides a question.
   $turn = Get-NewestAgentTurn $agentLeft
   if ($turn.Length -eq 0) { return $false }
   if ([regex]::IsMatch($turn, $script:YourCallRe)) { return $true }
   foreach ($m in [regex]::Matches($turn, $script:NeedsFromYouRe)) {
     if (Test-AskTextIsOpen $m.Groups[1].Value) { return $true }
+  }
+  return $false
+}
+
+function Test-AskTextIsBlocking([string]$value) {
+  # Does this `Needs from you:` value BLOCK the run? Stricter than Test-AskTextIsOpen: a
+  # dismissive opener is the agent's own statement that it is not blocked, so whatever follows
+  # the clause break is an OFFER the user may decline by silence -- not a blocker.
+  #
+  # This is the one place the gate must NOT inherit the digest's reading. `Test-AskTextIsOpen`
+  # keeps its meaning for `has_open_ask`, so the offer still reaches the user; it just no longer
+  # stops the agent from doing the work it already said it could do unaided.
+  $v = "$value".Trim()
+  if ($v.Length -eq 0) { return $false }
+  return ($v -notmatch $script:DismissiveAskRe)
+}
+
+function Test-HasBlockingAsk([string]$agentLeft) {
+  # GATE reading (`awaiting_reply`). `**Your call:**` still parks -- it is a direct hand-back
+  # with no accompanying claim of self-sufficiency, and arms I/J of mutcheck-awaiting-reply
+  # depend on that. Only the declared-unblocked case loosens.
+  $turn = Get-NewestAgentTurn $agentLeft
+  if ($turn.Length -eq 0) { return $false }
+  if ([regex]::IsMatch($turn, $script:YourCallRe)) { return $true }
+  foreach ($m in [regex]::Matches($turn, $script:NeedsFromYouRe)) {
+    if (Test-AskTextIsBlocking $m.Groups[1].Value) { return $true }
   }
   return $false
 }
@@ -665,7 +716,8 @@ function Get-JournalFacts([string]$path) {
     FullHash        = Get-Sha256 $content
     AgentLeftHash   = Get-Sha256 $agentLeft     # file as the agent last left it (no trailing user prose)
     HasTrailingUser = (Test-TrailingHasUser $trailing)
-    HasOpenAsk      = (Test-HasOpenAsk $agentLeft)   # newest turn still asks the user something
+    HasOpenAsk      = (Test-HasOpenAsk $agentLeft)       # visibility: digest must show it
+    HasBlockingAsk  = (Test-HasBlockingAsk $agentLeft)   # gate: does it stop the run proceeding?
     Consent         = (Get-ConsentFacts $trailing)   # #227: fail-CLOSED authorship verdict
     Trailing        = $trailing
     Legacy          = Parse-LegacyOaState $content
@@ -1050,7 +1102,7 @@ function Cmd-Scan {
       # waiting on the user -- the same state `proposed` encodes, reached from `in-progress`.
       # `reopened` outranks it (Test-Workable checks that first), so a reply un-parks it at once.
       has_open_ask   = [bool]$facts.HasOpenAsk
-      awaiting_reply = [bool]($facts.HasAgentBlock -and $facts.HasOpenAsk -and -not $facts.HasTrailingUser)
+      awaiting_reply = [bool]($facts.HasAgentBlock -and $facts.HasBlockingAsk -and -not $facts.HasTrailingUser)
     }
   }
 
