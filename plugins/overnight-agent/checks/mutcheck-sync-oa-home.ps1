@@ -117,6 +117,27 @@ function Add-Roster {
   } finally { Pop-Location }
 }
 
+function Add-Mutcheck {
+  <#
+    Adds a mutation check that NOTHING points at: it is absent from the `$Suite` roster
+    (run-sweeps.ps1 finds mutchecks by GLOBBING THE FLAT HOME, so no roster ever names
+    one) and it is imported by nobody (it is an entry point). Before rule 4 it was
+    therefore required by nothing, and reached the machine only when a human copied it.
+
+    Both extensions, because the runner globs both -- and the .ps1 half is the half that
+    was silently skipped once already (2026-08-27, when the glob was '.mjs'-only). #>
+  param([string]$Repo)
+  $chk = Join-Path $Repo 'plugins\overnight-agent\checks'
+  Set-Content -LiteralPath (Join-Path $chk 'mutcheck-probe.mjs') -Value "// proves probe.ps1's guard is load-bearing" -NoNewline -Encoding utf8
+  Set-Content -LiteralPath (Join-Path $chk 'mutcheck-probe.ps1') -Value "# proves the other guard is load-bearing" -NoNewline -Encoding utf8
+  Push-Location $Repo
+  try {
+    & git add -A 2>&1 | Out-Null
+    & git commit --quiet -m 'mutchecks' 2>&1 | Out-Null
+    & git branch -f main HEAD 2>&1 | Out-Null
+  } finally { Pop-Location }
+}
+
 function Invoke-Subject {
   param([string]$ScriptPath, $Fx, [switch]$WhatIf)
   $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath,
@@ -223,6 +244,26 @@ Assert ((Get-Class $rF 'diagnostic-tool.mjs') -eq '<absent>') 'T_NO_OVERDEPLOY_Q
 
 # ENTRY: run-sweeps.ps1 is named directly, so it deploys even though nothing imports it.
 Assert ((Get-Class $rF 'run-sweeps.ps1') -eq 'MISSING') 'T_ENTRY' 'a named entry point is required even when unreferenced'
+
+# --- T_MUTCHECK: a guard the runner globs but no roster names (2026-08-30) -----------
+# `run-sweeps.ps1 -IncludeMutchecks` discovers mutation checks by globbing the FLAT HOME.
+# So the deployer and the runner have to agree on what belongs here, and until now they
+# did not: the runner looked for `mutcheck-*`, the deployer required roster + closure +
+# entry, and `mutcheck-*` is in none of those. The disagreement was silent in the
+# safe-looking direction -- the suite reported clean over guards it could not see.
+# Measured live the day this was written: 47 mutation checks on main, 36 on the machine,
+# 11 that had never run once, including the #227 consent gate.
+$fxM = New-Fixture 'forward-mutcheck'
+Add-Roster $fxM.Repo
+Add-Mutcheck $fxM.Repo
+$rM = Invoke-Subject $Script $fxM
+
+Assert ((Get-Class $rM 'mutcheck-probe.mjs') -eq 'MISSING') 'T_MUTCHECK_MJS' 'an unrostered .mjs mutation check is required'
+Assert ((Get-Class $rM 'mutcheck-probe.ps1') -eq 'MISSING') 'T_MUTCHECK_PS1' 'and so is the .ps1 half the glob once skipped'
+Assert (Test-Path (Join-Path $fxM.Home 'mutcheck-probe.mjs')) 'T_MUTCHECK_WRITE' 'and it is actually deployed where the runner globs'
+Assert (Test-Path (Join-Path $fxM.Home 'mutcheck-probe.ps1')) 'T_MUTCHECK_WRITE_PS1' 'both extensions land'
+# Narrowness: rule 4 must not become "deploy everything". The one-off is still excluded.
+Assert (-not (Test-Path (Join-Path $fxM.Home 'diagnostic-tool.mjs'))) 'T_MUTCHECK_NARROW' 'rule 4 does not smuggle in unrostered one-offs'
 
 # --- T_MISSING_AMBIGUOUS: required, but the basename maps to two repo paths ----------
 # A flat home cannot say which path was meant. Same answer as for a live file: refuse.
@@ -360,6 +401,31 @@ $fx = New-Fixture 'm8'
 Add-Roster $fx.Repo
 $r = Invoke-Subject $m8 $fx -WhatIf
 Assert ($r.Json.verifiedCurrent -ne $false) 'M8' 'without the pending term, a missing file still reports verified-current True'
+
+# M9 - delete rule 4. The roster, the closure and the entry points all still work, so the
+#      run looks completely healthy - and every `mutcheck-*` goes back to being required
+#      by nothing. That is the state measured on 2026-08-30: 11 merged guards, none of
+#      them ever executed, while this tool printed `verified-current True`. The mutant is
+#      deliberately narrow: newsweep.mjs must STILL deploy, so a failure here can only
+#      mean the mutcheck rule died, not that the forward direction did.
+$m9find = @'
+  foreach ($n in $byName.Keys) {
+    if ($n -match '^mutcheck-.*\.(ps1|mjs)$') { [void]$required.Add($n) }
+  }
+'@
+$m9repl = @'
+  foreach ($n in $byName.Keys) {
+    if ($false) { [void]$required.Add($n) }
+  }
+'@
+$m9 = New-Mutant 'M9' $m9find.TrimEnd("`r","`n") $m9repl.TrimEnd("`r","`n")
+$fx = New-Fixture 'm9'
+Add-Roster $fx.Repo
+Add-Mutcheck $fx.Repo
+$r = Invoke-Subject $m9 $fx
+Assert ((Get-Class $r 'newsweep.mjs') -eq 'MISSING') 'M9_ROSTER_STILL_OK' 'the rostered sweep still deploys (so this mutant is narrow)'
+Assert ((Get-Class $r 'mutcheck-probe.mjs') -ne 'MISSING') 'M9' 'without rule 4, a merged mutation check is invisible again'
+Assert (-not (Test-Path (Join-Path $fx.Home 'mutcheck-probe.ps1'))) 'M9_NOWRITE' 'and never reaches the home the runner globs'
 
 Write-Host ''
 Write-Host ("[mutcheck-sync-oa-home] {0} passed, {1} failed" -f $script:pass, $script:fail)
