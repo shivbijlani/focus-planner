@@ -1,4 +1,4 @@
-<#
+﻿<#
   secret-vault.ps1 — generalized secure storage for MCP / agent secrets.
 
   Stores each secret in the WINDOWS CREDENTIAL MANAGER (the OS credential vault),

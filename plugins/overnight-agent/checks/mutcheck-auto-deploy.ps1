@@ -1,4 +1,4 @@
-<#
+﻿<#
   mutcheck-auto-deploy.ps1 — prove auto-deploy-plugin.ps1's guards are load-bearing.
 
   A guard that is only asserted by a passing test is not proven: the test may pass for

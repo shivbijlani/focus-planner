@@ -1,4 +1,4 @@
-# record-surface-poll.ps1 — stamp an off-journal surface as polled, so
+﻿# record-surface-poll.ps1 — stamp an off-journal surface as polled, so
 # external-surface-sweep.mjs can go quiet for its freshness window.
 #
 # WHY THIS EXISTS

@@ -1,4 +1,4 @@
-<#
+﻿<#
   run-telegram-mirror.ps1 — the ONLY sanctioned way to run PHASE 3.
 
   WHY THIS EXISTS

@@ -1,4 +1,4 @@
-<#
+﻿<#
   sync-checks.ps1 — move the nightly check suite between the repo and the machine.
 
   WHY THIS EXISTS
