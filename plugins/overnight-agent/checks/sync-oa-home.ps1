@@ -114,6 +114,27 @@
                    PR #264. This is exactly #254's forward direction one category over:
                    #254 closed the hole for rostered sweeps and left it open for the
                    files the runner globs, which is the larger half.
+    5. SUBJECTS  - the sibling script each required `mutcheck-*.ps1` resolves against
+                   $PSScriptRoot (`Join-Path $PSScriptRoot 'oa-state.ps1'`). Rule 4 makes
+                   the GUARD arrive; nothing made the thing it TESTS arrive with it, and a
+                   guard whose subject is absent does not skip - it dies with exit 1.
+
+                   This is rule 2 (CLOSURE) one language over. Closure walks relative
+                   `import` specifiers, which only exist in .mjs; a PowerShell mutcheck
+                   names its subject in a runtime Join-Path, so no import edge reaches it,
+                   no roster names it (it is not a sweep), and $AlwaysRequired does not
+                   list it. It was therefore required by nothing - the identical shape
+                   rule 4 was written to close, arriving from the other side.
+
+                   MEASURED 2026-08-30 19:20 PT, minutes after rule 4's own fix deployed:
+                   48 mutation checks in the flat home, 5 of them dead on arrival -
+                   mutcheck-blocked-recheck, -managed-heading, -priority-order and
+                   -turn-terminator all need `oa-state.ps1`, and `mutcheck-sync-oa-home`
+                   needs `sync-oa-home.ps1`. Neither subject was in the home. So THIS
+                   tool's own guard could not execute here, and `mutcheck-priority-order`
+                   - merged, deployed and verified the same hour - failed the first time
+                   the runner globbed it. Rule 4 guaranteed delivery of the guards and
+                   thereby created a new population of guards that cannot run.
 
   Anything else in the repo stays out, and any file already live keeps its existing
   classification - so legitimately local-only files and deliberately excluded
@@ -283,6 +304,24 @@ function Get-RelativeImports {
   return $out
 }
 
+function Get-PsScriptRootRefs {
+  # SUBJECTS (rule 5): the sibling scripts a PowerShell mutation check resolves against
+  # $PSScriptRoot, e.g. `Join-Path $PSScriptRoot 'oa-state.ps1'`. This is the .ps1
+  # analogue of Get-RelativeImports: same job (find the files this entry point cannot run
+  # without), different language, and the reason rule 2 could never see it.
+  #
+  # Literal operand only, matching Get-RelativeImports' own stance that a dependency
+  # appearing solely in a computed string is not something a deploy tool should guess at.
+  param([string]$Text)
+  if (-not $Text) { return @() }
+  $out = @()
+  foreach ($m in [regex]::Matches($Text, 'Join-Path\s+\$PSScriptRoot\s+([''"])([^''"]+)\1')) {
+    $leaf = Split-Path $m.Groups[2].Value -Leaf
+    if ($leaf -match '\.(ps1|mjs|js)$') { $out += $leaf }
+  }
+  return ($out | Sort-Object -Unique)
+}
+
 # --- preconditions ------------------------------------------------------------------
 if (-not (Test-Path $Repo))   { Write-Error "repo not found: $Repo";      exit 1 }
 if (-not (Test-Path $OaHome)) { Write-Error "OA home not found: $OaHome"; exit 1 }
@@ -404,6 +443,27 @@ if (-not $NoForward) {
   # direction ("all clean" over a suite it could not see).
   foreach ($n in $byName.Keys) {
     if ($n -match '^mutcheck-.*\.(ps1|mjs)$') { [void]$required.Add($n) }
+  }
+
+  # SUBJECTS (rule 5): a `mutcheck-*.ps1` names the script it tests in a runtime
+  # `Join-Path $PSScriptRoot '<subject>'`, which is an edge no other rule can see -- the
+  # closure below walks `import` specifiers and those exist only in .mjs. Rule 4 therefore
+  # delivers the guard while leaving its subject behind, and the failure is not a skip: the
+  # guard throws and exits 1 the first time the runner globs it. Measured 2026-08-30, five
+  # of the 48 guards in the home were dead this way, including this tool's own.
+  #
+  # Deliberately narrow: only `Join-Path $PSScriptRoot '<literal>'` counts. A computed path
+  # is not resolved, because guessing one would deploy a file on a hunch -- and the whole
+  # point of a derived required-set is that every entry has a reason.
+  foreach ($n in @($required)) {
+    if ($n -notmatch '^mutcheck-.*\.ps1$') { continue }
+    if (-not $byName.ContainsKey($n)) { continue }
+    $paths = $byName[$n]
+    if ($paths.Count -ne 1) { continue }   # ambiguous: refused below, do not read a guess
+    foreach ($dep in (Get-PsScriptRootRefs (Get-RefText $refSha $paths[0]))) {
+      if ($dep -match '^mutcheck-') { continue }   # already covered by rule 4
+      [void]$required.Add($dep)
+    }
   }
 
   # Transitive closure over relative imports. A queue rather than recursion so a cyclic
