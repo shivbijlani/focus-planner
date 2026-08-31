@@ -443,6 +443,23 @@ $Suite = @(
   # "matches origin/main -> OK" bypass makes it miss the reverted build, which is precisely
   # how the drift sweep is blind. Reads 0 on a healthy tree.
   @{ n = 'installed-capability-sweep'; bridge = $false }
+  # version-bump-sweep (added 2026-08-31) — the THIRD member of the "is the running
+  # copy current?" family above, and the only one that reads the mechanism the CLI
+  # itself uses. The two sweeps above compare CONTENT; the plugin updater compares
+  # plugin.json's VERSION. So a merge can be fully deployed and content-verified --
+  # auto-deploy-plugin.ps1 truthfully printing `verified-current True` -- while a
+  # version-keyed updater sees an unchanged version and correctly does nothing. The
+  # blind mechanism is the one that reports success, which is why this needed Shiv
+  # to notice it by eye on #448 rather than any check catching it.
+  # Not hypothetical, and it recurred on the very next merge after being discussed:
+  # ba598a6 (#282) bumped to 1.5.0, then 4f68818 (#283) shipped a change to
+  # oa-state.ps1 -- the engine that decides task eligibility -- with no bump.
+  # Finds the last bump by comparing the PARSED version against the first parent's,
+  # not by "last commit that touched plugin.json": #279/#280 both touched that file,
+  # and a commit editing `description` is not a release. Exits 1 when it cannot
+  # locate the repo, rather than passing, per the BRIDGE_SRC lesson. 7 fixtures,
+  # 5 mutations, every guard load-bearing (mutcheck-version-bump.mjs).
+  @{ n = 'version-bump-sweep';       bridge = $false }
   # journal-encoding-invariant (added 2026-08-27 12:50 PT) — the COMPLEMENT of the line
   # above. installed-skill-drift-sweep asks "does the live file differ from a git ref?",
   # which is a PROXY for danger, and measured this run it is the wrong way round:
