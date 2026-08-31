@@ -95,7 +95,8 @@ already processed in this journal") lives in the **skill's own working dir**, wh
 - **Tool:** [`oa-state.ps1`](./oa-state.ps1) (next to this skill) reads/writes that state. Run it with
   `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\oa-state.ps1 <command>`:
   - **`scan`** → your per-run worklist as JSON, one row per task: `{ id, status, changed, reopened,
-    has_agent_block, tracked, due_poll, poll_cadence }`. **Run this first, every run** (see PHASE 1/2).
+    has_agent_block, tracked, due_poll, poll_cadence, has_open_ask, awaiting_reply, eligible }`.
+    **Run this first, every run** (see PHASE 1/2).
     It is how you find work without re-reading 90+ journals by hand.
   - **`get -Id <id>`** → that task's full state JSON.
   - **`mark -Id <id> [-Status <s>] [-Version <n>] [-PlanId <p>]`** → call this **after you write your
@@ -299,6 +300,14 @@ Do the phases **in this order** every time.
 > - **Never work a row with `eligible: false`.** A Deferred row stays ineligible while *any*
 >   Today row is still workable, which is what stops a P2 Deferred item eating a run while a
 >   Today item sits untouched.
+> - **`awaiting_reply: true` means the agent spoke last and its newest turn still asks you
+>   something** — the same waiting state `proposed` encodes, reached from `in-progress`. Such a
+>   row is **not workable**, so it neither gets a stacked turn nor holds the Today→Deferred gate
+>   shut. Without this, one unanswered Today row froze the entire Deferred backlog: measured
+>   2026-08-30, **#451 alone made all 55 workable Deferred rows ineligible**, leaving the run
+>   with no permitted work anywhere. A reply (`reopened`) or a **due `poll`/`recheck`** un-parks
+>   it immediately — a timer is read-only agent work that needs no reply, so it must never be
+>   silenced by waiting on the user.
 > - The sort is: `reopened` first (a live reply always wins), then Today before Deferred, then
 >   `Work Priority` (P0 > P1 > P2 > unset), then urgency icon, then the `## Priorities` list,
 >   then board row order, then task id.

@@ -265,6 +265,68 @@ function Test-IsRunLogBodyOnly([string]$region) {
   return $true
 }
 
+# --- Awaiting the user's reply: the selection gate's missing waiting state --------------
+# `Test-Workable` excludes `done`/`skip`/`proposed`/`blocked` because they are terminal or
+# waiting on the user. `in-progress` has a case that model misses: a run that finishes a step
+# and hands back an open question leaves the task `in-progress`, yet it is now waiting on the
+# user exactly as much as a `proposed` one is.
+#
+# That gap is load-bearing because of the OTHER rule the run obeys -- user-settings.md's "do
+# NOT stack a new turn on an unanswered one", which says an unanswered agent turn must be
+# REPLACED rather than appended to. So this state describes a task the run must not simply
+# write to, while `Test-Workable` still called it workable and therefore held the
+# Today->Deferred gate shut.
+#
+# Measured on the live board 2026-08-30 21:30 PT: ONE Today row in this state (#451, an
+# unanswered `Your call:` from 14 minutes earlier) made all 55 workable Deferred rows
+# ineligible, so the run had no permitted work anywhere on the board. Nothing errored -- the
+# gate was behaving exactly as written, which is why it reads clean and starves silently.
+#
+# Detection deliberately mirrors the vocabulary the Telegram digest already parses, so the two
+# surfaces cannot drift: `**Your call:**` is always an ask, and `**Needs from you:**` is an ask
+# unless it is purely dismissive. A dismissive clause dismisses only ITSELF -- `none - but tell
+# me X` is still an ask -- which is the precedence error the bridge already had to fix once.
+$script:NeedsFromYouRe  = '(?im)^[ \t]*\*\*[ \t]*Needs from you[ \t]*:?[ \t]*\*\*[ \t]*:?(.*)$'
+$script:YourCallRe      = '(?im)^[ \t]*\*\*[ \t]*Your call[ \t]*:?[ \t]*\*\*[ \t]*:?(.*)$'
+$script:DismissiveAskRe = '(?i)^[ \t]*(none|nothing|nada|n/a|no)\b'
+# A clause break after a dismissive opener means real content follows: `.` `;` `:`, an en/em
+# dash, or a SPACED hyphen. Written as \u escapes, never as literal glyphs: a BOM-less .ps1 is
+# decoded as the ANSI codepage under Windows PowerShell 5.1, so a literal dash here would be
+# silently mangled on the way in (this is what ps1-encoding-sweep.mjs exists to catch).
+$script:AskClauseBreakRe = '[.;:]|\u2014|\u2013|(?<=\s)-(?=\s)'
+
+function Get-NewestAgentTurn([string]$agentLeft) {
+  # The agent's LAST turn only. Scoping is what keeps this honest: an ask answered three turns
+  # ago is not an open ask, and testing the whole block would leave a task awaiting forever.
+  if ([string]::IsNullOrEmpty($agentLeft)) { return '' }
+  $idx = Get-LastIndexOfPattern $agentLeft ('(?m)' + $script:ManagedHeadingRe)
+  if ($idx -lt 0) { $idx = Get-LastIndexOfPattern $agentLeft $script:ProvenanceRe }
+  if ($idx -lt 0) { return $agentLeft }
+  return $agentLeft.Substring($idx)
+}
+
+function Test-AskTextIsOpen([string]$value) {
+  # Does this `Needs from you:` value carry a real ask? Used to OPEN the gate, so it answers
+  # "no" when unsure: a false "no" merely keeps today's behaviour, a false "yes" would park a
+  # genuinely workable task.
+  $v = "$value".Trim()
+  if ($v.Length -eq 0) { return $false }
+  if ($v -notmatch $script:DismissiveAskRe) { return $true }
+  $m = [regex]::Match($v, $script:AskClauseBreakRe)
+  if (-not $m.Success) { return $false }
+  return (($v.Substring($m.Index + $m.Length)).Trim().Length -gt 0)
+}
+
+function Test-HasOpenAsk([string]$agentLeft) {
+  $turn = Get-NewestAgentTurn $agentLeft
+  if ($turn.Length -eq 0) { return $false }
+  if ([regex]::IsMatch($turn, $script:YourCallRe)) { return $true }
+  foreach ($m in [regex]::Matches($turn, $script:NeedsFromYouRe)) {
+    if (Test-AskTextIsOpen $m.Groups[1].Value) { return $true }
+  }
+  return $false
+}
+
 function Get-AgentEndIndex([string]$content) {
   # End offset of THIS agent's last turn: the latest of its own provenance marker, the legacy
   # managed `<!-- oa-state ... -->` block, or the OVERNIGHT-AGENT sentinel. The turn runs
@@ -565,6 +627,7 @@ function Get-JournalFacts([string]$path) {
     FullHash        = Get-Sha256 $content
     AgentLeftHash   = Get-Sha256 $agentLeft     # file as the agent last left it (no trailing user prose)
     HasTrailingUser = (Test-TrailingHasUser $trailing)
+    HasOpenAsk      = (Test-HasOpenAsk $agentLeft)   # newest turn still asks the user something
     Consent         = (Get-ConsentFacts $trailing)   # #227: fail-CLOSED authorship verdict
     Trailing        = $trailing
     Legacy          = Parse-LegacyOaState $content
@@ -824,11 +887,23 @@ function Get-PriorityRank($wp) {
 # A task is "workable" when the agent could actually do something with it this run. Terminal and
 # waiting-on-the-user states are NOT workable -- that is what lets Today drain so Deferred can
 # open up (#223 rule 1). Snoozed is handled by the caller, which outranks everything.
+#
+# `awaiting_reply` is the fourth waiting state, and it is a STATE, not a status: an `in-progress`
+# task whose newest agent turn still asks the user something is waiting on them just as much as a
+# `proposed` one, and the run is required to replace rather than append to that turn. Leaving it
+# out of this list let a single unanswered Today row hold the whole Deferred backlog shut.
 $script:NonWorkableStatus = @('done', 'skip', 'proposed', 'blocked')
 
 function Test-Workable($row) {
   if ($row.snoozed) { return $false }
   if ($row.reopened) { return $true }   # a live reply is always workable (#223 rule 4)
+  # A DUE timer outranks the awaiting-reply park. A poll/recheck is read-only agent work that
+  # needs no reply, so parking it on "the user has not answered" would silently stop exactly the
+  # recurring duty polling exists to protect -- SKILL.md's "a purely time-based job would be
+  # invisible and silently stop the moment the user stops replying". Measured on the live board:
+  # all 3 polled and both recheck tasks are awaiting_reply, so without this they would all stop.
+  # It yields only the park, never the status gate below.
+  if ($row.awaiting_reply -and -not $row.due_poll -and -not $row.due_recheck) { return $false }
   return ($script:NonWorkableStatus -notcontains "$($row.status)".ToLowerInvariant())
 }
 
@@ -903,6 +978,11 @@ function Cmd-Scan {
       # an irreversible action from `reopened` -- read this instead.
       consent_ok    = [bool]$facts.Consent.consent_ok
       consent_reason = "$($facts.Consent.reason)"
+      # The agent spoke last and its newest turn still carries an open ask, so this task is
+      # waiting on the user -- the same state `proposed` encodes, reached from `in-progress`.
+      # `reopened` outranks it (Test-Workable checks that first), so a reply un-parks it at once.
+      has_open_ask   = [bool]$facts.HasOpenAsk
+      awaiting_reply = [bool]($facts.HasAgentBlock -and $facts.HasOpenAsk -and -not $facts.HasTrailingUser)
     }
   }
 
