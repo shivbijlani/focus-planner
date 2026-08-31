@@ -816,6 +816,36 @@ function Get-SnoozeFromStore {
   return $map
 }
 
+function Get-BoardRowId {
+  # The task id of a planner.md table row, or $null if the line is not a task row.
+  #
+  # The id CELL is not always a bare integer. The board's ID column carries the task id
+  # optionally followed by external references, e.g.
+  #
+  #     | 448,[176](https://github.com/shivbijlani/focus-planner/issues/176) | 🔴 | ... |
+  #
+  # The original pattern (`^\s*\|\s*(\d+)\s*\|`) required the cell to be digits and NOTHING
+  # else, so it silently skipped that row entirely -- the row vanished from the board map and
+  # from the snooze map at once, with no error anywhere.
+  #
+  # That is not a cosmetic miss. It is the Today->Deferred gate's only input. Measured on the
+  # live board 2026-08-31: the board's ONE Today row used this compound form, so `Get-BoardMap`
+  # returned no `today` rows at all, `$todayWorkable` was 0, the gate stood permanently open,
+  # and the single 🔴 Today task sorted to position 232 of 238 -- behind all 121 Deferred rows,
+  # which is the exact inversion the ordering rule exists to prevent. The run reads perfectly
+  # clean while doing so, because "no Today rows" and "Today is finished" are indistinguishable
+  # downstream.
+  #
+  # Parse the first CELL and take its leading digits: a header (`| ID |`) and a separator
+  # (`|---|`) still yield nothing, so non-rows are rejected exactly as before.
+  param([string]$Line)
+  if ($Line -notmatch '^\s*\|') { return $null }
+  $first = (($Line.Trim().Trim('|') -split '\|') | Select-Object -First 1)
+  if ($null -eq $first) { return $null }
+  if ($first.Trim() -match '^(\d+)') { return $Matches[1] }
+  return $null
+}
+
 function Get-SnoozeFromBoard {
   # Legacy path: `<!-- snooze:YYYY-MM-DD -->` HTML comments stamped onto planner.md rows by
   # the #353 feature. Kept as a migration fallback so nothing breaks the day snooze.json
@@ -824,8 +854,8 @@ function Get-SnoozeFromBoard {
   if (-not (Test-Path $PlannerBoard)) { return $map }
   foreach ($line in (Get-Content -Path $PlannerBoard)) {
     # Board rows look like: | 327 | 🟡 | Task… | P1 | 2026-07-20 | 353 | <!-- snooze:2026-08-18 -->
-    if ($line -notmatch '^\s*\|\s*(\d+)\s*\|') { continue }
-    $tid = $Matches[1]
+    $tid = Get-BoardRowId $line
+    if (-not $tid) { continue }
     # The <!-- --> wrapper is REQUIRED. Without it a task titled "snooze: …" matches its own
     # title and hides itself from the board — the concrete failure mode behind #391.
     if ($line -match '<!--\s*snooze:(\d{4}-\d{2}-\d{2})\s*-->') {
@@ -880,8 +910,8 @@ function Get-BoardMap {
     if ($line -match '^##\s*Today\b') { $section = 'today'; continue }
     elseif ($line -match '^##\s*Deferred\b') { $section = 'deferred'; continue }
     elseif ($line -match '^##\s') { $section = 'other'; continue }
-    if ($line -notmatch '^\s*\|\s*(\d+)\s*\|') { continue }
-    $id = $Matches[1]
+    $id = Get-BoardRowId $line
+    if (-not $id) { continue }
     $cells = ($line.Trim().Trim('|') -split '\|') | ForEach-Object { $_.Trim() }
     # Today is `ID | urgency | Task | Work Priority | Added | Linked ID` and Deferred inserts a
     # `Wake` column before Linked ID, so the first four cells line up in both tables.
