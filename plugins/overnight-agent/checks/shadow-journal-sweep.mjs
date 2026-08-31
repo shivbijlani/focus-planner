@@ -127,6 +127,10 @@ const REVIEWED = new Map([
     { on: '2026-08-27',
       hash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
       why: 'no unique content -- the live journal is a strict superset' }],
+  ['task-451.truncated-bak-20260830.md',
+    { on: '2026-08-30',
+      hash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      why: 'forensic copy of the 2026-08-30 external truncation of #451; the repaired live journal is a strict superset (0 unique lines)' }],
 ]);
 
 function uniqueHash(unique) {
