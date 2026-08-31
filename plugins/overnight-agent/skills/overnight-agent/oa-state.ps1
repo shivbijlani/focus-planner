@@ -749,8 +749,95 @@ function Get-SnoozeMap {
   return $merged
 }
 
+function Get-PrioritiesRank {
+  # The `## Priorities` block at the bottom of planner.md is the user's own ordered list of task
+  # IDs ("1. 285", "2. 191", ...). It is the third sort key in #223, below section and priority.
+  param([string[]]$Lines)
+  $rank = @{}
+  $inSection = $false
+  $n = 0
+  foreach ($line in $Lines) {
+    if ($line -match '^##\s') { $inSection = ($line -match '^##\s*Priorities\b'); continue }
+    if (-not $inSection) { continue }
+    if ($line -match '^\s*\d+\.\s+(\d+)\s*$') { $rank[$Matches[1]] = $n; $n++ }
+  }
+  return $rank
+}
+
+function Get-BoardMap {
+  # id -> { section, urgency, work_priority, board_pos } for every row on the board.
+  #
+  # Read with the explicit UTF-8 decoder, NOT Get-Content: the urgency cell is an emoji, and
+  # under Windows PowerShell 5.1 a bare read decodes these BOM-less files as the ANSI codepage,
+  # so every icon would arrive as mojibake and rank as "unknown" (HAZARD 4, user-settings.md).
+  $map = @{}
+  if (-not (Test-Path $PlannerBoard)) { return $map }
+  $lines = (Read-JournalText $PlannerBoard) -split "`r?`n"
+  $section = 'other'
+  $pos = 0
+  foreach ($line in $lines) {
+    if ($line -match '^##\s*Today\b') { $section = 'today'; continue }
+    elseif ($line -match '^##\s*Deferred\b') { $section = 'deferred'; continue }
+    elseif ($line -match '^##\s') { $section = 'other'; continue }
+    if ($line -notmatch '^\s*\|\s*(\d+)\s*\|') { continue }
+    $id = $Matches[1]
+    $cells = ($line.Trim().Trim('|') -split '\|') | ForEach-Object { $_.Trim() }
+    # Today is `ID | urgency | Task | Work Priority | Added | Linked ID` and Deferred inserts a
+    # `Wake` column before Linked ID, so the first four cells line up in both tables.
+    $wp = if ($cells.Count -ge 4 -and $cells[3] -match '^(P[0-9])$') { $Matches[1] } else { $null }
+    $pos++
+    $map[$id] = [pscustomobject]@{
+      section       = $section
+      urgency       = if ($cells.Count -ge 2) { $cells[1] } else { '' }
+      work_priority = $wp
+      board_pos     = $pos
+    }
+  }
+  return $map
+}
+
+# Urgency icons, built from codepoints on purpose: a literal emoji in a comparison line is the
+# LOAD-BEARING class that ps1-encoding-sweep.mjs flags, because 5.1 would compare against
+# mojibake. Codepoints keep this file's logic pure ASCII.
+$script:UrgencyRank = @{
+  ([char]::ConvertFromUtf32(0x1F534)) = 0   # red
+  ([char]::ConvertFromUtf32(0x1F7E1)) = 1   # yellow
+  ([char]::ConvertFromUtf32(0x1F4D6)) = 2   # book / reading
+  ([char]::ConvertFromUtf32(0x26AA))  = 3   # white
+}
+
+function Get-UrgencyRank([string]$icon) {
+  if ([string]::IsNullOrWhiteSpace($icon)) { return 4 }
+  foreach ($k in $script:UrgencyRank.Keys) { if ($icon.Contains($k)) { return $script:UrgencyRank[$k] } }
+  return 4
+}
+
+function Get-SectionRank([string]$section) {
+  switch ($section) { 'today' { 0 } 'deferred' { 1 } default { 2 } }
+}
+
+function Get-PriorityRank($wp) {
+  if ($wp -match '^P([0-9])$') { return [int]$Matches[1] }
+  return 9   # unset sorts after every explicit priority
+}
+
+# A task is "workable" when the agent could actually do something with it this run. Terminal and
+# waiting-on-the-user states are NOT workable -- that is what lets Today drain so Deferred can
+# open up (#223 rule 1). Snoozed is handled by the caller, which outranks everything.
+$script:NonWorkableStatus = @('done', 'skip', 'proposed', 'blocked')
+
+function Test-Workable($row) {
+  if ($row.snoozed) { return $false }
+  if ($row.reopened) { return $true }   # a live reply is always workable (#223 rule 4)
+  return ($script:NonWorkableStatus -notcontains "$($row.status)".ToLowerInvariant())
+}
+
 function Cmd-Scan {
   $snooze = Get-SnoozeMap
+  $board = Get-BoardMap
+  $boardLines = @()
+  if (Test-Path $PlannerBoard) { $boardLines = (Read-JournalText $PlannerBoard) -split "`r?`n" }
+  $prioRank = Get-PrioritiesRank $boardLines
   $journals = Get-ChildItem $JournalDir -Filter 'task-*.md' -File | Where-Object { $_.BaseName -match '^task-\d+$' } | Sort-Object Name
   $rows = foreach ($f in $journals) {
     $facts = Get-JournalFacts $f.FullName
@@ -776,6 +863,19 @@ function Cmd-Scan {
     # DUE verdict only -- the timer object itself is left armed, so it fires again on its own once
     # the snooze lapses rather than being silently disarmed by it.
     $isSnoozed = [bool]$snoozeUntil
+    $b = $board[$facts.Id]
+    $section = 'other'
+    $urgency = ''
+    $workPriority = $null
+    $boardPos = 999999
+    if ($b) {
+      $section = $b.section
+      $urgency = $b.urgency
+      $workPriority = $b.work_priority
+      $boardPos = $b.board_pos
+    }
+    $pRank = 999999
+    if ($prioRank.ContainsKey($facts.Id)) { $pRank = $prioRank[$facts.Id] }
     [pscustomobject]@{
       id            = $facts.Id
       status        = $status
@@ -785,6 +885,14 @@ function Cmd-Scan {
       tracked       = [bool]$st
       snoozed       = $isSnoozed
       snooze_until  = $snoozeUntil
+      # #223: the board joined onto each row, so selection order is DATA rather than the agent's
+      # judgement. Before this, scan emitted rows in task-ID order with no notion of section or
+      # priority at all, and "Today first" existed only as prose in SKILL.md.
+      section       = $section
+      urgency       = $urgency
+      work_priority = $workPriority
+      board_pos     = $boardPos
+      priorities_rank = $pRank
       due_poll      = [bool]((Test-PollDue $poll) -and -not $isSnoozed)
       poll_cadence  = if ($poll) { "$($poll.cadence)" } else { $null }
       due_recheck   = [bool]((Test-PollDue $recheck) -and -not $isSnoozed)
@@ -797,6 +905,40 @@ function Cmd-Scan {
       consent_reason = "$($facts.Consent.reason)"
     }
   }
+
+  # ---- #223: deterministic selection order -------------------------------------------------
+  # Rule 1  Today before Deferred, and a Deferred row is not eligible while any Today row is
+  #         still workable.
+  # Rule 2  Within a section: Work Priority (P0>P1>P2>unset), then urgency icon, then the
+  #         `## Priorities` list, then board row order, then task id.
+  # Rule 4  `reopened` preempts everything -- a live reply is the highest-value work there is.
+  #
+  # Sorting here rather than in the agent's head is the whole point of the issue: two runs over
+  # an unchanged board must produce the same order, and the order must be auditable afterwards.
+  $rows = $rows | Sort-Object `
+    @{ Expression = { if ($_.reopened) { 0 } else { 1 } } }, `
+    @{ Expression = { Get-SectionRank $_.section } }, `
+    @{ Expression = { Get-PriorityRank $_.work_priority } }, `
+    @{ Expression = { Get-UrgencyRank $_.urgency } }, `
+    @{ Expression = { $_.priorities_rank } }, `
+    @{ Expression = { $_.board_pos } }, `
+    @{ Expression = { [int]$_.id } }
+
+  # The gate is computed from the WHOLE set, so it cannot be evaluated per-row in the loop above.
+  $todayWorkable = @($rows | Where-Object { $_.section -eq 'today' -and (Test-Workable $_) }).Count
+  $order = 0
+  foreach ($r in $rows) {
+    $order++
+    $eligible = $false
+    if (-not $r.snoozed) {
+      if ($r.reopened) { $eligible = $true }                       # rule 4 beats the gate
+      elseif ($r.section -eq 'today') { $eligible = (Test-Workable $r) }
+      elseif ($todayWorkable -eq 0) { $eligible = (Test-Workable $r) }
+    }
+    Add-Member -InputObject $r -NotePropertyName 'order' -NotePropertyValue $order -Force
+    Add-Member -InputObject $r -NotePropertyName 'eligible' -NotePropertyValue $eligible -Force
+  }
+
   $rows | ConvertTo-Json -Depth 4
 }
 
