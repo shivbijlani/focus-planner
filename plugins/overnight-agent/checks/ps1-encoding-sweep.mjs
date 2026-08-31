@@ -42,9 +42,41 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const HERE = import.meta.dirname;
-// checks -> overnight-agent -> plugins -> repo root
-const REPO = process.env.PS1_SWEEP_ROOT || path.resolve(HERE, '..', '..', '..');
+// ROOT RESOLUTION -- and this is not incidental plumbing, it is the one thing this sweep
+// got wrong on its first live run.
+//
+// Sweeps execute from the FLAT OA home (%LOCALAPPDATA%\overnight-agent), not from the repo
+// tree they were authored in. So deriving the root as `<this file>/../../..` -- correct when
+// the file sits in plugins/overnight-agent/checks -- resolves to C:\Users\<name> once the
+// file is deployed. Measured: 40 .ps1 scanned in the repo, **1,004** from the flat home,
+// including 2 LOAD-BEARING hits inside third-party tooling that is not ours to re-save.
+// A detector that reports 131 findings about other people's files is one that gets switched
+// off in a week, which is the same failure repo-drift-sweep's header warns about.
+//
+// Resolved the way repo-drift-sweep already does it: explicit env wins, then probe the known
+// checkout. Deliberately NOT "walk up until a .git turns up" -- from the flat home that finds
+// nothing, and from a worktree it finds the wrong root.
+function firstExisting(paths) {
+  for (const p of paths) { if (p && fs.existsSync(p)) return p; }
+  return null;
+}
+
+const CHECKS_REPO = process.env.OA_CHECKS_REPO || firstExisting([
+  'V:\\repos\\focus-planner\\plugins\\overnight-agent\\checks',
+  'V:\\repos\\focus-planner.worktrees\\oa-version-the-checks\\plugins\\overnight-agent\\checks',
+]);
+
+// PS1_SWEEP_ROOT stays the explicit override (the mutation check drives the sweep with it).
+// Otherwise scan the repo the checks archive belongs to; if neither resolves, say so and exit
+// 0 rather than scanning an arbitrary directory -- a sweep that cannot find its subject must
+// report that, not invent a corpus.
+const REPO = process.env.PS1_SWEEP_ROOT
+  || (CHECKS_REPO ? path.resolve(CHECKS_REPO, '..', '..', '..') : null);
+
+if (!REPO || !fs.existsSync(REPO)) {
+  console.log('ps1-encoding-sweep: no repo root found (set PS1_SWEEP_ROOT or OA_CHECKS_REPO) - nothing scanned.');
+  process.exit(0);
+}
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage']);
 
