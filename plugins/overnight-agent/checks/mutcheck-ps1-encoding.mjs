@@ -20,11 +20,22 @@
 // same defect the sweep hunts, one layer up: a fixture corrupted on the way in reads exactly
 // like a broken implementation.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const sweep = join(import.meta.dirname, 'ps1-encoding-sweep.mjs');
+
+// The repo's checks directory, which is NOT necessarily where this file lives: -IncludeMutchecks
+// runs mutation checks from the flat OA home, where `import.meta.dirname` is the OA home and
+// `../../..` from it is C:\Users. Assuming otherwise made this check report 13/14 in the one
+// environment it actually runs in -- the same root-resolution defect it was written to pin,
+// reproduced inside the pin. Resolve it explicitly, exactly as the sweep does.
+const REPO_CHECKS = [
+  'V:\\repos\\focus-planner\\plugins\\overnight-agent\\checks',
+  'V:\\repos\\focus-planner.worktrees\\oa-version-the-checks\\plugins\\overnight-agent\\checks',
+  import.meta.dirname,
+].find((p) => existsSync(join(p, 'ps1-encoding-sweep.mjs')));
 
 const MOON = '\u{1F319}';   // an astral-plane emoji (surrogate pair in UTF-16)
 const WARN = '\u26a0';      // a BMP symbol
@@ -167,7 +178,7 @@ function runDeployedCopy() {
     try {
       const out = execFileSync('node', [copy], {
         encoding: 'utf8',
-        env: { ...process.env, PS1_SWEEP_ROOT: '', OA_CHECKS_REPO: import.meta.dirname },
+        env: { ...process.env, PS1_SWEEP_ROOT: '', OA_CHECKS_REPO: REPO_CHECKS },
       });
       return { code: 0, out };
     } catch (err) {
@@ -191,7 +202,7 @@ const rootCases = [
     // Exit code is deliberately not asserted: it depends on whether the repo currently has a
     // finding, which is not what this case is about. What matters is that the root RESOLVED --
     // a scan happened, and it was not the "I gave up" path.
-    env: { PS1_SWEEP_ROOT: '', OA_CHECKS_REPO: import.meta.dirname },
+    env: { PS1_SWEEP_ROOT: '', OA_CHECKS_REPO: REPO_CHECKS },
     expectCode: null,
     expectText: '.ps1 files scanned',
     reject: 'no repo root found',
