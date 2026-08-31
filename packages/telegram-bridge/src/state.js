@@ -66,6 +66,29 @@ export function setUserEngaged(state, taskId, engaged) {
   return state
 }
 
+// Remember the Telegram message ids of the last agent turn we posted for a task,
+// so a FOLLOWING unanswered turn can delete them instead of stacking on top (#205).
+//
+// Shiv, 2026-08-27: "if I haven't responded, and you are planning to post, you need
+// to update the last one or delete it and post a new merged one. If I haven't
+// responded, assume it's unread and can be clobbered." He raised it again on
+// 2026-08-31 ("too many stacked consecutive messages on telegram"), which is what
+// finally made this a code change rather than a rule the run had to remember.
+//
+// A LIST, not a single id: a long turn is split into an ordered run of parts by
+// formatForTelegramParts, so "the last message" is genuinely several of them and
+// collapsing must remove the whole run or it leaves orphaned fragments.
+//
+// Cleared rather than kept once consumed, so a stale id can never be re-deleted —
+// deleting a message id that has been reused or already removed is the one
+// irreversible mistake available here.
+export function setLastPostedMessageIds(state, taskId, ids) {
+  const prev = state.tasks[taskId] || {}
+  const list = Array.isArray(ids) ? ids.filter((n) => Number.isInteger(n)) : []
+  state.tasks[taskId] = { ...prev, lastPostedMessageIds: list.length ? list : undefined }
+  return state
+}
+
 export function setOffset(state, offset) {
   state.updateOffset = offset
   return state
