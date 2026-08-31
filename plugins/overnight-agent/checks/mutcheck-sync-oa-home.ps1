@@ -138,6 +138,36 @@ function Add-Mutcheck {
   } finally { Pop-Location }
 }
 
+function Add-MutcheckSubject {
+  <#
+    A PowerShell mutation check plus the script it tests. `mutcheck-subject.ps1` names its
+    subject the way every real one does -- `Join-Path $PSScriptRoot 'subject-tool.ps1'` --
+    which is an edge NO other rule can see: the roster names only sweeps, the import
+    closure walks `import` specifiers that exist only in .mjs, and $AlwaysRequired does
+    not list it. Rule 4 delivers the guard and leaves the subject behind, and that is not
+    a skip: the guard throws and exits 1 the first time the runner globs it.
+
+    `unrelated-tool.ps1` is the narrowness control -- a .ps1 nobody references, which must
+    stay out, so rule 5 cannot quietly become "deploy every .ps1 in the repo". #>
+  param([string]$Repo)
+  $chk = Join-Path $Repo 'plugins\overnight-agent\checks'
+  $guard = @'
+[CmdletBinding()]
+param([string]$ScriptPath)
+if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'subject-tool.ps1' }
+if (-not (Test-Path $ScriptPath)) { throw "subject not found at $ScriptPath" }
+'@
+  Set-Content -LiteralPath (Join-Path $chk 'mutcheck-subject.ps1') -Value $guard -Encoding utf8
+  Set-Content -LiteralPath (Join-Path $chk 'subject-tool.ps1') -Value "# the script under test" -NoNewline -Encoding utf8
+  Set-Content -LiteralPath (Join-Path $chk 'unrelated-tool.ps1') -Value "# referenced by nobody" -NoNewline -Encoding utf8
+  Push-Location $Repo
+  try {
+    & git add -A 2>&1 | Out-Null
+    & git commit --quiet -m 'mutcheck subject' 2>&1 | Out-Null
+    & git branch -f main HEAD 2>&1 | Out-Null
+  } finally { Pop-Location }
+}
+
 function Invoke-Subject {
   param([string]$ScriptPath, $Fx, [switch]$WhatIf)
   $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath,
@@ -264,6 +294,24 @@ Assert (Test-Path (Join-Path $fxM.Home 'mutcheck-probe.mjs')) 'T_MUTCHECK_WRITE'
 Assert (Test-Path (Join-Path $fxM.Home 'mutcheck-probe.ps1')) 'T_MUTCHECK_WRITE_PS1' 'both extensions land'
 # Narrowness: rule 4 must not become "deploy everything". The one-off is still excluded.
 Assert (-not (Test-Path (Join-Path $fxM.Home 'diagnostic-tool.mjs'))) 'T_MUTCHECK_NARROW' 'rule 4 does not smuggle in unrostered one-offs'
+
+# --- T_SUBJECT: rule 5 -- the guard arrives, so its subject must too (2026-08-30) ----
+# Rule 4 above closed "the guard never arrives". It thereby created the opposite failure:
+# a guard that arrives WITHOUT the script it tests. That does not degrade quietly -- the
+# mutcheck throws and exits 1, so the suite reports a red guard for a healthy subject.
+# Measured minutes after rule 4 deployed: 5 of the 48 guards in the live home were dead
+# this way (4 needing oa-state.ps1, 1 needing sync-oa-home.ps1), including this tool's own
+# guard, and `mutcheck-priority-order.ps1` failed the very first time the runner globbed it.
+$fxS = New-Fixture 'forward-subject'
+Add-Roster $fxS.Repo
+Add-MutcheckSubject $fxS.Repo
+$rS = Invoke-Subject $Script $fxS
+
+Assert ((Get-Class $rS 'mutcheck-subject.ps1') -eq 'MISSING') 'T_SUBJECT_GUARD' 'the guard itself is required (rule 4)'
+Assert ((Get-Class $rS 'subject-tool.ps1') -eq 'MISSING') 'T_SUBJECT' 'and the script it resolves via $PSScriptRoot comes with it'
+Assert (Test-Path (Join-Path $fxS.Home 'subject-tool.ps1')) 'T_SUBJECT_WRITE' 'so the guard can actually execute where the runner globs it'
+# Narrowness: rule 5 follows a reference, it does not sweep the repo for .ps1 files.
+Assert (-not (Test-Path (Join-Path $fxS.Home 'unrelated-tool.ps1'))) 'T_SUBJECT_NARROW' 'an unreferenced .ps1 is still not deployed'
 
 # --- T_MISSING_AMBIGUOUS: required, but the basename maps to two repo paths ----------
 # A flat home cannot say which path was meant. Same answer as for a live file: refuse.
@@ -426,6 +474,28 @@ $r = Invoke-Subject $m9 $fx
 Assert ((Get-Class $r 'newsweep.mjs') -eq 'MISSING') 'M9_ROSTER_STILL_OK' 'the rostered sweep still deploys (so this mutant is narrow)'
 Assert ((Get-Class $r 'mutcheck-probe.mjs') -ne 'MISSING') 'M9' 'without rule 4, a merged mutation check is invisible again'
 Assert (-not (Test-Path (Join-Path $fx.Home 'mutcheck-probe.ps1'))) 'M9_NOWRITE' 'and never reaches the home the runner globs'
+
+# M10 - delete rule 5. Rule 4 still fires, so every guard still deploys and the run still
+#       prints a healthy summary - but each PowerShell guard now lands without the script
+#       it tests and dies with exit 1 on first execution. The mutant is deliberately
+#       narrow: mutcheck-subject.ps1 must STILL deploy, so a failure here can only mean
+#       the SUBJECTS rule died, not that rule 4 or the forward direction did.
+$m10find = @'
+      if ($dep -match '^mutcheck-') { continue }   # already covered by rule 4
+      [void]$required.Add($dep)
+'@
+$m10repl = @'
+      if ($dep -match '^mutcheck-') { continue }   # already covered by rule 4
+      if ($false) { [void]$required.Add($dep) }
+'@
+$m10 = New-Mutant 'M10' $m10find.TrimEnd("`r","`n") $m10repl.TrimEnd("`r","`n")
+$fx = New-Fixture 'm10'
+Add-Roster $fx.Repo
+Add-MutcheckSubject $fx.Repo
+$r = Invoke-Subject $m10 $fx
+Assert ((Get-Class $r 'mutcheck-subject.ps1') -eq 'MISSING') 'M10_GUARD_STILL_OK' 'the guard still deploys (so this mutant is narrow)'
+Assert ((Get-Class $r 'subject-tool.ps1') -ne 'MISSING') 'M10' 'without rule 5 the subject is required by nothing'
+Assert (-not (Test-Path (Join-Path $fx.Home 'subject-tool.ps1'))) 'M10_NOWRITE' 'so the deployed guard would throw on its first run'
 
 Write-Host ''
 Write-Host ("[mutcheck-sync-oa-home] {0} passed, {1} failed" -f $script:pass, $script:fail)
