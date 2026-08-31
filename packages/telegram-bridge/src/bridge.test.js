@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { createBridge, hashTurn } from './bridge.js'
-import { emptyState } from './state.js'
+import { emptyState, setUserEngaged } from './state.js'
 import { FROM_ME, TURN_END, latestAgentTurn } from './journal.js'
 
 const AGENT_JOURNAL = `# Task 42: Demo
@@ -20,9 +20,12 @@ function makeHarness(files) {
   const store = { ...files }
   const sent = []
   let topicSeq = 0
+  let messageSeq = 0
   const created = []
   const closed = []
   const reopened = []
+  const deleted = []
+  let deleteFails = false
   let completedBoard = ''
   let activeBoard = ''
   let syncRecords = []
@@ -36,6 +39,15 @@ function makeHarness(files) {
     },
     async sendMessage(m) {
       sent.push(m)
+      // Real Telegram returns the Message, and #205's collapse depends on the
+      // message_id in it. A harness that returned undefined would make the
+      // feature untestable while every assertion still passed.
+      return { message_id: ++messageSeq }
+    },
+    async deleteMessage({ messageId }) {
+      if (deleteFails) throw new Error('message to delete not found')
+      deleted.push(messageId)
+      return true
     },
     async closeForumTopic({ messageThreadId }) {
       closed.push(messageThreadId)
@@ -81,9 +93,13 @@ function makeHarness(files) {
     created,
     closed,
     reopened,
+    deleted,
     client,
     io,
     config,
+    failDeletes: () => {
+      deleteFails = true
+    },
     setCompletedBoard: (md) => {
       completedBoard = md
     },
@@ -98,6 +114,64 @@ function makeHarness(files) {
     },
   }
 }
+
+describe('collapsing superseded turns (#205)', () => {
+  const secondTurn = AGENT_JOURNAL.replace('do the thing', 'do the other thing')
+
+  it('deletes the previous unanswered turn instead of stacking a second one', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(1)
+    const firstId = state.tasks['42'].lastPostedMessageIds
+    expect(firstId).toEqual([1])
+
+    // A new turn arrives with no reply from the user in between.
+    h.store['42'] = secondTurn
+    await bridge.syncUp()
+
+    expect(h.sent).toHaveLength(2)
+    // The superseded message is gone, so the topic holds ONE current message.
+    expect(h.deleted).toEqual([1])
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([2])
+  })
+
+  it('NEVER deletes a turn the user has replied to', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([1])
+
+    // The user has spoken since. That turn is now frozen history, not a draft.
+    setUserEngaged(state, '42', true)
+    h.store['42'] = secondTurn
+    await bridge.syncUp()
+
+    expect(h.sent).toHaveLength(2)
+    expect(h.deleted).toEqual([])
+  })
+
+  it('posts before deleting, and a failed delete never costs the new turn', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    h.failDeletes()
+    h.store['42'] = secondTurn
+    await bridge.syncUp()
+
+    // Degrades to the OLD stacking behaviour -- never to a lost message.
+    expect(h.sent).toHaveLength(2)
+    expect(h.sent[1].text).toContain('do the other thing')
+    expect(h.deleted).toEqual([])
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([2])
+  })
+})
 
 describe('syncUp', () => {
   it('creates a topic and posts the agent turn once, then dedups', async () => {

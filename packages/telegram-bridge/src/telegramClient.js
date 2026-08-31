@@ -126,5 +126,13 @@ export function createTelegramClient({
         timeout,
         ...(allowedUpdates ? { allowed_updates: allowedUpdates } : {}),
       }),
+    // Used to collapse a superseded, unanswered agent turn (#205). Telegram lets a
+    // bot delete its own message for 48h, and any message in a group where it is an
+    // admin - which this bot is, since it creates and closes forum topics.
+    deleteMessage: ({ chatId, messageId }) =>
+      call('deleteMessage', {
+        chat_id: chatId,
+        message_id: messageId,
+      }),
   }
 }

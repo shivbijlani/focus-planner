@@ -17,6 +17,7 @@ import {
   getTask,
   setTopic,
   setLastPosted,
+  setLastPostedMessageIds,
   setSuppressedHash,
   setArchived,
   setUserEngaged,
@@ -381,15 +382,32 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       // so a mid-run failure retries the turn rather than recording it as done;
       // and the plain-text fallback is per-part, so one rejected part never
       // costs the rest of the turn.
+      //
+      // COLLAPSE (#205): if our own previous turn for this task is still the last
+      // thing in the topic and the user has NOT replied to it, that turn is
+      // superseded and gets deleted once this one is safely out. Shiv's words:
+      // "if I haven't responded, assume it's unread and can be clobbered."
+      //
+      // `userEngaged` is the boundary and it is exactly the right one: it is set
+      // when a reply is routed to this task and consumed below once answered. So
+      // it is true precisely when the user has spoken since our last post — and a
+      // turn the user has replied to is frozen forever and must never be deleted.
+      const supersedes =
+        task && !task.userEngaged && Array.isArray(task.lastPostedMessageIds)
+          ? task.lastPostedMessageIds
+          : []
+
       const parts = formatForTelegramParts(taskId, title, turn)
+      const postedIds = []
       for (const [index, text] of parts.entries()) {
         try {
-          await client.sendMessage({
+          const sent = await client.sendMessage({
             chatId,
             text,
             messageThreadId: topicId,
             parseMode: 'HTML',
           })
+          if (sent && Number.isInteger(sent.message_id)) postedIds.push(sent.message_id)
         } catch (err) {
           // If Telegram rejects our HTML (e.g. an unexpected entity), don't lose
           // the update — resend the same content as plain text.
@@ -397,13 +415,37 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
             `HTML send failed for task #${taskId} part ${index + 1}/${parts.length} ` +
               `(${err.message}); retrying as plain text`,
           )
-          await client.sendMessage({
+          const sent = await client.sendMessage({
             chatId,
             text: formatPlain(taskId, parts.length > 1 ? `${title} (${index + 1}/${parts.length})` : title, turn),
             messageThreadId: topicId,
           })
+          if (sent && Number.isInteger(sent.message_id)) postedIds.push(sent.message_id)
         }
       }
+
+      // Strictly AFTER the new turn is out. Deleting first would open a window in
+      // which the topic contains neither turn, and a crash in between would leave
+      // the user with nothing rather than with a duplicate. A failed delete is a
+      // cosmetic regression to the old stacking behaviour; a failed post after a
+      // successful delete is lost content.
+      if (supersedes.length && typeof client.deleteMessage === 'function' && postedIds.length) {
+        let removed = 0
+        for (const messageId of supersedes) {
+          try {
+            await client.deleteMessage({ chatId, messageId })
+            removed++
+          } catch (err) {
+            // Older than Telegram's 48h delete window, already gone, or lacking
+            // rights. Never fatal: the worst case is the stacked message Shiv
+            // was already seeing before this existed.
+            logger(`could not collapse superseded message ${messageId} for task #${taskId} (${err.message})`)
+          }
+        }
+        if (removed) logger(`collapsed ${removed} superseded message(s) for task #${taskId}`)
+      }
+
+      setLastPostedMessageIds(state, taskId, postedIds)
       setLastPosted(state, taskId, hash)
       // The pending-suppression marker has served its purpose once the turn is
       // out; clearing it keeps state from carrying a stale "we owe this task a
