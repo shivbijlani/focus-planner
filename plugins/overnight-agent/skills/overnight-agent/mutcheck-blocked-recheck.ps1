@@ -25,6 +25,16 @@
     F  snoozed + due recheck  -> due_recheck FALSE     (kills: snooze precedence missing on recheck)
     G  snooze lapses          -> due_poll TRUE again   (kills: snooze DISARMING the timer instead of
                                                         merely suppressing the verdict)
+    H  blocked + due recheck  -> eligible TRUE         (kills: the timer firing and the verdict being
+                                                        DISCARDED by the `blocked` status gate, which
+                                                        made the whole recheck feature inert)
+    I  done + due recheck     -> eligible FALSE        (kills: an over-broad fix to H that lets a
+                                                        recheck REOPEN a closed task -- the #170
+                                                        "agent executes in closed tasks" bug)
+
+  H and I are the pair that matters: every arm above asserts the SIGNAL (`due_recheck`) and none
+  asserted the CONSEQUENCE (`eligible`), which is exactly how a timer that fired into a closed gate
+  read as healthy for as long as it did.
 #>
 [CmdletBinding()]
 param(
@@ -66,7 +76,7 @@ $board = Join-Path $root 'planner.md'
 $store = Join-Path $root 'snooze.json'
 $utf8 = New-Object Text.UTF8Encoding($false)
 
-foreach ($id in 601, 602, 603) {
+foreach ($id in 601, 602, 603, 604, 605) {
   [IO.File]::WriteAllText((Join-Path $jdir "task-$id.md"), $Journal.Replace('{ID}', "$id"), $utf8)
 }
 [IO.File]::WriteAllText($board, "## Today`n`n| ID | Task |`n|---|---|`n", $utf8)
@@ -144,6 +154,21 @@ Check 'G lapsed snooze re-fires'    { $r602g.due_poll -eq $true -and $r602g.snoo
 Check 'F- recheck due before snooze' { (Get-Row '603').due_recheck -eq $true }
 Set-Snooze '603' $today
 Check 'F snooze outranks recheck'   { (Get-Row '603').due_recheck -eq $false }
+
+# H: the consequence, not just the signal. A blocked task whose recheck is DUE must actually
+# become workable -- otherwise the timer fires into a closed gate and the feature does nothing.
+[void](Invoke-Oa @('mark', '-Id', '604', '-Status', 'blocked', '-Recheck', 'daily', '-RecheckKind', 'ci'))
+$r604 = Get-Row '604'
+Check 'H- blocked recheck is due'   { $r604.due_recheck -eq $true }   # guard: arm actually worked
+Check 'H due recheck is ELIGIBLE'   { $r604.eligible -eq $true }
+
+# I: the opposite failure. Yielding the status gate too broadly would let a recheck re-surface a
+# CLOSED task, which is the #170 "agent executes in closed tasks" bug. done must stay ineligible.
+[void](Invoke-Oa @('mark', '-Id', '605', '-Status', 'blocked', '-Recheck', 'daily', '-RecheckKind', 'ci'))
+Check 'I- recheck armed while blocked' { (Get-Row '605').due_recheck -eq $true }
+[void](Invoke-Oa @('mark', '-Id', '605', '-Status', 'done'))
+$r605 = Get-Row '605'
+Check 'I done stays INELIGIBLE'     { $r605.due_recheck -eq $true -and $r605.eligible -eq $false }
 
 # --- report ---------------------------------------------------------------------------
 $pass = 0; $fail = 0
