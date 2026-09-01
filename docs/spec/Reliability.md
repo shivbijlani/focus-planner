@@ -16,9 +16,9 @@ Everything described here is treated as shipped: mechanisms that currently live 
 GitHub issue as intended direction are specified as if implemented, because the point of
 this page is the complete blueprint, not a snapshot of progress.
 
-## The two founding principles
+## The founding principles
 
-Every strategy below is an application of one of two rules the system learned the hard way.
+Every strategy below is an application of one of a few rules the system learned the hard way.
 
 1. **Assert the artifact at the far end — never the exit code of the step that produced
    it.** "Copilot exited 0" says nothing about whether the work is correct; "the file on
@@ -38,6 +38,25 @@ A third rule governs supervision specifically and is important enough to state o
 3. **You cannot supervise a system from inside its own failure domain.** A watchdog
    dispatched by the thing it watches dies with it. Real supervision must be dispatched by
    something strictly outside — the operating system.
+
+One more rule cuts across all of the above and is, for a rebuilder, the most important of
+the four, because it is the mechanism by which the other failures stay invisible:
+
+4. **A reader must be able to tell "absent" from "present but unreadable."** The failures
+   that survive are the ones that do not raise — they decode to a valid value that happens
+   to be a lie. Age-only `STUCK` collapsed "working hard" and "hung" into a single
+   observable (Strategy B); the "merged isn't running" gap is silent *in the safe-looking
+   direction*, so the blind updater reports success (Strategy D); an encoding fault corrupts
+   a script *before any code runs* (Strategy E), where no downstream logic can catch it. The
+   liveness lock exists precisely to make a distinction the database alone cannot — a
+   `running` row over a dead PID is a different fact from the same row over a live one. The
+   design test for every state a check reads is therefore: *does a failure produce an
+   invalid value, or a valid one that is wrong?* The first is caught by any check; the
+   second is caught only by deliberately asking whether the reader can distinguish missing
+   from unparsed — because, by construction, nothing downstream will ever raise it for you.
+   This is a cross-cutting hazard, not a supervision-only one: the prioritisation layer hits
+   the same shape — a snoozed row that decodes to "not snoozed," a skipped board row that
+   reads as "Today is finished" — which is why the two concerns are documented as siblings.
 
 ## Strategy A — Out-of-band supervision of the agent process
 
