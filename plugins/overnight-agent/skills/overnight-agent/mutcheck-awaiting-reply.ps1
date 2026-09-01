@@ -182,6 +182,13 @@ function Get-Rows {
   try { return ($text | ConvertFrom-Json) } catch { return @() }
 }
 
+function Get-RowsWith {
+  # scan with extra flags, for arms that must isolate one mechanism from another.
+  param([string[]]$Extra)
+  $text = (Invoke-Oa (@('scan') + $Extra) | Out-String)
+  try { return ($text | ConvertFrom-Json) } catch { return @() }
+}
+
 function Get-Row {
   param($rows, [string]$id)
   return ($rows | Where-Object { "$($_.id)" -eq $id } | Select-Object -First 1)
@@ -327,7 +334,16 @@ $sbQ = New-Object Text.StringBuilder
 [void]$sbQ.AppendLine('| 891 |  | deferred 891 | - | 2026-08-31 |  |  |')
 [void]$sbQ.AppendLine('| 892 |  | deferred 892 | - | 2026-08-31 |  |  |')
 [IO.File]::WriteAllText($board, $sbQ.ToString(), $utf8)
-$rowsQ = Get-Rows
+# Pinned to -TodayServedMinutes 0 ON PURPOSE. This arm is a test of the awaiting-reply PARK, and
+# its distinguishing claim is that the Today row becomes eligible by being UN-PARKED rather than
+# by the Today->Deferred gate being opened underneath it. The run-budget gate added later
+# (Test-HoldsTodayGate) is a second, independent mechanism that also opens Deferred -- and this
+# harness marks every fixture task at setup purely to set its STATUS, which incidentally stamps a
+# fresh `updated` and makes 890 read as "served this cycle". Leaving that in would let the two
+# mechanisms mask each other: the arm would pass or fail for reasons that have nothing to do with
+# the park. `0` disables only the budget gate, so the original assertion below -- including
+# "Deferred stays held" -- is preserved in full and still kills the gate-opening mutant.
+$rowsQ = Get-RowsWith @('-TodayServedMinutes', '0')
 Check 'Q declared-unblocked board is not zero-eligible' {
   $elig = @($rowsQ | Where-Object { $_.eligible })
   $today = Get-Row $rowsQ '890'
