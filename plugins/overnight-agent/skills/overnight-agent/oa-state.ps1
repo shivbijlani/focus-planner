@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
   Skill-owned memory for the Overnight Agent. Tracks, per task, what the agent has
   already processed in each journal — so a user message appended at the BOTTOM of a
@@ -291,7 +291,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate')]
+  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract')]
   [string]$Command = 'scan',
 
   [string]$Id,
@@ -324,6 +324,13 @@ param(
   [string]$RecheckKind,
   [switch]$RecheckDone,
   [switch]$RecheckClear,
+
+  # `extract` (#291): the byte budget for one journal digest. The default is deliberately far
+  # below the 64 KB read-path budget -- the point of an extract is that its cost does not vary
+  # with the journal, so the number is a property of the READER's context, not of the file.
+  [int]$Budget = 12288,
+  # Emit the digest as JSON (sections + accounting) instead of markdown.
+  [switch]$Json,
 
   # Overridable so the skill stays shareable; defaults match user-settings.md.
   [string]$JournalDir = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\journal",
@@ -2018,6 +2025,263 @@ function Cmd-Get {
   $st | ConvertTo-Json -Depth 6
 }
 
+# --- Bounded journal extract (#291) -----------------------------------------------------
+# SKILL.md tells the run to read a linked task's journal IN FULL before planning. Journals are
+# append-only and never pruned, so that instruction's cost grows without bound: measured
+# 2026-09-01, task-400.md is 272 KB (~70K tokens) and task-463.md -- the CURRENT `## Today` row,
+# therefore on the read path of every single run -- is 141 KB (~36K tokens).
+#
+# This is the identical shape as #262, which did the same thing to user-settings.md and was not
+# theoretical: at ~97% of context per call a run made 49 round-trips, sat in `running` for ~9
+# hours, never finished, and froze the */30 schedule. The journals are larger than that file ever
+# got and have no mitigation at all.
+#
+# The fix #291 asks for is "read less, not smaller" -- do not move or delete a single byte of the
+# user's history, just stop pulling all of it into context. `extract` returns the four things the
+# run actually consumes from a linked journal, inside a fixed budget:
+#
+#   1. the user's own notes above the sentinel  (their decisions and constraints)
+#   2. the newest agent turn                    (status, run log, deliverables, the live ask)
+#   3. anything below that turn                 (an unanswered reply -- see the priority note)
+#   4. the deliverable links                    (cheap, and the reason most look-ups happen)
+#
+# TWO PROPERTIES ARE LOAD-BEARING, and the mutation check exists because prose alone has not been
+# enough in this codebase:
+#
+#   * NO ELISION IS SILENT. Every drop leaves a visible marker naming the bytes and lines removed
+#     and pointing at the full file. A digest that quietly loses a paragraph is worse than the
+#     unbounded read it replaces, because the reader cannot tell it happened.
+#   * THE USER'S UNANSWERED TEXT IS CUT LAST. Budget is allocated trailing-first, then the agent's
+#     newest turn, then the head, then links. This is the same bias the reopen reader takes and
+#     for the same reason: losing the agent's own narration costs a re-read, losing the user's
+#     message costs a dropped instruction.
+function Get-JournalSentinelIndex([string]$content) {
+  # Start of the managed region: the `---` rule immediately above the sentinel comment when one
+  # is present, else the sentinel itself. Returns -1 when the journal has no agent block.
+  $s = $content.LastIndexOf('OVERNIGHT-AGENT do not edit')
+  if ($s -lt 0) { return -1 }
+  $lineStart = $content.LastIndexOf("`n", [Math]::Max(0, $s - 1))
+  if ($lineStart -lt 0) { return 0 }
+  # Step back over a `---` rule directly above the sentinel so it is not left orphaned in head.
+  $prevStart = $content.LastIndexOf("`n", [Math]::Max(0, $lineStart - 1))
+  $prevLine = $content.Substring($prevStart + 1, $lineStart - $prevStart - 1).Trim()
+  if ($prevLine -eq '---') { return $prevStart + 1 }
+  return $lineStart + 1
+}
+
+function Get-JournalLinks([string]$content) {
+  # Deliverables the journal names: markdown links plus bare http(s) URLs, de-duplicated in
+  # first-seen order. Read from the WHOLE journal on purpose -- a deliverable produced six turns
+  # ago is exactly the thing a later run must not rebuild.
+  $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+  $out = New-Object System.Collections.Generic.List[string]
+  foreach ($m in [regex]::Matches($content, '\[([^\]\r\n]{1,120})\]\(([^)\s]+)\)')) {
+    $t = '[' + $m.Groups[1].Value.Trim() + '](' + $m.Groups[2].Value + ')'
+    if ($seen.Add($m.Groups[2].Value)) { $out.Add($t) }
+  }
+  foreach ($m in [regex]::Matches($content, '(?<![(\]])\bhttps?://[^\s)<>\]]+')) {
+    if ($seen.Add($m.Value)) { $out.Add($m.Value) }
+  }
+  return $out
+}
+
+function Limit-Section([string]$text, [int]$budget, [string]$path) {
+  # Trim to budget by removing from the MIDDLE, keeping the opening and the closing lines: a
+  # section's first lines say what it is and its last lines carry the newest state (the Status
+  # line, the run log, the ask). Cutting the tail would silently drop the live ask, which is the
+  # single field the gate reads.
+  #
+  # The budget is a HARD bound, including the elision marker. An earlier version floored the kept
+  # region at 200 bytes regardless, which quietly turned `-Budget` into a suggestion -- four
+  # sections each overrunning by a little is how a bound becomes untrue without anything erroring.
+  $t = "$text"
+  if ($t.Length -le $budget) { return @{ text = $t; dropped = 0; droppedLines = 0 } }
+  $marker = "`n`n<!-- extract: elided -->`n> **... {0} bytes / {1} lines elided here. Full text: ``{2}`` ...**`n`n"
+  $reserve = ($marker -f $t.Length, $t.Length, $path).Length
+  if ($budget -le $reserve) {
+    # Not even room for the marker: say so in the smallest honest form rather than overrun.
+    $tiny = "<!-- extract: elided --> _($($t.Length) bytes elided; see ``$path``)_"
+    return @{ text = $tiny; dropped = $t.Length; droppedLines = ([regex]::Matches($t, "`n")).Count }
+  }
+  $keep = $budget - $reserve
+  $headLen = [int][Math]::Floor($keep * 0.35)
+  $tailLen = $keep - $headLen
+  $head = $t.Substring(0, [Math]::Min($headLen, $t.Length))
+  $tail = $t.Substring($t.Length - [Math]::Min($tailLen, $t.Length))
+  $droppedBytes = $t.Length - $head.Length - $tail.Length
+  if ($droppedBytes -lt 0) { $droppedBytes = 0 }
+  $droppedLines = ([regex]::Matches($t.Substring($head.Length, $droppedBytes), "`n")).Count
+  return @{
+    text         = $head + ($marker -f $droppedBytes, $droppedLines, $path) + $tail
+    dropped      = $droppedBytes
+    droppedLines = $droppedLines
+  }
+}
+
+function Build-ExtractChrome {
+  # Everything in the digest that is NOT journal text: the title, the accounting lines and the
+  # four section headings. Rendered by the same function that reserves room for it, so the
+  # reservation cannot drift from the thing it is reserving for -- the "one table, one reader"
+  # rule this repo already applies to the browser slots.
+  param(
+    [string]$Id, [string]$Path, [int]$OriginalBytes,
+    [int]$Budget, [int]$Dropped, [int]$OutOfScope,
+    [string]$Head = '', [string]$Turn = '', [string]$Trailing = '', [string]$Links = ''
+  )
+  $sb = New-Object System.Text.StringBuilder
+  [void]$sb.AppendLine("<!-- extract: task-$Id (#291 bounded read) -->")
+  [void]$sb.AppendLine("# Extract - task $Id")
+  [void]$sb.AppendLine()
+  [void]$sb.AppendLine("**Source:** ``$Path`` - $([Math]::Round($OriginalBytes / 1KB, 1)) KB")
+  # Be exact about WHAT is complete. The four sections below are the read-path slice, not the
+  # journal: the older turns are out of scope BY DESIGN and are never counted as "elided". Saying
+  # "complete" without that distinction would be a footer certifying its own completeness -- the
+  # same self-attestation that has already been wrong twice in this project.
+  [void]$sb.AppendLine("**Scope:** the four sections below - the user's notes, the newest agent turn, anything under it, and the links. **Earlier turns are deliberately not included**; this is a bounded read (#291), not the file.")
+  if ($Dropped -gt 0) {
+    [void]$sb.AppendLine("**Budget:** $Dropped bytes were elided from those sections to fit $Budget bytes. Each cut is marked inline.")
+  } else {
+    [void]$sb.AppendLine("**Budget:** those sections fit in $Budget bytes intact - nothing within scope was cut.")
+  }
+  if ($OutOfScope -gt 0) {
+    [void]$sb.AppendLine("**Not shown:** ~$([Math]::Round($OutOfScope / 1KB, 1)) KB of earlier history. Open the source above if you need it.")
+  }
+  [void]$sb.AppendLine()
+  [void]$sb.AppendLine('## 1. The user''s own notes (above the sentinel)')
+  [void]$sb.AppendLine()
+  [void]$sb.AppendLine($(if ("$Head".Trim().Length -gt 0) { "$Head".Trim() } else { '_(none)_' }))
+  [void]$sb.AppendLine()
+  [void]$sb.AppendLine('## 2. Newest agent turn')
+  [void]$sb.AppendLine()
+  [void]$sb.AppendLine($(if ("$Turn".Trim().Length -gt 0) { "$Turn".Trim() } else { '_(no agent block yet)_' }))
+  [void]$sb.AppendLine()
+  [void]$sb.AppendLine('## 3. Below that turn (unanswered - read this first)')
+  [void]$sb.AppendLine()
+  [void]$sb.AppendLine($(if ("$Trailing".Trim().Length -gt 0) { "$Trailing".Trim() } else { '_(nothing - the agent spoke last)_' }))
+  [void]$sb.AppendLine()
+  [void]$sb.AppendLine('## 4. Deliverables referenced')
+  [void]$sb.AppendLine()
+  [void]$sb.AppendLine($(if ("$Links".Trim().Length -gt 0) { "$Links".Trim() } else { '_(none)_' }))
+  return $sb.ToString()
+}
+
+function Cmd-Extract {
+  # Bounded digest of ONE journal. Read-only: never writes the journal, never touches state.
+  if (-not $Id) { throw 'extract requires -Id' }
+  $path = Join-Path $JournalDir "task-$Id.md"
+  if (-not (Test-Path $path)) { throw "journal not found: $path" }
+
+  $content = Read-JournalText $path
+  $originalBytes = $content.Length
+
+  $sentinel = Get-JournalSentinelIndex $content
+  $head = if ($sentinel -gt 0) { $content.Substring(0, $sentinel) } elseif ($sentinel -eq 0) { '' } else { $content }
+
+  $agentEnd = Get-AgentEndIndex $content
+  $hasAgentBlock = $agentEnd -ge 0
+  if ($agentEnd -lt 0) { $agentEnd = $content.Length }
+  $agentLeft = $content.Substring(0, [Math]::Min($agentEnd, $content.Length))
+  $trailing = if ($agentEnd -lt $content.Length) { $content.Substring($agentEnd) } else { '' }
+  $newestTurn = if ($hasAgentBlock) { Get-NewestAgentTurn $agentLeft } else { '' }
+  # A journal with no agent block has no "newest turn" to show, and its head IS the whole file --
+  # so do not also replay it as a turn.
+  if (-not $hasAgentBlock) { $head = $content }
+
+  $links = Get-JournalLinks $content
+  $linkText = if ($links.Count -gt 0) { ($links -join "`n") } else { '' }
+
+  # --- Allocate the budget, user-first ----------------------------------------------------
+  # Order is the guarantee: whatever is left over after the user's unanswered text and the agent's
+  # newest turn is what the head and the link list get. Reversing this list is precisely the
+  # mutation the check kills.
+  #
+  # The chrome (headings + accounting footer) is MEASURED, not guessed at. A guessed constant
+  # made `-Budget` a suggestion rather than a bound -- at 2000 it produced 2137 bytes -- and a
+  # bound that is only usually true is the kind of thing this codebase keeps having to rediscover.
+  $budget = [Math]::Max(1024, $Budget)
+  $chrome = (Build-ExtractChrome -Id $Id -Path $path -OriginalBytes $originalBytes `
+                                 -Budget $budget -Dropped $originalBytes -OutOfScope $originalBytes).Length
+  # A budget smaller than the chrome cannot be honoured, so REFUSE it by name rather than
+  # returning something larger than was asked for. A bound that silently degrades is worse than
+  # no bound: the caller sizes its context against a number that turns out not to be true.
+  $minBudget = $chrome + 512
+  if ($budget -lt $minBudget) {
+    throw "extract: -Budget $budget is below the minimum $minBudget for this journal (the section headings and accounting alone are $chrome bytes). Pass -Budget $minBudget or more."
+  }
+  $avail = $budget - $chrome
+
+  # Allocate, render, and FIT. The allocation above is arithmetic over the sections, but the
+  # thing that must obey the budget is the rendered document -- and the two are joined by the
+  # chrome, whose size shifts with the very numbers the render reports (digits in "N bytes were
+  # elided", the KB rounding). Predicting that exactly was already wrong once by 7 bytes at
+  # -Budget 8000, silently, which is the whole failure mode this command exists to remove.
+  #
+  # So do not predict it: render, measure the real string, and if it overruns, give back exactly
+  # the overrun and render again. Reducing $avail strictly reduces output, so this converges; the
+  # loop is capped and the caller-visible guarantee is asserted at the end rather than assumed.
+  $hSec = $null; $tSec = $null; $uSec = $null; $lSec = $null
+  $droppedTotal = 0; $rendered = $null
+  $outOfScope = [Math]::Max(0, $originalBytes - ($head.Length + $newestTurn.Length + $trailing.Length))
+  for ($attempt = 0; $attempt -lt 6; $attempt++) {
+    $trailBudget = [Math]::Min($trailing.Length, [int][Math]::Floor($avail * 0.35))
+    $rest = $avail - $trailBudget
+    $turnBudget = [Math]::Min($newestTurn.Length, [int][Math]::Floor($rest * 0.60))
+    $rest = $rest - $turnBudget
+    $headBudget = [Math]::Min($head.Length, [int][Math]::Floor($rest * 0.70))
+    $linkBudget = [Math]::Max(0, $rest - $headBudget)
+
+    # Hand back anything a short section did not need, in the same priority order.
+    $slack = $avail - ($trailBudget + $turnBudget + $headBudget + $linkBudget)
+    if ($slack -gt 0) {
+      $grow = [Math]::Min($slack, [Math]::Max(0, $trailing.Length - $trailBudget))
+      $trailBudget += $grow; $slack -= $grow
+      $grow = [Math]::Min($slack, [Math]::Max(0, $newestTurn.Length - $turnBudget))
+      $turnBudget += $grow; $slack -= $grow
+      $grow = [Math]::Min($slack, [Math]::Max(0, $head.Length - $headBudget))
+      $headBudget += $grow; $slack -= $grow
+      $linkBudget += [Math]::Max(0, $slack)
+    }
+
+    $hSec = Limit-Section $head $headBudget $path
+    $tSec = Limit-Section $newestTurn $turnBudget $path
+    $uSec = Limit-Section $trailing $trailBudget $path
+    $lSec = Limit-Section $linkText $linkBudget $path
+    $droppedTotal = $hSec.dropped + $tSec.dropped + $uSec.dropped + $lSec.dropped
+
+    $rendered = Build-ExtractChrome -Id $Id -Path $path -OriginalBytes $originalBytes `
+                                    -Budget $budget -Dropped $droppedTotal -OutOfScope $outOfScope `
+                                    -Head $hSec.text -Turn $tSec.text -Trailing $uSec.text -Links $lSec.text
+    if ($rendered.Length -le $budget) { break }
+    $avail = $avail - ($rendered.Length - $budget)
+    if ($avail -lt 0) { $avail = 0 }
+  }
+  if ($rendered.Length -gt $budget) {
+    throw "extract: could not fit task-$Id into $budget bytes (best $($rendered.Length)). Raise -Budget."
+  }
+
+  if ($Json) {
+    [pscustomobject]@{
+      id              = "$Id"
+      path            = $path
+      original_bytes  = $originalBytes
+      budget          = $budget
+      truncated       = ($droppedTotal -gt 0)
+      dropped_bytes   = $droppedTotal
+      has_agent_block = $hasAgentBlock
+      has_trailing    = ($trailing.Trim().Length -gt 0)
+      head            = $hSec.text
+      newest_turn     = $tSec.text
+      trailing        = $uSec.text
+      links           = @($links)
+    } | ConvertTo-Json -Depth 4
+    return
+  }
+
+  # Emit the exact string the fit loop measured. Re-rendering here would reintroduce the very gap
+  # the loop closes: "what was checked against the budget" must be "what the caller receives".
+  Write-Output $rendered
+}
+
 function Cmd-Gate {
   # The gate as this script actually reads it — so a human can diff what they wrote against what
   # the agent parsed, rather than trusting that the two agree. Rule text is verbatim.
@@ -2407,4 +2671,5 @@ switch ($Command) {
   'resnapshot' { Cmd-Resnapshot }
   'consent' { Cmd-Consent }
   'gate' { Cmd-Gate }
+  'extract' { Cmd-Extract }
 }
