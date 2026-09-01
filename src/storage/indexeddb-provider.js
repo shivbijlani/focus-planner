@@ -18,6 +18,7 @@ import { get, set, del, keys, clear, createStore } from 'idb-keyval'
 import { parseTodos } from './fsa.js'
 import { PLAN_FILE, COMPLETED_FILE } from '../config/branding.js'
 import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
+import { scaffoldAgentGate } from '../config/agentGate.js'
 
 // Dedicated DB + store so file records don't mix with idb-keyval's default
 // keyval store (used elsewhere for FSA directory handles).
@@ -59,6 +60,7 @@ export class IndexedDbProvider {
       await set(COMPLETED_FILE, SCAFFOLD_COMPLETED, filesStore)
     }
     await scaffoldAgentsDoc((p) => this.read(p), (p, c) => this.write(p, c))
+    await scaffoldAgentGate((p) => this.read(p), (p, c) => this.write(p, c))
   }
 
   async read(path, { signal } = {}) {

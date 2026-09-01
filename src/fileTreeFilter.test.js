@@ -57,8 +57,17 @@ describe('filterPlannerTree', () => {
     expect(names.sort()).toEqual(['AGENTS.md', 'planner-completed.md', 'planner.md'])
   })
 
-  it('hides legacy and stray loose .md files', () => {
-    const names = filterPlannerTree(sampleTree).map((i) => i.name)
+  it('surfaces the agent gate next to the plan files (#288)', () => {
+    const withGate = [...sampleTree, { name: 'agent-gate.md', type: 'file', path: 'agent-gate.md' }]
+    const names = filterPlannerTree(withGate)
+      .filter((i) => i.type === 'file')
+      .map((i) => i.name)
+    expect(names).toContain('agent-gate.md')
+    expect(names).toContain('planner.md')
+    expect(names).toContain('planner-completed.md')
+  })
+
+  it('hides legacy and stray loose .md files', () => {    const names = filterPlannerTree(sampleTree).map((i) => i.name)
     expect(names).not.toContain('focus-plan.md')
     expect(names).not.toContain('focus-plan-completed.md')
     expect(names).not.toContain('agent-email-setup.md')
