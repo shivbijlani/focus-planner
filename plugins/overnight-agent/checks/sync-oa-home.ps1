@@ -136,6 +136,28 @@
                    the runner globbed it. Rule 4 guaranteed delivery of the guards and
                    thereby created a new population of guards that cannot run.
 
+    6. DATA      - the sibling DATA file a required .mjs reads at run time, e.g.
+                   `join(HERE, 'read-path-manifest.json')`. Rule 5 one language over: a
+                   `join(HERE, ...)` is not an `import` specifier, so the closure walk in
+                   rule 2 cannot see it, and the target is not code, so no roster, entry
+                   list or glob names it either. It was required by nothing.
+
+                   And, exactly as in rule 5, the failure is not a skip. `readFileSync`
+                   throws ENOENT, so the sweep exits 1 having measured nothing - a RED
+                   guard over a healthy subject, which reads as "the check is broken"
+                   rather than "the check never arrived".
+
+                   MEASURED 2026-08-31 18:59 PT, hours after `read-path-budget-sweep`
+                   was merged and deployed by this very tool: it crashed on its first
+                   and every subsequent run with
+                   `ENOENT ... open '...\overnight-agent\read-path-manifest.json'`,
+                   0 bytes of stdout, 728 of stderr. The sweep was current, the roster
+                   named it, the deploy reported `verified-current True` - and the two
+                   JSON files it cannot start without had never been copied. The one
+                   comparable data file already in the home (lost-interpolation-
+                   baseline.json) was there by hand, required by nothing, one `rm` from
+                   the same fate.
+
   Anything else in the repo stays out, and any file already live keeps its existing
   classification - so legitimately local-only files and deliberately excluded
   diagnostics generate no new noise.
@@ -331,6 +353,28 @@ function Get-PsScriptRootRefs {
   return ($out | Sort-Object -Unique)
 }
 
+function Get-HereDataRefs {
+  # DATA (rule 6): the sibling files a JS/MJS check resolves against its own directory at
+  # run time, e.g. `join(HERE, 'read-path-manifest.json')`. This is Get-PsScriptRootRefs'
+  # counterpart for the .mjs half of the suite, and it exists for the same reason: the
+  # reference is a runtime path join, not an `import` specifier, so rule 2's closure walk
+  # is structurally unable to see it, and a data file is named by no roster and matched by
+  # no glob. A sweep deployed without it does not degrade - it throws ENOENT and exits 1.
+  #
+  # Literal operand only, matching the stance of both functions above: a path assembled at
+  # run time is not something a deploy tool should guess at. An extension is required, so
+  # a directory join (`join(HERE, 'sweep-runs')`) is not mistaken for a file.
+  param([string]$Text)
+  if (-not $Text) { return @() }
+  $out = @()
+  $re = '(?:^|[^\w.$])(?:path\.)?join\(\s*(?:HERE|__dirname)\s*,\s*([''"])([^''"]+)\1\s*\)'
+  foreach ($m in [regex]::Matches($Text, $re)) {
+    $leaf = Split-Path $m.Groups[2].Value -Leaf
+    if ($leaf -match '\.[A-Za-z0-9]{1,5}$') { $out += $leaf }
+  }
+  return ($out | Sort-Object -Unique)
+}
+
 # --- preconditions ------------------------------------------------------------------
 if (-not (Test-Path $Repo))   { Write-Error "repo not found: $Repo";      exit 1 }
 if (-not (Test-Path $OaHome)) { Write-Error "OA home not found: $OaHome"; exit 1 }
@@ -354,11 +398,20 @@ Write-Line "[sync-oa-home] $Ref = $($refSha.Substring(0,12))"
 # --- index the ref's files under the prefix, by basename ----------------------------
 $tracked = Invoke-Git @('ls-tree', '-r', '--name-only', $refSha, "$RepoPrefix/")
 $byName = @{}
+$dataByName = @{}
 foreach ($p in $tracked) {
   $p = "$p".Trim()
   if (-not $p) { continue }
-  if ($p -notmatch '\.(ps1|mjs|js)$') { continue }
   $n = Split-Path $p -Leaf
+  if ($p -notmatch '\.(ps1|mjs|js)$') {
+    # DATA (rule 6): non-code files are indexed SEPARATELY and are only ever handled in
+    # the MISSING direction below. They are deliberately kept out of $byName so they can
+    # never be classified BEHIND or DIVERGENT -- a data file in the home may be locally
+    # mutated state, and this tool must never overwrite that on a name match.
+    if (-not $dataByName.ContainsKey($n)) { $dataByName[$n] = @() }
+    $dataByName[$n] += $p
+    continue
+  }
   if (-not $byName.ContainsKey($n)) { $byName[$n] = @() }
   $byName[$n] += $p
 }
@@ -493,6 +546,13 @@ if (-not $NoForward) {
       [void]$required.Add($dep)
       if ($dep -match '\.(mjs|js)$') { $queue.Enqueue($dep) }
     }
+    # DATA (rule 6): sibling files this module reads via `join(HERE, '<literal>')`. Walked
+    # here, inside the closure, so a data file reached through an imported library counts
+    # too -- the module that reads it is not always the one the roster names.
+    foreach ($dep in (Get-HereDataRefs $src)) {
+      [void]$required.Add($dep)
+      if ($dep -match '\.(mjs|js)$') { $queue.Enqueue($dep) }
+    }
   }
 
   $requiredCount = $required.Count
@@ -501,7 +561,22 @@ if (-not $NoForward) {
 
   foreach ($n in ($required | Sort-Object)) {
     if ($liveNames.Contains($n)) { continue }        # already classified by the live walk
-    if (-not $byName.ContainsKey($n)) { continue }   # required but not on the ref: not ours to invent
+    if (-not $byName.ContainsKey($n)) {
+      # DATA (rule 6): a required NON-code file, e.g. the manifest a sweep reads on its
+      # first line. Handled MISSING-only, and only when it is genuinely absent: if the
+      # file is already on disk we do not classify it at all, because a data file can be
+      # locally mutated state and a name match is not a licence to overwrite it.
+      if ($dataByName.ContainsKey($n) -and -not (Test-Path -LiteralPath (Join-Path $OaHome $n))) {
+        $dPaths = $dataByName[$n]
+        if ($dPaths.Count -gt 1) {
+          $missingRefused += [pscustomobject]@{ file = $n; class = 'MISSING-AMBIGUOUS'; repoPath = ($dPaths -join ' | '); matchCommit = $null }
+        }
+        else {
+          $missing += [pscustomobject]@{ file = $n; class = 'MISSING'; repoPath = $dPaths[0]; matchCommit = $refSha }
+        }
+      }
+      continue                                       # required but not on the ref: not ours to invent
+    }
     $paths = $byName[$n]
     if ($paths.Count -gt 1) {
       # Same reasoning as AMBIGUOUS above: a flat home cannot say which path was meant.

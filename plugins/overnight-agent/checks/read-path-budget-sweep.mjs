@@ -40,6 +40,7 @@
 
 import { readFileSync, statSync, existsSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { homedir } from 'node:os'
 import { dirname, join, basename } from 'node:path'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -54,7 +55,23 @@ if (!planner) {
   console.error('read-path-budget: PLANNER_PATH is unset; measured nothing.')
   process.exit(1)
 }
-const skillDir = process.env.OA_SKILL_DIR || join(HERE, '..', 'skills', 'overnight-agent')
+// Where SKILL.md actually lives, which depends on WHERE THIS COPY OF THE SWEEP IS.
+// `../skills/overnight-agent` is only true in the repo. The copy that actually runs every
+// night sits in the FLAT OA home, where `..` is %LOCALAPPDATA% and that path does not
+// exist -- so the entry resolved to a phantom, the sweep reported it MISSING, and
+// SKILL.md, the single largest every-run read after the settings file, was never measured
+// at all. Same flat-home layout assumption that stranded this sweep's own manifest; a
+// budget guard that silently measures nothing is the failure mode this file exists to
+// prevent. Ordered candidates, first one that exists wins.
+const skillDir = (() => {
+  const candidates = [
+    process.env.OA_SKILL_DIR,
+    join(HERE, '..', 'skills', 'overnight-agent'),
+    join(homedir(), '.copilot', 'installed-plugins', 'focus-planner',
+         'overnight-agent', 'skills', 'overnight-agent')
+  ].filter(Boolean)
+  return candidates.find((c) => existsSync(join(c, 'SKILL.md'))) || candidates[1]
+})()
 
 const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8'))
 const baseline = existsSync(BASELINE) ? JSON.parse(readFileSync(BASELINE, 'utf8')) : { known: {} }
