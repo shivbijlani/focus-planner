@@ -560,6 +560,43 @@ else {
     Write-Host '  (skipped: no live user-settings.md on this host)' -ForegroundColor DarkGray
 }
 
+# ===========================================================================
+# ARM I -- the SHIPPED TEMPLATE's example table must itself be valid.
+#
+# The template is what a new user starts from, and #180's whole subject is a
+# slot list that drifted out of step with its readers. An example that no longer
+# parses is that same defect aimed at everyone who installs this next: they copy
+# it, it is refused, and the refusal looks like their mistake. So the example is
+# asserted against the real parser rather than eyeballed.
+#
+# Note this does NOT contradict arm H. H proves the template is never picked up
+# as somebody's live settings (path-based: it sits next to SKILL.md). This proves
+# that when a user COPIES it, what they copied works.
+# ===========================================================================
+Write-Host "`nI: the shipped template ships a working example" -ForegroundColor Cyan
+$tmpl = $null
+foreach ($c in @(
+        ([IO.Path]::Combine($PSScriptRoot, '..', 'skills', 'overnight-agent', 'user-settings.md'))
+        ([IO.Path]::Combine($PSScriptRoot, 'user-settings.md'))
+    )) {
+    if (Test-Path -LiteralPath $c) { $tmpl = (Resolve-Path -LiteralPath $c).Path; break }
+}
+if ($tmpl) {
+    $iRes = Invoke-Probe -Settings $tmpl
+    Assert 'I the template example parses' ($iRes.ok) $iRes.err
+    if ($iRes.ok) {
+        $iPorts = Get-PortList $iRes
+        Assert 'I the example defines at least one slot' ($iPorts.Count -ge 1) 'no rows'
+        Assert 'I every example slot has a profile dir' (@($iRes.rows | Where-Object { -not $_.ProfileDir }).Count -eq 0) 'a row has no profile dir'
+    }
+    # The template must stay free of real account names -- it ships to everyone.
+    $tmplText = [IO.File]::ReadAllText($tmpl, $utf8NoBom)
+    Assert 'I the template has a Browser slots section' ($tmplText -match '(?m)^##\s+Browser slots\b') 'a new user has no starting point for slots'
+}
+else {
+    Write-Host '  (skipped: shipped template not found)' -ForegroundColor DarkGray
+}
+
 Remove-Item $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host ''

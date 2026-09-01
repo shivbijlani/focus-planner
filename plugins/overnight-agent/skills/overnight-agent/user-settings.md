@@ -53,6 +53,72 @@ the end of every run (SKILL.md → "PHASE 3 — Mirror to Telegram"). Leave `Ena
 - **Browser automation:** use a **Playwright MCP browser slot** — never the agent's built-in browser.
 - **Secrets:** never stored in this repo. Email credentials live in the email MCP's own store.
 
+## Browser slots
+
+**This section is the source of truth for the agent's browsers — the scripts read THIS table, and no
+slot list is hard-coded in any of them.** Add a row to add a browser; delete a row to remove one. No
+script needs editing either way.
+
+**One row = one slot = one identity.** A slot is a browser the agent drives on your behalf, running its
+own dedicated profile directory on its own CDP debug port. Two slots that share a profile are the same
+identity twice over and are pure cost (~6 processes and ~400 MB each at startup, plus ~24 duplicate tool
+schemas each in the agent's context), so only add a slot when it represents an account the others
+cannot stand in for.
+
+| Slot | Port | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Desktop shortcut |
+| --- | --- | --- | --- | --- |
+| `edge-cdp-1` (regular) | 9225 | `edge1` | `<your main account>` | MCP Edge 1 (CDP 9225) |
+
+**The columns**
+
+| Column | Required | What it means |
+| --- | --- | --- |
+| **Slot** | **yes** | The MCP server name, so it must match the key in `~\.copilot\mcp-config.json`. A trailing `(alias)` is optional and gives you a friendly second name to select by. |
+| **Port** | **yes** | The CDP debug port. Must be unique across rows and otherwise unused on your machine. |
+| **Profile dir** | **yes** | **This is the identity.** A bare name (`edge1`) is resolved under the base folder named in this column's own header; a full path (`D:\browsers\work`) or one with `%VARS%` is used as-is. Must be unique across rows. |
+| **Account** | no | A label for you and for the agent to select by (e.g. `work`, `personal`). Purely descriptive. |
+| **Desktop shortcut** | no | The shortcut name to tell you to open if an automatic launch fails. Defaults to the slot name. |
+
+Only **Slot**, **Port** and **Profile dir** are required, and the column **order does not matter** —
+columns are found by name. The profile base folder is taken from the Profile column's header, so
+changing `%LOCALAPPDATA%\playwright-mcp\` there moves every bare-name slot at once. A slot whose name or
+profile contains `chrome` launches Chrome; anything else launches Edge.
+
+**Adding more identities** — one row each. For example, a three-identity setup:
+
+```
+| Slot | Port | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Desktop shortcut |
+| --- | --- | --- | --- | --- |
+| `edge-cdp-1` (regular) | 9225 | `edge1`      | personal | MCP Edge 1 (CDP 9225) |
+| `edge-cdp-work`        | 9228 | `edge-work`  | work     | MCP Edge work (CDP 9228) |
+| `edge-cdp-client`      | 9229 | `edge-client`| client   | MCP Edge client (CDP 9229) |
+```
+
+The table is **refused rather than guessed at** if it is missing, has no Slot/Port/Profile columns, has
+no rows, or has two rows sharing a port or a profile dir. A silent fallback to a stale built-in list is
+exactly how this drifts out of date without anyone noticing, so the scripts fail loudly instead.
+
+**Rules for the agent:**
+
+1. **Resolve the *profile*, not the slot name.** Pick the slot by which account the task needs. Never
+   substitute a different account's profile for the requested one — that produces actions taken as the
+   wrong identity, which is worse than failing.
+2. **Launch on demand.** A closed slot answers `ECONNREFUSED`. That is **not** a task failure — run
+   `ensure-mcp-browsers.ps1 -Slot <name|account|profile|port>`, wait for the port, then continue. Only if
+   the launch fails, or the profile needs an interactive sign-in the agent cannot perform, set `blocked`
+   with that one ask.
+3. **Sign-in is one-time per profile, by you.** Chrome/Edge 127+ bind cookies to the profile directory
+   (App-Bound Encryption), so a newly created or copied profile carries the password vault but starts
+   **logged out**. The agent must never type a master password.
+4. **Preflight before browser work:** `check-browser-slots.ps1` (`-Json`; exit 0 = ok, 2 = attention). It
+   derives its slot list from **this table** and is strictly **read-only** — it never launches or kills
+   one of your windows, because they may hold in-flight state.
+5. **Zombie slot after a browser auto-update:** port open and `/json/version` answering, but every *new*
+   tab dies with `Target crashed`, because the running process is pinned to the pre-update version
+   directory. Detected by comparing the build at `/json/version` with the installed browser's version.
+   Fix: close that window and reopen its shortcut — sign-ins persist, since the cookies live with the
+   profile directory, not the process.
+
 ## Where your real settings live
 
 This bundled file is a **template inside the installed plugin, so plugin updates overwrite it.** Your real,
