@@ -27,7 +27,9 @@ param(
   [int]$IntervalMinutes = 15,
   [string]$TaskName = 'Overnight Agent supervisor',
   [switch]$Uninstall,
-  [switch]$NoAlert
+  # Install a DETECT-ONLY supervisor (classifies + logs, never restarts). Default is the
+  # acting supervisor: on a genuine hang it silently restarts the app.
+  [switch]$NoAct
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,17 +66,18 @@ if ($Uninstall) {
 $oaHome     = Join-Path $env:LOCALAPPDATA 'overnight-agent'
 $deployed   = Join-Path $oaHome 'oa-supervisor.ps1'
 $repoCopy   = Join-Path $PSScriptRoot 'oa-supervisor.ps1'
-if (-not (Test-Path $deployed)) {
-  if (-not (Test-Path $oaHome)) { New-Item -ItemType Directory -Path $oaHome -Force | Out-Null }
-  Copy-Item $repoCopy $deployed -Force
-  Write-Host "[oa-supervisor] seeded $deployed from the repo copy."
-}
+if (-not (Test-Path $oaHome)) { New-Item -ItemType Directory -Path $oaHome -Force | Out-Null }
+# Always REFRESH, not seed-if-absent: re-running the installer after a plugin update must
+# pick up the new supervisor. (sync-oa-home also keeps this copy current on every run now
+# that oa-supervisor.ps1 is in its required set - this covers a manual/one-off install.)
+Copy-Item $repoCopy $deployed -Force
+Write-Host "[oa-supervisor] deployed $deployed from the repo copy."
 # stuck-run-sweep.mjs is resolved by the supervisor from the OA home too; sync-oa-home.ps1
 # keeps both current on every run, so nothing here needs to pin a repo path.
 
 $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $argLine = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$deployed`""
-if ($NoAlert) { $argLine += ' -NoAlert' }
+if ($NoAct) { $argLine += ' -NoAct' }
 
 $action = New-ScheduledTaskAction -Execute $psExe -Argument $argLine
 
@@ -112,7 +115,8 @@ $settings = New-ScheduledTaskSettingsSet `
 
 $desc = "GH #226: out-of-band supervisor for the Overnight Agent. Runs every $IntervalMinutes min, " +
         "dispatched by the OS rather than by an agent run, so it can observe the agent NOT running. " +
-        "Read-only against the app database; alerts Telegram. Remove with: " +
+        "Read-only classification against the app database; on a genuine hang it silently RESTARTS " +
+        "the app (no Telegram). Remove with: " +
         "powershell -File `"$PSCommandPath`" -Uninstall"
 
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue

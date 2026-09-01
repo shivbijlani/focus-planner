@@ -206,7 +206,16 @@ $AlwaysRequired = @(
   'reap-stale-mcp.ps1',
   'auto-deploy-plugin.ps1',
   'deploy-installed-plugin.ps1',
-  'check-browser-slots.ps1'
+  'check-browser-slots.ps1',
+  # The #226 supervisor and its daemon are dispatched by the OS (a Windows scheduled task
+  # or the Startup-folder shim) as `%LOCALAPPDATA%\overnight-agent\<name>` - the same
+  # absolute-path-from-the-flat-home contract as the entries above. They are named by no
+  # roster (not sweeps), reached by no import edge (.ps1), and the installer only SEEDS
+  # them when absent - so without this line a merged supervisor fix lands in
+  # installed-plugins and never reaches the copy the daemon actually runs. Classic
+  # "merged isn't running" (cf. #196, #254).
+  'oa-supervisor.ps1',
+  'oa-supervisor-daemon.ps1'
 )
 
 # Subdirectories of the OA home that are data, not code. Never walked.
