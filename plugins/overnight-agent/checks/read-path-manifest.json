@@ -79,6 +79,8 @@
     {
       "id": "journals",
       "glob": "{planner}/journal/task-*.md",
+      "idPattern": "^task-\\d+\\.md$",
+      "strayPattern": "-(DESKTOP|LAPTOP)-[A-Z0-9]+\\.md$",
       "owner": "shared",
       "writer": "agent+user",
       "readPath": "every-run",
@@ -89,7 +91,9 @@
         "issue": 291,
         "reason": "SKILL.md instructs the agent to read a task's linked journal(s) in full before planning. Closing this needs a bounded extract (head + latest turn + open asks), not a size cap, so the violation is acknowledged and tracked rather than silenced. Growth beyond tolerance still fails."
       },
-      "note": "SKILL.md says to read a task's linked journal(s) in full before planning. 95th percentile is ~41 KB, so 64 KB is above normal and flags genuine outliers rather than routine files."
+      "note": "SKILL.md says to read a task's linked journal(s) in full before planning. 95th percentile is ~41 KB, so 64 KB is above normal and flags genuine outliers rather than routine files.",
+      "idPatternNote": "A real journal is task-<id>.md. The glob also matches OneDrive sync-conflict copies (task-463-DESKTOP-P9116M3.md), which no run reads -- oa-state.ps1 scan returned exactly 239 rows on 2026-09-01, the same count as files matching this pattern. Declaring the read-path SHAPE is deliberate: matching the conflict shape instead would need a guess per sync vendor and would miss a custom machine name.",
+      "strayPatternNote": "SEPARATE FROM idPattern ON PURPOSE, and the separation is load-bearing. idPattern decides what is MEASURED; strayPattern decides what is ACCUSED. The folder also holds 153 legitimate deliverables that SKILL.md tells the agent to write as task-<id>-<slug>.md, and a conflict copy has the same shape as one. Collapsing the two would print 'remedy is to remove it' against the user's own deliverables. Files matching neither pattern are counted as companions and nothing is claimed about them. Keep this pattern NARROW: too narrow leaves a conflict copy uncounted, too wide accuses a deliverable, and those costs are not symmetric. Extend it only for a naming form actually observed on disk."
     }
   ]
 }

@@ -20,7 +20,16 @@
     "growth-checked at all. SKILL.md went 43 KB -> 78.5 KB in seven days under a 96 KB budget",
     "and this sweep reported clean every night. `sizes` records the measured size of the",
     "every-run files that are within budget, so the growth signal applies to them too.",
-    "Update an entry here only together with a deliberate, reviewed size change."
+    "Update an entry here only together with a deliberate, reviewed size change.",
+    "",
+    "`offPath` is the third list, added 2026-09-01. These files match a glob but not its",
+    "`idPattern`, so no run reads them -- they were previously misreported as OVER-budget",
+    "journals, whose stated remedy (shrink the file) was the wrong action on a file nobody",
+    "opens. They are acknowledged rather than failing because the AGENT CANNOT CLEAR THEM:",
+    "removing a file is blocked by the agent-gate.md floor rule 'Outcome can result in",
+    "permanent data loss'. A finding no run can ever clear is the permanently-red line this",
+    "suite has twice been burned by. They print in full in their own section, so acknowledging",
+    "them does not hide them. Delete the file and remove its entry here."
   ],
   "measuredAt": "2026-09-01",
   "sizes": {
@@ -37,5 +46,10 @@
     "task-419.md": 73.3,
     "task-422.md": 103.4,
     "task-451.md": 73.8
+  },
+  "offPath": {
+    "task-249-DESKTOP-P9116M3.md": "OneDrive sync-conflict copy, 2026-07-07. Holds a superseded v1 proposal (Seattle City Light TOU) not present in task-249.md; check before deleting.",
+    "task-292-DESKTOP-P9116M3.md": "OneDrive sync-conflict copy, 2026-07-07. Verified 2026-09-01: zero lines absent from task-292.md, so it is redundant.",
+    "task-463-DESKTOP-P9116M3.md": "OneDrive sync-conflict copy, 2026-08-31. Verified 2026-09-01: its only differing line is a SHORTER form of task-463.md line 8, so it is redundant."
   }
 }

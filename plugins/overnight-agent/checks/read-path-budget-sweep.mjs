@@ -35,6 +35,52 @@
 //                 no explicit exemption, is a finding -- a stale contract is not a passing
 //                 one. A row marked `optional` may be absent (the agent gate is scaffolded
 //                 by the app on first use) and reports as acknowledged instead.
+//   g6 OFF-PATH.  A file that matches a glob but not that glob's declared `idPattern` is
+//                 NOT on the read path, so it is not budget-checked -- it is reported as
+//                 its own finding class. See below.
+//
+// WHY g6 EXISTS -- A BUDGET FINDING NAMES ITS OWN REMEDY, SO MISFILING ONE IS NOT COSMETIC
+// ----------------------------------------------------------------------------------------
+// The journals row globs `task-*.md`. OneDrive names a sync-conflict copy
+// `task-463-DESKTOP-P9116M3.md`, which matches that glob, so the sweep measured a file the
+// agent never reads and reported:
+//
+//     OVER  task-463-DESKTOP-P9116M3.md: 82.9 KB exceeds the 64 KB budget for 'journals'
+//
+// Every word of that is true and the conclusion is wrong. `OVER` means "this file is on the
+// read path and too big", so its remedy is "make it smaller". The real remedy is "delete
+// this stale duplicate" -- a different action, on a file no run ever opens. Measured
+// 2026-09-01: `oa-state.ps1 scan` returned 239 rows, none of them the conflict copy.
+//
+// It was also unfixable by the agent and permanently red: deleting a file is gated by the
+// `agent-gate.md` floor rule "Outcome can result in permanent data loss", so no run could
+// ever clear it. This file already warns twice that a permanently-red detector teaches
+// every future run to skim it -- a MISCLASSIFIED finding is worse than a red one, because
+// the remedy it prints is work nobody should do.
+//
+// Fixed by DECLARING the read-path shape rather than inferring the conflict shape.
+// Guessing at vendor naming (`-DESKTOP-*`, `(1)`, `conflicted copy`) fails on the next
+// vendor and on a custom machine name. `idPattern` says positively what a real read-path
+// file looks like, so anything else is off-path by construction -- the same reasoning that
+// made `optional` a declared field: "a declared, reviewable field rather than an inferred
+// one, so it cannot quietly spread". A glob with no `idPattern` behaves exactly as before.
+//
+// THE NEAR-MISS THAT SHAPED THIS -- WHY THERE ARE THREE CLASSES AND NOT TWO
+// -------------------------------------------------------------------------
+// The first version of this fix had one bucket: on-path, or "stray, remove it". Run against
+// the real planner folder it printed "Remedy is to remove it" against 150 files -- because
+// SKILL.md instructs the agent to write larger deliverables next to the journal as
+// `task-<id>-<slug>.md`, and a sync-conflict copy (`task-463-DESKTOP-P9116M3.md`) has the
+// SAME SHAPE as a deliverable (`task-370-healthy-living.md`). Measured: 239 journals, 153
+// companions, 3 conflict copies.
+//
+// That is the identical defect this guard exists to fix -- a finding whose printed remedy
+// is the wrong action -- except pointed at the user's own work, and it was invisible in the
+// unit fixtures because they contained no companions. It was caught only by running the
+// real script against the real folder. So: `idPattern` decides what is MEASURED, a separate
+// `strayPattern` decides what is ACCUSED, and the gap between them is counted in silence.
+// Getting `strayPattern` too narrow means a conflict copy goes uncounted; getting it too
+// wide means accusing a deliverable. Those costs are not symmetric, so it is narrow.
 //
 // Exit 1 on findings, 0 when clean, matching every other sweep in run-sweeps.ps1.
 
@@ -81,6 +127,13 @@ const expand = (p) => p.replace('{planner}', planner).replace('{skill}', skillDi
 const kb = (bytes) => Math.round((bytes / 1024) * 10) / 10
 
 // Resolve one manifest entry to the concrete files it covers.
+//
+// A glob row may declare two optional patterns, and the split between them is the whole
+// point (see the g6 note above):
+//   `idPattern`    what a REAL read-path file looks like. Only these are budget-checked.
+//   `strayPattern` what a known-bad ARTIFACT looks like. Only these are accused.
+// Anything matching the glob but neither pattern is a legitimate companion file that is
+// simply off the every-run read path -- counted, never accused.
 function resolve(entry) {
   if (entry.path) {
     const p = expand(entry.path)
@@ -90,13 +143,36 @@ function resolve(entry) {
   const dir = dirname(pattern)
   const [pre, post] = basename(pattern).split('*')
   if (!existsSync(dir)) return [{ missing: dir }]
+  // An unparseable pattern must not silently disable the check it configures, so it is
+  // reported as a finding and the row falls back to its pre-configuration behaviour.
+  const compile = (src, field) => {
+    if (!src) return null
+    try {
+      return new RegExp(src)
+    } catch {
+      findings.push(
+        `COVERAGE  ${entry.id}: ${field} '${src}' is not a valid regex; ` +
+          `off-path classification is disabled for this row.`
+      )
+      return null
+    }
+  }
+  const idRe = compile(entry.idPattern, 'idPattern')
+  const strayRe = compile(entry.strayPattern, 'strayPattern')
   return readdirSync(dir)
     .filter((f) => f.startsWith(pre) && f.endsWith(post))
-    .map((f) => join(dir, f))
+    .map((f) => {
+      const full = join(dir, f)
+      if (!idRe || idRe.test(f)) return full
+      if (strayRe && strayRe.test(f)) return { offPath: full }
+      return { companion: full }
+    })
 }
 
 const findings = []
 const acknowledged = []
+const offPathAck = []
+let companions = 0
 const observed = {}
 
 for (const entry of manifest.files) {
@@ -130,6 +206,37 @@ for (const entry of manifest.files) {
   }
 
   for (const target of resolve(entry)) {
+    // --- g6: matched the glob, but is not a read-path file. ------------------------------
+    // Two outcomes, deliberately unequal. A COMPANION is a legitimate deliverable that
+    // SKILL.md tells the agent to write next to the journal (`task-<id>-<slug>.md`); it is
+    // merely off the every-run read path, so it is counted and nothing is claimed about it.
+    // An OFFPATH file matched the declared stray shape and is accused by name.
+    //
+    // Measured 2026-09-01, and this is why the two are separate: the journal folder holds
+    // 239 real journals, 153 companion deliverables, and 3 sync-conflict copies. A single
+    // "not a journal" bucket would have printed "remedy is to remove it" against 150 of
+    // Shiv's own deliverables -- a worse misclassification than the one g6 exists to fix,
+    // and in the dangerous direction.
+    if (typeof target === 'object' && target.companion) {
+      companions++
+      continue
+    }
+    if (typeof target === 'object' && target.offPath) {
+      const name = basename(target.offPath)
+      const wasKnown = baseline.offPath?.[name]
+      const sizeKB = kb(statSync(target.offPath).size)
+      if (wasKnown) {
+        offPathAck.push(`  ${name} ${sizeKB} KB -- ${wasKnown}`)
+      } else {
+        findings.push(
+          `OFFPATH   ${name}: ${sizeKB} KB matches the '${entry.id}' stray pattern ` +
+            `(${entry.strayPattern}), so nothing reads it. This is not a budget breach -- ` +
+            `it is a leftover artifact, typically a OneDrive sync-conflict copy. ` +
+            `Remedy is to remove it, not to shrink it.`
+        )
+      }
+      continue
+    }
     if (typeof target === 'object' && target.missing) {
       // An `optional` row is one the app scaffolds on first use (the agent gate, #288). It
       // is legitimately absent until the user opens that page, so its absence is reported
@@ -197,10 +304,21 @@ if (acknowledged.length) {
   if (acknowledged.length > 5) console.log(`  ... and ${acknowledged.length - 5} more`)
 }
 
+// Printed in full and in its own section rather than folded into the list above, which is
+// truncated at 5. These are the only acknowledged entries the USER must clear -- the agent
+// cannot, since removing a file is floor-blocked -- so burying them in a "... and N more"
+// tail would hide the one class that needs a human.
+if (offPathAck.length) {
+  console.log(`\n${offPathAck.length} known off-path file(s) -- not read by any run; remove when convenient:`)
+  for (const a of offPathAck) console.log(a)
+}
+
 console.log(
   findings.length
     ? `\nread-path-budget: ${findings.length} finding(s).`
     : `\nread-path-budget: clean (${Object.keys(observed).length} files measured, ` +
-        `${acknowledged.length} acknowledged).`
+        `${acknowledged.length} acknowledged` +
+        `${companions ? `, ${companions} companion` : ''}` +
+        `${offPathAck.length ? `, ${offPathAck.length} off-path` : ''}).`
 )
 process.exit(findings.length ? 1 : 0)

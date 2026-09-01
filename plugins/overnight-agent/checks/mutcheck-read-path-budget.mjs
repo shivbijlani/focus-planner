@@ -13,6 +13,10 @@
 //   m5  exception accepted with no issue -> an alarm can be silenced untracked       (g1)
 //   m6  the sweep writes to disk         -> read-only is not actually enforced
 //   m7  `optional` swallows any absence  -> a vanished required file passes          (g4)
+//   m8  growth ignored while under budget-> a runaway is only seen after it arrives  (g3)
+//   m9  idPattern classification disabled-> a stray file is measured as a journal    (g6)
+//   m10 a NEW stray treated as known     -> the offPath baseline swallows a new one  (g6)
+//   m11 a companion accused as a stray   -> the sweep tells you to delete your work  (g6)
 //
 // Each arm is verified in BOTH directions: the scenario must fail against the real script
 // (proving the scenario is live) and pass against the mutant (proving the guard is what
@@ -59,7 +63,9 @@ const okManifest = (over = {}) => ({
     { id: 'user-settings', path: '{planner}/user-settings.md', owner: 'user', writer: 'app', readPath: 'every-run', budgetKB: 120 },
     { id: 'agent-lore', path: '{planner}/agent-lore.md', owner: 'agent', writer: 'agent', readPath: 'on-demand', budgetKB: null },
     {
-      id: 'journals', glob: '{planner}/journal/task-*.md', owner: 'shared', writer: 'agent+user',
+      id: 'journals', glob: '{planner}/journal/task-*.md',
+      idPattern: '^task-\\d+\\.md$', strayPattern: '-(DESKTOP|LAPTOP)-[A-Z0-9]+\\.md$',
+      owner: 'shared', writer: 'agent+user',
       readPath: 'every-run', budgetKB: 64, contractException: { issue: 291, reason: 'tracked' }, ...over,
     },
   ],
@@ -113,6 +119,33 @@ const S = {
     manifest: okManifest(),
     journals: { 'task-8.md': 21 },
     baseline: { known: {}, sizes: { 'task-8.md': 20 } },
+  }),
+  // g6. The stray is deliberately UNDER budget (10 KB vs 64 KB). That is what makes the arm
+  // discriminating: with classification disabled it is just a small journal and the sweep
+  // goes clean, so only the idPattern guard can produce a finding here. Every g6 fixture
+  // also carries a COMPANION deliverable, because the fixtures originally had none and that
+  // is precisely why the one-bucket version passed its tests while accusing 150 real files.
+  offPathStray: () => newFixture({
+    manifest: okManifest(),
+    journals: {
+      'task-1.md': 10,
+      'task-1-healthy-living.md': 10,
+      'task-1-DESKTOP-P9116M3.md': 10,
+    },
+  }),
+  offPathKnown: () => newFixture({
+    manifest: okManifest(),
+    journals: {
+      'task-1.md': 10,
+      'task-1-healthy-living.md': 10,
+      'task-1-DESKTOP-P9116M3.md': 10,
+    },
+    baseline: { known: {}, offPath: { 'task-1-DESKTOP-P9116M3.md': 'sync-conflict copy, verified redundant' } },
+  }),
+  // Companions alone must be entirely silent -- no finding, no accusation, exit 0.
+  companionsOnly: () => newFixture({
+    manifest: okManifest(),
+    journals: { 'task-1.md': 10, 'task-1-healthy-living.md': 10, 'task-1-backlog.md': 200 },
   }),
 }
 
@@ -189,6 +222,59 @@ const check = (name, cond) => { asserts++; if (!cond) fails.push(name) }
   const r11 = run(S.stableUnderBudget())
   check('under-budget file within tolerance exits 0', r11.code === 0)
   check('under-budget file within tolerance is not reported', !/GROWING/.test(r11.out))
+
+  // g6: a file matching the glob but not the idPattern is off-path, not over-budget. The
+  // class matters more than the count here -- OVER prints "shrink this", which is the wrong
+  // action on a file nothing reads, so asserting it is NOT called OVER is the real check.
+  const r12 = run(S.offPathStray())
+  check('off-path stray exits 1', r12.code === 1)
+  check('off-path stray reported as OFFPATH', /OFFPATH\s+task-1-DESKTOP-P9116M3\.md/.test(r12.out))
+  check('off-path stray is NOT called a budget breach', !/OVER\s+task-1-DESKTOP/.test(r12.out))
+  check('off-path stray names the real remedy', /not to shrink it/.test(r12.out))
+  // The negative half: the genuine journal alongside it must still be measured normally.
+  check('a real journal is unaffected by the idPattern', !/OFFPATH\s+task-1\.md/.test(r12.out))
+  // THE DANGEROUS DIRECTION. A companion deliverable must never be accused, in any fixture
+  // that also contains a real stray. This is the assertion the one-bucket version failed
+  // against the live folder while passing every unit test it had.
+  check('a companion deliverable is never accused', !/OFFPATH\s+task-1-healthy-living\.md/.test(r12.out))
+  check('a companion deliverable is not told to be removed', !/healthy-living\.md.*remove/s.test(r12.out))
+
+  const r13 = run(S.offPathKnown())
+  check('known off-path stray exits 0', r13.code === 0)
+  check('known off-path stray still prints in its own section', /known off-path file/.test(r13.out))
+  check('known off-path stray is not silently dropped', /task-1-DESKTOP-P9116M3\.md/.test(r13.out))
+
+  // Companions on their own are silent: not measured, not accused, and not a finding even
+  // when one of them is far over what the budget would have been (200 KB vs 64 KB).
+  const r13b = run(S.companionsOnly())
+  check('companions alone exit 0', r13b.code === 0)
+  check('companions alone produce no OFFPATH', !/OFFPATH/.test(r13b.out))
+  check('an oversized companion is not a budget breach', !/OVER\s+task-1-backlog/.test(r13b.out))
+  check('companions are counted in the summary', /companion/.test(r13b.out))
+
+  // Backwards compatibility: a glob row with no idPattern behaves exactly as before, so
+  // adding this field cannot change any other manifest row by accident.
+  const r14 = run(newFixture({
+    manifest: okManifest({ idPattern: undefined, strayPattern: undefined }),
+    journals: { 'task-1.md': 10, 'task-1-DESKTOP-P9116M3.md': 10 },
+  }))
+  check('glob with no idPattern exits 0', r14.code === 0)
+  check('glob with no idPattern classifies nothing', !/OFFPATH/.test(r14.out))
+
+  // A typo in either pattern must not silently disable the guard it configures.
+  const r15 = run(newFixture({
+    manifest: okManifest({ idPattern: '^task-(\\d+\\.md$' }),
+    journals: { 'task-1.md': 10 },
+  }))
+  check('unparseable idPattern exits 1', r15.code === 1)
+  check('unparseable idPattern says so', /not a valid regex/.test(r15.out))
+
+  const r16 = run(newFixture({
+    manifest: okManifest({ strayPattern: '-(DESKTOP\\.md$' }),
+    journals: { 'task-1.md': 10 },
+  }))
+  check('unparseable strayPattern exits 1', r16.code === 1)
+  check('unparseable strayPattern names the field', /strayPattern/.test(r16.out))
 }
 
 if (fails.length) {
@@ -218,6 +304,16 @@ const arms = [
   // only file class that can still be caught early is the one already too big.
   { name: 'm8 growth ignored while a file is under budget', scenario: S.grownUnderBudget,
     mutate: (s) => s.replace('const grownUnderBudget =', 'const grownUnderBudget = false &&') },
+  // Restores the exact 2026-09-01 misclassification: a OneDrive sync-conflict copy measured
+  // as though it were a journal on the read path. The stray is under budget, so with this
+  // guard disabled the sweep reports clean and the stray is invisible rather than merely
+  // mislabelled.
+  { name: 'm9 idPattern classification disabled', scenario: S.offPathStray,
+    mutate: (s) => s.replace('if (!idRe || idRe.test(f)) return full', 'if (true) return full') },
+  // The offPath baseline must acknowledge only what it names. Without this, one entry in
+  // the list would swallow every future stray -- the g3 hole, in the new class.
+  { name: 'm10 a new stray treated as known off-path', scenario: S.offPathStray,
+    mutate: (s) => s.replace('if (wasKnown) {', 'if (true) {') },
 ]
 
 const survived = []
@@ -248,11 +344,30 @@ for (const arm of arms) {
   }
 }
 
+// m11's kill signal is an accusation appearing against an innocent file, so its directions
+// are inverted relative to the arms above: the real script must be SILENT and the mutant
+// must speak. This is the one-bucket bug that shipped in the first draft of g6 and was
+// caught only by running against the live folder -- so it gets an arm rather than a comment.
+{
+  const name = 'm11 a companion deliverable is accused as a stray'
+  const mutated = SRC.replace('return { companion: full }', 'return { offPath: full }')
+  if (mutated === SRC) survived.push(`${name} (anchor did not match)`)
+  else {
+    const real = run(S.companionsOnly())
+    const mutant = run(S.companionsOnly(), mutated)
+    if (real.code !== 0 || /OFFPATH/.test(real.out)) {
+      survived.push(`${name} (the real script already accuses a companion)`)
+    } else if (!/OFFPATH\s+task-1-healthy-living\.md/.test(mutant.out)) {
+      survived.push(`${name} (the mutant's accusation went undetected)`)
+    } else console.log(`[mutcheck] killed:   ${name}`)
+  }
+}
+
 cleanup()
 if (survived.length) {
   console.log(`[mutcheck] FAIL - ${survived.length} mutation(s) survived:`)
   for (const s of survived) console.log(`  ${s}`)
   process.exit(1)
 }
-console.log(`[mutcheck] PASS - all ${arms.length + 1} mutations killed; every guard is load-bearing.`)
+console.log(`[mutcheck] PASS - all ${arms.length + 2} mutations killed; every guard is load-bearing.`)
 process.exit(0)

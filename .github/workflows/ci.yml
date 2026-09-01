@@ -73,3 +73,36 @@ jobs:
       - name: Mutation check (one table, one reader)
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-browser-slots.ps1
+
+  # The read-path budget guard (GH #292/#293) is what stops an every-run file growing
+  # until it eats the context window -- the defect that made runs stop finishing. Its
+  # mutation check proves those guards are load-bearing, but until now it ran only on
+  # the nightly laptop, which is the same gap the job above was created to close: a
+  # guard that only runs where the drift happens cannot stop the drift from merging.
+  #
+  # It is pure text work against synthetic fixtures in a temp dir -- it never reads the
+  # real planner folder -- so it runs unmodified on the Linux runner.
+  read-path-budget:
+    name: Read-path budget guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Mutation check (budgets, growth, off-path classification)
+        run: node ./plugins/overnight-agent/checks/mutcheck-read-path-budget.mjs
+      - name: Manifest and baseline are valid JSON
+        run: |
+          node -e "JSON.parse(require('fs').readFileSync('plugins/overnight-agent/checks/read-path-manifest.json','utf8'))"
+          node -e "JSON.parse(require('fs').readFileSync('plugins/overnight-agent/checks/read-path-baseline.json','utf8'))"
+      - name: Declared patterns compile
+        run: |
+          node -e "
+            const m = JSON.parse(require('fs').readFileSync('plugins/overnight-agent/checks/read-path-manifest.json','utf8'));
+            for (const f of m.files) {
+              for (const k of ['idPattern','strayPattern']) {
+                if (f[k]) { new RegExp(f[k]); console.log(k + ' ok for ' + f.id); }
+              }
+            }
+          "
