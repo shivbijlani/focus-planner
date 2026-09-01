@@ -114,13 +114,13 @@
 <header>
   <p class="kicker">Focus Planner &middot; Overnight Agent</p>
   <h1>The settings file grew until the agent could no longer read it</h1>
-  <p class="sub">What went wrong, why it stopped the automation from finishing, what was done about it
-  tonight — and why that is a stopgap rather than the fix.</p>
+  <p class="sub">What went wrong, why it stopped the automation from finishing, what shipped —
+  and the one thing still open.</p>
   <ul class="refs">
     <li><a href="https://github.com/shivbijlani/focus-planner/issues/262">Issue 262</a></li>
-    <li><a href="https://github.com/shivbijlani/focus-planner/pull/287">Pull request 287</a> <span class="tag done">merged</span></li>
+    <li><a href="https://github.com/shivbijlani/focus-planner/pull/287">PR 287</a> <span class="tag done">merged</span></li>
+    <li><a href="https://github.com/shivbijlani/focus-planner/pull/294">PR 294</a> <span class="tag done">merged</span></li>
     <li><a href="#shipped">What shipped &rarr;</a></li>
-    <li><a href="#approach">The approach &rarr;</a></li>
   </ul>
 </header>
 
@@ -137,9 +137,9 @@ roughly <strong>237,000 tokens down to about 19,000</strong> — with all 41 set
 <div class="callout">
   <span class="lbl">The one-line version</span>
   <p>The agent's notepad and the agent's config were the same file, and that file was on the
-  read-every-single-time path. Tonight's change separates them — but that is containment. The
-  durable fix is that the file was holding four different jobs at once, and each needs its own
-  home. <a href="#approach">Section 7</a> is that argument.</p>
+  read-every-single-time path. Two things now separate them, and one problem is still open:
+  the <strong>journals</strong> have the identical bug, unmitigated, and are larger.
+  <a href="#shipped">Section 10</a> is what shipped.</p>
 </div>
 
 <hr>
@@ -533,7 +533,8 @@ cost is now a script that rewrites a cloud-synced file on a timer, forever.</p>
 <details class="sec" id="shipped" open>
   <summary><span class="num">10</span>What shipped tonight<span class="teaser">A contract, a tripwire, and three issues. Read this first if you read nothing else.</span></summary>
 
-<p>Two things landed in the planner, and three issues were filed for what remains.</p>
+<p>Two things landed in the planner and are merged to <code>main</code>; three issues were filed
+for what remains, and two of them closed with the merge.</p>
 
 <h3>1. The file-layout contract, as data</h3>
 
@@ -585,13 +586,18 @@ makes the sweep write a file, so the read-only property is <em>tested</em> rathe
   </tr>
   <tr>
     <td><a href="https://github.com/shivbijlani/focus-planner/issues/292">#292</a> — the file-layout contract</td>
-    <td>The umbrella. Shipped as the manifest above; the issue tracks moving the remaining files onto it.</td>
+    <td>The umbrella. <span class="tag done">shipped</span> as the manifest above; moving the remaining files onto it is follow-on work.</td>
   </tr>
   <tr>
     <td><a href="https://github.com/shivbijlani/focus-planner/issues/293">#293</a> — read-path budget</td>
-    <td>Shipped as the sweep above.</td>
+    <td><span class="tag done">shipped</span> as the sweep above.</td>
   </tr>
 </table>
+
+<p>Both merged in
+<a href="https://github.com/shivbijlani/focus-planner/pull/294">pull request 294</a> with lint and
+tests green. The running copy picks them up on the next scheduled run, when the agent deploys
+merged plugin changes to its installed copy.</p>
 
 <h3>Also true now, and it was not this morning</h3>
 
