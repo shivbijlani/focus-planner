@@ -36,14 +36,31 @@
     M2  the probe runs against a NEW target instead of the existing pages.
     M3  the probe evaluates synchronous JS instead of awaiting a timer.
     M4  the `stuck` verdict is downgraded back to healthy (classification hole).
+    M5  the -Json path exits 0 unconditionally (the verdict is reached, correctly
+        reported in the body, and then thrown away at the process boundary).
 
-    All four must FAIL -- i.e. the wedged fixture must be misreported as healthy
-    by each mutant, proving the real script's verdict comes from that specific
-    behaviour and not from something incidental.
+    M1-M4 must FAIL by misreporting the wedged fixture as healthy, proving the
+    real script's verdict comes from that specific behaviour rather than from
+    something incidental. M5 is different in kind and is listed separately below.
 
     C1 is the control: a cosmetic edit to a detail string. It must SHIP GREEN.
     Without it, "every mutation breaks the check" would be indistinguishable
     from "the check is load-bearing", and the suite would prove nothing.
+
+  THE HALF OF THE INVARIANT THIS SUITE USED TO SKIP (added 2026-09-01)
+    The invariant above has always said "and must drive a non-zero exit", but
+    `Invoke-Checker` read only the JSON body and never the exit code. So the
+    suite asserted one half of its own contract.
+
+    Measured live that day, with all three of the user's real slots wedged:
+    the human path exited 2 and `-Json` exited 0, from identical data, while
+    the JSON body it printed carried `"state": "stuck"` for every slot. The
+    mode an automated caller uses was the mode that lied.
+
+    B2 and A2 assert the exit code directly. M5 restores the old behaviour and
+    must be caught -- and it is caught ONLY by B2, since it leaves the body
+    correct. That asymmetry is the evidence that the two halves are genuinely
+    independent, and that reading the payload alone can never cover this class.
 
   NEVER TOUCHES LIVE STATE
     Every probe runs against a Node fixture CDP server on an ephemeral port.
@@ -108,16 +125,23 @@ function Start-Fixture {
 function Stop-Fixture { param($fx) if ($fx -and $fx.Proc -and -not $fx.Proc.HasExited) { Stop-Process -Id $fx.Proc.Id -Force -ErrorAction SilentlyContinue } }
 
 # Run a candidate script against a fixture port and return the parsed slot row.
+#
+# The EXIT CODE is captured alongside the body. It was not, before -- and that
+# omission is exactly why the suite could state "and must drive a non-zero exit"
+# in its own invariant while `-Json` exited 0 on a slot it had just called
+# `stuck`. A suite that reads only the half of the contract that happens to be
+# in the payload cannot see a defect in the other half.
 function Invoke-Checker {
   param([string]$Path, [int]$Port, [int]$TimeoutSec = 4)
   $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $Path `
             -Json -ProbeTimeoutSec $TimeoutSec -SlotSpec "${Port}:fixture" 2>&1 | Out-String
+  $code = $LASTEXITCODE
   $rows = $null
   try { $rows = $out | ConvertFrom-Json } catch {
-    return [pscustomobject]@{ parsed = $false; raw = $out; healthy = $null; state = $null }
+    return [pscustomobject]@{ parsed = $false; raw = $out; healthy = $null; state = $null; exit = $code }
   }
   $row = @($rows) | Select-Object -First 1
-  return [pscustomobject]@{ parsed = $true; raw = $out; healthy = $row.healthy; state = $row.state; detail = $row.detail }
+  return [pscustomobject]@{ parsed = $true; raw = $out; healthy = $row.healthy; state = $row.state; detail = $row.detail; exit = $code }
 }
 
 # Write a mutated copy of the script under test.
@@ -145,9 +169,11 @@ try {
   Write-Host 'baseline' -ForegroundColor DarkCyan
   $bh = Invoke-Checker -Path $ScriptPath -Port $healthyFx.Port
   Assert 'A  healthy slot reports healthy' ($bh.parsed -and $bh.healthy -eq $true -and $bh.state -eq 'up') "got state=$($bh.state) healthy=$($bh.healthy)`n$($bh.raw)"
+  Assert 'A2 healthy slot exits 0 in -Json mode' ($bh.exit -eq 0) "got exit=$($bh.exit)"
 
   $bw = Invoke-Checker -Path $ScriptPath -Port $wedgedFx.Port
   Assert 'B  wedged slot reports stuck (THE INVARIANT)' ($bw.parsed -and $bw.healthy -eq $false -and $bw.state -eq 'stuck') "got state=$($bw.state) healthy=$($bw.healthy)`n$($bw.raw)"
+  Assert 'B2 wedged slot drives exit 2 in -Json mode (the other half of the invariant)' ($bw.exit -eq 2) "got exit=$($bw.exit) -- the body said stuck but the process said ok"
 
   # The probe must be bounded: a never-answering renderer cannot hang the run.
   $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -199,6 +225,27 @@ try {
   }
   $r4 = Invoke-Checker -Path $m4 -Port $wedgedFx.Port
   Assert 'M4 dropped stuck verdict misreports wedged as healthy' ($r4.parsed -and $r4.healthy -eq $true) "mutant was not caught: state=$($r4.state) healthy=$($r4.healthy)"
+
+  # M5 is the defect that was LIVE on main until 2026-09-01, and it is the
+  # reason B2 exists. It restores the unconditional `exit 0` on the -Json path.
+  #
+  # Note what it does NOT change: the JSON body still says stuck/unhealthy, so
+  # arm B passes on this mutant. Only the process exit is wrong. That is the
+  # whole point -- a caller that trusts the exit code (a watchdog, a CI gate)
+  # is told "all healthy" while the payload it did not parse says otherwise.
+  # If B2 were removed, this mutant would survive, which is precisely how the
+  # real bug survived every previous green run of this suite.
+  $m5 = New-Mutant 'M5-json-always-exit-0' {
+    param($s)
+    # Line-ending agnostic on purpose: this repo is edited from Windows and CI
+    # runs on Linux, and a mutant that silently stops matching would be reported
+    # by New-Mutant as "changed nothing" rather than as a passing arm.
+    $s -replace ([regex]::Escape('if ($bad.Count -gt 0) { exit 2 }') + '\r?\n'), ''
+  }
+  $r5 = Invoke-Checker -Path $m5 -Port $wedgedFx.Port
+  Assert 'M5 -Json exit-0 mutant is caught by the exit code, not the body' `
+    ($r5.parsed -and $r5.healthy -eq $false -and $r5.exit -eq 0) `
+    "mutant was not caught: exit=$($r5.exit) healthy=$($r5.healthy) (expected exit=0 healthy=False)"
 
   # ---- control -----------------------------------------------------------
   Write-Host ''
