@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, afterEach } from 'vitest'
 import { reconcileRecordsFile, sidecarPath, frameHasStructure, preferStructuredFrame, framePriorityCount, preferPopulatedPriorityFrame } from './records.js'
 import { mdTableCodec } from './codecs/mdTable.js'
 import { serializeSidecar } from './merge.js'
+import { clearDiagnostics, dumpDiagnostics, enableDiagnostics, resetDiagnosticsForTests } from '../../diagnostics/src/index.js'
 
 // In-memory store with content + sidecar maps, exposing the closure shape that
 // reconcileRecordsFile expects.
@@ -243,6 +244,51 @@ describe('reconcileRecordsFile — end-to-end record sync', () => {
     expect(second.changedRemote).toBe(false)
     const meta = JSON.parse(remote.get(sidecarPath(PATH))).entries
     expect(meta['2'].clock).toBe(2000)  // not re-stamped every sync
+  })
+})
+
+describe('#190 — reconcile surfaces an alive-but-recordless row instead of voiding it', () => {
+  afterEach(() => { resetDiagnosticsForTests() })
+
+  it('preserves the live meta AND emits an alive-without-record diag when a board row has no parsed row', async () => {
+    // The #228 shape end-to-end: a remote sidecar still marks row 228 ALIVE, but
+    // neither the remote nor the local content carries that row, and the local
+    // side never had 228 in its own sidecar (so stampLocalChanges has nothing to
+    // tombstone). Before the fix the merge dropped 228 from meta with no
+    // tombstone — the silent void. Now the meta is kept and the inconsistency is
+    // logged on the sync path.
+    resetDiagnosticsForTests()
+    clearDiagnostics()
+    enableDiagnostics({ persist: false })
+
+    const local = store({ [PATH]: plan(row(1, 'A')) })
+    const remote = store({
+      [PATH]: plan(row(1, 'A')), // 228 absent from the content...
+      [sidecarPath(PATH)]: serializeSidecar(
+        {
+          1: { clock: 1000, deleted: false },
+          228: { clock: 9000, deleted: false }, // ...but the sidecar says it's alive
+          __frame__: { clock: 1000, deleted: false },
+        },
+        1000,
+      ),
+    })
+
+    await syncOnce(local, remote, 5000)
+
+    // Anti-void: 228 must still be tracked alive in the merged sidecar, never a
+    // tombstone-less disappearance.
+    const meta = JSON.parse(remote.get(sidecarPath(PATH))).entries
+    expect(meta['228']).toBeDefined()
+    expect(meta['228'].deleted).toBe(false)
+
+    // And the app surfaces it on the sync/load path rather than leaving an
+    // external sweep as the only thing that notices.
+    const anomalies = dumpDiagnostics().filter((e) => e.event === 'alive-without-record')
+    expect(anomalies.length).toBeGreaterThan(0)
+    expect(anomalies[0].fields.ids).toContain('228')
+    // The structural FRAME sentinel must never be reported as a lost row.
+    expect(anomalies[0].fields.ids).not.toContain('__frame__')
   })
 })
 

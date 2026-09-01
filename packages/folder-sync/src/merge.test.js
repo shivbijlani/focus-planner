@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  clearDiagnostics,
+  dumpDiagnostics,
+  enableDiagnostics,
+  resetDiagnosticsForTests,
+} from '../../diagnostics/src/index.js'
+import {
   mergeCollections,
   stampWrite,
   stampDelete,
@@ -11,6 +17,7 @@ import {
   serializeSidecar,
   parseSidecar,
   isCollapse,
+  findAliveWithoutRecord,
 } from './merge.js'
 
 const snap = (records = {}, meta = {}) => ({ records, meta })
@@ -68,11 +75,16 @@ describe('mergeCollections — per-record LWW with tombstones', () => {
     }
   })
 
-  it('drops an alive-but-contentless entry when neither side has the record', () => {
+  it('drops an alive-but-contentless entry from RECORDS, but keeps its META tracked (#190)', () => {
     const remote = snap({}, { ghost: { clock: 99, deleted: false } })
     const local = snap({}, {})
     const m = mergeCollections(local, remote)
+    // No phantom record can win (the #46 crash guard) …
     expect('ghost' in m.records).toBe(false)
+    // … but the live meta entry must NOT vanish with no tombstone (#190). Before
+    // the fix this id evaporated from BOTH records and meta — the silent void
+    // that made task #228's row disappear with no sidecar entry at all.
+    expect(m.meta.ghost).toEqual({ clock: 99, deleted: false })
   })
 
   it('intentional re-add after delete wins when newer than the tombstone', () => {
@@ -370,5 +382,112 @@ describe('sidecar (de)serialization', () => {
     expect(parseSidecar('')).toEqual({})
     expect(parseSidecar('not json')).toEqual({})
     expect(parseSidecar('{}')).toEqual({})
+  })
+})
+
+describe('#190 — a live meta entry must never be dropped with no tombstone (the silent void)', () => {
+  // Root cause, reproduced. When a row is ALIVE in the sidecar meta but its parsed
+  // record is missing on BOTH sides — the shape a stale/empty parse or a #171
+  // parser-rejected id cell leaves — sideEntry collapses each side to present:false
+  // so a content-less row can never win and crash fingerprint() (#46). pickWinner
+  // then returns not-present and the merge loop used to `continue`, erasing the id
+  // from BOTH records AND meta with no tombstone. That is exactly #228: "no sidecar
+  // entry at all, in either board's sidecar," the row gone and the journal
+  // unreachable. Each test below pins one facet of the fix; each is proven
+  // load-bearing by exactly one arm of mutcheck-meta-nodrop.mjs.
+  const bothPhantom = () => mergeCollections(
+    { records: {}, meta: { '228': { clock: 1000, deleted: false } } },
+    { records: {}, meta: { '228': { clock: 1000, deleted: false } } },
+    { now: 5000 },
+  )
+
+  it('stays-alive: the preserved entry is ALIVE, never silently turned into a tombstone', () => {
+    // ARM alive-flag (`deleted: false` -> `deleted: true`).
+    const m = bothPhantom()
+    expect(m.meta['228']).toBeDefined()
+    expect(m.meta['228'].deleted).toBe(false)
+  })
+
+  it('single-sided: a one-sided alive phantom (the #228 cross-device shape) is preserved, not voided', () => {
+    // Device A's sidecar still marks 228 alive; device B never had it; neither has
+    // the record. This is the exact two-replica shape #228 took. Reverting the OR
+    // guard to AND reintroduces the silent void HERE and only here.
+    // ARM require-both (`||` -> `&&`).
+    const m = mergeCollections(
+      { records: {}, meta: { '228': { clock: 7, deleted: false } } },
+      { records: {}, meta: {} },
+      { now: 5000 },
+    )
+    expect('228' in m.meta).toBe(true)
+    expect(m.meta['228'].deleted).toBe(false)
+  })
+
+  it('max-clock: the preserved clock is the highest known alive clock, symmetrically', () => {
+    // ARM clock-min (`Math.max` -> `Math.min`). Order-independent by construction.
+    const fwd = mergeCollections(
+      { records: {}, meta: { r: { clock: 7, deleted: false } } },
+      { records: {}, meta: { r: { clock: 3, deleted: false } } },
+      { now: 5000 },
+    )
+    const rev = mergeCollections(
+      { records: {}, meta: { r: { clock: 3, deleted: false } } },
+      { records: {}, meta: { r: { clock: 7, deleted: false } } },
+      { now: 5000 },
+    )
+    expect(fwd.meta.r.clock).toBe(7)
+    expect(rev.meta.r.clock).toBe(7)
+  })
+
+  it('no-record: preserving the meta must NOT emit a record (the #46 fingerprint crash guard still holds)', () => {
+    // ARM emit-record (also writing `mergedRecords[id] = winner.content`, which is
+    // undefined for a not-present winner — the exact content-less row #46 crashed on).
+    const m = bothPhantom()
+    expect('228' in m.records).toBe(false)
+    for (const id of Object.keys(m.records)) {
+      expect(() => fingerprint(m.records[id])).not.toThrow()
+    }
+  })
+
+  it('diag: preserving a phantom emits a logged anomaly, never a silent no-op', () => {
+    // ARM diag-event (wrong event name / removed). Diagnostics off elsewhere, so the
+    // buffer is otherwise empty.
+    resetDiagnosticsForTests()
+    clearDiagnostics()
+    enableDiagnostics({ persist: false })
+    bothPhantom()
+    const events = dumpDiagnostics().filter((e) => e.event === 'phantom-meta-preserved')
+    resetDiagnosticsForTests()
+    expect(events.length).toBeGreaterThan(0)
+    expect(events[0].fields.id).toBe('228')
+  })
+
+  it('a genuine tombstone on one side still wins — preservation never resurrects a delete', () => {
+    // The fix must not fire when a real tombstone should win: the newer delete
+    // beats the stale alive-but-recordless side, exactly as before.
+    const m = mergeCollections(
+      { records: {}, meta: { '9': { clock: 5, deleted: false } } },
+      { records: {}, meta: { '9': { clock: 20, deleted: true } } },
+      { now: 5000 },
+    )
+    expect(m.meta['9'].deleted).toBe(true)
+    expect('9' in m.records).toBe(false)
+  })
+})
+
+describe('findAliveWithoutRecord — the in-app inconsistency detector (#190)', () => {
+  it('flags an id that meta marks alive but which has no record (the #228 residue)', () => {
+    expect(findAliveWithoutRecord({}, { '228': { clock: 1, deleted: false } })).toEqual(['228'])
+  })
+
+  it('ignores a tombstone with no record (a deliberate, correct steady state)', () => {
+    expect(findAliveWithoutRecord({}, { d: { clock: 1, deleted: true } })).toEqual([])
+  })
+
+  it('ignores an alive record that has a matching meta entry', () => {
+    expect(findAliveWithoutRecord({ a: 'A' }, { a: { clock: 1, deleted: false } })).toEqual([])
+  })
+
+  it('ignores a legacy record with no meta (stampLocalChanges stamps it — not an inconsistency)', () => {
+    expect(findAliveWithoutRecord({ a: 'A' }, {})).toEqual([])
   })
 })

@@ -102,13 +102,23 @@ Looks right, go ahead.
 | Any other `<!-- ... -->` (may span multiple lines) | Hidden entirely from the rendered chat — the safe place for machine-readable metadata (e.g. the Telegram bridge's `tg-meta` marker below). |
 | Content before the first day/agent marker | "Pinned" / undated earlier notes. |
 
-`src/journalChat.js`'s `appendJournalMessage(content, text)` is the canonical writer: it
-finds the last `## YYYY-MM-DD` heading, and either (a) appends under it if that heading
-is today's and the trailing author is already "me", (b) inserts a `<!-- from: me -->`
-switch if the trailing author is an agent, or (c) opens a fresh `## <today>` block if the
-last heading isn't today. **Rule for any external writer:** always append at the bottom;
+`src/journalChat.js`'s `appendJournalMessage(content, text)` is the canonical writer, and it
+**always stamps `<!-- from: me -->` on the text it appends** — the app is the true author of
+journal-chat sends and close-out notes, so it identifies itself rather than leaving the entry
+unattributed. It finds the last `## YYYY-MM-DD` heading, and either (a) opens a fresh
+`## <today>` block followed by the marker if the last heading isn't today, (b) appends bare
+under the current bubble if a `<!-- from: me -->` marker still owns the bottom of the file, or
+(c) inserts the marker otherwise (after an agent block, or after a `## ` heading that ended a
+previous marker's ownership). The emitted shape is byte-identical to the Telegram bridge's
+`appendUserReply`, so a reply reads the same whichever channel it arrived through.
+
+This matters beyond rendering: the overnight agent's consent reader attributes trailing text by
+marker and **fails closed on unmarked text**, so an unstamped entry can never count as human
+approval. The writer stamps; the reader is deliberately left strict.
+
+**Rule for any external writer:** always append at the bottom, and stamp your own authorship;
 never rewrite or reorder earlier entries — the format has no mechanism to express an edit
-to history, only new content.
+to history, only new content. Historical unmarked entries stay unmarked; nothing migrates them.
 
 ### Telegram deep-link marker
 

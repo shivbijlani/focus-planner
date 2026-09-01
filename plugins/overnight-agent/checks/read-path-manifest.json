@@ -54,7 +54,7 @@
       "retention": "a visible list the user edits; bounded by fitting on one screen",
       "issue": 288,
       "optional": true,
-      "note": "Shipped by #290. The agent only ever READS this file, which is what makes anything in it attributable to the user without a marker (#250). Budgeted tightly on purpose: its value is that the whole gate is reviewable at a glance, and a gate nobody reads is a gate nobody trusts."
+      "note": "Shipped by #290, and READ by the agent since #297 (`oa-state.ps1 gate`, PHASE 0). The agent only ever READS this file, which is what makes anything in it attributable to the user without a marker (#250) -- writer stays 'app' for that reason and must never become 'agent'. Budgeted tightly on purpose: its value is that the whole gate is reviewable at a glance, and a gate nobody reads is a gate nobody trusts."
     },
     {
       "id": "board",

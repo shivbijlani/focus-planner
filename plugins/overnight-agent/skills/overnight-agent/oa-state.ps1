@@ -32,6 +32,14 @@
   consent -Id <id>              Print the CONSENT verdict for one task's journal as it stands
                                 now: has the HUMAN provably authorized something? Fail-CLOSED
                                 (see .CONSENT below). Ask this before any irreversible action.
+          [-Action <kind>]      Also consult the AGENT GATE (see .GATE below) for this action
+                                kind, from a FIXED enum. Omit it and the output is unchanged.
+          [-Repo <name>]        The repository the action targets, so a repo-scoped gate rule
+                                can be matched exactly. A repo-scoped rule NEVER matches when
+                                this is omitted.
+  gate                          Print the parsed agent gate as JSON:
+                                { path, exists, state, version, allow[], ask[], mtime }.
+                                Rule text is preserved VERBATIM so a verdict can be audited.
   mark   -Id <id> [-Status s] [-Version n] [-PlanId p]
                                 Record that the agent has processed the journal as it now
                                 stands (re-snapshots processed_file_hash + updates fields).
@@ -51,6 +59,12 @@
          [-RecheckDone]         Record that the recheck just ran: stamp last_rechecked = now and
                                 push next_due forward by the cadence interval.
          [-RecheckClear]        Remove the recheck from the task (e.g. once it is unblocked).
+         [-Exhausted <list>]    DECLARE this Today row exhausted for THIS RUN, naming what was
+                                examined (see .EXHAUSTION). This is what opens the
+                                Today->Deferred gate. It is a SEPARATE call: it cannot be
+                                combined with -Status/-Version/-PlanId or any timer flag.
+         [-ExhaustedNote <s>]   Optional free-text note recorded alongside the declaration.
+         [-ExhaustionClear]     Withdraw a standing declaration (the row gates again at once).
   resnapshot                    One-time migration after a change to how journals are decoded
                                 or hashed: re-baseline processed_file_hash for tasks with
                                 nothing pending. SKIPS any journal with trailing user content,
@@ -102,6 +116,100 @@
   consent on an identity the agent cannot forge (e.g. the Telegram `from_user` id captured at
   fold time) is the follow-up; this makes the reader stop treating absence as permission.
 
+.GATE (#297 -- the standing permission channel the user owns)
+  `consent` above answers "did the human approve THIS TASK?" from the journal. That is the only
+  consent channel the agent had, and it has a structural ceiling: the journal is a surface the
+  AGENT WRITES, so every permission has to be re-granted, per task, in a file the agent itself
+  edits. A standing instruction ("this repo is YOLO, stop asking") has nowhere to live.
+
+  `agent-gate.md` is that second channel. It sits in the planner folder next to planner.md, the
+  Planner web app seeds and edits it, and THIS AGENT ONLY EVER READS IT -- never writes it. That
+  one-way property is the whole point: text in it needs no attribution marker to be trusted,
+  because the agent could not have put it there. It holds two lists:
+
+    ## Do not gate these (reversible)   -> ALLOW  : the agent may act without asking
+    ## Always ask (safety floor)        -> FLOOR  : the agent always stops and asks
+
+  ORDER IS LOAD-BEARING, and it is the one thing that must not be got backwards:
+
+    1. FLOOR first. A matching floor rule denies, `reason: gate-floor-blocks`, and it OVERRIDES
+       everything below it -- including an allow rule AND a human `approve` in the journal. The
+       floor is the user saying "not even if I said yes in a hurry".
+    2. ALLOW next. A matching allow rule returns `consent_ok: true`, `reason: gate-allowed`.
+    3. Otherwise fall through to the journal reading above, completely unchanged.
+
+  MATCHING IS DETERMINISTIC, NOT INTERPRETIVE. `-Action` is a fixed enum (see the param block);
+  a rule maps to action kinds through the explicit keyword table in $script:GateActionKinds, and
+  the verdict reports the VERBATIM rule that decided it (`gate_rule`) so a human can audit it.
+  There is no fuzzy matching and no model in the loop.
+
+  TWO ASYMMETRIES, both deliberately biased fail-CLOSED:
+
+    * REPO SCOPE applies to ALLOW rules only. A rule naming a repository matches only that
+      repository, and never matches at all when `-Repo` is omitted. It is NOT applied to floor
+      rules: narrowing the floor would REMOVE protection, and 'Send-to-many' must keep blocking
+      everywhere. Being over-eager about "this looks repo-scoped" therefore only ever grants
+      LESS.
+    * BLANKET GRANTS ('yolo', 'dont ask just do', 'no need to ask') apply to ALLOW rules only,
+      because that is grant-shaped language. They cover every action kind -- and the floor still
+      wins over them.
+
+  ABSENT / UNREADABLE / EMPTY / MALFORMED GATE == TODAY'S BEHAVIOUR, EXACTLY. Both lists come
+  back empty, no rule can match, and the journal reader decides as it always did. The gate may
+  only ever ADD permission via the allow list or REMOVE it via the floor; it can never weaken
+  the fail-closed default. Asserted by mutcheck-agent-gate.ps1.
+
+  A WORKED EXAMPLE, because this is exactly where a careless reading grants what was never
+  given. The live gate allows `focus-planner-ado-codeapp is in YOLO mode, dont ask just do` and
+  `Creating and publishing a pull request in any repository ... do not gate it`. Neither
+  authorises MERGING a pull request in `focus-planner`: the first names a DIFFERENT repo, and
+  the second covers CREATING a PR, not merging one. So:
+
+    consent -Id 463 -Action merge_pr -Repo focus-planner                -> falls through (no rule)
+    consent -Id 463 -Action open_pr                                     -> gate-allowed
+    consent -Id 463 -Action merge_pr -Repo focus-planner-ado-codeapp    -> gate-allowed (blanket)
+    consent -Id 463 -Action send_email_many                             -> gate-floor-blocks
+
+.EXHAUSTION (#310 -- what actually opens the Today->Deferred gate)
+  Rule 1 of #223 is "Today before Deferred": a Deferred row is ineligible while a Today row
+  still holds the gate. The only hard question is WHAT RELEASES IT, and that has been answered
+  wrongly twice, in opposite directions:
+
+    keyed to WORKABILITY   never opens for an unbounded row. The live `## Today` held one
+                           standing meta-task ("triage fix and ship GitHub issues"), workable
+                           forever, so it froze 121 Deferred rows on every run -- measured at
+                           1 eligible row out of 238.
+    keyed to RECENCY       opens the moment the agent TYPES. `mark` stamps `last_turn_at` on
+                           every turn, so one turn -- any content, any completion state --
+                           released the whole backlog for the rest of the run.
+
+  The second is the repo's recurring failure class: THE AGENT AUTHORS THE SIGNAL ITS OWN GATE
+  READS (cf. #227/#272 consent, and the `awaiting_reply` ratchet). So the release is now an
+  affirmative DECLARATION the run has to make on purpose, and the things that CANCEL it are
+  state the agent does not author:
+
+    mark -Id <today-id> -Exhausted 'gh:197,gh:179,gh:139' -ExhaustedNote 'all blocked on review'
+
+  A declaration stands only while ALL of these hold. `scan` reports which one failed, per row,
+  as `today_release_reason`:
+
+    * it named at least one examined item             (an unnamed claim asserts nothing)
+    * it is younger than -ExhaustionTtlMinutes        (scoped to one run; look again next run)
+    * the board's `## Today` section is UNCHANGED     (the human revokes it by editing Today)
+    * no turn has been written to the row SINCE it    (writing more work refutes "exhausted")
+    * the row is not `reopened`                       (a live reply reclaims exclusivity)
+
+  Writing a turn is now NECESSARY BUT NOT SUFFICIENT: you cannot declare a row you never
+  opened, and every turn written after a declaration cancels it. That is the exact inversion of
+  the defect -- typing can only ever make the gate hold LONGER.
+
+  BACKSTOP. -TodayGateBackstopHours (default 6) releases a Today row nobody has written a turn
+  to for that long, so a wedged run cannot freeze the backlog behind a row it cannot move. It
+  is keyed to STALENESS, so writing resets it; there is no path from typing to a release.
+
+  ROLLBACK. -TodayGateStrict (or the legacy -TodayServedMinutes 0) disables every release path:
+  a workable Today row gates forever, exactly as before #223's correction.
+
 .SNOOZE PRECEDENCE
   Snooze is the user's explicit "not until <date>", so it outranks both timers: a snoozed task
   reports `due_poll: false` and `due_recheck: false` regardless of how overdue the timer is. The
@@ -113,6 +221,9 @@
   pwsh oa-state.ps1 scan
   pwsh oa-state.ps1 get  -Id 293
   pwsh oa-state.ps1 consent -Id 276                    # may I take the irreversible step on #276?
+  pwsh oa-state.ps1 gate                               # what standing permissions has the user granted?
+  pwsh oa-state.ps1 consent -Id 463 -Action merge_pr -Repo focus-planner
+  pwsh oa-state.ps1 consent -Id 463 -Action send_email_many
   pwsh oa-state.ps1 mark -Id 305 -Status proposed -Version 1 -PlanId t305-v1
   pwsh oa-state.ps1 mark -Id 400 -Poll daily          # arm a daily poll on #400
   pwsh oa-state.ps1 mark -Id 400 -PollDone            # after running it this run
@@ -120,12 +231,16 @@
   pwsh oa-state.ps1 mark -Id 357 -Status blocked -Recheck 12h -RecheckKind ci
   pwsh oa-state.ps1 mark -Id 357 -RecheckDone         # still blocked; re-arm the timer
   pwsh oa-state.ps1 mark -Id 357 -RecheckClear        # prerequisite cleared
+  pwsh oa-state.ps1 mark -Id 463 -Status in-progress  # 1. write the turn
+  pwsh oa-state.ps1 mark -Id 463 -Exhausted 'gh:197,gh:179,gh:139' `
+                         -ExhaustedNote 'all three blocked on review'   # 2. then declare
+  pwsh oa-state.ps1 mark -Id 463 -ExhaustionClear     # withdraw it; the row gates again
 #>
 
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent')]
+  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate')]
   [string]$Command = 'scan',
 
   [string]$Id,
@@ -133,6 +248,20 @@ param(
   [int]$Version,
   [string]$PlanId,
   [switch]$Force,
+
+  # The agent gate (#297). `-Action` is a CLOSED ENUM on purpose: free text would put the
+  # matcher's input under the control of whatever prose the agent happened to generate, which is
+  # the same self-authored-permission hole #227 closed one level down. A caller that cannot name
+  # its action in this vocabulary does not get a gate verdict and falls through to the journal
+  # reader -- which is the safe direction. Adding a kind is a deliberate, reviewable edit here.
+  [ValidateSet(
+    'merge_pr', 'open_pr', 'push_main', 'delete_branch',
+    'send_email_self', 'send_email_reply', 'send_email_new_thread', 'send_email_many',
+    'post_public', 'spend_money', 'delete_data', 'deploy', 'publish_release')]
+  [string]$Action,
+  # The repository the action targets, so a repo-scoped ALLOW rule can be matched exactly.
+  # Accepts `name` or `owner/name`. Omitting it makes every repo-scoped rule non-matching.
+  [string]$Repo,
 
   # Polling (time-triggered worklist). See .POLLING in the header.
   [string]$Poll,
@@ -155,15 +284,49 @@ param(
   # Structured snooze store, written by the Planner web app and read-only here (#391).
   # Preferred over the in-markdown markers above; see Get-SnoozeMap.
   [string]$SnoozeStore = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\snooze.json",
-  # How long a Today row stays "served" after the agent last wrote a turn to it, in minutes.
-  # A served Today row no longer holds the Today->Deferred gate shut. See Test-HoldsTodayGate.
-  # Default is deliberately LONGER than the ~30 min scheduled run interval, so a standing Today
-  # task worked by the previous run does not re-starve the backlog before this run does anything.
-  # `0` restores the pre-fix behaviour (a workable Today row always gates) in one flag.
-  [int]$TodayServedMinutes = 45
+  # The agent gate (#297): the user's standing permissions. Seeded and edited by the Planner web
+  # app, READ-ONLY here -- nothing in this script ever writes it, which is what makes its contents
+  # trustworthy without an attribution marker. Sits next to planner.md by default.
+  [string]$GatePath = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\agent-gate.md",
+  # --- The Today->Deferred gate (#223, corrected 2026-08-31, corrected again in #310) ------
+  #
+  # DEPRECATED, and kept for exactly one value. `0` is the one-flag rollback to the STRICT gate
+  # (a workable Today row always holds Deferred shut, the pre-#223-fix behaviour). The old
+  # NON-ZERO meaning -- "a Today row is served for N minutes after the agent last wrote a turn
+  # to it" -- WAS the #310 defect, and it is gone: any other value is now ignored. New callers
+  # should say `-TodayGateStrict` instead, which names the same thing honestly.
+  [int]$TodayServedMinutes = -1,
+  # The rollback, named for what it does: no release path at all.
+  [switch]$TodayGateStrict,
+  # How long an exhaustion DECLARATION stays valid, in minutes. Sized to ONE scheduled run
+  # (~30 min): a declaration covers the run that made it, and the next run must look again and
+  # declare again -- which is what "exhausted for this run" has to mean if it is to mean
+  # anything. Expiry fails CLOSED (the gate re-shuts), so a window that is too short costs one
+  # cheap re-declaration and never a wrong release. `0` disables the declaration path entirely.
+  [int]$ExhaustionTtlMinutes = 30,
+  # Wedged-run backstop, in hours (#310, and the "still plenty of time" clause of #223). If a
+  # Today row is holding the gate and the agent has NOT written a turn to it for this long, the
+  # run cannot work it, so the backlog is released rather than frozen behind a row nobody is
+  # moving. This is the exact INVERSE of the #310 defect: writing RESETS the timer, so the agent
+  # can only ever DELAY this release, never cause it. A row the agent has never worked is exempt
+  # (`last_turn_at` absent keeps gating), because "never touched" is the one state that most
+  # deserves the run's attention. `0` disables.
+  [int]$TodayGateBackstopHours = 6,
+  # The exhaustion DECLARATION itself (#310). See .EXHAUSTION in the header and
+  # Set-ExhaustionDeclaration below. Value is the list of things the run examined; it is
+  # REQUIRED to be non-empty, because a declaration that names nothing is indistinguishable
+  # from a shrug.
+  [string]$Exhausted,
+  [string]$ExhaustedNote,
+  [switch]$ExhaustionClear
 )
 
 $ErrorActionPreference = 'Stop'
+
+# The one-flag rollback to the strict (pre-#223-fix) gate, resolved once so every reader agrees.
+# `-TodayServedMinutes 0` is the legacy spelling and is honoured verbatim; every other value of
+# that deprecated parameter is ignored, because its old meaning was the #310 defect.
+$script:TodayGateIsStrict = [bool]($TodayGateStrict -or ($TodayServedMinutes -eq 0))
 
 function Ensure-StateDir {
   if (-not (Test-Path $StateDir)) { New-Item -ItemType Directory -Path $StateDir -Force | Out-Null }
@@ -199,6 +362,336 @@ $script:LegacyStateRe = '(?m)^[ \t]*<!--[ \t]*oa-state'
 # inside `redo it`. Phrase precision is deliberately NOT the subject of #227 -- authorship is
 # -- so this list mirrors SKILL.md rather than trying to improve on it.
 $script:ConsentAffirmRe = '(?i)(?<![\w-])(approved?|approve it|yes|yep|yeah|go ahead|go for it|go|lgtm|ship it|do it|vibe it|send it|make it so|proceed)(?![\w-])'
+
+# --- The agent gate (#297) --------------------------------------------------------------
+# Everything below reads `agent-gate.md`. NOTHING below writes it, and nothing anywhere in this
+# script does either. That is not an implementation detail -- it is the property that makes the
+# file a trustworthy consent channel (see .GATE in the header), so any future edit that adds a
+# write here destroys the guarantee rather than extending the feature.
+
+# --- structure: kept in lockstep with src/config/agentGate.js -----------------------------
+# The web app is the WRITER of this file and this is the READER, so the two must agree on
+# structure or the user edits a list the agent cannot see. These four constants are the
+# PowerShell mirror of SECTION_MATCHERS / HEADING_RE / BULLET_RE over there; the section keys
+# are renamed (reversible -> allow, alwaysAsk -> ask) to match the vocabulary of the verdict.
+$script:GateHeadingRe = '^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$'
+$script:GateBulletRe = '^\s*[-*+]\s+(.*)$'
+$script:GateVersionRe = '(?i)<!--\s*planner-agent-gate\s+v(\d+)'
+$script:GateSectionMatchers = @(
+  @{ Key = 'allow'; Phrases = @('do not gate', "don't gate", 'reversible') },
+  @{ Key = 'ask'; Phrases = @('always ask', 'safety floor') }
+)
+
+# --- action vocabulary --------------------------------------------------------------------
+# Kind -> an array of regex GROUPS. A rule covers the kind when it matches EVERY group (an AND
+# of ORs). Two groups is the usual shape: a verb and the thing the verb acts on, which is what
+# keeps the kinds apart from each other.
+#
+# THE DISCRIMINATION THIS TABLE EXISTS FOR. #297 is explicit that a rule about CREATING a pull
+# request must never authorise MERGING one -- the live gate has exactly such a rule, and reading
+# it as a merge grant would hand out a permission the user never gave. That falls out of the
+# table rather than out of a special case: `merge_pr` requires a merge verb, `open_pr` requires
+# a create verb AND a pull-request noun, and no create verb implies a merge verb.
+#
+# The verb/object split also keeps near-neighbours separate, and the near misses are the point:
+#   * `publish_release` needs a RELEASE noun, so "publishing a pull request" is not a release.
+#   * `post_public` needs `\bpublic(ly)?\b`, which does NOT fire inside "publishing" (there is
+#     no word boundary after "public" in "publishing").
+#   * `send_email_many` needs a many-audience word, so a 1-1 reply rule never blocks itself.
+# Matching is case-insensitive (PowerShell `-match` default) and word-bounded throughout.
+$script:GateActionKinds = [ordered]@{
+  merge_pr              = @('\bmerg(?:e|es|ed|ing)\b|\bauto-?merges?\b|\bland(?:s|ed|ing)? (?:the |a |it )?(?:pr|pull request)\b')
+  open_pr               = @(
+    '\b(?:creat(?:e|es|ed|ing)|open(?:s|ed|ing)?|publish(?:es|ed|ing)?|rais(?:e|es|ed|ing)|draft(?:s|ed|ing)?|submit(?:s|ted|ting)?|fil(?:e|es|ed|ing))\b',
+    '\bpull[- ]requests?\b|\bprs?\b'
+  )
+  push_main             = @(
+    '\bpush(?:es|ed|ing)?\b|\bforce-?push(?:es|ed|ing)?\b',
+    '\bmain\b|\bmaster\b|\btrunk\b|\bdefault branch\b'
+  )
+  delete_branch         = @(
+    '\bdelet(?:e|es|ed|ing)\b|\bremov(?:e|es|ed|ing)\b|\bprun(?:e|es|ed|ing)\b',
+    '\bbranch(?:es)?\b'
+  )
+  send_email_self       = @(
+    '\bemail(?:s|ing|ed)?\b|\be-mail(?:s|ing|ed)?\b|\bsend(?:s|ing)?\b|\bsent\b|\bmail(?:s|ing|ed)?\b',
+    '\bmyself\b|\bmy own\b|\bto me\b|\bself\b'
+  )
+  send_email_reply      = @(
+    '\brepl(?:y|ies|ied|ying)\b|\brespond(?:s|ed|ing)?\b|\bresponses?\b|\banswer(?:s|ed|ing)?\b',
+    '\bemail(?:s|ing|ed)?\b|\be-mail(?:s|ing|ed)?\b|\bchat\b|\bmessages?\b|\bdms?\b|\binteractions?\b|\bthreads?\b|\bconversations?\b'
+  )
+  send_email_new_thread = @(
+    '\bstart(?:s|ed|ing)?\b|\binitiat(?:e|es|ed|ing)\b|\bfresh\b|\bcold\b|\bnew\b|\breach(?:es|ed|ing)? out\b',
+    '\bconversations?\b|\bthreads?\b|\bemail(?:s|ing|ed)?\b|\be-mail(?:s|ing|ed)?\b|\bchat\b|\bmessages?\b|\boutreach\b'
+  )
+  send_email_many       = @(
+    '\bsend-to-many\b|\bgroups?\b|\bchannels?\b|\bmanager\b|\bmass\b|\bbroadcast\b|\bdistribution list\b|\beveryone\b|\ball-hands\b|\bmany\b|\bbulk\b',
+    '\bemail(?:s|ing|ed)?\b|\be-mail(?:s|ing|ed)?\b|\bmessages?\b|\bchat\b|\bchannels?\b|\bgroups?\b|\bsend(?:s|ing)?\b|\bsent\b|\bpost(?:s|ed|ing)?\b'
+  )
+  post_public           = @(
+    '\bpost(?:s|ed|ing)?\b|\bpublish(?:es|ed|ing)?\b|\btweet(?:s|ed|ing)?\b|\bshar(?:e|es|ed|ing)\b|\bannounc(?:e|es|ed|ing)\b',
+    '\bpublic(?:ly)?\b|\bsocial\b|\btwitter\b|\blinkedin\b|\binstagram\b|\bblog\b|\bwebsite\b|\bfeed\b'
+  )
+  spend_money           = @(
+    '\bspend(?:s|ing)?\b|\bspent\b|\bpurchas(?:e|es|ed|ing)\b|\bbuy(?:s|ing)?\b|\bbought\b|\bpay(?:s|ing)?\b|\bpaid\b|\bsubscrib(?:e|es|ed|ing)\b',
+    '\bmoney\b|\bpurchases?\b|\bpayments?\b|\bcards?\b|\bdollars?\b|\bcosts?\b|\bcharges?\b|\bsubscriptions?\b|\borders?\b|\$'
+  )
+  delete_data           = @(
+    '\bdelet(?:e|es|ed|ing)\b|\bdrop(?:s|ped|ping)?\b|\bdestroy(?:s|ed|ing)?\b|\bwip(?:e|es|ed|ing)\b|\bpurg(?:e|es|ed|ing)\b',
+    '\bdata\b|\bdatabases?\b|\bdbs?\b|\bfiles?\b|\brecords?\b|\btables?\b|\brows?\b|\bfolders?\b'
+  )
+  deploy                = @('\bdeploy(?:s|ed|ing|ment|ments)?\b|\brollouts?\b|\broll out\b|\bship(?:s|ped|ping)? to prod(?:uction)?\b')
+  publish_release       = @(
+    '\bpublish(?:es|ed|ing)?\b|\breleas(?:e|es|ed|ing)\b|\bcut(?:s|ting)?\b|\btag(?:s|ged|ging)?\b',
+    '\breleases?\b|\bversions?\b|\bpackages?\b|\bnpm\b|\btags?\b|\bchangelog\b'
+  )
+}
+
+# --- outcome-shaped floor vocabulary --------------------------------------------------------
+# Kind -> a regex of OUTCOME words. Applied to FLOOR (ask) rules ONLY. This is the mirror image
+# of the blanket-grant asymmetry below, pointing the other way.
+#
+# WHY THE TABLE ABOVE IS NOT ENOUGH. It is VERB+OBJECT shaped, because that is how a PERMISSION
+# is written -- "Emailing myself", "Creating and publishing a pull request". A PROHIBITION is not
+# written that way. Asked to name what he wants stopped, a human names the OUTCOME he is afraid
+# of, not the verb that gets there. Shiv's live floor rule is:
+#
+#     Outcome can result in permanent data loss
+#
+# which carries the OBJECT (`data`) and no verb `delete_data` knows, so the rule matched nothing
+# and the blanket YOLO grant in the allow list won by default. Measured on the live gate before
+# this fix, with everything else in this file working exactly as designed:
+#
+#     consent -Action delete_data -Repo focus-planner  ->  consent_ok: true (gate-allowed)
+#
+# The one rule standing between the agent and permanent data loss was inert, and nothing said so.
+# It is the #304 vocabulary wall on the floor side, where the direction of error is dangerous
+# rather than merely annoying.
+#
+# THE DIRECTION OF ERROR IS THE DESIGN, again. A floor rule that matches too eagerly costs one
+# unnecessary question; a floor rule that matches too little costs the data. So this vocabulary
+# is deliberately generous, and it is confined to the ask list -- where generous is the safe
+# direction -- by a per-stage flag rather than by where the lookup happens to sit.
+#
+# It stays anchored to the kind's OBJECT group, so a floor rule about some other permanent thing
+# cannot be dragged into `delete_data` by the word "permanent" alone.
+$script:GateOutcomeKinds = @{
+  delete_data = '\bdata ?loss\b|\blos(?:e|es|ing)\b|\blost\b|\bloss\b|\bunrecoverable\b|\birrecoverable\b|\birreversible\b|\bpermanent(?:ly)?\b|\bcannot be undone\b|\bcan(?:no|'')?t be undone\b|\bcannot be recovered\b|\bcan(?:no|'')?t be recovered\b|\bno backup\b|\bdestructive\b'
+  spend_money = '\bcosts?\b|\bexpensive\b|\bbilled?\b|\bbilling\b|\bcharged?\b|\bnon-?refundable\b|\bout of pocket\b'
+}
+
+# --- blanket grants -------------------------------------------------------------------------
+# A rule that says "stop asking me" rather than naming an action. Applied to ALLOW rules ONLY,
+# because this is grant-shaped language: a floor rule is a prohibition and never phrases itself
+# this way, and letting a blanket phrase widen the floor would turn one careless sentence into a
+# total shutdown. The floor still outranks a blanket grant, because the floor is checked first.
+#
+# Deliberately NOT in this list: 'anything', 'everything', and 'do not gate'. The live gate's
+# fourth rule ends "do not gate it" while covering only PR CREATION -- reading that as a blanket
+# grant is precisely the #297 trap, so the vocabulary is limited to phrases that unambiguously
+# mean "I am switching the gate off", not "this particular thing is fine".
+$script:GateBlanketRe = '(?i)\byolo\b|\bdo ?n[o'']?t ask\b|\bno need to ask\b|\bnever ask\b|\bwithout asking\b|\bjust do\b|\bstop asking\b'
+
+# --- repo scoping ---------------------------------------------------------------------------
+# A repo token is a hyphenated identifier, optionally `owner/name`. English hyphenations that
+# turn up in safety prose are excluded so they do not silently neuter a rule.
+#
+# THE DIRECTION OF ERROR IS THE DESIGN. Repo scope only ever NARROWS an allow rule, and it is
+# applied to allow rules only. So a token wrongly read as a repo name grants LESS (fail closed);
+# a repo name wrongly read as English grants MORE, which is why the stop list is short, holds
+# only unmistakable English, and must not be grown casually.
+#
+# Substring matching is banned outright here, and this is the live trap: `focus-planner` is a
+# PREFIX of `focus-planner-ado-codeapp`, so `rule.Contains($repo)` reports that the YOLO rule for
+# the ADO app authorises merges in the planner repo -- the exact false grant #297 was filed over.
+# Comparison is therefore whole-token equality, case-insensitive.
+$script:GateRepoTokenRe = '(?:[A-Za-z0-9_.]+/)?[A-Za-z0-9_.]+(?:-[A-Za-z0-9_.]+)+'
+$script:GateRepoStopWords = @(
+  'e-mail', 'e-mails', 'follow-up', 'follow-ups', 'read-only', 'sign-in', 'sign-off',
+  'check-in', 'one-off', 'day-to-day', 'up-to-date', 'so-called', 'pull-request',
+  'pull-requests', 'send-to-many', 'all-hands', 'long-running', 'non-trivial',
+  'end-to-end', 'write-up', 'back-and-forth', 'out-of-office', 'opt-in', 'opt-out',
+  'double-check', 'third-party', 'first-party', 'real-time', 'on-call', 'ad-hoc',
+  'force-push', 'auto-merge', 'case-by-case', 'one-to-one', 'well-known', 'up-front'
+)
+
+function Get-GateSectionKey([string]$headingText) {
+  $t = "$headingText".ToLowerInvariant()
+  foreach ($m in $script:GateSectionMatchers) {
+    foreach ($p in $m.Phrases) { if ($t.Contains($p)) { return $m.Key } }
+  }
+  return $null
+}
+
+function Parse-AgentGateText([string]$md) {
+  # Mirrors parseAgentGate() in src/config/agentGate.js: a section runs from its heading to the
+  # next heading of the same-or-shallower depth, the FIRST heading naming a list wins, and only
+  # bullet lines inside it are rules. Tolerant by construction -- CRLF, `*`/`+` bullets, prose
+  # mixed among the bullets, and a file with only one of the two sections all parse without
+  # throwing, because a gate that throws is a gate that stops the run.
+  $normalised = ("$md" -replace "`r`n", "`n") -replace "`r", "`n"
+  $lines = $normalised -split "`n"
+  $out = [ordered]@{ Version = $null; Allow = @(); Ask = @() }
+
+  $v = [regex]::Match($normalised, $script:GateVersionRe)
+  if ($v.Success) { $out.Version = [int]$v.Groups[1].Value }
+
+  $seen = @{}
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    $h = [regex]::Match($lines[$i], $script:GateHeadingRe)
+    if (-not $h.Success) { continue }
+    $key = Get-GateSectionKey $h.Groups[2].Value
+    if (-not $key) { continue }
+    if ($seen.ContainsKey($key)) { continue }
+    $seen[$key] = $true
+    $depth = $h.Groups[1].Value.Length
+    $end = $lines.Count
+    for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+      $n = [regex]::Match($lines[$j], $script:GateHeadingRe)
+      if ($n.Success -and $n.Groups[1].Value.Length -le $depth) { $end = $j; break }
+    }
+    $items = @()
+    for ($j = $i + 1; $j -lt $end; $j++) {
+      $b = [regex]::Match($lines[$j], $script:GateBulletRe)
+      if (-not $b.Success) { continue }
+      $text = $b.Groups[1].Value.Trim()
+      if ($text) { $items += $text }
+    }
+    if ($key -eq 'allow') { $out.Allow = @($items) } else { $out.Ask = @($items) }
+  }
+  return [pscustomobject]$out
+}
+
+function Read-AgentGate([string]$path) {
+  # READ ONLY. A missing, unreadable, blank or unparseable file yields two EMPTY lists, which is
+  # the same thing as "no rule matched" -- so every one of those states degrades to exactly the
+  # pre-#297 behaviour rather than to a special case that could drift away from it. `state` is
+  # reported so a run can tell "the user granted nothing" from "I could not read the grants".
+  $result = [ordered]@{
+    path = "$path"; exists = $false; state = 'absent'
+    version = $null; allow = @(); ask = @(); mtime = $null
+  }
+  if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    return [pscustomobject]$result
+  }
+  $result.exists = $true
+  $text = $null
+  try {
+    # Same explicit UTF-8 decode as the journals, and for the same reason: the default decoder
+    # is host-dependent, so a rule containing an em-dash or a smart quote would match under one
+    # host and not the other. See Read-JournalText.
+    $text = [IO.File]::ReadAllText($path, (New-Object Text.UTF8Encoding($false)))
+    $result.mtime = (Get-Item -LiteralPath $path).LastWriteTimeUtc.ToString('o')
+  }
+  catch {
+    $result.state = 'unreadable'
+    return [pscustomobject]$result
+  }
+  if ([string]::IsNullOrWhiteSpace($text)) { $result.state = 'empty'; return [pscustomobject]$result }
+  $parsed = Parse-AgentGateText $text
+  $result.version = $parsed.Version
+  $result.allow = @($parsed.Allow)
+  $result.ask = @($parsed.Ask)
+  $result.state = if ($result.allow.Count -eq 0 -and $result.ask.Count -eq 0) { 'malformed' } else { 'ok' }
+  return [pscustomobject]$result
+}
+
+function Get-GateRepoTokens([string]$rule) {
+  $out = @()
+  foreach ($m in [regex]::Matches("$rule", $script:GateRepoTokenRe)) {
+    $t = $m.Value.ToLowerInvariant().TrimEnd('.', ',', ')', '-')
+    $bare = ($t -split '/')[-1]
+    if ($bare.Length -lt 6) { continue }              # too short to be a repo name
+    if ($bare -notmatch '[a-z]') { continue }         # digits only, e.g. `1-1`
+    if ($script:GateRepoStopWords -contains $bare) { continue }
+    if ($out -notcontains $bare) { $out += $bare }
+  }
+  # NOT `return , $out`. The comma operator wraps the list in an outer array, the pipeline
+  # unrolls exactly one level, and an EMPTY list therefore arrives at the caller as a single
+  # empty-array element -- `@(...).Count -eq 1`. That reads as "this rule is repo-scoped" for
+  # every rule in the file, so nothing but a blanket grant can ever match. Caught by the
+  # 'Emailing myself' fixture. Plain `return` lets the caller's `@(...)` normalise correctly.
+  return $out
+}
+
+function Test-GateRuleCovers([string]$rule, [string]$action, [bool]$applyRepoScope, [string]$repo, [bool]$allowOutcomePhrasing) {
+  if ([string]::IsNullOrWhiteSpace($rule)) { return $false }
+  if ([string]::IsNullOrWhiteSpace($action)) { return $false }
+  $text = "$rule"
+
+  if ($applyRepoScope) {
+    $tokens = @(Get-GateRepoTokens $text)
+    if ($tokens.Count -gt 0) {
+      # A repo-scoped rule with no -Repo to check against cannot be shown to apply, so it does
+      # not. This is the fail-closed half of scoping and it is what stops a bare
+      # `consent -Action merge_pr` from collecting another repo's YOLO grant.
+      if ([string]::IsNullOrWhiteSpace($repo)) { return $false }
+      $want = "$repo".Trim().ToLowerInvariant()
+      $wantBare = ($want -split '/')[-1]
+      $hit = $false
+      foreach ($t in $tokens) { if ($t -eq $want -or $t -eq $wantBare) { $hit = $true; break } }
+      if (-not $hit) { return $false }
+    }
+    if ($text -match $script:GateBlanketRe) { return $true }
+  }
+
+  $groups = $script:GateActionKinds[$action]
+  if (-not $groups) { return $false }
+  $allGroups = $true
+  foreach ($g in $groups) { if ($text -notmatch $g) { $allGroups = $false; break } }
+  if ($allGroups) { return $true }
+
+  # Outcome-shaped phrasing -- FLOOR ONLY, and gated on the caller's per-stage flag rather than
+  # on anything about the rule text, so an allow rule can never reach it however it is worded.
+  # See the .GATE header note on $script:GateOutcomeKinds: a prohibition names the outcome, not
+  # the verb, and "permanent data loss" is the live proof.
+  if ($allowOutcomePhrasing) {
+    $outcome = $script:GateOutcomeKinds[$action]
+    if ($outcome -and $text -match $outcome) {
+      # Still anchored to the kind's OBJECT group (the last one), so "permanent" on its own
+      # cannot drag an unrelated prohibition into this action kind. Single-group kinds have no
+      # object to anchor to, so the outcome word alone carries them.
+      if ($groups.Count -lt 2 -or $text -match $groups[-1]) { return $true }
+    }
+  }
+  return $false
+}
+
+function Get-GateVerdict($gate, [string]$action, [string]$repo) {
+  # ORDER IS THE GUARANTEE, so it is written down as DATA rather than as the order two `foreach`
+  # blocks happen to appear in. The floor stage is first and the first stage to match returns, so
+  # a floor rule outranks an allow rule AND -- because the caller consults this before reading the
+  # journal -- outranks a human `approve` too. Reversing these two entries silently converts the
+  # safety floor into a suggestion, which is the worst available bug in this file;
+  # mutcheck-agent-gate.ps1 asserts it with a mutation that reverses exactly this list.
+  #
+  # `Scoped` is per stage and is $false for the floor on purpose: repo scope NARROWS a rule, and
+  # narrowing a prohibition removes protection. `Outcome` is the mirror: it is $true for the floor
+  # only, because a prohibition names the OUTCOME it fears rather than a verb, and matching too
+  # eagerly on the floor costs a question while matching too little costs the data. Both live here
+  # as stage DATA so each asymmetry has one precise mutation target.
+  $stages = @(
+    [pscustomobject]@{ Decision = 'floor'; List = 'ask'; Rules = @($gate.ask); Scoped = $false; Outcome = $true },
+    [pscustomobject]@{ Decision = 'allow'; List = 'allow'; Rules = @($gate.allow); Scoped = $true; Outcome = $false }
+  )
+
+  $verdict = [ordered]@{ decision = 'none'; list = $null; rule = $null }
+  if ([string]::IsNullOrWhiteSpace($action)) { return [pscustomobject]$verdict }
+
+  foreach ($stage in $stages) {
+    foreach ($rule in @($stage.Rules)) {
+      if (Test-GateRuleCovers $rule $action ([bool]$stage.Scoped) $repo ([bool]$stage.Outcome)) {
+        $verdict.decision = $stage.Decision
+        $verdict.list = $stage.List
+        $verdict.rule = $rule
+        return [pscustomobject]$verdict
+      }
+    }
+  }
+  return [pscustomobject]$verdict
+}
+
 
 # --- The turn terminator ---------------------------------------------------------------
 # An HTML comment (invisible when the journal renders) that marks the exact END of this
@@ -1001,6 +1494,31 @@ function Get-UrgencyRank([string]$icon) {
   return 4
 }
 
+function Get-TodaySectionText {
+  # The substantive rows of the board's `## Today` section, trimmed, one per line.
+  #
+  # This is the SUBJECT of an exhaustion declaration (#310). "I examined everything Today holds
+  # and there is nothing workable left this run" is a claim ABOUT this text, so when the text
+  # changes the claim is about a board that no longer exists and must be made again. That is the
+  # part of the release signal the agent does NOT author: the human revokes it by editing Today.
+  #
+  # Blank lines are dropped and every line is trimmed, so whitespace churn from an editor or from
+  # OneDrive cannot invalidate a live declaration -- only an actual add/remove/edit of a row can.
+  if (-not (Test-Path $PlannerBoard)) { return '' }
+  $lines = (Read-JournalText $PlannerBoard) -split "`r?`n"
+  $out = New-Object Text.StringBuilder
+  $inToday = $false
+  foreach ($line in $lines) {
+    if ($line -match '^##\s') { $inToday = [bool]($line -match '^##\s*Today\b'); continue }
+    if (-not $inToday) { continue }
+    $t = $line.Trim()
+    if ($t.Length -gt 0) { [void]$out.AppendLine($t) }
+  }
+  return $out.ToString()
+}
+
+function Get-TodaySectionHash { return (Get-Sha256 (Get-TodaySectionText)) }
+
 function Get-SectionRank([string]$section) {
   switch ($section) { 'today' { 0 } 'deferred' { 1 } default { 2 } }
 }
@@ -1049,52 +1567,130 @@ function Test-Workable($row) {
 }
 
 # Does this Today row still deserve the run's EXCLUSIVE attention -- i.e. does it hold the
-# Today->Deferred gate shut? (#223 rule 1, corrected 2026-08-31.)
+# Today->Deferred gate shut? (#223 rule 1, corrected 2026-08-31, corrected again in #310.)
 #
-# "Today before Deferred" was implemented as "a Deferred row is ineligible while any Today row is
-# WORKABLE", and workability is a property of the board, not of the run. That is fine while Today
-# rows finish. It starves the board permanently as soon as one does not.
+# THIS HAS BEEN WRONG TWICE, IN OPPOSITE DIRECTIONS. Both readings are recorded here because
+# the fix is only defensible as the thing that satisfies BOTH at once.
 #
-# Measured live 2026-08-31: the entire `## Today` section is a SINGLE standing meta-task (#448,
-# "plannermd + Overnight Agent development - triage fix and ship GitHub issues"). It is unbounded
-# by construction -- there is always another issue to triage -- so it is `in-progress` and workable
-# on every run, forever. It therefore held **121 Deferred rows** (10 of them workable) shut on
-# every run, and three runs in one night each re-worked #448 and touched nothing else. Nothing
-# errored; the gate did exactly what it said, which is why this reads clean and starves silently.
-# It is the same shape as the awaiting_reply ratchet fixed in #282, one level up: there the agent
-# wrote the text the gate read, here the agent cannot ever finish the row the gate waits on.
+# WRONG READING 1 -- "a Deferred row is ineligible while any Today row is WORKABLE".
+# Workability is a property of the BOARD, not of the run, so the gate can only open if a Today
+# row stops being workable. Measured live 2026-08-31: the entire `## Today` section was a SINGLE
+# standing meta-task (#448, "triage fix and ship GitHub issues"), unbounded by construction, so
+# `in-progress` and workable forever. It held 121 Deferred rows shut on every run; `scan`
+# reported 1 eligible row out of 238, and three runs in one night each re-worked that one task
+# and touched nothing else. A gate keyed to workability NEVER OPENS for an unbounded row.
 #
-# The user's own spec for #223 carries the missing half: *"only if its blocked on all today items,
-# can it move to deferred items -- ASSUMING THAT THERE IS STILL PLENTY OF TIME before the next
-# scheduled automation kicks in."* That clause is about the RUN's remaining budget, not about the
-# row's status, and it is the part that was never implemented.
+# WRONG READING 2 -- "a Today row is SERVED for N minutes after the agent last wrote a turn".
+# That is what replaced reading 1, and it made the release signal `last_turn_at`, which `mark`
+# stamps to now on EVERY turn. So the agent opened its own gate BY TYPING: one `mark`, with any
+# content, at any completion state, released the whole Deferred backlog for the rest of the run.
+# Measured live 2026-08-31 22:20 PT: after one turn on #463 -- still `in-progress`, its queue
+# nowhere near drained, four criticals unworked -- eligibility went 1 -> 13 and the run moved to
+# a Deferred-adjacent task at order 181. Note the field is named `last_turn_at`, not
+# `last_completed_at`: the data needed to answer "is this done" was never collected at all.
 #
-# So the gate now asks "has this run's Today work already been done?" instead of "could this row
-# ever be worked?". A Today row is SERVED once the agent has written a turn to it recently
-# (`mark` stamps `last_turn_at`; `seed` and `resnapshot` deliberately do NOT, because a bootstrap
-# is not work), and a served row steps out of the gate -- while staying fully eligible itself at
-# its board rank, so Today is still worked FIRST. Only the exclusivity lapses, never the ordering.
+# That is the third instance of ONE failure class in this repo: THE AGENT AUTHORS THE SIGNAL
+# THAT ITS OWN GATE READS. (#227/#272: the agent's unmarked prose read back as the human's
+# consent. The `awaiting_reply` ratchet: the agent's closing courtesy line parked its own task,
+# 186 of 238 rows parked, 0 eligible. This.) Each reader was correct in isolation and wrong
+# because the thing it read was agent-authored.
 #
-# Every branch fails CLOSED (returns $true = keep gating), so anything unknown preserves the old
-# Today-first behaviour rather than opening the backlog by accident.
-function Test-HoldsTodayGate($row, [int]$servedMinutes) {
-  if (-not (Test-Workable $row)) { return $false }
-  # A live reply is the highest-value work there is, so it reclaims exclusivity immediately --
-  # this is what stops a "served" stamp from muting a Today task the user just replied to.
-  if ($row.reopened) { return $true }
-  # Short-circuit for READABILITY, not for behaviour: with $servedMinutes <= 0 the fall-through
-  # below already returns $true for every reachable input (elapsed >= 0 is always true, and both
-  # the null and unparseable branches return $true anyway). Verified exhaustively, so removing
-  # this line is an EQUIVALENT mutant and no arm can kill it -- recorded here so a future reader
-  # does not mistake that for a coverage gap and invent a test that asserts nothing. Arm K still
-  # proves the flag end-to-end, because a build without the parameter cannot answer at all.
-  if ($servedMinutes -le 0) { return $true }        # feature off: Today always gates (pre-fix)
-  if (-not $row.last_turn_at) { return $true }      # never worked: definitely not served
-  $t = [datetime]::MinValue
+# THE CORRECTION: release on EXHAUSTION, and make exhaustion a deliberate DECLARATION rather
+# than a side effect of writing. A Today row stops being exclusive when, and only when:
+#
+#   not_workable         it is terminal (`done`/`skip`) or genuinely waiting on the user
+#                        (`proposed`, `blocked`, `awaiting_reply`, snoozed). Unchanged.
+#   declared_exhausted   the run has affirmatively declared -- in its own separate call, naming
+#                        what it examined -- that this row has nothing workable left THIS RUN,
+#                        and that declaration is still standing (see Test-ExhaustionClaim).
+#   stale_turn_backstop  nobody has written a turn here for -TodayGateBackstopHours, so the run
+#                        is wedged and the backlog is released rather than frozen behind it.
+#
+# Writing a turn is now NECESSARY-BUT-NOT-SUFFICIENT for the declaration and, on its own, moves
+# the gate in the SAFE direction only: it resets the backstop, i.e. typing makes the gate hold
+# LONGER, never shorter. That inversion is the whole of the #310 fix.
+#
+# Every branch that is unsure HOLDS, so an unknown or unparseable input preserves Today-first
+# exclusivity rather than opening the backlog by accident.
+function Get-TodayGateVerdict($row, [string]$todayHash) {
+  if (-not (Test-Workable $row)) {
+    return [pscustomobject]@{ holds = $false; reason = 'not_workable' }
+  }
+  # A live reply is the highest-value work there is, AND it invalidates any standing claim that
+  # this row was examined -- the thing that was examined has just changed underneath the claim.
+  if ($row.reopened) {
+    return [pscustomobject]@{ holds = $true; reason = 'holding:reopened' }
+  }
+  if ($script:TodayGateIsStrict) {
+    return [pscustomobject]@{ holds = $true; reason = 'holding:strict' }
+  }
+
+  $claim = Test-ExhaustionClaim $row.exhaustion $row $todayHash
+  if ($claim -eq 'declared_exhausted') {
+    return [pscustomobject]@{ holds = $false; reason = 'declared_exhausted' }
+  }
+
+  # The wedged-run backstop. Deliberately keyed to STALENESS, never to recency: it fires because
+  # the agent has NOT written here, and any turn written resets it. There is therefore no way to
+  # reach this release by writing, which is precisely what #310 was.
+  if ($TodayGateBackstopHours -gt 0 -and $row.last_turn_at) {
+    $t = [datetime]::MinValue
+    if ([datetime]::TryParse(
+        "$($row.last_turn_at)", [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::None, [ref]$t)) {
+      if (((Get-Date) - $t).TotalHours -ge $TodayGateBackstopHours) {
+        return [pscustomobject]@{ holds = $false; reason = 'stale_turn_backstop' }
+      }
+    }
+  }
+
+  return [pscustomobject]@{ holds = $true; reason = $claim }
+}
+
+# Is a stored exhaustion declaration still standing? Returns `declared_exhausted` when it is,
+# and otherwise a `holding:<why-not>` string that goes straight into `today_release_reason`, so
+# a run's selection can be audited afterwards without re-deriving anything.
+#
+# The four ways a declaration stops standing are the reason this is a claim rather than a latch,
+# and three of the four are invalidated by state the AGENT DOES NOT AUTHOR:
+#
+#   exhaustion_expired        older than -ExhaustionTtlMinutes. A declaration is scoped to the
+#                             run that made it; the next run must look again.
+#   exhaustion_stale_board    the `## Today` section of planner.md has changed since the claim
+#                             was made. "I examined everything Today holds" is a statement ABOUT
+#                             that text, so the HUMAN revokes it simply by editing the board.
+#   exhaustion_superseded     a turn was written to this row AFTER the declaration. Writing more
+#                             work on a row you just called exhausted refutes the claim, by the
+#                             run's own record. This is what makes the declaration awkward to
+#                             make falsely: claim it early and every later turn cancels it.
+#   declaration_named_nothing the claim names no examined item, so it asserts nothing.
+function Test-ExhaustionClaim($ex, $row, [string]$todayHash) {
+  if ($ExhaustionTtlMinutes -le 0) { return 'holding:declaration_disabled' }
+  if (-not $ex) { return 'holding:no_declaration' }
+  $examined = @()
+  if ($ex.PSObject.Properties['examined'] -and $ex.examined) { $examined = @($ex.examined) }
+  if ($examined.Count -eq 0) { return 'holding:declaration_named_nothing' }
+
+  $at = [datetime]::MinValue
   if (-not [datetime]::TryParse(
-      "$($row.last_turn_at)", [Globalization.CultureInfo]::InvariantCulture,
-      [Globalization.DateTimeStyles]::None, [ref]$t)) { return $true }   # unparseable -> gate
-  return (((Get-Date) - $t).TotalMinutes -ge $servedMinutes)
+      "$($ex.at)", [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::None, [ref]$at)) { return 'holding:declaration_unparseable' }
+  if (((Get-Date) - $at).TotalMinutes -ge $ExhaustionTtlMinutes) { return 'holding:exhaustion_expired' }
+
+  if ("$($ex.today_hash)" -ne $todayHash) { return 'holding:exhaustion_stale_board' }
+
+  if ($row.last_turn_at) {
+    $lt = [datetime]::MinValue
+    if ([datetime]::TryParse(
+        "$($row.last_turn_at)", [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::None, [ref]$lt)) {
+      # Strictly AFTER. Both stamps have one-second resolution, so the declaration made in the
+      # same second as the turn that preceded it must not refute itself.
+      if ($lt -gt $at) { return 'holding:exhaustion_superseded' }
+    }
+  }
+
+  return 'declared_exhausted'
 }
 
 function Cmd-Scan {
@@ -1174,9 +1770,12 @@ function Cmd-Scan {
       has_open_ask   = [bool]$facts.HasOpenAsk
       awaiting_reply = [bool]($facts.HasAgentBlock -and $facts.HasBlockingAsk -and -not $facts.HasTrailingUser)
       # When the agent last wrote a TURN here (`mark` stamps it; `seed` and `resnapshot`
-      # deliberately do not). Input to the Today->Deferred gate: a Today row served this
-      # recently no longer holds the whole backlog shut. Absent -> never worked -> keeps gating.
+      # deliberately do not). Since #310 this is NOT a release signal: it feeds the wedged-run
+      # backstop, where a FRESH stamp holds the gate and only a STALE one can release it.
       last_turn_at   = if ($st -and $st.PSObject.Properties['last_turn_at']) { "$($st.last_turn_at)" } else { $null }
+      # The standing exhaustion declaration for this row, verbatim (#310), so a human can audit
+      # what the run claimed to have examined and against which board it claimed it.
+      exhaustion     = if ($st -and $st.PSObject.Properties['today_exhausted']) { $st.today_exhausted } else { $null }
     }
   }
 
@@ -1200,9 +1799,15 @@ function Cmd-Scan {
 
   # The gate is computed from the WHOLE set, so it cannot be evaluated per-row in the loop above.
   # NOTE this counts rows that still hold the gate SHUT, which is narrower than "workable": a
-  # Today row the agent has already served this cycle stays workable (and eligible, at its own
-  # board rank) but stops blocking Deferred. See Test-HoldsTodayGate for why.
-  $todayHolding = @($rows | Where-Object { $_.section -eq 'today' -and (Test-HoldsTodayGate $_ $TodayServedMinutes) }).Count
+  # Today row the run has DECLARED EXHAUSTED stays workable (and eligible, at its own board rank)
+  # but stops blocking Deferred. See Get-TodayGateVerdict for why, and for the two ways this has
+  # been got wrong already.
+  $todayHash = Get-TodaySectionHash
+  $verdicts = @{}
+  foreach ($r in $rows) {
+    if ($r.section -eq 'today') { $verdicts["$($r.id)"] = (Get-TodayGateVerdict $r $todayHash) }
+  }
+  $todayHolding = @($verdicts.Values | Where-Object { $_.holds }).Count
   $order = 0
   foreach ($r in $rows) {
     $order++
@@ -1212,12 +1817,18 @@ function Cmd-Scan {
       elseif ($r.section -eq 'today') { $eligible = (Test-Workable $r) }
       elseif ($todayHolding -eq 0) { $eligible = (Test-Workable $r) }
     }
+    $v = $verdicts["$($r.id)"]
     Add-Member -InputObject $r -NotePropertyName 'order' -NotePropertyValue $order -Force
     Add-Member -InputObject $r -NotePropertyName 'eligible' -NotePropertyValue $eligible -Force
     # Auditable: which Today rows are actually holding the backlog shut this run (#223 is
     # explicit that selection must be data, not the agent's judgement).
     Add-Member -InputObject $r -NotePropertyName 'holds_today_gate' `
-      -NotePropertyValue ([bool]($r.section -eq 'today' -and (Test-HoldsTodayGate $r $TodayServedMinutes))) -Force
+      -NotePropertyValue ([bool]($null -ne $v -and $v.holds)) -Force
+    # ...and WHY, in one word, for every Today row (#310). A run that skipped to Deferred can be
+    # audited afterwards without re-deriving anything: either it says `declared_exhausted` and
+    # the declaration is right there in `exhaustion`, or it does not and the skip was a bug.
+    Add-Member -InputObject $r -NotePropertyName 'today_release_reason' `
+      -NotePropertyValue $(if ($null -ne $v) { "$($v.reason)" } else { $null }) -Force
   }
 
   $rows | ConvertTo-Json -Depth 4
@@ -1230,6 +1841,21 @@ function Cmd-Get {
   $st | ConvertTo-Json -Depth 6
 }
 
+function Cmd-Gate {
+  # The gate as this script actually reads it — so a human can diff what they wrote against what
+  # the agent parsed, rather than trusting that the two agree. Rule text is verbatim.
+  $g = Read-AgentGate $GatePath
+  [pscustomobject]@{
+    path    = "$($g.path)"
+    exists  = [bool]$g.exists
+    state   = "$($g.state)"
+    version = $g.version
+    allow   = @($g.allow)
+    ask     = @($g.ask)
+    mtime   = $g.mtime
+  } | ConvertTo-Json -Depth 4
+}
+
 function Cmd-Consent {
   # #227: the consent channel, read fail-CLOSED. Ask this BEFORE any irreversible action.
   #
@@ -1237,17 +1863,92 @@ function Cmd-Consent {
   # journal as it stands RIGHT NOW, not of the stored state. Reading it from state would let a
   # stale `status: approved` -- which the agent itself wrote -- stand in for the user's word,
   # which is the same self-authored-consent hole one level up.
+  #
+  # #297 adds the SECOND channel in front of it: the agent gate. It is consulted ONLY when the
+  # caller names an `-Action`, and when it does not decide, control falls through to the journal
+  # reader below completely untouched. With `-Action` omitted this function does not even open
+  # the gate file, so the pre-#297 output is preserved byte for byte.
   if (-not $Id) { throw 'consent requires -Id' }
   $path = Join-Path $JournalDir "task-$Id.md"
+
+  $gate = $null
+  $verdict = $null
+  if ($Action) {
+    $gate = Read-AgentGate $GatePath
+    $verdict = Get-GateVerdict $gate $Action $Repo
+    if ($verdict.decision -ne 'none') {
+      # A gate decision short-circuits the journal read, in BOTH directions and on purpose:
+      #   floor -> deny, and it must outrank a human `approve` sitting in the journal;
+      #   allow -> a STANDING permission, which by definition does not need re-granting per task
+      #            (that is the whole reason the file exists).
+      #
+      # THE ALLOW DIRECTION HAS A CONSEQUENCE WORTH STATING, because it is surprising and it is
+      # NOT a bug. Measured: with an allow rule covering merges in a repo, a journal carrying the
+      # human's own `<!-- from: me -->` "do not merge that, hold off" still returns
+      # `consent_ok: true, reason: gate-allowed` -- the journal is never opened. That is correct:
+      # a standing permission any stray sentence could cancel would not be standing, and the
+      # revocation channel is the file the user owns (move the rule to the floor, or delete it),
+      # which is verified -- adding 'Merging any pull request' to the floor flips the same fixture
+      # to `gate-floor-blocks`.
+      #
+      # What it means for the CALLER is that this command answers "am I authorised?", never
+      # "should I?". SKILL.md carries that distinction: a fresh human "don't" in the journal stops
+      # the run regardless of what this returns. Do not widen this function to also read refusals
+      # -- a refusal vocabulary is the #301 problem (which affirmatives count), and it belongs in
+      # its own change with its own mutation arms, not smuggled in here.
+      # `trailing_has_user` is reported on this path too (#302), even though the verdict did not
+      # consult it and MUST NOT. Surfacing it is the whole point: without it, a caller holding a
+      # `gate-allowed` cannot tell "nobody has said anything" from "he replied 'don't' ninety
+      # seconds ago", because the journal was never opened. Filing an issue saying a wrapper
+      # should refuse, while the data the wrapper needs is absent from the output, is prose with
+      # a tracking number.
+      #
+      # It deliberately uses HasTrailingUser -- the FAIL-OPEN reader -- not the fail-closed
+      # consent reader, and the asymmetry is the same one documented at the top of this file
+      # read in the other direction. Here a false "there is a human message" costs one pause; a
+      # false "there is none" costs acting over a refusal. So unmarked prose counts.
+      #
+      # WHICH MEANS IT SAYS "SOMEONE MAY BE WAITING", NOT "HE REFUSED", and a consumer must not
+      # collapse the two. Reading it as a refusal would let stray unattributed text silently
+      # revoke a permission he actually granted -- the mirror image of the bug this file exists
+      # to prevent. Measured bounds on how wrong that can go, pinned by arm H: the agent's own
+      # unstamped turn and a sibling skill's turn both read FALSE (the managed-heading rule from
+      # #272 and the sibling-reopen fix respectively), so machine text cannot impersonate him.
+      # The residual true-but-not-him case is genuinely unattributed prose.
+      #
+      # Reporting only. Nothing in this function weighs it, and nothing should: deciding what a
+      # human MEANT by the text below the turn is the vocabulary problem in #301, and it needs
+      # its own reader with its own mutation arms rather than an `if` bolted on here.
+      $trailingHasUser = $false
+      if (Test-Path $path) { $trailingHasUser = [bool](Get-JournalFacts $path).HasTrailingUser }
+      [pscustomobject]@{
+        id                = $Id
+        consent_ok        = ($verdict.decision -eq 'allow')
+        reason            = $(if ($verdict.decision -eq 'floor') { 'gate-floor-blocks' } else { 'gate-allowed' })
+        action            = "$Action"
+        repo              = $(if ($Repo) { "$Repo" } else { $null })
+        gate_state        = "$($gate.state)"
+        gate_list         = "$($verdict.list)"
+        gate_rule         = "$($verdict.rule)"
+        gate_path         = "$($gate.path)"
+        trailing_has_user = $trailingHasUser
+        path              = $path
+      } | ConvertTo-Json -Depth 4
+      return
+    }
+  }
+
   if (-not (Test-Path $path)) {
-    [pscustomobject]@{
+    $out = [ordered]@{
       id = $Id; consent_ok = $false; reason = 'journal-not-found'; path = $path
-    } | ConvertTo-Json -Depth 4
+    }
+    if ($Action) { Add-GateFallthrough $out $gate }
+    [pscustomobject]$out | ConvertTo-Json -Depth 4
     return
   }
   $facts = Get-JournalFacts $path
   $c = $facts.Consent
-  [pscustomobject]@{
+  $out = [ordered]@{
     id                       = $facts.Id
     consent_ok               = [bool]$c.consent_ok
     reason                   = "$($c.reason)"
@@ -1259,7 +1960,21 @@ function Cmd-Consent {
     # visible at the call site instead of being a footnote in a comment.
     trailing_has_user        = [bool]$facts.HasTrailingUser
     path                     = $facts.Path
-  } | ConvertTo-Json -Depth 4
+  }
+  if ($Action) { Add-GateFallthrough $out $gate }
+  [pscustomobject]$out | ConvertTo-Json -Depth 4
+}
+
+function Add-GateFallthrough($out, $gate) {
+  # The gate was consulted and declined to decide. Say so explicitly rather than staying silent:
+  # `gate_rule: null` next to a real `gate_state` is the difference between "no rule covers this"
+  # and "I never looked", and only the first is a verdict a human can audit.
+  $out['action'] = "$Action"
+  $out['repo'] = $(if ($Repo) { "$Repo" } else { $null })
+  $out['gate_state'] = $(if ($gate) { "$($gate.state)" } else { 'not-consulted' })
+  $out['gate_list'] = $null
+  $out['gate_rule'] = $null
+  $out['gate_path'] = $(if ($gate) { "$($gate.path)" } else { $null })
 }
 
 function Add-TurnTerminator([string]$path) {
@@ -1342,10 +2057,85 @@ function Cmd-Resnapshot {
   } | ConvertTo-Json -Depth 4
 }
 
+function Set-ExhaustionDeclaration {
+  # The exhaustion DECLARATION (#310) -- the affirmative statement that releases the
+  # Today->Deferred gate. Everything about the shape of this call is chosen to make the
+  # declaration cheap to make honestly and awkward to make falsely.
+  #
+  #   IT IS ITS OWN CALL. `-Exhausted` cannot be combined with `-Status`/`-Version`/`-PlanId` or
+  #   with any timer flag. That is the structural half of the #310 fix: the act that RELEASES
+  #   the gate can no longer ride along on the act that WRITES a turn, so writing can never
+  #   release by accident. A caller that wants both must ask for both, in that order, on purpose.
+  #
+  #   IT MUST NAME WHAT IT EXAMINED. An empty declaration is rejected outright. "Exhausted" is a
+  #   claim about a set; a claim that names no set asserts nothing and would be a shrug with the
+  #   authority of a decision.
+  #
+  #   IT MUST FOLLOW REAL WORK. There must be a `last_turn_at` within -ExhaustionTtlMinutes: you
+  #   may not declare a row exhausted that this run never opened. Note the direction -- writing a
+  #   turn is now NECESSARY BUT NOT SUFFICIENT, which is the exact inversion of the #310 defect,
+  #   where writing alone was sufficient.
+  #
+  #   IT DOES NOT TOUCH THE JOURNAL. No turn terminator, no re-snapshot, no `last_turn_at`. A
+  #   declaration is a statement about work already recorded, so it must not be able to absorb a
+  #   user reply that arrived in the meantime, and it must not refute itself (see
+  #   Test-ExhaustionClaim's `exhaustion_superseded`).
+  #
+  # It records the hash of the `## Today` section it was made against, which is what lets the
+  # HUMAN revoke it -- silently and without knowing this file exists -- just by editing the board.
+  $st = Read-State $Id
+  if ($ExhaustionClear) {
+    if (-not $st) { throw "task $Id has no state to clear" }
+    Set-Member $st 'today_exhausted' $null
+    $st.updated = Now-Iso
+    Write-State $st
+    return ($st | ConvertTo-Json -Depth 6)
+  }
+
+  if ($Status -or $Version -gt 0 -or $PlanId -or $Poll -or $PollDone -or $PollClear -or
+      $Recheck -or $RecheckKind -or $RecheckDone -or $RecheckClear) {
+    throw "-Exhausted is a separate declaration and cannot be combined with -Status/-Version/-PlanId or any timer flag: write the turn first, then declare exhaustion in its own call"
+  }
+  if ($ExhaustionTtlMinutes -le 0) {
+    throw "-Exhausted is disabled (-ExhaustionTtlMinutes is $ExhaustionTtlMinutes)"
+  }
+
+  $examined = @(($Exhausted -split '[,;\r\n\t ]+') | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 })
+  if ($examined.Count -eq 0) {
+    throw "-Exhausted must name what was examined (e.g. -Exhausted 'gh:197,gh:179,gh:139'); an unnamed declaration asserts nothing"
+  }
+
+  # ONE guard, deliberately: "there is no turn", "the turn is unreadable" and "the turn is too
+  # old to be this run's" are the same refusal -- you may not declare a row this run has not
+  # worked -- and splitting them into separate throws would leave a mutant that deletes only the
+  # first one still failing on the second, i.e. a hole no test can see.
+  $lt = [datetime]::MinValue
+  $hasTurn = [bool]($st -and $st.PSObject.Properties['last_turn_at'] -and $st.last_turn_at -and
+    [datetime]::TryParse(
+      "$($st.last_turn_at)", [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::None, [ref]$lt))
+  if (-not $hasTurn -or ((Get-Date) - $lt).TotalMinutes -ge $ExhaustionTtlMinutes) {
+    throw "task $Id has no turn recorded in the last $ExhaustionTtlMinutes minute(s): work the row and mark it this run before declaring it exhausted"
+  }
+
+  Set-Member $st 'today_exhausted' ([pscustomobject]@{
+      at         = Now-Iso
+      examined   = $examined
+      note       = "$ExhaustedNote"
+      today_hash = Get-TodaySectionHash
+    })
+  $st.updated = Now-Iso
+  Write-State $st
+  return ($st | ConvertTo-Json -Depth 6)
+}
+
 function Cmd-Mark {
   if (-not $Id) { throw 'mark requires -Id' }
   $path = Join-Path $JournalDir "task-$Id.md"
   if (-not (Test-Path $path)) { throw "no journal at $path" }
+  # The exhaustion declaration (#310) branches out BEFORE anything below touches the journal or
+  # stamps a turn -- see Set-ExhaustionDeclaration for why it must be a separate act.
+  if ($Exhausted -or $ExhaustionClear) { return (Set-ExhaustionDeclaration) }
   # Stamp the turn boundary BEFORE snapshotting, so the hash recorded below describes the
   # file as it now stands on disk. Doing it after would record a hash the file no longer has
   # and every subsequent scan would report a phantom change.
@@ -1415,9 +2205,11 @@ function Cmd-Mark {
   # that carries -Status/-Version/-PlanId, or a bare `mark`, is the documented "I just wrote my
   # turn" call and does count.
   #
-  # Absent means "never worked", which makes Test-HoldsTodayGate keep gating -- so existing
-  # state files written before this field existed roll forward into the SAFE pre-fix behaviour
-  # and only release once the agent genuinely writes a turn.
+  # SINCE #310 THIS FIELD NO LONGER RELEASES THE GATE. It is a precondition for declaring
+  # exhaustion (you may not declare a row you never opened), it refutes a declaration made
+  # before it (`exhaustion_superseded`), and it resets the wedged-run backstop. All three
+  # directions make a fresh stamp hold the gate LONGER, so writing can no longer open it.
+  # Absent still means "never worked", which keeps the row gating.
   $timerOnly = ($PollDone -or $PollClear -or $RecheckDone -or $RecheckClear -or ($RecheckKind -and -not $Recheck))
   $isTurn = -not ($timerOnly -and -not $Status -and $Version -le 0 -and -not $PlanId)
   if ($isTurn) { Set-Member $st 'last_turn_at' (Now-Iso) }
@@ -1432,4 +2224,5 @@ switch ($Command) {
   'mark' { Cmd-Mark }
   'resnapshot' { Cmd-Resnapshot }
   'consent' { Cmd-Consent }
+  'gate' { Cmd-Gate }
 }

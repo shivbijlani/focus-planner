@@ -31,6 +31,21 @@ export function parseSnoozeUntil(rawLine, headers = null) {
   return match ? match[1] : null
 }
 
+/**
+ * Read ONLY the legacy `<!-- snooze:DATE -->` trailer off a raw row, ignoring
+ * any `Wake` column.
+ *
+ * `parseSnoozeUntil` answers "when does this row wake?" and prefers the column.
+ * A writer migrating a row to the `Wake` schema needs the different question
+ * "is there a legacy date here that I am about to destroy?", because the tail of
+ * the line does not survive a `cells`/`formatRow` round-trip. Splitting the two
+ * reads is what lets #307's migration be explicit instead of accidental.
+ */
+export function parseLegacySnoozeComment(rawLine) {
+  const match = String(rawLine || '').match(SNOOZE_COMMENT_RE)
+  return match ? match[1] : null
+}
+
 export function normalizeDateOnly(value) {
   const s = String(value || '').trim()
   const match = s.match(/^(\d{4})-(\d{2})-(\d{2})$/)

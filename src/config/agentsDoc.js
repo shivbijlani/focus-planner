@@ -8,7 +8,7 @@
  * used to refresh stale copies that were scaffolded by an older app build.
  */
 
-export const AGENTS_DOC_VERSION = 2
+export const AGENTS_DOC_VERSION = 3
 
 export const AGENTS_FILE = 'AGENTS.md'
 
@@ -83,12 +83,19 @@ lists, tables, blockquotes (\`>\`), horizontal rules (\`---\`), and task items
 ## How to append to a journal (rules for agents)
 
 1. **Always append at the bottom.** Never rewrite or reorder earlier entries.
-2. If today already has a \`## YYYY-MM-DD\` header and the last author was the
-   user, just add your lines under it (they merge into the same bubble).
-3. If today has no header yet, add a new \`\\n\\n## YYYY-MM-DD\\n\\n\` block.
-4. If you are an automation/agent, precede your block with
+2. **Stamp who is speaking.** When you write *as the user*, put \`<!-- from: me -->\`
+   on the line directly above the text. Readers use this marker to tell a human's
+   words from a machine's, and unmarked text is treated as unattributed. Leave
+   existing unmarked entries alone — never migrate history.
+3. If today has no header yet, add a new
+   \`\\n\\n## YYYY-MM-DD\\n\\n<!-- from: me -->\\n\` block.
+4. If today already has a \`## YYYY-MM-DD\` header **and** a \`<!-- from: me -->\`
+   marker still owns the bottom of the file, just add your lines under it (they
+   merge into the same bubble). Any \`## \` heading ends a marker's ownership, so
+   after one you must stamp again.
+5. If you are an automation/agent, precede your block with
    \`<!-- from: your-name -->\` so it renders as a distinct 🤖 message.
-5. Put any machine-readable metadata inside an HTML comment so it stays hidden.
+6. Put any machine-readable metadata inside an HTML comment so it stays hidden.
 `
 
 // Extract the "v<N>" version embedded in an existing AGENTS.md so we only
