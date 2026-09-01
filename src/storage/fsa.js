@@ -1,6 +1,7 @@
 import { get, set, del } from 'idb-keyval'
 import { PLAN_FILE, COMPLETED_FILE } from '../config/branding.js'
 import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
+import { scaffoldAgentGate } from '../config/agentGate.js'
 
 // Historical key — kept under this name so existing folder handles continue
 // to load after the Planner rebrand. The name is internal-only.
@@ -202,6 +203,10 @@ export async function scaffoldIfEmpty(dirHandle) {
     await writeFile(dirHandle, COMPLETED_FILE, SCAFFOLD_COMPLETED)
   }
   await scaffoldAgentsDoc(
+    (p) => readFile(dirHandle, p),
+    (p, c) => writeFile(dirHandle, p, c),
+  )
+  await scaffoldAgentGate(
     (p) => readFile(dirHandle, p),
     (p, c) => writeFile(dirHandle, p, c),
   )

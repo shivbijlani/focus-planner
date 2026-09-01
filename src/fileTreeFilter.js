@@ -5,7 +5,7 @@
  *
  * Kept (per source root):
  *  - The curated core files, by basename: planner.md, planner-completed.md,
- *    AGENTS.md (see CARED_ABOUT_FILES).
+ *    AGENTS.md, agent-gate.md (see CARED_ABOUT_FILES).
  *  - The `journal/` directory and its per-task journals (task-<n>.md).
  *
  * Dropped:
@@ -22,8 +22,14 @@
  */
 import { PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { AGENTS_FILE } from './config/agentsDoc.js'
+import { AGENT_GATE_FILE } from './config/agentGate.js'
 
-export const CARED_ABOUT_FILES = new Set([PLAN_FILE, COMPLETED_FILE, AGENTS_FILE])
+export const CARED_ABOUT_FILES = new Set([
+  PLAN_FILE,
+  COMPLETED_FILE,
+  AGENTS_FILE,
+  AGENT_GATE_FILE, // #288 — sibling of the plan files, edited in the app
+])
 
 const JOURNAL_DIR = 'journal'
 const JOURNAL_FILE_RE = /^task-\d+\.md$/i

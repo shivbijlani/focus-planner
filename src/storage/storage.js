@@ -10,6 +10,7 @@ import {
 } from '../../packages/folder-sync/src/index.js'
 import { IndexedDbProvider } from './indexeddb-provider.js'
 import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
+import { scaffoldAgentGate } from '../config/agentGate.js'
 import { getActiveTombstoneIds } from '../idTombstones.js'
 import { recordDiagnosticEvent } from './diagnostics.js'
 
@@ -357,9 +358,14 @@ export async function scaffold() {
 // Ensure the active source has an up-to-date AGENTS.md describing the data
 // schema, so the folder is self-documenting for any external agent. Version-
 // gated and idempotent: writes only when the file is missing or outdated.
+// Also seeds the agent gate (#288) if the folder has none — that one is only
+// ever created, never refreshed, because the user owns its contents.
 export async function ensureAgentsDoc() {
   if (!_provider) return
-  await scaffoldAgentsDoc((p) => _provider.read(p), (p, c) => _provider.write(p, c))
+  const read = (p) => _provider.read(p)
+  const write = (p, c) => _provider.write(p, c)
+  await scaffoldAgentsDoc(read, write)
+  await scaffoldAgentGate(read, write)
 }
 
 export async function read(path) {

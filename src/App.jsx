@@ -65,7 +65,9 @@ import {
 } from './storage/taskSettings.js'
 import { gatherDiagnostics, formatDiagnosticsReport } from './storage/diagnostics.js'
 import { AI_SETTINGS_FILE } from './config/aiSettings.js'
+import { AGENT_GATE_FILE } from './config/agentGate.js'
 import AgentSettingsEditor from './AgentSettingsEditor.jsx'
+import AgentGateEditor from './AgentGateEditor.jsx'
 import {
   attachmentFolderPath,
   formatAttachmentFolderMarkdown,
@@ -7148,6 +7150,7 @@ function App() {
   const isFocusPlan = !isCombinedFocusPlan && localPath === PLAN_FILE
   const isCompletedPlan = !isCombinedFocusPlan && localPath === COMPLETED_FILE
   const isAgentSettingsFile = selSourceId !== COMBINED_ID && localPath === AI_SETTINGS_FILE
+  const isAgentGateFile = selSourceId !== COMBINED_ID && localPath === AGENT_GATE_FILE
   const isJournal = !isCombinedFocusPlan && !isFocusPlan && !isCompletedPlan &&
     /(^|\/)journal\//.test(localPath) && localPath.endsWith('.md')
 
@@ -7248,7 +7251,7 @@ function App() {
             </div>
           )}
         </div>
-        {mission && !isJournal && !isFocusPlan && !isAgentSettingsFile && (
+        {mission && !isJournal && !isFocusPlan && !isAgentSettingsFile && !isAgentGateFile && (
           <div className="mission-banner" role="note" aria-label="Mission statement">
             <span className="mission-banner-icon" aria-hidden="true">✦</span>
             <p className="mission-banner-text">{mission}</p>
@@ -7256,6 +7259,14 @@ function App() {
         )}
         {isAgentSettingsFile ? (
           <AgentSettingsEditor
+            activeSourceId={getActiveSourceId()}
+            onSaved={(text) => {
+              setContent(text)
+              loadFiles().catch(() => {})
+            }}
+          />
+        ) : isAgentGateFile ? (
+          <AgentGateEditor
             activeSourceId={getActiveSourceId()}
             onSaved={(text) => {
               setContent(text)

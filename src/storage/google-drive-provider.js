@@ -5,6 +5,7 @@
  */
 import { PLAN_FILE, COMPLETED_FILE, CLOUD_FOLDER_NAME } from '../config/branding.js'
 import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
+import { scaffoldAgentGate } from '../config/agentGate.js'
 
 const DRIVE_API = 'https://www.googleapis.com/drive/v3'
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3'
@@ -79,6 +80,7 @@ export class GoogleDriveProvider {
       if (!existing) await this.write(name, content)
     }
     await scaffoldAgentsDoc((p) => this.read(p), (p, c) => this.write(p, c))
+    await scaffoldAgentGate((p) => this.read(p), (p, c) => this.write(p, c))
   }
 
   async read(path, { signal } = {}) {
