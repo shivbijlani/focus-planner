@@ -54,3 +54,22 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+
+  # The browser slot table (GH #180) lives in ONE place -- `## Browser slots` in
+  # user-settings.md -- and is read by ONE parser. Before this job existed, the
+  # only thing standing between that table and three scripts quietly re-encoding
+  # a stale copy of it was a nightly check that runs on one laptop. A guard that
+  # only runs where the drift happens cannot stop the drift from merging.
+  #
+  # The parser and its mutation check are pure text work, so they run on the
+  # Linux runner. The arms that need a real browser or the live settings file
+  # (F and G) self-skip; the parser arms (A-D), the mutants (M1-M4) and the
+  # check-browser-slots integration (E) all run here.
+  browser-slots:
+    name: Browser slot table
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (one table, one reader)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-browser-slots.ps1

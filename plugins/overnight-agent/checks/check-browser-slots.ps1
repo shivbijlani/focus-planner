@@ -17,28 +17,89 @@
   Read-only. Never kills or launches a browser -- the MCP slots are the user's
   windows and may hold in-flight state.
 
+  THE SLOT LIST IS NOT IN THIS FILE (GH #180).
+  It is read from the `## Browser slots` table in `user-settings.md`, which
+  declares itself the source of truth. Before this change the list was hardcoded
+  here -- all six ports, including the three (9222/9226/9227) retired when the
+  table moved -- and this file contained zero occurrences of "user-settings".
+  A preflight that reports on slots nobody uses trains the reader to ignore it.
+
+  NOTE ON RESOLUTION: this script is installed into the FLAT OA home
+  (`%LOCALAPPDATA%\overnight-agent\`), which has no `user-settings.md` and no
+  `SKILL.md` beside it. So the settings file is resolved by search order, never
+  assumed to be a sibling. Assuming a sibling is what made PR #303 green and
+  still broken (#305).
+
 .PARAMETER Json
   Emit a JSON array instead of the human-readable table.
+
+.PARAMETER SettingsPath
+  Override the resolved `user-settings.md`. Used by the mutation check so it can
+  point at a fixture table without touching live state.
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File check-browser-slots.ps1
   powershell -NoProfile -ExecutionPolicy Bypass -File check-browser-slots.ps1 -Json
+
+.NOTES
+  Exit codes: 0 = every running slot is healthy. 2 = attention needed -- either a
+  zombie slot, or the slot table could not be read (in which case the preflight
+  cannot answer its own question, which is emphatically not "ok").
 #>
 [CmdletBinding()]
 param(
-    [switch]$Json
+    [switch]$Json,
+    [string]$SettingsPath
 )
 
 $ErrorActionPreference = 'Stop'
 
-$slots = @(
-    @{ Port = 9222; Mcp = 'chrome-cdp-1';       Shortcut = 'MCP Chrome 1 (CDP 9222)' }
-    @{ Port = 9225; Mcp = 'edge-cdp-1';         Shortcut = 'MCP Edge 1 (CDP 9225)' }
-    @{ Port = 9226; Mcp = 'edge-cdp-2';         Shortcut = 'MCP Edge 2 (CDP 9226)' }
-    @{ Port = 9227; Mcp = 'edge-cdp-3';         Shortcut = 'MCP Edge 3 (CDP 9227)' }
-    @{ Port = 9228; Mcp = 'edge-cdp-bijlanis';  Shortcut = 'MCP Edge bijlanis (CDP 9228)' }
-    @{ Port = 9229; Mcp = 'edge-cdp-kiley';     Shortcut = 'MCP Edge kiley (CDP 9229)' }
-)
+# --- locate the ONE slot-table parser --------------------------------------
+# This is a SEARCH for the shared parser, not a second copy of it. The two
+# install locations hold different file sets, so the library cannot be assumed
+# to sit next to whichever consumer is running.
+$slotLib = $null
+foreach ($cand in @(
+        ([IO.Path]::Combine($PSScriptRoot, 'browser-slot-table.ps1'))
+        ([IO.Path]::Combine($PSScriptRoot, '..', '..', 'checks', 'browser-slot-table.ps1'))
+        ([IO.Path]::Combine($PSScriptRoot, '..', 'checks', 'browser-slot-table.ps1'))
+        $(if ($env:LOCALAPPDATA) { [IO.Path]::Combine($env:LOCALAPPDATA, 'overnight-agent', 'browser-slot-table.ps1') })
+        $(if ($env:USERPROFILE) { [IO.Path]::Combine($env:USERPROFILE, '.copilot', 'installed-plugins', 'focus-planner', 'overnight-agent', 'checks', 'browser-slot-table.ps1') })
+    )) {
+    if ($cand -and (Test-Path -LiteralPath $cand -PathType Leaf)) {
+        $slotLib = (Resolve-Path -LiteralPath $cand).Path
+        break
+    }
+}
+if (-not $slotLib) {
+    Write-Host 'check-browser-slots: browser-slot-table.ps1 not found next to this script, in the OA home, or in installed-plugins.' -ForegroundColor Red
+    Write-Host 'Cannot determine which slots exist, and will not guess. Run sync-checks.ps1 -Restore -Confirm.' -ForegroundColor Red
+    exit 2
+}
+. $slotLib
+
+# --- read the table --------------------------------------------------------
+# No baked-in fallback on purpose: a preflight that silently reverts to a stale
+# list is how the drift this fixes stayed invisible.
+try {
+    $slots = @(Get-BrowserSlotTable -SettingsPath $SettingsPath)
+}
+catch {
+    $msg = $_.Exception.Message
+    if ($Json) {
+        @([pscustomobject]@{
+                port = $null; mcp = $null; state = 'error'; healthy = $false
+                detail = "slot table unreadable: $msg"
+            }) | ConvertTo-Json -Depth 4
+    }
+    else {
+        Write-Host 'check-browser-slots: could not read the browser slot table.' -ForegroundColor Red
+        Write-Host "  $msg" -ForegroundColor Red
+        Write-Host '  The slot list lives in user-settings.md under "## Browser slots".' -ForegroundColor DarkGray
+    }
+    exit 2
+}
+
 
 function Get-InstalledBuild {
     param([string]$Product)
@@ -95,14 +156,16 @@ $results = foreach ($slot in $slots) {
     $port = $slot.Port
     $row = [ordered]@{
         port           = $port
-        mcp            = $slot.Mcp
+        mcp            = $slot.Slot
+        account        = $slot.Account
+        profile_dir    = $slot.ProfileDir
         state          = 'down'
         reported       = $null
         installed      = $null
         loaded_dll     = $null
         pages          = $null
         healthy        = $false
-        detail         = 'no CDP listener - open the desktop shortcut if this slot is needed'
+        detail         = "no CDP listener - launch on demand with ensure-mcp-browsers.ps1 -Slot $($slot.Slot), or open '$($slot.Shortcut)'"
         shortcut       = $slot.Shortcut
     }
 
@@ -153,7 +216,8 @@ if ($Json) {
     exit 0
 }
 
-$results | Format-Table port, mcp, state, reported, installed, pages, healthy -AutoSize
+$results | Format-Table port, mcp, account, state, reported, installed, pages, healthy -AutoSize
+Write-Host ("slot table: {0}" -f $slots[0].Source) -ForegroundColor DarkGray
 
 $bad = @($results | Where-Object { $_.state -eq 'up' -and -not $_.healthy })
 if ($bad.Count -gt 0) {

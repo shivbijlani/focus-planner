@@ -902,19 +902,30 @@ present the reversible draft and stop short of the committing action.
     one per dedicated profile. They **never launch a browser themselves**; they only attach to one the user
     already opened (via its desktop shortcut) and signed into. This guarantees no MCP ever opens an
     un-signed-in profile. If a cdp slot returns `ECONNREFUSED`, that profile's browser simply isn't running
-    yet — open its shortcut (below), don't fall back to anything else. Slot → port → profile map:
+    yet — **launch it on demand** (below), don't fall back to anything else.
 
-| MCP slot | Port | Desktop shortcut | Account |
-| --- | --- | --- | --- |
-| chrome-cdp-1 | 9222 | MCP Chrome 1 (CDP 9222) | primary account + password manager |
-| edge-cdp-1 | 9225 | MCP Edge 1 (CDP 9225) | primary account + password manager |
-| edge-cdp-2 | 9226 | MCP Edge 2 (CDP 9226) | primary account + password manager (clone of edge1) |
-| edge-cdp-3 | 9227 | MCP Edge 3 (CDP 9227) | primary account + password manager (clone of edge1) |
-| edge-cdp-alt | 9228 | MCP Edge alt (CDP 9228) | alternate account |
+    **The slot → port → profile map lives in `user-settings.md` under `## Browser slots`.** It is not
+    restated here: this table was stale for a week (it advertised `chrome-cdp-1`, which had been in
+    `disabledMcpServers` since 2026-08-21, plus two retired clones, and omitted `edge-cdp-kiley`
+    entirely), which is exactly why #180 moved it to one home. Read the live list with:
 
-  *(One Chrome + three Edge primary-account slots (edge1 + clones edge2/edge3) + an alternate-account slot. edge2/edge3 were cloned
-  from edge1's profile, so they carry the password-manager vault + saved logins but — per ABE — start
-  logged out; sign each in once via its shortcut. New MCP slots load after a Copilot CLI restart.)*
+    ```
+    powershell -NoProfile -File <oa-home>\check-browser-slots.ps1 -Json     # state of each slot
+    powershell -NoProfile -File <skill>\ensure-mcp-browsers.ps1 -List       # the table itself
+    ```
+
+    **Launch on demand (this is the important part).** `ECONNREFUSED` on a slot is **not** a task
+    failure — that profile's browser is simply closed:
+
+    ```
+    powershell -NoProfile -File <skill>\ensure-mcp-browsers.ps1 -Slot <slot|account|profile|port>
+    ```
+
+    It resolves the **profile** from the table, launches only that slot, waits for the port, and exits
+    non-zero only if the launch genuinely failed. An unmatched name is an **error**, never a near-miss:
+    never substitute a different account's profile for the requested one — wrong-identity actions are
+    worse than failing. Only if the launch fails, or the profile needs an interactive sign-in you
+    cannot perform, set `blocked` with that one ask.
 
   **⚠️ Each profile must be signed in ONCE by the user — clones do NOT inherit a live login.** Chrome/Edge
     127+ use **App-Bound Encryption (ABE)**: every session cookie is bound to the original install + path, so
@@ -922,9 +933,9 @@ present the reversible draft and stop short of the committing action.
     can't be decrypted — this is a deliberate anti-cookie-theft feature, not a bug). What the clone *does*
     carry: the **password-manager vault + saved passwords**. So the one-time setup is cheap.
 
-**Opening a signed-in browser:** double-click the matching `MCP <Browser> N (CDP <port>)` desktop
-    shortcut. Each shortcut launches its **dedicated, persistent** profile
-    (`%LOCALAPPDATA%\playwright-mcp\chrome1 | edge1 | edge-alt`) on its debug port, so one click =
+**Opening a signed-in browser by hand:** double-click the desktop shortcut named in the slot table's
+    **Desktop shortcut** column. Each shortcut launches its **dedicated, persistent** profile under
+    `%LOCALAPPDATA%\playwright-mcp\` on its debug port, so one click =
     browser **and** MCP-attachable. **One-time per profile**, the **user** must sign in inside that window
     (unlock your password manager → it autofills the saved login → sign into your account/any needed site).
     Cookies written *inside* the clone are ABE-bound to that dir, so they **persist** for every later attach.
