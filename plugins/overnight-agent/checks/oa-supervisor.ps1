@@ -217,7 +217,12 @@ console.log(JSON.stringify({ run: r ?? null }));
     if ($parsed.error) { throw "workflow '$WorkflowName' not found in $Db" }
     $newest = $parsed.run
   } finally {
-    Remove-Item $probeFile, $tmp -Force -ErrorAction SilentlyContinue
+    # sqlite creates -wal/-shm sidecars next to the copy; deleting only the .db leaks
+    # two files per invocation, which at a 15-minute cadence is ~200 files a day.
+    Remove-Item $probeFile -Force -ErrorAction SilentlyContinue
+    foreach ($suffix in @('', '-wal', '-shm')) {
+      Remove-Item ($tmp + $suffix) -Force -ErrorAction SilentlyContinue
+    }
   }
 } catch {
   $err = @{ state = 'SUPERVISOR-FAILED'; error = "$_" }

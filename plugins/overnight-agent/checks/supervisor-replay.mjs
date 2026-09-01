@@ -92,7 +92,10 @@ console.log(verdict
   : 'VERDICT: review thresholds - see the numbers above.');
 
 // Close before unlinking: an open sqlite handle makes the delete EPERM on Windows,
-// which would leak a copy of the app database into TEMP on every run.
+// which would leak a copy of the app database into TEMP on every run. The -wal/-shm
+// sidecars sqlite creates alongside the copy must go too, or two files leak per run.
 db.close();
-try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
+for (const suffix of ['', '-wal', '-shm']) {
+  try { fs.rmSync(tmp + suffix, { force: true }); } catch { /* best effort */ }
+}
 process.exit(verdict ? 0 : 1);
