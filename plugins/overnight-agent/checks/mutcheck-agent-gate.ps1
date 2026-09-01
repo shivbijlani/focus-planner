@@ -143,6 +143,15 @@ $HumanWaiting = "## 2026-09-01`n`n<!-- from: me -->`ndo not send that, hold off"
 # this must still register: the cost of missing a human here is acting over a refusal.
 $UnmarkedWaiting = "## 2026-09-01`n`ndo not send that, hold off"
 
+# The two MACHINE shapes, which must read FALSE. These bound how wrong a consumer can be if it
+# mistakes the field for "he refused" (the #302 hazard): the agent's own unstamped turn is
+# excluded by the managed-heading rule (#272) and a sibling skill's turn by the sibling-reopen
+# fix, so neither can make stray machine text look like a human changing his mind. Measured, then
+# pinned here -- the residual true-but-not-him case is genuinely unattributed prose, and that is
+# exactly why the consumer must read `true` as "stop and read", never as "he said no".
+$AgentTurnNoMarker = "## Overnight Agent`n`n**Status:** In progress`nI have shipped the thing and it is fine."
+$SiblingTurn = "## 2026-09-01`n`n<!-- from: dance-church -->`nAdded your class."
+
 function New-Journal {
   param([string]$Dir, [string]$Id, [string[]]$Entries)
   $sb = [System.Text.StringBuilder]::new()
@@ -270,6 +279,15 @@ $arms = [ordered]@{
       # cost of being wrong here is one pause, not a merge over a refusal.
       @{ args = @('-Action', 'send_email_self'); entries = @($UnmarkedWaiting)
         expect = @{ consent_ok = $true; reason = 'gate-allowed'; trailing_has_user = $true }
+      }
+      # Fail-open does NOT mean "any text at all". The two identifiable MACHINE shapes read false,
+      # which is what bounds the #302 consumer's blast radius: neither the agent's own unstamped
+      # turn nor a sibling skill's can masquerade as a human changing his mind.
+      @{ args = @('-Action', 'send_email_self'); entries = @($AgentTurnNoMarker)
+        expect = @{ consent_ok = $true; reason = 'gate-allowed'; trailing_has_user = $false }
+      }
+      @{ args = @('-Action', 'send_email_self'); entries = @($SiblingTurn)
+        expect = @{ consent_ok = $true; reason = 'gate-allowed'; trailing_has_user = $false }
       }
     )
   }

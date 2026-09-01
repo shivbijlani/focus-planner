@@ -1658,6 +1658,14 @@ function Cmd-Consent {
       # read in the other direction. Here a false "there is a human message" costs one pause; a
       # false "there is none" costs acting over a refusal. So unmarked prose counts.
       #
+      # WHICH MEANS IT SAYS "SOMEONE MAY BE WAITING", NOT "HE REFUSED", and a consumer must not
+      # collapse the two. Reading it as a refusal would let stray unattributed text silently
+      # revoke a permission he actually granted -- the mirror image of the bug this file exists
+      # to prevent. Measured bounds on how wrong that can go, pinned by arm H: the agent's own
+      # unstamped turn and a sibling skill's turn both read FALSE (the managed-heading rule from
+      # #272 and the sibling-reopen fix respectively), so machine text cannot impersonate him.
+      # The residual true-but-not-him case is genuinely unattributed prose.
+      #
       # Reporting only. Nothing in this function weighs it, and nothing should: deciding what a
       # human MEANT by the text below the turn is the vocabulary problem in #301, and it needs
       # its own reader with its own mutation arms rather than an `if` bolted on here.

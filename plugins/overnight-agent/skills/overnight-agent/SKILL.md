@@ -497,11 +497,19 @@ It prints `{ path, exists, state, version, allow[], ask[], mtime }`, with every 
   journal carrying Shiv's own `<!-- from: me -->` *"do not merge that, hold off"* still returns
   `consent_ok: true, reason: gate-allowed`. That is correct — a standing permission any stray
   sentence could cancel would not be standing — but it means **the gate is not where you find out he
-  changed his mind.** So every gate verdict also reports **`trailing_has_user`**: `true` means
-  somebody has written below your last turn and you have not answered them. **If it is `true`, stop
-  and answer him before you act, whatever the verdict said** — then tell him the rule is in his allow
-  list and that moving it to the floor (or deleting it) is what makes it stop. Never quote
-  `gate-allowed` back at a person who just said no.
+  changed his mind.** So every gate verdict also reports **`trailing_has_user`**.
+- ⛔ **`trailing_has_user: true` means "stop and read", never "he refused".** Those look alike and
+  are not. The field is deliberately fail-**open**, so unattributed prose sets it too: it tells you
+  *someone may be waiting*, not what they said. Treating it as a refusal would let stray text
+  silently revoke a permission he actually granted — the same bug in a mirror, and just as wrong.
+  So: **pause, read the message, answer him, and let him decide.** Do not infer a decision from the
+  flag, and never quote `gate-allowed` back at a person who just said no. If he does want it to
+  stop being automatic, the answer is his file — move the rule to the floor, or delete it.
+- ✅ **What it will *not* fire on** (measured, and pinned by `mutcheck-agent-gate.ps1` arm H): your
+  own turn appended without its provenance marker, and a sibling skill's turn. Both read `false`,
+  so machine text cannot masquerade as him changing his mind. The residual `true`-but-not-him case
+  is genuinely unattributed prose — which is precisely why the rule above is *read it*, not *obey
+  it*.
 - ⚠️ **You never write this file.** Not to tidy it, not to add a rule you think he meant, not to record
   that you read it. Its whole value is that anything in it must have come from him — the same problem
   #227 has with journal prose, solved by making the file one-way. If a rule is missing, **ask him to add
@@ -933,8 +941,9 @@ See PHASE 0.
   2. Only then does a matching **Do not gate these** rule authorize you, and the verdict names the
      verbatim rule (`gate_rule`) that did it — quote it when you record the action. A `gate-allowed`
      verdict **does not read the journal at all**, so it cannot tell you he has just changed his mind:
-     check **`trailing_has_user`** on the verdict, and if it is `true`, stop and answer him first
-     regardless of what the verdict said (see PHASE 0).
+     check **`trailing_has_user`**, and if it is `true`, **stop and read** before acting. It means
+     someone may be waiting, *not* that he refused — pause and answer, never infer a decision from
+     the flag (see PHASE 0).
   A missing or unparseable gate grants nothing and removes nothing; you are simply back to the journal
   reading above. **You never write `agent-gate.md`** — that one-way property is the only reason its
   contents can be trusted without an attribution marker. Asserted by `mutcheck-agent-gate.ps1`, whose
