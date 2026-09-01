@@ -105,58 +105,76 @@ $ErrorActionPreference = 'Stop'
 # This is a SEARCH for the shared parser, not a second copy of it. The two
 # install locations hold different file sets, so the library cannot be assumed
 # to sit next to whichever consumer is running.
+#
+# Skipped entirely under -SlotSpec: that switch supplies the slots directly, so
+# the parser is never called, and requiring it would make an explicit override
+# depend on machinery it does not use. (It also made the mutation check
+# unrunnable, because a mutant copy lives in a temp dir with no library beside
+# it -- the script exited 2 before emitting any JSON, and every arm read back an
+# empty verdict, control included.)
 $slotLib = $null
-foreach ($cand in @(
-        ([IO.Path]::Combine($PSScriptRoot, 'browser-slot-table.ps1'))
-        ([IO.Path]::Combine($PSScriptRoot, '..', '..', 'checks', 'browser-slot-table.ps1'))
-        ([IO.Path]::Combine($PSScriptRoot, '..', 'checks', 'browser-slot-table.ps1'))
-        $(if ($env:LOCALAPPDATA) { [IO.Path]::Combine($env:LOCALAPPDATA, 'overnight-agent', 'browser-slot-table.ps1') })
-        $(if ($env:USERPROFILE) { [IO.Path]::Combine($env:USERPROFILE, '.copilot', 'installed-plugins', 'focus-planner', 'overnight-agent', 'checks', 'browser-slot-table.ps1') })
-    )) {
-    if ($cand -and (Test-Path -LiteralPath $cand -PathType Leaf)) {
-        $slotLib = (Resolve-Path -LiteralPath $cand).Path
-        break
+if (-not $SlotSpec) {
+    foreach ($cand in @(
+            ([IO.Path]::Combine($PSScriptRoot, 'browser-slot-table.ps1'))
+            ([IO.Path]::Combine($PSScriptRoot, '..', '..', 'checks', 'browser-slot-table.ps1'))
+            ([IO.Path]::Combine($PSScriptRoot, '..', 'checks', 'browser-slot-table.ps1'))
+            $(if ($env:LOCALAPPDATA) { [IO.Path]::Combine($env:LOCALAPPDATA, 'overnight-agent', 'browser-slot-table.ps1') })
+            $(if ($env:USERPROFILE) { [IO.Path]::Combine($env:USERPROFILE, '.copilot', 'installed-plugins', 'focus-planner', 'overnight-agent', 'checks', 'browser-slot-table.ps1') })
+        )) {
+        if ($cand -and (Test-Path -LiteralPath $cand -PathType Leaf)) {
+            $slotLib = (Resolve-Path -LiteralPath $cand).Path
+            break
+        }
     }
+    if (-not $slotLib) {
+        Write-Host 'check-browser-slots: browser-slot-table.ps1 not found next to this script, in the OA home, or in installed-plugins.' -ForegroundColor Red
+        Write-Host 'Cannot determine which slots exist, and will not guess. Run sync-checks.ps1 -Restore -Confirm.' -ForegroundColor Red
+        exit 2
+    }
+    . $slotLib
 }
-if (-not $slotLib) {
-    Write-Host 'check-browser-slots: browser-slot-table.ps1 not found next to this script, in the OA home, or in installed-plugins.' -ForegroundColor Red
-    Write-Host 'Cannot determine which slots exist, and will not guess. Run sync-checks.ps1 -Restore -Confirm.' -ForegroundColor Red
-    exit 2
-}
-. $slotLib
 
 # --- read the table --------------------------------------------------------
 # No baked-in fallback on purpose: a preflight that silently reverts to a stale
 # list is how the drift this fixes stayed invisible.
-try {
-    $slots = @(Get-BrowserSlotTable -SettingsPath $SettingsPath)
-}
-catch {
-    $msg = $_.Exception.Message
-    if ($Json) {
-        @([pscustomobject]@{
-                port = $null; mcp = $null; state = 'error'; healthy = $false
-                detail = "slot table unreadable: $msg"
-            }) | ConvertTo-Json -Depth 4
-    }
-    else {
-        Write-Host 'check-browser-slots: could not read the browser slot table.' -ForegroundColor Red
-        Write-Host "  $msg" -ForegroundColor Red
-        Write-Host '  The slot list lives in user-settings.md under "## Browser slots".' -ForegroundColor DarkGray
-    }
-    exit 2
-}
-
-
+#
+# -SlotSpec is the one exception, and it is an EXPLICIT caller override rather
+# than a fallback: it must therefore bypass the settings read entirely. Reading
+# the table first and overriding afterwards looks equivalent and is not -- the
+# catch below exits 2, so a caller that supplied its own slots (the mutation
+# check, pointing at fixture CDP servers) died on an unreadable live settings
+# file it was never going to consult.
 if ($SlotSpec) {
     $slots = @(foreach ($spec in $SlotSpec) {
         $parts = $spec -split ':', 2
         @{
             Port     = [int]$parts[0]
-            Mcp      = if ($parts.Count -gt 1 -and $parts[1]) { $parts[1] } else { "slot-$($parts[0])" }
+            Slot     = if ($parts.Count -gt 1 -and $parts[1]) { $parts[1] } else { "slot-$($parts[0])" }
             Shortcut = "MCP slot (CDP $($parts[0]))"
+            Account  = '(-SlotSpec)'
+            Source   = '-SlotSpec override'
         }
     })
+}
+else {
+    try {
+        $slots = @(Get-BrowserSlotTable -SettingsPath $SettingsPath)
+    }
+    catch {
+        $msg = $_.Exception.Message
+        if ($Json) {
+            @([pscustomobject]@{
+                    port = $null; mcp = $null; state = 'error'; healthy = $false
+                    detail = "slot table unreadable: $msg"
+                }) | ConvertTo-Json -Depth 4
+        }
+        else {
+            Write-Host 'check-browser-slots: could not read the browser slot table.' -ForegroundColor Red
+            Write-Host "  $msg" -ForegroundColor Red
+            Write-Host '  The slot list lives in user-settings.md under "## Browser slots".' -ForegroundColor DarkGray
+        }
+        exit 2
+    }
 }
 
 function Get-InstalledBuild {
