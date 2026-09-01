@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { parseJournalChat, appendJournalMessage, formatCloseOutComment } from './journalChat.js'
+import { parseJournalChat, appendJournalMessage, formatCloseOutComment, FROM_ME } from './journalChat.js'
+import { appendUserReply } from '../packages/telegram-bridge/src/journal.js'
 
 // Simplified excerpt mirroring the real journal/task-254.md structure:
 // title, an undated TODO, a thematic break, an AUTO agent marker, agent
@@ -73,11 +74,13 @@ describe('appendJournalMessage', () => {
     expect(out.trimEnd().endsWith('new note')).toBe(true)
   })
 
-  it('merges into the same bubble when same day and last author is me', () => {
-    const base = '# Task 1: Hi\n\n## 2026-06-13\n\nfirst'
+  it('merges into the same bubble when a from:me marker already owns the tail', () => {
+    const base = '# Task 1: Hi\n\n## 2026-06-13\n\n<!-- from: me -->\nfirst'
     const out = appendJournalMessage(base, 'second', '2026-06-13')
     expect(out).not.toContain('## 2026-06-13\n\nfirst\n\n## 2026-06-13')
     expect(out).toContain('first\nsecond')
+    // Idempotent: merging under a live marker must not stamp a second one.
+    expect(out.match(/<!-- from: me -->/g)).toHaveLength(1)
   })
 
   it('adds a from:me marker when last author was an agent on the same day', () => {
@@ -112,6 +115,61 @@ describe('appendJournalMessage', () => {
     const out = appendJournalMessage(base, 'my reply', '2026-06-15')
     expect(out).toContain('<!-- from: me -->\nmy reply')
     expect(out).not.toMatch(/Here is the plan\.\nmy reply/)
+  })
+})
+
+// The app is the true author of what it appends, so it must say so. An entry
+// with no provenance marker is unattributed, and the overnight agent's consent
+// reader fails closed on unattributed text — which silently discarded every
+// approval typed in the app while the same word sent via Telegram worked.
+// These assert the WRITER stamps; the reader stays strict on purpose.
+describe('appendJournalMessage provenance marker', () => {
+  it('stamps from:me under a freshly opened day heading', () => {
+    const base = '# Task 1: Hi\n\n## 2026-08-31\n\n<!-- from: me -->\nyesterday'
+    const out = appendJournalMessage(base, 'yes', '2026-09-01')
+    expect(out).toContain(`## 2026-09-01\n\n${FROM_ME}\nyes`)
+  })
+
+  it('stamps from:me on the very first entry of an empty journal', () => {
+    const out = appendJournalMessage('# Task 1: Hi', 'approve', '2026-09-01')
+    expect(out).toContain(`## 2026-09-01\n\n${FROM_ME}\napprove`)
+  })
+
+  // A `## ` heading ends the previous marker's ownership, so text appended into
+  // a legacy unmarked bubble would still be unattributed without a fresh stamp.
+  it('stamps from:me when today\'s existing bubble carries no marker', () => {
+    const base = '# Task 1: Hi\n\n## 2026-09-01\n\ntyped before the fix'
+    const out = appendJournalMessage(base, 'yes', '2026-09-01')
+    expect(out).toContain(`${FROM_ME}\nyes`)
+    // Backward compatible: the historical entry is appended to, never rewritten.
+    expect(out).toContain('## 2026-09-01\n\ntyped before the fix')
+  })
+
+  it('stamps from:me again after a non-dated ## heading ends marker ownership', () => {
+    const base = [
+      '# Task 1: Hi',
+      '',
+      '## 2026-09-01',
+      '',
+      '<!-- from: me -->',
+      'go ahead',
+      '',
+      '## Run log',
+      '',
+      '- did the thing',
+    ].join('\n')
+    const out = appendJournalMessage(base, 'yes', '2026-09-01')
+    expect(out).toContain(`${FROM_ME}\nyes`)
+    expect(out.match(/<!-- from: me -->/g)).toHaveLength(2)
+  })
+
+  // Both channels must be indistinguishable to the consent reader: the same
+  // reply typed in the app and folded from Telegram must produce equal bytes.
+  it('emits the byte-identical shape the Telegram bridge produces', () => {
+    const base = '# Task 1: Hi\n\n## 2026-08-31\n\n<!-- from: me -->\nyesterday'
+    const fromApp = appendJournalMessage(base, 'yes', '2026-09-01')
+    const fromBridge = appendUserReply(base, { text: 'yes', date: '2026-09-01' })
+    expect(fromApp).toBe(fromBridge)
   })
 })
 

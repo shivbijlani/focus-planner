@@ -349,23 +349,62 @@ Do the phases **in this order** every time.
 > - **Never work a row with `eligible: false`.** A Deferred row stays ineligible while a
 >   Today row still **holds the gate** — which is what stops a P2 Deferred item eating a run
 >   while a Today item sits untouched.
-> - ⚠️ **"Holds the gate" is narrower than "is workable", and conflating the two starved the
->   whole board (fixed 2026-08-31).** Workability is a property of the *board*, so a gate keyed
->   to it only ever opens if Today rows **finish**. Measured live: the entire `## Today` section
->   was one standing meta-task ("triage and ship GitHub issues") — unbounded by construction, so
->   `in-progress` and workable **forever** — and it therefore held every Deferred row shut on
->   every run. `scan` reported **1 eligible row out of 238**, and three runs in one night each
->   re-worked that same task and touched nothing else. Nothing errored; the gate did exactly
->   what it said, which is why this starves silently. It is the same shape as the
->   `awaiting_reply` ratchet below, one level up: there the agent wrote the text the gate read,
->   here the agent could never finish the row the gate waited on.
->   The missing half is in the original #223 spec — fall through *"assuming that there is still
->   plenty of time before the next scheduled automation kicks in"*, which is about the **run's
->   budget**, not the row's status. So a Today row the agent has **already served this cycle**
->   keeps its rank but stops being exclusive, reported per row as **`holds_today_gate`**.
->   **Ordering is untouched — Today is still worked first; only the monopoly lapses.** A reply
->   (`reopened`) reclaims exclusivity immediately, so "served" can never mute a task you just
->   replied to. Guarded by `mutcheck-today-served.ps1` and arms **I/J/K/L** of
+> - ⚠️ **"Holds the gate" is narrower than "is workable", and this has been got wrong TWICE, in
+>   opposite directions.** Both are recorded because the current rule is only defensible as the
+>   thing that satisfies both at once.
+>   - **Keyed to workability, it never opens.** Measured live 2026-08-31: the entire `## Today`
+>     section was one standing meta-task ("triage and ship GitHub issues") — unbounded by
+>     construction, so `in-progress` and workable **forever** — and it held every Deferred row
+>     shut on every run. `scan` reported **1 eligible row out of 238**, and three runs in one
+>     night each re-worked that same task and touched nothing else.
+>   - **Keyed to recency, it opens when you type.** That was the replacement, and it was worse.
+>     `mark` stamps `last_turn_at` on every turn, so **one turn — any content, at any completion
+>     state — released the whole Deferred backlog for the rest of the run.** Measured live
+>     2026-08-31 22:20 PT: after one turn on #463 (still `in-progress`, its queue nowhere near
+>     drained, four criticals unworked) eligibility went **1 → 13** and the run moved to a
+>     Deferred-adjacent task at order 181. Shiv's rule is the opposite: *"you only go beyond
+>     today once today's work is done and there is nothing more to be done there."*
+>   - It is the same shape as the `awaiting_reply` ratchet below: **you write the text your own
+>     gate reads.** A gate whose release signal you author is not a gate.
+>
+> - ✅ **So the gate now opens on EXHAUSTION, which you must DECLARE.** Nothing you write moves
+>   it. A Today row stops being exclusive only when one of these is true, and `scan` tells you
+>   which, per row, as **`today_release_reason`**:
+>
+>   | reason | meaning |
+>   |---|---|
+>   | `not_workable` | terminal (`done`/`skip`) or waiting on Shiv (`proposed`, `blocked`, `awaiting_reply`, snoozed) |
+>   | `declared_exhausted` | **you declared it** — see below |
+>   | `stale_turn_backstop` | nobody has written a turn here for 6h, so the run is wedged and the backlog is released rather than frozen |
+>   | `holding:…` | it is still exclusive, and the suffix says why your declaration did not stand |
+>
+> - **How to declare exhaustion.** Two calls, in this order, never one:
+>
+>   ```powershell
+>   oa-state.ps1 mark -Id 463 -Status in-progress                       # 1. write your turn
+>   oa-state.ps1 mark -Id 463 -Exhausted 'gh:197,gh:179,gh:139' `       # 2. then declare
+>                             -ExhaustedNote 'all three blocked on review'
+>   ```
+>
+>   `-Exhausted` **must name what you examined** and is rejected if it names nothing. It cannot
+>   be combined with `-Status`/`-Version`/`-PlanId` or any timer flag — releasing the gate must
+>   be a deliberate act, not a passenger on a turn. And you cannot declare a row this run has not
+>   worked. **Only declare when it is true**: for a queue-draining task like "triage and ship
+>   GitHub issues", exhausted means *the queue has no workable item left this run* — not "I did
+>   one and I'm bored". If four criticals are still unworked, you are not exhausted.
+>
+> - **Your declaration is not a latch. Four things cancel it, and you author none of them:**
+>   it expires after ~one run (`holding:exhaustion_expired`); Shiv editing the `## Today` section
+>   revokes it (`holding:exhaustion_stale_board`); **writing another turn to that row refutes it**
+>   (`holding:exhaustion_superseded`); and a reply reclaims exclusivity outright
+>   (`holding:reopened`). If you declare and then keep working the row, you have cancelled your
+>   own release — which is the point.
+>
+> - **Ordering is untouched — Today is still worked FIRST; only the monopoly lapses.** A declared
+>   row keeps its rank and stays `eligible`, so you never abandon your own top-priority task.
+>   `-TodayGateStrict` (or the legacy `-TodayServedMinutes 0`) is the one-flag rollback to the
+>   old always-gates behaviour. Guarded by `mutcheck-today-served.ps1` (12 arms, and
+>   `-Matrix` proves each is killed by exactly one mutant) and arms **I/J/K/L/M** of
 >   `mutcheck-priority-order.ps1`.
 > - **`awaiting_reply: true` means the agent spoke last and its newest turn still asks you
 >   something it actually needs** — the same waiting state `proposed` encodes, reached from
@@ -499,6 +538,70 @@ pointer link. Measured on the live file: **924 KB → 73 KB (~237K → ~19K toke
 - **Read `agent-lore.md` on demand, never at run start.** Grep it for the heading you need; loading it
   eagerly re-creates the exact problem this step exists to remove.
 - Add `-WhatIf` to preview. A failed split must never abort the run.
+
+**Fourth, read the agent gate (GH #297).** `agent-gate.md` sits in the planner folder and holds the
+user's **standing** permissions — the ones that are true across every task, so he does not have to
+re-grant them in a journal every night. Run this fourth, every run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\oa-state.ps1" gate
+```
+
+It prints `{ path, exists, state, version, allow[], ask[], mtime }`, with every rule **verbatim**.
+
+- ⛔ **The floor list (`ask`) wins over everything.** If a rule in **Always ask (safety floor)** covers
+  what you are about to do, you stop and ask — no matter what the allow list says, and **no matter what
+  the journal says**, including an explicit human `approve`. That is the entire point of a floor: it is
+  the user saying *"not even if I said yes in a hurry."* Nothing overrides it. There is no exception,
+  and you do not get to weigh it against anything.
+- ✅ **The allow list (`allow`) is a standing grant.** A rule there authorises that action without a
+  per-task approval, and `consent` will say so and name the rule that did it.
+- ⚠️ **A `gate-allowed` verdict short-circuits the journal — so it can tell you that you are
+  *authorised*, not that you *should*.** Measured: with a gate rule allowing merges in a repo, a
+  journal carrying Shiv's own `<!-- from: me -->` *"do not merge that, hold off"* still returns
+  `consent_ok: true, reason: gate-allowed`. That is correct — a standing permission any stray
+  sentence could cancel would not be standing — but it means **the gate is not where you find out he
+  changed his mind.** So every gate verdict also reports **`trailing_has_user`**.
+- ⛔ **`trailing_has_user: true` means "stop and read", never "he refused".** Those look alike and
+  are not. The field is deliberately fail-**open**, so unattributed prose sets it too: it tells you
+  *someone may be waiting*, not what they said. Treating it as a refusal would let stray text
+  silently revoke a permission he actually granted — the same bug in a mirror, and just as wrong.
+  So: **pause, read the message, answer him, and let him decide.** Do not infer a decision from the
+  flag, and never quote `gate-allowed` back at a person who just said no. If he does want it to
+  stop being automatic, the answer is his file — move the rule to the floor, or delete it.
+- ✅ **What it will *not* fire on** (measured, and pinned by `mutcheck-agent-gate.ps1` arm H): your
+  own turn appended without its provenance marker, and a sibling skill's turn. Both read `false`,
+  so machine text cannot masquerade as him changing his mind. The residual `true`-but-not-him case
+  is genuinely unattributed prose — which is precisely why the rule above is *read it*, not *obey
+  it*.
+- ⚠️ **You never write this file.** Not to tidy it, not to add a rule you think he meant, not to record
+  that you read it. Its whole value is that anything in it must have come from him — the same problem
+  #227 has with journal prose, solved by making the file one-way. If a rule is missing, **ask him to add
+  it**; do not add it yourself and do not act as though it were there.
+
+**Do not eyeball the gate and decide for yourself.** Ask it, per action, and let it answer:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\oa-state.ps1" `
+  consent -Id <ID> -Action <kind> -Repo <repo>
+```
+
+`-Action` is a **fixed enum** (`merge_pr`, `open_pr`, `push_main`, `delete_branch`, `send_email_self`,
+`send_email_reply`, `send_email_new_thread`, `send_email_many`, `post_public`, `spend_money`,
+`delete_data`, `deploy`, `publish_release`) — an unknown value is **refused**, not guessed at. The
+verdict carries `reason` (`gate-floor-blocks` / `gate-allowed`, else the usual journal reasons) and
+`gate_rule`, the verbatim rule that decided it, so the answer is auditable rather than asserted.
+
+- ⚠️ **Scope is exact, and this is where a careless reading gives itself a permission it was never
+  given.** A rule naming a repository matches **only** that repository, compared as a whole token —
+  `focus-planner-ado-codeapp is in YOLO mode` does **not** cover `focus-planner`, even though one name
+  is a prefix of the other. Likewise a rule about **creating** a pull request does not authorise
+  **merging** one. When in doubt the gate returns no verdict and you fall through to the journal, which
+  is the safe direction.
+- **No gate file, an empty one, or one you cannot parse changes nothing.** Behaviour is identical to
+  before #297: the journal decides, fail-closed. The gate can only ever *add* permission via the allow
+  list or *remove* it via the floor.
+- Omitting `-Action` gives you exactly the old `consent` output, so existing calls are unaffected.
 
 The user can leave you new instructions by emailing the agent account
 (`<agent-inbox@example.com>`, from `user-settings.md`). At the start of each run, read the inbox via the email MCP and fold any
@@ -875,6 +978,12 @@ out?\* If yes, do it now and link it. If no, plan it and gate it.
 When in doubt about a step's reversibility, treat it as irreversible: set `blocked` and ask, or
 present the reversible draft and stop short of the committing action.
 
+**The user can move the line, in one direction each way, and only in `agent-gate.md`.** The lists
+above are the defaults; his **Do not gate these** list can move a specific ⛔ action to ✅, and his
+**Always ask** floor can move a specific ✅ action to ⛔. Ask `consent -Action <kind>` rather than
+deciding from the two lists above — and remember the floor is checked first and cannot be outvoted.
+See PHASE 0.
+
 ## Guardrails (important — you run unattended)
 
 - **Approval gates the irreversible, not the reversible.** During planning you may do easily
@@ -893,6 +1002,22 @@ present the reversible draft and stop short of the committing action.
   `merge <PR number>` (e.g. `merge 300`) — command-shaped so it cannot occur in your own prose; bare
   `merge`/`merged` never approve. Its narrowness is proven load-bearing by `mutcheck-consent-vocab.ps1`.
   Never advertise a word outside that list, or the reply reads as no affirmative and is silently dropped.
+- **The agent gate is the other half of that, and the floor list outranks everything (#297).** Pass
+  `-Action <kind>` (and `-Repo` where it applies) so the standing permissions in `agent-gate.md` are
+  actually consulted — see PHASE 0. Two rules, in this order and no other:
+  1. A matching **Always ask (safety floor)** rule is a **hard stop**. It beats the allow list and it
+     beats a human `approve` sitting in the journal. You do not weigh it, override it, or reason your
+     way past it.
+  2. Only then does a matching **Do not gate these** rule authorize you, and the verdict names the
+     verbatim rule (`gate_rule`) that did it — quote it when you record the action. A `gate-allowed`
+     verdict **does not read the journal at all**, so it cannot tell you he has just changed his mind:
+     check **`trailing_has_user`**, and if it is `true`, **stop and read** before acting. It means
+     someone may be waiting, *not* that he refused — pause and answer, never infer a decision from
+     the flag (see PHASE 0).
+  A missing or unparseable gate grants nothing and removes nothing; you are simply back to the journal
+  reading above. **You never write `agent-gate.md`** — that one-way property is the only reason its
+  contents can be trusted without an attribution marker. Asserted by `mutcheck-agent-gate.ps1`, whose
+  seven mutations each break one guarantee and are each killed by that guarantee's own arm.
 - **No surprise irreversible actions.** Sending email **to anyone not on the Auto-send allow-list**,
   submitting forms/applications, making purchases, posting publicly, merging/deploying, or anything
   with money or external side effects is only allowed when the **approved plan explicitly says so**.
@@ -973,4 +1098,4 @@ present the reversible draft and stop short of the committing action.
 - This skill composes with the others: it may call the dance-church, daily-planner, or other skills
   when a task's approved plan calls for them.
 - Keep plans small and high-signal — match the style of the user's existing journals (concrete
-  steps, named deliverables, real links, clear recommendations).
+  steps, named deliverables, real links, clear recommendations).

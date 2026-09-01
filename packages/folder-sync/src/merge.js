@@ -198,7 +198,41 @@ export function mergeCollections(local = {}, remote = {}, opts = {}) {
     const remoteEntry = sideEntry(remoteSnap, id)
     const winner = pickWinner(localEntry, remoteEntry)
     logMergeDecision(id, localEntry, remoteEntry, winner)
-    if (!winner.present) continue
+    if (!winner.present) {
+      // #190: both sides resolved to "not present". For an id that a side's meta
+      // still marks ALIVE, that only happens through sideEntry's phantom guard —
+      // an alive meta row whose parsed record is missing returns present:false so
+      // a content-less row can never win and crash fingerprint() (the #46 OneDrive
+      // crash). But dropping the id here erased the *meta* too, with NO tombstone:
+      // the merged sidecar (written to both replicas) ended up with no entry at
+      // all. That is the silent void behind #190 — task #228's row vanished from
+      // the board with "no sidecar entry at all, in either board's sidecar," and
+      // its still-live journal became unreachable. A live meta entry that loses
+      // its record must never become a no-op; it is either a deliberate delete
+      // (tombstone) or a suspected anomaly — here, the latter. Keep it ALIVE at
+      // the highest known clock (deterministic/symmetric via Math.max) but emit
+      // NO record, so the crash guard still holds while the row stays TRACKED:
+      // the next honest reconcile either reunites it with its parsed record or
+      // tombstones it deliberately (stampLocalChanges), and the detector below
+      // (findAliveWithoutRecord) can surface it in the meantime. Also log it.
+      const lm = localSnap.meta[id]
+      const rm = remoteSnap.meta[id]
+      const localAliveClock = lm && !lm.deleted ? (lm.clock ?? 0) : null
+      const remoteAliveClock = rm && !rm.deleted ? (rm.clock ?? 0) : null
+      if (localAliveClock !== null || remoteAliveClock !== null) {
+        const clock = Math.max(localAliveClock ?? 0, remoteAliveClock ?? 0)
+        mergedMeta[id] = { clock, deleted: false }
+        if (isDiagEnabled()) {
+          diag('folder-sync.merge', 'phantom-meta-preserved', {
+            id,
+            clock,
+            local: summarizeEntry(localEntry),
+            remote: summarizeEntry(remoteEntry),
+          })
+        }
+      }
+      continue
+    }
     if (winner.deleted) {
       mergedMeta[id] = winner.fp !== undefined
         ? { clock: winner.clock, deleted: true, fp: winner.fp }
@@ -384,6 +418,31 @@ export function gcTombstones(meta, now = Date.now(), ttlMs = 90 * 24 * 60 * 60 *
     if (meta[id].deleted && now - (meta[id].clock ?? 0) > ttlMs) delete meta[id]
   }
   return meta
+}
+
+/**
+ * #190 in-app detector (records/sidecar layer). Return the ids that the sidecar
+ * `meta` marks ALIVE (present, not deleted) but which have no matching parsed
+ * record. This is the residue #190 leaves behind: a row tracked as live with no
+ * row on the board and no tombstone — the exact "invisible but being worked"
+ * state that only an external sweep noticed. It is cheap to compute wherever the
+ * app already holds a board's records + meta (e.g. after a reconcile/merge), so
+ * the app can surface the inconsistency itself instead of waiting for a sweep.
+ *
+ * Deliberately narrow: only alive-without-record is reported. A tombstone
+ * (deleted:true) with no record is the correct, deliberate steady state, and a
+ * record with no meta is a legacy/external write that stampLocalChanges stamps —
+ * neither is an inconsistency.
+ *
+ * @returns {string[]} ids alive in meta but absent from records
+ */
+export function findAliveWithoutRecord(records = {}, meta = {}) {
+  const out = []
+  for (const id of Object.keys(meta)) {
+    const m = meta[id]
+    if (m && !m.deleted && !Object.prototype.hasOwnProperty.call(records, id)) out.push(id)
+  }
+  return out
 }
 
 // ── Sidecar (de)serialization ──────────────────────────────────────────

@@ -168,6 +168,45 @@ if (-not (Test-Path $ScriptPath)) { throw "subject not found at $ScriptPath" }
   } finally { Pop-Location }
 }
 
+function Add-DataDependentSweep {
+  <#
+    A rostered .mjs that cannot start without a sibling DATA file, referenced the way the
+    real ones are -- `join(HERE, 'probe-manifest.json')`. That reference is invisible to
+    every other rule: it is not an `import` specifier (rule 2 walks only those), the file
+    is not a sweep (no roster names it), not an entry point (not in $AlwaysRequired) and
+    not a `mutcheck-*` (rule 4's glob misses it). So it was required by nothing.
+
+    `probe-unused.json` is the narrowness control -- a data file nobody references, which
+    must stay out, so rule 6 cannot quietly become "deploy every .json in the repo". #>
+  param([string]$Repo)
+  $chk = Join-Path $Repo 'plugins\overnight-agent\checks'
+  $roster = @"
+# synthetic roster
+`$Suite = @(
+  @{ n = 'datasweep'; bridge = `$false }
+)
+"@
+  Set-Content -LiteralPath (Join-Path $chk 'run-sweeps.ps1') -Value $roster -Encoding utf8
+  $sweep = @'
+import { readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+const HERE = dirname(fileURLToPath(import.meta.url))
+const MANIFEST = join(HERE, 'probe-manifest.json')
+const rows = JSON.parse(readFileSync(MANIFEST, 'utf8'))
+console.log(rows.length)
+'@
+  Set-Content -LiteralPath (Join-Path $chk 'datasweep.mjs') -Value $sweep -Encoding utf8
+  Set-Content -LiteralPath (Join-Path $chk 'probe-manifest.json') -Value '[]' -NoNewline -Encoding utf8
+  Set-Content -LiteralPath (Join-Path $chk 'probe-unused.json') -Value '{}' -NoNewline -Encoding utf8
+  Push-Location $Repo
+  try {
+    & git add -A 2>&1 | Out-Null
+    & git commit --quiet -m 'data-dependent sweep' 2>&1 | Out-Null
+    & git branch -f main HEAD 2>&1 | Out-Null
+  } finally { Pop-Location }
+}
+
 function Invoke-Subject {
   param([string]$ScriptPath, $Fx, [switch]$WhatIf)
   $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath,
@@ -312,6 +351,33 @@ Assert ((Get-Class $rS 'subject-tool.ps1') -eq 'MISSING') 'T_SUBJECT' 'and the s
 Assert (Test-Path (Join-Path $fxS.Home 'subject-tool.ps1')) 'T_SUBJECT_WRITE' 'so the guard can actually execute where the runner globs it'
 # Narrowness: rule 5 follows a reference, it does not sweep the repo for .ps1 files.
 Assert (-not (Test-Path (Join-Path $fxS.Home 'unrelated-tool.ps1'))) 'T_SUBJECT_NARROW' 'an unreferenced .ps1 is still not deployed'
+
+# --- T_DATA: rule 6 -- the sweep arrives, so the file it reads must too (2026-08-31) ---
+# Rules 4 and 5 closed this shape for PowerShell guards. The .mjs half stayed open: a
+# rostered sweep deploys, and the JSON it reads on line one does not, so it dies with
+# ENOENT and exits 1 -- a red guard over a healthy subject. Measured hours after
+# `read-path-budget-sweep` merged: 0 bytes of stdout, 728 of stderr, every single run,
+# while this tool reported `verified-current True`.
+$fxD = New-Fixture 'forward-data'
+Add-DataDependentSweep $fxD.Repo
+$rD = Invoke-Subject $Script $fxD
+
+Assert ((Get-Class $rD 'datasweep.mjs') -eq 'MISSING') 'T_DATA_SWEEP' 'the rostered sweep itself is required (rule 1)'
+Assert ((Get-Class $rD 'probe-manifest.json') -eq 'MISSING') 'T_DATA' 'and the data file it resolves via join(HERE, ...) comes with it'
+Assert (Test-Path (Join-Path $fxD.Home 'probe-manifest.json')) 'T_DATA_WRITE' 'so the sweep can actually read it where the runner runs it'
+# Narrowness: rule 6 follows a reference, it does not sweep the repo for .json files.
+Assert (-not (Test-Path (Join-Path $fxD.Home 'probe-unused.json'))) 'T_DATA_NARROW' 'an unreferenced data file is still not deployed'
+
+# Safety half of rule 6: a data file ALREADY in the home is left completely alone. A data
+# file can be locally mutated state (a baseline a sweep rewrites), so a basename match on
+# the ref must never license an overwrite. This is why rule 6 is MISSING-only and why the
+# data index is kept out of $byName rather than widening the BEHIND/DIVERGENT path.
+$fxD2 = New-Fixture 'forward-data-live'
+Add-DataDependentSweep $fxD2.Repo
+Set-Content -LiteralPath (Join-Path $fxD2.Home 'probe-manifest.json') -Value '["locally mutated"]' -NoNewline -Encoding utf8
+$rD2 = Invoke-Subject $Script $fxD2
+Assert ((Get-Class $rD2 'probe-manifest.json') -eq '<absent>') 'T_DATA_LIVE_QUIET' 'an existing data file is not classified at all'
+Assert ((Get-Content -LiteralPath (Join-Path $fxD2.Home 'probe-manifest.json') -Raw) -eq '["locally mutated"]') 'T_DATA_LIVE_KEPT' 'and its local contents are never overwritten'
 
 # --- T_MISSING_AMBIGUOUS: required, but the basename maps to two repo paths ----------
 # A flat home cannot say which path was meant. Same answer as for a live file: refuse.
@@ -496,6 +562,51 @@ $r = Invoke-Subject $m10 $fx
 Assert ((Get-Class $r 'mutcheck-subject.ps1') -eq 'MISSING') 'M10_GUARD_STILL_OK' 'the guard still deploys (so this mutant is narrow)'
 Assert ((Get-Class $r 'subject-tool.ps1') -ne 'MISSING') 'M10' 'without rule 5 the subject is required by nothing'
 Assert (-not (Test-Path (Join-Path $fx.Home 'subject-tool.ps1'))) 'M10_NOWRITE' 'so the deployed guard would throw on its first run'
+
+# M11 - delete rule 6. Rules 1-5 all still fire, so the rostered sweep deploys and the run
+#       prints a healthy summary - but the sweep lands without the manifest it reads on
+#       line one and dies with ENOENT the first time the runner executes it. That is the
+#       live state measured on 2026-08-31. Deliberately narrow: datasweep.mjs must STILL
+#       deploy, so a failure here can only mean the DATA rule died.
+$m11find = @'
+    foreach ($dep in (Get-HereDataRefs $src)) {
+      [void]$required.Add($dep)
+      if ($dep -match '\.(mjs|js)$') { $queue.Enqueue($dep) }
+    }
+'@
+$m11repl = @'
+    foreach ($dep in (Get-HereDataRefs $src)) {
+      if ($false) { [void]$required.Add($dep) }
+    }
+'@
+$m11 = New-Mutant 'M11' $m11find.TrimEnd("`r","`n") $m11repl.TrimEnd("`r","`n")
+$fx = New-Fixture 'm11'
+Add-DataDependentSweep $fx.Repo
+$r = Invoke-Subject $m11 $fx
+Assert ((Get-Class $r 'datasweep.mjs') -eq 'MISSING') 'M11_SWEEP_STILL_OK' 'the rostered sweep still deploys (so this mutant is narrow)'
+Assert ((Get-Class $r 'probe-manifest.json') -ne 'MISSING') 'M11' 'without rule 6 the data file is required by nothing'
+Assert (-not (Test-Path (Join-Path $fx.Home 'probe-manifest.json'))) 'M11_NOWRITE' 'so the deployed sweep would throw ENOENT on its first run'
+
+# M12 - keep rule 6 but drop its extension test, so a bare directory join would be
+#       required as if it were a file. The rule must stay a reference-follower, not a
+#       path-guesser; the real data file must still deploy either way.
+$m12 = New-Mutant 'M12' "if (`$leaf -match '\.[A-Za-z0-9]{1,5}`$') { `$out += `$leaf }" "`$out += `$leaf"
+$fx = New-Fixture 'm12'
+Add-DataDependentSweep $fx.Repo
+$r = Invoke-Subject $m12 $fx
+Assert ((Get-Class $r 'probe-manifest.json') -eq 'MISSING') 'M12_STILL_OK' 'the real data file still deploys (so this mutant is narrow)'
+
+# M13 - keep rule 6's reference-finding but delete the ref-side data index, so the
+#       required name resolves to nothing and is dropped by the "not on the ref" guard.
+#       This is the half that actually failed first time: the walk found the manifest and
+#       the missing loop threw it away, because non-code files were never indexed at all.
+$m13 = New-Mutant 'M13' '    if ($dataByName.ContainsKey($n) -and -not (Test-Path -LiteralPath (Join-Path $OaHome $n))) {' '    if ($false) {'
+$fx = New-Fixture 'm13'
+Add-DataDependentSweep $fx.Repo
+$r = Invoke-Subject $m13 $fx
+Assert ((Get-Class $r 'datasweep.mjs') -eq 'MISSING') 'M13_SWEEP_STILL_OK' 'the rostered sweep still deploys (so this mutant is narrow)'
+Assert ((Get-Class $r 'probe-manifest.json') -ne 'MISSING') 'M13' 'without the data index the required file is silently dropped'
+Assert (-not (Test-Path (Join-Path $fx.Home 'probe-manifest.json'))) 'M13_NOWRITE' 'and never reaches the home'
 
 Write-Host ''
 Write-Host ("[mutcheck-sync-oa-home] {0} passed, {1} failed" -f $script:pass, $script:fail)

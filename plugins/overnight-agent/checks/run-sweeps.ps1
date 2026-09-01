@@ -153,6 +153,15 @@ $Suite = @(
   # board) proved reversible-gate-sweep is structurally blind to gates written into the
   # DELIVERABLE the ask points at rather than into the ask itself.
   @{ n = 'deliverable-gate-sweep';   bridge = $false }
+  # Third member of the same family, added 2026-09-01. The two above catch an ask that
+  # should never have been made (the work needed no approval). This one catches the
+  # opposite: approval genuinely IS needed, and the ask names a reply word that
+  # `oa-state.ps1 consent` cannot recognise as approval — so Shiv can type exactly what he
+  # was told to type and the run still reads "no affirmative" and refuses to act.
+  # Measured on the live board the day it was written: 7 deadlocked tasks, incl. #463,
+  # which had re-issued `repair board` verbatim for eight consecutive nights while two
+  # destroyed wake dates (one due that Thursday) sat unrepaired behind it.
+  @{ n = 'dead-ask-word-sweep';      bridge = $false }
   # The first detector that leaves the filesystem (added 2026-08-26 12:30). Every other
   # sweep reads only journals/board/state, so an ask naming a PR was never checked against
   # whether that PR is still open, still exists, or is still MERGEABLE. It calls `gh`, so it

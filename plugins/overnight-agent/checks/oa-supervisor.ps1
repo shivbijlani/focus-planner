@@ -47,15 +47,20 @@
 
   SAFETY POSTURE
   --------------
-    * Opens the app DB read-only. Arm 2 never writes.
-    * Alerting is the default action. Killing a run mid-write is more dangerous than
-      the stall, so repair is opt-in (-Repair) and is delegated to the existing
-      sweep's own vetted guards rather than reimplemented here.
-    * One incident produces ONE alert. A permanently-red channel trains the reader to
-      skim it - that exact failure cost 11 hours of dead watchdog on 2026-08-27, when
-      workflow-health-sweep flagged correctly in 16 consecutive runs and every one of
-      them skimmed the line. Escalation re-alerts only after -ReAlertMinutes.
-    * Never prints the bot token.
+    * Opens the app DB read-only for classification.
+    * ACTS instead of alerting (Shiv, 2026-08-31: "it should act, restart ghcp - don't
+      message me"). The remedy is a silent app restart, GATED ON LIVENESS, not age: a run
+      is only restarted when stuck-run-sweep proves it is a genuine orphan (owning process
+      dead) or hung-alive (its own log says the task finished, then went silent). A run
+      that is merely long but still emitting events is NEVER touched - that is the
+      false-positive class that used to page a healthy 40-min run (GH #296).
+    * The row is cleared with the existing vetted sweep (--repair) BEFORE any restart, so
+      the schedule can resume even if the relaunch does not reconcile it. A restart is
+      only added on top when there is a live process to reclaim (hung-alive) or the
+      scheduler itself is wedged (schedule-dead while the app is up).
+    * One incident drives at most one restart per -RestartCooldownMinutes, so a bad state
+      cannot become a reboot loop.
+    * Fully silent: no Telegram, ever. Every decision is still written to supervisor-log.jsonl.
 
 .PARAMETER StuckMinutes
   A run at status='running' older than this is STUCK. Default 45.
@@ -68,28 +73,35 @@
   No run of ANY status started within this window => SCHEDULE-DEAD. Default 90,
   i.e. three consecutive missed */30 ticks, so one skipped tick is never an alarm.
 
-.PARAMETER Repair
-  Opt-in. Passes --repair to stuck-run-sweep.mjs so an orphaned row is cleared.
-  OFF by default.
+.PARAMETER RestartCooldownMinutes
+  Do not restart the same incident more than once inside this window. Default 20, so a
+  state that keeps looking stuck cannot drive a reboot loop.
 
-.PARAMETER NoAlert
-  Classify and log, but send nothing. For testing.
+.PARAMETER NoAct
+  Classify, run the sweep in DETECT-ONLY mode, and log the decision, but never kill or
+  launch anything. The safe mode for testing and replay.
 
-.PARAMETER TestAlert
-  Send one unmistakably-labelled TEST message through the real alert path and exit.
-  An alerting system that has never delivered a message is not known to work - that is
-  the same "verified by nobody" gap this whole issue is about - so the path is testable
-  on demand rather than only on a real outage.
+.PARAMETER Repair, NoAlert, TestAlert
+  LEGACY and inert. Alerting was removed in favour of silent auto-restart, but these are
+  still accepted so an already-registered task or daemon that passes them keeps parsing.
 
 .OUTPUTS
-  One line of JSON on stdout. Exit 0 healthy, 1 alerted, 2 supervisor itself failed.
+  One line of JSON on stdout. Exit 0 = healthy / no action, 1 = acted (or would act under
+  -NoAct), 2 = supervisor itself failed.
 #>
 [CmdletBinding()]
 param(
   [int]$StuckMinutes   = 45,
   [int]$DeadMinutes    = 90,
   [int]$ReAlertMinutes = 240,
+  # Don't restart the same incident more than once inside this window (anti-loop).
+  [int]$RestartCooldownMinutes = 20,
   [string]$WorkflowName = 'Overnight Agent',
+  # Detect + log only; never kill or launch anything. For testing/replay.
+  [switch]$NoAct,
+  # LEGACY and inert: alerting was removed in favour of silent auto-restart
+  # (Shiv, 2026-08-31). Retained only so an already-registered task/daemon that
+  # still passes them keeps parsing.
   [switch]$Repair,
   [switch]$NoAlert,
   [switch]$TestAlert,
@@ -148,37 +160,69 @@ function Get-SupervisorVerdict {
   return @{ state = 'HEALTHY'; detail = "last run started $ageMin min ago, status $($NewestRun.status)"; ageMin = $ageMin }
 }
 
-function Send-SupervisorAlert([string[]]$Lines) {
-  $secret = Join-Path $OaHome 'secrets\telegram-secret.ps1'
-  $token  = (& $secret get).Trim()
-  if (-not $token) { throw 'no telegram token in the credential vault' }
-  $body = @{
-    chat_id = '-1004310604015'
-    message_thread_id = 1767      # the sanctioned interrupt topic; deliberately NOT General
-    text = ($Lines -join "`n")
-    parse_mode = 'Markdown'
-  } | ConvertTo-Json -Compress
-  $null = Invoke-RestMethod -Method Post -Uri "https://api.telegram.org/bot$token/sendMessage" `
-            -ContentType 'application/json; charset=utf-8' `
-            -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 30
+# --- the ACTION is a pure function of (state, orphan findings, app-running) ----------
+# Kept side-effect-free so mutcheck-supervisor.ps1 can prove each arm is load-bearing.
+function Get-SupervisorAction {
+  param(
+    [string]$State,
+    [int]$FlaggedOrphans,   # genuine orphans the sweep found (STUCK only)
+    [bool]$HasHungAlive,    # at least one orphan is a LIVE, leaked process
+    [bool]$AppRunning
+  )
+  switch ($State) {
+    'STUCK' {
+      if ($FlaggedOrphans -le 0) { return 'none' }     # live, still-progressing long run
+      if ($HasHungAlive)         { return 'restart' }  # leaked live process: only a restart reclaims it
+      return 'repair-only'                              # process already dead: sweep --repair unblocked it
+    }
+    'SCHEDULE-DEAD' {
+      if ($AppRunning) { return 'restart' }             # app up but scheduler wedged
+      return 'launch'                                   # app down: just bring it back
+    }
+    default { return 'none' }                           # HEALTHY / unknown
+  }
+}
+
+# The app we supervise is the desktop GUI process 'github.exe'; its children are the
+# 'copilot.exe --server' backends. Resolve its exe from the live process when we can
+# (survives version bumps), else the stable per-user install path.
+function Resolve-AppExe {
+  $p = Get-Process -Name 'github' -ErrorAction SilentlyContinue |
+         Where-Object { $_.Path } | Select-Object -First 1
+  if ($p -and $p.Path) { return $p.Path }
+  $stable = Join-Path $env:LOCALAPPDATA 'Programs\GitHub Copilot\github.exe'
+  if (Test-Path $stable) { return $stable }
+  return $null
+}
+
+# Kill the app process tree (GUI + server backends) by explicit PID, then relaunch it.
+function Restart-App {
+  $exe = Resolve-AppExe
+  $killed = @()
+  foreach ($name in @('github', 'copilot')) {
+    foreach ($proc in (Get-Process -Name $name -ErrorAction SilentlyContinue)) {
+      try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop; $killed += "$name#$($proc.Id)" } catch { }
+    }
+  }
+  Start-Sleep -Seconds 3
+  $launched = $false
+  if ($exe) { try { Start-Process -FilePath $exe | Out-Null; $launched = $true } catch { } }
+  return @{ exe = $exe; killed = $killed; launched = $launched }
+}
+
+# Schedule-dead with the app DOWN: nothing to kill, just launch it.
+function Start-App {
+  $exe = Resolve-AppExe
+  $launched = $false
+  if ($exe) { try { Start-Process -FilePath $exe | Out-Null; $launched = $true } catch { } }
+  return @{ exe = $exe; killed = @(); launched = $launched }
 }
 
 if ($TestAlert) {
-  try {
-    Send-SupervisorAlert @(
-      '*TEST - no action needed*',
-      '',
-      'This is a one-off check that the Overnight Agent supervisor can reach you.',
-      'From now on, if the agent gets stuck or stops running, a message like this arrives here instead of nothing happening at all.',
-      'Nothing is wrong right now.'
-    )
-    ('{"state":"TEST-ALERT","alerted":true}')
-    exit 0
-  } catch {
-    $m = "$_"; if ($m -match 'bot\d+:') { $m = 'telegram send failed (redacted)' }
-    ('{"state":"TEST-ALERT","alerted":false,"error":"' + $m + '"}')
-    exit 2
-  }
+  # Alerting was removed in favour of silent auto-restart; keep the flag inert so an old
+  # caller does not error, but do nothing and say so in the machine-readable line.
+  ('{"state":"TEST-ALERT","acted":false,"note":"alerting removed - supervisor now acts silently"}')
+  exit 0
 }
 
 if ($MyInvocation.InvocationName -eq '.') { return }   # dot-sourced by the mutcheck: expose functions only
@@ -234,70 +278,64 @@ console.log(JSON.stringify({ run: r ?? null }));
 $verdict = Get-SupervisorVerdict -NewestRun $newest -Now $NowUtc `
              -StuckMinutes $StuckMinutes -DeadMinutes $DeadMinutes -AppRunning $appRunning
 
-# --------------------------------------------------- arm 1: reuse the existing sweep --
-# Do not reimplement orphan detection - dispatch the vetted one from out here.
-$sweepResult = 'skipped'
+# ------------------------------------------------ arm 1: reuse the vetted sweep -------
+# Never reimplement orphan detection. When the run LOOKS stuck by age, ask stuck-run-sweep
+# for the truth: it distinguishes a live, still-working run (leave alone) from a genuine
+# orphan, and further splits orphans into process-dead vs hung-alive (a finished run whose
+# live process leaked). In act mode we pass --repair so a genuine orphan's row is cleared
+# regardless of whether we then restart.
+$sweepResult    = 'skipped'
+$flaggedOrphans = 0
+$hasHungAlive   = $false
 if ($verdict.state -eq 'STUCK') {
   $sweep = Join-Path $PSScriptRoot 'stuck-run-sweep.mjs'
   if (-not (Test-Path $sweep)) { $sweep = Join-Path $OaHome 'stuck-run-sweep.mjs' }
   if (Test-Path $sweep) {
     try {
-      $args = @($sweep); if ($Repair) { $args += '--repair' }
-      $out = & node @args 2>&1 | Out-String
-      $sweepResult = ($out -split "`n" | Where-Object { $_ -match 'FLAGGED|repaired|ok\s' } | Select-Object -First 3) -join ' | '
+      $sweepArgs = @($sweep)
+      if (-not $NoAct) { $sweepArgs += '--repair' }   # detect-only under -NoAct
+      $out = & node @sweepArgs 2>&1 | Out-String
+      $m = [regex]::Match($out, 'orphaned runs blocking their workflow:\s*(\d+)')
+      if ($m.Success) { $flaggedOrphans = [int]$m.Groups[1].Value }
+      $hasHungAlive = ($out -match 'hung-alive')
+      $sweepResult  = ($out -split "`n" | Where-Object { $_ -match 'FLAGGED|repaired|ok\s|arm\s' } | Select-Object -First 4) -join ' | '
     } catch { $sweepResult = "sweep-failed: $_" }
   } else { $sweepResult = 'sweep-not-found' }
 }
 
-# ------------------------------------------------------------------ anti-spam state --
-# An incident is keyed by (state + the run it is about). A NEW incident must always be
-# able to alert even if an older one was suppressed, or suppression would reintroduce
-# the very blindness this script exists to remove.
+$action = Get-SupervisorAction -State $verdict.state -FlaggedOrphans $flaggedOrphans `
+            -HasHungAlive $hasHungAlive -AppRunning $appRunning
+
+# ---------------------------------------------------------------- anti-loop cooldown --
+# One incident (state + the run it is about) may drive at most one restart per cooldown,
+# so a state that keeps looking stuck cannot become a reboot loop.
 $incidentKey = '{0}:{1}' -f $verdict.state, ($(if ($newest) { $newest.started_at } else { 'none' }))
 $state = @{}
 if (Test-Path $StatePath) {
   try { $state = Get-Content $StatePath -Raw | ConvertFrom-Json -AsHashtable } catch { $state = @{} }
 }
-
-$shouldAlert = $false
-if ($verdict.state -ne 'HEALTHY') {
-  $shouldAlert = $true
-  if ($state.incidentKey -eq $incidentKey -and $state.lastAlertUtc) {
-    $since = ($NowUtc - [datetime]::Parse($state.lastAlertUtc, $null, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()).TotalMinutes
-    if ($since -lt $ReAlertMinutes) { $shouldAlert = $false }
-  }
+$onCooldown = $false
+if ($action -in @('restart','launch') -and $state.lastActionKey -eq $incidentKey -and $state.lastActionUtc) {
+  $since = ($NowUtc - [datetime]::Parse($state.lastActionUtc, $null, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()).TotalMinutes
+  if ($since -lt $RestartCooldownMinutes) { $onCooldown = $true }
 }
 
-# ------------------------------------------------------------------------- alerting --
-$alertSent = $false
-$alertError = $null
-if ($shouldAlert -and -not $NoAlert) {
+# ----------------------------------------------------------------------- act (silent) --
+$acted     = $false
+$actResult = $null
+$actError  = $null
+if ($action -in @('restart','launch') -and -not $onCooldown -and -not $NoAct) {
   try {
-    $lines = @(
-      "*Overnight Agent supervisor*",
-      "",
-      "State: *$($verdict.state)*",
-      $verdict.detail,
-      ""
-    )
-    if ($verdict.state -eq 'STUCK') {
-      $lines += "The scheduled run has been stuck. While it is stuck, every following run is refused, so the agent is doing nothing."
-      $lines += "Fix: restart the app (that is what has ended all 18 previous stalls), or run the supervisor with -Repair."
-    } elseif ($verdict.state -eq 'SCHEDULE-DEAD') {
-      $lines += "The agent has not started a run recently. It is not working on anything."
-      $lines += "Fix: open the app; the schedule resumes on its own."
-    }
-    Send-SupervisorAlert $lines
-    $alertSent = $true
+    $actResult = if ($action -eq 'restart') { Restart-App } else { Start-App }
+    $acted = [bool]$actResult.launched
+    if (-not $acted) { $actError = 'app exe not found or relaunch failed' }
   } catch {
-    $alertError = "$_"    # never surface the token; only the failure shape
-    if ($alertError -match 'bot\d+:') { $alertError = 'telegram send failed (redacted)' }
+    $actError = "$_"
   }
-}
-
-if ($alertSent) {
-  $state.incidentKey  = $incidentKey
-  $state.lastAlertUtc = $NowUtc.ToString('o')
+  # Record the incident so the cooldown holds even if the relaunch itself failed - a
+  # failing restart must not become a hot loop.
+  $state.lastActionKey = $incidentKey
+  $state.lastActionUtc = $NowUtc.ToString('o')
   try {
     if (-not (Test-Path $OaHome)) { New-Item -ItemType Directory -Path $OaHome -Force | Out-Null }
     ($state | ConvertTo-Json -Depth 6) | Set-Content -Path $StatePath -Encoding utf8
@@ -305,19 +343,24 @@ if ($alertSent) {
 }
 
 $result = @{
-  state       = $verdict.state
-  detail      = $verdict.detail
-  ageMin      = $verdict.ageMin
-  lastStatus  = $(if ($newest) { $newest.status } else { $null })
-  lastStarted = $(if ($newest) { $newest.started_at } else { $null })
-  appRunning  = $appRunning
-  alerted     = $alertSent
-  alertError  = $alertError
-  suppressed  = ($verdict.state -ne 'HEALTHY' -and -not $shouldAlert)
-  sweep       = $sweepResult
-  thresholds  = @{ stuckMin = $StuckMinutes; deadMin = $DeadMinutes; reAlertMin = $ReAlertMinutes }
+  state          = $verdict.state
+  detail         = $verdict.detail
+  ageMin         = $verdict.ageMin
+  lastStatus     = $(if ($newest) { $newest.status } else { $null })
+  lastStarted    = $(if ($newest) { $newest.started_at } else { $null })
+  appRunning     = $appRunning
+  action         = $action
+  acted          = $acted
+  actResult      = $actResult
+  actError       = $actError
+  onCooldown     = $onCooldown
+  noAct          = [bool]$NoAct
+  flaggedOrphans = $flaggedOrphans
+  hasHungAlive   = $hasHungAlive
+  sweep          = $sweepResult
+  thresholds     = @{ stuckMin = $StuckMinutes; deadMin = $DeadMinutes; restartCooldownMin = $RestartCooldownMinutes }
 }
 Write-Log $result
 ($result | ConvertTo-Json -Compress -Depth 6)
 
-if ($verdict.state -eq 'HEALTHY') { exit 0 } else { exit 1 }
+if ($action -eq 'none') { exit 0 } else { exit 1 }

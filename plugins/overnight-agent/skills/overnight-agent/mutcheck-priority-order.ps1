@@ -27,17 +27,19 @@
     D  `## Priorities` breaks ties  (kills: the user's own ordered list being ignored)
     E  Deferred not eligible        (kills: ordering without a GATE, so the agent can still
                                      pick a Deferred row it merely sorted lower)
-    F  Today exhausted -> eligible  (kills: a gate that never opens, starving Deferred forever)
+    F  Today terminal -> eligible   (kills: a gate that never opens, starving Deferred forever)
     G  reopened preempts            (kills: a live reply losing to board rank -- rule 4)
     H  deterministic                (kills: unstable sort; two runs must agree)
-    I  served Today releases        (kills: exclusivity keyed to WORKABLE rather than to the
-                                     run's budget -- an unbounded Today row then starves the
-                                     whole backlog forever, which is what happened live)
-    J  served Today still first     (kills: the over-correction -- releasing exclusivity must
+    I  declared Today releases       (kills: exclusivity keyed to WORKABLE -- an unbounded Today
+                                     row then starves the whole backlog forever, which is what
+                                     happened live)
+    J  declared Today still first    (kills: the over-correction -- releasing exclusivity must
                                      not cost ORDERING, or the fix is just "ignore the board")
-    K  served-minutes 0 reverts     (kills: a one-way change; the flag must restore A-H exactly)
-    L  reply reclaims exclusivity   (kills: "served" muting a Today task the user just replied
-                                     to -- dropping live input is worse than the starvation)
+    K  served-minutes 0 reverts      (kills: a one-way change; the flag must restore A-H exactly)
+    L  reply reclaims exclusivity    (kills: a declaration muting a Today task the user just
+                                     replied to -- dropping live input is worse than starvation)
+    M  writing does not release      (kills: exclusivity keyed to RECENCY -- the agent then opens
+                                     its own gate by typing, which is #310)
 
   NOTE: the urgency icons are built from CODEPOINTS, never as literals. A literal emoji in a
   .ps1 is the exact hazard ps1-encoding-sweep.mjs exists to catch -- under Windows PowerShell
@@ -151,6 +153,16 @@ function Get-Row {
   return ($rows | Where-Object { "$($_.id)" -eq $id } | Select-Object -First 1)
 }
 
+function Try-Oa {
+  # For calls that a build may not understand at all (e.g. `-Exhausted` against the pre-fix
+  # script this harness is meant to be run against). Same reasoning as Get-RowsWith: under
+  # $ErrorActionPreference='Stop' the NativeCommandError would abort the whole run and report
+  # NOTHING, and a harness that dies instead of reporting is worse than a vacuous pass. Swallow
+  # it and let the dependent arm FAIL, which is the correct verdict for "this build cannot".
+  param([string[]]$OaArgs)
+  try { [void](Invoke-Oa $OaArgs) } catch { }
+}
+
 function Ord {
   param($rows, [string]$id)
   $r = Get-Row $rows $id
@@ -214,54 +226,80 @@ Check 'H deterministic order' {
   ($a -eq $b) -and $a.Length -gt 0 -and (($ords -join ',') -eq ($expected -join ','))
 }
 
-# --- I/J/K/L: the RUN-BUDGET half of the Today gate (#223, corrected 2026-08-31) ------
+# --- M/I/J/K/L: WHAT RELEASES the Today gate (#223's rule 1, corrected again in #310) ------
 # Arms A-H prove Today is worked FIRST. They do not prove Deferred is ever REACHABLE when a
-# Today row is unbounded, and that gap was load-bearing in production. Measured live
-# 2026-08-31: the entire `## Today` section was a SINGLE standing meta-task ("triage and ship
-# GitHub issues"). It is unbounded by construction -- there is always another issue -- so it is
-# `in-progress` and workable on every run, forever, and arm E's gate therefore held 121
-# Deferred rows shut on every run. `scan` reported **1 eligible row out of 238**, and three
-# runs in one night each re-worked that one task and touched nothing else. Nothing errored;
-# the gate did exactly what A-H assert, which is why this starves silently.
+# Today row is unbounded, and they do not say what may open the gate. Both gaps were
+# load-bearing in production, in opposite directions:
 #
-# The missing half is in the user's own #223 spec: fall through *"assuming that there is still
-# plenty of time before the next scheduled automation kicks in"* -- a statement about the RUN's
-# budget, not about the row's status. So a Today row the agent has ALREADY SERVED this cycle
-# keeps its rank but stops being exclusive.
+#   keyed to WORKABILITY  the gate never opens for an unbounded row. Measured live 2026-08-31:
+#                         the entire `## Today` section was a SINGLE standing meta-task ("triage
+#                         and ship GitHub issues") -- there is always another issue -- so arm E's
+#                         gate held 121 Deferred rows shut on every run. `scan` reported 1
+#                         eligible row out of 238, and three runs in one night each re-worked
+#                         that one task and touched nothing else.
+#   keyed to RECENCY      the gate opens the moment the agent TYPES, because `mark` stamps
+#                         `last_turn_at` on every turn. That was the replacement, and it was
+#                         worse: the run released the whole backlog by writing one turn to a row
+#                         whose own journal said the work had not started (#310).
+#
+# So the release is now an affirmative DECLARATION -- its own call, naming what was examined --
+# and writing a turn does not release anything. Arm M pins the second failure, arm I the first,
+# and they pull in opposite directions, so neither can be satisfied by deleting the feature.
 foreach ($id in 730, 710, 720) { [void](Invoke-Oa @('mark', '-Id', "$id", '-Status', 'in-progress')) }
-$rowsI = Get-Rows
+$rowsM = Get-Rows
 
-# I: THE FIX. The Today rows are still workable (in-progress), but having been served they no
-# longer hold the backlog shut. Pre-fix this is false -- workable means holding, forever.
-Check 'I served Today releases Deferred' {
+# M: writing is not finishing. Every Today row was just worked and is still `in-progress` with
+# work left; the deployed script handed over the entire backlog at exactly this point.
+Check 'M writing a turn does not release Deferred' {
+  $t = @(730, 710, 720 | ForEach-Object { (Get-Row $rowsM "$_").holds_today_gate })
+  $d = @(740, 760, 750 | ForEach-Object { (Get-Row $rowsM "$_").eligible })
+  ($d -notcontains $null) -and ($t -notcontains $null) -and
+  ($d -notcontains $true) -and ($t -notcontains $false)
+}
+
+# I: THE FIX. The Today rows are unchanged -- still `in-progress`, still workable, still
+# unbounded -- and the ONLY thing that has happened is that the run has said, in its own call,
+# what it examined. Pre-fix this is false in one direction (workability) or true for the wrong
+# reason in the other (recency), which is why arm M has to sit next to it.
+foreach ($id in 730, 710, 720) {
+  Try-Oa @('mark', '-Id', "$id", '-Exhausted', "gh:197,gh:179,task:$id", '-ExhaustedNote', 'queue drained this run')
+}
+$rowsI = Get-Rows
+Check 'I declared-exhausted Today releases Deferred' {
   $t = @(730, 710, 720 | ForEach-Object { (Get-Row $rowsI "$_").eligible })
   $d = @(740, 760, 750 | ForEach-Object { (Get-Row $rowsI "$_").eligible })
+  $reasons = @(730, 710, 720 | ForEach-Object { "$((Get-Row $rowsI "$_").today_release_reason)" })
   ($d -notcontains $null) -and ($t -notcontains $null) -and
-  ($d -notcontains $false) -and ($t -notcontains $false)
+  ($d -notcontains $false) -and ($t -notcontains $false) -and
+  (@($reasons | Where-Object { $_ -ne 'declared_exhausted' }).Count -eq 0)
 }
 
 # J: releasing exclusivity must NOT cost ordering. Without this arm the fix could degenerate
 # into "ignore the board", which is a worse defect than the starvation it replaces: Today is
-# still worked first, only its monopoly lapses.
-Check 'J served Today still ranks first' {
+# still worked first, only its monopoly lapses. It also pins that the release lives in the GATE
+# and not in Test-Workable -- a declared row that stopped being workable would drop off the
+# worklist entirely, and the agent would abandon its own top-priority task.
+Check 'J declared-exhausted Today still ranks first' {
   $t = @(730, 710, 720 | ForEach-Object { Ord $rowsI "$_" })
   $d = @(740, 760, 750 | ForEach-Object { Ord $rowsI "$_" })
   ($t -notcontains -1) -and ($d -notcontains -1) -and
   (($t | Measure-Object -Maximum).Maximum -lt ($d | Measure-Object -Minimum).Minimum)
 }
 
-# K: the escape hatch is real, not decorative. `-TodayServedMinutes 0` must restore pre-fix
-# exclusivity EXACTLY, so this is revertible with a flag instead of a redeploy.
+# K: the escape hatch is real, not decorative. The strict flag must restore pre-#223-correction
+# exclusivity EXACTLY, so this is revertible with a flag instead of a redeploy. Asserted through
+# the LEGACY spelling `-TodayServedMinutes 0`, because that is what existing callers pass and it
+# must keep meaning the same thing after the parameter's other meanings were removed.
 $rowsK = Get-RowsWith @('-TodayServedMinutes', '0')
 Check 'K served-minutes 0 restores exclusivity' {
   $d = @(740, 760, 750 | ForEach-Object { (Get-Row $rowsK "$_").eligible })
   ($d -notcontains $null) -and ($d -notcontains $true)
 }
 
-# L: a live reply RECLAIMS exclusivity. Killed by dropping `if ($row.reopened) { return $true }`
-# from Test-HoldsTodayGate. This is the arm that keeps the fix from trading one silent failure
-# for another: without it, "served" would mute a Today task the user had just replied to, and
-# dropping the user's own input is strictly worse than making them wait.
+# L: a live reply RECLAIMS exclusivity, even with a declaration standing. This is the arm that
+# keeps the fix from trading one silent failure for another: without it, a declaration made
+# seconds earlier would mute a Today task the user had just replied to, and dropping the user's
+# own input is strictly worse than making them wait.
 $p730 = Join-Path $jdir 'task-730.md'
 [IO.File]::WriteAllText($p730,
   ([IO.File]::ReadAllText($p730, $utf8) + "`n`n## 2026-08-31`n`n<!-- from: me -->`nactually do this one now`n"), $utf8)
@@ -287,17 +325,18 @@ Check 'G reopened preempts' {
   (Ord $rowsG '750') -eq 1 -and $r.reopened -eq $true -and $r.eligible -eq $true
 }
 
-# --- F: once Today is exhausted the gate opens ----------------------------------------
-# Pinned to `-TodayServedMinutes 0` ON PURPOSE. F's distinguishing claim is that EXHAUSTION
-# opens the gate. The run-budget gate added by I-L opens it too, and the marks above stamp a
-# fresh `updated` on every Today row -- so left unpinned, F would pass for the other
-# mechanism's reason and stop killing its own mutant (a gate that never opens on exhaustion).
-# `0` disables only the budget gate, preserving F's original assertion in full.
+# --- F: once Today is TERMINAL the gate opens -----------------------------------------
+# Pinned to `-TodayServedMinutes 0` ON PURPOSE. F's distinguishing claim is that a Today row
+# which is genuinely FINISHED (or parked on the user) opens the gate without anyone having to
+# declare anything. Arm I's declaration path opens it too, and the declarations made above are
+# still standing -- so left unpinned, F would pass for the other mechanism's reason and stop
+# killing its own mutant (a gate that never opens on exhaustion). The flag disables only the
+# declaration and backstop paths, preserving F's original assertion in full.
 [void](Invoke-Oa @('mark', '-Id', '730', '-Status', 'done'))
 [void](Invoke-Oa @('mark', '-Id', '710', '-Status', 'blocked'))
 [void](Invoke-Oa @('mark', '-Id', '720', '-Status', 'proposed'))
 $rowsF = Get-RowsWith @('-TodayServedMinutes', '0')
-Check 'F exhausted Today opens gate' {
+Check 'F terminal Today opens gate' {
   (Get-Row $rowsF '740').eligible -eq $true -and (Get-Row $rowsF '760').eligible -eq $true
 }
 

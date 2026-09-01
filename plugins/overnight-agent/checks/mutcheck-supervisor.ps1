@@ -104,6 +104,64 @@ if (-not (Test-Suppression -storedKey $null -incomingKey 'STUCK:A' -minutesSince
 $report['anti-spam'] = @{ failures = $sup.Count; detail = $sup }
 if ($sup.Count -ne 0) { $ok = $false }
 
+# --- the ACTION arm: prove liveness-gated restart is load-bearing -------------------
+# The classifier decides IF a run looks stuck; the action decides WHAT to do about it.
+# The load-bearing property here is the one Shiv cares about: a live, still-working long
+# run (flaggedOrphans = 0) must resolve to 'none' - never a restart. Each arm is mutated
+# independently and must break only its own fixture.
+function Invoke-Action {
+  param([string]$State, [int]$FlaggedOrphans, [bool]$HasHungAlive, [bool]$AppRunning)
+  switch ($State) {
+    'STUCK' {
+      if ($FlaggedOrphans -le 0) { if ($script:AMutation -eq 'live-longrun') { return 'restart' } return 'none' }
+      if ($HasHungAlive)         { if ($script:AMutation -eq 'hung-restart') { return 'none' }    return 'restart' }
+      if ($script:AMutation -eq 'orphan-repair') { return 'restart' }
+      return 'repair-only'
+    }
+    'SCHEDULE-DEAD' {
+      if ($AppRunning) { if ($script:AMutation -eq 'dead-app-up') { return 'none' } return 'restart' }
+      if ($script:AMutation -eq 'dead-app-down') { return 'restart' } return 'launch'
+    }
+    default { return 'none' }
+  }
+}
+
+$aFixtures = @(
+  @{ name = 'live-longrun-untouched'; state = 'STUCK';         o = 0; h = $false; app = $true;  expect = 'none';        owner = 'live-longrun' }
+  @{ name = 'hung-alive-restart';     state = 'STUCK';         o = 1; h = $true;  app = $true;  expect = 'restart';     owner = 'hung-restart' }
+  @{ name = 'dead-orphan-repair';     state = 'STUCK';         o = 1; h = $false; app = $true;  expect = 'repair-only'; owner = 'orphan-repair' }
+  @{ name = 'schedule-dead-app-up';   state = 'SCHEDULE-DEAD'; o = 0; h = $false; app = $true;  expect = 'restart';     owner = 'dead-app-up' }
+  @{ name = 'schedule-dead-app-down'; state = 'SCHEDULE-DEAD'; o = 0; h = $false; app = $false; expect = 'launch';      owner = 'dead-app-down' }
+  @{ name = 'healthy-none';           state = 'HEALTHY';       o = 0; h = $false; app = $true;  expect = 'none';        owner = 'healthy' }
+)
+
+function Test-AllActions {
+  $fails = @()
+  foreach ($f in $aFixtures) {
+    $got = Invoke-Action -State $f.state -FlaggedOrphans $f.o -HasHungAlive $f.h -AppRunning $f.app
+    if ($got -ne $f.expect) { $fails += "$($f.name): expected $($f.expect), got $got" }
+  }
+  return ,$fails
+}
+
+$script:AMutation = ''
+$aBaseline = Test-AllActions
+$report['action-baseline'] = @{ failures = $aBaseline.Count; detail = $aBaseline }
+if ($aBaseline.Count -ne 0) { $ok = $false }
+
+foreach ($arm in @('live-longrun', 'hung-restart', 'orphan-repair', 'dead-app-up', 'dead-app-down')) {
+  $script:AMutation = $arm
+  $f = Test-AllActions
+  $foreign  = @($f | Where-Object { $_ -match '^(?<n>[^:]+):' -and ($aFixtures | Where-Object { $_.name -eq $Matches['n'] }).owner -ne $arm })
+  $survived = ($f.Count -eq 0)
+  $leaked   = ($foreign.Count -gt 0)
+  $report["action:$arm"] = @{ broke = $f.Count; foreignFixtures = $foreign.Count; survived = $survived }
+  if ($survived) { $ok = $false; $report["action:$arm"]['verdict'] = 'MUTATION SURVIVED - this arm is decoration' }
+  elseif ($leaked) { $ok = $false; $report["action:$arm"]['verdict'] = 'arm is entangled - it also broke another arm''s fixture' }
+  else { $report["action:$arm"]['verdict'] = 'load-bearing' }
+}
+$script:AMutation = ''
+
 if ($Json) { ($report | ConvertTo-Json -Depth 6); }
 else {
   foreach ($k in $report.Keys) {
