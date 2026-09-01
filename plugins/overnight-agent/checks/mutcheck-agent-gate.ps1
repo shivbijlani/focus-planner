@@ -82,15 +82,33 @@ if (-not $ScriptPath) {
 if (-not $ScriptPath -or -not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found (pass -ScriptPath)" }
 
 # --- fixture material ---------------------------------------------------------------------
-# The four allow rules and two floor rules below are the LIVE gate's, VERBATIM. They are quoted
-# rather than paraphrased on purpose: a paraphrase would drift towards whatever the matcher
-# happens to accept, and the whole question the issue asks is what THIS text authorises.
+# The rules below are the live gate's, VERBATIM. They are quoted rather than paraphrased on
+# purpose: a paraphrase would drift towards whatever the matcher happens to accept, and the whole
+# question the issue asks is what THIS text authorises.
+#
+# TWO generations are pinned here, because Shiv rewrote the file on 2026-09-01 and both texts
+# still earn their keep:
+#   * the ORIGINAL (`*_V1`) is the prefix trap -- `focus-planner` is a prefix of
+#     `focus-planner-ado-codeapp` -- so arm C keeps testing against it forever.
+#   * the CURRENT is what the agent actually reads tonight, and arm L asserts its real finding.
 $RULE_YOLO_REPO = 'focus-planner-ado-codeapp is in YOLO mode, dont ask just do, Im the only user'
 $RULE_EMAIL_SELF = 'Emailing myself'
 $RULE_REPLY = 'Responding to an interaction in a 1-1 chat or email with valuable info (not just shiv is oof). If doing so, append message signature indicating that this was sent by bot and that shiv will review when he gets back.'
 $RULE_CREATE_PR = 'Creating and publishing a pull request in any repository, then continuing to work on it until all checks pass, is easily reversible and has no consequence; do not gate it.'
 $FLOOR_MANY = 'Send-to-many (group/channel, manager, mass email)'
 $FLOOR_FRESH = 'Starting a fresh conversation with someone in chat/email'
+
+# The CURRENT live gate (mtime 2026-09-01T06:42Z), verbatim. Shiv answered the question #297
+# deliberately left open -- "if he wants this repo auto-mergeable that is a question to put to
+# him" -- by naming THIS repo and adding a data-loss floor.
+$RULE_YOLO_THIS_REPO = 'focus-planner is in YOLO mode, dont ask just do, Im the only user. If you ship bug in a PR to prod, dont worry we can easily revert it.'
+$FLOOR_MANY_LIVE = 'Send-to-many (group/channel, mass email)'
+$FLOOR_DATA_LOSS = 'Outcome can result in permanent data loss'
+
+# An ALLOW rule carrying outcome words but NO verb the action table knows. Used by arm I to prove
+# outcome phrasing is confined to the floor: if it were applied to both lists, this would read as
+# a GRANT for delete_data, which is the one direction that must never happen.
+$ALLOW_OUTCOME_SHAPED = 'A permanent data loss here would be perfectly acceptable'
 
 function New-Gate {
   param([string[]]$Allow, [string[]]$Ask)
@@ -109,8 +127,11 @@ function New-Gate {
   return $sb.ToString()
 }
 
-# The full live gate, reassembled from the verbatim rules above.
+# The full ORIGINAL gate, reassembled from the verbatim rules above.
 $LIVE_GATE = New-Gate -Allow @($RULE_YOLO_REPO, $RULE_EMAIL_SELF, $RULE_REPLY, $RULE_CREATE_PR) -Ask @($FLOOR_MANY, $FLOOR_FRESH)
+
+# The CURRENT gate, likewise.
+$LIVE_GATE_NOW = New-Gate -Allow @($RULE_YOLO_THIS_REPO, $RULE_EMAIL_SELF, $RULE_CREATE_PR) -Ask @($FLOOR_MANY_LIVE, $FLOOR_DATA_LOSS)
 
 $AgentBlock = @'
 # Task {ID}: synthetic
@@ -291,6 +312,41 @@ $arms = [ordered]@{
       }
     )
   }
+  'I-floor-outcome-phrasing'         = @{
+    why     = 'a floor rule naming the OUTCOME binds, instead of matching nothing and being inert'
+    gate    = (New-Gate -Allow @($RULE_YOLO_THIS_REPO) -Ask @($FLOOR_DATA_LOSS))
+    entries = @()
+    queries = @(
+      # THE FIX, in its live shape: a blanket YOLO grant for this repo, and a floor rule phrased
+      # as the outcome the user fears. Before this, the floor matched nothing -- "data loss" has
+      # no verb `delete_data` knew -- so the grant won and the answer was `gate-allowed`. The one
+      # rule standing between the agent and permanent data loss was inert, and nothing said so.
+      @{ args = @('-Action', 'delete_data', '-Repo', 'focus-planner')
+        expect = @{ consent_ok = $false; reason = 'gate-floor-blocks'; gate_rule = $FLOOR_DATA_LOSS }
+      }
+      # Control: the grant is still a grant. Without this the arm would pass just as well if the
+      # floor had swallowed the whole gate, which is the over-correction to guard against.
+      @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner')
+        expect = @{ consent_ok = $true; reason = 'gate-allowed' }
+      }
+    )
+  }
+  'J-outcome-confined-to-floor'      = @{
+    why     = 'outcome phrasing NEVER widens an allow rule -- the one direction of error to refuse'
+    # The same outcome words as arm I, moved to the ALLOW list. Applied to both lists, this
+    # sentence becomes a licence to delete data. The floor here is deliberately unrelated to the
+    # queried kind, so nothing but the allow rule can produce a `true` -- which is also what keeps
+    # this arm blind to M1 and M2: with no floor verdict in play for `delete_data`, neither stage
+    # ordering nor short-circuiting can change the answer.
+    gate    = (New-Gate -Allow @($ALLOW_OUTCOME_SHAPED) -Ask @($FLOOR_MANY_LIVE))
+    entries = @()
+    queries = @(
+      @{ args = @('-Action', 'delete_data', '-Repo', 'focus-planner'); expect = @{ consent_ok = $false } }
+      # Non-vacuity, asserted on a field no other mutation moves: the gate really was read, so
+      # the `false` above is a decision rather than a file that failed to load.
+      @{ args = @('-Action', 'delete_data', '-Repo', 'focus-planner'); expect = @{ gate_state = 'ok' } }
+    )
+  }
   'L-live-gate-merge-finding'        = @{
     why        = 'THE finding: the live gate as written does not authorise merging a focus-planner PR'
     diagnostic = $true
@@ -305,6 +361,27 @@ $arms = [ordered]@{
       @{ args = @('-Action', 'send_email_reply'); expect = @{ consent_ok = $true; reason = 'gate-allowed'; gate_rule = $RULE_REPLY } }
       @{ args = @('-Action', 'send_email_many'); expect = @{ consent_ok = $false; reason = 'gate-floor-blocks'; gate_rule = $FLOOR_MANY } }
       @{ args = @('-Action', 'send_email_new_thread'); expect = @{ consent_ok = $false; reason = 'gate-floor-blocks'; gate_rule = $FLOOR_FRESH } }
+    )
+  }
+  'M-live-gate-now'                  = @{
+    why        = 'THE finding, restated against the gate Shiv actually rewrote on 2026-09-01'
+    diagnostic = $true
+    gate       = $LIVE_GATE_NOW
+    entries    = @()                  # no human approve: every verdict below is the gate's alone
+    queries    = @(
+      # The inversion. #297 closed with "if he wants this repo auto-mergeable that is a question
+      # to put to him, not a default to assume." He answered it by naming THIS repo -- so the same
+      # query that read `no rule -> ask` against the previous text is now a grant, and it is the
+      # GATE saying so against an empty journal, not the agent reading its own prose.
+      @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $true; reason = 'gate-allowed'; gate_rule = $RULE_YOLO_THIS_REPO } }
+      # Still scoped: a blanket grant naming one repo is not a blanket grant for every repo.
+      @{ args = @('-Action', 'merge_pr', '-Repo', 'some-other-repo'); expect = @{ consent_ok = $false } }
+      @{ args = @('-Action', 'open_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $true; reason = 'gate-allowed' } }
+      @{ args = @('-Action', 'send_email_self'); expect = @{ consent_ok = $true; reason = 'gate-allowed'; gate_rule = $RULE_EMAIL_SELF } }
+      # Both floor rules bind, and the second is the one this PR had to fix: phrased as an
+      # OUTCOME, it lost to the YOLO grant above it until outcome vocabulary was added.
+      @{ args = @('-Action', 'send_email_many'); expect = @{ consent_ok = $false; reason = 'gate-floor-blocks'; gate_rule = $FLOOR_MANY_LIVE } }
+      @{ args = @('-Action', 'delete_data', '-Repo', 'focus-planner'); expect = @{ consent_ok = $false; reason = 'gate-floor-blocks'; gate_rule = $FLOOR_DATA_LOSS } }
     )
   }
 }
@@ -485,6 +562,8 @@ $mutations = @(
   @{
     name  = 'M1: the ALLOW list is scanned before the floor (floor becomes a suggestion)'
     kills = 'A-floor-overrides-allow'
+    # Arm I asserts a floor block, which cannot happen unless the floor is scanned first.
+    alsoCaughtBy = @('I-floor-outcome-phrasing')
     apply = {
       param($s)
       $s -replace [regex]::Escape('foreach ($stage in $stages) {'), 'foreach ($stage in ($stages[1], $stages[0])) {'
@@ -493,6 +572,8 @@ $mutations = @(
   @{
     name  = 'M2: a floor verdict no longer short-circuits, so a journal `approve` overrides it'
     kills = 'B-floor-overrides-human-approval'
+    # Same entailment: a floor block that does not short-circuit is not a floor block.
+    alsoCaughtBy = @('I-floor-outcome-phrasing')
     apply = {
       param($s)
       $s -replace [regex]::Escape("if (`$verdict.decision -ne 'none') {"), "if (`$verdict.decision -eq 'allow') {"
@@ -537,6 +618,27 @@ $mutations = @(
     'send_email_self', 'send_email_reply', 'send_email_new_thread', 'send_email_many',
     'post_public', 'spend_money', 'delete_data', 'deploy', 'publish_release')]
   [string]`$Action,"), "  [string]`$Action,"
+    }
+  },
+  @{
+    name  = 'M10: outcome-shaped floor vocabulary dropped (a floor naming the OUTCOME goes inert)'
+    kills = 'I-floor-outcome-phrasing'
+    apply = {
+      param($s)
+      # Restores the pre-fix behaviour exactly: the floor is matched by the verb+object table
+      # alone, so "Outcome can result in permanent data loss" matches nothing and the blanket
+      # YOLO grant below it wins.
+      $s -replace [regex]::Escape('  if ($allowOutcomePhrasing) {'), '  if ($false) {'
+    }
+  },
+  @{
+    name  = 'M11: outcome vocabulary applied to the ALLOW list too (it starts GRANTING)'
+    kills = 'J-outcome-confined-to-floor'
+    apply = {
+      param($s)
+      # The dangerous direction: an allow rule that merely mentions a permanent loss becomes a
+      # licence to cause one.
+      $s -replace [regex]::Escape("Scoped = `$true; Outcome = `$false }"), "Scoped = `$true; Outcome = `$true }"
     }
   },
   @{
@@ -592,10 +694,25 @@ try {
     try { $failedArms = Test-AllArms -Script $path -Label $m.name -Quiet }
     catch { $failedArms = @('<threw>'); Write-Host "  (mutant threw: $($_.Exception.Message))" }
 
-    # Only the SEVEN guarantee arms take part in the aim check; `L` is the corpus arm and is
+    # Only the guarantee arms take part in the aim check; `L`/`M` are corpus arms and are
     # expected to be caught by several mutations (see the header).
     $guaranteeArms = @($failedArms | Where-Object { -not $arms[$_].diagnostic })
     Write-Host ("  arms that caught it: {0}" -f $(if ($failedArms.Count) { $failedArms -join ', ' } else { '(none)' }))
+
+    # STRUCTURAL DEPENDENCIES, DECLARED. `alsoCaughtBy` names arms whose sensitivity to this
+    # mutation is a property of the design rather than a duplicated test, and it is subtracted
+    # before the owner check so "exactly one owner" still means exactly one owner.
+    #
+    # It exists for one honest reason. Arm I asserts that a floor rule phrased as an OUTCOME
+    # blocks -- and "the floor blocked this" entails "the floor was scanned first" (M1) and "a
+    # floor verdict short-circuits" (M2). Those are not separable by any fixture: with the floor
+    # neutered, M2 and M10 produce a byte-identical verdict, because both end at the journal with
+    # `gate_rule` nulled. Declaring the entailment is truthful; silently widening `kills` into a
+    # set would hide which arm actually owns the guarantee, and marking arm I diagnostic would
+    # leave M10 with no owner at all.
+    $expected = @($m.kills)
+    $allowedExtra = @(@($m.alsoCaughtBy) | Where-Object { $_ })
+    $owners = @($guaranteeArms | Where-Object { $allowedExtra -notcontains $_ })
 
     if ($failedArms.Count -eq 0) {
       $survived++
@@ -603,12 +720,13 @@ try {
       continue
     }
     $killed++
-    if (@($guaranteeArms).Count -eq 1 -and $guaranteeArms[0] -eq $m.kills) {
-      Write-Host "  -> KILLED by its own arm, and only its own arm"
+    if (@($owners).Count -eq 1 -and $owners[0] -eq $m.kills) {
+      $note = if (@($allowedExtra).Count) { " (declared structural: $($allowedExtra -join ', '))" } else { '' }
+      Write-Host "  -> KILLED by its own arm, and only its own arm$note"
     }
     else {
       $misaimed++
-      Write-Host "  -> KILLED, but MISAIMED: expected exactly '$($m.kills)', got '$($guaranteeArms -join ', ')'"
+      Write-Host "  -> KILLED, but MISAIMED: expected exactly '$($m.kills)', got '$($owners -join ', ')'"
     }
   }
 }

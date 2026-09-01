@@ -368,6 +368,39 @@ $script:GateActionKinds = [ordered]@{
   )
 }
 
+# --- outcome-shaped floor vocabulary --------------------------------------------------------
+# Kind -> a regex of OUTCOME words. Applied to FLOOR (ask) rules ONLY. This is the mirror image
+# of the blanket-grant asymmetry below, pointing the other way.
+#
+# WHY THE TABLE ABOVE IS NOT ENOUGH. It is VERB+OBJECT shaped, because that is how a PERMISSION
+# is written -- "Emailing myself", "Creating and publishing a pull request". A PROHIBITION is not
+# written that way. Asked to name what he wants stopped, a human names the OUTCOME he is afraid
+# of, not the verb that gets there. Shiv's live floor rule is:
+#
+#     Outcome can result in permanent data loss
+#
+# which carries the OBJECT (`data`) and no verb `delete_data` knows, so the rule matched nothing
+# and the blanket YOLO grant in the allow list won by default. Measured on the live gate before
+# this fix, with everything else in this file working exactly as designed:
+#
+#     consent -Action delete_data -Repo focus-planner  ->  consent_ok: true (gate-allowed)
+#
+# The one rule standing between the agent and permanent data loss was inert, and nothing said so.
+# It is the #304 vocabulary wall on the floor side, where the direction of error is dangerous
+# rather than merely annoying.
+#
+# THE DIRECTION OF ERROR IS THE DESIGN, again. A floor rule that matches too eagerly costs one
+# unnecessary question; a floor rule that matches too little costs the data. So this vocabulary
+# is deliberately generous, and it is confined to the ask list -- where generous is the safe
+# direction -- by a per-stage flag rather than by where the lookup happens to sit.
+#
+# It stays anchored to the kind's OBJECT group, so a floor rule about some other permanent thing
+# cannot be dragged into `delete_data` by the word "permanent" alone.
+$script:GateOutcomeKinds = @{
+  delete_data = '\bdata ?loss\b|\blos(?:e|es|ing)\b|\blost\b|\bloss\b|\bunrecoverable\b|\birrecoverable\b|\birreversible\b|\bpermanent(?:ly)?\b|\bcannot be undone\b|\bcan(?:no|'')?t be undone\b|\bcannot be recovered\b|\bcan(?:no|'')?t be recovered\b|\bno backup\b|\bdestructive\b'
+  spend_money = '\bcosts?\b|\bexpensive\b|\bbilled?\b|\bbilling\b|\bcharged?\b|\bnon-?refundable\b|\bout of pocket\b'
+}
+
 # --- blanket grants -------------------------------------------------------------------------
 # A rule that says "stop asking me" rather than naming an action. Applied to ALLOW rules ONLY,
 # because this is grant-shaped language: a floor rule is a prohibition and never phrases itself
@@ -502,7 +535,7 @@ function Get-GateRepoTokens([string]$rule) {
   return $out
 }
 
-function Test-GateRuleCovers([string]$rule, [string]$action, [bool]$applyRepoScope, [string]$repo) {
+function Test-GateRuleCovers([string]$rule, [string]$action, [bool]$applyRepoScope, [string]$repo, [bool]$allowOutcomePhrasing) {
   if ([string]::IsNullOrWhiteSpace($rule)) { return $false }
   if ([string]::IsNullOrWhiteSpace($action)) { return $false }
   $text = "$rule"
@@ -525,8 +558,24 @@ function Test-GateRuleCovers([string]$rule, [string]$action, [bool]$applyRepoSco
 
   $groups = $script:GateActionKinds[$action]
   if (-not $groups) { return $false }
-  foreach ($g in $groups) { if ($text -notmatch $g) { return $false } }
-  return $true
+  $allGroups = $true
+  foreach ($g in $groups) { if ($text -notmatch $g) { $allGroups = $false; break } }
+  if ($allGroups) { return $true }
+
+  # Outcome-shaped phrasing -- FLOOR ONLY, and gated on the caller's per-stage flag rather than
+  # on anything about the rule text, so an allow rule can never reach it however it is worded.
+  # See the .GATE header note on $script:GateOutcomeKinds: a prohibition names the outcome, not
+  # the verb, and "permanent data loss" is the live proof.
+  if ($allowOutcomePhrasing) {
+    $outcome = $script:GateOutcomeKinds[$action]
+    if ($outcome -and $text -match $outcome) {
+      # Still anchored to the kind's OBJECT group (the last one), so "permanent" on its own
+      # cannot drag an unrelated prohibition into this action kind. Single-group kinds have no
+      # object to anchor to, so the outcome word alone carries them.
+      if ($groups.Count -lt 2 -or $text -match $groups[-1]) { return $true }
+    }
+  }
+  return $false
 }
 
 function Get-GateVerdict($gate, [string]$action, [string]$repo) {
@@ -538,10 +587,13 @@ function Get-GateVerdict($gate, [string]$action, [string]$repo) {
   # mutcheck-agent-gate.ps1 asserts it with a mutation that reverses exactly this list.
   #
   # `Scoped` is per stage and is $false for the floor on purpose: repo scope NARROWS a rule, and
-  # narrowing a prohibition removes protection. See the .GATE header note on the two asymmetries.
+  # narrowing a prohibition removes protection. `Outcome` is the mirror: it is $true for the floor
+  # only, because a prohibition names the OUTCOME it fears rather than a verb, and matching too
+  # eagerly on the floor costs a question while matching too little costs the data. Both live here
+  # as stage DATA so each asymmetry has one precise mutation target.
   $stages = @(
-    [pscustomobject]@{ Decision = 'floor'; List = 'ask'; Rules = @($gate.ask); Scoped = $false },
-    [pscustomobject]@{ Decision = 'allow'; List = 'allow'; Rules = @($gate.allow); Scoped = $true }
+    [pscustomobject]@{ Decision = 'floor'; List = 'ask'; Rules = @($gate.ask); Scoped = $false; Outcome = $true },
+    [pscustomobject]@{ Decision = 'allow'; List = 'allow'; Rules = @($gate.allow); Scoped = $true; Outcome = $false }
   )
 
   $verdict = [ordered]@{ decision = 'none'; list = $null; rule = $null }
@@ -549,7 +601,7 @@ function Get-GateVerdict($gate, [string]$action, [string]$repo) {
 
   foreach ($stage in $stages) {
     foreach ($rule in @($stage.Rules)) {
-      if (Test-GateRuleCovers $rule $action ([bool]$stage.Scoped) $repo) {
+      if (Test-GateRuleCovers $rule $action ([bool]$stage.Scoped) $repo ([bool]$stage.Outcome)) {
         $verdict.decision = $stage.Decision
         $verdict.list = $stage.List
         $verdict.rule = $rule
