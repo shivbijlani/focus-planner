@@ -102,6 +102,18 @@ const S = {
     m.files[0].path = '{planner}/does-not-exist.md'
     return newFixture({ manifest: m, journals: {} })
   },
+  // Under budget (40 KB vs 64 KB) but doubled against its recorded size. Before g5 this
+  // was invisible: the budget test passed, so growth was never evaluated.
+  grownUnderBudget: () => newFixture({
+    manifest: okManifest(),
+    journals: { 'task-8.md': 40 },
+    baseline: { known: {}, sizes: { 'task-8.md': 20 } },
+  }),
+  stableUnderBudget: () => newFixture({
+    manifest: okManifest(),
+    journals: { 'task-8.md': 21 },
+    baseline: { known: {}, sizes: { 'task-8.md': 20 } },
+  }),
 }
 
 // -------------------------------------------------------------------- baseline --
@@ -166,6 +178,17 @@ const check = (name, cond) => { asserts++; if (!cond) fails.push(name) }
   const before9 = snapshot(fx9.planner)
   run(fx9)
   check('sweep writes nothing to the planner folder', snapshot(fx9.planner) === before9)
+
+  // g5: growth applies to files that are still within budget. Both directions, because a
+  // guard that fires on everything is as useless as one that fires on nothing.
+  const r10 = run(S.grownUnderBudget())
+  check('under-budget growth exits 1', r10.code === 1)
+  check('under-budget growth reported as GROWING', /GROWING\s+task-8\.md/.test(r10.out))
+  check('under-budget growth says it is still within budget', /still under its/i.test(r10.out))
+
+  const r11 = run(S.stableUnderBudget())
+  check('under-budget file within tolerance exits 0', r11.code === 0)
+  check('under-budget file within tolerance is not reported', !/GROWING/.test(r11.out))
 }
 
 if (fails.length) {
@@ -191,6 +214,10 @@ const arms = [
   // including a settings file that has genuinely vanished.
   { name: 'm7 optional swallows a required missing file', scenario: S.requiredMissing,
     mutate: (s) => s.replace('if (entry.optional) {', 'if (true) {') },
+  // Restores the pre-2026-09-01 hole: growth gated on already being over budget, so the
+  // only file class that can still be caught early is the one already too big.
+  { name: 'm8 growth ignored while a file is under budget', scenario: S.grownUnderBudget,
+    mutate: (s) => s.replace('const grownUnderBudget =', 'const grownUnderBudget = false &&') },
 ]
 
 const survived = []

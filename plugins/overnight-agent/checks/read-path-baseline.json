@@ -13,9 +13,22 @@
     "in a month while GH #123 sat open).",
     "",
     "Shrink a file below its budget and it leaves this list. Re-add an entry only with a",
-    "measurement and a reason."
+    "measurement and a reason.",
+    "",
+    "`sizes` is the other half, added 2026-09-01. `known` only ever held files ALREADY over",
+    "budget, and growth was only checked for those -- so a file under its budget was never",
+    "growth-checked at all. SKILL.md went 43 KB -> 78.5 KB in seven days under a 96 KB budget",
+    "and this sweep reported clean every night. `sizes` records the measured size of the",
+    "every-run files that are within budget, so the growth signal applies to them too.",
+    "Update an entry here only together with a deliberate, reviewed size change."
   ],
-  "measuredAt": "2026-08-31",
+  "measuredAt": "2026-09-01",
+  "sizes": {
+    "user-settings.md": 75.3,
+    "SKILL.md": 78.5,
+    "agent-gate.md": 0.9,
+    "planner.md": 11.2
+  },
   "known": {
     "task-276.md": 100.3,
     "task-349.md": 102.9,
