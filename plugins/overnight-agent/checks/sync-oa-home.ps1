@@ -280,6 +280,13 @@ function Get-NormalizedText {
 
 function Get-NormalizedTextFromBytes {
   param([byte[]]$Bytes)
+  # Strip a leading UTF-8 BOM before decoding. This is not cosmetic: the disk side uses
+  # [IO.File]::ReadAllText, which DETECTS AND STRIPS a BOM, so decoding these bytes with a
+  # bare GetString would keep U+FEFF and make an identical file compare unequal. That
+  # asymmetry is why exactly the BOM-carrying scripts, and only those, were misclassified.
+  if ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) {
+    $Bytes = $Bytes[3..($Bytes.Length - 1)]
+  }
   $t = [Text.Encoding]::UTF8.GetString($Bytes)
   return ($t -replace "`r`n", "`n").TrimEnd("`n")
 }
@@ -302,6 +309,25 @@ function Invoke-Git {
   return $out
 }
 
+function Get-BlobNormalized {
+  # THE ONE READER for git blob content in this file. Every comparison below routes
+  # through it, so the "never round-trip a blob through a PowerShell string" rule is
+  # enforced in one place rather than restated at three call sites -- the same "one
+  # table, one reader" discipline #180 applied to the browser-slot table, and for the
+  # same reason: the copies drifted. Three separate `| Out-String` captures existed
+  # here, and fixing one of them changed nothing, because the other two decided the
+  # verdict. Returns $null if the blob cannot be read.
+  param([string]$Blob)
+  if (-not $Blob) { return $null }
+  $tmp = [IO.Path]::GetTempFileName()
+  try {
+    & cmd /c "git -C `"$Repo`" cat-file blob $Blob > `"$tmp`"" | Out-Null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return (Get-NormalizedTextFromBytes ([IO.File]::ReadAllBytes($tmp)))
+  }
+  finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+}
+
 function Get-RefText {
   # Read a path's content at the ref. Returns $null when the path is absent there.
   # --verify --quiet first: on a path that does not exist at that commit a bare
@@ -309,10 +335,34 @@ function Get-RefText {
   # TERMINATING error under $ErrorActionPreference='Stop'. `2>$null` does NOT suppress
   # that on 5.1 (only on pwsh 7), which is exactly how the first-ever deletion took the
   # live deploy down on 2026-08-29. Probing first keeps that path unreachable.
+  #
+  # NEVER ROUND-TRIP THE BLOB THROUGH A POWERSHELL STRING.
+  # ------------------------------------------------------
+  # This used to end `| Out-String`, and the classification it feeds was therefore
+  # HOST-DEPENDENT. Measured 2026-09-01 on one machine, one tree, the same second:
+  #
+  #     powershell 5.1  ->  184 CURRENT,   0 DIVERGENT
+  #     pwsh 7.6.5      ->  171 CURRENT,   7 DIVERGENT
+  #
+  # The 7 were oa-state.ps1, write-turn.ps1, run-sweeps.ps1, sync-oa-home.ps1 and three
+  # others - every one of them carrying non-ASCII and a UTF-8 BOM. Extracting the blobs
+  # with `cmd /c git cat-file blob` (which bypasses the PowerShell host entirely) and
+  # comparing bytes proved the disk copies were byte-identical to the ref, matching
+  # `git cat-file -s` exactly. So 5.1 was right by luck and pwsh was wrong, and neither
+  # had measured anything.
+  #
+  # The direction is what makes it serious: DIVERGENT means "may be a live fix" and is
+  # REFUSED, so running this tool under pwsh silently declines to update the core scripts
+  # -- "merged but not running", recreated by host choice, inside the tool that exists to
+  # prevent it. Latent today only because user-settings.md invokes `powershell` (5.1).
+  #
+  # cmd /c is not belt-and-braces here; it is the only route that is correct on BOTH
+  # hosts. A PowerShell redirect is worse still: on 5.1 `git show > file` re-encodes the
+  # whole blob to UTF-16LE and converts LF to CRLF, more than doubling it.
   param([string]$Sha, [string]$RepoRelPath)
   $blob = & git -C $Repo rev-parse --verify --quiet "${Sha}:$RepoRelPath" 2>$null
   if ($LASTEXITCODE -ne 0 -or -not $blob) { return $null }
-  return (& git -C $Repo cat-file blob ("$blob".Trim()) 2>$null | Out-String)
+  return (Get-BlobNormalized ("$blob".Trim()))
 }
 
 function Get-RosterNames {
@@ -464,8 +514,8 @@ foreach ($f in $live) {
   $liveNorm = Get-NormalizedText $f.FullName
   $liveHash = Get-Sha256 $liveNorm
 
-  $headRaw = & git -C $Repo show "${refSha}:$repoPath" 2>$null | Out-String
-  $headNorm = ($headRaw -replace "`r`n", "`n").TrimEnd("`n")
+  $headNorm = Get-RefText $refSha $repoPath
+  if ($null -eq $headNorm) { $headNorm = '' }
   $headHash = Get-Sha256 $headNorm
 
   if ($liveHash -eq $headHash) {
@@ -493,8 +543,9 @@ foreach ($f in $live) {
     $blob = & git -C $Repo rev-parse --verify --quiet "${c}:$repoPath" 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $blob) { continue }
     $blob = "$blob".Trim()
-    $txt = & git -C $Repo cat-file blob $blob 2>$null | Out-String
-    if ((Get-Sha256 (($txt -replace "`r`n", "`n").TrimEnd("`n"))) -eq $liveHash) { $match = $c; break }
+    $txt = Get-BlobNormalized $blob
+    if ($null -eq $txt) { continue }
+    if ((Get-Sha256 $txt) -eq $liveHash) { $match = $c; break }
   }
 
   if ($match) {
