@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "Acknowledged read-path budget breaches as measured on 2026-08-31 (GH #293).",
+    "",
+    "These files are ALREADY over their declared budget. Failing the run on all of them",
+    "every night would make read-path-budget-sweep.mjs a permanently-red line, and this",
+    "suite has twice learned what that does: workflow-health-sweep flagged a dead watchdog",
+    "in 16 consecutive runs and nobody acted, because the same line was red every time.",
+    "",
+    "So a known breach at a stable size is reported as acknowledged, not as a finding.",
+    "GROWTH beyond tolerancePct in read-path-manifest.json still fails -- which is the live",
+    "signal, because growth is the actual defect (the journal folder went 2.26 MB -> 4.90 MB",
+    "in a month while GH #123 sat open).",
+    "",
+    "Shrink a file below its budget and it leaves this list. Re-add an entry only with a",
+    "measurement and a reason."
+  ],
+  "measuredAt": "2026-08-31",
+  "known": {
+    "task-276.md": 100.3,
+    "task-349.md": 102.9,
+    "task-356.md": 78.7,
+    "task-400.md": 256.8,
+    "task-419.md": 73.3,
+    "task-422.md": 103.4,
+    "task-451.md": 73.8
+  }
+}
