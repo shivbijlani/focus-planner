@@ -41,7 +41,10 @@ open yourself). You may open any file in the repo to go deeper — prefer doing 
 
 ## Pages to write
 
-Write these files into `docs/spec/`. Use exactly these names (the wiki keys off them):
+Write these files into `docs/spec/`. Use exactly these names (the wiki keys off them). **This
+table is the page set: a page that is not listed here is not indexed from `Home.md`, and since
+`Home.md` is regenerated every run, an unlisted page silently becomes unreachable.** Adding a page
+to the spec therefore means adding a row here, not only a link in `Home.md`.
 
 | File | Contents |
 | --- | --- |
@@ -49,6 +52,7 @@ Write these files into `docs/spec/`. Use exactly these names (the wiki keys off 
 | `Architecture.md` | The domains, how they compose, the module graph in prose, process/runtime boundaries, and the data-flow from user action to persisted state. |
 | `Data-Formats.md` | Every persisted format — the planner board, task journals, agent state, bridge state — with **annotated real samples** and the invariants each must satisfy. This is the page a rebuilder needs most and can least infer. |
 | `Domain-<name>.md` | One page per entry in `domains`. Its responsibility, principal modules, public exports, behavioural requirements derived from its tests, and its failure modes. |
+| `Prioritisation.md` | Prioritisation as a product behaviour: how priority is expressed on the board (section, urgency icon, `Work Priority`, the `## Priorities` list, row order, id — the full sort key, in order), how the user changes it (the board, a journal reply, snoozing, `agent-gate.md`, `user-settings.md`), and how the Overnight Agent's `scan` turns it into an ordered worklist with a binding `eligible` flag. Must cover the Today→Deferred gate and **what releases it** — the exhaustion declaration, the four things that cancel it, and `today_release_reason` — the liveness mechanisms (`awaiting_reply` parking, poll/recheck timers, the staleness backstop, snooze precedence), and the recurring failure class this design guards against: *the agent authoring the signal its own gate reads*. Ground it in `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1` and the `mutcheck-*.ps1` checks, which are the executable statement of the intended behaviour. |
 | `Behaviour.md` | The system's required behaviour as testable statements, derived from `testFiles`. Group by area. This is the acceptance suite a rebuilt implementation must satisfy. |
 | `Rebuilding.md` | A build-order guide: what to construct first, dependencies between parts, and how to verify each stage. Written for someone starting from an empty directory. |
 | `Roadmap.md` | Known gaps and direction, grouped by priority label, derived from `issues`. Reference issues by number. |

@@ -101,6 +101,7 @@ compose and [Rebuilding](Rebuilding) for the order to build them in.
 - [Domain-scripts](Domain-scripts) — build/maintenance scripts, including this spec's own generator.
 - [Domain-root](Domain-root) — the Express dev server and build tooling entry points.
 - [Behaviour](Behaviour) — the system's required behaviour, derived from its tests.
+- [Prioritisation](Prioritisation) — how priority is expressed, changed by the user, and read by the agent.
 - [Reliability](Reliability) — how the autonomous agent is supervised and self-heals: out-of-band supervision, liveness-gated stuck recovery, silent auto-restart, deploy propagation, and the mutation-tested sweep suite.
 - [Rebuilding](Rebuilding) — a build-order guide starting from an empty directory.
 - [Roadmap](Roadmap) — known gaps and direction, from open issues.
