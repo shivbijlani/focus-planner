@@ -229,6 +229,13 @@ $AlwaysRequired = @(
   'auto-deploy-plugin.ps1',
   'deploy-installed-plugin.ps1',
   'check-browser-slots.ps1',
+  # The one entry here that is a LIBRARY rather than a command, and the reason it
+  # earns a place: check-browser-slots.ps1 (above) dot-sources it, so a home that
+  # has the command but not this file has a command that cannot run. The rule is
+  # "restorable from a wiped home", and a listed command with a missing dependency
+  # is not restorable. Added with #180, which moved the slot table into
+  # user-settings.md and gave it a single reader.
+  'browser-slot-table.ps1',
   # The #226 supervisor and its daemon are dispatched by the OS (a Windows scheduled task
   # or the Startup-folder shim) as `%LOCALAPPDATA%\overnight-agent\<name>` - the same
   # absolute-path-from-the-flat-home contract as the entries above. They are named by no

@@ -77,6 +77,11 @@ const ORCHESTRATION = [
   'run-telegram-mirror.ps1',
   'reap-stale-mcp.ps1',
   'check-browser-slots.ps1',
+  // Dot-sourced by check-browser-slots.ps1 (and by the two launchers in the
+  // skill dir). No .mjs import graph reaches a PowerShell dot-source, so it
+  // has to be named here or it would be invisible to drift detection -- which
+  // is the failure mode #180 was about, one level down.
+  'browser-slot-table.ps1',
   'write-turn.ps1',
   'artifact-index.mjs',
   'sync-checks.ps1',
