@@ -50,7 +50,7 @@ model, not the model itself.
   installed plugin at PHASE 0 of every run, so fixes do ship — the watchdog itself is just
   not among the things checked for staleness.
 
-## High (7 open)
+## High (5 open)
 
 - **#250 — Consent still rests on a marker the agent's own software writes** (a follow-up
   to its now-closed predecessor issue, which made the consent *reader* fail closed — an
@@ -59,15 +59,6 @@ model, not the model itself.
   channel such as the reply's originating `from_user` id. The predecessor's third success
   criterion (an approval record the agent's own journal-writing path cannot reach) is
   still open.
-- **#223 — The Overnight Agent should work tasks in board-priority order** (`## Today` by
-  priority, falling through to `## Deferred` only when Today is exhausted). Today
-  `oa-state.ps1 scan` returns a flat worklist with no notion of board section or priority,
-  and `SKILL.md`'s "prefer higher urgency" instruction is prose guidance to a model, not an
-  enforced mechanism.
-- **#205 — Collapse consecutive unanswered turns into one current message.** An actively
-  worked task that gets no reply accumulates a stack of separate agent monologues in its
-  Telegram topic, each restating its own ask, until the volume itself is why the real
-  question gets missed.
 - **#202 — A finished task stays in the approval queue forever.** The queue decides
   "is this done?" by reading a frozen Status header near the top of the journal, not the
   agent's latest turn — so a task that explicitly says "Needs from you: nothing" keeps
