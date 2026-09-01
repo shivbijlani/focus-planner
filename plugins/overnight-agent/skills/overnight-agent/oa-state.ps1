@@ -1630,7 +1630,22 @@ function Cmd-Consent {
       # A gate decision short-circuits the journal read, in BOTH directions and on purpose:
       #   floor -> deny, and it must outrank a human `approve` sitting in the journal;
       #   allow -> a STANDING permission, which by definition does not need re-granting per task
-      #            (that is the whole reason the file exists), so the journal has nothing to add.
+      #            (that is the whole reason the file exists).
+      #
+      # THE ALLOW DIRECTION HAS A CONSEQUENCE WORTH STATING, because it is surprising and it is
+      # NOT a bug. Measured: with an allow rule covering merges in a repo, a journal carrying the
+      # human's own `<!-- from: me -->` "do not merge that, hold off" still returns
+      # `consent_ok: true, reason: gate-allowed` -- the journal is never opened. That is correct:
+      # a standing permission any stray sentence could cancel would not be standing, and the
+      # revocation channel is the file the user owns (move the rule to the floor, or delete it),
+      # which is verified -- adding 'Merging any pull request' to the floor flips the same fixture
+      # to `gate-floor-blocks`.
+      #
+      # What it means for the CALLER is that this command answers "am I authorised?", never
+      # "should I?". SKILL.md carries that distinction: a fresh human "don't" in the journal stops
+      # the run regardless of what this returns. Do not widen this function to also read refusals
+      # -- a refusal vocabulary is the #301 problem (which affirmatives count), and it belongs in
+      # its own change with its own mutation arms, not smuggled in here.
       [pscustomobject]@{
         id         = $Id
         consent_ok = ($verdict.decision -eq 'allow')

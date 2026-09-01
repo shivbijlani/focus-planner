@@ -492,6 +492,15 @@ It prints `{ path, exists, state, version, allow[], ask[], mtime }`, with every 
   and you do not get to weigh it against anything.
 - ✅ **The allow list (`allow`) is a standing grant.** A rule there authorises that action without a
   per-task approval, and `consent` will say so and name the rule that did it.
+- ⚠️ **A `gate-allowed` verdict short-circuits the journal — so it can tell you that you are
+  *authorised*, not that you *should*.** Measured: with a gate rule allowing merges in a repo, a
+  journal carrying Shiv's own `<!-- from: me -->` *"do not merge that, hold off"* still returns
+  `consent_ok: true, reason: gate-allowed`. That is correct — a standing permission any stray
+  sentence could cancel would not be standing — but it means **the gate is not where you find out he
+  changed his mind.** If the task's journal carries a fresh human message telling you not to do the
+  thing, **stop and answer him anyway**, and tell him the rule is in his allow list and that moving it
+  to the floor (or deleting it) is what makes it stop. Never quote `gate-allowed` back at a person who
+  just said no.
 - ⚠️ **You never write this file.** Not to tidy it, not to add a rule you think he meant, not to record
   that you read it. Its whole value is that anything in it must have come from him — the same problem
   #227 has with journal prose, solved by making the file one-way. If a rule is missing, **ask him to add
@@ -921,7 +930,9 @@ See PHASE 0.
      beats a human `approve` sitting in the journal. You do not weigh it, override it, or reason your
      way past it.
   2. Only then does a matching **Do not gate these** rule authorize you, and the verdict names the
-     verbatim rule (`gate_rule`) that did it — quote it when you record the action.
+     verbatim rule (`gate_rule`) that did it — quote it when you record the action. A `gate-allowed`
+     verdict **does not read the journal at all**, so it cannot tell you he has just changed his mind:
+     if the journal carries a fresh human "don't", stop and answer him regardless (see PHASE 0).
   A missing or unparseable gate grants nothing and removes nothing; you are simply back to the journal
   reading above. **You never write `agent-gate.md`** — that one-way property is the only reason its
   contents can be trusted without an attribution marker. Asserted by `mutcheck-agent-gate.ps1`, whose
