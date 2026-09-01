@@ -57,6 +57,21 @@
 // new corruption in it — which is exactly what happened on 2026-08-26 — so it is
 // reported in its own bucket instead, with a count, and excluded only from the
 // EXIT CODE. Growth in that count is still visible to the reader.
+//
+// `agent-lore.md` is the SAME bucket, and must be listed or this sweep goes
+// permanently red (found live 2026-09-01). #262's `split-user-settings.ps1` moves
+// every non-settings section out of `user-settings.md` and into `agent-lore.md`
+// **verbatim** — so the quoted damage this exemption exists for physically
+// relocated, while the exemption kept naming only the file it had left. The
+// sweep then reported 3 lines in `agent-lore.md` as a genuine finding: all three
+// are prose about repairs already made (two of them quote the RECOVERED values
+// in the very next clause).
+//
+// That matters more than the noise. This sweep's whole value is that a non-zero
+// count means new corruption; a detector that is red for a reason nobody intends
+// to fix trains its reader to ignore it, and the next real eaten value arrives
+// into a red sweep and is never seen. Both files are reported in their own
+// bucket with a line count, exactly as before — only the exit code is affected.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -69,8 +84,10 @@ const JSON_OUT = process.argv.includes('--json');
 
 // Directories that are never agent-written prose.
 const SKIP_DIR = new Set(['node_modules', '.git', '.vs', 'dist', 'build', '__pycache__']);
-// Trips arm 1 by design — it documents the defect using damaged samples.
-const KNOWN_QUOTER = 'user-settings.md';
+// Trip arm 1 by design — they document the defect using damaged samples.
+// `agent-lore.md` is where `split-user-settings.ps1` relocates that prose verbatim,
+// so the two are one logical file and must share one exemption.
+const KNOWN_QUOTERS = new Set(['user-settings.md', 'agent-lore.md']);
 
 function walk(dir, out) {
   let entries;
@@ -111,7 +128,7 @@ for (const f of files) {
   if (!hits.length) continue;
   hits.sort((a, b) => a.n - b.n);
   const rec = { file: f, hits };
-  if (path.basename(f).toLowerCase() === KNOWN_QUOTER) knownQuoter.push(rec);
+  if (KNOWN_QUOTERS.has(path.basename(f).toLowerCase())) knownQuoter.push(rec);
   else findings.push(rec);
 }
 
@@ -138,7 +155,8 @@ if (JSON_OUT) {
     console.log('');
   }
   const kqLines = knownQuoter.reduce((n, r) => n + r.hits.length, 0);
-  console.log(`known permanent FP (documents the defect by quoting it): ${knownQuoter.length} file, ${kqLines} lines - excluded from exit code`);
+  const kqNames = knownQuoter.map((r) => path.basename(r.file)).join(', ');
+  console.log(`known permanent FP (documents the defect by quoting it): ${knownQuoter.length} file${knownQuoter.length === 1 ? '' : 's'}${kqNames ? ` (${kqNames})` : ''}, ${kqLines} lines - excluded from exit code`);
 }
 
 // Exit code is driven ONLY by genuine findings; the self-documenting file must not
