@@ -37,6 +37,11 @@ export function trimBlankEnds(arr) {
 export const AGENT_SENTINEL_RE = /^<!--.*\b(?:AUTO|AGENT)\b.*-->/i
 const FROM_RE = /^<!--\s*from:\s*([^\s>]+)\s*-->/i
 const DATE_RE = /^##\s+(\d{4}-\d{2}-\d{2})\b/
+// Any `## ` heading (dated or not) ends the preceding marker's ownership.
+const HEADING_RE = /^##\s/
+// The provenance marker the app stamps on its own writes. Byte-identical to the
+// Telegram bridge's `FROM_ME` so both channels are indistinguishable to readers.
+export const FROM_ME = '<!-- from: me -->'
 
 export function parseJournalChat(content) {
   const text = (content || '').replace(/^\uFEFF/, '')
@@ -123,26 +128,38 @@ export function parseJournalChat(content) {
 }
 
 // Append a new "me" message to journal markdown, merging into today's bubble.
+//
+// The app is the true author of everything appended here (journal-chat sends and
+// task close-out notes; agent content is written by the agents themselves, never
+// through this path), so it stamps its own provenance. Without the marker, a
+// `## ` heading leaves the text unattributed, and the overnight agent's consent
+// gate fails closed on unattributed text — which silently discarded every
+// approval typed in the app. The emitted shape is byte-identical to the Telegram
+// bridge's `appendUserReply`, so an approval reads the same from either channel.
+// Historical unmarked entries are never rewritten; only new text is stamped.
 export function appendJournalMessage(content, text, today = localISODate()) {
   const body = (content || '').replace(/\s+$/, '')
   const lines = body.split(/\r?\n/)
   let lastDate = null
-  let lastDateIdx = -1
   for (let i = lines.length - 1; i >= 0; i--) {
-    const m = lines[i].trim().match(/^##\s+(\d{4}-\d{2}-\d{2})\b/)
-    if (m) { lastDate = m[1]; lastDateIdx = i; break }
+    const m = lines[i].trim().match(DATE_RE)
+    if (m) { lastDate = m[1]; break }
   }
-  let endAuthor = 'me'
-  for (let i = lastDateIdx < 0 ? 0 : lastDateIdx; i < lines.length; i++) {
-    const t = lines[i].trim()
+  // Whether a `<!-- from: me -->` marker still owns the end of the file. Any
+  // `## ` heading ends the previous marker's ownership, so only a marker that is
+  // the last governing token can carry the new text's attribution. When one
+  // does, merging under it is already attributed and needs no second marker.
+  let attributed = false
+  for (const line of lines) {
+    const t = line.trim()
     const fm = t.match(FROM_RE)
-    if (fm) endAuthor = fm[1].toLowerCase() === 'me' ? 'me' : 'agent'
-    if (AGENT_SENTINEL_RE.test(t)) endAuthor = 'agent'
+    if (fm) { attributed = fm[1].toLowerCase() === 'me'; continue }
+    if (AGENT_SENTINEL_RE.test(t) || HEADING_RE.test(t)) attributed = false
   }
   let addition
-  if (lastDate !== today) addition = `\n\n## ${today}\n\n${text}`
-  else if (endAuthor === 'me') addition = `\n${text}`
-  else addition = `\n\n<!-- from: me -->\n${text}`
+  if (lastDate !== today) addition = `\n\n## ${today}\n\n${FROM_ME}\n${text}`
+  else if (attributed) addition = `\n${text}`
+  else addition = `\n\n${FROM_ME}\n${text}`
   return `${body}${addition}\n`
 }
 
