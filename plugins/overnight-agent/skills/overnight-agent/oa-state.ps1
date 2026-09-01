@@ -59,6 +59,12 @@
          [-RecheckDone]         Record that the recheck just ran: stamp last_rechecked = now and
                                 push next_due forward by the cadence interval.
          [-RecheckClear]        Remove the recheck from the task (e.g. once it is unblocked).
+         [-Exhausted <list>]    DECLARE this Today row exhausted for THIS RUN, naming what was
+                                examined (see .EXHAUSTION). This is what opens the
+                                Today->Deferred gate. It is a SEPARATE call: it cannot be
+                                combined with -Status/-Version/-PlanId or any timer flag.
+         [-ExhaustedNote <s>]   Optional free-text note recorded alongside the declaration.
+         [-ExhaustionClear]     Withdraw a standing declaration (the row gates again at once).
   resnapshot                    One-time migration after a change to how journals are decoded
                                 or hashed: re-baseline processed_file_hash for tasks with
                                 nothing pending. SKIPS any journal with trailing user content,
@@ -164,6 +170,46 @@
     consent -Id 463 -Action merge_pr -Repo focus-planner-ado-codeapp    -> gate-allowed (blanket)
     consent -Id 463 -Action send_email_many                             -> gate-floor-blocks
 
+.EXHAUSTION (#310 -- what actually opens the Today->Deferred gate)
+  Rule 1 of #223 is "Today before Deferred": a Deferred row is ineligible while a Today row
+  still holds the gate. The only hard question is WHAT RELEASES IT, and that has been answered
+  wrongly twice, in opposite directions:
+
+    keyed to WORKABILITY   never opens for an unbounded row. The live `## Today` held one
+                           standing meta-task ("triage fix and ship GitHub issues"), workable
+                           forever, so it froze 121 Deferred rows on every run -- measured at
+                           1 eligible row out of 238.
+    keyed to RECENCY       opens the moment the agent TYPES. `mark` stamps `last_turn_at` on
+                           every turn, so one turn -- any content, any completion state --
+                           released the whole backlog for the rest of the run.
+
+  The second is the repo's recurring failure class: THE AGENT AUTHORS THE SIGNAL ITS OWN GATE
+  READS (cf. #227/#272 consent, and the `awaiting_reply` ratchet). So the release is now an
+  affirmative DECLARATION the run has to make on purpose, and the things that CANCEL it are
+  state the agent does not author:
+
+    mark -Id <today-id> -Exhausted 'gh:197,gh:179,gh:139' -ExhaustedNote 'all blocked on review'
+
+  A declaration stands only while ALL of these hold. `scan` reports which one failed, per row,
+  as `today_release_reason`:
+
+    * it named at least one examined item             (an unnamed claim asserts nothing)
+    * it is younger than -ExhaustionTtlMinutes        (scoped to one run; look again next run)
+    * the board's `## Today` section is UNCHANGED     (the human revokes it by editing Today)
+    * no turn has been written to the row SINCE it    (writing more work refutes "exhausted")
+    * the row is not `reopened`                       (a live reply reclaims exclusivity)
+
+  Writing a turn is now NECESSARY BUT NOT SUFFICIENT: you cannot declare a row you never
+  opened, and every turn written after a declaration cancels it. That is the exact inversion of
+  the defect -- typing can only ever make the gate hold LONGER.
+
+  BACKSTOP. -TodayGateBackstopHours (default 6) releases a Today row nobody has written a turn
+  to for that long, so a wedged run cannot freeze the backlog behind a row it cannot move. It
+  is keyed to STALENESS, so writing resets it; there is no path from typing to a release.
+
+  ROLLBACK. -TodayGateStrict (or the legacy -TodayServedMinutes 0) disables every release path:
+  a workable Today row gates forever, exactly as before #223's correction.
+
 .SNOOZE PRECEDENCE
   Snooze is the user's explicit "not until <date>", so it outranks both timers: a snoozed task
   reports `due_poll: false` and `due_recheck: false` regardless of how overdue the timer is. The
@@ -185,6 +231,10 @@
   pwsh oa-state.ps1 mark -Id 357 -Status blocked -Recheck 12h -RecheckKind ci
   pwsh oa-state.ps1 mark -Id 357 -RecheckDone         # still blocked; re-arm the timer
   pwsh oa-state.ps1 mark -Id 357 -RecheckClear        # prerequisite cleared
+  pwsh oa-state.ps1 mark -Id 463 -Status in-progress  # 1. write the turn
+  pwsh oa-state.ps1 mark -Id 463 -Exhausted 'gh:197,gh:179,gh:139' `
+                         -ExhaustedNote 'all three blocked on review'   # 2. then declare
+  pwsh oa-state.ps1 mark -Id 463 -ExhaustionClear     # withdraw it; the row gates again
 #>
 
 [CmdletBinding()]
@@ -238,15 +288,45 @@ param(
   # app, READ-ONLY here -- nothing in this script ever writes it, which is what makes its contents
   # trustworthy without an attribution marker. Sits next to planner.md by default.
   [string]$GatePath = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\agent-gate.md",
-  # How long a Today row stays "served" after the agent last wrote a turn to it, in minutes.
-  # A served Today row no longer holds the Today->Deferred gate shut. See Test-HoldsTodayGate.
-  # Default is deliberately LONGER than the ~30 min scheduled run interval, so a standing Today
-  # task worked by the previous run does not re-starve the backlog before this run does anything.
-  # `0` restores the pre-fix behaviour (a workable Today row always gates) in one flag.
-  [int]$TodayServedMinutes = 45
+  # --- The Today->Deferred gate (#223, corrected 2026-08-31, corrected again in #310) ------
+  #
+  # DEPRECATED, and kept for exactly one value. `0` is the one-flag rollback to the STRICT gate
+  # (a workable Today row always holds Deferred shut, the pre-#223-fix behaviour). The old
+  # NON-ZERO meaning -- "a Today row is served for N minutes after the agent last wrote a turn
+  # to it" -- WAS the #310 defect, and it is gone: any other value is now ignored. New callers
+  # should say `-TodayGateStrict` instead, which names the same thing honestly.
+  [int]$TodayServedMinutes = -1,
+  # The rollback, named for what it does: no release path at all.
+  [switch]$TodayGateStrict,
+  # How long an exhaustion DECLARATION stays valid, in minutes. Sized to ONE scheduled run
+  # (~30 min): a declaration covers the run that made it, and the next run must look again and
+  # declare again -- which is what "exhausted for this run" has to mean if it is to mean
+  # anything. Expiry fails CLOSED (the gate re-shuts), so a window that is too short costs one
+  # cheap re-declaration and never a wrong release. `0` disables the declaration path entirely.
+  [int]$ExhaustionTtlMinutes = 30,
+  # Wedged-run backstop, in hours (#310, and the "still plenty of time" clause of #223). If a
+  # Today row is holding the gate and the agent has NOT written a turn to it for this long, the
+  # run cannot work it, so the backlog is released rather than frozen behind a row nobody is
+  # moving. This is the exact INVERSE of the #310 defect: writing RESETS the timer, so the agent
+  # can only ever DELAY this release, never cause it. A row the agent has never worked is exempt
+  # (`last_turn_at` absent keeps gating), because "never touched" is the one state that most
+  # deserves the run's attention. `0` disables.
+  [int]$TodayGateBackstopHours = 6,
+  # The exhaustion DECLARATION itself (#310). See .EXHAUSTION in the header and
+  # Set-ExhaustionDeclaration below. Value is the list of things the run examined; it is
+  # REQUIRED to be non-empty, because a declaration that names nothing is indistinguishable
+  # from a shrug.
+  [string]$Exhausted,
+  [string]$ExhaustedNote,
+  [switch]$ExhaustionClear
 )
 
 $ErrorActionPreference = 'Stop'
+
+# The one-flag rollback to the strict (pre-#223-fix) gate, resolved once so every reader agrees.
+# `-TodayServedMinutes 0` is the legacy spelling and is honoured verbatim; every other value of
+# that deprecated parameter is ignored, because its old meaning was the #310 defect.
+$script:TodayGateIsStrict = [bool]($TodayGateStrict -or ($TodayServedMinutes -eq 0))
 
 function Ensure-StateDir {
   if (-not (Test-Path $StateDir)) { New-Item -ItemType Directory -Path $StateDir -Force | Out-Null }
@@ -1414,6 +1494,31 @@ function Get-UrgencyRank([string]$icon) {
   return 4
 }
 
+function Get-TodaySectionText {
+  # The substantive rows of the board's `## Today` section, trimmed, one per line.
+  #
+  # This is the SUBJECT of an exhaustion declaration (#310). "I examined everything Today holds
+  # and there is nothing workable left this run" is a claim ABOUT this text, so when the text
+  # changes the claim is about a board that no longer exists and must be made again. That is the
+  # part of the release signal the agent does NOT author: the human revokes it by editing Today.
+  #
+  # Blank lines are dropped and every line is trimmed, so whitespace churn from an editor or from
+  # OneDrive cannot invalidate a live declaration -- only an actual add/remove/edit of a row can.
+  if (-not (Test-Path $PlannerBoard)) { return '' }
+  $lines = (Read-JournalText $PlannerBoard) -split "`r?`n"
+  $out = New-Object Text.StringBuilder
+  $inToday = $false
+  foreach ($line in $lines) {
+    if ($line -match '^##\s') { $inToday = [bool]($line -match '^##\s*Today\b'); continue }
+    if (-not $inToday) { continue }
+    $t = $line.Trim()
+    if ($t.Length -gt 0) { [void]$out.AppendLine($t) }
+  }
+  return $out.ToString()
+}
+
+function Get-TodaySectionHash { return (Get-Sha256 (Get-TodaySectionText)) }
+
 function Get-SectionRank([string]$section) {
   switch ($section) { 'today' { 0 } 'deferred' { 1 } default { 2 } }
 }
@@ -1462,52 +1567,130 @@ function Test-Workable($row) {
 }
 
 # Does this Today row still deserve the run's EXCLUSIVE attention -- i.e. does it hold the
-# Today->Deferred gate shut? (#223 rule 1, corrected 2026-08-31.)
+# Today->Deferred gate shut? (#223 rule 1, corrected 2026-08-31, corrected again in #310.)
 #
-# "Today before Deferred" was implemented as "a Deferred row is ineligible while any Today row is
-# WORKABLE", and workability is a property of the board, not of the run. That is fine while Today
-# rows finish. It starves the board permanently as soon as one does not.
+# THIS HAS BEEN WRONG TWICE, IN OPPOSITE DIRECTIONS. Both readings are recorded here because
+# the fix is only defensible as the thing that satisfies BOTH at once.
 #
-# Measured live 2026-08-31: the entire `## Today` section is a SINGLE standing meta-task (#448,
-# "plannermd + Overnight Agent development - triage fix and ship GitHub issues"). It is unbounded
-# by construction -- there is always another issue to triage -- so it is `in-progress` and workable
-# on every run, forever. It therefore held **121 Deferred rows** (10 of them workable) shut on
-# every run, and three runs in one night each re-worked #448 and touched nothing else. Nothing
-# errored; the gate did exactly what it said, which is why this reads clean and starves silently.
-# It is the same shape as the awaiting_reply ratchet fixed in #282, one level up: there the agent
-# wrote the text the gate read, here the agent cannot ever finish the row the gate waits on.
+# WRONG READING 1 -- "a Deferred row is ineligible while any Today row is WORKABLE".
+# Workability is a property of the BOARD, not of the run, so the gate can only open if a Today
+# row stops being workable. Measured live 2026-08-31: the entire `## Today` section was a SINGLE
+# standing meta-task (#448, "triage fix and ship GitHub issues"), unbounded by construction, so
+# `in-progress` and workable forever. It held 121 Deferred rows shut on every run; `scan`
+# reported 1 eligible row out of 238, and three runs in one night each re-worked that one task
+# and touched nothing else. A gate keyed to workability NEVER OPENS for an unbounded row.
 #
-# The user's own spec for #223 carries the missing half: *"only if its blocked on all today items,
-# can it move to deferred items -- ASSUMING THAT THERE IS STILL PLENTY OF TIME before the next
-# scheduled automation kicks in."* That clause is about the RUN's remaining budget, not about the
-# row's status, and it is the part that was never implemented.
+# WRONG READING 2 -- "a Today row is SERVED for N minutes after the agent last wrote a turn".
+# That is what replaced reading 1, and it made the release signal `last_turn_at`, which `mark`
+# stamps to now on EVERY turn. So the agent opened its own gate BY TYPING: one `mark`, with any
+# content, at any completion state, released the whole Deferred backlog for the rest of the run.
+# Measured live 2026-08-31 22:20 PT: after one turn on #463 -- still `in-progress`, its queue
+# nowhere near drained, four criticals unworked -- eligibility went 1 -> 13 and the run moved to
+# a Deferred-adjacent task at order 181. Note the field is named `last_turn_at`, not
+# `last_completed_at`: the data needed to answer "is this done" was never collected at all.
 #
-# So the gate now asks "has this run's Today work already been done?" instead of "could this row
-# ever be worked?". A Today row is SERVED once the agent has written a turn to it recently
-# (`mark` stamps `last_turn_at`; `seed` and `resnapshot` deliberately do NOT, because a bootstrap
-# is not work), and a served row steps out of the gate -- while staying fully eligible itself at
-# its board rank, so Today is still worked FIRST. Only the exclusivity lapses, never the ordering.
+# That is the third instance of ONE failure class in this repo: THE AGENT AUTHORS THE SIGNAL
+# THAT ITS OWN GATE READS. (#227/#272: the agent's unmarked prose read back as the human's
+# consent. The `awaiting_reply` ratchet: the agent's closing courtesy line parked its own task,
+# 186 of 238 rows parked, 0 eligible. This.) Each reader was correct in isolation and wrong
+# because the thing it read was agent-authored.
 #
-# Every branch fails CLOSED (returns $true = keep gating), so anything unknown preserves the old
-# Today-first behaviour rather than opening the backlog by accident.
-function Test-HoldsTodayGate($row, [int]$servedMinutes) {
-  if (-not (Test-Workable $row)) { return $false }
-  # A live reply is the highest-value work there is, so it reclaims exclusivity immediately --
-  # this is what stops a "served" stamp from muting a Today task the user just replied to.
-  if ($row.reopened) { return $true }
-  # Short-circuit for READABILITY, not for behaviour: with $servedMinutes <= 0 the fall-through
-  # below already returns $true for every reachable input (elapsed >= 0 is always true, and both
-  # the null and unparseable branches return $true anyway). Verified exhaustively, so removing
-  # this line is an EQUIVALENT mutant and no arm can kill it -- recorded here so a future reader
-  # does not mistake that for a coverage gap and invent a test that asserts nothing. Arm K still
-  # proves the flag end-to-end, because a build without the parameter cannot answer at all.
-  if ($servedMinutes -le 0) { return $true }        # feature off: Today always gates (pre-fix)
-  if (-not $row.last_turn_at) { return $true }      # never worked: definitely not served
-  $t = [datetime]::MinValue
+# THE CORRECTION: release on EXHAUSTION, and make exhaustion a deliberate DECLARATION rather
+# than a side effect of writing. A Today row stops being exclusive when, and only when:
+#
+#   not_workable         it is terminal (`done`/`skip`) or genuinely waiting on the user
+#                        (`proposed`, `blocked`, `awaiting_reply`, snoozed). Unchanged.
+#   declared_exhausted   the run has affirmatively declared -- in its own separate call, naming
+#                        what it examined -- that this row has nothing workable left THIS RUN,
+#                        and that declaration is still standing (see Test-ExhaustionClaim).
+#   stale_turn_backstop  nobody has written a turn here for -TodayGateBackstopHours, so the run
+#                        is wedged and the backlog is released rather than frozen behind it.
+#
+# Writing a turn is now NECESSARY-BUT-NOT-SUFFICIENT for the declaration and, on its own, moves
+# the gate in the SAFE direction only: it resets the backstop, i.e. typing makes the gate hold
+# LONGER, never shorter. That inversion is the whole of the #310 fix.
+#
+# Every branch that is unsure HOLDS, so an unknown or unparseable input preserves Today-first
+# exclusivity rather than opening the backlog by accident.
+function Get-TodayGateVerdict($row, [string]$todayHash) {
+  if (-not (Test-Workable $row)) {
+    return [pscustomobject]@{ holds = $false; reason = 'not_workable' }
+  }
+  # A live reply is the highest-value work there is, AND it invalidates any standing claim that
+  # this row was examined -- the thing that was examined has just changed underneath the claim.
+  if ($row.reopened) {
+    return [pscustomobject]@{ holds = $true; reason = 'holding:reopened' }
+  }
+  if ($script:TodayGateIsStrict) {
+    return [pscustomobject]@{ holds = $true; reason = 'holding:strict' }
+  }
+
+  $claim = Test-ExhaustionClaim $row.exhaustion $row $todayHash
+  if ($claim -eq 'declared_exhausted') {
+    return [pscustomobject]@{ holds = $false; reason = 'declared_exhausted' }
+  }
+
+  # The wedged-run backstop. Deliberately keyed to STALENESS, never to recency: it fires because
+  # the agent has NOT written here, and any turn written resets it. There is therefore no way to
+  # reach this release by writing, which is precisely what #310 was.
+  if ($TodayGateBackstopHours -gt 0 -and $row.last_turn_at) {
+    $t = [datetime]::MinValue
+    if ([datetime]::TryParse(
+        "$($row.last_turn_at)", [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::None, [ref]$t)) {
+      if (((Get-Date) - $t).TotalHours -ge $TodayGateBackstopHours) {
+        return [pscustomobject]@{ holds = $false; reason = 'stale_turn_backstop' }
+      }
+    }
+  }
+
+  return [pscustomobject]@{ holds = $true; reason = $claim }
+}
+
+# Is a stored exhaustion declaration still standing? Returns `declared_exhausted` when it is,
+# and otherwise a `holding:<why-not>` string that goes straight into `today_release_reason`, so
+# a run's selection can be audited afterwards without re-deriving anything.
+#
+# The four ways a declaration stops standing are the reason this is a claim rather than a latch,
+# and three of the four are invalidated by state the AGENT DOES NOT AUTHOR:
+#
+#   exhaustion_expired        older than -ExhaustionTtlMinutes. A declaration is scoped to the
+#                             run that made it; the next run must look again.
+#   exhaustion_stale_board    the `## Today` section of planner.md has changed since the claim
+#                             was made. "I examined everything Today holds" is a statement ABOUT
+#                             that text, so the HUMAN revokes it simply by editing the board.
+#   exhaustion_superseded     a turn was written to this row AFTER the declaration. Writing more
+#                             work on a row you just called exhausted refutes the claim, by the
+#                             run's own record. This is what makes the declaration awkward to
+#                             make falsely: claim it early and every later turn cancels it.
+#   declaration_named_nothing the claim names no examined item, so it asserts nothing.
+function Test-ExhaustionClaim($ex, $row, [string]$todayHash) {
+  if ($ExhaustionTtlMinutes -le 0) { return 'holding:declaration_disabled' }
+  if (-not $ex) { return 'holding:no_declaration' }
+  $examined = @()
+  if ($ex.PSObject.Properties['examined'] -and $ex.examined) { $examined = @($ex.examined) }
+  if ($examined.Count -eq 0) { return 'holding:declaration_named_nothing' }
+
+  $at = [datetime]::MinValue
   if (-not [datetime]::TryParse(
-      "$($row.last_turn_at)", [Globalization.CultureInfo]::InvariantCulture,
-      [Globalization.DateTimeStyles]::None, [ref]$t)) { return $true }   # unparseable -> gate
-  return (((Get-Date) - $t).TotalMinutes -ge $servedMinutes)
+      "$($ex.at)", [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::None, [ref]$at)) { return 'holding:declaration_unparseable' }
+  if (((Get-Date) - $at).TotalMinutes -ge $ExhaustionTtlMinutes) { return 'holding:exhaustion_expired' }
+
+  if ("$($ex.today_hash)" -ne $todayHash) { return 'holding:exhaustion_stale_board' }
+
+  if ($row.last_turn_at) {
+    $lt = [datetime]::MinValue
+    if ([datetime]::TryParse(
+        "$($row.last_turn_at)", [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::None, [ref]$lt)) {
+      # Strictly AFTER. Both stamps have one-second resolution, so the declaration made in the
+      # same second as the turn that preceded it must not refute itself.
+      if ($lt -gt $at) { return 'holding:exhaustion_superseded' }
+    }
+  }
+
+  return 'declared_exhausted'
 }
 
 function Cmd-Scan {
@@ -1587,9 +1770,12 @@ function Cmd-Scan {
       has_open_ask   = [bool]$facts.HasOpenAsk
       awaiting_reply = [bool]($facts.HasAgentBlock -and $facts.HasBlockingAsk -and -not $facts.HasTrailingUser)
       # When the agent last wrote a TURN here (`mark` stamps it; `seed` and `resnapshot`
-      # deliberately do not). Input to the Today->Deferred gate: a Today row served this
-      # recently no longer holds the whole backlog shut. Absent -> never worked -> keeps gating.
+      # deliberately do not). Since #310 this is NOT a release signal: it feeds the wedged-run
+      # backstop, where a FRESH stamp holds the gate and only a STALE one can release it.
       last_turn_at   = if ($st -and $st.PSObject.Properties['last_turn_at']) { "$($st.last_turn_at)" } else { $null }
+      # The standing exhaustion declaration for this row, verbatim (#310), so a human can audit
+      # what the run claimed to have examined and against which board it claimed it.
+      exhaustion     = if ($st -and $st.PSObject.Properties['today_exhausted']) { $st.today_exhausted } else { $null }
     }
   }
 
@@ -1613,9 +1799,15 @@ function Cmd-Scan {
 
   # The gate is computed from the WHOLE set, so it cannot be evaluated per-row in the loop above.
   # NOTE this counts rows that still hold the gate SHUT, which is narrower than "workable": a
-  # Today row the agent has already served this cycle stays workable (and eligible, at its own
-  # board rank) but stops blocking Deferred. See Test-HoldsTodayGate for why.
-  $todayHolding = @($rows | Where-Object { $_.section -eq 'today' -and (Test-HoldsTodayGate $_ $TodayServedMinutes) }).Count
+  # Today row the run has DECLARED EXHAUSTED stays workable (and eligible, at its own board rank)
+  # but stops blocking Deferred. See Get-TodayGateVerdict for why, and for the two ways this has
+  # been got wrong already.
+  $todayHash = Get-TodaySectionHash
+  $verdicts = @{}
+  foreach ($r in $rows) {
+    if ($r.section -eq 'today') { $verdicts["$($r.id)"] = (Get-TodayGateVerdict $r $todayHash) }
+  }
+  $todayHolding = @($verdicts.Values | Where-Object { $_.holds }).Count
   $order = 0
   foreach ($r in $rows) {
     $order++
@@ -1625,12 +1817,18 @@ function Cmd-Scan {
       elseif ($r.section -eq 'today') { $eligible = (Test-Workable $r) }
       elseif ($todayHolding -eq 0) { $eligible = (Test-Workable $r) }
     }
+    $v = $verdicts["$($r.id)"]
     Add-Member -InputObject $r -NotePropertyName 'order' -NotePropertyValue $order -Force
     Add-Member -InputObject $r -NotePropertyName 'eligible' -NotePropertyValue $eligible -Force
     # Auditable: which Today rows are actually holding the backlog shut this run (#223 is
     # explicit that selection must be data, not the agent's judgement).
     Add-Member -InputObject $r -NotePropertyName 'holds_today_gate' `
-      -NotePropertyValue ([bool]($r.section -eq 'today' -and (Test-HoldsTodayGate $r $TodayServedMinutes))) -Force
+      -NotePropertyValue ([bool]($null -ne $v -and $v.holds)) -Force
+    # ...and WHY, in one word, for every Today row (#310). A run that skipped to Deferred can be
+    # audited afterwards without re-deriving anything: either it says `declared_exhausted` and
+    # the declaration is right there in `exhaustion`, or it does not and the skip was a bug.
+    Add-Member -InputObject $r -NotePropertyName 'today_release_reason' `
+      -NotePropertyValue $(if ($null -ne $v) { "$($v.reason)" } else { $null }) -Force
   }
 
   $rows | ConvertTo-Json -Depth 4
@@ -1859,10 +2057,85 @@ function Cmd-Resnapshot {
   } | ConvertTo-Json -Depth 4
 }
 
+function Set-ExhaustionDeclaration {
+  # The exhaustion DECLARATION (#310) -- the affirmative statement that releases the
+  # Today->Deferred gate. Everything about the shape of this call is chosen to make the
+  # declaration cheap to make honestly and awkward to make falsely.
+  #
+  #   IT IS ITS OWN CALL. `-Exhausted` cannot be combined with `-Status`/`-Version`/`-PlanId` or
+  #   with any timer flag. That is the structural half of the #310 fix: the act that RELEASES
+  #   the gate can no longer ride along on the act that WRITES a turn, so writing can never
+  #   release by accident. A caller that wants both must ask for both, in that order, on purpose.
+  #
+  #   IT MUST NAME WHAT IT EXAMINED. An empty declaration is rejected outright. "Exhausted" is a
+  #   claim about a set; a claim that names no set asserts nothing and would be a shrug with the
+  #   authority of a decision.
+  #
+  #   IT MUST FOLLOW REAL WORK. There must be a `last_turn_at` within -ExhaustionTtlMinutes: you
+  #   may not declare a row exhausted that this run never opened. Note the direction -- writing a
+  #   turn is now NECESSARY BUT NOT SUFFICIENT, which is the exact inversion of the #310 defect,
+  #   where writing alone was sufficient.
+  #
+  #   IT DOES NOT TOUCH THE JOURNAL. No turn terminator, no re-snapshot, no `last_turn_at`. A
+  #   declaration is a statement about work already recorded, so it must not be able to absorb a
+  #   user reply that arrived in the meantime, and it must not refute itself (see
+  #   Test-ExhaustionClaim's `exhaustion_superseded`).
+  #
+  # It records the hash of the `## Today` section it was made against, which is what lets the
+  # HUMAN revoke it -- silently and without knowing this file exists -- just by editing the board.
+  $st = Read-State $Id
+  if ($ExhaustionClear) {
+    if (-not $st) { throw "task $Id has no state to clear" }
+    Set-Member $st 'today_exhausted' $null
+    $st.updated = Now-Iso
+    Write-State $st
+    return ($st | ConvertTo-Json -Depth 6)
+  }
+
+  if ($Status -or $Version -gt 0 -or $PlanId -or $Poll -or $PollDone -or $PollClear -or
+      $Recheck -or $RecheckKind -or $RecheckDone -or $RecheckClear) {
+    throw "-Exhausted is a separate declaration and cannot be combined with -Status/-Version/-PlanId or any timer flag: write the turn first, then declare exhaustion in its own call"
+  }
+  if ($ExhaustionTtlMinutes -le 0) {
+    throw "-Exhausted is disabled (-ExhaustionTtlMinutes is $ExhaustionTtlMinutes)"
+  }
+
+  $examined = @(($Exhausted -split '[,;\r\n\t ]+') | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 })
+  if ($examined.Count -eq 0) {
+    throw "-Exhausted must name what was examined (e.g. -Exhausted 'gh:197,gh:179,gh:139'); an unnamed declaration asserts nothing"
+  }
+
+  # ONE guard, deliberately: "there is no turn", "the turn is unreadable" and "the turn is too
+  # old to be this run's" are the same refusal -- you may not declare a row this run has not
+  # worked -- and splitting them into separate throws would leave a mutant that deletes only the
+  # first one still failing on the second, i.e. a hole no test can see.
+  $lt = [datetime]::MinValue
+  $hasTurn = [bool]($st -and $st.PSObject.Properties['last_turn_at'] -and $st.last_turn_at -and
+    [datetime]::TryParse(
+      "$($st.last_turn_at)", [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::None, [ref]$lt))
+  if (-not $hasTurn -or ((Get-Date) - $lt).TotalMinutes -ge $ExhaustionTtlMinutes) {
+    throw "task $Id has no turn recorded in the last $ExhaustionTtlMinutes minute(s): work the row and mark it this run before declaring it exhausted"
+  }
+
+  Set-Member $st 'today_exhausted' ([pscustomobject]@{
+      at         = Now-Iso
+      examined   = $examined
+      note       = "$ExhaustedNote"
+      today_hash = Get-TodaySectionHash
+    })
+  $st.updated = Now-Iso
+  Write-State $st
+  return ($st | ConvertTo-Json -Depth 6)
+}
+
 function Cmd-Mark {
   if (-not $Id) { throw 'mark requires -Id' }
   $path = Join-Path $JournalDir "task-$Id.md"
   if (-not (Test-Path $path)) { throw "no journal at $path" }
+  # The exhaustion declaration (#310) branches out BEFORE anything below touches the journal or
+  # stamps a turn -- see Set-ExhaustionDeclaration for why it must be a separate act.
+  if ($Exhausted -or $ExhaustionClear) { return (Set-ExhaustionDeclaration) }
   # Stamp the turn boundary BEFORE snapshotting, so the hash recorded below describes the
   # file as it now stands on disk. Doing it after would record a hash the file no longer has
   # and every subsequent scan would report a phantom change.
@@ -1932,9 +2205,11 @@ function Cmd-Mark {
   # that carries -Status/-Version/-PlanId, or a bare `mark`, is the documented "I just wrote my
   # turn" call and does count.
   #
-  # Absent means "never worked", which makes Test-HoldsTodayGate keep gating -- so existing
-  # state files written before this field existed roll forward into the SAFE pre-fix behaviour
-  # and only release once the agent genuinely writes a turn.
+  # SINCE #310 THIS FIELD NO LONGER RELEASES THE GATE. It is a precondition for declaring
+  # exhaustion (you may not declare a row you never opened), it refutes a declaration made
+  # before it (`exhaustion_superseded`), and it resets the wedged-run backstop. All three
+  # directions make a fresh stamp hold the gate LONGER, so writing can no longer open it.
+  # Absent still means "never worked", which keeps the row gating.
   $timerOnly = ($PollDone -or $PollClear -or $RecheckDone -or $RecheckClear -or ($RecheckKind -and -not $Recheck))
   $isTurn = -not ($timerOnly -and -not $Status -and $Version -le 0 -and -not $PlanId)
   if ($isTurn) { Set-Member $st 'last_turn_at' (Now-Iso) }

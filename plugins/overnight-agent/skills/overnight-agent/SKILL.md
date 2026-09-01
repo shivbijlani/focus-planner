@@ -324,23 +324,62 @@ Do the phases **in this order** every time.
 > - **Never work a row with `eligible: false`.** A Deferred row stays ineligible while a
 >   Today row still **holds the gate** — which is what stops a P2 Deferred item eating a run
 >   while a Today item sits untouched.
-> - ⚠️ **"Holds the gate" is narrower than "is workable", and conflating the two starved the
->   whole board (fixed 2026-08-31).** Workability is a property of the *board*, so a gate keyed
->   to it only ever opens if Today rows **finish**. Measured live: the entire `## Today` section
->   was one standing meta-task ("triage and ship GitHub issues") — unbounded by construction, so
->   `in-progress` and workable **forever** — and it therefore held every Deferred row shut on
->   every run. `scan` reported **1 eligible row out of 238**, and three runs in one night each
->   re-worked that same task and touched nothing else. Nothing errored; the gate did exactly
->   what it said, which is why this starves silently. It is the same shape as the
->   `awaiting_reply` ratchet below, one level up: there the agent wrote the text the gate read,
->   here the agent could never finish the row the gate waited on.
->   The missing half is in the original #223 spec — fall through *"assuming that there is still
->   plenty of time before the next scheduled automation kicks in"*, which is about the **run's
->   budget**, not the row's status. So a Today row the agent has **already served this cycle**
->   keeps its rank but stops being exclusive, reported per row as **`holds_today_gate`**.
->   **Ordering is untouched — Today is still worked first; only the monopoly lapses.** A reply
->   (`reopened`) reclaims exclusivity immediately, so "served" can never mute a task you just
->   replied to. Guarded by `mutcheck-today-served.ps1` and arms **I/J/K/L** of
+> - ⚠️ **"Holds the gate" is narrower than "is workable", and this has been got wrong TWICE, in
+>   opposite directions.** Both are recorded because the current rule is only defensible as the
+>   thing that satisfies both at once.
+>   - **Keyed to workability, it never opens.** Measured live 2026-08-31: the entire `## Today`
+>     section was one standing meta-task ("triage and ship GitHub issues") — unbounded by
+>     construction, so `in-progress` and workable **forever** — and it held every Deferred row
+>     shut on every run. `scan` reported **1 eligible row out of 238**, and three runs in one
+>     night each re-worked that same task and touched nothing else.
+>   - **Keyed to recency, it opens when you type.** That was the replacement, and it was worse.
+>     `mark` stamps `last_turn_at` on every turn, so **one turn — any content, at any completion
+>     state — released the whole Deferred backlog for the rest of the run.** Measured live
+>     2026-08-31 22:20 PT: after one turn on #463 (still `in-progress`, its queue nowhere near
+>     drained, four criticals unworked) eligibility went **1 → 13** and the run moved to a
+>     Deferred-adjacent task at order 181. Shiv's rule is the opposite: *"you only go beyond
+>     today once today's work is done and there is nothing more to be done there."*
+>   - It is the same shape as the `awaiting_reply` ratchet below: **you write the text your own
+>     gate reads.** A gate whose release signal you author is not a gate.
+>
+> - ✅ **So the gate now opens on EXHAUSTION, which you must DECLARE.** Nothing you write moves
+>   it. A Today row stops being exclusive only when one of these is true, and `scan` tells you
+>   which, per row, as **`today_release_reason`**:
+>
+>   | reason | meaning |
+>   |---|---|
+>   | `not_workable` | terminal (`done`/`skip`) or waiting on Shiv (`proposed`, `blocked`, `awaiting_reply`, snoozed) |
+>   | `declared_exhausted` | **you declared it** — see below |
+>   | `stale_turn_backstop` | nobody has written a turn here for 6h, so the run is wedged and the backlog is released rather than frozen |
+>   | `holding:…` | it is still exclusive, and the suffix says why your declaration did not stand |
+>
+> - **How to declare exhaustion.** Two calls, in this order, never one:
+>
+>   ```powershell
+>   oa-state.ps1 mark -Id 463 -Status in-progress                       # 1. write your turn
+>   oa-state.ps1 mark -Id 463 -Exhausted 'gh:197,gh:179,gh:139' `       # 2. then declare
+>                             -ExhaustedNote 'all three blocked on review'
+>   ```
+>
+>   `-Exhausted` **must name what you examined** and is rejected if it names nothing. It cannot
+>   be combined with `-Status`/`-Version`/`-PlanId` or any timer flag — releasing the gate must
+>   be a deliberate act, not a passenger on a turn. And you cannot declare a row this run has not
+>   worked. **Only declare when it is true**: for a queue-draining task like "triage and ship
+>   GitHub issues", exhausted means *the queue has no workable item left this run* — not "I did
+>   one and I'm bored". If four criticals are still unworked, you are not exhausted.
+>
+> - **Your declaration is not a latch. Four things cancel it, and you author none of them:**
+>   it expires after ~one run (`holding:exhaustion_expired`); Shiv editing the `## Today` section
+>   revokes it (`holding:exhaustion_stale_board`); **writing another turn to that row refutes it**
+>   (`holding:exhaustion_superseded`); and a reply reclaims exclusivity outright
+>   (`holding:reopened`). If you declare and then keep working the row, you have cancelled your
+>   own release — which is the point.
+>
+> - **Ordering is untouched — Today is still worked FIRST; only the monopoly lapses.** A declared
+>   row keeps its rank and stays `eligible`, so you never abandon your own top-priority task.
+>   `-TodayGateStrict` (or the legacy `-TodayServedMinutes 0`) is the one-flag rollback to the
+>   old always-gates behaviour. Guarded by `mutcheck-today-served.ps1` (12 arms, and
+>   `-Matrix` proves each is killed by exactly one mutant) and arms **I/J/K/L/M** of
 >   `mutcheck-priority-order.ps1`.
 > - **`awaiting_reply: true` means the agent spoke last and its newest turn still asks you
 >   something it actually needs** — the same waiting state `proposed` encodes, reached from
