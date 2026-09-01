@@ -321,9 +321,27 @@ Do the phases **in this order** every time.
 > `order` (its rank this run), `section` (`today`/`deferred`/`other`), `work_priority`, `urgency`,
 > `priorities_rank`, and — the one that actually gates you — **`eligible`**.
 >
-> - **Never work a row with `eligible: false`.** A Deferred row stays ineligible while *any*
->   Today row is still workable, which is what stops a P2 Deferred item eating a run while a
->   Today item sits untouched.
+> - **Never work a row with `eligible: false`.** A Deferred row stays ineligible while a
+>   Today row still **holds the gate** — which is what stops a P2 Deferred item eating a run
+>   while a Today item sits untouched.
+> - ⚠️ **"Holds the gate" is narrower than "is workable", and conflating the two starved the
+>   whole board (fixed 2026-08-31).** Workability is a property of the *board*, so a gate keyed
+>   to it only ever opens if Today rows **finish**. Measured live: the entire `## Today` section
+>   was one standing meta-task ("triage and ship GitHub issues") — unbounded by construction, so
+>   `in-progress` and workable **forever** — and it therefore held every Deferred row shut on
+>   every run. `scan` reported **1 eligible row out of 238**, and three runs in one night each
+>   re-worked that same task and touched nothing else. Nothing errored; the gate did exactly
+>   what it said, which is why this starves silently. It is the same shape as the
+>   `awaiting_reply` ratchet below, one level up: there the agent wrote the text the gate read,
+>   here the agent could never finish the row the gate waited on.
+>   The missing half is in the original #223 spec — fall through *"assuming that there is still
+>   plenty of time before the next scheduled automation kicks in"*, which is about the **run's
+>   budget**, not the row's status. So a Today row the agent has **already served this cycle**
+>   keeps its rank but stops being exclusive, reported per row as **`holds_today_gate`**.
+>   **Ordering is untouched — Today is still worked first; only the monopoly lapses.** A reply
+>   (`reopened`) reclaims exclusivity immediately, so "served" can never mute a task you just
+>   replied to. Guarded by `mutcheck-today-served.ps1` and arms **I/J/K/L** of
+>   `mutcheck-priority-order.ps1`.
 > - **`awaiting_reply: true` means the agent spoke last and its newest turn still asks you
 >   something it actually needs** — the same waiting state `proposed` encodes, reached from
 >   `in-progress`. Such a row is **not workable**, so it neither gets a stacked turn nor holds the
