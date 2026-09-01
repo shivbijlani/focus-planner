@@ -53,6 +53,19 @@ Throughout the rest of this skill, references to "User settings", "Preferences",
 "Authorized sender addresses", and the "Auto-send allow-list" all mean the values in the resolved
 `user-settings.md`.
 
+⚠️ **`user-settings.md` holds SETTINGS ONLY. The agent's accumulated notes live in `agent-lore.md`
+beside it, and are NOT read at run start (GH #262).** This file is on the per-run read path, so
+anything added to it is paid for on every model call for the rest of time. It reached **946 KB /
+~232K tokens — ~97% of the context window per call** — which is what made runs stop finishing, and
+then made the file too large for the agent to read at all. `split-user-settings.ps1` (PHASE 0) keeps
+it small automatically.
+
+**So: when you record a hazard, a postmortem or a run learning, append it to `agent-lore.md`, not
+here.** Put a value in `user-settings.md` only when a run needs it to *act* — a path, an account, an
+allow-list, a toggle. If a setting needs a long justification, keep the operative value in the cell and
+put the reasoning in the lore file. Nothing is lost either way: the splitter relocates verbatim and
+leaves an index of every archived heading.
+
 ## Where everything lives
 
 - Planner board: `<planner folder>\planner.md` (from `user-settings.md` → "Planner board")
@@ -415,6 +428,34 @@ stale-artefact class as a stale CI tick), deploys only files that are plainly be
 - A first refusal is information and does not escalate; the *same* refusal on the next cycle is a
   decision nobody is making, and that is what gets surfaced.
 - Add `-WhatIf` to see what it would do without writing. A failed deploy must never abort the run.
+
+**Third, keep the settings file readable (GH #262).** `user-settings.md` is read at the start of every
+run, and it is also where the agent appends its own hazard notes — so it grows without bound. Measured:
+**28 KB on 2026-08-23 → 946 KB on 2026-08-31**, roughly doubling weekly. At 918 KB it was **~232K tokens,
+~97% of the model context on every single call**, and run `30a97ad9` sat in `running` for ~9 hours
+without finishing, freezing the `*/30` schedule. By 946 KB it had crossed a second threshold: the
+agent's own file reader **refused it outright** ("File too large to read at once"), so PHASE 0 could no
+longer read its own configuration. Run this third, every run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\..\..\checks\split-user-settings.ps1"
+```
+
+It moves every non-settings `## ` section **verbatim** into `agent-lore.md` beside the settings file,
+leaves an index of the archived headings behind, and relocates oversized table-cell tails behind a
+pointer link. Measured on the live file: **924 KB → 73 KB (~237K → ~19K tokens), 135 sections archived,
+0 lost.**
+
+- **Nothing is deleted, and it is a fixed point.** A second run writes nothing at all (`noOp: true`), so
+  it is safe on the `*/30` cadence. It refuses and writes nothing if the pieces do not reassemble into
+  the source, and it rolls back automatically if the bytes it wrote carry more mojibake than the bytes
+  it read.
+- **The archived headings are the index, and that is why archiving is safe here.** These headings state
+  their own rule ("STOP — RELIABILITY IS ALWAYS HIGH PRIORITY", "STOP — Keep turns short"), so the index
+  preserves nearly all of the behavioural signal at ~1% of the bytes.
+- **Read `agent-lore.md` on demand, never at run start.** Grep it for the heading you need; loading it
+  eagerly re-creates the exact problem this step exists to remove.
+- Add `-WhatIf` to preview. A failed split must never abort the run.
 
 The user can leave you new instructions by emailing the agent account
 (`<agent-inbox@example.com>`, from `user-settings.md`). At the start of each run, read the inbox via the email MCP and fold any
