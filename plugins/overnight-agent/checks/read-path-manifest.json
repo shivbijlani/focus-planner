@@ -1,0 +1,95 @@
+{
+  "_comment": [
+    "The file-layout contract (GH #292), in machine-readable form.",
+    "",
+    "One row per file the Overnight Agent reads or writes. Each row answers four",
+    "questions: who OWNS the intent, who is allowed to WRITE it, whether it is on the",
+    "PER-RUN READ PATH, and what BOUNDS its size.",
+    "",
+    "The invariant this file exists to enforce:",
+    "",
+    "    writer 'agent' + readPath 'every-run' is INVALID.",
+    "",
+    "That combination is the bug. It produced GH #262 on user-settings.md (grew to",
+    "~947,000 chars, ~97% of the context window per call, runs stopped finishing) and",
+    "GH #291 on the journals (task-400.md at 257 KB / ~66K tokens, read whole when",
+    "planning that task). Declaring it as data means the third instance is refused",
+    "before it is written rather than diagnosed after it breaks something.",
+    "",
+    "read-path-budget-sweep.mjs enforces this. It only ever reads."
+  ],
+
+  "tolerancePct": 15,
+
+  "files": [
+    {
+      "id": "user-settings",
+      "path": "{planner}/user-settings.md",
+      "owner": "user",
+      "writer": "app",
+      "readPath": "every-run",
+      "budgetKB": 120,
+      "retention": "values only; the agent's prose belongs in agent-lore.md",
+      "issue": 262,
+      "note": "Writer is 'app' as the target state (GH #292). The agent appending here is what caused #262; SKILL.md now redirects those writes to agent-lore.md."
+    },
+    {
+      "id": "skill",
+      "path": "{skill}/SKILL.md",
+      "owner": "repo",
+      "writer": "developer",
+      "readPath": "every-run",
+      "budgetKB": 96,
+      "retention": "reviewed edits only; guardrail prose splits per GH #127",
+      "issue": 127,
+      "note": "Developer-written, so it cannot grow unattended. Budgeted anyway because it is read in full on every run."
+    },
+    {
+      "id": "agent-gate",
+      "path": "{planner}/agent-gate.md",
+      "owner": "user",
+      "writer": "app",
+      "readPath": "every-run",
+      "budgetKB": 32,
+      "retention": "a visible list the user edits; bounded by fitting on one screen",
+      "issue": 288,
+      "optional": true,
+      "note": "Shipped by #290. The agent only ever READS this file, which is what makes anything in it attributable to the user without a marker (#250). Budgeted tightly on purpose: its value is that the whole gate is reviewable at a glance, and a gate nobody reads is a gate nobody trusts."
+    },
+    {
+      "id": "board",
+      "path": "{planner}/planner.md",
+      "owner": "user",
+      "writer": "app",
+      "readPath": "every-run",
+      "budgetKB": 64,
+      "retention": "completed rows move to planner-completed.md"
+    },
+    {
+      "id": "agent-lore",
+      "path": "{planner}/agent-lore.md",
+      "owner": "agent",
+      "writer": "agent",
+      "readPath": "on-demand",
+      "budgetKB": null,
+      "retention": "needs a rotation policy (GH #104)",
+      "issue": 104,
+      "note": "Agent-written, so it MUST stay off the per-run read path. Unbudgeted on purpose: it is grepped, never loaded. If this ever becomes 'every-run' the contract check fails, which is the point."
+    },
+    {
+      "id": "journals",
+      "glob": "{planner}/journal/task-*.md",
+      "owner": "shared",
+      "writer": "agent+user",
+      "readPath": "every-run",
+      "budgetKB": 64,
+      "retention": "none today - this is the open defect",
+      "issue": 291,
+      "contractException": {
+        "issue": 291,
+        "reason": "SKILL.md instructs the agent to read a task's linked journal(s) in full before planning. Closing this needs a bounded extract (head + latest turn + open asks), not a size cap, so the violation is acknowledged and tracked rather than silenced. Growth beyond tolerance still fails."
+      },
+      "note": "SKILL.md says to read a task's linked journal(s) in full before planning. 95th percentile is ~41 KB, so 64 KB is above normal and flags genuine outliers rather than routine files."
+    }
+  ]
+}

@@ -638,6 +638,18 @@ $Suite = @(
   # COMMENT-ONLY (latent trap). 11 assertions, 5 mutations, each killed by a DIFFERENT assertion
   # (mutcheck-ps1-encoding.mjs, auto-globbed by -IncludeMutchecks). Exits 1 on findings.
   @{ n = 'ps1-encoding-sweep'; bridge = $false }
+# GH #293, added 2026-08-31. The alternative to #262's every-run rewriter: assert the size
+# of everything on the per-run read path and FAIL LOUDLY, rather than silently repairing a
+# OneDrive-synced file on a timer. Most of that rewriter's 492 lines are guards that exist
+# because it WRITES; this reads only, and mutcheck proves the read-only property rather
+# than assuming it. It also enforces the file-layout contract (#292): writer='agent' plus
+# readPath='every-run' is refused outright, because that combination is the defect class
+# itself -- it produced #262 on user-settings.md and #291 on the journals.
+# Known breaches are baselined (read-path-baseline.json) so the check does not go
+# permanently red and get skimmed, which is the workflow-health-sweep lesson above; GROWTH
+# past tolerance still fails, and growth is the live signal. 17 assertions, 6 mutations,
+# all killed (mutcheck-read-path-budget.mjs, auto-globbed by -IncludeMutchecks).
+@{ n = 'read-path-budget-sweep'; bridge = $false }
 )
 
 if ($IncludeMutchecks) {
