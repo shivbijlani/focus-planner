@@ -54,9 +54,16 @@ the four, because it is the mechanism by which the other failures stay invisible
    invalid value, or a valid one that is wrong?* The first is caught by any check; the
    second is caught only by deliberately asking whether the reader can distinguish missing
    from unparsed — because, by construction, nothing downstream will ever raise it for you.
-   This is a cross-cutting hazard, not a supervision-only one: the prioritisation layer hits
-   the same shape — a snoozed row that decodes to "not snoozed," a skipped board row that
-   reads as "Today is finished" — which is why the two concerns are documented as siblings.
+   The instance and the class need different fixes, and only one kind closes the class:
+   teaching a parser the real format, or decoding bytes explicitly, removes *this* misread
+   but leaves the reader just as unable to say "I could not read that" the next time; the
+   durable fix is to **make unreadability a value the reader can return.** The liveness lock
+   is exactly this shape — a `running` row over a dead PID is a different *value* from one
+   over a live PID, not the same value reached two ways — whereas age-only `STUCK` had no
+   way to represent "I cannot tell," which is why it collapsed. This is a cross-cutting
+   hazard, not a supervision-only one: the prioritisation layer hits the same shape — a
+   snoozed row that decodes to "not snoozed," a skipped board row that reads as "Today is
+   finished" — which is why the two concerns are documented as siblings.
 
 ## Strategy A — Out-of-band supervision of the agent process
 
