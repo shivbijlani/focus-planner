@@ -58,6 +58,12 @@ const ARMS = [
     from: '        || legacyWake\n        || \'\'',
     to: '        || \'\'',
   },
+  {
+    name: 'linked-id-fixed-offset',
+    why: 'restore opChangeLinkedId\'s hardcoded parts[6] — writes the parent id into Wake on a 7-col row (#451/#465)',
+    from: "  const linkedIndex = headers.findIndex(h => h.includes('Linked'))",
+    to: '  const linkedIndex = -1',
+  },
 ]
 
 const original = readFileSync(target, 'utf8')

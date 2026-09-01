@@ -7,7 +7,7 @@ import {
   resetDiagnosticsForTests,
 } from '../packages/diagnostics/src/index.js'
 import { planBoardRepair, verifyBoardRepair, RECOVERED_WAKES } from './boardRepair.js'
-import { findMalformedRows, opAddTask, opMoveBetweenSections } from './focusPlanOps.js'
+import { findMalformedRows, opAddTask, opChangeLinkedId, opMoveBetweenSections } from './focusPlanOps.js'
 import { parseSnoozeUntil } from './snooze.js'
 
 // ── helpers ──────────────────────────────────────────────────────────
@@ -176,8 +176,100 @@ describe('#307 — a board rewrite must migrate legacy snooze comments, never dr
   })
 })
 
-describe('#307 — an un-migratable wake date is logged as an anomaly, never dropped silently', () => {
-  // Guarantee 3, and deliberately the SAME rule #190/PR #306 established one
+describe('#307 is LIVE, not historical — every new Deferred row hit the same defect', () => {
+  // Observed in the wild at 22:57:11 on 2026-08-31, ~13 minutes after the
+  // mutation check predicted it: Shiv added task #465 in the app and the app
+  // wrote it with SIX cells under the SEVEN-column header that has been on the
+  // board since the migration:
+  //
+  //   | 465 | 🟡 | simplehuman auto soap dispenser ... | - | 2026-09-01 | 215 |
+  //
+  // `215` is #465's Linked ID, so under the 7-column header it sat in the WAKE
+  // position and a brand-new task already read as parentless — the exact damage
+  // the issue reports for #446/#356/#276, reproduced on creation. The cause is
+  // the third hole: the writer early-returned as soon as the header already
+  // contained `Wake`, so rows created AFTER the schema change were never
+  // brought up to width. Malformed Deferred rows went 5 -> 6.
+
+  /** The live board's shape: 7-column Deferred header already in place. */
+  const MODERN_BOARD = [
+    '## Today',
+    '',
+    '| ID | 🎯 | Task | Work Priority | Added | Linked ID |',
+    '|---|---|------|---------------|-------|-----------|',
+    '| 463 | 🟡 | Ship issues | - | 2026-08-31 | 192 |',
+    '',
+    '## Deferred',
+    '',
+    '| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |',
+    '| --- | --- | ------ | --------------- | ------- | ---- | ----------- |',
+    '| 464 | 🟡 | Daily, check instagram | - | 2026-08-31 |  |',
+    '| 437 | 🟡 | Dust mites | - | 2026-08-22 |  | 191 |',
+    '',
+  ].join('\n')
+
+  it('writes a NEW Deferred row at full header width, with Linked ID in Linked ID (#465)', () => {
+    const { content } = opAddTask(MODERN_BOARD, {
+      task: 'simplehuman auto soap dispenser used available? ~ 30$ range  TOTAL? FB mktplace?',
+      priority: '🟡',
+      linkedTask: '215',
+      section: 'Deferred',
+    })
+    const headers = deferredHeaders(content)
+    const cells = cellsOf(rowFor(content, 465))
+    expect(cells).toHaveLength(headers.length)
+    expect(cells[headers.indexOf('Linked ID')]).toBe('215')
+    // The live bug: 215 sitting here, so the task reads as parentless.
+    expect(cells[headers.indexOf('Wake')]).toBe('')
+    expect(wakeOf(content, 465)).toBeNull()
+  })
+
+  it('leaves the whole Deferred section well-formed after adding a task', () => {
+    // Malformed rows must go DOWN, never up: the live board went 5 -> 6.
+    expect(findMalformedRows(MODERN_BOARD, 'Deferred').map(r => r.id)).toEqual(['464'])
+    const { content } = opAddTask(MODERN_BOARD, {
+      task: 'simplehuman auto soap dispenser', priority: '🟡', linkedTask: '215', section: 'Deferred',
+    })
+    expect(findMalformedRows(content, 'Deferred')).toEqual([])
+  })
+
+  it('setting a Linked ID addresses the column by HEADER, not by a fixed offset (#451)', () => {
+    // opChangeLinkedId used a hardcoded `parts[6]` — the last cell of the OLD
+    // 6-column schema. `Wake` is inserted immediately BEFORE `Linked ID`, so on
+    // a 7-column row that offset is the WAKE cell: setting a task's parent wrote
+    // the parent id into the wake date and left Linked ID untouched.
+    const out = opChangeLinkedId(MODERN_BOARD, '| 437 | 🟡 | Dust mites | - | 2026-08-22 |  | 191 |', '295')
+    const headers = deferredHeaders(out)
+    const cells = cellsOf(rowFor(out, 437))
+    expect(cells[headers.indexOf('Linked ID')]).toBe('295')
+    expect(cells[headers.indexOf('Wake')]).toBe('')
+    expect(wakeOf(out, 437)).toBeNull()
+  })
+
+  it('setting a Linked ID on a short row repairs its width instead of corrupting Wake (#451)', () => {
+    // #451's live shape: a 6-cell row under the 7-column header. Writing the
+    // parent id into its last cell put `191` in the Wake position — which is
+    // exactly what the live board showed by 22:58.
+    const out = opChangeLinkedId(MODERN_BOARD, '| 464 | 🟡 | Daily, check instagram | - | 2026-08-31 |  |', '191')
+    const headers = deferredHeaders(out)
+    const cells = cellsOf(rowFor(out, 464))
+    expect(cells).toHaveLength(headers.length)
+    expect(cells[headers.indexOf('Linked ID')]).toBe('191')
+    expect(cells[headers.indexOf('Wake')]).toBe('')
+  })
+
+  it('never lets a Linked ID edit clobber a real wake date', () => {
+    const withWake = MODERN_BOARD.replace(
+      '| 437 | 🟡 | Dust mites | - | 2026-08-22 |  | 191 |',
+      '| 437 | 🟡 | Dust mites | - | 2026-08-22 | 2026-09-04 | 191 |',
+    )
+    const out = opChangeLinkedId(withWake, '| 437 | 🟡 | Dust mites | - | 2026-08-22 | 2026-09-04 | 191 |', '295')
+    expect(wakeOf(out, 437)).toBe('2026-09-04')
+    expect(cellsOf(rowFor(out, 437))[deferredHeaders(out).indexOf('Linked ID')]).toBe('295')
+  })
+})
+
+describe('#307 — an un-migratable wake date is logged as an anomaly, never dropped silently', () => {  // Guarantee 3, and deliberately the SAME rule #190/PR #306 established one
   // layer down (`phantom-meta-preserved` / `alive-without-record`): a live value
   // is either deliberately removed or it is a recoverable anomaly — never
   // nothing. Same `diag`/`isDiagEnabled` mechanism, not a parallel one.

@@ -533,16 +533,70 @@ export function opRenameTask(content, rawLine, newTaskName) {
   return lines.join('\n')
 }
 
+/**
+ * Find the table header row governing `lineIndex` by scanning upward for the
+ * nearest header (a `|` row whose first cell is `ID`/`#`).
+ *
+ * Deliberately not section-based: several ops are called with bare tables that
+ * have no `## Section` heading at all, and a row must still be written against
+ * the header it actually lives under.
+ */
+function headersForLine(lines, lineIndex) {
+  for (let i = lineIndex - 1; i >= 0; i--) {
+    const trimmed = lines[i]?.trim()
+    if (!trimmed) continue
+    if (trimmed.startsWith('## ')) return []
+    if (!trimmed.startsWith('|')) continue
+    const cells = rowCells(trimmed)
+    if (cells[0] === 'ID' || cells[0] === '#') return cells
+  }
+  return []
+}
+
+/**
+ * Set a row's `Linked ID`, addressing the cell **by header** rather than by a
+ * fixed offset.
+ *
+ * #307: this used a hardcoded `parts[6] = newLinkedId`. That offset is the last
+ * cell of the OLD 6-column schema, but `Wake` is inserted immediately *before*
+ * `Linked ID`, so on a 7-column row `parts[6]` is the **Wake** cell. Setting a
+ * task's parent therefore wrote the parent id into the wake date and left the
+ * real `Linked ID` untouched — the same "value lands in the wrong column"
+ * corruption the issue reports for #446/#356/#276, but produced live, on every
+ * edit, rather than once by the migration.
+ *
+ * Observed in the wild: #451 was a 6-cell row at 22:28 and read
+ * `| 451 | 🔴 | Report hit and run | - | 2026-08-30 | 191 |` by 22:58 — the
+ * `191` sitting in the position the 7-column header calls `Wake`.
+ *
+ * The row is also normalized to the header width on the way through, so this op
+ * can no longer leave a malformed row behind either.
+ */
 export function opChangeLinkedId(content, rawLine, newLinkedId) {
   const lines = content.split('\n')
   // Rendered rows are trimmed by parseMarkdownTable, while CRLF-backed files
   // retain a trailing \r after split('\n'). Match their normalized row text.
   const lineIndex = lines.findIndex(line => line.trim() === rawLine.trim())
   if (lineIndex === -1) return content
-  const parts = rawLine.split('|')
-  if (parts.length < 7) return content
-  parts[6] = ` ${newLinkedId || ''} `
-  lines[lineIndex] = parts.join('|')
+
+  const headers = headersForLine(lines, lineIndex)
+  const linkedIndex = headers.findIndex(h => h.includes('Linked'))
+  if (linkedIndex === -1) {
+    // No header to address by (e.g. a headerless fragment): keep the historical
+    // positional behaviour rather than guessing.
+    const parts = rawLine.split('|')
+    if (parts.length < 7) return content
+    parts[6] = ` ${newLinkedId || ''} `
+    lines[lineIndex] = parts.join('|')
+    return lines.join('\n')
+  }
+
+  const wakeIndex = headers.indexOf(WAKE_COLUMN)
+  const padIndex = wakeIndex === -1 ? headers.length : wakeIndex
+  const cells = normalizeRowToHeaders(rowCells(lines[lineIndex]), headers, padIndex)
+  cells[linkedIndex] = newLinkedId || ''
+  const hadCarriageReturn = lines[lineIndex].endsWith('\r')
+  lines[lineIndex] = formatRow(cells) + (hadCarriageReturn ? '\r' : '')
   return lines.join('\n')
 }
 
