@@ -540,16 +540,43 @@ if ($toWrite.Count -gt 0 -and -not $WhatIf) {
     try {
       # Only an existing file needs backing up; a MISSING one has nothing to preserve.
       if ($backupDir -and (Test-Path $dst)) { Copy-Item $dst (Join-Path $backupDir $r.file) -Force }
-      $src = Join-Path $Repo ($r.repoPath -replace '/', '\')
-      if (-not (Test-Path $src)) {
-        # The ref may be ahead of the working tree; take the bytes from the ref itself.
-        $tmp = [IO.Path]::GetTempFileName()
+
+      # ALWAYS take the bytes from the REF. Never from the working tree.
+      #
+      # This used to prefer `$Repo\<repoPath>` and fall back to the ref only when that path was
+      # ABSENT -- i.e. it handled "the ref is ahead because a file is new" and missed "the ref is
+      # ahead because a file CHANGED", which is the ordinary state of a checkout that nobody has
+      # pulled. Every classification above is computed against the ref (Get-RefText), so reading
+      # the checkout here was not a different SOURCE, it was a different ANSWER: the script
+      # decided using the ref and then wrote something else.
+      #
+      # The two agree until the moment they matter. Measured live on 2026-09-01, seconds after a
+      # merge: local `main` sat at 65e4f16 while `origin/main` was e956de3, so the just-merged
+      # oa-state.ps1 was copied from the STALE checkout, `WROTE oa-state.ps1` was printed, and the
+      # OA home file remained byte-identical to the old commit. Nothing pulls in this pipeline, so
+      # that is not an unlucky window -- it is the default right after every merge, and the
+      # oahome-sync backup folders show it repeating across 2026-08-30, 08-31 and 09-01.
+      #
+      # The residual-drift re-classification did report it honestly every time ("verified-current
+      # False"), which is the only reason it was visible at all -- but nothing ever cleared it,
+      # because each run re-did the identical stale copy.
+      $tmp = [IO.Path]::GetTempFileName()
+      try {
         & cmd /c "git -C `"$Repo`" show ${refSha}:$($r.repoPath) > `"$tmp`"" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "git show ${refSha}:$($r.repoPath) failed (exit $LASTEXITCODE)" }
         Copy-Item $tmp $dst -Force
-        Remove-Item $tmp -Force
-      } else {
-        Copy-Item $src $dst -Force
       }
+      finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+
+      # VERIFY, then report. The old line announced WROTE on the strength of Copy-Item not
+      # throwing, and a copy of the wrong bytes does not throw -- which is how a stale deploy
+      # reported success for three days. A write that cannot be confirmed is a FAILED write.
+      $wroteNorm = Get-NormalizedText $dst
+      $refNorm = ("$(Get-RefText $refSha $r.repoPath)" -replace "`r`n", "`n").TrimEnd("`n")
+      if ((Get-Sha256 $wroteNorm) -ne (Get-Sha256 $refNorm)) {
+        throw "post-write verify failed: $($r.file) does not match $Ref after writing"
+      }
+
       $deployed++
       Write-Line ("  WROTE      {0}" -f $r.file)
     } catch {
