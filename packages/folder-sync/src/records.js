@@ -19,6 +19,7 @@ import {
   stampLocalChanges,
   gcTombstones,
   fingerprint,
+  findAliveWithoutRecord,
   serializeSidecar,
   parseSidecar,
 } from './merge.js'
@@ -260,6 +261,20 @@ export async function reconcileRecordsFile({ path, codec, local, remote, now = D
   // fresh writes, which both resurrects deletes and clobbers concurrent edits).
   for (const [id, rec] of Object.entries(merged.records)) {
     if (merged.meta[id]) merged.meta[id].fp = fingerprint(rec)
+  }
+  // #190 in-app detection: an id the merged sidecar still marks ALIVE but which
+  // has no row in the merged content is an inconsistency the app can see for free
+  // right here on the sync/load path — the residue #228 left behind (a live task
+  // with no board row and no tombstone, invisible to Shiv and to every
+  // board-gated sweep). Surface it as a diag anomaly instead of leaving an
+  // external sweep as the only thing that ever notices. The FRAME_ID sentinel is
+  // structural, not a task row, so it is excluded.
+  if (isDiagEnabled()) {
+    const orphanedMeta = findAliveWithoutRecord(merged.records, merged.meta)
+      .filter((id) => id !== FRAME_ID)
+    if (orphanedMeta.length) {
+      diag('folder-sync.records', 'alive-without-record', { path, ids: orphanedMeta })
+    }
   }
   const mergedContent = fromCollection(codec, merged.records)
   const mergedSidecar = serializeSidecar(merged.meta, now)
