@@ -9,11 +9,13 @@
  * single-source FocusPlanView and the multi-source Combined view (where
  * each operation routes to whichever source the rawLine belongs to).
  */
+import { diag, isDiagEnabled } from '../packages/diagnostics/src/index.js'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import {
   clearSnoozeUntilFromLine,
   isSnoozeActive,
   normalizeDateOnly,
+  parseLegacySnoozeComment,
   parseSnoozeUntil,
   setSnoozeUntilOnLine,
 } from './snooze.js'
@@ -74,37 +76,191 @@ function wakeInsertIndex(headers) {
   return linkedIndex === -1 ? headers.length : linkedIndex
 }
 
+function isDataRowCells(cells) {
+  return cells.length > 0 && !isTableSeparatorCells(cells) && cells[0] !== 'ID' && cells[0] !== '#'
+}
+
+/**
+ * #307: report a wake date the writer could not carry across, instead of
+ * dropping it silently.
+ *
+ * Same rule #190/PR #306 established one layer down (`phantom-meta-preserved` /
+ * `alive-without-record`): a live value must never become a no-op. It is either
+ * deliberately removed or it is a recoverable anomaly — never nothing. This is
+ * that rule applied to the board writer, and it deliberately reuses the same
+ * `diag`/`isDiagEnabled` mechanism rather than inventing a parallel channel.
+ */
+function reportWakeAnomaly(event, fields) {
+  if (!isDiagEnabled()) return
+  diag('planner.board', event, fields)
+}
+
+/**
+ * Re-shape one table row so it has exactly `headers.length` cells (#307
+ * guarantee 2: the writer must never emit a row whose cell count disagrees with
+ * its section header).
+ *
+ * Padding position matters. The leading columns (ID, 🎯, Task, Priority, Added)
+ * are positionally reliable, but the tail is not: a short row like
+ * `| 446 | 🔴 | NVIDIA roles | - | 2026-08-24 | 295 |` carries `295` as its
+ * **Linked ID**, and naively appending an empty cell at the end would leave
+ * `295` sitting in the freshly inserted `Wake` slot — the live-board damage this
+ * issue reports for #446/#356/#276 (a bogus wake value AND an apparently
+ * parentless task, which breaks the upstream-context walk).
+ *
+ * So we split at `padIndex` (the Wake position): cells before it keep their
+ * left-aligned positions, cells from it onward are kept **right-aligned** to the
+ * end of the header. Missing cells are inserted at the seam.
+ */
+function normalizeRowToHeaders(cells, headers, padIndex) {
+  const width = headers.length
+  if (cells.length === width) return [...cells]
+  const seam = Math.max(0, Math.min(padIndex, width))
+  const head = cells.slice(0, seam)
+  const tail = cells.slice(seam)
+  if (cells.length < width) {
+    const fill = new Array(width - head.length - tail.length).fill('')
+    return [...head, ...fill, ...tail]
+  }
+  // Too many cells: keep the head and the right-most tail that still fits, so a
+  // trailing Linked ID stays in the last column rather than shifting left.
+  const keepTail = tail.slice(Math.max(0, tail.length - (width - head.length)))
+  return [...head.slice(0, width - keepTail.length), ...keepTail]
+}
+
+/**
+ * Bring the Deferred table up to the 7-column `Wake` schema (task #353/PR #126).
+ *
+ * #307 — this is where the data loss happened. The original loop was:
+ *
+ *   const cells = rowCells(lines[i])                       // drops the tail after the last `|`
+ *   if (cells.length === table.headers.length) {           // …and skipped everything else
+ *     cells.splice(insertIndex, 0, '')
+ *     lines[i] = formatRow(cells)                          // rebuilt from cells only
+ *   }
+ *
+ * which destroyed live data in two distinct ways, both reproduced in the tests:
+ *
+ *  1. **Dropped wake dates.** `rowCells` slices off whatever follows the final
+ *     pipe, so a legacy `<!-- snooze:2026-09-08 -->` never reached `cells`, and
+ *     `formatRow` rebuilt the row without it. The row came out well-formed with
+ *     an **empty** Wake cell: the date was gone, with no tombstone and no log.
+ *     That is #254 (2026-09-08) and #327 (2026-09-04) on the live board.
+ *  2. **Malformed rows.** Any row whose cell count didn't equal the *old* header
+ *     width was skipped entirely, so it kept its old width under the new
+ *     7-column header. A trailing `295` (Linked ID) then sat in the `Wake`
+ *     position — #446/#356/#276 rendering a bogus wake and reading as orphans.
+ *
+ * Now every data row is migrated: the legacy comment is read from the raw line
+ * *before* any reshaping, the row is normalized to the header width with the
+ * padding placed so trailing values stay in their own column, and the recovered
+ * date is written into `Wake`. Anything that still cannot be carried across is
+ * reported via `reportWakeAnomaly` rather than dropped.
+ *
+ * The migration pass also runs when the `Wake` column **already exists**. The
+ * original early-return meant a legacy row arriving after the schema change —
+ * synced from a replica still running the old build, or written by an external
+ * agent following the older format that SKILL.md documents — would sit on the
+ * board forever with its date in a comment the column-first reader ignores.
+ */
 function ensureWakeColumn(lines, section) {
   const table = findSectionTable(lines, section)
-  if (!shouldHaveWakeColumn(section, table.headers) || table.headers.includes(WAKE_COLUMN)) {
+  if (!shouldHaveWakeColumn(section, table.headers) && !table.headers.includes(WAKE_COLUMN)) {
     return table
   }
 
-  const insertIndex = wakeInsertIndex(table.headers)
+  const alreadyPresent = table.headers.includes(WAKE_COLUMN)
+  const insertIndex = alreadyPresent
+    ? table.headers.indexOf(WAKE_COLUMN)
+    : wakeInsertIndex(table.headers)
   const headers = [...table.headers]
-  headers.splice(insertIndex, 0, WAKE_COLUMN)
-  lines[table.headerIndex] = formatRow(headers)
 
-  if (table.separatorIndex !== -1) {
-    const separator = rowCells(lines[table.separatorIndex])
-    separator.splice(insertIndex, 0, '----')
-    lines[table.separatorIndex] = formatRow(separator)
+  if (!alreadyPresent) {
+    headers.splice(insertIndex, 0, WAKE_COLUMN)
+    lines[table.headerIndex] = formatRow(headers)
+
+    if (table.separatorIndex !== -1) {
+      const separator = rowCells(lines[table.separatorIndex])
+      separator.splice(insertIndex, 0, '----')
+      lines[table.separatorIndex] = formatRow(separator)
+    }
   }
 
   for (let i = table.separatorIndex + 1; i < table.endIndex; i++) {
     if (!lines[i]?.trim().startsWith('|')) continue
-    const cells = rowCells(lines[i])
-    if (isTableSeparatorCells(cells) || cells[0] === 'ID' || cells[0] === '#') continue
-    if (cells.length === table.headers.length) {
-      cells.splice(insertIndex, 0, '')
-      lines[i] = formatRow(cells)
+    const rawLine = lines[i]
+    const cells = rowCells(rawLine)
+    if (!isDataRowCells(cells)) continue
+
+    // Read the legacy comment off the RAW line first — `rowCells` is about to
+    // throw the tail away, and that discard is the whole bug.
+    const legacyWake = parseLegacySnoozeComment(rawLine)
+    const nextCells = normalizeRowToHeaders(cells, headers, insertIndex)
+    const existingWake = normalizeDateOnly(nextCells[insertIndex])
+
+    if (legacyWake && !existingWake) {
+      nextCells[insertIndex] = legacyWake
+    } else if (legacyWake && existingWake && existingWake !== legacyWake) {
+      // The column already holds a date and the comment disagrees. The column is
+      // the source of truth (`parseSnoozeUntil` prefers it), so keep it — but the
+      // comment's value is about to stop existing, so say so.
+      reportWakeAnomaly('wake-migration-conflict', {
+        id: nextCells[0] ?? '', section, kept: existingWake, discarded: legacyWake,
+      })
     }
+
+    const migrated = formatRow(nextCells)
+    if (legacyWake && !parseSnoozeUntil(migrated, headers)) {
+      // Should be unreachable, but #307 is precisely a wake date that vanished
+      // with nothing recording it. Never let that be silent again.
+      reportWakeAnomaly('wake-migration-failed', {
+        id: nextCells[0] ?? '', section, wake: legacyWake, row: rawLine.trim(),
+      })
+    }
+    lines[i] = migrated
   }
 
   return findSectionTable(lines, section)
 }
 
+/**
+ * #307 guarantee 2, as an inspectable predicate: every data row in a section
+ * must have exactly as many cells as that section's header.
+ *
+ * Exported so both the writer's own tests and the (human-gated) repair path can
+ * assert the invariant on real content instead of eyeballing it.
+ */
+export function findMalformedRows(content, section = 'Deferred') {
+  const lines = String(content || '').split('\n')
+  const table = findSectionTable(lines, section)
+  if (table.headerIndex === -1) return []
+  const width = table.headers.length
+  const out = []
+  for (let i = table.separatorIndex + 1; i < table.endIndex; i++) {
+    const line = lines[i]
+    if (!line?.trim().startsWith('|')) continue
+    const cells = rowCells(line)
+    if (!isDataRowCells(cells)) continue
+    if (cells.length !== width) {
+      out.push({ lineIndex: i, id: cells[0], cells: cells.length, expected: width, line: line.trim() })
+    }
+  }
+  return out
+}
+
+/**
+ * Re-shape a row from one section's header layout into another's.
+ *
+ * #307: this is the *second* place a wake date could evaporate. The first line
+ * strips the legacy `<!-- snooze:DATE -->` trailer, and the `Wake` cell was then
+ * sourced only from `sourceByHeader` — so moving a legacy-format row out of a
+ * table that has no `Wake` column (Deferred → Today → Deferred, or a
+ * "defer all below" sweep) silently discarded the date. Read the legacy trailer
+ * off the raw line and use it as the fallback, so an explicit `wakeUntil` still
+ * wins but nothing is lost when there isn't one.
+ */
 function transformRowForSection(rawLine, fromHeaders, toHeaders, { wakeUntil = null } = {}) {
+  const legacyWake = parseLegacySnoozeComment(rawLine)
   const cleanLine = clearSnoozeUntilFromLine(rawLine, fromHeaders)
   const sourceCells = rowCells(cleanLine)
   if (!Array.isArray(fromHeaders) || fromHeaders.length === 0
@@ -115,9 +271,23 @@ function transformRowForSection(rawLine, fromHeaders, toHeaders, { wakeUntil = n
   const sourceByHeader = new Map()
   fromHeaders.forEach((header, index) => sourceByHeader.set(header, sourceCells[index] || ''))
   const cells = toHeaders.map(header => {
-    if (header === WAKE_COLUMN) return normalizeDateOnly(wakeUntil) || sourceByHeader.get(WAKE_COLUMN) || ''
+    if (header === WAKE_COLUMN) {
+      return normalizeDateOnly(wakeUntil)
+        || normalizeDateOnly(sourceByHeader.get(WAKE_COLUMN))
+        || legacyWake
+        || ''
+    }
     return sourceByHeader.get(header) || ''
   })
+
+  if (legacyWake && !toHeaders.includes(WAKE_COLUMN) && !normalizeDateOnly(wakeUntil)) {
+    // The destination genuinely has nowhere to put a wake date (e.g. Today).
+    // That is a legitimate clear, but the value still stops existing here, so it
+    // must be recorded rather than dropped in silence — the #190/PR #306 rule.
+    reportWakeAnomaly('wake-dropped-on-section-move', {
+      id: cells[0] ?? '', wake: legacyWake, to: toHeaders.join('|'),
+    })
+  }
   return formatRow(cells)
 }
 
@@ -363,16 +533,70 @@ export function opRenameTask(content, rawLine, newTaskName) {
   return lines.join('\n')
 }
 
+/**
+ * Find the table header row governing `lineIndex` by scanning upward for the
+ * nearest header (a `|` row whose first cell is `ID`/`#`).
+ *
+ * Deliberately not section-based: several ops are called with bare tables that
+ * have no `## Section` heading at all, and a row must still be written against
+ * the header it actually lives under.
+ */
+function headersForLine(lines, lineIndex) {
+  for (let i = lineIndex - 1; i >= 0; i--) {
+    const trimmed = lines[i]?.trim()
+    if (!trimmed) continue
+    if (trimmed.startsWith('## ')) return []
+    if (!trimmed.startsWith('|')) continue
+    const cells = rowCells(trimmed)
+    if (cells[0] === 'ID' || cells[0] === '#') return cells
+  }
+  return []
+}
+
+/**
+ * Set a row's `Linked ID`, addressing the cell **by header** rather than by a
+ * fixed offset.
+ *
+ * #307: this used a hardcoded `parts[6] = newLinkedId`. That offset is the last
+ * cell of the OLD 6-column schema, but `Wake` is inserted immediately *before*
+ * `Linked ID`, so on a 7-column row `parts[6]` is the **Wake** cell. Setting a
+ * task's parent therefore wrote the parent id into the wake date and left the
+ * real `Linked ID` untouched — the same "value lands in the wrong column"
+ * corruption the issue reports for #446/#356/#276, but produced live, on every
+ * edit, rather than once by the migration.
+ *
+ * Observed in the wild: #451 was a 6-cell row at 22:28 and read
+ * `| 451 | 🔴 | Report hit and run | - | 2026-08-30 | 191 |` by 22:58 — the
+ * `191` sitting in the position the 7-column header calls `Wake`.
+ *
+ * The row is also normalized to the header width on the way through, so this op
+ * can no longer leave a malformed row behind either.
+ */
 export function opChangeLinkedId(content, rawLine, newLinkedId) {
   const lines = content.split('\n')
   // Rendered rows are trimmed by parseMarkdownTable, while CRLF-backed files
   // retain a trailing \r after split('\n'). Match their normalized row text.
   const lineIndex = lines.findIndex(line => line.trim() === rawLine.trim())
   if (lineIndex === -1) return content
-  const parts = rawLine.split('|')
-  if (parts.length < 7) return content
-  parts[6] = ` ${newLinkedId || ''} `
-  lines[lineIndex] = parts.join('|')
+
+  const headers = headersForLine(lines, lineIndex)
+  const linkedIndex = headers.findIndex(h => h.includes('Linked'))
+  if (linkedIndex === -1) {
+    // No header to address by (e.g. a headerless fragment): keep the historical
+    // positional behaviour rather than guessing.
+    const parts = rawLine.split('|')
+    if (parts.length < 7) return content
+    parts[6] = ` ${newLinkedId || ''} `
+    lines[lineIndex] = parts.join('|')
+    return lines.join('\n')
+  }
+
+  const wakeIndex = headers.indexOf(WAKE_COLUMN)
+  const padIndex = wakeIndex === -1 ? headers.length : wakeIndex
+  const cells = normalizeRowToHeaders(rowCells(lines[lineIndex]), headers, padIndex)
+  cells[linkedIndex] = newLinkedId || ''
+  const hadCarriageReturn = lines[lineIndex].endsWith('\r')
+  lines[lineIndex] = formatRow(cells) + (hadCarriageReturn ? '\r' : '')
   return lines.join('\n')
 }
 
