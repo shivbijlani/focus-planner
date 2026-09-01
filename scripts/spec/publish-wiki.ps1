@@ -21,8 +21,17 @@
   GitHub does not provision `<owner>/<repo>.wiki.git` until the wiki has at least one
   page, and there is no API to create that first page -- it must be done once in the
   web UI (Wiki tab -> "Create the first page" -> Save). After that this script works
-  forever with no further manual step. If the wiki is not initialised the clone 404s
-  and this script says exactly that.
+  forever with no further manual step.
+
+  Confirmed empirically (not just from docs): before a first page exists, ALL of
+  `ls-remote`, `clone`, and even `push` return an identical `Repository not found`
+  (some hosts create a repo on first push -- GitHub's wiki does not), and both `/wiki`
+  and `/wiki/_new` redirect to the repo root. So a 404 here is not "push would have
+  worked"; the repo simply is not there yet.
+
+  A 404 has TWO causes, though -- an uninitialised wiki AND a token without `repo`
+  scope both return the same "Repository not found". This script distinguishes them
+  (absent vs unreadable) so a scope problem is not misreported as a setup problem.
 
   SOURCE-OF-TRUTH NOTE
   --------------------
@@ -114,8 +123,29 @@ try {
   if ($LASTEXITCODE -ne 0) {
     $msg = ($cloneOut | Out-String)
     if ($msg -match 'not found|404') {
-      throw "The wiki repo does not exist yet. Initialise it once in the UI: " +
-            "https://github.com/$repoFull/wiki -> Create the first page -> Save. Then re-run."
+      # "Repository not found" has TWO causes: the wiki genuinely does not exist yet,
+      # OR this token cannot read the repo at all (missing `repo` scope). Reporting the
+      # first when it is really the second sends the user clicking around a wiki UI for a
+      # page that is already there. Distinguish absent from unreadable with one call: if
+      # `gh repo view` can read the repo, auth is fine and the wiki 404 is genuinely
+      # "not initialised"; if it cannot, the 404 is an auth problem.
+      $wikiEnabled = $null
+      $canRead = $false
+      try {
+        $wikiEnabled = (& gh repo view $repoFull --json hasWikiEnabled --jq '.hasWikiEnabled' 2>$null)
+        if ($LASTEXITCODE -eq 0) { $canRead = $true }
+      } catch { }
+      if (-not $canRead) {
+        throw "Could not read $repoFull with this token, so the wiki 404 is most likely an AUTH " +
+              "problem, not a missing wiki. Ensure the token has 'repo' scope (e.g. `gh auth refresh -s repo`) and retry."
+      }
+      if ("$wikiEnabled" -eq 'False' -or "$wikiEnabled" -eq 'false') {
+        throw "The wiki feature is DISABLED for $repoFull. Enable it in the repo Settings, " +
+              "then create the first page in the UI."
+      }
+      throw "The wiki is enabled but NOT INITIALISED. GitHub does not create the wiki git repo " +
+            "until a first page is saved in the UI (no API exists for it). Do it once at " +
+            "https://github.com/$repoFull/wiki -> Create the first page -> Save, then re-run."
     }
     throw "Clone failed: $msg"
   }
