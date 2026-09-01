@@ -142,6 +142,23 @@
                    rule 2 cannot see it, and the target is not code, so no roster, entry
                    list or glob names it either. It was required by nothing.
 
+                   A data file is NEVER overwritten -- it may be locally mutated state.
+                   But it IS now reported when the live copy differs from the ref
+                   (DATA-STALE), because "never overwrite" and "never mention" are
+                   different promises and only the first one is safe.
+
+                   MEASURED 2026-09-01, minutes after #336 merged and this tool printed
+                   "0 behind, 186 current, verified-current True": the live
+                   read-path-manifest.json was byte-identical to ad5e1d6, the commit
+                   that first DELIVERED it, five commits earlier. Rule 6 hands a data
+                   file over once and then freezes it forever. So #336's new
+                   idPattern/strayPattern never arrived, the freshly-deployed code that
+                   reads them found nothing to read, and the sweep silently reverted to
+                   the behaviour the PR had just fixed -- while every check reported
+                   success. #196's failure in its most deceptive form: not "the fix did
+                   not deploy" but "the fix deployed and its configuration did not",
+                   which no code-level comparison can see.
+
                    And, exactly as in rule 5, the failure is not a skip. `readFileSync`
                    throws ENOENT, so the sweep exits 1 having measured nothing - a RED
                    guard over a healthy subject, which reads as "the check is broken"
@@ -494,6 +511,7 @@ foreach ($f in $live) {
 # missing from disk. Deploying it cannot revert a live fix: there are no live bytes.
 $missing         = @()
 $missingRefused  = @()
+$dataStale       = @()
 $requiredCount   = 0
 
 if (-not $NoForward) {
@@ -570,16 +588,42 @@ if (-not $NoForward) {
     if ($liveNames.Contains($n)) { continue }        # already classified by the live walk
     if (-not $byName.ContainsKey($n)) {
       # DATA (rule 6): a required NON-code file, e.g. the manifest a sweep reads on its
-      # first line. Handled MISSING-only, and only when it is genuinely absent: if the
-      # file is already on disk we do not classify it at all, because a data file can be
-      # locally mutated state and a name match is not a licence to overwrite it.
-      if ($dataByName.ContainsKey($n) -and -not (Test-Path -LiteralPath (Join-Path $OaHome $n))) {
+      # first line. NEVER overwritten -- a data file in the home may be locally mutated
+      # state, and a name match is not a licence to destroy it. But "never overwrite" and
+      # "never mention" are different promises, and only the first one is safe.
+      #
+      # MEASURED 2026-09-01, minutes after #336 merged and this tool reported
+      # "0 behind, 186 current, verified-current True": the live
+      # read-path-manifest.json was byte-identical to ad5e1d6 -- the commit that first
+      # DELIVERED it, five commits earlier. Rule 6 hands a data file over once and then
+      # freezes it forever, so #336's `idPattern`/`strayPattern` never arrived and the
+      # code that reads them ran inert, silently reverting to the old behaviour. The
+      # sweep's own guard shipped, deployed, verified -- and did nothing.
+      #
+      # That is #196's failure in its most deceptive form: not "the fix did not deploy"
+      # but "the fix deployed and its configuration did not", which no code-level check
+      # can see. So a present-but-stale data file is now REPORTED and counted as a
+      # refusal. It is still never written; a human decides, because only a human can
+      # tell locally-mutated state from a stale copy.
+      if ($dataByName.ContainsKey($n)) {
         $dPaths = $dataByName[$n]
-        if ($dPaths.Count -gt 1) {
-          $missingRefused += [pscustomobject]@{ file = $n; class = 'MISSING-AMBIGUOUS'; repoPath = ($dPaths -join ' | '); matchCommit = $null }
+        $dst = Join-Path $OaHome $n
+        if (-not (Test-Path -LiteralPath $dst)) {
+          if ($dPaths.Count -gt 1) {
+            $missingRefused += [pscustomobject]@{ file = $n; class = 'MISSING-AMBIGUOUS'; repoPath = ($dPaths -join ' | '); matchCommit = $null }
+          }
+          else {
+            $missing += [pscustomobject]@{ file = $n; class = 'MISSING'; repoPath = $dPaths[0]; matchCommit = $refSha }
+          }
         }
-        else {
-          $missing += [pscustomobject]@{ file = $n; class = 'MISSING'; repoPath = $dPaths[0]; matchCommit = $refSha }
+        elseif ($dPaths.Count -eq 1) {
+          $refRaw = Get-RefText $refSha $dPaths[0]
+          if ($null -ne $refRaw) {
+            $refNorm = ($refRaw -replace "`r`n", "`n").TrimEnd("`n")
+            if ((Get-Sha256 (Get-NormalizedText $dst)) -ne (Get-Sha256 $refNorm)) {
+              $dataStale += [pscustomobject]@{ file = $n; class = 'DATA-STALE'; repoPath = $dPaths[0]; matchCommit = $null }
+            }
+          }
         }
       }
       continue                                       # required but not on the ref: not ours to invent
@@ -594,6 +638,7 @@ if (-not $NoForward) {
   }
   $results += $missing
   $results += $missingRefused
+  $results += $dataStale
 }
 
 $behind    = @($results | Where-Object { $_.class -eq 'BEHIND' })
@@ -608,10 +653,11 @@ foreach ($r in $missing)        { Write-Line ("  MISSING    {0}   required by th
 foreach ($r in $divergent)      { Write-Line ("  REFUSE     {0}   live content is on no commit of {1} - may be a live fix" -f $r.file, $Ref) }
 foreach ($r in $ambiguous)      { Write-Line ("  REFUSE     {0}   basename is ambiguous: {1}" -f $r.file, $r.repoPath) }
 foreach ($r in $missingRefused) { Write-Line ("  REFUSE     {0}   required but basename is ambiguous: {1}" -f $r.file, $r.repoPath) }
+foreach ($r in $dataStale)      { Write-Line ("  DATA-STALE {0}   live data file differs from {1} - NOT overwritten; a human must reconcile it" -f $r.file, $Ref) }
 Write-Line ""
 Write-Line ("[sync-oa-home] {0} behind, {1} missing, {2} current, {3} refused, {4} local-only. ({5} required)" -f `
             $behind.Count, $missing.Count, $current.Count,
-            ($divergent.Count + $ambiguous.Count + $missingRefused.Count), $localOnly.Count, $requiredCount)
+            ($divergent.Count + $ambiguous.Count + $missingRefused.Count + $dataStale.Count), $localOnly.Count, $requiredCount)
 
 # --- deploy the safe class ----------------------------------------------------------
 # BEHIND (live bytes provably older) and MISSING (no live bytes at all) are both safe to
@@ -731,18 +777,23 @@ if (-not $WhatIf) {
 
 $exit = 0
 if ($failed -gt 0)                          { $exit = 1 }
-elseif ($residual -gt 0 -or $escalate.Count) { $exit = 2 }
+elseif ($residual -gt 0 -or $escalate.Count -or $dataStale.Count) { $exit = 2 }
 
 # Under -WhatIf nothing was written, so `residual` cannot speak. Pending work still means
 # the tree is NOT current, and saying otherwise is the precise false claim #254 is about:
 # `verified-current True` printed over a rostered guard that had never run. The exit code
 # is deliberately left alone - -WhatIf is a report, not a verdict.
 $pending = if ($WhatIf) { $toWrite.Count } else { 0 }
-$verifiedCurrent = ($residual -eq 0 -and $pending -eq 0)
+# A stale data file is never written, so `residual` (which only walks $toWrite) is
+# structurally unable to see it. Without this term the line would keep printing True over
+# exactly the drift that made #336's guard inert -- the same false claim, one file class
+# over.
+$verifiedCurrent = ($residual -eq 0 -and $pending -eq 0 -and $dataStale.Count -eq 0)
 
 Write-Line ""
 Write-Line ("[sync-oa-home] deployed {0}, refused {1}, residual drift {2}, verified-current {3}" -f `
-            $deployed, ($divergent.Count + $ambiguous.Count + $missingRefused.Count), $residual, $verifiedCurrent)
+            $deployed, ($divergent.Count + $ambiguous.Count + $missingRefused.Count + $dataStale.Count), $residual, $verifiedCurrent)
+foreach ($r in $dataStale) { Write-Line "[sync-oa-home] NEEDS A HUMAN: $($r.file) is a required data file whose live copy differs from $Ref. It was NOT overwritten (it may be local state). Reconcile it by hand, then re-run." }
 foreach ($e in $escalate) { Write-Line "[sync-oa-home] NEEDS A HUMAN: $e" }
 
 if ($Json) {
@@ -754,7 +805,8 @@ if ($Json) {
     missing          = $missing.Count
     required         = $requiredCount
     current          = $current.Count
-    refused          = ($divergent.Count + $ambiguous.Count + $missingRefused.Count)
+    refused          = ($divergent.Count + $ambiguous.Count + $missingRefused.Count + $dataStale.Count)
+    dataStale        = $dataStale.Count
     localOnly        = $localOnly.Count
     deployed         = $deployed
     failed           = $failed

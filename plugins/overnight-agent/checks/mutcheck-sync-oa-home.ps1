@@ -368,16 +368,29 @@ Assert (Test-Path (Join-Path $fxD.Home 'probe-manifest.json')) 'T_DATA_WRITE' 's
 # Narrowness: rule 6 follows a reference, it does not sweep the repo for .json files.
 Assert (-not (Test-Path (Join-Path $fxD.Home 'probe-unused.json'))) 'T_DATA_NARROW' 'an unreferenced data file is still not deployed'
 
-# Safety half of rule 6: a data file ALREADY in the home is left completely alone. A data
-# file can be locally mutated state (a baseline a sweep rewrites), so a basename match on
-# the ref must never license an overwrite. This is why rule 6 is MISSING-only and why the
-# data index is kept out of $byName rather than widening the BEHIND/DIVERGENT path.
+# Safety half of rule 6: a data file ALREADY in the home is never OVERWRITTEN. A data file
+# can be locally mutated state (a baseline a sweep rewrites), so a basename match on the
+# ref must never license a write.
+#
+# What it IS now: reported. "Never overwrite" and "never mention" are different promises,
+# and only the first one is safe -- staying silent is what let the live
+# read-path-manifest.json sit frozen at the commit that first delivered it while the tool
+# printed `verified-current True` over it (see rule 6's receipt, and M14 below).
 $fxD2 = New-Fixture 'forward-data-live'
 Add-DataDependentSweep $fxD2.Repo
 Set-Content -LiteralPath (Join-Path $fxD2.Home 'probe-manifest.json') -Value '["locally mutated"]' -NoNewline -Encoding utf8
 $rD2 = Invoke-Subject $Script $fxD2
-Assert ((Get-Class $rD2 'probe-manifest.json') -eq '<absent>') 'T_DATA_LIVE_QUIET' 'an existing data file is not classified at all'
+Assert ((Get-Class $rD2 'probe-manifest.json') -eq 'DATA-STALE') 'T_DATA_LIVE_REPORTED' 'a live data file that differs from the ref is reported'
 Assert ((Get-Content -LiteralPath (Join-Path $fxD2.Home 'probe-manifest.json') -Raw) -eq '["locally mutated"]') 'T_DATA_LIVE_KEPT' 'and its local contents are never overwritten'
+Assert ($rD2.Json.verifiedCurrent -eq $false) 'T_DATA_LIVE_NOT_CURRENT' 'and the tree is not claimed current while it differs'
+
+# The other direction, so the report is a measurement and not a blanket accusation: a live
+# data file that MATCHES the ref stays completely quiet.
+$fxD3 = New-Fixture 'forward-data-live-current'
+Add-DataDependentSweep $fxD3.Repo
+Set-Content -LiteralPath (Join-Path $fxD3.Home 'probe-manifest.json') -Value '[]' -NoNewline -Encoding utf8
+$rD3 = Invoke-Subject $Script $fxD3
+Assert ((Get-Class $rD3 'probe-manifest.json') -eq '<absent>') 'T_DATA_LIVE_QUIET' 'a live data file identical to the ref is not classified at all'
 
 # --- T_MISSING_AMBIGUOUS: required, but the basename maps to two repo paths ----------
 # A flat home cannot say which path was meant. Same answer as for a live file: refuse.
@@ -600,13 +613,37 @@ Assert ((Get-Class $r 'probe-manifest.json') -eq 'MISSING') 'M12_STILL_OK' 'the 
 #       required name resolves to nothing and is dropped by the "not on the ref" guard.
 #       This is the half that actually failed first time: the walk found the manifest and
 #       the missing loop threw it away, because non-code files were never indexed at all.
-$m13 = New-Mutant 'M13' '    if ($dataByName.ContainsKey($n) -and -not (Test-Path -LiteralPath (Join-Path $OaHome $n))) {' '    if ($false) {'
+$m13 = New-Mutant 'M13' '      if ($dataByName.ContainsKey($n)) {' '      if ($false) {'
 $fx = New-Fixture 'm13'
 Add-DataDependentSweep $fx.Repo
 $r = Invoke-Subject $m13 $fx
 Assert ((Get-Class $r 'datasweep.mjs') -eq 'MISSING') 'M13_SWEEP_STILL_OK' 'the rostered sweep still deploys (so this mutant is narrow)'
 Assert ((Get-Class $r 'probe-manifest.json') -ne 'MISSING') 'M13' 'without the data index the required file is silently dropped'
 Assert (-not (Test-Path (Join-Path $fx.Home 'probe-manifest.json'))) 'M13_NOWRITE' 'and never reaches the home'
+
+# M14 - rule 6 delivers a data file once and then freezes it. Restore that by deleting the
+#       DATA-STALE branch: a live data file that no longer matches the ref goes back to
+#       being classified as nothing at all, and `verified-current True` is printed over it.
+#
+#       This is the 2026-09-01 defect exactly. Minutes after #336 merged, the live
+#       read-path-manifest.json was still byte-identical to ad5e1d6 - the commit that
+#       first DELIVERED it, five commits earlier - so the just-deployed code that reads
+#       `idPattern` found no `idPattern` to read and silently reverted to the behaviour
+#       the PR had fixed. Every check reported success. The subject must never be able to
+#       call a stale required data file current again.
+$m14find = '              $dataStale += [pscustomobject]@{ file = $n; class = ''DATA-STALE''; repoPath = $dPaths[0]; matchCommit = $null }'
+$m14 = New-Mutant 'M14' $m14find '              $null = $null'
+$fx = New-Fixture 'm14'
+Add-DataDependentSweep $fx.Repo
+# Deliver the data file first, then make the live copy stale, so the ONLY difference
+# between the two runs is whether the stale copy is noticed.
+$null = Invoke-Subject $Script $fx
+Set-Content -LiteralPath (Join-Path $fx.Home 'probe-manifest.json') -Value '{"stale":true}' -Encoding utf8
+$rReal = Invoke-Subject $Script $fx
+Assert ((Get-Class $rReal 'probe-manifest.json') -eq 'DATA-STALE') 'M14_REAL' 'the real subject notices a stale required data file'
+Assert ((Get-Content -LiteralPath (Join-Path $fx.Home 'probe-manifest.json') -Raw) -match 'stale') 'M14_NOWRITE' 'and still refuses to overwrite it (it may be local state)'
+$rMut = Invoke-Subject $m14 $fx
+Assert ((Get-Class $rMut 'probe-manifest.json') -ne 'DATA-STALE') 'M14' 'without the DATA-STALE branch a frozen data file is called current'
 
 Write-Host ''
 Write-Host ("[mutcheck-sync-oa-home] {0} passed, {1} failed" -f $script:pass, $script:fail)
