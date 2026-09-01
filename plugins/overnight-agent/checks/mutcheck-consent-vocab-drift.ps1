@@ -47,11 +47,25 @@ if (-not $ScriptPath) {
     (Join-Path $env:LOCALAPPDATA 'overnight-agent\oa-state.ps1'),
     "$env:USERPROFILE\.copilot\installed-plugins\focus-planner\overnight-agent\skills\overnight-agent\oa-state.ps1"
   )
-  foreach ($c in $candidates) { if (Test-Path $c) { $ScriptPath = (Resolve-Path $c).Path; break } }
+  # This check needs the PAIR -- oa-state.ps1 AND the SKILL.md beside it -- so auto-resolution must
+  # probe for a directory carrying BOTH, not just the first oa-state.ps1 it finds. The flat OA home
+  # ($env:LOCALAPPDATA\overnight-agent) deploys oa-state.ps1 WITHOUT SKILL.md, so matching on the
+  # script alone resolves there and then throws on the missing SKILL.md -- short-circuiting past the
+  # installed-plugins copy that has both. Probing for the pair encodes the real requirement (a
+  # directory with both halves) instead of the order the deploy layouts happen to appear in today.
+  # (Surfaced by the #305 read-path audit; same failure class as #301 -- a guard drifting from the
+  # layout it runs in, invisible from the code and only seen when run where it actually runs.)
+  foreach ($c in $candidates) {
+    if ((Test-Path $c) -and (Test-Path (Join-Path (Split-Path $c) 'SKILL.md'))) { $ScriptPath = (Resolve-Path $c).Path; break }
+  }
+  # Fallback: any oa-state.ps1 that exists, so an explicit -SkillPath can still drive the check.
+  if (-not $ScriptPath) {
+    foreach ($c in $candidates) { if (Test-Path $c) { $ScriptPath = (Resolve-Path $c).Path; break } }
+  }
 }
 if (-not $ScriptPath -or -not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found (pass -ScriptPath)" }
 if (-not $SkillPath) { $SkillPath = Join-Path (Split-Path $ScriptPath) 'SKILL.md' }
-if (-not (Test-Path $SkillPath)) { throw "SKILL.md not found (pass -SkillPath)" }
+if (-not (Test-Path $SkillPath)) { throw "SKILL.md not found beside $ScriptPath (pass -SkillPath)" }
 
 function Read-Utf8([string]$p) { [IO.File]::ReadAllText($p, (New-Object Text.UTF8Encoding($false))) }
 
