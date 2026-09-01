@@ -192,7 +192,7 @@ eligible before its wake date** — being in `Deferred` deprioritises it but doe
 `Test-Workable` still applies, so it is spared merely by being terminal or waiting on the user, which
 is unrelated to the snooze the user asked for. A rebuilder must close this: either write
 `snooze.json` from the app, or teach `Get-SnoozeMap` the `Wake` column. Do not assume the three
-representations agree.
+representations agree. Tracked as #343.
 
 ### 2.4 `agent-gate.md` — the standing-permission channel, and why one-way matters
 
@@ -542,5 +542,5 @@ Two disciplines in these checks are worth copying:
 | #250 | Consent still rests on a `from: me` marker written by software the agent runs. |
 | #170 | The agent can write turns into tasks that are already closed. |
 | #261 | A stuck run has no run-level timeout, which is the condition the staleness backstop mitigates rather than fixes. |
-| — | The board's `Wake` column is invisible to `Get-SnoozeMap`, so a task snoozed by the app can become eligible before its wake date (see 2.3). Not yet filed. |
+| #343 | The board's `Wake` column is invisible to `Get-SnoozeMap`, so a task snoozed in the app can become eligible before its wake date (see 2.3). |
 | #328 | A bare `#NNN` is ambiguous — GitHub numbers and planner task ids already collide — so this page names the namespace explicitly wherever a number appears. |
