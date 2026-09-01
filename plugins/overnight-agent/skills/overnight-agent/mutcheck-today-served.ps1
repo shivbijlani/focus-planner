@@ -43,6 +43,23 @@
   mutant, and fails if any mutant is killed by zero arms (a claim nothing pins) or by more than
   one (two arms asserting the same thing).
 
+  MUTANT TARGET PRE-FLIGHT, and why it runs unconditionally. Every mutant is a literal patch of
+  oa-state.ps1, so it stops biting the moment someone reformats the line it matches -- and the
+  ARMS DO NOT NOTICE, because they test the real script, which still works. The count assertion
+  that catches this used to live only inside New-Mutant, which is reached only under -Matrix. So
+  a default run printed "12 passed, 0 failed" and exited 0 with every mutant silently dead.
+  Nothing about that output was false; it simply implied a check it had not performed.
+
+  That is a distinct class from a vacuous pass, and a worse one to find: a vacuous arm has a tell
+  (it passes against an empty fixture), whereas this has none -- every fixture non-empty, every
+  number correct, the exit code right. Demonstrated: a whitespace-only reformat of one line in
+  oa-state.ps1 kills mutant M10, and before this change the suite reported 12/12 and exit 0.
+  It now reports the drift and exits 1 while still printing 12 passed, which is the honest
+  summary -- the arms ARE passing; what has rotted is the proof that they are load-bearing.
+
+  A drift check that is itself opt-in has exactly the same defect one level up, so this one is
+  not behind a flag. It is pure string matching over a file already in memory and spawns nothing.
+
     A  writing a turn does not release      M1  recency release restored (the #310 defect)
     B  a named declaration releases         M2  the declaration release deleted
     C  an expired declaration gates again   M3  the TTL check deleted
@@ -490,10 +507,57 @@ $Mutants = [ordered]@{
   }
 }
 
+function Test-MutantTargets {
+  # Do the mutants still have something to bite? Pure string matching against a file already in
+  # memory: no subprocesses, so this is free and runs on EVERY invocation.
+  #
+  # IT DID NOT USE TO. The count assertion lived only inside New-Mutant, which is reached only
+  # under -Matrix -- so a default run printed "12 passed, 0 failed" while every mutant had
+  # silently become a no-op, because someone had reformatted a line in oa-state.ps1 that a
+  # mutant matches verbatim. The arms would still pass, since they test the REAL script and it
+  # still works; what rots is the proof that the arms are load-bearing at all, which is this
+  # file's entire stated value.
+  #
+  # That is the failure class of "an assertion whose domain is narrower than its report implies",
+  # and it is nastier than a vacuous pass because it has NO TELL: every fixture is non-empty,
+  # every number is correct, the exit code is right, and the summary line implies a check that
+  # was never run. Reporting it up front, unconditionally, is the only thing that closes it --
+  # a drift check that is itself opt-in has exactly the same defect one level up.
+  # Sets $script:MutantTargetsOk rather than RETURNING a verdict, deliberately. A PowerShell
+  # function emits its bare strings and its return value into the same stream, so
+  # `$ok = Test-MutantTargets` would swallow every diagnostic line into the variable and leave
+  # the caller holding an array that is truthy no matter what the check found. Caught here by
+  # reading the output instead of trusting exit code 0 -- which is the same lesson this whole
+  # file is about.
+  param()
+  $script:MutantTargetsOk = $true
+  $text = [IO.File]::ReadAllText($ScriptPath)
+  $drifted = @()
+  foreach ($mName in $Mutants.Keys) {
+    foreach ($e in $Mutants[$mName].edits) {
+      $n = ([regex]::Matches($text, [regex]::Escape($e.find))).Count
+      if ($n -ne $e.count) { $drifted += "$mName -- expected $($e.count) occurrence(s) of its target, found $n" }
+    }
+  }
+  if ($drifted.Count -gt 0) {
+    $script:MutantTargetsOk = $false
+    "MUTANT TARGETS HAVE DRIFTED - the arms below prove nothing about these mutants:"
+    foreach ($d in $drifted) { "  $d" }
+    "Re-point each mutant at the current source, or the bijection is unverifiable."
+    ""
+    return
+  }
+  "  targets OK  $($Mutants.Count) mutants still match the source"
+  ""
+}
+
 function New-Mutant {
   param([string]$Name, $Spec)
   $text = [IO.File]::ReadAllText($ScriptPath)
   foreach ($e in $Spec.edits) {
+    # Re-asserted here as well as in the pre-flight: this is the site that would silently produce
+    # an identical-to-original "mutant" and report it unkilled, so it must not depend on a caller
+    # having run the check first.
     $n = ([regex]::Matches($text, [regex]::Escape($e.find))).Count
     if ($n -ne $e.count) {
       throw "mutant '$Name': expected $($e.count) occurrence(s) of its target, found $n -- the source has drifted and this mutant would be a silent no-op"
@@ -509,6 +573,15 @@ function New-Mutant {
 }
 
 # --- run -----------------------------------------------------------------------------------
+# The pre-flight runs FIRST and unconditionally, so its verdict is visible next to the arm
+# results rather than buried behind a flag nobody passes.
+#
+# Skipped only under -ExpectPreFix, where the script under test is a DIFFERENT (older) build by
+# construction and its targets are expected not to match -- reporting drift there would be a
+# guaranteed false alarm on every run, which is how a check gets ignored.
+$script:MutantTargetsOk = $true
+if (-not $ExpectPreFix) { Test-MutantTargets }
+
 $results = Invoke-Arms $ScriptPath
 $pass = 0; $fail = 0
 foreach ($k in $results.Keys) {
@@ -524,6 +597,9 @@ if ($ExpectPreFix) {
 }
 
 if ($fail -gt 0) { exit 1 }
+# Drifted targets are a FAILURE, not a warning. Green arms plus dead mutants is precisely the
+# state this file exists to make impossible.
+if (-not $script:MutantTargetsOk) { exit 1 }
 
 if (-not $Matrix) { exit 0 }
 
