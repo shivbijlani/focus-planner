@@ -147,6 +147,27 @@ for (const entry of manifest.files) {
     const sizeKB = kb(statSync(target).size)
     const name = basename(target)
     observed[name] = sizeKB
+    // --- g5: growth must not be gated on already being over budget. ---------------------
+    // The budget answers "is this too big?". Only growth answers "is this doubling?", and
+    // this file's own baseline calls growth "the live signal, because growth is the actual
+    // defect". Yet growth was only ever evaluated after the budget test below, so a file
+    // UNDER its budget fell through the `continue` and was never growth-checked at all.
+    // Measured 2026-09-01: SKILL.md went 43 KB -> 78.5 KB in seven days (+16% in the final
+    // day alone) against a 96 KB budget, and this sweep reported clean every single night.
+    // A guard that can only see a runaway after it has already arrived is the failure mode
+    // this file exists to prevent, so growth is now checked independently of the budget.
+    const wasSize = baseline.sizes?.[name]
+    const grownUnderBudget =
+      wasSize != null && sizeKB <= entry.budgetKB && sizeKB > wasSize * (1 + tolerance)
+    if (grownUnderBudget) {
+      findings.push(
+        `GROWING   ${name}: ${sizeKB} KB, up from ${wasSize} KB at baseline ` +
+          `(+${Math.round(((sizeKB - wasSize) / wasSize) * 100)}%, tolerance ${manifest.tolerancePct}%). ` +
+          `Still under its ${entry.budgetKB} KB budget, but growing faster than tolerance.`
+      )
+      continue
+    }
+
     if (sizeKB <= entry.budgetKB) continue
 
     // --- g2 + g3: over budget. New or worsened is a finding; known and stable is not. ---
