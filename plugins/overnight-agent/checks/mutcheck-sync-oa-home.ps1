@@ -411,6 +411,48 @@ $rV = Invoke-Subject $Script $fxV -WhatIf
 Assert ($rV.Json.verifiedCurrent -eq $false) 'T_FORWARD_VERIFIED' 'verified-current is False while a required file is absent'
 Assert (-not (Test-Path (Join-Path $fxV.Home 'newsweep.mjs'))) 'T_FORWARD_WHATIF' 'and -WhatIf still writes nothing'
 
+# --- T_BOM: a BOM-carrying file identical on both sides must read CURRENT --------------
+# This is the host-dependence case, reduced to one file. The subject compares the live
+# bytes against the ref, and the two sides used DIFFERENT readers: the disk side used
+# [IO.File]::ReadAllText, which strips a UTF-8 BOM, while the ref side captured
+# `git cat-file blob | Out-String`, which does not. So a file that was byte-identical to
+# the ref compared UNEQUAL -- and, worse, it did so only on some hosts.
+#
+# MEASURED 2026-09-01, one machine, one tree, the same second:
+#     powershell 5.1  ->  0 DIVERGENT
+#     pwsh 7.6.5      ->  7 DIVERGENT   (oa-state.ps1, write-turn.ps1, run-sweeps.ps1,
+#                                        sync-oa-home.ps1 and three others)
+# Extracting those blobs with `cmd /c git cat-file blob` and comparing bytes proved the
+# disk copies were byte-identical to the ref, matching `git cat-file -s`. So 5.1 was right
+# by luck, pwsh was wrong, and neither had measured anything.
+#
+# DIVERGENT means "may be a live fix" and is REFUSED, so under pwsh this tool silently
+# declines to update the core scripts -- "merged but not running", recreated by host
+# choice, inside the tool that exists to prevent it.
+#
+# The fixture below carries BOTH triggers, because either alone is insufficient: a UTF-8
+# BOM (the asymmetric reader) and non-ASCII (which is what makes the decoding differ).
+$fxB = New-Fixture 'bom-identical'
+# Non-ASCII built from code points, not literals: this file's own encoding must not decide
+# whether the fixture actually carries the bytes the case needs. U+00E9 e-acute, U+26A0
+# warning sign, U+1F319 crescent moon (a surrogate pair, so it also covers >BMP).
+$nonAscii = [string][char]0x00E9 + [string][char]0x26A0 + [char]::ConvertFromUtf32(0x1F319)
+$bomBytes = [byte[]]@(0xEF, 0xBB, 0xBF) +
+            [Text.Encoding]::UTF8.GetBytes("# probe`n# non-ascii: $nonAscii`nWrite-Host 'x'`n")
+$bomRepoPath = Join-Path $fxB.Repo 'plugins\overnight-agent\checks\bomprobe.ps1'
+[IO.File]::WriteAllBytes($bomRepoPath, $bomBytes)
+Push-Location $fxB.Repo
+try {
+  & git add -A 2>&1 | Out-Null
+  & git commit --quiet -m 'bom probe' 2>&1 | Out-Null
+  & git branch -f main HEAD 2>&1 | Out-Null
+} finally { Pop-Location }
+# The live copy is byte-for-byte the same file. Anything but CURRENT is a false accusation.
+[IO.File]::WriteAllBytes((Join-Path $fxB.Home 'bomprobe.ps1'), $bomBytes)
+$rB = Invoke-Subject $Script $fxB -WhatIf
+Assert ((Get-Class $rB 'bomprobe.ps1') -eq 'CURRENT') 'T_BOM' 'a BOM-carrying file identical to the ref reads CURRENT'
+Assert ((Get-Class $rB 'bomprobe.ps1') -ne 'DIVERGENT') 'T_BOM_NOT_REFUSED' 'and is never refused as a possible live fix'
+
 Write-Host ''
 Write-Host '[mutants] each must FLIP the case it protects'
 
@@ -644,6 +686,31 @@ Assert ((Get-Class $rReal 'probe-manifest.json') -eq 'DATA-STALE') 'M14_REAL' 't
 Assert ((Get-Content -LiteralPath (Join-Path $fx.Home 'probe-manifest.json') -Raw) -match 'stale') 'M14_NOWRITE' 'and still refuses to overwrite it (it may be local state)'
 $rMut = Invoke-Subject $m14 $fx
 Assert ((Get-Class $rMut 'probe-manifest.json') -ne 'DATA-STALE') 'M14' 'without the DATA-STALE branch a frozen data file is called current'
+
+# --- the host-dependence pair. Both restore one half of the asymmetric-reader bug -------
+# T_BOM above proves the case is live; these two prove which line is holding it up. They
+# must be separate, because either half alone reproduces the false DIVERGENT and a single
+# arm could be killed by the other's guard.
+
+# M15 - drop the BOM strip on the ref side. The disk side still strips (ReadAllText does it
+#       silently), so an identical file compares unequal. This is the asymmetry itself.
+$m15find = @'
+  if ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) {
+    $Bytes = $Bytes[3..($Bytes.Length - 1)]
+  }
+'@
+$m15 = New-Mutant 'M15' ($m15find.TrimEnd("`r","`n")) '  # BOM strip mutated away'
+$rM15 = Invoke-Subject $m15 $fxB -WhatIf
+Assert ((Get-Class $rM15 'bomprobe.ps1') -ne 'CURRENT') 'M15' 'without the BOM strip an identical BOM-carrying file is not CURRENT'
+
+# M16 - route the blob back through the PowerShell host. This is the literal pre-fix line,
+#       and it is the half that made the verdict differ BY HOST rather than merely be
+#       wrong: `| Out-String` decodes using host rules, so 5.1 and pwsh 7 disagreed on the
+#       same bytes. Killing it requires the fixture to carry non-ASCII, which is why the
+#       fixture above builds real code points instead of plain text.
+$m16 = New-Mutant 'M16' '    return (Get-NormalizedTextFromBytes ([IO.File]::ReadAllBytes($tmp)))' '    return (& git -C $Repo cat-file blob $Blob 2>$null | Out-String)'
+$rM16 = Invoke-Subject $m16 $fxB -WhatIf
+Assert ((Get-Class $rM16 'bomprobe.ps1') -ne 'CURRENT') 'M16' 'routing the blob back through the host reintroduces the false mismatch'
 
 Write-Host ''
 Write-Host ("[mutcheck-sync-oa-home] {0} passed, {1} failed" -f $script:pass, $script:fail)
