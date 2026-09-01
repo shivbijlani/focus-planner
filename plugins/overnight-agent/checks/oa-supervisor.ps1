@@ -183,6 +183,70 @@ function Get-SupervisorAction {
   }
 }
 
+# --- the DB read path: snapshot then read, kept as functions so the mutcheck can drive
+# --- the REAL code rather than a shadow copy of it -----------------------------------
+
+# Snapshot the app's SQLite database for read-only inspection.
+#
+# The app holds the live DB open, and a WAL-mode reader can still trip on a concurrent
+# checkpoint, so we deliberately read a copy rather than the original. The copy MUST
+# include the -wal (and -shm) sidecars: in WAL mode a committed transaction lives in
+# the -wal file until a checkpoint folds it into the .db, so copying the .db alone
+# yields the database AS OF THE LAST CHECKPOINT, not as of now (GH #348).
+#
+# Measured cost of getting this wrong, replaying 93 real supervisor ticks: 21 (23%)
+# read stale, lag up to 97.6 min, and 18 alarms fired against runs that were healthy.
+# That matters because SCHEDULE-DEAD has no liveness veto - it restarts the app - so a
+# stale read alone could kill live sessions on a perfectly healthy machine.
+#
+# SQLite recovers the WAL when it opens the copy, so the snapshot reads as of NOW.
+function Copy-DbSnapshot {
+  param([string]$Source, [string]$Destination)
+  Copy-Item $Source $Destination -Force
+  foreach ($suffix in @('-wal', '-shm')) {
+    $sidecar = $Source + $suffix
+    if (Test-Path $sidecar) { Copy-Item $sidecar ($Destination + $suffix) -Force }
+  }
+}
+
+# Newest run of any status for $WorkflowName, read out of a snapshot of $Db.
+# Returns $null when the workflow exists but has never run; throws otherwise.
+function Get-NewestWorkflowRun {
+  param([string]$Db, [string]$WorkflowName)
+
+  $tmp = Join-Path $env:TEMP ("oa-supervisor-{0}.db" -f [guid]::NewGuid().ToString('N'))
+  Copy-DbSnapshot -Source $Db -Destination $tmp
+  $probe = @'
+import { DatabaseSync } from 'node:sqlite';
+const [dbPath, wfName] = process.argv.slice(2);
+const db = new DatabaseSync(dbPath, { readOnly: true });
+const wf = db.prepare('SELECT id FROM workflows WHERE name = ?').get(wfName);
+if (!wf) { console.log(JSON.stringify({ error: 'workflow-not-found' })); process.exit(0); }
+// NOTE: the FK column in workflow_runs is `task_id`, not `workflow_id`; and
+// workflows.last_run_at is not maintained for every trigger path, so date from runs.
+const r = db.prepare(
+  'SELECT status, trigger, started_at, completed_at, error_message FROM workflow_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 1'
+).get(wf.id);
+console.log(JSON.stringify({ run: r ?? null }));
+'@
+  $probeFile = Join-Path $env:TEMP ("oa-supervisor-probe-{0}.mjs" -f [guid]::NewGuid().ToString('N'))
+  $probe | Out-File -FilePath $probeFile -Encoding utf8
+  try {
+    $raw = & node $probeFile $tmp $WorkflowName 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "probe failed: $raw" }
+    $parsed = $raw | ConvertFrom-Json
+    if ($parsed.error) { throw "workflow '$WorkflowName' not found in $Db" }
+    return $parsed.run
+  } finally {
+    # sqlite creates -wal/-shm sidecars next to the copy; deleting only the .db leaks
+    # two files per invocation, which at a 15-minute cadence is ~200 files a day.
+    Remove-Item $probeFile -Force -ErrorAction SilentlyContinue
+    foreach ($suffix in @('', '-wal', '-shm')) {
+      Remove-Item ($tmp + $suffix) -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 # The app we supervise is the desktop GUI process 'github.exe'; its children are the
 # 'copilot.exe --server' backends. Resolve its exe from the live process when we can
 # (survives version bumps), else the stable per-user install path.
@@ -233,41 +297,7 @@ $appRunning = [bool](Get-Process -Name 'copilot' -ErrorAction SilentlyContinue)
 
 try {
   if (-not (Test-Path $Db)) { throw "app database not found at $Db" }
-
-  # Read-only, via Node's built-in sqlite. Copy first: the app holds the DB open and a
-  # WAL-mode reader can still trip on a concurrent checkpoint. A stale-by-seconds copy
-  # is fine for a 15-minute supervisor and cannot corrupt the original.
-  $tmp = Join-Path $env:TEMP ("oa-supervisor-{0}.db" -f [guid]::NewGuid().ToString('N'))
-  Copy-Item $Db $tmp -Force
-  $probe = @'
-import { DatabaseSync } from 'node:sqlite';
-const [dbPath, wfName] = process.argv.slice(2);
-const db = new DatabaseSync(dbPath, { readOnly: true });
-const wf = db.prepare('SELECT id FROM workflows WHERE name = ?').get(wfName);
-if (!wf) { console.log(JSON.stringify({ error: 'workflow-not-found' })); process.exit(0); }
-// NOTE: the FK column in workflow_runs is `task_id`, not `workflow_id`; and
-// workflows.last_run_at is not maintained for every trigger path, so date from runs.
-const r = db.prepare(
-  'SELECT status, trigger, started_at, completed_at, error_message FROM workflow_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 1'
-).get(wf.id);
-console.log(JSON.stringify({ run: r ?? null }));
-'@
-  $probeFile = Join-Path $env:TEMP ("oa-supervisor-probe-{0}.mjs" -f [guid]::NewGuid().ToString('N'))
-  $probe | Out-File -FilePath $probeFile -Encoding utf8
-  try {
-    $raw = & node $probeFile $tmp $WorkflowName 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "probe failed: $raw" }
-    $parsed = $raw | ConvertFrom-Json
-    if ($parsed.error) { throw "workflow '$WorkflowName' not found in $Db" }
-    $newest = $parsed.run
-  } finally {
-    # sqlite creates -wal/-shm sidecars next to the copy; deleting only the .db leaks
-    # two files per invocation, which at a 15-minute cadence is ~200 files a day.
-    Remove-Item $probeFile -Force -ErrorAction SilentlyContinue
-    foreach ($suffix in @('', '-wal', '-shm')) {
-      Remove-Item ($tmp + $suffix) -Force -ErrorAction SilentlyContinue
-    }
-  }
+  $newest = Get-NewestWorkflowRun -Db $Db -WorkflowName $WorkflowName
 } catch {
   $err = @{ state = 'SUPERVISOR-FAILED'; error = "$_" }
   Write-Log $err
