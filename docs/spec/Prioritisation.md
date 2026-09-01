@@ -458,9 +458,9 @@ task. Four mechanisms keep work moving, and they are ordered against each other 
   correctly and the verdict was discarded one line later, making the whole feature inert. **Snooze
   outranks both timers**, because it is the user's explicit instruction and the user always wins.
 
-### 3.4 The recurring failure class, and the design rule it produces
+### 3.4 The recurring failure classes, and the design rules they produce
 
-One failure has now occurred three times in this system, in three unrelated readers:
+One failure has occurred three times in this system, in three unrelated readers:
 
 | Instance | The self-authored signal |
 | --- | --- |
@@ -469,8 +469,9 @@ One failure has now occurred three times in this system, in three unrelated read
 | The Today gate (GitHub issue 310) | `last_turn_at`, stamped by the agent's own `mark`, released the agent's own gate. |
 
 Each reader was correct in isolation and wrong because the thing it read was agent-authored. **A gate
-whose release signal the agent writes is not a gate.** The design rule that follows, and that a
-rebuilder should apply to any new gate before shipping it:
+whose release signal the agent writes is not a gate.** That produces the first three rules below; the
+fourth is a second, cross-cutting class, and it is the one that lets the others go unnoticed. A
+rebuilder should apply all four to any new gate before shipping it:
 
 1. **Prefer a signal derived from state the agent cannot author** — the clock, the user's board, the
    user's reply, a file the agent only reads. Three of the four things that cancel an exhaustion
@@ -484,6 +485,30 @@ rebuilder should apply to any new gate before shipping it:
 3. **Assert the consequence, not the signal.** Both the recheck bug and the parking bug survived
    because a check asserted that a signal was computed (`due_recheck: true`) and never that it had an
    effect (`eligible: true`). A fired-and-ignored timer reads as healthy.
+4. **A reader must be able to tell "absent" from "present but unreadable."** This is the rule the
+   other three depend on, because it is the mechanism by which a violation of any of them stays
+   invisible. Every hazard on this page has the same anatomy: the failure does not produce an
+   *invalid* value, it produces a *valid* one that is wrong, and every consumer downstream then
+   behaves correctly on a lie.
+
+   | Unreadable input | Decodes to | Which is indistinguishable from |
+   | --- | --- | --- |
+   | A compound ID cell (`448,[176](…)`) the row parser rejects | no `Today` rows | "Today is finished" — gate wide open |
+   | A board read with the host's default decoder | every urgency icon "unknown" | "the user set no icons" |
+   | A `Wake`-column snooze (#343) | `snoozed: false` | "the user never snoozed it" |
+   | A `## Priorities` entry that is not a bare id | no rank | "this task is not prioritised" |
+   | A malformed `snooze.json` read as `@{}` | nothing snoozed | "the user unsnoozed everything" |
+
+   Only the `snooze.json` case is defended by making the distinction *representable*:
+   `Get-SnoozeFromStore` returns `$null` for a parse failure and an empty map for an empty store, so
+   the caller can tell "no store" from "nothing snoozed" and falls back to the markers instead of
+   acting. The first two were instead fixed by removing the misread at source — teaching the row
+   parser the real ID format, and decoding the board as UTF-8 explicitly — which works but leaves
+   the next misread of the same shape undefended. The fourth is by design rather than a defect. The
+   design test is: **does this failure yield an invalid value, or a valid one that is wrong?** The
+   first is caught by any check. The second is caught only by asking, deliberately and in advance,
+   whether the reader can tell missing from unparsed — because by construction nothing downstream
+   will ever raise it.
 
 This is a narrowing of the hole, not a closure of it, and the spec should say so: **nothing verifies
 the *content* of a declaration.** A run can name three items it never looked at, and `oa-state.ps1`
