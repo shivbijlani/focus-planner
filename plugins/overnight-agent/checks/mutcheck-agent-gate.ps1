@@ -28,6 +28,15 @@
     E  absent-file-fail-closed        absent / empty / malformed gate == the pre-#297 behaviour
     F  enum-validation                -Action is a closed enum; an unknown kind is REFUSED
     G  action-omitted-unchanged       with no -Action the output is the pre-#297 output exactly
+    H  gate-allowed-surfaces-human    a gate verdict still REPORTS a human waiting below the turn
+
+  Arm H is the data half of #302 and does not change any verdict. A `gate-allowed` short-circuits
+  the journal read, so without this the caller cannot tell "nobody has said anything" from "he
+  replied 'don't' ninety seconds ago" -- and "stop when he says stop" becomes an instruction with
+  nothing behind it. Two mutations name arm H (M8 always-false, M9 always-true), which the aim
+  check permits: it requires each MUTATION to be caught by exactly one arm, not each arm to own
+  exactly one mutation. A field that is always false is missing and a field that is always true
+  is noise, so only an arm asserting both directions kills both.
 
   Plus one CORPUS arm, `L`, which runs the REAL live gate text (embedded verbatim below) and
   asserts the finding the issue turns on: merging a focus-planner PR is NOT authorised, while
@@ -123,6 +132,16 @@ The agent's last turn. Awaiting a decision.
 
 # A genuine, positively-attributed human approval. Used by arm B to prove the floor beats it.
 $HumanApprove = "## 2026-08-31`n`n<!-- from: me -->`napprove"
+
+# A human REFUSAL below the agent's turn. Arm H's point: this changes no verdict -- the gate
+# still says allowed -- but the caller must be able to SEE it, or "stop when he says stop" is an
+# instruction nobody can enforce. Deliberately not an affirmative, so it cannot be confused with
+# a consent signal; the field being asserted is presence, not meaning.
+$HumanWaiting = "## 2026-09-01`n`n<!-- from: me -->`ndo not send that, hold off"
+
+# The same message with NO provenance marker. `trailing_has_user` uses the fail-OPEN reader, so
+# this must still register: the cost of missing a human here is acting over a refusal.
+$UnmarkedWaiting = "## 2026-09-01`n`ndo not send that, hold off"
 
 function New-Journal {
   param([string]$Dir, [string]$Id, [string[]]$Entries)
@@ -234,6 +253,26 @@ $arms = [ordered]@{
       @{ args = @(); expect = @{ consent_ok = $true; reason = 'human-authored-affirmative' } }
     )
   }
+  'H-gate-allowed-surfaces-human'    = @{
+    why     = 'a gate verdict still REPORTS whether a human is waiting below the turn (#302)'
+    gate    = (New-Gate -Allow @($RULE_EMAIL_SELF) -Ask @($FLOOR_MANY))
+    entries = @()
+    queries = @(
+      # Both halves are `gate-allowed` -- the verdict must NOT move. Only the reported fact does.
+      # A field that is always true is the same failure as no field, so the arm asserts both.
+      @{ args = @('-Action', 'send_email_self'); entries = @($HumanWaiting)
+        expect = @{ consent_ok = $true; reason = 'gate-allowed'; trailing_has_user = $true }
+      }
+      @{ args = @('-Action', 'send_email_self'); entries = @()
+        expect = @{ consent_ok = $true; reason = 'gate-allowed'; trailing_has_user = $false }
+      }
+      # And it must be the FAIL-OPEN reader: unmarked prose below the turn is somebody, and the
+      # cost of being wrong here is one pause, not a merge over a refusal.
+      @{ args = @('-Action', 'send_email_self'); entries = @($UnmarkedWaiting)
+        expect = @{ consent_ok = $true; reason = 'gate-allowed'; trailing_has_user = $true }
+      }
+    )
+  }
   'L-live-gate-merge-finding'        = @{
     why        = 'THE finding: the live gate as written does not authorise merging a focus-planner PR'
     diagnostic = $true
@@ -295,6 +334,11 @@ function Invoke-Arm {
     $results = @()
     foreach ($q in @($Arm.queries)) {
       if ($null -eq $q) { continue }
+      # A query may carry its OWN journal, so one arm can assert both halves of a discrimination
+      # (arm H needs "gate-allowed WITH a human message" and "gate-allowed WITHOUT one" to differ
+      # in exactly one field). ContainsKey, not truthiness: `entries = @()` is a meaningful world.
+      $entries = if ($q.ContainsKey('entries')) { $q.entries } else { $Arm.entries }
+      New-Journal -Dir $jdir -Id '970' -Entries @($entries)
       $child = Invoke-Child -ChildArgs ($base + @($q.args))
       $obj = $null
       try { $obj = $child.Raw | ConvertFrom-Json } catch { }
@@ -486,6 +530,26 @@ $mutations = @(
     $gate = Read-AgentGate $GatePath'), 'if ($true) {
     $gate = Read-AgentGate $GatePath'
       $out -replace [regex]::Escape('if ($Action) { Add-GateFallthrough $out $gate }'), 'Add-GateFallthrough $out $gate'
+    }
+  },
+  # M8 and M9 are the two halves of the same guarantee and BOTH name arm H, which is allowed:
+  # the aim check requires each mutation to be caught by exactly one arm, not each arm to have
+  # exactly one mutation. A field that is always false is missing; a field that is always true is
+  # noise. Only an arm asserting both directions kills both.
+  @{
+    name  = 'M8: the gate path reports trailing_has_user as always FALSE (the field goes missing)'
+    kills = 'H-gate-allowed-surfaces-human'
+    apply = {
+      param($s)
+      $s -replace [regex]::Escape('if (Test-Path $path) { $trailingHasUser = [bool](Get-JournalFacts $path).HasTrailingUser }'), '# mutated: never look'
+    }
+  },
+  @{
+    name  = 'M9: the gate path reports trailing_has_user as always TRUE (the field says nothing)'
+    kills = 'H-gate-allowed-surfaces-human'
+    apply = {
+      param($s)
+      $s -replace [regex]::Escape('if (Test-Path $path) { $trailingHasUser = [bool](Get-JournalFacts $path).HasTrailingUser }'), '$trailingHasUser = $true'
     }
   }
 )

@@ -1646,17 +1646,35 @@ function Cmd-Consent {
       # the run regardless of what this returns. Do not widen this function to also read refusals
       # -- a refusal vocabulary is the #301 problem (which affirmatives count), and it belongs in
       # its own change with its own mutation arms, not smuggled in here.
+      # `trailing_has_user` is reported on this path too (#302), even though the verdict did not
+      # consult it and MUST NOT. Surfacing it is the whole point: without it, a caller holding a
+      # `gate-allowed` cannot tell "nobody has said anything" from "he replied 'don't' ninety
+      # seconds ago", because the journal was never opened. Filing an issue saying a wrapper
+      # should refuse, while the data the wrapper needs is absent from the output, is prose with
+      # a tracking number.
+      #
+      # It deliberately uses HasTrailingUser -- the FAIL-OPEN reader -- not the fail-closed
+      # consent reader, and the asymmetry is the same one documented at the top of this file
+      # read in the other direction. Here a false "there is a human message" costs one pause; a
+      # false "there is none" costs acting over a refusal. So unmarked prose counts.
+      #
+      # Reporting only. Nothing in this function weighs it, and nothing should: deciding what a
+      # human MEANT by the text below the turn is the vocabulary problem in #301, and it needs
+      # its own reader with its own mutation arms rather than an `if` bolted on here.
+      $trailingHasUser = $false
+      if (Test-Path $path) { $trailingHasUser = [bool](Get-JournalFacts $path).HasTrailingUser }
       [pscustomobject]@{
-        id         = $Id
-        consent_ok = ($verdict.decision -eq 'allow')
-        reason     = $(if ($verdict.decision -eq 'floor') { 'gate-floor-blocks' } else { 'gate-allowed' })
-        action     = "$Action"
-        repo       = $(if ($Repo) { "$Repo" } else { $null })
-        gate_state = "$($gate.state)"
-        gate_list  = "$($verdict.list)"
-        gate_rule  = "$($verdict.rule)"
-        gate_path  = "$($gate.path)"
-        path       = $path
+        id                = $Id
+        consent_ok        = ($verdict.decision -eq 'allow')
+        reason            = $(if ($verdict.decision -eq 'floor') { 'gate-floor-blocks' } else { 'gate-allowed' })
+        action            = "$Action"
+        repo              = $(if ($Repo) { "$Repo" } else { $null })
+        gate_state        = "$($gate.state)"
+        gate_list         = "$($verdict.list)"
+        gate_rule         = "$($verdict.rule)"
+        gate_path         = "$($gate.path)"
+        trailing_has_user = $trailingHasUser
+        path              = $path
       } | ConvertTo-Json -Depth 4
       return
     }
