@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Overnight Agent's settings file ate its own context</title>
+<style>
+  :root{
+    --ink:#16181d; --dim:#5b6270; --line:#e2e5ea; --bg:#fbfbfc;
+    --accent:#8a3b12; --good:#1b6b3a; --bad:#9b1c1c; --card:#fff;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:17px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    padding:0 18px 72px;
+  }
+  .wrap{max-width:44rem; margin:0 auto}
+  header{padding:44px 0 10px; border-bottom:2px solid var(--ink); margin-bottom:26px}
+  .kicker{font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim); margin:0 0 10px}
+  h1{font-size:30px; line-height:1.2; margin:0 0 12px; letter-spacing:-.015em}
+  .sub{color:var(--dim); font-size:16px; margin:0}
+  .refs{margin:14px 0 0; padding:0; list-style:none; font-size:14px}
+  .refs li{display:inline-block; margin:0 14px 4px 0}
+  h2{font-size:21px; margin:38px 0 10px; letter-spacing:-.01em; line-height:1.28}
+  .num{
+    color:var(--dim); font-variant-numeric:tabular-nums; font-weight:600;
+    display:inline-block; min-width:1.5em; margin-right:.35em;
+  }
+  h3{font-size:16px; margin:24px 0 6px}
+  p{margin:0 0 14px}
+  a{color:var(--accent); text-underline-offset:2px}
+  code{
+    font:14px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    background:#f0f1f4; padding:.12em .34em; border-radius:4px; word-break:break-word;
+  }
+  .lede{font-size:19px; line-height:1.55}
+  .lede strong{background:#fff3d6; padding:0 .18em}
+  blockquote{
+    margin:20px 0; padding:2px 0 2px 18px; color:var(--ink);
+    border-left:1px solid var(--line);
+  }
+  blockquote p{margin:0}
+  .callout{
+    background:var(--card); border:1px solid var(--line); border-radius:10px;
+    padding:14px 16px; margin:18px 0;
+  }
+  .callout p:last-child{margin-bottom:0}
+  .callout .lbl{
+    display:block; font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--dim); margin-bottom:6px; font-weight:700;
+  }
+  table{width:100%; border-collapse:collapse; margin:16px 0; font-size:15px}
+  th,td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--dim); font-weight:700}
+  td.n,th.n{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+  .win{color:var(--good); font-weight:700}
+  .lose{color:var(--bad); font-weight:700}
+  details{
+    background:var(--card); border:1px solid var(--line); border-radius:10px;
+    padding:0 16px; margin:14px 0;
+  }
+  details[open]{padding-bottom:6px}
+  summary{
+    cursor:pointer; padding:13px 0; font-weight:650; list-style:none; font-size:16px;
+  }
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"▸ "; color:var(--accent); font-weight:700}
+  details[open]>summary::before{content:"▾ "}
+  details[open]>summary{border-bottom:1px solid var(--line); margin-bottom:12px}
+  .hist{background:#fdfaf5; border-color:#e8dcc8}
+  ul,ol{margin:0 0 14px; padding-left:1.25em}
+  li{margin:0 0 8px}
+  .tag{
+    display:inline-block; font-size:11px; letter-spacing:.08em; text-transform:uppercase;
+    font-weight:700; padding:3px 8px; border-radius:99px; vertical-align:middle;
+  }
+  .tag.draft{background:#fdf0d5; color:#7a4b00; border:1px solid #e8cf9a}
+  .tag.done{background:#e6f4ec; color:#1b6b3a; border:1px solid #b7dfc7}
+
+  details.sec{
+    background:transparent; border:0; border-top:1px solid var(--line);
+    border-radius:0; padding:0; margin:0;
+  }
+  details.sec[open]{padding-bottom:22px}
+  details.sec>summary{
+    font-size:21px; font-weight:650; line-height:1.3; letter-spacing:-.01em;
+    padding:17px 0; margin:0; border-bottom:0;
+  }
+  details.sec>summary::before{content:"+"; color:var(--accent); font-weight:700; margin-right:.5em}
+  details.sec[open]>summary{border-bottom:0; margin-bottom:10px}
+  details.sec[open]>summary::before{content:"\2013"}
+  .teaser{
+    display:block; font-size:14.5px; font-weight:400; color:var(--dim);
+    line-height:1.45; margin:3px 0 0 2.3em;
+  }
+  details.sec[open] .teaser{display:none}
+  details.sec>summary h3:first-of-type{margin-top:0}
+  hr{border:0; border-top:1px solid var(--line); margin:36px 0}
+  .foot{color:var(--dim); font-size:13px; margin-top:34px}
+  @media (max-width:420px){
+    body{font-size:16px; padding:0 14px 60px}
+    h1{font-size:25px}
+    h2{font-size:19px}
+    table{font-size:14px}
+    th,td{padding:7px 6px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="kicker">Focus Planner &middot; Overnight Agent</p>
+  <h1>The settings file grew until the agent could no longer read it</h1>
+  <p class="sub">What went wrong, why it stopped the automation from finishing, what was done about it
+  tonight — and why that is a stopgap rather than the fix.</p>
+  <ul class="refs">
+    <li><a href="https://github.com/shivbijlani/focus-planner/issues/262">Issue 262</a></li>
+    <li><a href="https://github.com/shivbijlani/focus-planner/pull/287">Pull request 287</a> <span class="tag done">merged</span></li>
+    <li><a href="#shipped">What shipped &rarr;</a></li>
+    <li><a href="#approach">The approach &rarr;</a></li>
+  </ul>
+</header>
+
+<p class="lede">One configuration file, <code>user-settings.md</code>, is read at the start of every
+Overnight Agent run — and it is also where the agent writes its own notes after every run. So it
+kept growing. It reached <strong>about 950,000 characters</strong>, which was roughly
+<strong>97% of everything the model is allowed to read in one call</strong>. Runs stopped finishing.
+Eventually the agent's own file reader refused to open it at all.</p>
+
+<p>The fix moves the accumulated notes into a second file beside it, leaves an index behind, and
+deletes nothing. Applied to the real file, it went from about 947,000 characters to about 75,000 —
+roughly <strong>237,000 tokens down to about 19,000</strong> — with all 41 settings rows intact.</p>
+
+<div class="callout">
+  <span class="lbl">The one-line version</span>
+  <p>The agent's notepad and the agent's config were the same file, and that file was on the
+  read-every-single-time path. Tonight's change separates them — but that is containment. The
+  durable fix is that the file was holding four different jobs at once, and each needs its own
+  home. <a href="#approach">Section 7</a> is that argument.</p>
+</div>
+
+<hr>
+
+<details class="sec">
+  <summary><span class="num">1</span>Why a big file stops the automation from finishing<span class="teaser">Why “the file is big” turns into “the automation never finishes”.</span></summary>
+
+<p>The model can only look at a fixed amount of text per call. Think of it as a desk with a fixed
+surface area. Everything the agent needs — the instructions, the planner board, the task journal,
+the code it is reading, and its own work-in-progress — has to fit on that desk at the same time.</p>
+
+<p>The instructions say: read <code>user-settings.md</code> first, every run. So the first thing that
+lands on the desk is the settings file. And because each step of a run re-sends the whole conversation
+so far, that file is not paid for once — it is paid for again on every single back-and-forth with
+the model.</p>
+
+<p>When the settings file alone takes ~97% of the desk, three things happen at once:</p>
+
+<ul>
+  <li><strong>Each step accomplishes almost nothing</strong>, because there is nearly no room left
+  for actual work.</li>
+  <li><strong>So the run needs far more steps</strong> — and every one of those steps re-reads the
+  same giant file.</li>
+  <li><strong>Every step is slow and expensive</strong>, because cost and latency scale with how much
+  text goes in.</li>
+</ul>
+
+<p>The result is not an error message. It is a run that grinds forever and never reaches the end.
+And because the schedule will not start a new run while the previous one is still marked
+<em>running</em>, one stuck run freezes the whole every-30-minutes cadence behind it.</p>
+
+<blockquote>
+  <p>One measured run made <strong>49 round-trips</strong> to the model, averaging
+  <strong>239,624 input tokens</strong> each. The settings file by itself accounted for about
+  232,500 of those. It sat in <em>running</em> for roughly <strong>nine hours</strong> and never
+  finished. (<a href="https://github.com/shivbijlani/focus-planner/issues/262">issue 262</a>)</p>
+</blockquote>
+
+<details>
+  <summary>How it got that big — the growth curve</summary>
+  <p>The file doubled roughly every week, because every run appended to it and nothing ever removed
+  anything. These sizes are read off the timestamped backups sitting next to it:</p>
+  <table>
+    <tr><th>Date</th><th class="n">Size</th></tr>
+    <tr><td>2026-08-23</td><td class="n">29 KB</td></tr>
+    <tr><td>2026-08-26</td><td class="n">478 KB</td></tr>
+    <tr><td>2026-08-27</td><td class="n">616 KB &rarr; 737 KB</td></tr>
+    <tr><td>2026-08-28</td><td class="n">884 KB</td></tr>
+    <tr><td>2026-08-29</td><td class="n">934 KB</td></tr>
+    <tr><td>2026-08-31</td><td class="n">956 KB</td></tr>
+  </table>
+  <p>Nothing was misbehaving. Writing down what you learned after a run is the correct instinct.
+  The mistake was that the notepad and the config were the same file, and that file was on the
+  read-it-every-time path.</p>
+  <p><small>Sizes here count 1&nbsp;KB as 1,000 bytes, to match the figures in the issue. Windows
+  Explorer counts 1,024 and will show slightly smaller numbers for the same files.</small></p>
+</details>
+</details>
+<details class="sec">
+  <summary><span class="num">2</span>Then it crossed a second line<span class="teaser">The file got too large for the agent to read its own configuration.</span></summary>
+
+<p>Context pressure is a gradual problem — things get slower and worse. The second failure was
+abrupt. The agent's file-reading tool has its own size limit, and the file went past it:</p>
+
+<blockquote><p><code>File too large to read at once (946.0 KB)</code></p></blockquote>
+
+<p>Put plainly: <strong>the file that tells the agent how to behave became too large for the agent
+to read.</strong> On that run it could not load its own configuration, and had to reconstruct the
+settings table by searching the file for individual lines instead of reading it. That is not a
+degraded mode anyone designed; it is the automation improvising around its own config.</p>
+</details>
+<details class="sec">
+  <summary><span class="num">3</span>What the shipped change does<span class="teaser">Split in two, verbatim, with an index left behind. Nothing deleted.</span></summary>
+
+<p>The change adds one script,
+<a href="https://github.com/shivbijlani/focus-planner/blob/oa-262-settings-split/plugins/overnight-agent/checks/split-user-settings.ps1"><code>split-user-settings.ps1</code></a>,
+wired into the start of each run. It splits the file in place into two:</p>
+
+<table>
+  <tr><th>File</th><th>What's in it</th><th>Read when?</th></tr>
+  <tr>
+    <td><code>user-settings.md</code></td>
+    <td>The actual settings — paths, accounts, allow-lists, preferences, browser slots.</td>
+    <td>Every run.</td>
+  </tr>
+  <tr>
+    <td><code>agent-lore.md</code></td>
+    <td>Everything else — the dated run learnings, postmortems and hazard write-ups. Verbatim, in
+    original order.</td>
+    <td>Only when something specifically calls for it.</td>
+  </tr>
+</table>
+
+<p>Concretely it does three things. It moves every <code>##</code> section that is not on a keep-list
+into the lore file, <strong>character for character</strong>. It leaves behind a short index listing
+every heading it moved. And for the settings rows that stayed, if a single table cell has grown
+enormous, it keeps the operative part of the value in the cell and moves the trailing essay to the
+lore file behind a link.</p>
+
+<div class="callout">
+  <span class="lbl">The insight that makes this safe</span>
+  <p>In this particular file, the archived headings <em>state their own rule</em> — things like
+  &ldquo;STOP — RELIABILITY IS ALWAYS HIGH PRIORITY&rdquo; and &ldquo;STOP — Keep turns short&rdquo;.
+  So a list of the headings carries nearly all of the behavioural signal at roughly <strong>1% of the
+  characters</strong>. The agent still sees every rule's name on every run; it only pays for the full
+  text when it goes looking. And nothing is deleted — the complete text is one search away.</p>
+</div>
+
+<details>
+  <summary>Why the keep-list is written out by hand instead of worked out automatically</summary>
+  <p>The list of sections that stay is short and literal: <code>Settings</code>,
+  <code>Telegram</code>, <code>Preferences</code>, <code>Browser slots</code>, plus the file's opening
+  paragraphs.</p>
+  <p>The tempting alternative is a rule like &ldquo;keep any section that contains a settings
+  table&rdquo;. That rule is wrong here, because <em>&ldquo;has a table&rdquo;</em> and
+  <em>&ldquo;the agent acts on this&rdquo;</em> are different questions. Both
+  <code>Preferences</code> and <code>Browser slots</code> contain no table at all and are load-bearing;
+  an inferred rule would have archived both.</p>
+  <p>A hand-written list also has a second property that matters more over time: it cannot quietly
+  expand. An inferred rule keeps more and more as the file changes shape — which is precisely how
+  the read-every-time path grew to a megabyte in the first place.</p>
+</details>
+</details>
+<details class="sec">
+  <summary><span class="num">4</span>The result, measured on the real file<span class="teaser">946,628 chars → 75,207. All 41 settings rows intact.</span></summary>
+
+<p>The split has already been applied to the live file. These numbers are read back off disk, not
+estimated:</p>
+
+<table>
+  <tr><th></th><th class="n">Before</th><th class="n">After</th></tr>
+  <tr><td>Size of <code>user-settings.md</code></td><td class="n">946,628 chars</td><td class="n win">75,207 chars</td></tr>
+  <tr><td>Cost per model call (approx.)</td><td class="n">~237,000 tokens</td><td class="n win">~19,000 tokens</td></tr>
+  <tr><td>Sections archived</td><td class="n">&mdash;</td><td class="n">135</td></tr>
+  <tr><td>Sections lost</td><td class="n">&mdash;</td><td class="n win">0</td></tr>
+  <tr><td>Oversized cells relocated</td><td class="n">&mdash;</td><td class="n">22</td></tr>
+  <tr><td>Settings rows the web app can read</td><td class="n">41</td><td class="n win">41</td></tr>
+</table>
+
+<p>The 135 archived sections break down as 33 standing rules and 102 dated run learnings. Both counts
+are printed in the index the file now carries, so the archive is discoverable from the settings file
+itself.</p>
+
+<p>The original is preserved in the same folder as
+<code>user-settings.md.bak-20260831-162050</code>. <strong>Rolling this back is one file copy.</strong></p>
+
+<details>
+  <summary>What's actually left in the file now</summary>
+  <table>
+    <tr><th>Section</th><th class="n">Chars</th></tr>
+    <tr><td>Settings</td><td class="n">14,392</td></tr>
+    <tr><td>Browser slots</td><td class="n">3,955</td></tr>
+    <tr><td>Telegram</td><td class="n">21,178</td></tr>
+    <tr><td>Preferences</td><td class="n">30,274</td></tr>
+    <tr><td>Index of what was archived</td><td class="n">4,713</td></tr>
+    <tr><td><strong>Total</strong></td><td class="n"><strong>75,207</strong></td></tr>
+  </table>
+</details>
+</details>
+<details class="sec">
+  <summary><span class="num">5</span>The guards, and what each one is for<span class="teaser">Six refusals to proceed, each proven load-bearing by mutation testing.</span></summary>
+
+<p>The script rewrites a file that lives in your OneDrive and is the only copy of its own history,
+unattended, on a timer. So most of it is not the splitting logic — it is six refusals to proceed.
+Each one exists because of a specific way this could go wrong quietly.</p>
+
+<table>
+  <tr><th>The guard</th><th>What happens without it</th></tr>
+  <tr>
+    <td><strong>Put it back together first.</strong> Before writing anything, reassemble the original
+    from the pieces and require an exact match. Any mismatch aborts with nothing written.</td>
+    <td>A split that silently dropped a settings value would hand the agent a wrong path or a wrong
+    allow-list — and look perfectly healthy doing it. That is worse than the bloat.</td>
+  </tr>
+  <tr>
+    <td><strong>Back up before the first byte.</strong> The backup is written before any output is.</td>
+    <td>A crash halfway through the write would leave you with a half-written file and no original.</td>
+  </tr>
+  <tr>
+    <td><strong>Say the text encoding out loud, both directions.</strong></td>
+    <td>Windows PowerShell 5.1 assumes a legacy encoding for files like this one. Read it wrongly and
+    write it back, and every accented character and emoji is permanently replaced with garbage —
+    silently, reporting success. That exact failure destroyed 593 lines of a task journal a few days
+    earlier.</td>
+  </tr>
+  <tr>
+    <td><strong>Running it twice must change nothing.</strong> A second run writes literally zero bytes.</td>
+    <td>This runs every 30 minutes against a cloud-synced file. A script that appends a little on each
+    pass is a second growth problem wearing the fix's clothes — and every needless rewrite is another
+    sync event and another backup file, forever.</td>
+  </tr>
+  <tr>
+    <td><strong>Never break a table row.</strong> A shortened row must still have the same number of
+    cells, and the cut may not land on an escaped pipe character.</td>
+    <td>See the next section — this is the one that could corrupt your file through the web app.</td>
+  </tr>
+  <tr>
+    <td><strong>Check the bytes on disk afterwards, and roll back.</strong> Re-read both output files
+    and count the byte patterns that are the fingerprint of mangled text. If the output has more than
+    the input did, restore the backup and fail.</td>
+    <td>Corruption that every in-memory check passes can still reach disk. This is the standing proof
+    that it didn't — and it caught a real instance (see the appendix).</td>
+  </tr>
+</table>
+
+<div class="callout">
+  <span class="lbl">These aren't decorative</span>
+  <p>A companion script,
+  <a href="https://github.com/shivbijlani/focus-planner/blob/oa-262-settings-split/plugins/overnight-agent/checks/mutcheck-split-settings.ps1"><code>mutcheck-split-settings.ps1</code></a>,
+  deliberately breaks each guard one at a time and confirms the script then fails. Running it on this
+  branch: <strong>13 baseline checks pass, 6 sabotages introduced, all 6 caught.</strong> Every guard
+  is doing work. A safety check that has quietly stopped mattering still reports success, which is the
+  exact failure mode this catches.</p>
+</div>
+</details>
+<details class="sec">
+  <summary><span class="num">6</span>Why this is safe for the planner web app<span class="teaser">The settings editor saves by byte offset, so a broken row would corrupt the file.</span></summary>
+
+<p>The planner's settings editor does not regenerate <code>user-settings.md</code> when you save. It
+finds the exact character positions of the one value you changed and splices the new text in, leaving
+every other byte untouched — see
+<a href="https://github.com/shivbijlani/focus-planner/blob/main/src/config/userSettingsForm.js"><code>src/config/userSettingsForm.js</code></a>.</p>
+
+<p>That design is why it never mangles your file, and it is also why a malformed table row here would
+be more than cosmetic. A row the parser reads incorrectly wouldn't just look odd in the editor — it
+would mean the next time you save any setting, the splice lands in the wrong place and
+<strong>corrupts the file</strong>.</p>
+
+<p>So the check
+(<a href="https://github.com/shivbijlani/focus-planner/blob/oa-262-settings-split/plugins/overnight-agent/checks/verify-settings-form.mjs"><code>verify-settings-form.mjs</code></a>)
+runs the before-and-after files through <strong>the web app's own shipped parser</strong>, not a
+reimplementation of it. Two things must hold: every settings row still parses, and reading the file
+and writing it straight back must return it completely unchanged. Both hold, on both sides:</p>
+
+<table>
+  <tr><th></th><th class="n">Chars</th><th class="n">Rows parsed</th><th class="n">Unchanged round-trip</th></tr>
+  <tr><td>Before</td><td class="n">946,628</td><td class="n">41</td><td class="n win">yes</td></tr>
+  <tr><td>After</td><td class="n">75,207</td><td class="n">41</td><td class="n win">yes</td></tr>
+  <tr><td>Rows lost</td><td class="n">&mdash;</td><td class="n win">0</td><td class="n">&mdash;</td></tr>
+</table>
+</details>
+<details class="sec" id="approach">
+  <summary><span class="num">7</span>Why this is containment, not the cure<span class="teaser">Four different jobs were sharing one file. The same bug is in three places.</span></summary>
+
+<p>Everything above describes moving the notes out of the way. It works, and the numbers are real.
+But it treats the file as one thing that got too big, and that is not what happened.</p>
+
+<p>Sorting the archived material by <em>what kind of thing it is</em> shows four different jobs that
+had been sharing one file:</p>
+
+<table>
+  <tr><th>What it actually is</th><th class="n">Sections</th><th class="n">Chars</th><th class="n">Share</th></tr>
+  <tr><td>Dated run learnings — history</td><td class="n">103</td><td class="n">677,744</td><td class="n">75.6%</td></tr>
+  <tr><td><strong>Operative rules</strong> — <code>STOP</code> notices the agent must obey</td><td class="n">23</td><td class="n">101,903</td><td class="n">11.4%</td></tr>
+  <tr><td>Reference / domain knowledge</td><td class="n">9</td><td class="n">52,023</td><td class="n">5.8%</td></tr>
+  <tr><td><strong>Settings values that outgrew their table cell</strong></td><td class="n">22</td><td class="n">64,407</td><td class="n">7.2%</td></tr>
+</table>
+
+<p>That last row is the diagnosis. One "setting" is an 8,479-character root-cause analysis of an
+unrelated startup failure, living in a table cell. It is not a setting. It is an incident report that
+was written where a value belongs.</p>
+
+<div class="callout">
+  <span class="lbl">Which means</span>
+  <p>The cell-trimming stage, the rule about keeping table rows intact, and the whole
+  byte-offset-splicing verification exist only to make prose-in-a-value-cell survivable. If values
+  were values, none of that machinery would need to exist — let alone be guarded.</p>
+</div>
+
+<h3>The same bug is in at least three places</h3>
+
+<p>This is not one file that misbehaved. It is a pattern with no owner: <strong>nothing the agent
+writes to has a retention policy.</strong></p>
+
+<table>
+  <tr><th>Store</th><th>State</th><th>Tracked as</th></tr>
+  <tr><td>Settings file</td><td>Grew to ~947,000 chars</td><td><a href="https://github.com/shivbijlani/focus-planner/issues/262">#262</a></td></tr>
+  <tr><td>Task journals</td><td><strong>386 files, 4.89 MB</strong>, largest 257 KB</td><td><a href="https://github.com/shivbijlani/focus-planner/issues/123">#123</a></td></tr>
+  <tr><td>Accumulated lessons</td><td>103 dated entries, never consolidated</td><td><a href="https://github.com/shivbijlani/focus-planner/issues/104">#104</a></td></tr>
+</table>
+
+<p>The journal figure is worth pausing on. When that issue was filed it measured 235 files and
+2.26 MB. It is now <strong>386 files and 4.89 MB</strong> — it more than doubled while the issue sat
+open, which is the same curve the settings file ran.</p>
+
+<p>And the lessons issue is the sharpest evidence, because it <em>predicted this file by name</em>.
+It proposed distilling run retros into <code>lessons.md</code>, plus a consolidation pass to
+"compress the day's hard-won lessons." The append half shipped. The compaction half never did. What
+exists today is that proposal with its second half missing.</p>
+
+<blockquote>
+  <p>The settings file was not special because it grew. Journals grew too. It was special because the
+  file that grew was also the file read on every single call. That is what turned untidy into fatal.</p>
+</blockquote>
+</details>
+<details class="sec">
+  <summary><span class="num">8</span>Where each piece should actually live<span class="teaser">Four jobs, four homes — and only one of them has no issue tracking it.</span></summary>
+
+<p>Four jobs, four homes. Only the first has no issue tracking it.</p>
+
+<table>
+  <tr><th>Job</th><th>Belongs in</th><th>Read when</th><th>Issue</th></tr>
+  <tr>
+    <td>The 41 real settings</td>
+    <td>A values-only file the app can write safely</td>
+    <td>Every run</td>
+    <td><strong>still none</strong></td>
+  </tr>
+  <tr>
+    <td>Rules about what needs your permission</td>
+    <td>An <strong>agent gate</strong> file you edit in the planner app</td>
+    <td>Every run</td>
+    <td><a href="https://github.com/shivbijlani/focus-planner/issues/288">#288</a> <span class="tag done">shipped</span></td>
+  </tr>
+  <tr>
+    <td>Rules a machine can enforce</td>
+    <td><code>checks/</code> — executed, not read</td>
+    <td>Never loaded as text</td>
+    <td>&mdash;</td>
+  </tr>
+  <tr>
+    <td>Dated history</td>
+    <td>An archive, with a retention policy</td>
+    <td>On demand only</td>
+    <td><a href="https://github.com/shivbijlani/focus-planner/issues/104">#104</a></td>
+  </tr>
+</table>
+
+<details>
+  <summary>Why most of those 23 rules should be code, not prose</summary>
+  <p>The <code>STOP</code> notices average <strong>4,431 characters each</strong> — about
+  <strong>25,000 tokens</strong> if they were simply moved to another file that is also read every
+  run. Relocating them would recreate this same problem more slowly.</p>
+  <p>But there are already <strong>158 scripts</strong> in the repo's <code>checks/</code> folder, and
+  the rules largely duplicate them. Six spot-checks, six hits:</p>
+  <table>
+    <tr><th>The written rule</th><th>The check that already enforces it</th></tr>
+    <tr><td>how you WRITE a journal turn</td><td><code>journal-encoding-invariant.mjs</code></td></tr>
+    <tr><td><code>consent_ok</code> can be the agent's own prose</td><td><code>mutcheck-consent-authorship.ps1</code></td></tr>
+    <tr><td>a long turn arrives with its ask deleted</td><td><code>telegram-ask-truncation-sweep.mjs</code></td></tr>
+    <tr><td>11 mutation checks had never run</td><td><code>rule-coverage.mjs</code></td></tr>
+    <tr><td>the agent gating its own reversible work</td><td><code>reversible-gate-sweep.mjs</code></td></tr>
+    <tr><td>a plugin reinstall reverts live fixes</td><td><code>capability-floor.ps1</code></td></tr>
+  </table>
+  <p><strong>A rule with a check does not need to be prose the model reads. It needs to be a check
+  that fails.</strong> That moves the cost from context — paid on every call, forever — to execution,
+  paid once per run. Prose is only load-bearing for judgement that cannot be mechanically tested.</p>
+  <p>One caveat, and it is a real one: an existing proposal to split these into partial files
+  (<a href="https://github.com/shivbijlani/focus-planner/issues/127">#127</a>) deliberately requires
+  every guardrail to stay in <em>a static file the model reads inline, never emitted as script
+  output</em> — on the grounds that a rule the model cannot see is a rule it cannot weigh. Both
+  positions are defensible and they have not been reconciled.</p>
+</details>
+</details>
+<details class="sec">
+  <summary><span class="num">9</span>What is deliberately not done<span class="teaser">Preferences kept whole, and the decision the merge did not settle.</span></summary>
+
+<p><strong>The <code>Preferences</code> section is kept whole.</strong> It is about 30,000 characters
+— roughly 40% of what remains — and unlike the archived material, it is prose the agent acts on
+directly rather than a list of named rules. Trimming it bullet by bullet would get the file
+meaningfully smaller (the pull request estimates under ~25 KB), but it trades away nuance in
+instructions you actually rely on. That is a judgement call about your own preferences, so it is left
+for you rather than assumed.</p>
+
+<p><strong>The change is now live.</strong>
+<a href="https://github.com/shivbijlani/focus-planner/pull/287">Pull request 287</a> was
+<span class="tag done">merged</span> and the script is deployed, so the settings file is
+re-shrunk automatically on every run. That closes the bleeding — and it means the standing
+cost is now a script that rewrites a cloud-synced file on a timer, forever.</p>
+
+<div class="callout">
+  <span class="lbl">The decision the merge did not settle</span>
+  <p>Merging bought back the context window. It did not answer whether a <em>rewriter</em> was
+  the right instrument. The issue's own second suggestion — <em>"enforce a hard size cap on
+  what's read at run start; fail loudly if exceeded"</em> — was never built, and it is the
+  cheaper, safer shape: a check that refuses to run cannot corrupt the file it is protecting.
+  That is what shipped tonight alongside it.</p>
+</div>
+
+<div class="callout">
+  <span class="lbl">The open decision</span>
+  <p>Merging that pull request buys back the context window and stops the bleeding, at the cost of a
+  script that rewrites a cloud-synced file on a timer forever. Not merging it means hand-fixing the
+  file periodically until the four homes above exist. The issue's own second suggestion — <em>"enforce
+  a hard size cap on what's read at run start; fail loudly if exceeded"</em> — is a third option that
+  was never built: keep the split as a one-time cleanup, and replace the every-run rewrite with a
+  tripwire that refuses to run rather than quietly repairing.</p>
+</div>
+</details>
+
+<details class="sec" id="shipped" open>
+  <summary><span class="num">10</span>What shipped tonight<span class="teaser">A contract, a tripwire, and three issues. Read this first if you read nothing else.</span></summary>
+
+<p>Two things landed in the planner, and three issues were filed for what remains.</p>
+
+<h3>1. The file-layout contract, as data</h3>
+
+<p><code>read-path-manifest.json</code> gives every file the agent touches one row stating four
+things: who <strong>owns</strong> it, who may <strong>write</strong> it, whether it is on the
+<strong>per-run read path</strong>, and what <strong>bounds its size</strong>. The rule it encodes
+is a single sentence:</p>
+
+<blockquote><p>No file may be both agent-appended and read on every run.</p></blockquote>
+
+<p>That combination is the bug, stated once instead of re-diagnosed per file. It caused this
+issue on the settings file and is causing it again on the journals. Declaring it as data means a
+third instance gets refused when it is written, not diagnosed after it breaks a night's work.</p>
+
+<h3>2. A tripwire that refuses, instead of a rewriter that repairs</h3>
+
+<p><code>read-path-budget-sweep.mjs</code> runs with the existing nightly checks and fails loudly
+when anything on the read path exceeds its budget. It is the suggestion this issue made and
+nobody built.</p>
+
+<p>The distinction that matters: <strong>it never writes.</strong> Most of the merged script's
+492 lines are guards that exist <em>because</em> it writes — back up first, UTF-8 both
+directions, byte-exact reassembly, idempotency, preserve the row shape the settings editor
+splices by offset, roll back on mojibake. A read-only check needs none of them, and it cannot
+corrupt the file it is protecting or produce a cloud-sync event every thirty minutes.</p>
+
+<div class="callout">
+  <span class="lbl">Designed against a failure this repo already paid for</span>
+  <p>Seven journals are over budget today. Failing on all seven every night would make the check
+  a permanently-red line — and a permanently-red line is one the next run learns to skim. That is
+  not hypothetical here: a dead watchdog was flagged in <strong>16 consecutive runs</strong> and
+  nobody acted, for exactly that reason.</p>
+  <p>So known breaches are recorded in a baseline and reported as acknowledged. <strong>Growth
+  past tolerance still fails</strong> — and growth is the real signal, because growth is the
+  defect. Night one is green, with all seven visible.</p>
+</div>
+
+<p>Verification, using this repo's own convention: <strong>19 assertions, 7 mutations, all
+killed.</strong> Each mutation re-opens one hole and must be caught by its own guard. One of them
+makes the sweep write a file, so the read-only property is <em>tested</em> rather than claimed.</p>
+
+<h3>3. Three issues, in dependency order</h3>
+
+<table>
+  <tr><th>Issue</th><th>Why</th></tr>
+  <tr>
+    <td><a href="https://github.com/shivbijlani/focus-planner/issues/291">#291</a> — journals on the read path</td>
+    <td><strong>The urgent one.</strong> Same failure as this issue, unmitigated, and now larger: <code>task-400.md</code> is 257 KB (~66K tokens) and is read whole to plan that task. Settings are at 76 KB.</td>
+  </tr>
+  <tr>
+    <td><a href="https://github.com/shivbijlani/focus-planner/issues/292">#292</a> — the file-layout contract</td>
+    <td>The umbrella. Shipped as the manifest above; the issue tracks moving the remaining files onto it.</td>
+  </tr>
+  <tr>
+    <td><a href="https://github.com/shivbijlani/focus-planner/issues/293">#293</a> — read-path budget</td>
+    <td>Shipped as the sweep above.</td>
+  </tr>
+</table>
+
+<h3>Also true now, and it was not this morning</h3>
+
+<p><a href="https://github.com/shivbijlani/focus-planner/issues/288">#288</a>, the
+<strong>Agent gate</strong> page, <span class="tag done">shipped</span>. The file is
+<code>agent-gate.md</code>, the app writes it, and <em>the agent only reads it</em> — which is
+what makes anything you put there attributable to you without needing a marker. That is the
+usability half of the consent problem that stopped a merge earlier tonight. It is now a row in
+the contract, budgeted at 32 KB on the principle that a gate you cannot review at a glance is a
+gate you will not trust.</p>
+
+<h3>What I did not do</h3>
+
+<p>I did not remove the merged rewriter. It works, it is deployed, and replacing a live fix at
+3am on the strength of an argument is exactly the move that turns one problem into two. The
+tripwire runs alongside it and is the safer instrument; retiring the rewriter in favour of it is
+a decision worth making awake, and it is written down in
+<a href="https://github.com/shivbijlani/focus-planner/issues/293">#293</a>.</p>
+</details>
+
+<hr>
+
+<details class="hist">
+  <summary>Appendix &mdash; three real defects the guards caught while this was being built</summary>
+  <p><em>History, not required reading. Included because each one is a bug class worth recognising
+  again, and each is the reason a specific guard exists.</em></p>
+
+  <h3>1. The script corrupted text it never touched</h3>
+  <p>The first live-shaped run wrote 94 mangled character sequences to disk. The cause was not the
+  data file — it was the script itself. Windows PowerShell 5.1 reads a script file with no
+  byte-order mark using the legacy Windows codepage, so the few non-ASCII characters in the
+  <em>script's own source</em> (an ellipsis, an arrow, an emoji) were already garbage the moment the
+  script loaded, before they were ever written anywhere. Every in-memory check compared garbage to
+  itself and passed.</p>
+  <p>This is the same encoding hazard the settings file itself documents, one layer up: not the data,
+  the tool. The fix was to make everything the script emits plain ASCII, so the host's decoder cannot
+  matter — and the byte-level check after writing is the standing proof that it stays that way.</p>
+
+  <h3>2. A type annotation silently archived the file's own introduction</h3>
+  <p>The function that decides whether a section stays declared its parameter as a string. PowerShell
+  converts a missing value to an empty string when binding to a typed parameter, so the test for
+  &ldquo;this section has no heading&rdquo; never fired. The only section without a heading is the
+  file's opening paragraphs — the part that explains what the file <em>is</em> — and it got moved to
+  the archive.</p>
+  <p>The alarming part: the split reported success and every guard passed. It only surfaced because
+  the file came back starting abruptly at <code>## Settings</code>. There is now an explicit check
+  that whatever the source opened with still opens the result.</p>
+
+  <h3>3. The shrinking tool was itself a growth engine</h3>
+  <p>The index of archived headings that the script leaves behind is, structurally, just another
+  <code>##</code> section. So on the next run the script found it, decided it wasn't on the keep-list,
+  archived it into the lore file, and appended a fresh one. Every 30 minutes, forever.</p>
+  <p>The tool built to stop a file growing without bound was quietly growing it without bound — the
+  original bug wearing the fix's clothes. The script now strips the previous index before it starts
+  parsing, which makes running it twice a genuine no-op.</p>
+</details>
+
+<p class="foot">
+  Sources: <a href="https://github.com/shivbijlani/focus-planner/issues/262">issue 262</a> &middot;
+  <a href="https://github.com/shivbijlani/focus-planner/pull/287">pull request 287</a> &middot;
+  <a href="https://github.com/shivbijlani/focus-planner/blob/oa-262-settings-split/plugins/overnight-agent/checks/split-user-settings.ps1">split-user-settings.ps1</a> &middot;
+  <a href="https://github.com/shivbijlani/focus-planner/blob/oa-262-settings-split/plugins/overnight-agent/checks/mutcheck-split-settings.ps1">mutcheck-split-settings.ps1</a> &middot;
+  <a href="https://github.com/shivbijlani/focus-planner/blob/oa-262-settings-split/plugins/overnight-agent/checks/verify-settings-form.mjs">verify-settings-form.mjs</a> &middot;
+  <a href="https://github.com/shivbijlani/focus-planner/blob/oa-262-settings-split/plugins/overnight-agent/skills/overnight-agent/SKILL.md">SKILL.md</a> &middot;
+  <a href="https://github.com/shivbijlani/focus-planner/blob/main/src/config/userSettingsForm.js">userSettingsForm.js</a>.
+  Related issues: <a href="https://github.com/shivbijlani/focus-planner/issues/288">#288</a> (agent gate UI),
+  <a href="https://github.com/shivbijlani/focus-planner/issues/127">#127</a> (guardrail partials),
+  <a href="https://github.com/shivbijlani/focus-planner/issues/104">#104</a> (lessons + consolidation),
+  <a href="https://github.com/shivbijlani/focus-planner/issues/123">#123</a> (journal growth),
+  <a href="https://github.com/shivbijlani/focus-planner/issues/250">#250</a> (self-authored consent).
+  Every size, token estimate, row count and category split above was measured directly against the
+  live files, the backups beside them, and the repository — not quoted from the issues.
+</p>
+
+</div>
+</body>
+</html>
