@@ -154,7 +154,13 @@ param(
   [string]$PlannerBoard = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\planner.md",
   # Structured snooze store, written by the Planner web app and read-only here (#391).
   # Preferred over the in-markdown markers above; see Get-SnoozeMap.
-  [string]$SnoozeStore = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\snooze.json"
+  [string]$SnoozeStore = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\snooze.json",
+  # How long a Today row stays "served" after the agent last wrote a turn to it, in minutes.
+  # A served Today row no longer holds the Today->Deferred gate shut. See Test-HoldsTodayGate.
+  # Default is deliberately LONGER than the ~30 min scheduled run interval, so a standing Today
+  # task worked by the previous run does not re-starve the backlog before this run does anything.
+  # `0` restores the pre-fix behaviour (a workable Today row always gates) in one flag.
+  [int]$TodayServedMinutes = 45
 )
 
 $ErrorActionPreference = 'Stop'
@@ -1042,6 +1048,55 @@ function Test-Workable($row) {
   return ($script:NonWorkableStatus -notcontains "$($row.status)".ToLowerInvariant())
 }
 
+# Does this Today row still deserve the run's EXCLUSIVE attention -- i.e. does it hold the
+# Today->Deferred gate shut? (#223 rule 1, corrected 2026-08-31.)
+#
+# "Today before Deferred" was implemented as "a Deferred row is ineligible while any Today row is
+# WORKABLE", and workability is a property of the board, not of the run. That is fine while Today
+# rows finish. It starves the board permanently as soon as one does not.
+#
+# Measured live 2026-08-31: the entire `## Today` section is a SINGLE standing meta-task (#448,
+# "plannermd + Overnight Agent development - triage fix and ship GitHub issues"). It is unbounded
+# by construction -- there is always another issue to triage -- so it is `in-progress` and workable
+# on every run, forever. It therefore held **121 Deferred rows** (10 of them workable) shut on
+# every run, and three runs in one night each re-worked #448 and touched nothing else. Nothing
+# errored; the gate did exactly what it said, which is why this reads clean and starves silently.
+# It is the same shape as the awaiting_reply ratchet fixed in #282, one level up: there the agent
+# wrote the text the gate read, here the agent cannot ever finish the row the gate waits on.
+#
+# The user's own spec for #223 carries the missing half: *"only if its blocked on all today items,
+# can it move to deferred items -- ASSUMING THAT THERE IS STILL PLENTY OF TIME before the next
+# scheduled automation kicks in."* That clause is about the RUN's remaining budget, not about the
+# row's status, and it is the part that was never implemented.
+#
+# So the gate now asks "has this run's Today work already been done?" instead of "could this row
+# ever be worked?". A Today row is SERVED once the agent has written a turn to it recently
+# (`mark` stamps `last_turn_at`; `seed` and `resnapshot` deliberately do NOT, because a bootstrap
+# is not work), and a served row steps out of the gate -- while staying fully eligible itself at
+# its board rank, so Today is still worked FIRST. Only the exclusivity lapses, never the ordering.
+#
+# Every branch fails CLOSED (returns $true = keep gating), so anything unknown preserves the old
+# Today-first behaviour rather than opening the backlog by accident.
+function Test-HoldsTodayGate($row, [int]$servedMinutes) {
+  if (-not (Test-Workable $row)) { return $false }
+  # A live reply is the highest-value work there is, so it reclaims exclusivity immediately --
+  # this is what stops a "served" stamp from muting a Today task the user just replied to.
+  if ($row.reopened) { return $true }
+  # Short-circuit for READABILITY, not for behaviour: with $servedMinutes <= 0 the fall-through
+  # below already returns $true for every reachable input (elapsed >= 0 is always true, and both
+  # the null and unparseable branches return $true anyway). Verified exhaustively, so removing
+  # this line is an EQUIVALENT mutant and no arm can kill it -- recorded here so a future reader
+  # does not mistake that for a coverage gap and invent a test that asserts nothing. Arm K still
+  # proves the flag end-to-end, because a build without the parameter cannot answer at all.
+  if ($servedMinutes -le 0) { return $true }        # feature off: Today always gates (pre-fix)
+  if (-not $row.last_turn_at) { return $true }      # never worked: definitely not served
+  $t = [datetime]::MinValue
+  if (-not [datetime]::TryParse(
+      "$($row.last_turn_at)", [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::None, [ref]$t)) { return $true }   # unparseable -> gate
+  return (((Get-Date) - $t).TotalMinutes -ge $servedMinutes)
+}
+
 function Cmd-Scan {
   $snooze = Get-SnoozeMap
   $board = Get-BoardMap
@@ -1118,6 +1173,10 @@ function Cmd-Scan {
       # `reopened` outranks it (Test-Workable checks that first), so a reply un-parks it at once.
       has_open_ask   = [bool]$facts.HasOpenAsk
       awaiting_reply = [bool]($facts.HasAgentBlock -and $facts.HasBlockingAsk -and -not $facts.HasTrailingUser)
+      # When the agent last wrote a TURN here (`mark` stamps it; `seed` and `resnapshot`
+      # deliberately do not). Input to the Today->Deferred gate: a Today row served this
+      # recently no longer holds the whole backlog shut. Absent -> never worked -> keeps gating.
+      last_turn_at   = if ($st -and $st.PSObject.Properties['last_turn_at']) { "$($st.last_turn_at)" } else { $null }
     }
   }
 
@@ -1140,7 +1199,10 @@ function Cmd-Scan {
     @{ Expression = { [int]$_.id } }
 
   # The gate is computed from the WHOLE set, so it cannot be evaluated per-row in the loop above.
-  $todayWorkable = @($rows | Where-Object { $_.section -eq 'today' -and (Test-Workable $_) }).Count
+  # NOTE this counts rows that still hold the gate SHUT, which is narrower than "workable": a
+  # Today row the agent has already served this cycle stays workable (and eligible, at its own
+  # board rank) but stops blocking Deferred. See Test-HoldsTodayGate for why.
+  $todayHolding = @($rows | Where-Object { $_.section -eq 'today' -and (Test-HoldsTodayGate $_ $TodayServedMinutes) }).Count
   $order = 0
   foreach ($r in $rows) {
     $order++
@@ -1148,10 +1210,14 @@ function Cmd-Scan {
     if (-not $r.snoozed) {
       if ($r.reopened) { $eligible = $true }                       # rule 4 beats the gate
       elseif ($r.section -eq 'today') { $eligible = (Test-Workable $r) }
-      elseif ($todayWorkable -eq 0) { $eligible = (Test-Workable $r) }
+      elseif ($todayHolding -eq 0) { $eligible = (Test-Workable $r) }
     }
     Add-Member -InputObject $r -NotePropertyName 'order' -NotePropertyValue $order -Force
     Add-Member -InputObject $r -NotePropertyName 'eligible' -NotePropertyValue $eligible -Force
+    # Auditable: which Today rows are actually holding the backlog shut this run (#223 is
+    # explicit that selection must be data, not the agent's judgement).
+    Add-Member -InputObject $r -NotePropertyName 'holds_today_gate' `
+      -NotePropertyValue ([bool]($r.section -eq 'today' -and (Test-HoldsTodayGate $r $TodayServedMinutes))) -Force
   }
 
   $rows | ConvertTo-Json -Depth 4
@@ -1337,6 +1403,24 @@ function Cmd-Mark {
   $st.processed_file_hash = $facts.FullHash
   $st.has_agent_block = $facts.HasAgentBlock
   $st.updated = Now-Iso
+  # `last_turn_at` is DELIBERATELY not `updated`. `updated` means "this state record was
+  # touched", and it is stamped by `seed` (a bootstrap over every journal on disk) and by
+  # `resnapshot` (a rebaseline) as well as by a real turn. Feeding that into the Today gate
+  # made every freshly-seeded task read as "the agent just worked this", which released the
+  # Today->Deferred gate for the whole board after any seed or migration -- caught by
+  # mutcheck-board-compound-id, whose fixture seeds before it scans.
+  #
+  # Pure timer bookkeeping (-PollDone/-RecheckDone and the clear/retag forms) is not a turn
+  # either: nothing was written to the journal, so it must not buy the row a release. Anything
+  # that carries -Status/-Version/-PlanId, or a bare `mark`, is the documented "I just wrote my
+  # turn" call and does count.
+  #
+  # Absent means "never worked", which makes Test-HoldsTodayGate keep gating -- so existing
+  # state files written before this field existed roll forward into the SAFE pre-fix behaviour
+  # and only release once the agent genuinely writes a turn.
+  $timerOnly = ($PollDone -or $PollClear -or $RecheckDone -or $RecheckClear -or ($RecheckKind -and -not $Recheck))
+  $isTurn = -not ($timerOnly -and -not $Status -and $Version -le 0 -and -not $PlanId)
+  if ($isTurn) { Set-Member $st 'last_turn_at' (Now-Iso) }
   Write-State $st
   $st | ConvertTo-Json -Depth 6
 }
