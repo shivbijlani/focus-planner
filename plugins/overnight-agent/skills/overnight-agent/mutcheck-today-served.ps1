@@ -60,6 +60,13 @@
   A drift check that is itself opt-in has exactly the same defect one level up, so this one is
   not behind a flag. It is pure string matching over a file already in memory and spawns nothing.
 
+  HERMETIC BY CONSTRUCTION. Every invocation is pointed at a sandbox `-UserSettings` file. Two of
+  the gate's tunables are read from `user-settings.md` by the script under test, and the
+  resolver's production fallbacks include the real `%OneDrive%\Apps\Focus Planner\user-settings.md`
+  -- which exists on the author's machine. Without that override this suite would read the user's
+  live configuration, and a `Today gate backstop = off` row would change results here for a reason
+  no arm names.
+
     A  writing a turn does not release      M1  recency release restored (the #310 defect)
     B  a named declaration releases         M2  the declaration release deleted
     C  an expired declaration gates again   M3  the TTL check deleted
@@ -72,6 +79,8 @@
     J  the strict rollback holds everything M10 the rollback flag ignored
     K  a wedged run releases (backstop)     M11 the backstop disabled
     L  a terminal Today row does not hold   M12 the workability check deleted
+    M  the backstop comes from settings     M13 the user-settings value ignored
+    N  an explicit argument outranks it     M14 the file allowed to outrank the command line
 
   DROPPED ON PURPOSE: the old arm P ("seed alone is not a turn"). It existed because a stamp on
   the state record RELEASED the gate, so a bootstrap over every journal released the whole board
@@ -136,6 +145,13 @@ function New-Sandbox {
   New-Item -ItemType Directory -Path $sdir -Force | Out-Null
   $board = Join-Path $root 'planner.md'
   $store = Join-Path $root 'snooze.json'
+  # A settings file INSIDE the sandbox, and every invocation is pointed at it (see Oa below).
+  # Without this the resolver falls back to its production candidates -- including the real
+  # `%OneDrive%\Apps\Focus Planner\user-settings.md`, which exists on the author's machine -- and
+  # the suite would silently read the user's live configuration. Every arm would then depend on a
+  # file this harness does not control, so a `Today gate backstop = off` row on one machine would
+  # change results here for reasons no arm names. Hermetic by construction, not by luck.
+  $settings = Join-Path $root 'user-settings.md'
 
   foreach ($id in 910, 920, 921) {
     [IO.File]::WriteAllText((Join-Path $jdir "task-$id.md"), $Journal.Replace('{ID}', "$id"), $utf8)
@@ -156,8 +172,12 @@ function New-Sandbox {
   [void]$sb.AppendLine('| 921 |  | deferred two | - | 2026-08-31 |  |  |')
   [IO.File]::WriteAllText($board, $sb.ToString(), $utf8)
   [IO.File]::WriteAllText($store, '{}', $utf8)
+  # Deliberately EMPTY of gate rows: the baseline for every arm is "the user has configured
+  # nothing", so the built-in defaults are what the other arms exercise. The two settings arms
+  # write their own rows into this file.
+  [IO.File]::WriteAllText($settings, "# sandbox settings`n`n| Setting | Value |`n| --- | --- |`n", $utf8)
 
-  return [pscustomobject]@{ root = $root; jdir = $jdir; sdir = $sdir; board = $board; store = $store }
+  return [pscustomobject]@{ root = $root; jdir = $jdir; sdir = $sdir; board = $board; store = $store; settings = $settings }
 }
 
 function Invoke-Arms {
@@ -178,7 +198,8 @@ function Invoke-Arms {
     # than a vacuous pass. Arms that expect a command to FAIL depend on getting the output back.
     $ErrorActionPreference = 'Continue'
     & powershell -NoProfile -ExecutionPolicy Bypass -File $Build @OaArgs `
-      -JournalDir $box.jdir -StateDir $box.sdir -PlannerBoard $box.board -SnoozeStore $box.store 2>&1
+      -JournalDir $box.jdir -StateDir $box.sdir -PlannerBoard $box.board -SnoozeStore $box.store `
+      -UserSettings $box.settings 2>&1
   }
   function Oa-Ok {
     # $true when the command succeeded. Used by the arms that assert a declaration is REFUSED.
@@ -424,6 +445,48 @@ function Invoke-Arms {
     ("$($t.today_release_reason)" -eq 'not_workable') -and (DeferredOpen $rowsL)
   }
 
+  # --- M: THE BACKSTOP WINDOW COMES FROM user-settings.md ------------------------------------
+  # The number was a magic constant in the parameter block, so changing it meant editing code.
+  # It is now a user setting -- and the setting is read BY THIS SCRIPT, not passed in as a flag
+  # the agent has to remember. That distinction is the whole point: a forgotten path argument
+  # fails loudly (no journals found), but a forgotten NUMBER fails silently, using the built-in
+  # default while the run looks perfectly normal and the user's configured value never applies.
+  #
+  # The turn is 8h old, so the built-in 6h default WOULD release. A `12h` setting must hold it.
+  # Asserting the eligibility consequence rather than just the reported number is what stops this
+  # passing on a build that echoes the setting back without acting on it.
+  Set-Row -TurnMinutesAgo 480
+  [IO.File]::WriteAllText($box.settings,
+    "# sandbox settings`n`n| Setting | Value |`n| --- | --- |`n| Today gate backstop | ``12h`` |`n", $utf8)
+  $rowsM = Rows
+  Check 'M the backstop window is read from user-settings.md' {
+    $t = Row $rowsM '910'
+    ($null -ne $t) -and ([int]$t.gate_backstop_hours -eq 12) -and
+    ($t.holds_today_gate -eq $true) -and (DeferredHeld $rowsM)
+  }
+
+  # --- N: AN EXPLICIT ARGUMENT STILL OUTRANKS THE FILE ---------------------------------------
+  # Precedence must run command line > settings file > built-in default. Without this arm the
+  # resolver could be written "file always wins", which would make every sandbox and every
+  # one-off override silently ineffective -- including the overrides this suite depends on to
+  # stay hermetic.
+  #
+  # The explicit value is LARGER than the file's, so this arm asserts the gate HOLDS. That is
+  # deliberate and the matrix is what forced it: an earlier version used a smaller explicit value
+  # and asserted a release, which made it kill the backstop mutant as well as its own -- two arms
+  # claiming one thing, and the bijection reported it. Holding for a reason arm K never produces
+  # keeps the two claims disjoint.
+  [IO.File]::WriteAllText($box.settings,
+    "# sandbox settings`n`n| Setting | Value |`n| --- | --- |`n| Today gate backstop | ``2h`` |`n", $utf8)
+  $rowsN = Rows @('-TodayGateBackstopHours', '999')
+  Check 'N an explicit backstop argument outranks the file' {
+    $t = Row $rowsN '910'
+    ($null -ne $t) -and ([int]$t.gate_backstop_hours -eq 999) -and
+    ($t.holds_today_gate -eq $true) -and (DeferredHeld $rowsN)
+  }
+  # Restore the empty settings file so no later arm inherits a configured window.
+  [IO.File]::WriteAllText($box.settings, "# sandbox settings`n`n| Setting | Value |`n| --- | --- |`n", $utf8)
+
   Remove-Item $box.root -Recurse -Force -ErrorAction SilentlyContinue
   return $r
 }
@@ -492,18 +555,32 @@ $Mutants = [ordered]@{
   'M10 strict rollback flag ignored' = @{
     kills = 'J'
     edits = @(
-      @{ find = '  if ($script:TodayGateIsStrict) {'; with = '  if ($false) {'; count = 1 })
+      @{ find = '  if ($script:GateStrict) {'; with = '  if ($false) {'; count = 1 })
   }
   'M11 staleness backstop disabled' = @{
     kills = 'K'
     edits = @(
-      @{ find = '      if (((Get-Date) - $t).TotalHours -ge $TodayGateBackstopHours) {'
+      @{ find  = '      if (((Get-Date) - $t).TotalHours -ge $script:BackstopHours) {'
          with  = '      if (((Get-Date) - $t).TotalHours -ge 999999) {'; count = 1 })
   }
   'M12 workability check deleted' = @{
     kills = 'L'
     edits = @(
       @{ find = '  if (-not (Test-Workable $row)) {'; with = '  if ($false) {'; count = 1 })
+  }
+  'M13 user-settings backstop ignored' = @{
+    kills = 'M'
+    edits = @(
+      @{ find = "          if (`$v -match '^(?i)(off|none|disabled)`$') { `$backstop = 0 }"
+         with = '          if ($false) { $backstop = 0 }'; count = 1 }
+      @{ find = "          elseif (`$v -match '^\s*(\d+)') { `$backstop = [int]`$Matches[1] }"
+         with = '          # mutant: settings value ignored'; count = 1 })
+  }
+  'M14 the file outranks an explicit argument' = @{
+    kills = 'N'
+    edits = @(
+      @{ find = '  if (-not $explicitBackstop) { $script:BackstopHours = $backstop } else { $script:BackstopHours = $TodayGateBackstopHours }'
+         with = '  $script:BackstopHours = $backstop'; count = 1 })
   }
 }
 

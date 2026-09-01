@@ -403,9 +403,19 @@ Do the phases **in this order** every time.
 > - **Ordering is untouched — Today is still worked FIRST; only the monopoly lapses.** A declared
 >   row keeps its rank and stays `eligible`, so you never abandon your own top-priority task.
 >   `-TodayGateStrict` (or the legacy `-TodayServedMinutes 0`) is the one-flag rollback to the
->   old always-gates behaviour. Guarded by `mutcheck-today-served.ps1` (12 arms, and
+>   old always-gates behaviour. Guarded by `mutcheck-today-served.ps1` (14 arms, and
 >   `-Matrix` proves each is killed by exactly one mutant) and arms **I/J/K/L/M** of
 >   `mutcheck-priority-order.ps1`.
+> - ⚙️ **The backstop window and the strict rollback are USER SETTINGS, not constants.**
+>   `user-settings.md` → `## Overnight Agent behaviour` carries `Today gate backstop` (default
+>   `6h`, accepts `off`) and `Today gate strict` (default `off`). **`oa-state.ps1` reads them
+>   itself — you do not pass them as flags**, and there is nothing for you to remember. That is
+>   deliberate: a forgotten *path* argument fails loudly, but a forgotten *number* fails silently
+>   on the built-in default while the run looks normal, which is the same shape as the defect
+>   above. An explicit `-TodayGateBackstopHours` still wins for one invocation, and a missing or
+>   malformed file yields the built-in defaults exactly. `scan` reports the values that were
+>   actually in force as `gate_backstop_hours` and `gate_strict` on every Today row, so a
+>   configured value that is not applying is visible rather than silent.
 > - **`awaiting_reply: true` means the agent spoke last and its newest turn still asks you
 >   something it actually needs** — the same waiting state `proposed` encodes, reached from
 >   `in-progress`. Such a row is **not workable**, so it neither gets a stacked turn nor holds the

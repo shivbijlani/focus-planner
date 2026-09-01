@@ -229,12 +229,37 @@
   opened, and every turn written after a declaration cancels it. That is the exact inversion of
   the defect -- typing can only ever make the gate hold LONGER.
 
-  BACKSTOP. -TodayGateBackstopHours (default 6) releases a Today row nobody has written a turn
-  to for that long, so a wedged run cannot freeze the backlog behind a row it cannot move. It
-  is keyed to STALENESS, so writing resets it; there is no path from typing to a release.
+  BACKSTOP. -TodayGateBackstopHours (default 6, from user-settings.md) releases a Today row
+  nobody has written a turn to for that long, so a wedged run cannot freeze the backlog behind a
+  row it cannot move. It is keyed to STALENESS, so writing resets it; there is no path from
+  typing to a release.
 
   ROLLBACK. -TodayGateStrict (or the legacy -TodayServedMinutes 0) disables every release path:
-  a workable Today row gates forever, exactly as before #223's correction.
+  a workable Today row gates forever, exactly as before #223's correction. Also settable as
+  `Today gate strict = on` in user-settings.md.
+
+.SETTINGS (which values the user owns)
+  Most parameters here are paths the agent passes in. TWO are read from `user-settings.md` by
+  THIS SCRIPT instead, under `## Overnight Agent behaviour`:
+
+    Today gate backstop   hours, default 6, accepts `off`   -> -TodayGateBackstopHours
+    Today gate strict     on|off, default off               -> -TodayGateStrict
+
+  Read here rather than passed in, on purpose. A forgotten PATH argument fails loudly -- the
+  journal folder is not found and the run stops. A forgotten NUMBER fails SILENTLY: the gate uses
+  its built-in default, the run looks entirely normal, and the user's configured value simply
+  never applied. That is the same class of defect as #310 itself, so the setting is read where it
+  is used and there is nothing to forget.
+
+  Precedence: an explicit command-line parameter, then the settings file, then the built-in
+  default. An absent, unreadable, empty or malformed settings file yields the built-in defaults
+  EXACTLY -- a settings file can change a value that is already in service, but can never be the
+  reason the gate stops working. `scan` reports the resolved values per Today row
+  (`gate_backstop_hours`, `gate_strict`), so a configured value that is not applying is visible.
+
+  The exhaustion TTL is deliberately NOT exposed: it currently governs both how long a
+  declaration survives and how recently a turn must have been written to make one, so raising it
+  would let one run declare on another run's work. It stays in code until #330 splits it.
 
 .SNOOZE PRECEDENCE
   Snooze is the user's explicit "not until <date>", so it outranks both timers: a snoozed task
@@ -337,7 +362,16 @@ param(
   # can only ever DELAY this release, never cause it. A row the agent has never worked is exempt
   # (`last_turn_at` absent keeps gating), because "never touched" is the one state that most
   # deserves the run's attention. `0` disables.
-  [int]$TodayGateBackstopHours = 6,
+  #
+  # DEFAULTED FROM user-settings.md, not from this line. The value here is the LAST resort; the
+  # user's `Today gate backstop` row wins over it, and an explicit `-TodayGateBackstopHours` on
+  # the command line wins over both. See Resolve-GateSettings for the precedence and for why the
+  # file is read HERE rather than being passed in by the agent.
+  [int]$TodayGateBackstopHours = -1,
+  # Where the user's real settings live. Resolved exactly as SKILL.md documents when omitted;
+  # override it to point at a sandbox copy (which is the only way to test the resolution without
+  # touching the live planner folder).
+  [string]$UserSettings,
   # The exhaustion DECLARATION itself (#310). See .EXHAUSTION in the header and
   # Set-ExhaustionDeclaration below. Value is the list of things the run examined; it is
   # REQUIRED to be non-empty, because a declaration that names nothing is indistinguishable
@@ -349,10 +383,102 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# The one-flag rollback to the strict (pre-#223-fix) gate, resolved once so every reader agrees.
-# `-TodayServedMinutes 0` is the legacy spelling and is honoured verbatim; every other value of
-# that deprecated parameter is ignored, because its old meaning was the #310 defect.
-$script:TodayGateIsStrict = [bool]($TodayGateStrict -or ($TodayServedMinutes -eq 0))
+# --- The gate tunables, resolved from user-settings.md (#310 follow-up) --------------------
+#
+# WHY THIS SCRIPT READS THE FILE ITSELF, rather than the agent passing flags.
+#
+# Every other setting in user-settings.md reaches this script as a command-line argument the
+# agent is instructed to pass. That works for a PATH, because omitting it fails loudly -- the
+# journal folder is not found and the run stops. It fails SILENTLY for a NUMBER: forget the flag
+# and the gate quietly uses the built-in default, the run looks completely normal, and the user's
+# configured value never applied. Nobody ever finds out.
+#
+# That is the same failure this whole area has now been fixed for twice -- a signal that decides
+# behaviour and is not actually checked -- so the setting is read where it is USED. Forgetting is
+# no longer possible, because there is nothing to forget.
+#
+# PRECEDENCE, highest first:
+#   1. an explicit command-line parameter   (so a sandbox/test can pin a value, and so an
+#      operator can override the file for one invocation without editing it)
+#   2. the user's user-settings.md row
+#   3. the built-in default named below
+#
+# An ABSENT, UNREADABLE, EMPTY or MALFORMED settings file yields the built-in defaults exactly --
+# the same fail-safe contract Read-AgentGate documents. A settings file can only ever change a
+# value that is already in service; it can never be the reason the gate stops working.
+$script:GateDefaults = @{ BackstopHours = 6; Strict = $false }
+# Captured at SCRIPT scope on purpose. Inside a function, `$PSBoundParameters` is that function's
+# own bound parameters -- an empty hashtable here -- so reading it from Resolve-GateSettings would
+# report every parameter as "not explicitly passed" and the file would silently outrank the command
+# line. Exactly the kind of always-true test this file has had to fix twice.
+$script:ExplicitArgs = $PSBoundParameters
+
+function Get-UserSettingsPath {
+  # The resolution order SKILL.md documents, first hit wins. The bundled template is deliberately
+  # NOT in this list: it ships inside the plugin full of `<placeholders>`, so reading it would
+  # feed `<hours>` to an [int] parse on a machine that has never been configured.
+  if ($UserSettings) { return $UserSettings }
+  $candidates = @(
+    $env:OVERNIGHT_AGENT_SETTINGS,
+    (Join-Path (Get-Location).Path 'user-settings.md'),
+    (Join-Path (Split-Path -Parent $PlannerBoard) 'user-settings.md'),
+    "$env:USERPROFILE\OneDrive\Apps\Focus Planner\user-settings.md",
+    "$env:LOCALAPPDATA\overnight-agent\user-settings.md"
+  )
+  foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { return $c } }
+  return $null
+}
+
+function Get-SettingRow([string]$text, [string]$name) {
+  # One `| Setting | Value |` row, matched on the setting name at the start of the cell. Returns
+  # the raw value cell, or $null. Case-insensitive, tolerant of surrounding whitespace and of the
+  # backticks the template uses, because a user who copies the formatting must not be punished.
+  if (-not $text) { return $null }
+  $re = '(?im)^\s*\|\s*' + [regex]::Escape($name) + '\s*\|\s*([^|\r\n]*?)\s*\|'
+  $m = [regex]::Match($text, $re)
+  if (-not $m.Success) { return $null }
+  return ($m.Groups[1].Value -replace '`', '').Trim()
+}
+
+function Resolve-GateSettings {
+  # Fills in whatever the caller did not specify. Called once, before anything reads the values.
+  $explicitBackstop = $script:ExplicitArgs.ContainsKey('TodayGateBackstopHours')
+  $explicitStrict = $script:ExplicitArgs.ContainsKey('TodayGateStrict')
+
+  $backstop = $script:GateDefaults.BackstopHours
+  $strict = $script:GateDefaults.Strict
+
+  if (-not ($explicitBackstop -and $explicitStrict)) {
+    $path = Get-UserSettingsPath
+    if ($path) {
+      $text = $null
+      # Never let a settings problem take down a run: a locked, half-synced or unreadable file
+      # falls through to the defaults rather than throwing. OneDrive makes that a real case.
+      try { $text = Read-JournalText $path } catch { $text = $null }
+      if ($text) {
+        $v = Get-SettingRow $text 'Today gate backstop'
+        if ($v) {
+          # Accepts `6`, `6h`, `6 hours`, `off`. Anything else is ignored rather than guessed at,
+          # because a typo must not silently disable a safety backstop.
+          if ($v -match '^(?i)(off|none|disabled)$') { $backstop = 0 }
+          elseif ($v -match '^\s*(\d+)') { $backstop = [int]$Matches[1] }
+        }
+        $s = Get-SettingRow $text 'Today gate strict'
+        if ($s -match '^(?i)(on|yes|true)$') { $strict = $true }
+      }
+    }
+  }
+
+  if (-not $explicitBackstop) { $script:BackstopHours = $backstop } else { $script:BackstopHours = $TodayGateBackstopHours }
+  # The legacy `-TodayServedMinutes 0` spelling still forces strict, whatever the file says: it is
+  # an explicit instruction on the command line and outranks a stored preference.
+  if ($explicitStrict) { $script:GateStrict = [bool]$TodayGateStrict }
+  else { $script:GateStrict = [bool]$strict }
+  if ($TodayServedMinutes -eq 0) { $script:GateStrict = $true }
+  # A negative backstop is the "not specified" sentinel leaking through an explicit -1; treat it
+  # as the default rather than as "never fires", so the sentinel can never disable the backstop.
+  if ($script:BackstopHours -lt 0) { $script:BackstopHours = $script:GateDefaults.BackstopHours }
+}
 
 function Ensure-StateDir {
   if (-not (Test-Path $StateDir)) { New-Item -ItemType Directory -Path $StateDir -Force | Out-Null }
@@ -1664,7 +1790,7 @@ function Get-TodayGateVerdict($row, [string]$todayHash) {
   if ($row.reopened) {
     return [pscustomobject]@{ holds = $true; reason = 'holding:reopened' }
   }
-  if ($script:TodayGateIsStrict) {
+  if ($script:GateStrict) {
     return [pscustomobject]@{ holds = $true; reason = 'holding:strict' }
   }
 
@@ -1676,12 +1802,12 @@ function Get-TodayGateVerdict($row, [string]$todayHash) {
   # The wedged-run backstop. Deliberately keyed to STALENESS, never to recency: it fires because
   # the agent has NOT written here, and any turn written resets it. There is therefore no way to
   # reach this release by writing, which is precisely what #310 was.
-  if ($TodayGateBackstopHours -gt 0 -and $row.last_turn_at) {
+  if ($script:BackstopHours -gt 0 -and $row.last_turn_at) {
     $t = [datetime]::MinValue
     if ([datetime]::TryParse(
         "$($row.last_turn_at)", [Globalization.CultureInfo]::InvariantCulture,
         [Globalization.DateTimeStyles]::None, [ref]$t)) {
-      if (((Get-Date) - $t).TotalHours -ge $TodayGateBackstopHours) {
+      if (((Get-Date) - $t).TotalHours -ge $script:BackstopHours) {
         return [pscustomobject]@{ holds = $false; reason = 'stale_turn_backstop' }
       }
     }
@@ -1872,6 +1998,14 @@ function Cmd-Scan {
     # the declaration is right there in `exhaustion`, or it does not and the skip was a bug.
     Add-Member -InputObject $r -NotePropertyName 'today_release_reason' `
       -NotePropertyValue $(if ($null -ne $v) { "$($v.reason)" } else { $null }) -Force
+    # The tunables AS RESOLVED for this run, on every Today row. Reporting the value that was
+    # actually in force -- rather than the one someone believes they configured -- is what makes
+    # a settings file auditable instead of merely present: a row that says `backstop_hours: 6`
+    # when user-settings.md says 12 is a visible discrepancy, where silence is not.
+    if ($r.section -eq 'today') {
+      Add-Member -InputObject $r -NotePropertyName 'gate_backstop_hours' -NotePropertyValue ([int]$script:BackstopHours) -Force
+      Add-Member -InputObject $r -NotePropertyName 'gate_strict' -NotePropertyValue ([bool]$script:GateStrict) -Force
+    }
   }
 
   $rows | ConvertTo-Json -Depth 4
@@ -2259,6 +2393,11 @@ function Cmd-Mark {
   Write-State $st
   $st | ConvertTo-Json -Depth 6
 }
+
+# Resolve the gate tunables BEFORE dispatching, so every command sees the same values and no
+# code path can read a half-resolved one. It is here rather than beside the parameter block
+# because it calls Read-JournalText, which is defined further down the file.
+Resolve-GateSettings
 
 switch ($Command) {
   'seed' { Cmd-Seed }

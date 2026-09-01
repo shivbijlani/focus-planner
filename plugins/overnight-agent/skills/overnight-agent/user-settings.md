@@ -40,6 +40,26 @@ the end of every run (SKILL.md → "PHASE 3 — Mirror to Telegram"). Leave `Ena
 | Tasks | *(optional)* comma-separated task IDs to mirror; empty = every task that has an agent block. |
 | Archive completed topics | `on` (default once Telegram is added) — close a task's topic when it reaches the completed board, reopen it if the task leaves. Set to `off` to disable. |
 
+## Overnight Agent behaviour
+
+How the agent decides when it may stop working `## Today` and start on `## Deferred`. Both rows are
+optional — delete them and the built-in defaults apply. `oa-state.ps1` reads this table directly, so
+a value here takes effect on the next run with nothing else to change.
+
+| Setting | Value |
+| --- | --- |
+| Today gate backstop | `6h` — if **nothing** has been written to a Today task for this long, the agent stops waiting on it and works the backlog. Guards against a run that jams. Accepts `6`, `6h`, or `off` to disable. |
+| Today gate strict | `off` — set to `on` to make a workable Today task block the backlog **always**, with no release at all. The one-switch rollback if the agent starts leaving Today too readily. |
+
+**Raising the backstop makes the agent wait longer before giving up on a stuck Today task; lowering
+it makes it give up sooner.** Writing to the task *resets* the timer, so the agent can only ever
+delay this release, never trigger it.
+
+> The third tunable — how long an "I'm out of work here" declaration stays valid — is deliberately
+> **not** exposed. It currently controls two different things at once, and raising it would let one
+> run declare itself finished on the strength of a previous run's work. It stays in code until that
+> is split apart (tracked as GitHub issue 330).
+
 ## Preferences
 
 - **Inbox check:** `on` — check the agent email inbox at the start of every run (PHASE 0). Set to `off`
