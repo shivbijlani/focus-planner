@@ -5,9 +5,9 @@ matters, the user changes the board, and the Overnight Agent reads the board and
 order the board implies. The contract has one governing rule, and every mechanism on this page
 exists to protect it:
 
-> **Selection order is data, not the agent's judgement.** Two runs over an unchanged board and an
-> unchanged set of journals must produce the same order, and that order must be auditable after the
-> fact without re-deriving anything.
+> **Selection order is data, not the agent's judgement.** Two runs over an unchanged board, an
+> unchanged set of journals and unchanged agent state must produce the same order, and that order
+> must be auditable after the fact without re-deriving anything.
 
 The agent therefore never decides *what to work on next*. It asks
 `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1 scan`, which joins the board onto the
@@ -100,9 +100,10 @@ everything else (including a blank cell) at 4, so an icon the table does not nam
 rather than sorting unpredictably.
 
 Determinism is a property of the *whole* input, not of the board alone. `reopened` is the first sort
-key and is derived from the journals (hash versus `processed_file_hash`), so a reply — or the run's
-own `mark` — reorders rows without `planner.md` changing at all. That is intended: what must not
-happen is the *same* inputs yielding a different order.
+key and is computed by comparing the journal's hash against `processed_file_hash` in the agent's own
+state, so a reply reorders rows without `planner.md` changing — and so does a `mark`, which
+re-snapshots that hash without touching the journal. What must not vary is the order produced from
+an identical board, journal set **and** state.
 
 ### The board has two readers with different sort keys
 
@@ -138,7 +139,7 @@ Editing `planner.md` is the primary act. It can be done in any text editor, or t
 web app, whose board mutations are pure functions in `src/focusPlanOps.js`: `opMoveBetweenSections`
 (Today ⇄ Deferred), `opChangePriority` (the urgency icon), `opUpdateManagerPriorities` /
 `opPromoteToManagerPriority` / `opRemoveFromManagerPriority` (the `## Priorities` list),
-`opAddAndPrioritize`, and `opSnoozeTask` / `opSetTaskSnooze`. Every one of them rewrites markdown
+`opAddAndPrioritize`, and `opSnoozeTask`. Every one of them rewrites markdown
 and nothing else, which is what keeps "edit the file directly" and "use the app" the same act.
 
 The agent is correspondingly **conservative** about the board: while a task is in progress it must
@@ -183,14 +184,15 @@ map, so a parse failure can never be read as "nothing is snoozed". A date counts
 is today or later, so the agent holds off *through* the snooze date.
 
 **The `Wake` column is a third representation that the agent does not read, and this is a real gap.**
-The app expresses a snooze as a `Wake` date (`src/snooze.js`, written by `opSetTaskSnooze`), moving
-the row to `Deferred` first if it was in `Today` (`opSnoozeTask` → `opMoveBetweenSections` with
-`wakeUntil`); a row already in `Deferred` is stamped in place. `Get-SnoozeMap` reads neither the
-`Wake` column nor the `Deferred` table's dates. The row therefore reports `snoozed: false`, and once
-no `Today` row holds the gate it becomes **eligible before its wake date**. Being in `Deferred`
-deprioritises it, but it does not protect it. A rebuilder must close this: either write `snooze.json`
-from the app, or teach `Get-SnoozeMap` the `Wake` column. Do not assume the three representations
-agree.
+The app's snooze path is `opSnoozeTask`: a `Today` row is moved to `Deferred` carrying a `wakeUntil`
+date, and a row already in `Deferred` is stamped in place with a `Wake` date (`src/snooze.js` owns
+the cell format). `Get-SnoozeMap` reads neither the `Wake` column nor the `Deferred` table's dates,
+so the row reports `snoozed: false`. Once no `Today` row holds the gate, that row **can become
+eligible before its wake date** — being in `Deferred` deprioritises it but does not protect it; only
+`Test-Workable` still applies, so it is spared merely by being terminal or waiting on the user, which
+is unrelated to the snooze the user asked for. A rebuilder must close this: either write
+`snooze.json` from the app, or teach `Get-SnoozeMap` the `Wake` column. Do not assume the three
+representations agree.
 
 ### 2.4 `agent-gate.md` — the standing-permission channel, and why one-way matters
 
@@ -368,12 +370,12 @@ A declaration is a **claim, not a latch**. Four things cancel it:
 
 | `today_release_reason` | Meaning |
 | --- | --- |
-| `not_workable` | Terminal (`done`/`skip`) or waiting on the user (`proposed`, `blocked`, `awaiting_reply`, snoozed) — *absent a due timer, which overrides the last two; see 3.3*. Does not hold, and never did. |
+| `not_workable` | Terminal (`done`/`skip`) or waiting on the user (`proposed`, `blocked`, `awaiting_reply`, snoozed). Snooze is absolute; a due poll **or** recheck lifts `awaiting_reply`, and a due recheck alone lifts `blocked` (see 3.3). Does not hold, and never did. |
 | `declared_exhausted` | A standing declaration. The row stays *eligible* at its own rank but stops monopolising the run. |
 | `stale_turn_backstop` | Nobody has written a turn here for `Today gate backstop` hours: the run is wedged, so the backlog is released rather than frozen behind it. |
 | `holding:reopened` | A live reply reclaimed exclusivity. |
 | `holding:strict` | `Today gate strict` is on; there is no release path. |
-| `holding:exhaustion_expired` | Older than the TTL. A declaration is scoped to the run that made it; the next run must look again. |
+| `holding:exhaustion_expired` | Older than the TTL. A declaration is *intended* to cover one run, so the next run must look again. |
 | `holding:exhaustion_stale_board` | The `## Today` section has changed since the claim. The human revokes it simply by editing the board. |
 | `holding:exhaustion_superseded` | A turn was written to this row *after* the declaration. Writing more work on a row you just called exhausted refutes the claim by the run's own record. |
 | `holding:declaration_named_nothing` | The claim names no examined item. |
@@ -382,13 +384,14 @@ A declaration is a **claim, not a latch**. Four things cancel it:
 Three properties follow, and a rebuilder should treat them as requirements rather than incidentals:
 
 1. **Writing is necessary but not sufficient.** You cannot declare a row nothing has touched
-   recently, and every turn written after a declaration cancels it. Typing can therefore only ever
-   make the gate hold *longer* — the exact inversion of the defect. Three of the four cancellations
-   are state the agent does not author (the clock, the board's `## Today` section, a live reply); the
+   recently, and a turn written after a declaration cancels it. Typing can therefore only ever make
+   the gate hold *longer* — the exact inversion of the defect. Three of the four cancellations are
+   state the agent does not author (the clock, the board's `## Today` section, a live reply); the
    fourth, `exhaustion_superseded`, *is* agent-authored, but it can only ever **cancel** a release,
-   never cause one, so it cannot be exploited in the unsafe direction. Note the comparison is
-   strictly `>`: both stamps have one-second resolution, so a declaration made in the same second as
-   the turn preceding it does not refute itself.
+   never cause one, so it cannot be exploited in the unsafe direction. The comparison is strictly
+   `>` on stamps of one-second resolution, so "after" means *strictly* after: a turn recorded in the
+   same second as the declaration does not refute it, which is what stops a declaration made
+   immediately after its own turn from cancelling itself.
 2. **The backstop is keyed to staleness, never recency.** It fires because the agent has *not*
    written, and any turn resets it. There is no path from typing to a release. A row the agent has
    never worked (`last_turn_at` absent) is exempt and keeps gating, because "never touched" is the
@@ -399,12 +402,20 @@ Three properties follow, and a rebuilder should treat them as requirements rathe
    branch that is unsure **holds**, so an unknown or unparseable input preserves Today-first
    exclusivity rather than opening the backlog by accident.
 
-`Test-ExhaustionClaim` returns `declared_exhausted` or the `holding:<why-not>` string that goes
-straight into `today_release_reason`, so a run's selection can be audited afterwards without
-re-deriving anything. Deferred work is legitimate exactly when *every* `Today` row's verdict has
-`holds = false` — whether by `not_workable`, `declared_exhausted` or `stale_turn_backstop`. What the
-field makes checkable is that at least one of those reasons is recorded for each row: a run that
-touched Deferred while a row still reads `holding:…` skipped work it was not permitted to skip.
+`Test-ExhaustionClaim` returns `declared_exhausted` or a `holding:<why-not>` string, and that string
+becomes the row's `today_release_reason` — except that a failed claim is still tested against the
+backstop, so a row whose claim expired *and* whose last turn is older than the backstop window
+reports `stale_turn_backstop` rather than the `holding:` string. Two releases therefore never reach
+the claim logic at all: `not_workable` short-circuits ahead of it, and `holding:reopened` and
+`holding:strict` are decided before it.
+
+Deferred work is legitimate in exactly two situations: a Deferred row that is itself `reopened`
+(rule 4 preempts the gate outright), or — for every other Deferred row — *every* `Today` row's
+verdict having `holds = false`, whether by `not_workable`, `declared_exhausted` or
+`stale_turn_backstop`, with the Deferred row itself still workable. What `today_release_reason`
+makes checkable is that some such reason is recorded for each Today row: a run that touched a
+non-reopened Deferred row while a Today row still reads `holding:…` skipped work it was not
+permitted to skip.
 
 ### 3.3 Liveness — the mechanisms that stop work stalling
 
@@ -467,9 +478,9 @@ rebuilder should apply to any new gate before shipping it:
    Where an agent-authored signal is unavoidable, admit it only in the **safe direction**: a later
    turn is agent-authored, and it can only ever cancel a release, never grant one.
 2. **Where that is impossible, make the claim specific, expiring and self-refuting.** The exhaustion
-   declaration must name what it examined (specific), dies with the run (expiring), and is cancelled
-   by the run's own later turns on the row (self-refuting). That is what makes it cheap to make
-   honestly and awkward to make falsely.
+   declaration must name what it examined (specific), expires on a TTL that stands in for a run
+   boundary (expiring), and is cancelled by the run's own later turns on the row (self-refuting).
+   That is what makes it cheap to make honestly and awkward to make falsely.
 3. **Assert the consequence, not the signal.** Both the recheck bug and the parking bug survived
    because a check asserted that a signal was computed (`due_recheck: true`) and never that it had an
    effect (`eligible: true`). A fired-and-ignored timer reads as healthy.
