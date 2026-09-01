@@ -15,16 +15,27 @@
 
   Two consequences, and this file exists to make both permanently detectable:
 
-    * 9229 / `edge-kiley` was unlaunchable. The launcher had no idea it existed, so a
-      closed kiley browser was an unrecoverable failure rather than "open it".
-    * 9228 mapped to profile `edge-alt`, while the table maps it to `edge-bijlanis`.
-      Both dirs exist on disk, so the launch would have SUCCEEDED against the wrong
-      account -- which settings rule 1 calls worse than failing.
+    * THE THIRD SLOT (port 9229) WAS UNLAUNCHABLE. The launcher had no idea it
+      existed, so that profile being closed was an unrecoverable failure rather
+      than "open it and carry on" -- the exact thing #180 was filed to end.
+    * PORT 9228 POINTED AT THE WRONG PROFILE DIRECTORY. It named the profile from
+      the pre-#180 generation, not the one the table assigns. Both directories
+      exist on disk, so the launch would have SUCCEEDED against the wrong account
+      -- which settings rule 1 calls worse than failing.
+
+  FIXTURES ARE DELIBERATELY NOT THE REAL SLOT NAMES.
+  Every fixture below uses neutral identities (`edge-cdp-second`, `edge-third`,
+  `third-acct`, ...) that appear in no real configuration. That is a test
+  property, not tidiness: if the fixtures reused the live names, a parser that
+  had accidentally been keyed to one of those names would still pass every arm
+  here. Neutral fixtures mean the arms can only pass by actually reading the
+  table. It also keeps personal account names out of the repository, since the
+  real ones belong in the user's own user-settings.md and nowhere else.
 
   THE FOUR REQUIRED FACTS (asserted directly, arms A-D)
-    A  all three live slots come back, INCLUDING 9229 / kiley
+    A  every slot in the table comes back, INCLUDING THE THIRD (port 9229)
     B  no retired port (9222 / 9226 / 9227) ever comes back
-    C  port -> profile matches the table, not the pre-#180 mapping (9228 -> edge-bijlanis)
+    C  port -> profile matches the table, not the pre-#180 mapping
     D  editing the TABLE changes behaviour with no script edited
 
   THE MUTANTS (arms M1-M5)
@@ -150,8 +161,8 @@ function New-SettingsFixture {
 # The live shape: three identities, one slot each.
 $liveRows = @(
     '| `edge-cdp-1` (regular) | 9225 | `edge1` | primary | MCP Edge 1 (CDP 9225) |'
-    '| `edge-cdp-bijlanis` | 9228 | `edge-bijlanis` | bijlanis | MCP Edge bijlanis (CDP 9228) |'
-    '| `edge-cdp-kiley` | 9229 | `edge-kiley` | kiley | MCP Edge kiley (CDP 9229) |'
+    '| `edge-cdp-second` | 9228 | `edge-second` | second-acct | Second browser (CDP 9228) |'
+    '| `edge-cdp-third` | 9229 | `edge-third` | third-acct | Third browser (CDP 9229) |'
 )
 
 $fxLive = New-SettingsFixture -Name 'live' -Rows $liveRows
@@ -227,20 +238,20 @@ Write-Host "library : $LibPath" -ForegroundColor DarkGray
 Write-Host "host    : $psExe`n" -ForegroundColor DarkGray
 
 # ===========================================================================
-# ARM A -- all three live slots come back, INCLUDING 9229 / kiley.
+# ARM A -- every slot in the table comes back, INCLUDING the third (port 9229).
 # The pre-#180 launcher had zero references to 9229; that is the headline bug.
 # ===========================================================================
-Write-Host 'A: every live slot is returned (including 9229 / kiley)' -ForegroundColor Cyan
+Write-Host 'A: every slot is returned (including the third, port 9229)' -ForegroundColor Cyan
 $a = Invoke-Probe -Settings $fxLive
 Assert 'A parses the table'            ($a.ok)                                     $a.err
 $ports = Get-PortList $a
 Assert 'A returns exactly 3 slots'     ($ports.Count -eq 3)                        "got $($ports -join ',')"
 Assert 'A includes 9225 (regular)'     ($ports -contains 9225)                     "got $($ports -join ',')"
-Assert 'A includes 9228 (bijlanis)'    ($ports -contains 9228)                     "got $($ports -join ',')"
-Assert 'A includes 9229 (kiley)'       ($ports -contains 9229)                     'the kiley slot is missing -- the exact #180 defect'
-$kiley = @($a.rows | Where-Object { [int]$_.Port -eq 9229 })[0]
-Assert 'A kiley resolves to edge-kiley' ($kiley -and $kiley.ProfileDir -eq 'edge-kiley') "got '$($kiley.ProfileDir)'"
-Assert 'A kiley account is kiley'       ($kiley -and $kiley.Account -eq 'kiley')        "got '$($kiley.Account)'"
+Assert 'A includes 9228 (the second slot)'    ($ports -contains 9228)                     "got $($ports -join ',')"
+Assert 'A includes 9229 (the third slot)'       ($ports -contains 9229)                     'the third slot is missing -- the exact #180 defect'
+$third = @($a.rows | Where-Object { [int]$_.Port -eq 9229 })[0]
+Assert 'A the third slot maps to its own profile' ($third -and $third.ProfileDir -eq 'edge-third') "got '$($third.ProfileDir)'"
+Assert 'A the third slot carries its own account'       ($third -and $third.Account -eq 'third-acct')        "got '$($third.Account)'"
 
 # ===========================================================================
 # ARM B -- retired ports never come back. They are named in the section's PROSE
@@ -259,8 +270,8 @@ foreach ($retired in 9222, 9226, 9227) {
 # ===========================================================================
 Write-Host "`nC: port -> profile matches the table, not the old mapping" -ForegroundColor Cyan
 Assert 'C 9225 -> edge1'          ((Get-ProfileForPort $a 9225) -eq 'edge1')          "got '$(Get-ProfileForPort $a 9225)'"
-Assert 'C 9228 -> edge-bijlanis'  ((Get-ProfileForPort $a 9228) -eq 'edge-bijlanis')  "got '$(Get-ProfileForPort $a 9228)' -- the old code said edge-alt"
-Assert 'C 9229 -> edge-kiley'     ((Get-ProfileForPort $a 9229) -eq 'edge-kiley')     "got '$(Get-ProfileForPort $a 9229)'"
+Assert 'C 9228 -> edge-second'  ((Get-ProfileForPort $a 9228) -eq 'edge-second')  "got '$(Get-ProfileForPort $a 9228)' -- the old code said edge-alt"
+Assert 'C 9229 -> edge-third'     ((Get-ProfileForPort $a 9229) -eq 'edge-third')     "got '$(Get-ProfileForPort $a 9229)'"
 Assert 'C no slot maps to edge-alt' (-not (@($a.rows | ForEach-Object { $_.ProfileDir }) -contains 'edge-alt')) 'edge-alt is still reachable'
 
 # ===========================================================================
@@ -283,12 +294,12 @@ Assert 'D removing a row removes the slot' (-not ($d2Ports -contains 9229))    "
 # A reordered table must still map correctly: columns are found by NAME.
 $fxReorder = New-SettingsFixture -Name 'reorder' -ReorderColumns -Rows @(
     '| primary | `edge1` | `edge-cdp-1` | 9225 | MCP Edge 1 |'
-    '| bijlanis | `edge-bijlanis` | `edge-cdp-bijlanis` | 9228 | MCP Edge bijlanis |'
-    '| kiley | `edge-kiley` | `edge-cdp-kiley` | 9229 | MCP Edge kiley |'
+    '| second-acct | `edge-second` | `edge-cdp-second` | 9228 | Second browser |'
+    '| third-acct | `edge-third` | `edge-cdp-third` | 9229 | Third browser |'
 )
 $dr = Invoke-Probe -Settings $fxReorder
 Assert 'D reordered columns still parse'   ($dr.ok)                                    $dr.err
-Assert 'D reordered 9228 -> edge-bijlanis' ((Get-ProfileForPort $dr 9228) -eq 'edge-bijlanis') "got '$(Get-ProfileForPort $dr 9228)'"
+Assert 'D reordered 9228 -> edge-second' ((Get-ProfileForPort $dr 9228) -eq 'edge-second') "got '$(Get-ProfileForPort $dr 9228)'"
 
 # ===========================================================================
 # BASELINE FOR THE MUTANTS -- the unmutated library must FAIL LOUDLY on each
@@ -299,12 +310,12 @@ $fxNoSection = New-SettingsFixture -Name 'nosection' -NoSection
 $fxNoTable = New-SettingsFixture -Name 'notable' -NoTable
 $fxEmpty = New-SettingsFixture -Name 'emptytable' -EmptyTable
 $fxDupPort = New-SettingsFixture -Name 'dupport' -Rows @(
-    '| `edge-cdp-bijlanis` | 9228 | `edge-bijlanis` | bijlanis | s1 |'
-    '| `edge-cdp-kiley` | 9228 | `edge-kiley` | kiley | s2 |'
+    '| `edge-cdp-second` | 9228 | `edge-second` | second-acct | s1 |'
+    '| `edge-cdp-third` | 9228 | `edge-third` | third-acct | s2 |'
 )
 $fxDupProfile = New-SettingsFixture -Name 'dupprofile' -Rows @(
-    '| `edge-cdp-bijlanis` | 9228 | `edge-shared` | bijlanis | s1 |'
-    '| `edge-cdp-kiley` | 9229 | `edge-shared` | kiley | s2 |'
+    '| `edge-cdp-second` | 9228 | `edge-shared` | second-acct | s1 |'
+    '| `edge-cdp-third` | 9229 | `edge-shared` | third-acct | s2 |'
 )
 
 $bNoSection = Invoke-Probe -Settings $fxNoSection
@@ -326,7 +337,7 @@ Assert 'baseline error names the section'      ($bNoSection.err -match 'Browser 
 $selBad = Invoke-Probe -Settings $fxLive -Mode 'select' -Name 'edge-alt'
 Assert 'baseline refuses an unknown slot name' (-not $selBad.ok)       'edge-alt resolved to something'
 Assert 'baseline refusal explains itself'      ($selBad.err -match 'substitute') "unhelpful error: $($selBad.err)"
-$selOk = Invoke-Probe -Settings $fxLive -Mode 'select' -Name 'kiley'
+$selOk = Invoke-Probe -Settings $fxLive -Mode 'select' -Name 'third-acct'
 Assert 'baseline resolves a slot by account'   ($selOk.ok -and @(Get-PortList $selOk) -contains 9229) "got $($selOk.err)"
 
 # ===========================================================================
@@ -363,7 +374,7 @@ if ($m1Src -ne $libN) {
 # ===========================================================================
 # M2 -- Select-BrowserSlot "helpfully" returns the first slot on no match.
 # That is the wrong-identity substitution settings rule 1 forbids: asking for
-# bijlanis and being handed primary.
+# the second identity and being handed the first.
 # ===========================================================================
 Write-Host "`nM2: unknown slot silently resolves to the first slot" -ForegroundColor Cyan
 $m2Needle = @'
@@ -411,9 +422,9 @@ $m4Src = $libN.Replace(
 Assert 'M4 mutation applied' ($m4Src -ne $libN) 'the column resolution did not match -- update this mutcheck'
 if ($m4Src -ne $libN) {
     $m4 = Invoke-Probe -Source $m4Src -Settings $fxReorder
-    $m4Wrong = (-not $m4.ok) -or ((Get-ProfileForPort $m4 9228) -ne 'edge-bijlanis')
+    $m4Wrong = (-not $m4.ok) -or ((Get-ProfileForPort $m4 9228) -ne 'edge-second')
     Assert 'M4 gets the reordered table wrong' $m4Wrong 'positional lookup happened to be right -- pick a harder fixture'
-    Assert 'M4 is KILLED by the baseline'      ($dr.ok -and (Get-ProfileForPort $dr 9228) -eq 'edge-bijlanis') 'the real parser also mis-read the reordered table'
+    Assert 'M4 is KILLED by the baseline'      ($dr.ok -and (Get-ProfileForPort $dr 9228) -eq 'edge-second') 'the real parser also mis-read the reordered table'
 }
 
 # ===========================================================================
@@ -482,9 +493,9 @@ if (Test-Path -LiteralPath $CheckScript) {
     try { $rows = @(($eJson | Out-String) | ConvertFrom-Json) } catch { }
     $eports = @($rows | ForEach-Object { [int]$_.port })
     Assert 'E -Json still emits an array'   ($rows.Count -eq 3)                 "got $($rows.Count) row(s)"
-    Assert 'E reports 9229 / kiley'         ($eports -contains 9229)            "got $($eports -join ',')"
+    Assert 'E reports the third slot (9229)'         ($eports -contains 9229)            "got $($eports -join ',')"
     Assert 'E reports no retired port'      (-not (($eports -contains 9222) -or ($eports -contains 9226) -or ($eports -contains 9227))) "got $($eports -join ',')"
-    Assert 'E carries the account through'  (@($rows | Where-Object { [int]$_.port -eq 9228 })[0].account -eq 'bijlanis') 'account missing from JSON'
+    Assert 'E carries the account through'  (@($rows | Where-Object { [int]$_.port -eq 9228 })[0].account -eq 'second-acct') 'account missing from JSON'
     Assert 'E exits 0 when nothing is up'   ($e2 -eq 0)                         "exited $e2"
 }
 else {
@@ -500,13 +511,13 @@ if ($EnsureScript -and (Test-Path -LiteralPath $EnsureScript) -and $onWindows) {
     # Ports well outside the live range, so no live slot short-circuits as "already up".
     $fxDown = New-SettingsFixture -Name 'down' -Rows @(
         '| `edge-cdp-1` (regular) | 19225 | `edge1` | primary | s1 |'
-        '| `edge-cdp-bijlanis` | 19228 | `edge-bijlanis` | bijlanis | s2 |'
-        '| `edge-cdp-kiley` | 19229 | `edge-kiley` | kiley | s3 |'
+        '| `edge-cdp-second` | 19228 | `edge-second` | second-acct | s2 |'
+        '| `edge-cdp-third` | 19229 | `edge-third` | third-acct | s3 |'
     )
     $f1 = (& $psExe -NoProfile -File $EnsureScript -DryRun -SettingsPath $fxDown 2>&1 | Out-String)
-    Assert 'F would launch the kiley slot'    ($f1 -match 'edge-cdp-kiley.*WOULD LAUNCH')    'kiley is still unlaunchable'
-    Assert 'F kiley uses the kiley profile'   ($f1 -match 'playwright-mcp[\\/]edge-kiley')   'kiley launch does not name its profile dir'
-    Assert 'F bijlanis uses edge-bijlanis'    ($f1 -match 'playwright-mcp[\\/]edge-bijlanis') 'bijlanis launch does not name its profile dir'
+    Assert 'F would launch the third slot'    ($f1 -match 'edge-cdp-third.*WOULD LAUNCH')    'the third slot is still unlaunchable'
+    Assert 'F the third slot uses its own profile dir'   ($f1 -match 'playwright-mcp[\\/]edge-third')   'third slot launch does not name its profile dir'
+    Assert 'F the second slot uses its own profile dir'    ($f1 -match 'playwright-mcp[\\/]edge-second') 'second slot launch does not name its profile dir'
     Assert 'F never launches edge-alt'        ($f1 -notmatch 'edge-alt')                     'the retired wrong-identity profile is still reachable'
     Assert 'F names the port from the table'  ($f1 -match 'remote-debugging-port=19229')     'port did not come from the table'
 

@@ -29,8 +29,8 @@
 # In legacy mode this script REFUSES to bind a port the slot table has assigned to
 # a slot, unless the profile it is about to open is that slot's profile. Binding
 # 9228 to your default Edge profile would put the PRIMARY identity on the port every
-# consumer believes is `bijlanis` -- the wrong-account failure that settings rule 1
-# calls "worse than failing", arrived at from the other direction.
+# consumer believes belongs to a different account -- the wrong-account failure that
+# settings rule 1 calls "worse than failing", arrived at from the other direction.
 #
 # THE v136+ GOTCHA WE WORK AROUND: Chromium ignores --remote-debugging-port only when
 # --user-data-dir is OMITTED. Passing --user-data-dir explicitly (even your real path)

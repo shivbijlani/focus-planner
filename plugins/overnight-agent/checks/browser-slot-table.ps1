@@ -10,21 +10,22 @@
   The table moved. The scripts did not. Measured 2026-08-31, by counting port
   references in each helper:
 
-    script                        9222 9225 9226 9227 9228 9229  bijlanis kiley
-    ensure-mcp-browsers.ps1          2    2    2    2    2    0         0     0
-    launch-signed-in-browser.ps1     3    0    0    0    0    0         0     0
-    check-browser-slots.ps1          1    1    1    1    1    1         -     -
+    script                        9222 9225 9226 9227 9228 9229  2nd-id  3rd-id
+    ensure-mcp-browsers.ps1          2    2    2    2    2    0       0       0
+    launch-signed-in-browser.ps1     3    0    0    0    0    0       0       0
+    check-browser-slots.ps1          1    1    1    1    1    1       -       -
 
   So every script was still encoding the retired five-slot generation, and:
 
-    * ensure-mcp-browsers.ps1 had ZERO references to 9229 / `edge-kiley`, so the
-      one slot most likely to be closed could not be opened on demand at all --
-      which is the exact failure #180 was filed to end.
-    * ensure-mcp-browsers.ps1 mapped port 9228 to profile `edge-alt`, while the
-      table maps 9228 to `edge-bijlanis`. Both directories exist on disk, so that
-      launch would have SUCCEEDED against the wrong profile. Rule 1 of the settings
-      section: "Never substitute a different account's profile for the requested
-      one -- ... which is worse than failing."
+    * ensure-mcp-browsers.ps1 had ZERO references to port 9229 or to that slot's
+      profile dir, so the one slot most likely to be closed could not be opened on
+      demand at all -- which is the exact failure #180 was filed to end.
+    * ensure-mcp-browsers.ps1 pointed port 9228 at the profile directory from the
+      PREVIOUS generation of the table, not the one the table now assigns to it.
+      Both directories exist on disk, so that launch would have SUCCEEDED against
+      the wrong profile. Rule 1 of the settings section: "Never substitute a
+      different account's profile for the requested one -- ... which is worse than
+      failing."
     * check-browser-slots.ps1 hardcoded all six ports, including three retired
       ones, and contained zero occurrences of the string `user-settings`.
 
@@ -69,7 +70,7 @@
 # ---------------------------------------------------------------------------
 # Settings-file resolution -- the order SKILL.md documents, in one place.
 #
-# Shiv's OneDrive path is NOT hardcoded: it is composed from %OneDrive% (then the
+# The user's OneDrive path is NOT hardcoded: it is composed from %OneDrive% (then the
 # Consumer/Commercial variants) so this works on any machine and any account.
 # ---------------------------------------------------------------------------
 function Get-OaSettingsPathCandidate {

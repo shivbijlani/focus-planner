@@ -10,19 +10,20 @@
 # existed, and both are the reason #180 was filed:
 #
 #   1. THE LAUNCHER COULD NOT LAUNCH ONE OF THE LIVE SLOTS. This file had ZERO
-#      references to port 9229 or to profile `edge-kiley`. So when the kiley
+#      references to port 9229 or to that slot's profile dir. So when that
 #      browser was closed -- the normal state for a slot nobody has opened today
-#      -- nothing could open it, and the run just failed. Shiv, task #448:
-#      "most times we try to use the browser mcp, but it's closed so we don't
-#      think to launch it on demand... We just fail."
+#      -- nothing could open it, and the run just failed. From the request that
+#      became #180: "most times we try to use the browser mcp, but it's closed so
+#      we don't think to launch it on demand... We just fail."
 #
-#   2. IT COULD LAUNCH THE WRONG IDENTITY. Its slot list mapped port 9228 to
-#      profile `edge-alt`, while the table maps 9228 to `edge-bijlanis`. BOTH
-#      directories exist on disk, so that launch would have SUCCEEDED and bound
-#      9228 to the wrong profile -- silently, because a bound port looks healthy.
-#      Settings rule 1: "Never substitute a different account's profile for the
-#      requested one -- a fallback from bijlanis to regular produces actions taken
-#      as the wrong identity, which is worse than failing."
+#   2. IT COULD LAUNCH THE WRONG IDENTITY. Its slot list pointed port 9228 at the
+#      profile directory from the PREVIOUS generation of the table, not the one
+#      the table now assigns. BOTH directories exist on disk, so that launch would
+#      have SUCCEEDED and bound 9228 to the wrong profile -- silently, because a
+#      bound port looks healthy. Settings rule 1: "Never substitute a different
+#      account's profile for the requested one -- a fallback from one identity to
+#      another produces actions taken as the wrong identity, which is worse than
+#      failing."
 #
 # There is deliberately no hardcoded fallback list. If the table cannot be read,
 # this script refuses to launch anything rather than guessing which account a
@@ -30,9 +31,9 @@
 #
 # USAGE:
 #   .\ensure-mcp-browsers.ps1                        # start every slot whose port is down
-#   .\ensure-mcp-browsers.ps1 -Slot edge-cdp-kiley   # one slot, by name
-#   .\ensure-mcp-browsers.ps1 -Slot kiley            # ...or by account
-#   .\ensure-mcp-browsers.ps1 -Slot edge-bijlanis    # ...or by profile dir
+#   .\ensure-mcp-browsers.ps1 -Slot edge-cdp-2       # one slot, by name
+#   .\ensure-mcp-browsers.ps1 -Slot marketing        # ...or by account
+#   .\ensure-mcp-browsers.ps1 -Slot edge-work        # ...or by profile dir
 #   .\ensure-mcp-browsers.ps1 -Slot 9229             # ...or by port
 #   .\ensure-mcp-browsers.ps1 -List                  # show the table, launch nothing
 #   .\ensure-mcp-browsers.ps1 -DryRun                # print the exact command lines only

@@ -906,7 +906,7 @@ present the reversible draft and stop short of the committing action.
 
     **The slot → port → profile map lives in `user-settings.md` under `## Browser slots`.** It is not
     restated here: this table was stale for a week (it advertised `chrome-cdp-1`, which had been in
-    `disabledMcpServers` since 2026-08-21, plus two retired clones, and omitted `edge-cdp-kiley`
+    `disabledMcpServers` since 2026-08-21, plus two retired clones, and omitted one live slot
     entirely), which is exactly why #180 moved it to one home. Read the live list with:
 
     ```
