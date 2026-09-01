@@ -113,9 +113,17 @@ for (const page of pages) {
   // on the page's role: gaps pages (Roadmap) accept OPEN issues only, so a closed
   // ref framed as a live gap still fails; every other page accepts the broad
   // validRefs (open + closed issues + PRs) so closed-issue/PR rationale is valid.
+  //
+  // The boundary is a negative lookbehind, NOT `(?:^|\s)`: Roadmap entries are
+  // written `- **#226 -- ...**`, so a `#` glued to `*`, `(` or `,` is real. The
+  // old whitespace boundary could not see those lines -- the very lines that
+  // ASSERT an issue is open -- so staleness there was caught only incidentally by
+  // passing prose mentions elsewhere. `(?<![\w\/])` still rejects a `#` after a
+  // word char or slash, so URL fragments like `/pull/342#issuecomment-123` (the
+  // `#` follows a digit) are not mistaken for issue refs. (Node 22 runs this.)
   const allowed = GAPS_PAGES.has(page) ? openIssues : validRefs
   const closedOnPage = []
-  for (const m of text.matchAll(/(?:^|\s)#(\d{1,4})\b/g)) {
+  for (const m of text.matchAll(/(?<![\w/])#(\d{1,4})\b/g)) {
     if (!allowed.has(m[1])) {
       findings.push({ kind: 'unknown-issue', page, detail: `#${m[1]}` })
     } else if (!openIssues.has(m[1])) {
