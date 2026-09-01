@@ -232,7 +232,9 @@ The user replies in **plain English**, usually appended at the bottom of the jou
 message and interpret intent:
 
 - **Approved** — anything clearly affirmative: "approve", "approved", "yes", "go", "go ahead", "lgtm",
-  "vibe it", "ship it", "do it".
+  "vibe it", "ship it", "do it" — or, to authorize a **pull-request merge**, the command-shaped
+  **`merge <PR number>`** (e.g. `merge 300`). Bare "merge" / "merged" / "merge it later" are **not**
+  approvals.
 - **Revise** — they ask for changes or give new direction ("revise…", "change X", "actually do Y").
 - **Skip** — "skip", "not now", "leave it", "drop it".
 
@@ -270,6 +272,29 @@ a second call. **Never infer approval from `reopened`** — the two readers answ
 disagree on purpose. This is a floor, not a guarantee: the `<!-- from: me -->` marker is still written by
 software (the Telegram bridge stamps it when folding phone replies), so it raises the bar from "absence
 of evidence counts as consent" to "consent needs positive evidence".
+
+#### Approval vocabulary — advertise only a word the reader accepts (#301)
+
+The fail-closed reader accepts a fixed set of affirmatives. **When you ask for authorization — above
+all to merge a PR — advertise ONLY a phrase from the set below.** Ask for anything else and the user
+types a reply that reads as *no affirmative*, and nothing happens — silently, indistinguishable from
+them declining. This is exactly what bit the merge ask: for months it ended with "reply `merge 300`",
+a phrase the reader did not accept, so every such approval was quietly dropped.
+
+For a **pull-request merge** the accepted phrase is command-shaped: **`merge <PR number>`** — literally
+the word `merge`, a space, then the number, e.g. `merge 300`. Bare `merge`, `merged` and `merge it
+later` are deliberately **not** approvals: those run through your own prose constantly, and since #272
+an unstamped turn of yours reads as `unknown`, so a bare token would let your own narration authorise
+you — the #227 hole. A PR number is command-shaped and never appears in narrative, so it is safe.
+
+<!-- CONSENT-VOCAB:BEGIN -->
+`approve` · `approved` · `yes` · `go` · `go ahead` · `lgtm` · `ship it` · `do it` · `vibe it` · `send it` · `make it so` · `proceed` · `merge 300`
+<!-- CONSENT-VOCAB:END -->
+
+That list is not decorative. `mutcheck-consent-vocab-drift.ps1` extracts every phrase between those two
+markers and fails if `$script:ConsentAffirmRe` in `oa-state.ps1` would reject any of them, so the word
+you advertise here and the word the machine actually reads can never drift apart again (the #297
+failure mode). Add a word here only after the reader accepts it.
 
 ⚠️ **A `## ` heading ends a marker's ownership (#272, fixed 2026-08-30).** Attribution is positional — a
 marker owns the text below it — and until this fix that ownership ran to the *next marker*. An agent turn
@@ -862,6 +887,12 @@ present the reversible draft and stop short of the committing action.
   your own words authorize you. This is a **guard, not a guideline**: it is asserted by
   `mutcheck-consent-authorship.ps1`, whose six mutations each restore a different version of the hole
   and are each killed by a different fixture.
+- **Ask only for words the reader accepts (#301).** The approval vocabulary is one delimited list in
+  this file (see "Approval vocabulary" above), held identical to `$script:ConsentAffirmRe` in
+  `oa-state.ps1` by `mutcheck-consent-vocab-drift.ps1`. To authorize a merge, the word is
+  `merge <PR number>` (e.g. `merge 300`) — command-shaped so it cannot occur in your own prose; bare
+  `merge`/`merged` never approve. Its narrowness is proven load-bearing by `mutcheck-consent-vocab.ps1`.
+  Never advertise a word outside that list, or the reply reads as no affirmative and is silently dropped.
 - **No surprise irreversible actions.** Sending email **to anyone not on the Auto-send allow-list**,
   submitting forms/applications, making purchases, posting publicly, merging/deploying, or anything
   with money or external side effects is only allowed when the **approved plan explicitly says so**.

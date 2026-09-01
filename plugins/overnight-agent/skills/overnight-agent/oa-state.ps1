@@ -198,7 +198,21 @@ $script:LegacyStateRe = '(?m)^[ \t]*<!--[ \t]*oa-state'
 # Word-bounded on both sides so `go` does not fire inside `going` and `do it` does not fire
 # inside `redo it`. Phrase precision is deliberately NOT the subject of #227 -- authorship is
 # -- so this list mirrors SKILL.md rather than trying to improve on it.
-$script:ConsentAffirmRe = '(?i)(?<![\w-])(approved?|approve it|yes|yep|yeah|go ahead|go for it|go|lgtm|ship it|do it|vibe it|send it|make it so|proceed)(?![\w-])'
+#
+# `merge[ \t]+#?\d+` is the one COMMAND-shaped affirmative (#301). For months the agent has
+# ended merge asks with "reply `merge 300`", a phrase that was absent here, so a correctly
+# attributed `merge 300` returned `human-spoke-but-no-affirmative` -- silently identical to the
+# user declining. It cannot be fixed by adding a bare `merge` token: "merge", "merged" and
+# "merge it later" run through the agent's OWN prose constantly, and since #272 an unstamped
+# agent turn reads as `unknown` (not `me`), so a broad token would widen exactly the
+# self-authorised-consent surface #227 exists to close. `merge` followed by a PR number is
+# imperative and does not occur in narrative, so it is safe where bare `merge` is not; bare
+# `merge`, `merged` and `merge it later` still match nothing. The `merge <n>` form the ask
+# advertises in SKILL.md is held identical to what this line accepts by
+# `mutcheck-consent-vocab-drift.ps1`, so the operative instruction and the reader cannot drift
+# apart (the #297 failure mode). The narrowness itself is proven load-bearing by
+# `mutcheck-consent-vocab.ps1`.
+$script:ConsentAffirmRe = '(?i)(?<![\w-])(approved?|approve it|yes|yep|yeah|go ahead|go for it|go|lgtm|ship it|do it|vibe it|send it|make it so|proceed|merge[ \t]+#?\d+)(?![\w-])'
 
 # --- The turn terminator ---------------------------------------------------------------
 # An HTML comment (invisible when the journal renders) that marks the exact END of this
