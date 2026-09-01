@@ -63,7 +63,10 @@ the four, because it is the mechanism by which the other failures stay invisible
    way to represent "I cannot tell," which is why it collapsed. This is a cross-cutting
    hazard, not a supervision-only one: the prioritisation layer hits the same shape — a
    snoozed row that decodes to "not snoozed," a skipped board row that reads as "Today is
-   finished" — which is why the two concerns are documented as siblings.
+   finished" — which is why the two concerns are documented as siblings. See
+   [Prioritisation](Prioritisation), which owns the other half of this discipline: *the
+   observer must not be inside the thing it observes*, applied to **who wrote the signal**
+   a gate reads, where this page applies it to **who watches the watcher**.
 
 ## Strategy A — Out-of-band supervision of the agent process
 

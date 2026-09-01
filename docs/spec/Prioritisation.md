@@ -510,6 +510,12 @@ rebuilder should apply all four to any new gate before shipping it:
    whether the reader can tell missing from unparsed — because by construction nothing downstream
    will ever raise it.
 
+   [Reliability](Reliability) carries this same rule as its own fourth principle, reached from the
+   supervision side: age-only stuck detection, which collapsed "working hard" and "hung" into one
+   observable, is this hazard exactly. The two pages are halves of one discipline — *the observer
+   must not be inside the thing it observes*. This page applies it to **who wrote the signal** a
+   gate reads; that one applies it to **who watches the watcher**.
+
 This is a narrowing of the hole, not a closure of it, and the spec should say so: **nothing verifies
 the *content* of a declaration.** A run can name three items it never looked at, and `oa-state.ps1`
 cannot tell — it has no way to see GitHub. The guard is on the *shape* of the claim, never on its
