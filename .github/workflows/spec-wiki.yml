@@ -186,6 +186,10 @@ jobs:
           # rather than lingering as a stale page nobody can trace to a source.
           find wiki -maxdepth 1 -name '*.md' -delete
           cp docs/spec/*.md wiki/
+          # README.md is provenance for humans browsing docs/spec, not a spec page --
+          # verify.mjs deliberately excludes it, so the wiki must not carry it either
+          # or it gains a stray README page with no counterpart in the page set.
+          rm -f wiki/README.md
 
           cd wiki
           git config user.name  "github-actions[bot]"
