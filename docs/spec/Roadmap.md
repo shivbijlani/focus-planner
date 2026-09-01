@@ -62,8 +62,8 @@ model, not the model itself.
 - **#202 — A finished task stays in the approval queue forever.** The queue decides
   "is this done?" by reading a frozen Status header near the top of the journal, not the
   agent's latest turn — so a task that explicitly says "Needs from you: nothing" keeps
-  costing a read on every scan. The same complaint (#232) was previously "fixed" and did
-  not hold.
+  costing a read on every scan. The same complaint was addressed once before, in merged
+  pull request 232, and the fix did not hold.
 - **#181 — A green CI check must mean all tests ran and passed.** 25 of 30 open PRs, at
   filing time, had run zero CI checks yet showed `mergeStateStatus: CLEAN` — the exact
   inversion of the obvious reading, since `CLEAN` here is strictly weaker evidence than
