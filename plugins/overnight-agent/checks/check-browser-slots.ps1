@@ -85,8 +85,13 @@
 
 .NOTES
   Exit codes: 0 = every running slot is healthy. 2 = attention needed -- either a
-  zombie slot, or the slot table could not be read (in which case the preflight
-  cannot answer its own question, which is emphatically not "ok").
+  zombie slot, a wedged slot, or the slot table could not be read (in which case
+  the preflight cannot answer its own question, which is emphatically not "ok").
+
+  The exit code is IDENTICAL in -Json and human mode. It is derived from the same
+  verdict, computed once before the output branch, because the output format is a
+  question about presentation and the exit code is a question about the browsers.
+  Pinned by arms B2/A2/M5 of mutcheck-browser-slot-probe.ps1.
 #>
 [CmdletBinding()]
 param(
@@ -482,15 +487,30 @@ $results = foreach ($slot in $slots) {
     [pscustomobject]$row
 }
 
+# THE VERDICT IS COMPUTED ONCE, BEFORE THE OUTPUT-FORMAT BRANCH (GH #197).
+#
+# It used to be computed only on the human path, and `-Json` did an
+# unconditional `exit 0`. So the two modes answered DIFFERENT questions from
+# identical data: measured live on 2026-09-01 with all three of the user's
+# slots wedged, the human path exited 2 and `-Json` exited 0 -- while its own
+# JSON body carried `"state": "stuck", "healthy": false` for every slot.
+#
+# That is this issue's own failure class, one layer up: a check reporting
+# health it has already disproven. And it lands in the mode that matters most,
+# because `-Json` is what an automated caller uses -- a watchdog or CI step
+# gating on the exit code was told "all healthy" while nothing could run.
+# How a caller asks to be told must never change what it is told.
+$bad = @($results | Where-Object { $_.state -ne 'down' -and -not $_.healthy })
+
 if ($Json) {
     $results | ConvertTo-Json -Depth 4
+    if ($bad.Count -gt 0) { exit 2 }
     exit 0
 }
 
 $results | Format-Table port, mcp, account, state, reported, installed, pages, probed, wedged, healthy -AutoSize
 Write-Host ("slot table: {0}" -f $slots[0].Source) -ForegroundColor DarkGray
 
-$bad = @($results | Where-Object { $_.state -ne 'down' -and -not $_.healthy })
 if ($bad.Count -gt 0) {
     Write-Host ''
     Write-Host "$($bad.Count) slot(s) need attention:" -ForegroundColor Yellow
