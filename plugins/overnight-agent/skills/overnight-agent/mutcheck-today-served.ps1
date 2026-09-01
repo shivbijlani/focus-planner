@@ -507,6 +507,37 @@ $Mutants = [ordered]@{
   }
 }
 
+function ConvertTo-Lf {
+  # Line-ending normaliser for mutant matching. See Get-NormalisedSource for why this exists.
+  param([string]$s)
+  if ($null -eq $s) { return $s }
+  return $s.Replace("`r`n", "`n")
+}
+
+function Get-NormalisedSource {
+  # Read the script under test with CRLF collapsed to LF, so a mutant's `find` matches the SAME
+  # source regardless of which copy of the tree it is pointed at.
+  #
+  # WHY: the repo checkout is CRLF (git applies autocrlf on checkout) but the DEPLOYED copies --
+  # ~\.copilot\installed-plugins\... and %LOCALAPPDATA%\overnight-agent\... -- are written LF by
+  # the deployer. Measured 2026-09-01 on byte-identical-by-content copies of oa-state.ps1:
+  # checkout 2271 CRLF / 0 LF, deployed 0 CRLF / 2271 LF.
+  #
+  # M9 is this file's only MULTI-LINE mutant and its `find` hard-codes `r`n, so it matched in the
+  # repo and could never match in the deployed tree. Every other mutant here is single-line and
+  # so was unaffected, which is exactly why this went unnoticed: the failure is invisible unless
+  # you run the check against the tree the agent actually executes.
+  #
+  # The pre-flight added in #333 is what surfaced it, on its first deployed run -- and fixing it
+  # promptly matters more than it looks, because a guard that cries wolf on every deployed run is
+  # a guard someone switches off. That is the same reasoning as the -ExpectPreFix carve-out.
+  #
+  # Normalising is safe for the mutant file: it is a temp copy handed to PowerShell, which does
+  # not care about line endings. Nothing is written back to the source.
+  param([string]$Path)
+  return (ConvertTo-Lf ([IO.File]::ReadAllText($Path)))
+}
+
 function Test-MutantTargets {
   # Do the mutants still have something to bite? Pure string matching against a file already in
   # memory: no subprocesses, so this is free and runs on EVERY invocation.
@@ -531,11 +562,11 @@ function Test-MutantTargets {
   # file is about.
   param()
   $script:MutantTargetsOk = $true
-  $text = [IO.File]::ReadAllText($ScriptPath)
+  $text = Get-NormalisedSource $ScriptPath
   $drifted = @()
   foreach ($mName in $Mutants.Keys) {
     foreach ($e in $Mutants[$mName].edits) {
-      $n = ([regex]::Matches($text, [regex]::Escape($e.find))).Count
+      $n = ([regex]::Matches($text, [regex]::Escape((ConvertTo-Lf $e.find)))).Count
       if ($n -ne $e.count) { $drifted += "$mName -- expected $($e.count) occurrence(s) of its target, found $n" }
     }
   }
@@ -553,16 +584,17 @@ function Test-MutantTargets {
 
 function New-Mutant {
   param([string]$Name, $Spec)
-  $text = [IO.File]::ReadAllText($ScriptPath)
+  $text = Get-NormalisedSource $ScriptPath
   foreach ($e in $Spec.edits) {
     # Re-asserted here as well as in the pre-flight: this is the site that would silently produce
     # an identical-to-original "mutant" and report it unkilled, so it must not depend on a caller
     # having run the check first.
-    $n = ([regex]::Matches($text, [regex]::Escape($e.find))).Count
+    $find = ConvertTo-Lf $e.find
+    $n = ([regex]::Matches($text, [regex]::Escape($find))).Count
     if ($n -ne $e.count) {
       throw "mutant '$Name': expected $($e.count) occurrence(s) of its target, found $n -- the source has drifted and this mutant would be a silent no-op"
     }
-    $text = $text.Replace($e.find, $e.with)
+    $text = $text.Replace($find, (ConvertTo-Lf $e.with))
   }
   $out = Join-Path ([IO.Path]::GetTempPath()) ("oa-mutant-" + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.ps1')
   # WITH a BOM: oa-state.ps1 has one, and stripping it would make PowerShell 5.1 decode the file
