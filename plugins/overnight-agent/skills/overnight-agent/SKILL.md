@@ -1082,6 +1082,24 @@ See PHASE 0.
     powershell -NoProfile -File <skill>\ensure-mcp-browsers.ps1 -List       # the table itself
     ```
 
+    **A slot can be broken while looking fine (GH #197).** `ECONNREFUSED` is the easy failure. The
+    hard one is a slot that accepts TCP, answers `/json/version`, and lists pages, while every real
+    operation against it times out — its renderer is in the frozen lifecycle state. The old watchdog
+    tested only whether the socket accepted, so it reported such a slot `already-up` and reused it;
+    measured 2026-09-01 against fixtures, a wedged slot and a healthy one produced byte-identical
+    verdicts. If browser work is timing out on a slot that "is up", that is this failure. Run:
+
+    ```
+    powershell -NoProfile -File <oa-home>\browser-watchdog.ps1            # health + graduated recovery
+    powershell -NoProfile -File <oa-home>\browser-watchdog.ps1 -WhatIf    # decide only, change nothing
+    ```
+
+    It probes health rather than liveness, confirms before acting, and recovers cheapest-first: thaw
+    the frozen page in place → close just the wedged tab → restart the process on the **same** profile
+    dir (so the sign-in survives). It refuses and escalates rather than risk a signed-in profile, and
+    it never touches a slot a live MCP client is attached to. Exit 2 means a stuck slot it could not
+    recover — that is a question for the user, not something to retry silently.
+
     **Launch on demand (this is the important part).** `ECONNREFUSED` on a slot is **not** a task
     failure — that profile's browser is simply closed:
 

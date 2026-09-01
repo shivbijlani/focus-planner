@@ -6,7 +6,7 @@
 // answers at all. That split IS the bug -- a wedged slot passes every HTTP
 // probe -- so the fixture has to be able to lie in exactly that way.
 //
-// Usage: node fixture-cdp-slot.mjs <port> <healthy|wedged|freshonly>
+// Usage: node fixture-cdp-slot.mjs <port> <healthy|wedged|freshonly|flaky>
 //
 //   healthy    every target answers Runtime.evaluate
 //   wedged     existing page targets accept the socket and never reply;
@@ -14,12 +14,20 @@
 //              behaviour -- a new target is never in the frozen lifecycle
 //              state -- and it is what makes a fresh-tab probe useless)
 //   freshonly  alias for wedged, named for readability at the call site
+//   flaky      frozen for the FIRST awaited evaluate only, live thereafter.
+//              Models a slot that was merely slow for one moment. A watchdog
+//              that recovers on a single failed probe would kill this slot;
+//              one that confirms first leaves it alone. That distinction is
+//              GH #197 criterion 4, and mutcheck-browser-watchdog M3 uses this
+//              mode to prove the confirmation probe is load-bearing.
 import http from 'node:http';
 import crypto from 'node:crypto';
 
 const port = Number(process.argv[2] || 0);
 const mode = process.argv[3] || 'healthy';
 const wedged = mode === 'wedged' || mode === 'freshonly';
+const flaky = mode === 'flaky';
+let flakyMisses = 0;
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const BUILD = '152.0.4191.53';
@@ -108,6 +116,10 @@ server.on('upgrade', (req, socket) => {
     // `1+1` look like it works, which is the mistake M3 is written to catch.
     const awaitsPromise = msg.method === 'Runtime.evaluate' && msg.params && msg.params.awaitPromise === true;
     if (frozen && awaitsPromise) return;
+
+    // `flaky`: swallow exactly one awaited evaluate, then behave normally, so a
+    // first probe fails and the confirmation probe succeeds.
+    if (flaky && awaitsPromise && flakyMisses === 0) { flakyMisses++; return; }
 
     if (msg.method === 'Runtime.evaluate') {
       return socket.write(frame(JSON.stringify({

@@ -246,6 +246,13 @@ $AlwaysRequired = @(
   'auto-deploy-plugin.ps1',
   'deploy-installed-plugin.ps1',
   'check-browser-slots.ps1',
+  # The health-aware watchdog (#197). SKILL.md invokes it as
+  # `<oa-home>\browser-watchdog.ps1`, which is exactly the contract this list
+  # exists to serve. It also REPLACES a script that lived in OneDrive, outside
+  # this repo -- so it had no CI, no tests, and no deploy step, and a fix to it
+  # could never be verified as running. Omitting this line would recreate that
+  # hole with a newer file (#196, #254).
+  'browser-watchdog.ps1',
   # The one entry here that is a LIBRARY rather than a command, and the reason it
   # earns a place: check-browser-slots.ps1 (above) dot-sources it, so a home that
   # has the command but not this file has a command that cannot run. The rule is
