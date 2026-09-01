@@ -505,6 +505,104 @@ $script:SelfAuthor    = 'overnight-agent'
 $script:ProvenanceRe  = '(?m)^[ \t]*<!--[ \t]*from:[ \t]*([^>\r\n]*?)[ \t]*-->'
 $script:LegacyStateRe = '(?m)^[ \t]*<!--[ \t]*oa-state'
 
+# --- Fenced code blocks are QUOTED TEXT, not markup (#320 / #325) -----------------------
+# The line-start anchor above stops a marker quoted MID-LINE in prose. It does nothing about
+# the way this repo actually quotes journal markup: a fenced example. Inside a fence the
+# marker sits at COLUMN 0, where the anchor matches it happily -- so the reader cannot tell
+# an illustration of a turn from a turn.
+#
+# That single blind spot produces BOTH failure directions, and each was reproduced against
+# the deployed reader with a control that flips only the fenced marker:
+#
+#   #320 (false POSITIVE, the dangerous one). An agent postmortem about attribution -- no
+#        human anywhere in the file -- containing a fenced example whose marker reads `me`,
+#        plus the word `yes`. Verdict: consent_ok=TRUE, `human-authored-affirmative`. The
+#        agent authored its own approval, which is the one thing #227 exists to prevent.
+#        Control: change the fenced marker to an agent name and it correctly returns false,
+#        proving the fence is parsed as live markup rather than ignored as text.
+#
+#   #325 (false NEGATIVE). A GENUINE human approval that also pastes a fenced example --
+#        quoting the docs while asking a question, in one message, which is how people type.
+#        The fenced `<!-- from: overnight-agent -->` is read as the agent's newest marker, so
+#        the turn boundary is dragged BELOW the human's reply and the trailing region
+#        collapses: `no-trailing-content`. The approval does not merely fail to count; the
+#        reader concludes nobody spoke at all. Control: the same approval without the fence
+#        returns consent_ok=true.
+#
+# The fix is to give the reader the concept it was missing. Fenced spans are neutralised in
+# a MASK -- a same-length copy where fenced characters become spaces and every newline is
+# preserved -- so `(?m)^` anchors and every `.Index` offset stay valid and callers keep
+# substringing the ORIGINAL text. Masking, not stripping, is what makes this safe to drop in
+# at each scan site without re-deriving a single offset.
+#
+# Scope is deliberately narrow: only the structural scans (provenance markers, the turn-end
+# terminator, `## ` headings, the legacy state block) read the mask. Prose content is
+# untouched, so an affirmative typed inside a fence by the human still counts -- the fence
+# changes what is MARKUP, not what is SAID.
+$script:FenceOpenRe  = '^[ ]{0,3}(?<f>`{3,}|~{3,})(?<info>[^\r\n]*)$'
+$script:FenceCloseRe = '^[ ]{0,3}(?<f>`{3,}|~{3,})[ \t]*$'
+
+function Get-FenceMaskedText([string]$text) {
+  # Same-length copy of $text with fenced-code characters replaced by spaces. Newlines are
+  # never masked, so line numbering, `(?m)` anchors and all offsets are identical to $text.
+  if ([string]::IsNullOrEmpty($text)) { return $text }
+  if ($text.IndexOf('`') -lt 0 -and $text.IndexOf('~') -lt 0) { return $text }
+
+  $sb = [System.Text.StringBuilder]::new($text.Length)
+  $i = 0
+  $len = $text.Length
+  $inFence = $false
+  $fenceChar = ''
+  $fenceLen = 0
+
+  while ($i -lt $len) {
+    $nl = $text.IndexOf("`n", $i)
+    $lineEnd = if ($nl -lt 0) { $len } else { $nl }
+    $raw = $text.Substring($i, $lineEnd - $i)
+    $line = $raw.TrimEnd("`r")
+
+    $mask = $false
+    if (-not $inFence) {
+      $m = [regex]::Match($line, $script:FenceOpenRe)
+      if ($m.Success) {
+        # An info string may not contain a backtick when the fence is backticks (CommonMark),
+        # which keeps inline code like `a``b` from opening a block.
+        $f = $m.Groups['f'].Value
+        $info = $m.Groups['info'].Value
+        if (-not ($f[0] -eq '`' -and $info.Contains('`'))) {
+          $inFence = $true
+          $fenceChar = [string]$f[0]
+          $fenceLen = $f.Length
+          $mask = $true
+        }
+      }
+    }
+    else {
+      $mask = $true
+      $c = [regex]::Match($line, $script:FenceCloseRe)
+      if ($c.Success) {
+        $cf = $c.Groups['f'].Value
+        if ([string]$cf[0] -eq $fenceChar -and $cf.Length -ge $fenceLen) { $inFence = $false }
+      }
+    }
+
+    if ($mask) {
+      # Blank the visible characters; keep any trailing CR so CRLF files round-trip exactly.
+      [void]$sb.Append(' ', $line.Length)
+      if ($raw.Length -gt $line.Length) { [void]$sb.Append($raw.Substring($line.Length)) }
+    }
+    else {
+      [void]$sb.Append($raw)
+    }
+
+    if ($nl -lt 0) { break }
+    [void]$sb.Append("`n")
+    $i = $nl + 1
+  }
+
+  return $sb.ToString()
+}
+
 # --- Consent (#227) --------------------------------------------------------------------
 # The affirmative vocabulary SKILL.md tells the agent to read as approval. Kept here, next
 # to the provenance markers, because consent is (phrase AND author) and the two halves must
@@ -990,8 +1088,12 @@ function Get-NewestAgentTurn([string]$agentLeft) {
   # The agent's LAST turn only. Scoping is what keeps this honest: an ask answered three turns
   # ago is not an open ask, and testing the whole block would leave a task awaiting forever.
   if ([string]::IsNullOrEmpty($agentLeft)) { return '' }
-  $idx = Get-LastIndexOfPattern $agentLeft ('(?m)' + $script:ManagedHeadingRe)
-  if ($idx -lt 0) { $idx = Get-LastIndexOfPattern $agentLeft $script:ProvenanceRe }
+  # Scan the fence mask so a heading or marker inside a quoted example cannot be mistaken for
+  # the start of a real turn (#320). Offsets are mask-identical, so the substring is of the
+  # original text.
+  $scan = Get-FenceMaskedText $agentLeft
+  $idx = Get-LastIndexOfPattern $scan ('(?m)' + $script:ManagedHeadingRe)
+  if ($idx -lt 0) { $idx = Get-LastIndexOfPattern $scan $script:ProvenanceRe }
   if ($idx -lt 0) { return $agentLeft }
   return $agentLeft.Substring($idx)
 }
@@ -1054,15 +1156,21 @@ function Get-AgentEndIndex([string]$content) {
   # NOTE the boundary is deliberately *this agent's* turn, not the last machine turn of any
   # kind. If it were the latter, a sequence of [user reply] -> [sibling skill turn] would put
   # the user's unanswered message ABOVE the boundary and silently swallow it.
-  $sentinelMarker = $content.LastIndexOf('OVERNIGHT-AGENT do not edit')
+  #
+  # Every STRUCTURAL scan below reads `$scan`, the fence mask, so a marker, terminator or
+  # heading that only exists inside a quoted example cannot move the boundary (#320/#325).
+  # The mask is the same length as $content, so all offsets below are interchangeable and
+  # every Substring still reads the original text.
+  $scan = Get-FenceMaskedText $content
+  $sentinelMarker = $scan.LastIndexOf('OVERNIGHT-AGENT do not edit')
   $selfMarker = -1
-  foreach ($m in [regex]::Matches($content, $script:ProvenanceRe)) {
+  foreach ($m in [regex]::Matches($scan, $script:ProvenanceRe)) {
     if ($m.Groups[1].Value.Trim() -eq $script:SelfAuthor) { $selfMarker = $m.Index }
   }
 
   $markers = @(
     $selfMarker,
-    (Get-LastIndexOfPattern $content $script:LegacyStateRe),
+    (Get-LastIndexOfPattern $scan $script:LegacyStateRe),
     $sentinelMarker
   )
   $agentMarker = ($markers | Measure-Object -Maximum).Maximum
@@ -1080,7 +1188,7 @@ function Get-AgentEndIndex([string]$content) {
   # NEWER turn below it (see the managed-heading walk); a terminator with one of this
   # agent's own turn headings underneath it is simply stale.
   $turnEnd = -1
-  foreach ($m in [regex]::Matches($content, $script:TurnEndRe)) {
+  foreach ($m in [regex]::Matches($scan, $script:TurnEndRe)) {
     if ($m.Index -ge $agentMarker) { $turnEnd = $m.Index + $m.Length }
   }
   if ($turnEnd -ge 0) {
@@ -1111,7 +1219,7 @@ function Get-AgentEndIndex([string]$content) {
   $boundary = -1
   $sawManaged = $false
   $isFirstHeading = $true
-  foreach ($h in [regex]::Matches($content, '(?m)^##[ \t][^\r\n]*')) {
+  foreach ($h in [regex]::Matches($scan, '(?m)^##[ \t][^\r\n]*')) {
     if ($h.Index -lt $from) { continue }
     $managed = $h.Value -match $script:ManagedHeadingRe
     # Older journals opened the managed block with a heading that predates the naming
@@ -1154,9 +1262,9 @@ function Get-AgentEndIndex([string]$content) {
   # turn and the boundary belongs after it. Guarded by Test-IsRunLogBodyOnly, which refuses
   # to advance over anything that is not run-log shaped -- so raw user text appended below a
   # run log still reopens the task.
-  $runLog = Get-LastIndexOfPattern $content $script:RunLogRe
+  $runLog = Get-LastIndexOfPattern $scan $script:RunLogRe
   if ($runLog -ge $end) {
-    $afterRunLog = $content.IndexOf("`n## ", $runLog)
+    $afterRunLog = $scan.IndexOf("`n## ", $runLog)
     $regionEnd = if ($afterRunLog -lt 0) { $content.Length } else { $afterRunLog + 1 }
     $region = $content.Substring($runLog, $regionEnd - $runLog)
     if (Test-IsRunLogBodyOnly $region) { return $regionEnd }
@@ -1181,7 +1289,11 @@ function Test-TrailingHasUser([string]$trailing) {
   if ($trailing.Trim().Length -eq 0) { return $false }
 
   # Entry boundaries are H2 headings; text before the first heading belongs to the region as-is.
-  $entries = [regex]::Split($trailing, '(?m)(?=^## )') | Where-Object { $_.Trim().Length -gt 0 }
+  # Split and judge markers on the fence mask (#320) so a quoted example neither invents an
+  # entry boundary nor supplies an attribution the human never wrote. Judging is all this
+  # function does -- it returns a bool, not a substring -- so the mask can be used throughout.
+  $scan = Get-FenceMaskedText $trailing
+  $entries = [regex]::Split($scan, '(?m)(?=^## )') | Where-Object { $_.Trim().Length -gt 0 }
   foreach ($entry in $entries) {
     $marks = [regex]::Matches($entry, $script:ProvenanceRe)
     if ($marks.Count -eq 0) { return $true }
@@ -1246,8 +1358,13 @@ function Get-AuthorSegments([string]$region) {
   # this "fix" has merely broken the gate in the other direction.
   if ($null -eq $region) { return @() }
   $segments = @()
-  $marks = [regex]::Matches($region, $script:ProvenanceRe)
-  $headings = [regex]::Matches($region, '(?m)^[ \t]*##[ \t]+\S')
+  # Markers and headings are located on the fence mask (#320): a `<!-- from: me -->` that only
+  # exists inside a quoted example must not open a human-attributed segment. Offsets are
+  # mask-identical, so every Substring below still slices the ORIGINAL region -- the segment
+  # TEXT keeps its fences, and only the attribution stops being forgeable.
+  $scan = Get-FenceMaskedText $region
+  $marks = [regex]::Matches($scan, $script:ProvenanceRe)
+  $headings = [regex]::Matches($scan, '(?m)^[ \t]*##[ \t]+\S')
   if ($marks.Count -eq 0) {
     if ($region.Trim().Length -gt 0) {
       $segments += [pscustomobject]@{ Author = 'unknown'; Text = $region }
@@ -2181,9 +2298,12 @@ function Add-TurnTerminator([string]$path) {
 
   # Already terminated? Then Get-AgentEndIndex returned the marker's end, which is only equal
   # to the file length when the marker is the last thing in the file -- nothing to do.
-  if ([regex]::IsMatch($content, $script:TurnEndRe)) {
+  # Read the fence mask (#320) so a terminator shown inside a quoted example never counts as
+  # this file's real terminator.
+  $scan = Get-FenceMaskedText $content
+  if ([regex]::IsMatch($scan, $script:TurnEndRe)) {
     $last = $null
-    foreach ($m in [regex]::Matches($content, $script:TurnEndRe)) { $last = $m }
+    foreach ($m in [regex]::Matches($scan, $script:TurnEndRe)) { $last = $m }
     if ($null -ne $last -and $content.Substring($last.Index).Trim() -eq $script:TurnEndMarker) { return $false }
   }
 

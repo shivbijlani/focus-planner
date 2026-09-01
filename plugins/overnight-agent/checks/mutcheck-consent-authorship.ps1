@@ -164,6 +164,93 @@ approve
 Your approve is drained; nothing here needs a decision.
 '@
 
+# --- #320 / #325: a fenced code block is QUOTED TEXT, not markup -------------------------
+# These four are one experiment with its own control, in BOTH directions. They are what make
+# the fence-masking load-bearing rather than incidental: each pair changes exactly one thing.
+#
+# SECURITY HALF (#320). An agent postmortem about attribution -- the thing this repo writes
+# constantly -- quoting a journal example inside a fence. No human speaks anywhere in the
+# file. Before the fence mask this returned `human-authored-affirmative`: the agent authored
+# its own approval, which is the one outcome #227 exists to prevent.
+$fencedHumanMarker = @'
+## 2026-08-29 - notes on how attribution works
+
+A journal entry looks like this:
+
+```
+## 2026-08-29
+
+<!-- from: me -->
+
+yes
+```
+
+That marker is what makes a reply count as human.
+'@
+
+# CONTROL for the above. Byte-identical except the marker INSIDE the fence names an agent.
+# Its job is to prove the fence is what neutralises the marker: if this case and the one
+# above ever disagree, the reader is parsing fenced content as live markup again.
+$fencedAgentMarker = $fencedHumanMarker -replace '<!-- from: me -->', '<!-- from: dance-church -->'
+
+# FALSE-NEGATIVE HALF (#325), and the reason this is not merely a security fix. A GENUINE
+# human approval that also pastes a fenced example -- quoting the docs while asking a
+# question, in one message, which is how people actually type. The fenced
+# `<!-- from: overnight-agent -->` used to be read as the agent's newest marker, dragging the
+# turn boundary BELOW the human's reply: the region collapsed and the verdict was
+# `no-trailing-content`. Shiv's approval did not merely fail to count -- the reader concluded
+# nobody had spoken at all, which is indistinguishable from him staying silent.
+$humanApproveWithFence = @'
+## 2026-08-29
+
+<!-- from: me -->
+yes go ahead. quick question though, is this the bit you meant?
+
+```
+<!-- from: overnight-agent -->
+some quoted turn
+```
+'@
+
+# CONTROL for the above: the same approval with the fence removed. It isolates the fence as
+# the single cause, so a mutation cannot pass by breaking approvals generally.
+$humanApproveNoFence = "## 2026-08-29`n`n<!-- from: me -->`nyes go ahead. quick question though, is this the bit you meant?"
+
+# The MID-LINE case, which is what the line-start anchor actually defends. This is #320's own
+# fixture, and it is a different shape from the fenced ones above: the marker is embedded in a
+# running sentence, not at column 0. 28 such strings exist in the live corpus (e.g.
+# task-267.md:17 explains `appendJournalMessage` by quoting a marker inline). They are inert
+# ONLY because of the `^` in ProvenanceRe -- so without this case, that character is unpinned
+# and can be deleted by a passing regex tweak with every guard still green.
+$midLineQuotedMarker = @'
+## 2026-08-29 - notes on how attribution works
+
+Explaining how attribution works: a reply carries `<!-- from: me -->` above it, and that
+is what makes it count. yes, that is the whole mechanism.
+'@
+
+# The OFFSET case. A fence, and then a GENUINE human approval below it. The mask must be the
+# same length as the text it masks, because every caller locates markers on the mask and then
+# substrings the ORIGINAL. A mask that deletes fenced spans instead of blanking them shifts
+# every offset after the first fence, so this approval gets sliced at the wrong boundary and
+# is lost -- silently, and only in files that contain a fence.
+$fenceThenHumanApprove = @'
+## 2026-08-29
+
+<!-- from: overnight-agent -->
+For reference, the shape of a turn is:
+
+```
+<!-- from: someone -->
+body text
+```
+
+## 2026-08-29
+
+<!-- from: me -->
+approve
+'@
+
 # id -> expectations. `reopened` is asserted alongside `consent_ok` so a mutation that
 # collapses one into the other is caught rather than silently passing.
 $cases = [ordered]@{
@@ -180,6 +267,12 @@ $cases = [ordered]@{
   '950' = @{ entries = @($mixedAgentAffirm); consent = $false; reopened = $false; why = 'agent answered inline; its own "approve" is not consent' }
   '951' = @{ entries = @($trappedAgentTurn); consent = $false; reopened = $true;  why = '#272: unmarked agent turn under its own heading -> NOT the human''s approval' }
   '952' = @{ entries = @($humanApproveThenAgentTurn); consent = $true; reopened = $true; why = '#272 narrowness: human approved above the heading -> still CONSENT' }
+  '953' = @{ entries = @($fencedHumanMarker);     consent = $false; reopened = $true;  why = '#320: a `me` marker inside a FENCE is quoted text -> NOT consent' }
+  '954' = @{ entries = @($fencedAgentMarker);     consent = $false; reopened = $true;  why = '#320 control: same fence, agent marker -> NOT consent either' }
+  '955' = @{ entries = @($humanApproveWithFence); consent = $true;  reopened = $true;  why = '#325: a real approval is not erased by a fence pasted under it' }
+  '956' = @{ entries = @($humanApproveNoFence);   consent = $true;  reopened = $true;  why = '#325 control: the same approval without a fence -> CONSENT' }
+  '957' = @{ entries = @($midLineQuotedMarker);   consent = $false; reopened = $true;  why = '#320: a marker quoted MID-LINE in prose attributes nothing' }
+  '958' = @{ entries = @($fenceThenHumanApprove); consent = $true;  reopened = $true;  why = '#320: an approval BELOW a fence survives (mask preserves offsets)' }
 }
 
 function Invoke-Scan([string]$Script) {
@@ -255,6 +348,28 @@ $mutations = @(
   @{
     name  = 'M6: #272 -- the heading clamp swallows the human''s own segment too (over-correction)'
     apply = { param($s) $s -replace [regex]::Escape('if ($h.Index -ge $start -and $h.Index -lt $end) { $cut = $h.Index; break }'), 'if ($h.Index -lt $end) { $cut = $start; break }' }
+  },
+  @{
+    # The arm #320's body originally asked for. It is kept because it is genuinely
+    # load-bearing -- but note it is NOT sufficient on its own, which is why M8/M9 exist:
+    # the anchor only defends the mid-line case, and real journals quote markers in FENCES,
+    # where the marker sits at column 0 and the anchor matches it happily.
+    name  = 'M7: #320 -- the line-start anchor is removed, so a marker quoted MID-LINE attributes'
+    apply = { param($s) $s -replace [regex]::Escape("`$script:ProvenanceRe  = '(?m)^[ \t]*<!--[ \t]*from:"), "`$script:ProvenanceRe  = '(?m)[ \t]*<!--[ \t]*from:" }
+  },
+  @{
+    # The security half. Neutering the mask makes fenced content live markup again, so the
+    # agent's own postmortem (case 953) grants it consent.
+    name  = 'M8: #320 -- fenced code is treated as markup again (the agent can approve itself)'
+    apply = { param($s) $s -replace [regex]::Escape('function Get-FenceMaskedText([string]$text) {'), 'function Get-FenceMaskedText([string]$text) { return $text' }
+  },
+  @{
+    # The false-negative half, and the one that proves the mask must preserve LENGTH. Masking
+    # by deleting fenced spans would shift every offset after the fence; callers substring the
+    # ORIGINAL text, so segment boundaries would slide and case 955's approval would be cut
+    # apart. This mutation drops the newline-preserving/length-preserving property.
+    name  = 'M9: #320 -- the mask stops preserving length, so offsets slide off the real text'
+    apply = { param($s) $s -replace [regex]::Escape('[void]$sb.Append('' '', $line.Length)'), '[void]$sb.Append('''')' }
   }
 )
 
