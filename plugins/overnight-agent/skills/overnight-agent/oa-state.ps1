@@ -160,15 +160,41 @@
   the fail-closed default. Asserted by mutcheck-agent-gate.ps1.
 
   A WORKED EXAMPLE, because this is exactly where a careless reading grants what was never
-  given. The live gate allows `focus-planner-ado-codeapp is in YOLO mode, dont ask just do` and
-  `Creating and publishing a pull request in any repository ... do not gate it`. Neither
-  authorises MERGING a pull request in `focus-planner`: the first names a DIFFERENT repo, and
-  the second covers CREATING a PR, not merging one. So:
+  given. It uses a HYPOTHETICAL gate, quoted in full here, and deliberately says NOTHING about
+  what the live gate currently contains -- see the warning below. Suppose the allow list holds
+  exactly:
 
-    consent -Id 463 -Action merge_pr -Repo focus-planner                -> falls through (no rule)
+      "some-other-repo is in YOLO mode, dont ask just do"
+      "Creating and publishing a pull request in any repository ... do not gate it"
+
+  and the floor holds "Send-to-many (group/channel, mass email)". Then for a repo named
+  `some-repo`, neither allow rule authorises MERGING a pull request there: the first names a
+  DIFFERENT repo, and the second covers CREATING a PR, not merging one. So:
+
+    consent -Id 463 -Action merge_pr -Repo some-repo                    -> falls through (no rule)
     consent -Id 463 -Action open_pr                                     -> gate-allowed
-    consent -Id 463 -Action merge_pr -Repo focus-planner-ado-codeapp    -> gate-allowed (blanket)
+    consent -Id 463 -Action merge_pr -Repo some-other-repo              -> gate-allowed (blanket)
     consent -Id 463 -Action send_email_many                             -> gate-floor-blocks
+
+  The two lessons are (a) repo scope is whole-token, so a repo whose name is a PREFIX of the one
+  a rule names is NOT covered, and (b) an allow rule about creating a PR does not reach merging.
+  Both hold no matter what is in the live file.
+
+  DO NOT "UPDATE" THIS EXAMPLE TO MIRROR THE LIVE GATE. It used to do exactly that -- it named
+  the real repos and asserted their real verdicts -- and it silently went stale the moment Shiv
+  edited `agent-gate.md`, which he can do at any time without touching this repo. Measured
+  2026-09-01: within ~20 minutes of a gate edit, two of the four lines above were INVERTED
+  against the live file, while the two that never depended on gate contents stayed correct. That
+  is the whole diagnosis. A reader reasoning from the stale text would have DECLINED a merge
+  Shiv had explicitly permitted -- a wrong refusal, which is the safe direction, but the same
+  defect points the other way the moment a permission is narrowed rather than widened.
+
+  The gate is DATA and this file is DOCUMENTATION; documentation that restates data drifts from
+  it by construction. To learn what is actually permitted right now, ask -- never remember, and
+  never read it off this comment:
+
+    oa-state.ps1 gate                                     # the live lists, verbatim
+    oa-state.ps1 consent -Id <id> -Action <kind> [-Repo <repo>]   # the verdict, with gate_rule
 
 .EXHAUSTION (#310 -- what actually opens the Today->Deferred gate)
   Rule 1 of #223 is "Today before Deferred": a Deferred row is ineligible while a Today row
@@ -516,10 +542,13 @@ $script:GateBlanketRe = '(?i)\byolo\b|\bdo ?n[o'']?t ask\b|\bno need to ask\b|\b
 # a repo name wrongly read as English grants MORE, which is why the stop list is short, holds
 # only unmistakable English, and must not be grown casually.
 #
-# Substring matching is banned outright here, and this is the live trap: `focus-planner` is a
-# PREFIX of `focus-planner-ado-codeapp`, so `rule.Contains($repo)` reports that the YOLO rule for
-# the ADO app authorises merges in the planner repo -- the exact false grant #297 was filed over.
-# Comparison is therefore whole-token equality, case-insensitive.
+# Substring matching is banned outright here, and this is the live trap: repo names NEST, and
+# `focus-planner` is a PREFIX of `focus-planner-ado-codeapp`. Under `rule.Contains($repo)` a rule
+# naming the LONGER name would be reported as authorising the SHORTER repo -- so a blanket YOLO
+# rule written for the ADO app would silently grant merges in the planner repo. That is the exact
+# false grant #297 was filed over. The hazard is the NAME SHAPE, not today's gate contents: which
+# of the two is actually in YOLO is live data and changes without this repo being touched, so do
+# not rewrite this comment to track it. Comparison is whole-token equality, case-insensitive.
 $script:GateRepoTokenRe = '(?:[A-Za-z0-9_.]+/)?[A-Za-z0-9_.]+(?:-[A-Za-z0-9_.]+)+'
 $script:GateRepoStopWords = @(
   'e-mail', 'e-mails', 'follow-up', 'follow-ups', 'read-only', 'sign-in', 'sign-off',
