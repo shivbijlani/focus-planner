@@ -11,10 +11,13 @@
   journal attribution check, exactly as if the file did not exist.
 
   Wiring it up is the easy half. The dangerous half is wiring it up WRONG, and the issue names
-  the specific wrong reading: the live gate says `focus-planner-ado-codeapp is in YOLO mode` and
-  `Creating and publishing a pull request in any repository ... do not gate it`, and NEITHER
-  authorises merging a pull request in `focus-planner`. A "gate exists => act freely" reading
+  the specific wrong reading with this example: a gate allowing `<some-other-repo> is in YOLO
+  mode` and `Creating and publishing a pull request in any repository ... do not gate it` does
+  NOT authorise merging a pull request in a DIFFERENT repo. A "gate exists => act freely" reading
   grants a permission that was never given, which is strictly worse than the decorative file.
+  (Stated with a placeholder on purpose: which repo is really in YOLO is live data in
+  `agent-gate.md`, it changes without this repo being touched, and an earlier version of this
+  comment naming the real repo went stale and inverted within ~20 minutes of an edit.)
 
   WHAT IS ASSERTED
   ----------------

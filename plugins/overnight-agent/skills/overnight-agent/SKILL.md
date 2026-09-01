@@ -594,10 +594,12 @@ verdict carries `reason` (`gate-floor-blocks` / `gate-allowed`, else the usual j
 
 - ⚠️ **Scope is exact, and this is where a careless reading gives itself a permission it was never
   given.** A rule naming a repository matches **only** that repository, compared as a whole token —
-  `focus-planner-ado-codeapp is in YOLO mode` does **not** cover `focus-planner`, even though one name
+  a rule saying `some-other-repo is in YOLO mode` does **not** cover `some-repo`, even when one name
   is a prefix of the other. Likewise a rule about **creating** a pull request does not authorise
   **merging** one. When in doubt the gate returns no verdict and you fall through to the journal, which
-  is the safe direction.
+  is the safe direction. **Never work out what you are allowed to do from this page** — the gate is
+  data, this is documentation, and documentation that restates data drifts from it. Ask
+  `consent -Action <kind> -Repo <repo>` and read `gate_rule`.
 - **No gate file, an empty one, or one you cannot parse changes nothing.** Behaviour is identical to
   before #297: the journal decides, fail-closed. The gate can only ever *add* permission via the allow
   list or *remove* it via the floor.
