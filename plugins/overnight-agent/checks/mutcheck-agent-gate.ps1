@@ -1,0 +1,538 @@
+<#
+  mutcheck-agent-gate.ps1 -- mutation check for the agent gate (#297).
+
+  THE BUG THIS GUARDS
+  -------------------
+  `agent-gate.md` was DECORATIVE. The Planner web app seeded it, rendered it and let the user
+  edit it, and then nothing on the agent side ever read it again: `rg -i agent-gate` over the
+  plugin tree returned zero hits. So the one standing permission the user had written -- in the
+  one file the agent can never forge, because the agent never writes it -- could not reach the
+  gate it was written to open. Every irreversible action still failed closed on a per-task
+  journal attribution check, exactly as if the file did not exist.
+
+  Wiring it up is the easy half. The dangerous half is wiring it up WRONG, and the issue names
+  the specific wrong reading: the live gate says `focus-planner-ado-codeapp is in YOLO mode` and
+  `Creating and publishing a pull request in any repository ... do not gate it`, and NEITHER
+  authorises merging a pull request in `focus-planner`. A "gate exists => act freely" reading
+  grants a permission that was never given, which is strictly worse than the decorative file.
+
+  WHAT IS ASSERTED
+  ----------------
+  Seven guarantees, one arm each, and each arm is killed by ONE designated mutation and no other
+  (the matrix at the end enforces that, and fails if an arm is redundant or over-broad):
+
+    A  floor-overrides-allow          a floor rule beats an allow rule covering the same action
+    B  floor-overrides-human-approval a floor rule beats a human `approve` in the journal
+    C  repo-scope                     a rule naming a repo matches ONLY that repo, whole-token
+    D  create-is-not-merge            a rule about CREATING a PR never authorises MERGING one
+    E  absent-file-fail-closed        absent / empty / malformed gate == the pre-#297 behaviour
+    F  enum-validation                -Action is a closed enum; an unknown kind is REFUSED
+    G  action-omitted-unchanged       with no -Action the output is the pre-#297 output exactly
+
+  Plus one CORPUS arm, `L`, which runs the REAL live gate text (embedded verbatim below) and
+  asserts the finding the issue turns on: merging a focus-planner PR is NOT authorised, while
+  opening one IS. It is deliberately EXCLUDED from the one-arm-one-mutation matrix, because it
+  covers several guarantees at once and is therefore expected to be killed by more than one
+  mutation. That redundancy is the reason to have it: the seven arms prove the mechanism, `L`
+  proves the mechanism gives the right answer on the text that actually exists.
+
+  If the live gate file is present on this machine it is ALSO evaluated, as an ADVISORY report
+  only. The user is entitled to change his own gate, so a guard that went red when he did would
+  be crying wolf; the report says what his current text authorises and never fails on it.
+
+  Runs the REAL oa-state.ps1 as a child process against isolated synthetic journal/state/gate
+  folders (-JournalDir / -StateDir / -GatePath), so live state, live journals and the live gate
+  file are never touched -- and the gate is never written by anything here, which is the property
+  that makes it trustworthy in the first place.
+
+  Mutations run BY DEFAULT, because run-sweeps.ps1 invokes these with no arguments beyond
+  -ScriptPath; a mutcheck that only ran its baseline unless asked would report a comfortable
+  green every night while proving nothing.
+
+    powershell -File mutcheck-agent-gate.ps1 -ScriptPath <path-to-oa-state.ps1>
+    powershell -File mutcheck-agent-gate.ps1 -BaselineOnly     # skip the mutants
+#>
+[CmdletBinding()]
+param(
+  [string]$ScriptPath,
+  [switch]$BaselineOnly
+)
+
+$ErrorActionPreference = 'Stop'
+
+# Default to the installed skill's oa-state.ps1 when run by hand; run-sweeps.ps1 passes
+# -ScriptPath explicitly so the nightly sweep guards the PRODUCTION copy, not the repo's.
+if (-not $ScriptPath) {
+  $candidates = @(
+    (Join-Path $PSScriptRoot '..\skills\overnight-agent\oa-state.ps1'),
+    (Join-Path $env:LOCALAPPDATA 'overnight-agent\oa-state.ps1'),
+    "$env:USERPROFILE\.copilot\installed-plugins\focus-planner\overnight-agent\skills\overnight-agent\oa-state.ps1"
+  )
+  foreach ($c in $candidates) { if (Test-Path $c) { $ScriptPath = (Resolve-Path $c).Path; break } }
+}
+if (-not $ScriptPath -or -not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found (pass -ScriptPath)" }
+
+# --- fixture material ---------------------------------------------------------------------
+# The four allow rules and two floor rules below are the LIVE gate's, VERBATIM. They are quoted
+# rather than paraphrased on purpose: a paraphrase would drift towards whatever the matcher
+# happens to accept, and the whole question the issue asks is what THIS text authorises.
+$RULE_YOLO_REPO = 'focus-planner-ado-codeapp is in YOLO mode, dont ask just do, Im the only user'
+$RULE_EMAIL_SELF = 'Emailing myself'
+$RULE_REPLY = 'Responding to an interaction in a 1-1 chat or email with valuable info (not just shiv is oof). If doing so, append message signature indicating that this was sent by bot and that shiv will review when he gets back.'
+$RULE_CREATE_PR = 'Creating and publishing a pull request in any repository, then continuing to work on it until all checks pass, is easily reversible and has no consequence; do not gate it.'
+$FLOOR_MANY = 'Send-to-many (group/channel, manager, mass email)'
+$FLOOR_FRESH = 'Starting a fresh conversation with someone in chat/email'
+
+function New-Gate {
+  param([string[]]$Allow, [string[]]$Ask)
+  $sb = [System.Text.StringBuilder]::new()
+  [void]$sb.AppendLine('# Agent gate')
+  [void]$sb.AppendLine()
+  [void]$sb.AppendLine('<!-- planner-agent-gate v1 -- you own this file. The overnight agent reads it and never writes it. -->')
+  [void]$sb.AppendLine()
+  [void]$sb.AppendLine('## Do not gate these (reversible)')
+  [void]$sb.AppendLine()
+  foreach ($a in $Allow) { [void]$sb.AppendLine("- $a") }
+  [void]$sb.AppendLine()
+  [void]$sb.AppendLine('## Always ask (safety floor)')
+  [void]$sb.AppendLine()
+  foreach ($a in $Ask) { [void]$sb.AppendLine("- $a") }
+  return $sb.ToString()
+}
+
+# The full live gate, reassembled from the verbatim rules above.
+$LIVE_GATE = New-Gate -Allow @($RULE_YOLO_REPO, $RULE_EMAIL_SELF, $RULE_REPLY, $RULE_CREATE_PR) -Ask @($FLOOR_MANY, $FLOOR_FRESH)
+
+$AgentBlock = @'
+# Task {ID}: synthetic
+
+Some user notes at the top.
+
+---
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+## Overnight Agent
+
+**Status:** Proposed - plan v1 - 2026-08-31
+
+<!-- from: overnight-agent -->
+The agent's last turn. Awaiting a decision.
+
+**Needs from you:** approve to take the irreversible step.
+'@
+
+# A genuine, positively-attributed human approval. Used by arm B to prove the floor beats it.
+$HumanApprove = "## 2026-08-31`n`n<!-- from: me -->`napprove"
+
+function New-Journal {
+  param([string]$Dir, [string]$Id, [string[]]$Entries)
+  $sb = [System.Text.StringBuilder]::new()
+  [void]$sb.AppendLine(($AgentBlock -replace '\{ID\}', $Id))
+  foreach ($e in $Entries) {
+    [void]$sb.AppendLine()
+    [void]$sb.AppendLine($e)
+  }
+  [System.IO.File]::WriteAllText((Join-Path $Dir "task-$Id.md"), $sb.ToString(), [System.Text.UTF8Encoding]::new($false))
+}
+
+# --- the arms ------------------------------------------------------------------------------
+# Each arm is a self-contained world: its own gate text (or none), its own journal, and a list
+# of queries with expectations. `Diagnostic` arms are asserted but excluded from the
+# one-arm-one-mutation matrix.
+#
+# ASSERTION DISCIPLINE. Arms A and B both assert a DENY, and they must be told apart by which
+# mutation kills them, so each asserts ONLY the field that isolates its own guarantee:
+#   A asserts consent_ok=false where the ALLOW list would have said true  -> killed by order swap
+#   B asserts consent_ok=false where the JOURNAL would have said true     -> killed by short-circuit removal
+# Neither asserts `reason`, because a reason assertion would make each sensitive to the other's
+# mutation and collapse the isolation. `reason` and the verbatim `gate_rule` are asserted in
+# arm L, which is allowed to be broad.
+$arms = [ordered]@{
+  'A-floor-overrides-allow'          = @{
+    why     = 'a floor rule beats an allow rule covering the SAME action kind'
+    gate    = (New-Gate -Allow @('Sending email to a group channel is fine') -Ask @($FLOOR_MANY))
+    entries = @()
+    queries = @(
+      @{ args = @('-Action', 'send_email_many'); expect = @{ consent_ok = $false } }
+    )
+  }
+  'B-floor-overrides-human-approval' = @{
+    why     = 'a floor rule beats a genuine human `approve` sitting in the journal'
+    gate    = (New-Gate -Allow @($RULE_EMAIL_SELF) -Ask @($FLOOR_FRESH))
+    entries = @($HumanApprove)
+    queries = @(
+      # Control: the journal really does grant consent, so the deny below is not vacuous.
+      @{ args = @(); expect = @{ consent_ok = $true } }
+      @{ args = @('-Action', 'send_email_new_thread'); expect = @{ consent_ok = $false } }
+    )
+  }
+  'C-repo-scope'                     = @{
+    why     = 'a repo-scoped rule matches that repo and NOT one it is merely a prefix of'
+    gate    = (New-Gate -Allow @($RULE_YOLO_REPO) -Ask @($FLOOR_MANY))
+    entries = @()
+    queries = @(
+      # `focus-planner` is a PREFIX of `focus-planner-ado-codeapp`. Substring matching says yes
+      # here, and saying yes here is the false grant the whole issue is about.
+      @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $false } }
+      @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner-ado-codeapp'); expect = @{ consent_ok = $true } }
+      # No -Repo at all: a repo-scoped rule cannot be shown to apply, so it does not.
+      @{ args = @('-Action', 'merge_pr'); expect = @{ consent_ok = $false } }
+      # `owner/name` resolves to the same repo as the bare name.
+      @{ args = @('-Action', 'merge_pr', '-Repo', 'shivbijlani/focus-planner-ado-codeapp'); expect = @{ consent_ok = $true } }
+    )
+  }
+  'D-create-is-not-merge'            = @{
+    why     = 'CREATING a pull request is authorised; MERGING one is not the same action'
+    gate    = (New-Gate -Allow @($RULE_CREATE_PR) -Ask @($FLOOR_MANY))
+    entries = @()
+    queries = @(
+      @{ args = @('-Action', 'open_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $true } }
+      @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $false } }
+      # Near neighbours the same rule must not reach: "publishing" is not a release, and
+      # "publishing" is not posting in public (no word boundary after `public` in `publishing`).
+      @{ args = @('-Action', 'publish_release', '-Repo', 'focus-planner'); expect = @{ consent_ok = $false } }
+      @{ args = @('-Action', 'post_public'); expect = @{ consent_ok = $false } }
+    )
+  }
+  'E-absent-file-fail-closed'        = @{
+    why     = 'absent / empty / malformed gate behaves EXACTLY as before #297'
+    gate    = $null            # no gate file at all
+    entries = @()
+    queries = @(
+      @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $false; gate_state = 'absent' } }
+      @{ args = @('-Action', 'send_email_self'); expect = @{ consent_ok = $false; gate_state = 'absent' } }
+    )
+    # Two more worlds for the same guarantee, run with a substituted gate file.
+    extraGates = @(
+      @{ text = ''; state = 'empty' }
+      @{ text = "# Agent gate`n`nJust some prose. No sections, no bullets.`n"; state = 'malformed' }
+    )
+  }
+  'F-enum-validation'                = @{
+    why     = '-Action is a CLOSED enum; an action outside it is refused, not silently ignored'
+    gate    = (New-Gate -Allow @($RULE_EMAIL_SELF) -Ask @($FLOOR_MANY))
+    entries = @()
+    mustFail = @(
+      @('-Action', 'rm_minus_rf'),
+      @('-Action', 'merge'),
+      @('-Action', 'anything')
+    )
+    queries = @(
+      # Control: a VALID kind still works, so the arm is not just asserting "everything fails".
+      @{ args = @('-Action', 'send_email_self'); expect = @{ consent_ok = $true } }
+    )
+  }
+  'G-action-omitted-unchanged'       = @{
+    why     = 'with no -Action the verdict JSON is the pre-#297 shape, field for field'
+    # A gate whose FLOOR would block, and whose ALLOW would permit, several kinds -- so if the
+    # gate were consulted at all without -Action, this arm would see it.
+    gate    = (New-Gate -Allow @($RULE_EMAIL_SELF, $RULE_CREATE_PR) -Ask @($FLOOR_MANY, $FLOOR_FRESH))
+    entries = @($HumanApprove)
+    fields  = @('id', 'consent_ok', 'reason', 'human_segments', 'affirmative_phrase',
+      'affirmative_author', 'affirmative_unattributed', 'trailing_has_user', 'path')
+    queries = @(
+      @{ args = @(); expect = @{ consent_ok = $true; reason = 'human-authored-affirmative' } }
+    )
+  }
+  'L-live-gate-merge-finding'        = @{
+    why        = 'THE finding: the live gate as written does not authorise merging a focus-planner PR'
+    diagnostic = $true
+    gate       = $LIVE_GATE
+    entries    = @($HumanApprove)     # even WITH a human approve, the floor entries must hold
+    queries    = @(
+      # The headline. Rule 1 names another repo; rule 4 covers creating, not merging.
+      @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $true; reason = 'human-authored-affirmative'; gate_rule = $null } }
+      @{ args = @('-Action', 'open_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $true; reason = 'gate-allowed'; gate_rule = $RULE_CREATE_PR } }
+      @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner-ado-codeapp'); expect = @{ consent_ok = $true; reason = 'gate-allowed'; gate_rule = $RULE_YOLO_REPO } }
+      @{ args = @('-Action', 'send_email_self'); expect = @{ consent_ok = $true; reason = 'gate-allowed'; gate_rule = $RULE_EMAIL_SELF } }
+      @{ args = @('-Action', 'send_email_reply'); expect = @{ consent_ok = $true; reason = 'gate-allowed'; gate_rule = $RULE_REPLY } }
+      @{ args = @('-Action', 'send_email_many'); expect = @{ consent_ok = $false; reason = 'gate-floor-blocks'; gate_rule = $FLOOR_MANY } }
+      @{ args = @('-Action', 'send_email_new_thread'); expect = @{ consent_ok = $false; reason = 'gate-floor-blocks'; gate_rule = $FLOOR_FRESH } }
+    )
+  }
+}
+
+# NOTE on the first `L` case. With no gate rule covering `merge_pr` in `focus-planner`, control
+# falls through to the journal reader -- and this journal DOES carry a human approve, so the
+# answer is `true` for the pre-existing #227 reason, with `gate_rule: null`. That is the correct
+# and complete statement of the finding: the gate grants nothing here; any yes comes from the
+# per-task journal, exactly as it did before #297.
+
+function Invoke-Child {
+  # Runs the real script as a child process and returns (stdout+stderr, exit code).
+  #
+  # $ErrorActionPreference is dropped to Continue around the call ON PURPOSE. With `2>&1` under
+  # `Stop`, a native command's stderr arrives as an ErrorRecord and TERMINATES the caller -- so
+  # arm F, whose whole job is to make the script refuse a bad -Action, would blow up the harness
+  # instead of recording the refusal it was looking for.
+  param([string[]]$ChildArgs)
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $raw = (& powershell @ChildArgs 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    $code = $LASTEXITCODE
+  }
+  finally { $ErrorActionPreference = $prev }
+  return [pscustomobject]@{ Raw = $raw; Exit = $code }
+}
+
+function Invoke-Arm {
+  param([string]$Script, [string]$Name, $Arm, [string]$GateOverride, [bool]$HasGateOverride)
+  $root = Join-Path $env:TEMP ("oa-gate-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+  $jdir = Join-Path $root 'journal'
+  $sdir = Join-Path $root 'state'
+  $gpath = Join-Path $root 'agent-gate.md'
+  New-Item -ItemType Directory -Path $jdir -Force | Out-Null
+  New-Item -ItemType Directory -Path $sdir -Force | Out-Null
+  try {
+    New-Journal -Dir $jdir -Id '970' -Entries @($Arm.entries)
+    $gateText = if ($HasGateOverride) { $GateOverride } else { $Arm.gate }
+    if ($null -ne $gateText) {
+      [System.IO.File]::WriteAllText($gpath, $gateText, [System.Text.UTF8Encoding]::new($false))
+    }
+    $base = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Script, 'consent', '-Id', '970',
+      '-JournalDir', $jdir, '-StateDir', $sdir, '-GatePath', $gpath)
+    $results = @()
+    foreach ($q in @($Arm.queries)) {
+      if ($null -eq $q) { continue }
+      $child = Invoke-Child -ChildArgs ($base + @($q.args))
+      $obj = $null
+      try { $obj = $child.Raw | ConvertFrom-Json } catch { }
+      $results += [pscustomobject]@{ Query = $q; Raw = $child.Raw; Obj = $obj; Exit = $child.Exit }
+    }
+    $refusals = @()
+    foreach ($bad in @($Arm.mustFail)) {
+      # `@($null)` is a ONE-element array holding $null, not an empty one. Without this guard an
+      # arm with no mustFail list still fired a bare probe, and a bare probe exits 0 -- so every
+      # arm reported a phantom "expected refusal, got exit 0". Same shape as the extraGates guard
+      # below, and as the `, $out` bug this check found in oa-state.ps1 itself.
+      if ($null -eq $bad) { continue }
+      $child = Invoke-Child -ChildArgs ($base + @($bad))
+      $refusals += [pscustomobject]@{ Args = $bad; Raw = $child.Raw; Exit = $child.Exit }
+    }
+    return [pscustomobject]@{ Results = $results; Refusals = $refusals }
+  }
+  finally { Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue }
+}
+
+function Test-Arm {
+  param([string]$Script, [string]$Name, $Arm, [switch]$Quiet)
+  $fail = 0
+  $notes = @()
+
+  # main world + any extra gate worlds asserting the same expectations
+  $worlds = @([pscustomobject]@{ Override = $null; Has = $false; Label = ''; State = $null })
+  foreach ($g in @($Arm.extraGates)) {
+    if ($null -eq $g) { continue }
+    $worlds += [pscustomobject]@{ Override = $g.text; Has = $true; Label = " [$($g.state)]"; State = $g.state }
+  }
+
+  foreach ($w in $worlds) {
+    $run = Invoke-Arm -Script $Script -Name $Name -Arm $Arm -GateOverride $w.Override -HasGateOverride $w.Has
+    foreach ($r in $run.Results) {
+      $label = ($r.Query.args -join ' ')
+      if ($null -eq $r.Obj) { $fail++; $notes += "  x$($w.Label) [$label] no JSON: $($r.Raw)"; continue }
+      foreach ($k in $r.Query.expect.Keys) {
+        $want = $r.Query.expect[$k]
+        # `gate_state` in an extra-gate world is that world's state, not the arm's.
+        if ($k -eq 'gate_state' -and $w.Has) { $want = $w.State }
+        $got = $r.Obj.$k
+        $ok = if ($null -eq $want) { $null -eq $got -or "$got" -eq '' } else { "$got" -eq "$want" }
+        if (-not $ok) { $fail++; $notes += "  x$($w.Label) [$label] $k : want '$want' got '$got'" }
+      }
+    }
+    foreach ($r in $run.Refusals) {
+      # A closed enum must REFUSE, and refusal means a non-zero exit -- not a clean run that
+      # quietly ignored the argument, which is how a "validated" input stops validating anything.
+      if ($r.Exit -eq 0) { $fail++; $notes += "  x$($w.Label) [$($r.Args -join ' ')] expected refusal, got exit 0" }
+    }
+    if ($Arm.fields) {
+      # Field-for-field shape check: the pre-#297 output had exactly these keys, in this order.
+      $r = @($run.Results)[0]
+      if ($null -eq $r.Obj) { $fail++; $notes += '  x fields: no JSON' }
+      else {
+        $got = @($r.Obj.PSObject.Properties.Name)
+        if (($got -join ',') -ne (@($Arm.fields) -join ',')) {
+          $fail++; $notes += "  x fields: want '$(@($Arm.fields) -join ',')' got '$($got -join ',')'"
+        }
+      }
+    }
+  }
+  if (-not $Quiet) {
+    Write-Host ("{0,-34} {1,-6} {2}" -f $Name, $(if ($fail -eq 0) { 'PASS' } else { 'FAIL' }), $Arm.why)
+    foreach ($n in $notes) { Write-Host $n }
+  }
+  return $fail
+}
+
+function Test-AllArms {
+  param([string]$Script, [string]$Label, [switch]$Quiet)
+  if (-not $Quiet) { Write-Host ""; Write-Host "=== $Label ===" }
+  $failedArms = @()
+  foreach ($name in $arms.Keys) {
+    $f = 0
+    try { $f = Test-Arm -Script $Script -Name $name -Arm $arms[$name] -Quiet:$Quiet }
+    catch { $f = 1; if (-not $Quiet) { Write-Host "$name threw: $($_.Exception.Message)" } }
+    if ($f -gt 0) { $failedArms += $name }
+  }
+  if (-not $Quiet) { Write-Host ("arms failed: {0} / {1}" -f $failedArms.Count, $arms.Count) }
+  return , $failedArms
+}
+
+# --- baseline ------------------------------------------------------------------------------
+$baselineFailures = Test-AllArms -Script $ScriptPath -Label 'BASELINE (real oa-state.ps1)'
+if ($baselineFailures.Count -gt 0) { Write-Host ""; Write-Host "BASELINE FAILED"; exit 1 }
+
+# --- advisory: what does the gate on THIS machine actually authorise? ------------------------
+# Never fatal. The user owns this file and may change it whenever he likes; a check that went
+# red on his edit would be crying wolf. This just states the current answer out loud.
+$livePath = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\agent-gate.md"
+if (Test-Path $livePath) {
+  Write-Host ""
+  Write-Host "=== ADVISORY: the gate file on this machine (never fatal) ==="
+  $tmp = Join-Path $env:TEMP ("oa-gate-live-" + [guid]::NewGuid().ToString('N').Substring(0, 6))
+  New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+  try {
+    New-Journal -Dir $tmp -Id '970' -Entries @()
+    foreach ($probe in @(
+        @{ a = @('-Action', 'merge_pr', '-Repo', 'focus-planner'); t = 'merge a focus-planner PR' },
+        @{ a = @('-Action', 'open_pr', '-Repo', 'focus-planner'); t = 'open a focus-planner PR' },
+        @{ a = @('-Action', 'push_main', '-Repo', 'focus-planner'); t = 'push to focus-planner main' })) {
+      $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath, 'consent', '-Id', '970',
+        '-JournalDir', $tmp, '-StateDir', $tmp, '-GatePath', $livePath) + @($probe.a)
+      $o = $null
+      try { $o = (Invoke-Child -ChildArgs ($a)).Raw | ConvertFrom-Json } catch { }
+      Write-Host ("  {0,-30} gate says: {1,-18} {2}" -f $probe.t,
+        $(if ($o.reason -eq 'gate-allowed') { 'ALLOWED' } elseif ($o.reason -eq 'gate-floor-blocks') { 'BLOCKED (floor)' } else { 'no rule -> ask' }),
+        $(if ($o.gate_rule) { "via: $($o.gate_rule)" } else { '' }))
+    }
+  }
+  finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
+}
+
+if ($BaselineOnly) { exit 0 }
+
+# --- mutations -------------------------------------------------------------------------------
+# One mutation per guarantee, each restoring a DIFFERENT version of the hole. `kills` names the
+# single arm that must catch it; the matrix at the end fails if a mutation is caught by an arm
+# that is not its own, because that would mean two arms are testing the same thing and one of
+# them is not pulling its weight.
+$src = [IO.File]::ReadAllText($ScriptPath, (New-Object Text.UTF8Encoding($false)))
+
+$mutations = @(
+  @{
+    name  = 'M1: the ALLOW list is scanned before the floor (floor becomes a suggestion)'
+    kills = 'A-floor-overrides-allow'
+    apply = {
+      param($s)
+      $s -replace [regex]::Escape('foreach ($stage in $stages) {'), 'foreach ($stage in ($stages[1], $stages[0])) {'
+    }
+  },
+  @{
+    name  = 'M2: a floor verdict no longer short-circuits, so a journal `approve` overrides it'
+    kills = 'B-floor-overrides-human-approval'
+    apply = {
+      param($s)
+      $s -replace [regex]::Escape("if (`$verdict.decision -ne 'none') {"), "if (`$verdict.decision -eq 'allow') {"
+    }
+  },
+  @{
+    name  = 'M3: repo matching by SUBSTRING, so a prefix repo collects another repo''s grant'
+    kills = 'C-repo-scope'
+    apply = {
+      param($s)
+      $s -replace [regex]::Escape('if ($t -eq $want -or $t -eq $wantBare) { $hit = $true; break }'), 'if ($t.Contains($want) -or $t.Contains($wantBare)) { $hit = $true; break }'
+    }
+  },
+  @{
+    name  = 'M4: merge_pr accepts CREATE verbs, so "creating a PR is fine" authorises merging'
+    kills = 'D-create-is-not-merge'
+    apply = {
+      param($s)
+      $s -replace [regex]::Escape("merge_pr              = @('\bmerg(?:e|es|ed|ing)\b|\bauto-?merges?\b|\bland(?:s|ed|ing)? (?:the |a |it )?(?:pr|pull request)\b')"), "merge_pr              = @('\bmerg(?:e|es|ed|ing)\b|\bcreat(?:e|es|ed|ing)\b|\bpublish(?:es|ed|ing)?\b')"
+    }
+  },
+  @{
+    name  = 'M5: an ABSENT gate file yields a permissive default instead of no rules'
+    kills = 'E-absent-file-fail-closed'
+    apply = {
+      param($s)
+      $s -replace [regex]::Escape('if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    return [pscustomobject]$result
+  }'), 'if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    $result.allow = @(''yolo mode, dont ask just do'')
+    return [pscustomobject]$result
+  }'
+    }
+  },
+  @{
+    name  = 'M6: -Action is free text again (ValidateSet dropped)'
+    kills = 'F-enum-validation'
+    apply = {
+      param($s)
+      $s -replace [regex]::Escape("  [ValidateSet(
+    'merge_pr', 'open_pr', 'push_main', 'delete_branch',
+    'send_email_self', 'send_email_reply', 'send_email_new_thread', 'send_email_many',
+    'post_public', 'spend_money', 'delete_data', 'deploy', 'publish_release')]
+  [string]`$Action,"), "  [string]`$Action,"
+    }
+  },
+  @{
+    name  = 'M7: the gate is consulted even when -Action is omitted (output shape changes)'
+    kills = 'G-action-omitted-unchanged'
+    apply = {
+      param($s)
+      $out = $s -replace [regex]::Escape('if ($Action) {
+    $gate = Read-AgentGate $GatePath'), 'if ($true) {
+    $gate = Read-AgentGate $GatePath'
+      $out -replace [regex]::Escape('if ($Action) { Add-GateFallthrough $out $gate }'), 'Add-GateFallthrough $out $gate'
+    }
+  }
+)
+
+$mutDir = Join-Path $env:TEMP ("oa-gate-mut-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Path $mutDir -Force | Out-Null
+$killed = 0; $survived = 0; $misaimed = 0
+try {
+  foreach ($m in $mutations) {
+    Write-Host ""
+    Write-Host "--- $($m.name)"
+    $mutated = & $m.apply $src
+    if ($mutated -eq $src) {
+      Write-Host "  !! mutation did not apply (anchor text moved) -- treating as SURVIVED"
+      $survived++
+      continue
+    }
+    $path = Join-Path $mutDir ("oa-state-" + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.ps1')
+    [IO.File]::WriteAllText($path, $mutated, (New-Object Text.UTF8Encoding($false)))
+
+    $failedArms = @()
+    try { $failedArms = Test-AllArms -Script $path -Label $m.name -Quiet }
+    catch { $failedArms = @('<threw>'); Write-Host "  (mutant threw: $($_.Exception.Message))" }
+
+    # Only the SEVEN guarantee arms take part in the aim check; `L` is the corpus arm and is
+    # expected to be caught by several mutations (see the header).
+    $guaranteeArms = @($failedArms | Where-Object { -not $arms[$_].diagnostic })
+    Write-Host ("  arms that caught it: {0}" -f $(if ($failedArms.Count) { $failedArms -join ', ' } else { '(none)' }))
+
+    if ($failedArms.Count -eq 0) {
+      $survived++
+      Write-Host "  -> SURVIVED (guard is not load-bearing)"
+      continue
+    }
+    $killed++
+    if (@($guaranteeArms).Count -eq 1 -and $guaranteeArms[0] -eq $m.kills) {
+      Write-Host "  -> KILLED by its own arm, and only its own arm"
+    }
+    else {
+      $misaimed++
+      Write-Host "  -> KILLED, but MISAIMED: expected exactly '$($m.kills)', got '$($guaranteeArms -join ', ')'"
+    }
+  }
+}
+finally { Remove-Item -Recurse -Force $mutDir -ErrorAction SilentlyContinue }
+
+Write-Host ""
+Write-Host "mutations killed $killed / $($killed + $survived); misaimed $misaimed"
+if ($survived -gt 0 -or $misaimed -gt 0) { exit 1 }
+exit 0
