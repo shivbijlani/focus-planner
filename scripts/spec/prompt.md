@@ -52,6 +52,7 @@ Write these files into `docs/spec/`. Use exactly these names (the wiki keys off 
 | `Behaviour.md` | The system's required behaviour as testable statements, derived from `testFiles`. Group by area. This is the acceptance suite a rebuilt implementation must satisfy. |
 | `Rebuilding.md` | A build-order guide: what to construct first, dependencies between parts, and how to verify each stage. Written for someone starting from an empty directory. |
 | `Roadmap.md` | Known gaps and direction, grouped by priority label, derived from `issues`. Reference issues by number. |
+| `Reliability.md` | How the autonomous overnight agent is kept running unattended on one machine and heals itself: out-of-band supervision dispatched by the OS, liveness-gated stuck detection and orphan repair, silent auto-restart as the remedy, deploy propagation ("merged isn't running"), byte-level encoding safety, journal write safety, MCP process reaping, browser-slot health, the mutation-tested sweep harness, and the `user-settings.md` reconcile loop. Mine the `doc` comments of the `overnight-agent` and `scripts` domains and the reliability issues; cite scripts by name. Treat mechanisms described in issues as shipped. |
 
 ## Style
 
