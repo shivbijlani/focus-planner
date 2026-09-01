@@ -475,6 +475,70 @@ pointer link. Measured on the live file: **924 KB → 73 KB (~237K → ~19K toke
   eagerly re-creates the exact problem this step exists to remove.
 - Add `-WhatIf` to preview. A failed split must never abort the run.
 
+**Fourth, read the agent gate (GH #297).** `agent-gate.md` sits in the planner folder and holds the
+user's **standing** permissions — the ones that are true across every task, so he does not have to
+re-grant them in a journal every night. Run this fourth, every run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\oa-state.ps1" gate
+```
+
+It prints `{ path, exists, state, version, allow[], ask[], mtime }`, with every rule **verbatim**.
+
+- ⛔ **The floor list (`ask`) wins over everything.** If a rule in **Always ask (safety floor)** covers
+  what you are about to do, you stop and ask — no matter what the allow list says, and **no matter what
+  the journal says**, including an explicit human `approve`. That is the entire point of a floor: it is
+  the user saying *"not even if I said yes in a hurry."* Nothing overrides it. There is no exception,
+  and you do not get to weigh it against anything.
+- ✅ **The allow list (`allow`) is a standing grant.** A rule there authorises that action without a
+  per-task approval, and `consent` will say so and name the rule that did it.
+- ⚠️ **A `gate-allowed` verdict short-circuits the journal — so it can tell you that you are
+  *authorised*, not that you *should*.** Measured: with a gate rule allowing merges in a repo, a
+  journal carrying Shiv's own `<!-- from: me -->` *"do not merge that, hold off"* still returns
+  `consent_ok: true, reason: gate-allowed`. That is correct — a standing permission any stray
+  sentence could cancel would not be standing — but it means **the gate is not where you find out he
+  changed his mind.** So every gate verdict also reports **`trailing_has_user`**.
+- ⛔ **`trailing_has_user: true` means "stop and read", never "he refused".** Those look alike and
+  are not. The field is deliberately fail-**open**, so unattributed prose sets it too: it tells you
+  *someone may be waiting*, not what they said. Treating it as a refusal would let stray text
+  silently revoke a permission he actually granted — the same bug in a mirror, and just as wrong.
+  So: **pause, read the message, answer him, and let him decide.** Do not infer a decision from the
+  flag, and never quote `gate-allowed` back at a person who just said no. If he does want it to
+  stop being automatic, the answer is his file — move the rule to the floor, or delete it.
+- ✅ **What it will *not* fire on** (measured, and pinned by `mutcheck-agent-gate.ps1` arm H): your
+  own turn appended without its provenance marker, and a sibling skill's turn. Both read `false`,
+  so machine text cannot masquerade as him changing his mind. The residual `true`-but-not-him case
+  is genuinely unattributed prose — which is precisely why the rule above is *read it*, not *obey
+  it*.
+- ⚠️ **You never write this file.** Not to tidy it, not to add a rule you think he meant, not to record
+  that you read it. Its whole value is that anything in it must have come from him — the same problem
+  #227 has with journal prose, solved by making the file one-way. If a rule is missing, **ask him to add
+  it**; do not add it yourself and do not act as though it were there.
+
+**Do not eyeball the gate and decide for yourself.** Ask it, per action, and let it answer:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\oa-state.ps1" `
+  consent -Id <ID> -Action <kind> -Repo <repo>
+```
+
+`-Action` is a **fixed enum** (`merge_pr`, `open_pr`, `push_main`, `delete_branch`, `send_email_self`,
+`send_email_reply`, `send_email_new_thread`, `send_email_many`, `post_public`, `spend_money`,
+`delete_data`, `deploy`, `publish_release`) — an unknown value is **refused**, not guessed at. The
+verdict carries `reason` (`gate-floor-blocks` / `gate-allowed`, else the usual journal reasons) and
+`gate_rule`, the verbatim rule that decided it, so the answer is auditable rather than asserted.
+
+- ⚠️ **Scope is exact, and this is where a careless reading gives itself a permission it was never
+  given.** A rule naming a repository matches **only** that repository, compared as a whole token —
+  `focus-planner-ado-codeapp is in YOLO mode` does **not** cover `focus-planner`, even though one name
+  is a prefix of the other. Likewise a rule about **creating** a pull request does not authorise
+  **merging** one. When in doubt the gate returns no verdict and you fall through to the journal, which
+  is the safe direction.
+- **No gate file, an empty one, or one you cannot parse changes nothing.** Behaviour is identical to
+  before #297: the journal decides, fail-closed. The gate can only ever *add* permission via the allow
+  list or *remove* it via the floor.
+- Omitting `-Action` gives you exactly the old `consent` output, so existing calls are unaffected.
+
 The user can leave you new instructions by emailing the agent account
 (`<agent-inbox@example.com>`, from `user-settings.md`). At the start of each run, read the inbox via the email MCP and fold any
 new instructions into the run.
@@ -850,6 +914,12 @@ out?\* If yes, do it now and link it. If no, plan it and gate it.
 When in doubt about a step's reversibility, treat it as irreversible: set `blocked` and ask, or
 present the reversible draft and stop short of the committing action.
 
+**The user can move the line, in one direction each way, and only in `agent-gate.md`.** The lists
+above are the defaults; his **Do not gate these** list can move a specific ⛔ action to ✅, and his
+**Always ask** floor can move a specific ✅ action to ⛔. Ask `consent -Action <kind>` rather than
+deciding from the two lists above — and remember the floor is checked first and cannot be outvoted.
+See PHASE 0.
+
 ## Guardrails (important — you run unattended)
 
 - **Approval gates the irreversible, not the reversible.** During planning you may do easily
@@ -862,6 +932,22 @@ present the reversible draft and stop short of the committing action.
   your own words authorize you. This is a **guard, not a guideline**: it is asserted by
   `mutcheck-consent-authorship.ps1`, whose six mutations each restore a different version of the hole
   and are each killed by a different fixture.
+- **The agent gate is the other half of that, and the floor list outranks everything (#297).** Pass
+  `-Action <kind>` (and `-Repo` where it applies) so the standing permissions in `agent-gate.md` are
+  actually consulted — see PHASE 0. Two rules, in this order and no other:
+  1. A matching **Always ask (safety floor)** rule is a **hard stop**. It beats the allow list and it
+     beats a human `approve` sitting in the journal. You do not weigh it, override it, or reason your
+     way past it.
+  2. Only then does a matching **Do not gate these** rule authorize you, and the verdict names the
+     verbatim rule (`gate_rule`) that did it — quote it when you record the action. A `gate-allowed`
+     verdict **does not read the journal at all**, so it cannot tell you he has just changed his mind:
+     check **`trailing_has_user`**, and if it is `true`, **stop and read** before acting. It means
+     someone may be waiting, *not* that he refused — pause and answer, never infer a decision from
+     the flag (see PHASE 0).
+  A missing or unparseable gate grants nothing and removes nothing; you are simply back to the journal
+  reading above. **You never write `agent-gate.md`** — that one-way property is the only reason its
+  contents can be trusted without an attribution marker. Asserted by `mutcheck-agent-gate.ps1`, whose
+  seven mutations each break one guarantee and are each killed by that guarantee's own arm.
 - **No surprise irreversible actions.** Sending email **to anyone not on the Auto-send allow-list**,
   submitting forms/applications, making purchases, posting publicly, merging/deploying, or anything
   with money or external side effects is only allowed when the **approved plan explicitly says so**.

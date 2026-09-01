@@ -32,6 +32,14 @@
   consent -Id <id>              Print the CONSENT verdict for one task's journal as it stands
                                 now: has the HUMAN provably authorized something? Fail-CLOSED
                                 (see .CONSENT below). Ask this before any irreversible action.
+          [-Action <kind>]      Also consult the AGENT GATE (see .GATE below) for this action
+                                kind, from a FIXED enum. Omit it and the output is unchanged.
+          [-Repo <name>]        The repository the action targets, so a repo-scoped gate rule
+                                can be matched exactly. A repo-scoped rule NEVER matches when
+                                this is omitted.
+  gate                          Print the parsed agent gate as JSON:
+                                { path, exists, state, version, allow[], ask[], mtime }.
+                                Rule text is preserved VERBATIM so a verdict can be audited.
   mark   -Id <id> [-Status s] [-Version n] [-PlanId p]
                                 Record that the agent has processed the journal as it now
                                 stands (re-snapshots processed_file_hash + updates fields).
@@ -102,6 +110,60 @@
   consent on an identity the agent cannot forge (e.g. the Telegram `from_user` id captured at
   fold time) is the follow-up; this makes the reader stop treating absence as permission.
 
+.GATE (#297 -- the standing permission channel the user owns)
+  `consent` above answers "did the human approve THIS TASK?" from the journal. That is the only
+  consent channel the agent had, and it has a structural ceiling: the journal is a surface the
+  AGENT WRITES, so every permission has to be re-granted, per task, in a file the agent itself
+  edits. A standing instruction ("this repo is YOLO, stop asking") has nowhere to live.
+
+  `agent-gate.md` is that second channel. It sits in the planner folder next to planner.md, the
+  Planner web app seeds and edits it, and THIS AGENT ONLY EVER READS IT -- never writes it. That
+  one-way property is the whole point: text in it needs no attribution marker to be trusted,
+  because the agent could not have put it there. It holds two lists:
+
+    ## Do not gate these (reversible)   -> ALLOW  : the agent may act without asking
+    ## Always ask (safety floor)        -> FLOOR  : the agent always stops and asks
+
+  ORDER IS LOAD-BEARING, and it is the one thing that must not be got backwards:
+
+    1. FLOOR first. A matching floor rule denies, `reason: gate-floor-blocks`, and it OVERRIDES
+       everything below it -- including an allow rule AND a human `approve` in the journal. The
+       floor is the user saying "not even if I said yes in a hurry".
+    2. ALLOW next. A matching allow rule returns `consent_ok: true`, `reason: gate-allowed`.
+    3. Otherwise fall through to the journal reading above, completely unchanged.
+
+  MATCHING IS DETERMINISTIC, NOT INTERPRETIVE. `-Action` is a fixed enum (see the param block);
+  a rule maps to action kinds through the explicit keyword table in $script:GateActionKinds, and
+  the verdict reports the VERBATIM rule that decided it (`gate_rule`) so a human can audit it.
+  There is no fuzzy matching and no model in the loop.
+
+  TWO ASYMMETRIES, both deliberately biased fail-CLOSED:
+
+    * REPO SCOPE applies to ALLOW rules only. A rule naming a repository matches only that
+      repository, and never matches at all when `-Repo` is omitted. It is NOT applied to floor
+      rules: narrowing the floor would REMOVE protection, and 'Send-to-many' must keep blocking
+      everywhere. Being over-eager about "this looks repo-scoped" therefore only ever grants
+      LESS.
+    * BLANKET GRANTS ('yolo', 'dont ask just do', 'no need to ask') apply to ALLOW rules only,
+      because that is grant-shaped language. They cover every action kind -- and the floor still
+      wins over them.
+
+  ABSENT / UNREADABLE / EMPTY / MALFORMED GATE == TODAY'S BEHAVIOUR, EXACTLY. Both lists come
+  back empty, no rule can match, and the journal reader decides as it always did. The gate may
+  only ever ADD permission via the allow list or REMOVE it via the floor; it can never weaken
+  the fail-closed default. Asserted by mutcheck-agent-gate.ps1.
+
+  A WORKED EXAMPLE, because this is exactly where a careless reading grants what was never
+  given. The live gate allows `focus-planner-ado-codeapp is in YOLO mode, dont ask just do` and
+  `Creating and publishing a pull request in any repository ... do not gate it`. Neither
+  authorises MERGING a pull request in `focus-planner`: the first names a DIFFERENT repo, and
+  the second covers CREATING a PR, not merging one. So:
+
+    consent -Id 463 -Action merge_pr -Repo focus-planner                -> falls through (no rule)
+    consent -Id 463 -Action open_pr                                     -> gate-allowed
+    consent -Id 463 -Action merge_pr -Repo focus-planner-ado-codeapp    -> gate-allowed (blanket)
+    consent -Id 463 -Action send_email_many                             -> gate-floor-blocks
+
 .SNOOZE PRECEDENCE
   Snooze is the user's explicit "not until <date>", so it outranks both timers: a snoozed task
   reports `due_poll: false` and `due_recheck: false` regardless of how overdue the timer is. The
@@ -113,6 +175,9 @@
   pwsh oa-state.ps1 scan
   pwsh oa-state.ps1 get  -Id 293
   pwsh oa-state.ps1 consent -Id 276                    # may I take the irreversible step on #276?
+  pwsh oa-state.ps1 gate                               # what standing permissions has the user granted?
+  pwsh oa-state.ps1 consent -Id 463 -Action merge_pr -Repo focus-planner
+  pwsh oa-state.ps1 consent -Id 463 -Action send_email_many
   pwsh oa-state.ps1 mark -Id 305 -Status proposed -Version 1 -PlanId t305-v1
   pwsh oa-state.ps1 mark -Id 400 -Poll daily          # arm a daily poll on #400
   pwsh oa-state.ps1 mark -Id 400 -PollDone            # after running it this run
@@ -125,7 +190,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent')]
+  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate')]
   [string]$Command = 'scan',
 
   [string]$Id,
@@ -133,6 +198,20 @@ param(
   [int]$Version,
   [string]$PlanId,
   [switch]$Force,
+
+  # The agent gate (#297). `-Action` is a CLOSED ENUM on purpose: free text would put the
+  # matcher's input under the control of whatever prose the agent happened to generate, which is
+  # the same self-authored-permission hole #227 closed one level down. A caller that cannot name
+  # its action in this vocabulary does not get a gate verdict and falls through to the journal
+  # reader -- which is the safe direction. Adding a kind is a deliberate, reviewable edit here.
+  [ValidateSet(
+    'merge_pr', 'open_pr', 'push_main', 'delete_branch',
+    'send_email_self', 'send_email_reply', 'send_email_new_thread', 'send_email_many',
+    'post_public', 'spend_money', 'delete_data', 'deploy', 'publish_release')]
+  [string]$Action,
+  # The repository the action targets, so a repo-scoped ALLOW rule can be matched exactly.
+  # Accepts `name` or `owner/name`. Omitting it makes every repo-scoped rule non-matching.
+  [string]$Repo,
 
   # Polling (time-triggered worklist). See .POLLING in the header.
   [string]$Poll,
@@ -155,6 +234,10 @@ param(
   # Structured snooze store, written by the Planner web app and read-only here (#391).
   # Preferred over the in-markdown markers above; see Get-SnoozeMap.
   [string]$SnoozeStore = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\snooze.json",
+  # The agent gate (#297): the user's standing permissions. Seeded and edited by the Planner web
+  # app, READ-ONLY here -- nothing in this script ever writes it, which is what makes its contents
+  # trustworthy without an attribution marker. Sits next to planner.md by default.
+  [string]$GatePath = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\agent-gate.md",
   # How long a Today row stays "served" after the agent last wrote a turn to it, in minutes.
   # A served Today row no longer holds the Today->Deferred gate shut. See Test-HoldsTodayGate.
   # Default is deliberately LONGER than the ~30 min scheduled run interval, so a standing Today
@@ -199,6 +282,336 @@ $script:LegacyStateRe = '(?m)^[ \t]*<!--[ \t]*oa-state'
 # inside `redo it`. Phrase precision is deliberately NOT the subject of #227 -- authorship is
 # -- so this list mirrors SKILL.md rather than trying to improve on it.
 $script:ConsentAffirmRe = '(?i)(?<![\w-])(approved?|approve it|yes|yep|yeah|go ahead|go for it|go|lgtm|ship it|do it|vibe it|send it|make it so|proceed)(?![\w-])'
+
+# --- The agent gate (#297) --------------------------------------------------------------
+# Everything below reads `agent-gate.md`. NOTHING below writes it, and nothing anywhere in this
+# script does either. That is not an implementation detail -- it is the property that makes the
+# file a trustworthy consent channel (see .GATE in the header), so any future edit that adds a
+# write here destroys the guarantee rather than extending the feature.
+
+# --- structure: kept in lockstep with src/config/agentGate.js -----------------------------
+# The web app is the WRITER of this file and this is the READER, so the two must agree on
+# structure or the user edits a list the agent cannot see. These four constants are the
+# PowerShell mirror of SECTION_MATCHERS / HEADING_RE / BULLET_RE over there; the section keys
+# are renamed (reversible -> allow, alwaysAsk -> ask) to match the vocabulary of the verdict.
+$script:GateHeadingRe = '^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$'
+$script:GateBulletRe = '^\s*[-*+]\s+(.*)$'
+$script:GateVersionRe = '(?i)<!--\s*planner-agent-gate\s+v(\d+)'
+$script:GateSectionMatchers = @(
+  @{ Key = 'allow'; Phrases = @('do not gate', "don't gate", 'reversible') },
+  @{ Key = 'ask'; Phrases = @('always ask', 'safety floor') }
+)
+
+# --- action vocabulary --------------------------------------------------------------------
+# Kind -> an array of regex GROUPS. A rule covers the kind when it matches EVERY group (an AND
+# of ORs). Two groups is the usual shape: a verb and the thing the verb acts on, which is what
+# keeps the kinds apart from each other.
+#
+# THE DISCRIMINATION THIS TABLE EXISTS FOR. #297 is explicit that a rule about CREATING a pull
+# request must never authorise MERGING one -- the live gate has exactly such a rule, and reading
+# it as a merge grant would hand out a permission the user never gave. That falls out of the
+# table rather than out of a special case: `merge_pr` requires a merge verb, `open_pr` requires
+# a create verb AND a pull-request noun, and no create verb implies a merge verb.
+#
+# The verb/object split also keeps near-neighbours separate, and the near misses are the point:
+#   * `publish_release` needs a RELEASE noun, so "publishing a pull request" is not a release.
+#   * `post_public` needs `\bpublic(ly)?\b`, which does NOT fire inside "publishing" (there is
+#     no word boundary after "public" in "publishing").
+#   * `send_email_many` needs a many-audience word, so a 1-1 reply rule never blocks itself.
+# Matching is case-insensitive (PowerShell `-match` default) and word-bounded throughout.
+$script:GateActionKinds = [ordered]@{
+  merge_pr              = @('\bmerg(?:e|es|ed|ing)\b|\bauto-?merges?\b|\bland(?:s|ed|ing)? (?:the |a |it )?(?:pr|pull request)\b')
+  open_pr               = @(
+    '\b(?:creat(?:e|es|ed|ing)|open(?:s|ed|ing)?|publish(?:es|ed|ing)?|rais(?:e|es|ed|ing)|draft(?:s|ed|ing)?|submit(?:s|ted|ting)?|fil(?:e|es|ed|ing))\b',
+    '\bpull[- ]requests?\b|\bprs?\b'
+  )
+  push_main             = @(
+    '\bpush(?:es|ed|ing)?\b|\bforce-?push(?:es|ed|ing)?\b',
+    '\bmain\b|\bmaster\b|\btrunk\b|\bdefault branch\b'
+  )
+  delete_branch         = @(
+    '\bdelet(?:e|es|ed|ing)\b|\bremov(?:e|es|ed|ing)\b|\bprun(?:e|es|ed|ing)\b',
+    '\bbranch(?:es)?\b'
+  )
+  send_email_self       = @(
+    '\bemail(?:s|ing|ed)?\b|\be-mail(?:s|ing|ed)?\b|\bsend(?:s|ing)?\b|\bsent\b|\bmail(?:s|ing|ed)?\b',
+    '\bmyself\b|\bmy own\b|\bto me\b|\bself\b'
+  )
+  send_email_reply      = @(
+    '\brepl(?:y|ies|ied|ying)\b|\brespond(?:s|ed|ing)?\b|\bresponses?\b|\banswer(?:s|ed|ing)?\b',
+    '\bemail(?:s|ing|ed)?\b|\be-mail(?:s|ing|ed)?\b|\bchat\b|\bmessages?\b|\bdms?\b|\binteractions?\b|\bthreads?\b|\bconversations?\b'
+  )
+  send_email_new_thread = @(
+    '\bstart(?:s|ed|ing)?\b|\binitiat(?:e|es|ed|ing)\b|\bfresh\b|\bcold\b|\bnew\b|\breach(?:es|ed|ing)? out\b',
+    '\bconversations?\b|\bthreads?\b|\bemail(?:s|ing|ed)?\b|\be-mail(?:s|ing|ed)?\b|\bchat\b|\bmessages?\b|\boutreach\b'
+  )
+  send_email_many       = @(
+    '\bsend-to-many\b|\bgroups?\b|\bchannels?\b|\bmanager\b|\bmass\b|\bbroadcast\b|\bdistribution list\b|\beveryone\b|\ball-hands\b|\bmany\b|\bbulk\b',
+    '\bemail(?:s|ing|ed)?\b|\be-mail(?:s|ing|ed)?\b|\bmessages?\b|\bchat\b|\bchannels?\b|\bgroups?\b|\bsend(?:s|ing)?\b|\bsent\b|\bpost(?:s|ed|ing)?\b'
+  )
+  post_public           = @(
+    '\bpost(?:s|ed|ing)?\b|\bpublish(?:es|ed|ing)?\b|\btweet(?:s|ed|ing)?\b|\bshar(?:e|es|ed|ing)\b|\bannounc(?:e|es|ed|ing)\b',
+    '\bpublic(?:ly)?\b|\bsocial\b|\btwitter\b|\blinkedin\b|\binstagram\b|\bblog\b|\bwebsite\b|\bfeed\b'
+  )
+  spend_money           = @(
+    '\bspend(?:s|ing)?\b|\bspent\b|\bpurchas(?:e|es|ed|ing)\b|\bbuy(?:s|ing)?\b|\bbought\b|\bpay(?:s|ing)?\b|\bpaid\b|\bsubscrib(?:e|es|ed|ing)\b',
+    '\bmoney\b|\bpurchases?\b|\bpayments?\b|\bcards?\b|\bdollars?\b|\bcosts?\b|\bcharges?\b|\bsubscriptions?\b|\borders?\b|\$'
+  )
+  delete_data           = @(
+    '\bdelet(?:e|es|ed|ing)\b|\bdrop(?:s|ped|ping)?\b|\bdestroy(?:s|ed|ing)?\b|\bwip(?:e|es|ed|ing)\b|\bpurg(?:e|es|ed|ing)\b',
+    '\bdata\b|\bdatabases?\b|\bdbs?\b|\bfiles?\b|\brecords?\b|\btables?\b|\brows?\b|\bfolders?\b'
+  )
+  deploy                = @('\bdeploy(?:s|ed|ing|ment|ments)?\b|\brollouts?\b|\broll out\b|\bship(?:s|ped|ping)? to prod(?:uction)?\b')
+  publish_release       = @(
+    '\bpublish(?:es|ed|ing)?\b|\breleas(?:e|es|ed|ing)\b|\bcut(?:s|ting)?\b|\btag(?:s|ged|ging)?\b',
+    '\breleases?\b|\bversions?\b|\bpackages?\b|\bnpm\b|\btags?\b|\bchangelog\b'
+  )
+}
+
+# --- outcome-shaped floor vocabulary --------------------------------------------------------
+# Kind -> a regex of OUTCOME words. Applied to FLOOR (ask) rules ONLY. This is the mirror image
+# of the blanket-grant asymmetry below, pointing the other way.
+#
+# WHY THE TABLE ABOVE IS NOT ENOUGH. It is VERB+OBJECT shaped, because that is how a PERMISSION
+# is written -- "Emailing myself", "Creating and publishing a pull request". A PROHIBITION is not
+# written that way. Asked to name what he wants stopped, a human names the OUTCOME he is afraid
+# of, not the verb that gets there. Shiv's live floor rule is:
+#
+#     Outcome can result in permanent data loss
+#
+# which carries the OBJECT (`data`) and no verb `delete_data` knows, so the rule matched nothing
+# and the blanket YOLO grant in the allow list won by default. Measured on the live gate before
+# this fix, with everything else in this file working exactly as designed:
+#
+#     consent -Action delete_data -Repo focus-planner  ->  consent_ok: true (gate-allowed)
+#
+# The one rule standing between the agent and permanent data loss was inert, and nothing said so.
+# It is the #304 vocabulary wall on the floor side, where the direction of error is dangerous
+# rather than merely annoying.
+#
+# THE DIRECTION OF ERROR IS THE DESIGN, again. A floor rule that matches too eagerly costs one
+# unnecessary question; a floor rule that matches too little costs the data. So this vocabulary
+# is deliberately generous, and it is confined to the ask list -- where generous is the safe
+# direction -- by a per-stage flag rather than by where the lookup happens to sit.
+#
+# It stays anchored to the kind's OBJECT group, so a floor rule about some other permanent thing
+# cannot be dragged into `delete_data` by the word "permanent" alone.
+$script:GateOutcomeKinds = @{
+  delete_data = '\bdata ?loss\b|\blos(?:e|es|ing)\b|\blost\b|\bloss\b|\bunrecoverable\b|\birrecoverable\b|\birreversible\b|\bpermanent(?:ly)?\b|\bcannot be undone\b|\bcan(?:no|'')?t be undone\b|\bcannot be recovered\b|\bcan(?:no|'')?t be recovered\b|\bno backup\b|\bdestructive\b'
+  spend_money = '\bcosts?\b|\bexpensive\b|\bbilled?\b|\bbilling\b|\bcharged?\b|\bnon-?refundable\b|\bout of pocket\b'
+}
+
+# --- blanket grants -------------------------------------------------------------------------
+# A rule that says "stop asking me" rather than naming an action. Applied to ALLOW rules ONLY,
+# because this is grant-shaped language: a floor rule is a prohibition and never phrases itself
+# this way, and letting a blanket phrase widen the floor would turn one careless sentence into a
+# total shutdown. The floor still outranks a blanket grant, because the floor is checked first.
+#
+# Deliberately NOT in this list: 'anything', 'everything', and 'do not gate'. The live gate's
+# fourth rule ends "do not gate it" while covering only PR CREATION -- reading that as a blanket
+# grant is precisely the #297 trap, so the vocabulary is limited to phrases that unambiguously
+# mean "I am switching the gate off", not "this particular thing is fine".
+$script:GateBlanketRe = '(?i)\byolo\b|\bdo ?n[o'']?t ask\b|\bno need to ask\b|\bnever ask\b|\bwithout asking\b|\bjust do\b|\bstop asking\b'
+
+# --- repo scoping ---------------------------------------------------------------------------
+# A repo token is a hyphenated identifier, optionally `owner/name`. English hyphenations that
+# turn up in safety prose are excluded so they do not silently neuter a rule.
+#
+# THE DIRECTION OF ERROR IS THE DESIGN. Repo scope only ever NARROWS an allow rule, and it is
+# applied to allow rules only. So a token wrongly read as a repo name grants LESS (fail closed);
+# a repo name wrongly read as English grants MORE, which is why the stop list is short, holds
+# only unmistakable English, and must not be grown casually.
+#
+# Substring matching is banned outright here, and this is the live trap: `focus-planner` is a
+# PREFIX of `focus-planner-ado-codeapp`, so `rule.Contains($repo)` reports that the YOLO rule for
+# the ADO app authorises merges in the planner repo -- the exact false grant #297 was filed over.
+# Comparison is therefore whole-token equality, case-insensitive.
+$script:GateRepoTokenRe = '(?:[A-Za-z0-9_.]+/)?[A-Za-z0-9_.]+(?:-[A-Za-z0-9_.]+)+'
+$script:GateRepoStopWords = @(
+  'e-mail', 'e-mails', 'follow-up', 'follow-ups', 'read-only', 'sign-in', 'sign-off',
+  'check-in', 'one-off', 'day-to-day', 'up-to-date', 'so-called', 'pull-request',
+  'pull-requests', 'send-to-many', 'all-hands', 'long-running', 'non-trivial',
+  'end-to-end', 'write-up', 'back-and-forth', 'out-of-office', 'opt-in', 'opt-out',
+  'double-check', 'third-party', 'first-party', 'real-time', 'on-call', 'ad-hoc',
+  'force-push', 'auto-merge', 'case-by-case', 'one-to-one', 'well-known', 'up-front'
+)
+
+function Get-GateSectionKey([string]$headingText) {
+  $t = "$headingText".ToLowerInvariant()
+  foreach ($m in $script:GateSectionMatchers) {
+    foreach ($p in $m.Phrases) { if ($t.Contains($p)) { return $m.Key } }
+  }
+  return $null
+}
+
+function Parse-AgentGateText([string]$md) {
+  # Mirrors parseAgentGate() in src/config/agentGate.js: a section runs from its heading to the
+  # next heading of the same-or-shallower depth, the FIRST heading naming a list wins, and only
+  # bullet lines inside it are rules. Tolerant by construction -- CRLF, `*`/`+` bullets, prose
+  # mixed among the bullets, and a file with only one of the two sections all parse without
+  # throwing, because a gate that throws is a gate that stops the run.
+  $normalised = ("$md" -replace "`r`n", "`n") -replace "`r", "`n"
+  $lines = $normalised -split "`n"
+  $out = [ordered]@{ Version = $null; Allow = @(); Ask = @() }
+
+  $v = [regex]::Match($normalised, $script:GateVersionRe)
+  if ($v.Success) { $out.Version = [int]$v.Groups[1].Value }
+
+  $seen = @{}
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    $h = [regex]::Match($lines[$i], $script:GateHeadingRe)
+    if (-not $h.Success) { continue }
+    $key = Get-GateSectionKey $h.Groups[2].Value
+    if (-not $key) { continue }
+    if ($seen.ContainsKey($key)) { continue }
+    $seen[$key] = $true
+    $depth = $h.Groups[1].Value.Length
+    $end = $lines.Count
+    for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+      $n = [regex]::Match($lines[$j], $script:GateHeadingRe)
+      if ($n.Success -and $n.Groups[1].Value.Length -le $depth) { $end = $j; break }
+    }
+    $items = @()
+    for ($j = $i + 1; $j -lt $end; $j++) {
+      $b = [regex]::Match($lines[$j], $script:GateBulletRe)
+      if (-not $b.Success) { continue }
+      $text = $b.Groups[1].Value.Trim()
+      if ($text) { $items += $text }
+    }
+    if ($key -eq 'allow') { $out.Allow = @($items) } else { $out.Ask = @($items) }
+  }
+  return [pscustomobject]$out
+}
+
+function Read-AgentGate([string]$path) {
+  # READ ONLY. A missing, unreadable, blank or unparseable file yields two EMPTY lists, which is
+  # the same thing as "no rule matched" -- so every one of those states degrades to exactly the
+  # pre-#297 behaviour rather than to a special case that could drift away from it. `state` is
+  # reported so a run can tell "the user granted nothing" from "I could not read the grants".
+  $result = [ordered]@{
+    path = "$path"; exists = $false; state = 'absent'
+    version = $null; allow = @(); ask = @(); mtime = $null
+  }
+  if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    return [pscustomobject]$result
+  }
+  $result.exists = $true
+  $text = $null
+  try {
+    # Same explicit UTF-8 decode as the journals, and for the same reason: the default decoder
+    # is host-dependent, so a rule containing an em-dash or a smart quote would match under one
+    # host and not the other. See Read-JournalText.
+    $text = [IO.File]::ReadAllText($path, (New-Object Text.UTF8Encoding($false)))
+    $result.mtime = (Get-Item -LiteralPath $path).LastWriteTimeUtc.ToString('o')
+  }
+  catch {
+    $result.state = 'unreadable'
+    return [pscustomobject]$result
+  }
+  if ([string]::IsNullOrWhiteSpace($text)) { $result.state = 'empty'; return [pscustomobject]$result }
+  $parsed = Parse-AgentGateText $text
+  $result.version = $parsed.Version
+  $result.allow = @($parsed.Allow)
+  $result.ask = @($parsed.Ask)
+  $result.state = if ($result.allow.Count -eq 0 -and $result.ask.Count -eq 0) { 'malformed' } else { 'ok' }
+  return [pscustomobject]$result
+}
+
+function Get-GateRepoTokens([string]$rule) {
+  $out = @()
+  foreach ($m in [regex]::Matches("$rule", $script:GateRepoTokenRe)) {
+    $t = $m.Value.ToLowerInvariant().TrimEnd('.', ',', ')', '-')
+    $bare = ($t -split '/')[-1]
+    if ($bare.Length -lt 6) { continue }              # too short to be a repo name
+    if ($bare -notmatch '[a-z]') { continue }         # digits only, e.g. `1-1`
+    if ($script:GateRepoStopWords -contains $bare) { continue }
+    if ($out -notcontains $bare) { $out += $bare }
+  }
+  # NOT `return , $out`. The comma operator wraps the list in an outer array, the pipeline
+  # unrolls exactly one level, and an EMPTY list therefore arrives at the caller as a single
+  # empty-array element -- `@(...).Count -eq 1`. That reads as "this rule is repo-scoped" for
+  # every rule in the file, so nothing but a blanket grant can ever match. Caught by the
+  # 'Emailing myself' fixture. Plain `return` lets the caller's `@(...)` normalise correctly.
+  return $out
+}
+
+function Test-GateRuleCovers([string]$rule, [string]$action, [bool]$applyRepoScope, [string]$repo, [bool]$allowOutcomePhrasing) {
+  if ([string]::IsNullOrWhiteSpace($rule)) { return $false }
+  if ([string]::IsNullOrWhiteSpace($action)) { return $false }
+  $text = "$rule"
+
+  if ($applyRepoScope) {
+    $tokens = @(Get-GateRepoTokens $text)
+    if ($tokens.Count -gt 0) {
+      # A repo-scoped rule with no -Repo to check against cannot be shown to apply, so it does
+      # not. This is the fail-closed half of scoping and it is what stops a bare
+      # `consent -Action merge_pr` from collecting another repo's YOLO grant.
+      if ([string]::IsNullOrWhiteSpace($repo)) { return $false }
+      $want = "$repo".Trim().ToLowerInvariant()
+      $wantBare = ($want -split '/')[-1]
+      $hit = $false
+      foreach ($t in $tokens) { if ($t -eq $want -or $t -eq $wantBare) { $hit = $true; break } }
+      if (-not $hit) { return $false }
+    }
+    if ($text -match $script:GateBlanketRe) { return $true }
+  }
+
+  $groups = $script:GateActionKinds[$action]
+  if (-not $groups) { return $false }
+  $allGroups = $true
+  foreach ($g in $groups) { if ($text -notmatch $g) { $allGroups = $false; break } }
+  if ($allGroups) { return $true }
+
+  # Outcome-shaped phrasing -- FLOOR ONLY, and gated on the caller's per-stage flag rather than
+  # on anything about the rule text, so an allow rule can never reach it however it is worded.
+  # See the .GATE header note on $script:GateOutcomeKinds: a prohibition names the outcome, not
+  # the verb, and "permanent data loss" is the live proof.
+  if ($allowOutcomePhrasing) {
+    $outcome = $script:GateOutcomeKinds[$action]
+    if ($outcome -and $text -match $outcome) {
+      # Still anchored to the kind's OBJECT group (the last one), so "permanent" on its own
+      # cannot drag an unrelated prohibition into this action kind. Single-group kinds have no
+      # object to anchor to, so the outcome word alone carries them.
+      if ($groups.Count -lt 2 -or $text -match $groups[-1]) { return $true }
+    }
+  }
+  return $false
+}
+
+function Get-GateVerdict($gate, [string]$action, [string]$repo) {
+  # ORDER IS THE GUARANTEE, so it is written down as DATA rather than as the order two `foreach`
+  # blocks happen to appear in. The floor stage is first and the first stage to match returns, so
+  # a floor rule outranks an allow rule AND -- because the caller consults this before reading the
+  # journal -- outranks a human `approve` too. Reversing these two entries silently converts the
+  # safety floor into a suggestion, which is the worst available bug in this file;
+  # mutcheck-agent-gate.ps1 asserts it with a mutation that reverses exactly this list.
+  #
+  # `Scoped` is per stage and is $false for the floor on purpose: repo scope NARROWS a rule, and
+  # narrowing a prohibition removes protection. `Outcome` is the mirror: it is $true for the floor
+  # only, because a prohibition names the OUTCOME it fears rather than a verb, and matching too
+  # eagerly on the floor costs a question while matching too little costs the data. Both live here
+  # as stage DATA so each asymmetry has one precise mutation target.
+  $stages = @(
+    [pscustomobject]@{ Decision = 'floor'; List = 'ask'; Rules = @($gate.ask); Scoped = $false; Outcome = $true },
+    [pscustomobject]@{ Decision = 'allow'; List = 'allow'; Rules = @($gate.allow); Scoped = $true; Outcome = $false }
+  )
+
+  $verdict = [ordered]@{ decision = 'none'; list = $null; rule = $null }
+  if ([string]::IsNullOrWhiteSpace($action)) { return [pscustomobject]$verdict }
+
+  foreach ($stage in $stages) {
+    foreach ($rule in @($stage.Rules)) {
+      if (Test-GateRuleCovers $rule $action ([bool]$stage.Scoped) $repo ([bool]$stage.Outcome)) {
+        $verdict.decision = $stage.Decision
+        $verdict.list = $stage.List
+        $verdict.rule = $rule
+        return [pscustomobject]$verdict
+      }
+    }
+  }
+  return [pscustomobject]$verdict
+}
+
 
 # --- The turn terminator ---------------------------------------------------------------
 # An HTML comment (invisible when the journal renders) that marks the exact END of this
@@ -1230,6 +1643,21 @@ function Cmd-Get {
   $st | ConvertTo-Json -Depth 6
 }
 
+function Cmd-Gate {
+  # The gate as this script actually reads it — so a human can diff what they wrote against what
+  # the agent parsed, rather than trusting that the two agree. Rule text is verbatim.
+  $g = Read-AgentGate $GatePath
+  [pscustomobject]@{
+    path    = "$($g.path)"
+    exists  = [bool]$g.exists
+    state   = "$($g.state)"
+    version = $g.version
+    allow   = @($g.allow)
+    ask     = @($g.ask)
+    mtime   = $g.mtime
+  } | ConvertTo-Json -Depth 4
+}
+
 function Cmd-Consent {
   # #227: the consent channel, read fail-CLOSED. Ask this BEFORE any irreversible action.
   #
@@ -1237,17 +1665,92 @@ function Cmd-Consent {
   # journal as it stands RIGHT NOW, not of the stored state. Reading it from state would let a
   # stale `status: approved` -- which the agent itself wrote -- stand in for the user's word,
   # which is the same self-authored-consent hole one level up.
+  #
+  # #297 adds the SECOND channel in front of it: the agent gate. It is consulted ONLY when the
+  # caller names an `-Action`, and when it does not decide, control falls through to the journal
+  # reader below completely untouched. With `-Action` omitted this function does not even open
+  # the gate file, so the pre-#297 output is preserved byte for byte.
   if (-not $Id) { throw 'consent requires -Id' }
   $path = Join-Path $JournalDir "task-$Id.md"
+
+  $gate = $null
+  $verdict = $null
+  if ($Action) {
+    $gate = Read-AgentGate $GatePath
+    $verdict = Get-GateVerdict $gate $Action $Repo
+    if ($verdict.decision -ne 'none') {
+      # A gate decision short-circuits the journal read, in BOTH directions and on purpose:
+      #   floor -> deny, and it must outrank a human `approve` sitting in the journal;
+      #   allow -> a STANDING permission, which by definition does not need re-granting per task
+      #            (that is the whole reason the file exists).
+      #
+      # THE ALLOW DIRECTION HAS A CONSEQUENCE WORTH STATING, because it is surprising and it is
+      # NOT a bug. Measured: with an allow rule covering merges in a repo, a journal carrying the
+      # human's own `<!-- from: me -->` "do not merge that, hold off" still returns
+      # `consent_ok: true, reason: gate-allowed` -- the journal is never opened. That is correct:
+      # a standing permission any stray sentence could cancel would not be standing, and the
+      # revocation channel is the file the user owns (move the rule to the floor, or delete it),
+      # which is verified -- adding 'Merging any pull request' to the floor flips the same fixture
+      # to `gate-floor-blocks`.
+      #
+      # What it means for the CALLER is that this command answers "am I authorised?", never
+      # "should I?". SKILL.md carries that distinction: a fresh human "don't" in the journal stops
+      # the run regardless of what this returns. Do not widen this function to also read refusals
+      # -- a refusal vocabulary is the #301 problem (which affirmatives count), and it belongs in
+      # its own change with its own mutation arms, not smuggled in here.
+      # `trailing_has_user` is reported on this path too (#302), even though the verdict did not
+      # consult it and MUST NOT. Surfacing it is the whole point: without it, a caller holding a
+      # `gate-allowed` cannot tell "nobody has said anything" from "he replied 'don't' ninety
+      # seconds ago", because the journal was never opened. Filing an issue saying a wrapper
+      # should refuse, while the data the wrapper needs is absent from the output, is prose with
+      # a tracking number.
+      #
+      # It deliberately uses HasTrailingUser -- the FAIL-OPEN reader -- not the fail-closed
+      # consent reader, and the asymmetry is the same one documented at the top of this file
+      # read in the other direction. Here a false "there is a human message" costs one pause; a
+      # false "there is none" costs acting over a refusal. So unmarked prose counts.
+      #
+      # WHICH MEANS IT SAYS "SOMEONE MAY BE WAITING", NOT "HE REFUSED", and a consumer must not
+      # collapse the two. Reading it as a refusal would let stray unattributed text silently
+      # revoke a permission he actually granted -- the mirror image of the bug this file exists
+      # to prevent. Measured bounds on how wrong that can go, pinned by arm H: the agent's own
+      # unstamped turn and a sibling skill's turn both read FALSE (the managed-heading rule from
+      # #272 and the sibling-reopen fix respectively), so machine text cannot impersonate him.
+      # The residual true-but-not-him case is genuinely unattributed prose.
+      #
+      # Reporting only. Nothing in this function weighs it, and nothing should: deciding what a
+      # human MEANT by the text below the turn is the vocabulary problem in #301, and it needs
+      # its own reader with its own mutation arms rather than an `if` bolted on here.
+      $trailingHasUser = $false
+      if (Test-Path $path) { $trailingHasUser = [bool](Get-JournalFacts $path).HasTrailingUser }
+      [pscustomobject]@{
+        id                = $Id
+        consent_ok        = ($verdict.decision -eq 'allow')
+        reason            = $(if ($verdict.decision -eq 'floor') { 'gate-floor-blocks' } else { 'gate-allowed' })
+        action            = "$Action"
+        repo              = $(if ($Repo) { "$Repo" } else { $null })
+        gate_state        = "$($gate.state)"
+        gate_list         = "$($verdict.list)"
+        gate_rule         = "$($verdict.rule)"
+        gate_path         = "$($gate.path)"
+        trailing_has_user = $trailingHasUser
+        path              = $path
+      } | ConvertTo-Json -Depth 4
+      return
+    }
+  }
+
   if (-not (Test-Path $path)) {
-    [pscustomobject]@{
+    $out = [ordered]@{
       id = $Id; consent_ok = $false; reason = 'journal-not-found'; path = $path
-    } | ConvertTo-Json -Depth 4
+    }
+    if ($Action) { Add-GateFallthrough $out $gate }
+    [pscustomobject]$out | ConvertTo-Json -Depth 4
     return
   }
   $facts = Get-JournalFacts $path
   $c = $facts.Consent
-  [pscustomobject]@{
+  $out = [ordered]@{
     id                       = $facts.Id
     consent_ok               = [bool]$c.consent_ok
     reason                   = "$($c.reason)"
@@ -1259,7 +1762,21 @@ function Cmd-Consent {
     # visible at the call site instead of being a footnote in a comment.
     trailing_has_user        = [bool]$facts.HasTrailingUser
     path                     = $facts.Path
-  } | ConvertTo-Json -Depth 4
+  }
+  if ($Action) { Add-GateFallthrough $out $gate }
+  [pscustomobject]$out | ConvertTo-Json -Depth 4
+}
+
+function Add-GateFallthrough($out, $gate) {
+  # The gate was consulted and declined to decide. Say so explicitly rather than staying silent:
+  # `gate_rule: null` next to a real `gate_state` is the difference between "no rule covers this"
+  # and "I never looked", and only the first is a verdict a human can audit.
+  $out['action'] = "$Action"
+  $out['repo'] = $(if ($Repo) { "$Repo" } else { $null })
+  $out['gate_state'] = $(if ($gate) { "$($gate.state)" } else { 'not-consulted' })
+  $out['gate_list'] = $null
+  $out['gate_rule'] = $null
+  $out['gate_path'] = $(if ($gate) { "$($gate.path)" } else { $null })
 }
 
 function Add-TurnTerminator([string]$path) {
@@ -1432,4 +1949,5 @@ switch ($Command) {
   'mark' { Cmd-Mark }
   'resnapshot' { Cmd-Resnapshot }
   'consent' { Cmd-Consent }
+  'gate' { Cmd-Gate }
 }
