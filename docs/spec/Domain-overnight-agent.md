@@ -107,5 +107,5 @@ rather than as part of CI.
   detector built only on imagined failure cases.
 - See [Roadmap](Roadmap) for the currently-open gaps this domain has itself filed against
   its own design, including the still-forgeable consent marker (issue #250, a follow-up to
-  the now-closed predecessor issue) and the
-  supervision-cannot-detect-its-own-absence gap (issue #226).
+  the now-closed predecessor issue) and the residual in the Today gate's release signal
+  (issue #322, described in [Prioritisation](Prioritisation)).

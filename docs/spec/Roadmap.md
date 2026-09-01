@@ -5,34 +5,25 @@ priority label, so a rebuild — or a continuation of this repo — knows what i
 or known-missing rather than inheriting an undocumented gap. 38 issues are open as of the
 facts this spec was generated from.
 
-## Unlabeled bugs (2 open) — currently the most acute
+## Unlabeled bugs (1 open) — currently the most acute
 
-Filed most recently and not yet priority-labeled, but both describe the automation being
-dead in the water right now:
+Filed most recently and not yet priority-labeled, but describing the automation being dead
+in the water rather than merely degraded:
 
-- **#262 — Overnight Agent runs never finish.** `user-settings.md` has grown to 918 KB /
-  10,944 lines (~232,500 tokens), and `SKILL.md` instructs the agent to read it at the
-  start of *every* run, so every model round-trip carries the whole file. One measured run
-  burned ~11.7M input tokens over 49 round-trips (164,558–271,048 tokens each) and never
-  completed. The direction implied by the evidence is to stop treating the settings file as
-  something read whole on every turn — segment or index it instead of growing it further.
 - **#261 — A stuck "running" run freezes the `*/30` schedule.** There is no run-level
-  timeout or heartbeat: once a run hangs (as in #262), it never leaves `running`, so the
+  timeout or heartbeat: once a run hangs, it never leaves `running`, so the
   scheduler's `nextRunAt` passes and the next run never fires — silently disabling the
   entire every-30-minutes automation with no alert. This is the run-lifecycle analogue of
-  the browser-slot watchdog gaps below (#197 / #226), but for the workflow run itself.
+  the browser-slot watchdog gaps below (#197), but for the workflow run itself. The
+  Overnight Agent's own staleness backstop (see [Prioritisation](Prioritisation)) mitigates
+  the consequence for the task board without addressing the run lifecycle itself.
 
-## Critical (6 open, all `reliability`)
+## Critical (5 open, all `reliability`)
 
 Every critical issue concerns the [Domain-overnight-agent](Domain-overnight-agent)'s
 supervision and consent boundary — the layer built on top of the well-tested planner data
 model, not the model itself.
 
-- **#226 — Supervision lives entirely inside the failure domain.** Every existing
-  supervisory mechanism (`reap-stale-mcp.ps1`, the sweep suite, the browser watchdog) is
-  itself dispatched by an agent run, so none can detect the agent simply not running. Cited
-  cost in the sibling system this pattern was derived from: 15h19m of lost work, 847
-  consecutive skipped ticks, a 3-hour outage — each caught only by a human noticing.
 - **#197 — The watchdog can recover a missing browser slot but not a stuck one.** A
   TCP-accept check is treated as the health signal, so a hung-but-listening process reads
   healthy; the failure Shiv actually hit ("the browser slot stopped responding mid-session")
@@ -48,7 +39,8 @@ model, not the model itself.
   injects the full JSON schema of every tool it exposes on every turn regardless of use;
   with 4–5 near-identical Playwright browser slots configured, that is ~100 duplicate tool
   definitions competing for context on a run that typically uses one slot and three tools —
-  a token-cost and reliability problem, not just tidiness, and it compounds #262 directly.
+  a token-cost and reliability problem, not just tidiness, and it compounds the agent's
+  per-run context budget directly.
 - **#139 — Playwright MCP's CDP attach times out when the signed-in browser is
   overloaded** (too many open targets, or a pegged main thread) — one concrete instance of
   the "stuck, not missing" failure #197 generalizes.
@@ -155,13 +147,14 @@ Mostly deferred features and cleanup, not defects:
 
 ## Reading this list honestly
 
-The two unlabeled bugs (#262, #261) are, by their evidence, more operationally urgent right
+The unlabeled bug #261 is, by its evidence, more operationally urgent right
 now than most of the labeled criticals: the automation is not degraded, it is dead-locked.
 Beneath that, the critical and high clusters are dominated by two structural gaps in the
 [Domain-overnight-agent](Domain-overnight-agent): a consent boundary that still depends on
-software-written markers rather than an unforgeable channel (#250), and a
-supervision/browser-automation layer that is entirely inside its own failure domain (#226,
-#197, #180, #179, #139, #243). Neither cluster touches the planner data model itself, which
+software-written markers rather than an unforgeable channel (#250, #302, #322 — see
+[Prioritisation](Prioritisation)), and a
+supervision/browser-automation layer that is entirely inside its own failure domain
+(#197, #180, #179, #139, #243). Neither cluster touches the planner data model itself, which
 is heavily tested and self-verified (see [Behaviour](Behaviour)) — the least-finished part
 of this system is the newer, more autonomous layer built on top of it, not the storage or
 sync core. Several "low" issues (#85/#77/#71/#61/#56, #18, #12, #5) describe features that
