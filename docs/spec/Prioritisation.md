@@ -405,9 +405,9 @@ Three properties follow, and a rebuilder should treat them as requirements rathe
 `Test-ExhaustionClaim` returns `declared_exhausted` or a `holding:<why-not>` string, and that string
 becomes the row's `today_release_reason` — except that a failed claim is still tested against the
 backstop, so a row whose claim expired *and* whose last turn is older than the backstop window
-reports `stale_turn_backstop` rather than the `holding:` string. Two releases therefore never reach
-the claim logic at all: `not_workable` short-circuits ahead of it, and `holding:reopened` and
-`holding:strict` are decided before it.
+reports `stale_turn_backstop` rather than the `holding:` string. Three verdicts never reach the claim
+logic at all: `not_workable` short-circuits ahead of it, and `holding:reopened` and `holding:strict`
+are decided before it.
 
 Deferred work is legitimate in exactly two situations: a Deferred row that is itself `reopened`
 (rule 4 preempts the gate outright), or — for every other Deferred row — *every* `Today` row's
