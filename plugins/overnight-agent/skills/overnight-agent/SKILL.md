@@ -675,12 +675,32 @@ that already exist upstream, and will redo or contradict them.
    (A → B → C…). **Cap the walk at depth 3** to avoid runaway; if it's deeper, note "deeper chain
    exists" and stop. Also glance at **sibling** tasks that share A's parent (other children with the
    same `Linked ID`) when they're obviously relevant — but upstream is the priority.
-2. **Read each linked task's real material**, not just its title:
-   - Its journal `journal\task-<linkedID>.md` — the **user's notes at the top** (decisions,
-     constraints, "we already chose X", "don't do Y") **and** your agent block's **Run log /
-     deliverables** (what already got done, what's still open).
+2. **Read each linked task's real material**, not just its title — but read it **bounded**:
+
+   ```powershell
+   pwsh oa-state.ps1 extract -Id <linkedID>          # bounded, read-only, ~24 KB ceiling
+   ```
+
+   **Use `extract`. Do NOT open `journal\task-<linkedID>.md` in full as your default.** It gives you
+   the four things this step actually needs — the user's framing at the top, **every message the user
+   wrote, newest first**, the agent's **newest turn** (status / plan / latest run log), and any
+   unanswered trailing reply — plus pointers to the linked ids and the deliverable files. Everything
+   it prints is **verbatim** from the journal; nothing is summarised, and every elision states its
+   size in bytes.
+
+   Why: journals are append-only and nothing prunes them. Measured 2026-09-01 on the live folder —
+   239 journals, 4.01 MB, and `task-400.md` alone at **272 KB (~70K tokens)**, `task-463.md` at
+   **186.6 KB**. Reading two of those in full costs more context to *plan* a task than the entire
+   settings file cost at the peak of #262, which froze the schedule for ~9 hours. `extract` caps that
+   at ~6K tokens regardless of journal size (#291).
+
+   Then, **only if the extract says you are missing something you actually need**, open the file
+   directly — the footer tells you exactly how many bytes it did not show. That is a deliberate,
+   narrow escape hatch, not the default path.
+
    - The **files and links it produced** — deliverable files (`task-<linkedID>-<slug>.md`), PRs,
-     docs, repos under your repos root (see `user-settings.md`), calendar entries, etc. Open the ones that bear on A.
+     docs, repos under your repos root (see `user-settings.md`), calendar entries, etc. `extract`
+     lists these by name and size without reading them; open only the ones that bear on A.
 3. **Distil, don't dump.** Extract only what affects A: prior decisions to honor, constraints, naming
    conventions, partial work to build on, and links A should reference. A few tight bullets, with the
    source task ID, beat pasting whole journals.

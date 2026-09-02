@@ -40,6 +40,15 @@
   gate                          Print the parsed agent gate as JSON:
                                 { path, exists, state, version, allow[], ask[], mtime }.
                                 Rule text is preserved VERBATIM so a verdict can be audited.
+  extract -Id <id>              Print a BOUNDED, read-only extract of one journal: the user's
+                                framing at the top, the agent's newest turn, any unanswered
+                                trailing user prose, and the open asks -- each region capped,
+                                with every elision stated in bytes. See .BOUNDED READ below.
+          [-BudgetKB <n>]       Total byte ceiling for the emitted regions (default 24).
+          [-Json]               Emit the same extract as JSON instead of markdown.
+          [-Verify]             Additionally PROVE the extract: assert every emitted region is
+                                a verbatim substring of the source and that the output honours
+                                the declared ceiling. Non-zero exit if either fails.
   mark   -Id <id> [-Status s] [-Version n] [-PlanId p]
                                 Record that the agent has processed the journal as it now
                                 stands (re-snapshots processed_file_hash + updates fields).
@@ -238,6 +247,78 @@
   a workable Today row gates forever, exactly as before #223's correction. Also settable as
   `Today gate strict = on` in user-settings.md.
 
+.BOUNDED READ (#291 -- why `extract` exists, and why it never writes)
+  SKILL.md tells the agent to read a task's linked journal(s) IN FULL before planning or
+  executing ("Gather linked-task context FIRST", and again at PHASE 1 and PHASE 2). Journals
+  are append-only and nothing prunes them, so the cost of obeying that instruction grows
+  without bound. Measured on the live folder 2026-09-01: 239 journals, 4.01 MB, median 8.3 KB
+  -- but task-400.md at 272 KB (~70K tokens) and task-463.md at 186.6 KB (~48K tokens), with 8
+  journals over the 64 KB read-path budget. One task linking two of those costs more context to
+  PLAN than the entire settings file cost at the peak of #262.
+
+  #262 is the same defect one file over, and it is the reason this is not theoretical: an
+  unbounded, agent-appended markdown file that is always read whole reached ~97% of the context
+  window per call, made 49 round-trips, sat in `running` for ~9 hours, never finished, and froze
+  the */30 schedule. #261 (run-level timeout) is the circuit breaker for that and has not landed,
+  so today there is no automatic recovery.
+
+  THE CHOICE: READ LESS, NOT WRITE SMALLER.
+  ----------------------------------------
+  The tempting fix is the one #262 got -- a script that rewrites the file. That is the wrong
+  instrument here, and the difference is not stylistic:
+
+    user-settings.md   owner 'user', writer 'app'. A settings file. Rewritable.
+    journal/task-N.md  THE HUMAN SOURCE OF TRUTH. SKILL.md: if the state store and the journal
+                       prose ever disagree, THE JOURNAL PROSE WINS.
+
+  A journal is also the most dangerous file in the system to rewrite, because four independent
+  readers key off its exact bytes:
+    - `reopened`   hashes the file and the position of the last turn-end stamp (this script)
+    - `consent_ok` reads `<!-- from: me -->` attribution POSITIONALLY (this script, #227)
+    - the Telegram bridge anchors on `^##\s*<moon>` and the turn-end / provenance markers
+    - the OVERNIGHT-AGENT sentinel divides the user's space from the agent's
+  A rewriter that moved one byte across any of those boundaries would either silently re-answer
+  finished tasks forever, or fail the consent gate OPEN. And it would generate a OneDrive sync
+  event on 239 files every 30 minutes.
+
+  So `extract` is a READER. It never opens a journal for writing -- which is not a promise, it
+  is a property: there is no write path in it to get wrong. Every hard constraint above is
+  therefore satisfied by construction rather than by a proof about a risky write. Zero bytes
+  move, so `scan` and `consent` return byte-identical verdicts before and after.
+
+  WHAT IT EMITS, AND WHY THOSE FOUR REGIONS
+  -----------------------------------------
+  SKILL.md's own list of what the agent needs from a linked journal is: "the user's notes at the
+  top (decisions, constraints, 'we already chose X', 'don't do Y') AND your agent block's Run
+  log / deliverables (what already got done, what's still open)". That is a bounded set. The
+  full chronology of every previous night is not on it.
+
+    HEAD           everything above the first machine turn -- the user's framing.
+    OPEN ASKS      the newest turn's `Needs from you:` / `Your call:` values.
+    LATEST TURN    the agent's newest turn only: current status, plan, last run-log entry.
+    TRAILING       prose below the turn-end stamp -- the unanswered reply, if any.
+    POINTERS       linked task ids, deliverable files, and the byte count NOT shown.
+
+  Everything is sliced with the SAME parsers the reopen and consent readers use
+  (Get-AgentEndIndex, Get-NewestAgentTurn, Get-AuthorSegments, Read-JournalText). Re-deriving
+  those boundaries with a second, private parser is the drift bug this deliberately refuses to
+  introduce: the extract cannot disagree with the gate about where a turn ended, because it asks
+  the same function.
+
+  ITS TWO GUARANTEES, BOTH CHECKABLE (`-Verify`)
+  ----------------------------------------------
+  1. VERBATIM. Every emitted region is a contiguous substring of the source file. The extract
+     never paraphrases, summarises or re-words the user -- a lossy summary of Shiv's own
+     decisions would be exactly the byte loss this file refuses to risk. `-Verify` asserts each
+     emitted fragment with IndexOf against the source and fails loudly if one is not found.
+  2. BOUNDED. Total emitted bytes are <= -BudgetKB regardless of input size, so a 272 KB journal
+     and an 8 KB journal cost the same ceiling to read. Elision is never silent: each region
+     that was cut prints how many bytes were dropped, and the footer prints the total, so the
+     agent can always choose to open the file directly.
+
+  Truncation being VISIBLE is the point. A silent cap would be a new way to lose the user's
+  words; a stated one is a bounded read with a named escape hatch.
+
 .SETTINGS (which values the user owns)
   Most parameters here are paths the agent passes in. TWO are read from `user-settings.md` by
   THIS SCRIPT instead, under `## Overnight Agent behaviour`:
@@ -291,7 +372,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate')]
+  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract')]
   [string]$Command = 'scan',
 
   [string]$Id,
@@ -299,6 +380,11 @@ param(
   [int]$Version,
   [string]$PlanId,
   [switch]$Force,
+
+  # The bounded journal read (#291). See .BOUNDED READ in the header.
+  [int]$BudgetKB = 24,
+  [switch]$Json,
+  [switch]$Verify,
 
   # The agent gate (#297). `-Action` is a CLOSED ENUM on purpose: free text would put the
   # matcher's input under the control of whatever prose the agent happened to generate, which is
@@ -2163,6 +2249,425 @@ function Cmd-Get {
   $st | ConvertTo-Json -Depth 6
 }
 
+# --- The bounded journal read (#291) ---------------------------------------------------
+# See .BOUNDED READ in the header for why this is a READER and not a rewriter.
+#
+# Everything below is read-only by construction: it opens journals with Read-JournalText and
+# never with a writer. The only state it touches is the string it returns.
+
+function Get-Utf8ByteCount([string]$s) {
+  if ([string]::IsNullOrEmpty($s)) { return 0 }
+  return [Text.Encoding]::UTF8.GetByteCount($s)
+}
+
+function Get-Utf8Prefix([string]$s, [int]$maxBytes) {
+  # Longest prefix of $s whose UTF-8 encoding fits in $maxBytes, cut at a line boundary.
+  #
+  # Budgeting in BYTES rather than characters is deliberate. The budget exists to bound what a
+  # model call costs, and these journals carry em-dashes, curly quotes and emoji -- all of which
+  # are one char and up to four bytes. A char-based cap would be honest on ASCII and quietly
+  # wrong by up to 4x on exactly the files that matter most.
+  #
+  # MIDPOINTS ARE COMPUTED WITH [Math]::Floor/Ceiling, NEVER `[int](($lo+$hi)/2)`.
+  # PowerShell's `/` on two ints yields a DOUBLE and `[int]` rounds it BANKER'S-STYLE (to even),
+  # so `[int]((1+2)/2)` is 2, not 1. In the suffix search below that makes `mid` equal `hi`, `hi`
+  # is reassigned to itself, and the loop never terminates. Measured: extract -Id 349 hung for
+  # over 100s on a 104 KB journal with no error and no output. That is exactly the failure this
+  # whole change exists to prevent -- a run that never finishes and freezes the */30 schedule --
+  # so the arithmetic is written explicitly and the loops carry a hard iteration ceiling.
+  if ($maxBytes -le 0 -or [string]::IsNullOrEmpty($s)) { return '' }
+  if ((Get-Utf8ByteCount $s) -le $maxBytes) { return $s }
+  $lo = 0; $hi = $s.Length; $guard = 0
+  while ($lo -lt $hi) {
+    if (++$guard -gt 64) { break }   # log2(2^64) can never be reached; a break here is a bug, not a hang
+    $mid = [int][Math]::Ceiling(($lo + $hi) / 2.0)
+    if ($mid -le $lo) { $mid = $lo + 1 }
+    if ($mid -gt $hi) { $mid = $hi }
+    if ((Get-Utf8ByteCount $s.Substring(0, $mid)) -le $maxBytes) { $lo = $mid } else { $hi = $mid - 1 }
+  }
+  $cut = [Math]::Min($lo, $s.Length)
+  # Never split a surrogate pair: half of an astral character is not a substring of the source
+  # in any useful sense, and -Verify would be right to reject it.
+  if ($cut -gt 0 -and $cut -lt $s.Length -and [char]::IsHighSurrogate($s[$cut - 1])) { $cut-- }
+  # Prefer a line boundary so the emitted fragment is readable markdown rather than a half line.
+  # Only when one exists in the kept region -- otherwise keep the byte-exact cut.
+  $nl = $s.LastIndexOf("`n", [Math]::Max(0, $cut - 1))
+  if ($nl -gt 0) { $cut = $nl + 1 }
+  return $s.Substring(0, $cut)
+}
+
+function Get-Utf8Suffix([string]$s, [int]$maxBytes) {
+  # Longest SUFFIX of $s that fits in $maxBytes, cut at a line boundary. Mirror of the above,
+  # including the explicit-midpoint rule -- this is the loop that actually hung.
+  if ($maxBytes -le 0 -or [string]::IsNullOrEmpty($s)) { return '' }
+  if ((Get-Utf8ByteCount $s) -le $maxBytes) { return $s }
+  $lo = 0; $hi = $s.Length; $guard = 0
+  while ($lo -lt $hi) {
+    if (++$guard -gt 64) { break }
+    $mid = [int][Math]::Floor(($lo + $hi) / 2.0)
+    if ($mid -ge $hi) { $mid = $hi - 1 }
+    if ($mid -lt $lo) { $mid = $lo }
+    if ((Get-Utf8ByteCount $s.Substring($mid)) -le $maxBytes) { $hi = $mid } else { $lo = $mid + 1 }
+  }
+  $cut = [Math]::Min($lo, $s.Length)
+  if ($cut -lt $s.Length -and $cut -gt 0 -and [char]::IsLowSurrogate($s[$cut])) { $cut++ }
+  $nl = $s.IndexOf("`n", [Math]::Min($cut, [Math]::Max(0, $s.Length - 1)))
+  if ($nl -ge 0 -and $nl -lt $s.Length - 1) { $cut = $nl + 1 }
+  return $s.Substring([Math]::Min($cut, $s.Length))
+}
+
+function Get-BoundedSlice([string]$text, [int]$maxBytes) {
+  # Cap a region at $maxBytes by keeping its HEAD and its TAIL and stating what was dropped.
+  #
+  # Head AND tail, not one or the other, because the two ends carry different things and a run
+  # needs both: a region opens with its framing (a `**Status:**` line, the plan, the ask) and
+  # closes with the most recent thing that happened. Keeping only the head loses the latest
+  # state; keeping only the tail loses the decisions the user wrote down.
+  #
+  # Returns the two verbatim fragments SEPARATELY rather than pre-joined, so -Verify can assert
+  # each one against the source. A pre-joined string with an elision marker in the middle is by
+  # definition not a substring of anything.
+  $full = Get-Utf8ByteCount $text
+  if ($maxBytes -le 0) {
+    return [pscustomobject]@{ Head = ''; Tail = ''; FullBytes = $full; ElidedBytes = $full; Truncated = ($full -gt 0) }
+  }
+  if ($full -le $maxBytes) {
+    return [pscustomobject]@{ Head = $text; Tail = ''; FullBytes = $full; ElidedBytes = 0; Truncated = $false }
+  }
+  $headBudget = [int]([Math]::Floor($maxBytes * 0.6))
+  $head = Get-Utf8Prefix $text $headBudget
+  $rest = $text.Substring($head.Length)
+  $tail = Get-Utf8Suffix $rest ($maxBytes - (Get-Utf8ByteCount $head))
+  $elided = $full - (Get-Utf8ByteCount $head) - (Get-Utf8ByteCount $tail)
+  return [pscustomobject]@{
+    Head = $head; Tail = $tail; FullBytes = $full
+    ElidedBytes = [Math]::Max(0, $elided); Truncated = $true
+  }
+}
+
+function Get-JournalHeadIndex([string]$content) {
+  # Where the USER'S framing ends and the first machine turn begins.
+  #
+  # Located on the fence mask (#320) for the same reason every other structural scan here is:
+  # a `<!-- from: overnight-agent -->` quoted inside a fenced example must not be mistaken for
+  # the start of a real turn and truncate the user's notes to nothing.
+  #
+  # A leading `<!-- from: me -->` is the USER'S OWN marker and must not end the head -- that is
+  # the ordinary shape of a journal the Telegram bridge has folded a reply into, and treating it
+  # as a machine turn would drop the user's framing entirely.
+  if ([string]::IsNullOrEmpty($content)) { return 0 }
+  $scan = Get-FenceMaskedText $content
+  $idxs = @()
+  $m = [regex]::Match($scan, '(?m)' + $script:ManagedHeadingRe)
+  if ($m.Success) { $idxs += $m.Index }
+  foreach ($p in [regex]::Matches($scan, $script:ProvenanceRe)) {
+    if ($p.Groups[1].Value.Trim() -ne $script:HumanAuthor) { $idxs += $p.Index; break }
+  }
+  $m = [regex]::Match($scan, $script:LegacyStateRe)
+  if ($m.Success) { $idxs += $m.Index }
+  $sentinel = $scan.IndexOf('OVERNIGHT-AGENT do not edit')
+  if ($sentinel -ge 0) {
+    # The sentinel sits on its own line and the user's space is everything ABOVE it. Cut at the
+    # start of that line, not at the phrase, so the extract never shows half a comment.
+    $ls = $scan.LastIndexOf("`n", [Math]::Max(0, $sentinel - 1))
+    $idxs += $(if ($ls -ge 0) { $ls + 1 } else { 0 })
+  }
+  if ($idxs.Count -eq 0) { return $content.Length }
+  return [Math]::Max(0, ($idxs | Measure-Object -Minimum).Minimum)
+}
+
+function Get-JournalUserMessages([string]$content) {
+  # Every segment positively attributed to the HUMAN, NEWEST FIRST.
+  #
+  # WHY THIS REGION EXISTS AND HEAD IS NOT ENOUGH. The first shape of this extract had only a
+  # HEAD region -- "the user's notes at the top" -- because that is the phrase SKILL.md uses.
+  # That is wrong on any journal older than a few days: a journal is a chat thread, so the user
+  # keeps writing INTO it, and their later messages are the ones that supersede. On task-400,
+  # HEAD ends at the first machine turn on 2026-07-30; every decision Shiv made in the five
+  # weeks after that sits below it. A bounded read that dropped those would be worse than the
+  # unbounded read it replaces -- it would silently lose exactly the material the issue says the
+  # agent actually needs ("the user's decisions and the open items").
+  #
+  # Newest first because later decisions supersede earlier ones, so when the budget runs out the
+  # thing to lose is the oldest.
+  #
+  # Attribution comes from Get-AuthorSegments, the SAME reader the consent gate uses -- so this
+  # shows the user's words under exactly the rule that decides whether they authorised anything.
+  # That reader fails CLOSED (unmarked prose is 'unknown', not the human), which is right for
+  # consent and merely conservative here: an unmarked user note is not shown in THIS region, but
+  # it is still inside HEAD or TRAILING, and the footer states how much was not shown.
+  if ([string]::IsNullOrEmpty($content)) { return @() }
+  $out = @()
+  foreach ($s in (Get-AuthorSegments $content)) {
+    if ($s.Author -eq $script:HumanAuthor -and $s.Text.Trim().Length -gt 0) { $out += $s.Text }
+  }
+  if ($out.Count -gt 1) { [array]::Reverse($out) }
+  return $out
+}
+
+function Get-BoundedList($items, [int]$maxBytes) {
+  # Keep whole items until the budget is spent, then a verbatim PREFIX of the next one.
+  #
+  # Item-at-a-time rather than joining and slicing, so every kept fragment stays a contiguous
+  # substring of the source and -Verify can assert each one. Joining first would produce a
+  # string that is a substring of nothing.
+  $kept = @(); $used = 0; $dropped = 0; $elided = 0
+  foreach ($it in @($items)) {
+    $b = Get-Utf8ByteCount $it
+    if ($used + $b -le $maxBytes) { $kept += $it; $used += $b; continue }
+    $room = $maxBytes - $used
+    if ($room -gt 256) {
+      $p = Get-Utf8Prefix $it $room
+      if ($p.Length -gt 0) { $kept += $p; $used += (Get-Utf8ByteCount $p); $elided += ($b - (Get-Utf8ByteCount $p)); continue }
+    }
+    $dropped++; $elided += $b
+  }
+  return [pscustomobject]@{ Kept = @($kept); Dropped = $dropped; ElidedBytes = $elided; UsedBytes = $used }
+}
+
+function Get-JournalOpenAsks([string]$agentLeft) {
+  # The newest turn's asks, verbatim. Same regexes the digest and the gate read, so the extract
+  # cannot show the user a different question from the one the board is parked on.
+  $turn = Get-NewestAgentTurn $agentLeft
+  $asks = @()
+  if ([string]::IsNullOrEmpty($turn)) { return $asks }
+  foreach ($m in [regex]::Matches($turn, $script:YourCallRe)) {
+    $asks += [pscustomobject]@{ kind = 'Your call'; text = $m.Groups[1].Value.Trim(); blocking = $true }
+  }
+  foreach ($m in [regex]::Matches($turn, $script:NeedsFromYouRe)) {
+    $v = $m.Groups[1].Value.Trim()
+    if (Test-AskTextIsOpen $v) {
+      $asks += [pscustomobject]@{ kind = 'Needs from you'; text = $v; blocking = (Test-AskTextIsBlocking $v) }
+    }
+  }
+  return $asks
+}
+
+function Get-JournalPointers([string]$content, [string]$path) {
+  # The cheap facts a run would otherwise read the whole file to recover: the status line, the
+  # upstream link, and the deliverable files written NEXT TO the journal. Pointers, not content
+  # -- naming a 40 KB deliverable costs 30 bytes and lets the run decide whether it needs it.
+  $status = $null
+  foreach ($m in [regex]::Matches($content, '(?im)^[ \t]*\*\*[ \t]*Status[ \t]*:?[ \t]*\*\*[ \t]*:?(.*)$')) {
+    $status = $m.Groups[1].Value.Trim()
+  }
+  $linked = @()
+  foreach ($m in [regex]::Matches($content, '(?im)^[ \t]*\*\*[ \t]*Linked[ \t]*:?[ \t]*\*\*[ \t]*:?(.*)$')) {
+    foreach ($n in [regex]::Matches($m.Groups[1].Value, '#(\d+)')) {
+      if ($linked -notcontains $n.Groups[1].Value) { $linked += $n.Groups[1].Value }
+    }
+  }
+  $deliverables = @()
+  $id = [System.IO.Path]::GetFileNameWithoutExtension($path) -replace '^task-', ''
+  $dir = Split-Path -Parent $path
+  if ($dir -and (Test-Path $dir)) {
+    foreach ($f in (Get-ChildItem -LiteralPath $dir -Filter "task-$id-*.md" -File -ErrorAction SilentlyContinue)) {
+      $deliverables += [pscustomobject]@{ name = $f.Name; kb = [math]::Round($f.Length / 1KB, 1) }
+    }
+  }
+  return [pscustomobject]@{ Status = $status; Linked = $linked; Deliverables = $deliverables }
+}
+
+function Cmd-Extract {
+  if (-not $Id) { throw 'extract requires -Id' }
+  $path = Join-Path $JournalDir "task-$Id.md"
+  if (-not (Test-Path -LiteralPath $path)) {
+    # Loudly, and with the path tried. SKILL.md says a missing linked journal is a note-and-
+    # proceed, not a stop -- but a reader that returns an empty extract for a path it never
+    # found would let the run plan against silence and call it context.
+    throw "extract: no journal at $path"
+  }
+
+  $content = Read-JournalText $path
+  $sourceBytes = Get-Utf8ByteCount $content
+
+  $agentEnd = Get-AgentEndIndex $content
+  $hasAgentBlock = $agentEnd -ge 0
+  if ($agentEnd -lt 0) { $agentEnd = 0 }
+  $agentLeft = $content.Substring(0, [Math]::Min($agentEnd, $content.Length))
+  $trailing = if ($agentEnd -lt $content.Length) { $content.Substring($agentEnd) } else { '' }
+
+  $headEnd = [Math]::Min((Get-JournalHeadIndex $content), $content.Length)
+  $head = $content.Substring(0, $headEnd)
+  $turn = Get-NewestAgentTurn $agentLeft
+
+  # Region budgets. They sum to the declared ceiling, so the TOTAL is bounded no matter how the
+  # regions themselves are shaped -- a journal that is 100% head cannot borrow the turn's share.
+  $ceiling = [Math]::Max(4, $BudgetKB) * 1024
+  $slices = [ordered]@{
+    head     = (Get-BoundedSlice $head     ([int]($ceiling * 0.22)))
+    turn     = (Get-BoundedSlice $turn     ([int]($ceiling * 0.33)))
+    trailing = (Get-BoundedSlice $trailing ([int]($ceiling * 0.15)))
+  }
+  # The user's own later messages get the remaining 30%. Sized close to the agent's newest turn
+  # on purpose: this is the region the issue is actually about ("the user's decisions"), and
+  # starving it to show more of the agent's own prose would be the wrong trade.
+  $userMsgs = @(Get-JournalUserMessages $content)
+  $userList = Get-BoundedList $userMsgs ([int]($ceiling * 0.30))
+
+  $asks = @(Get-JournalOpenAsks $agentLeft)
+  $ptr = Get-JournalPointers $content $path
+
+  $emitted = 0
+  foreach ($s in $slices.Values) { $emitted += (Get-Utf8ByteCount $s.Head) + (Get-Utf8ByteCount $s.Tail) }
+  $emitted += $userList.UsedBytes
+  $elided = $sourceBytes - $emitted
+
+  $kb = { param($b) [math]::Round($b / 1024, 1) }
+
+  if ($Verify) {
+    # The proof, run against the file it just read. Two claims, both mechanical.
+    $problems = @()
+    foreach ($k in $slices.Keys) {
+      foreach ($frag in @($slices[$k].Head, $slices[$k].Tail)) {
+        if ([string]::IsNullOrEmpty($frag)) { continue }
+        if ($content.IndexOf($frag, [StringComparison]::Ordinal) -lt 0) {
+          $problems += "region '$k' emitted $(Get-Utf8ByteCount $frag) bytes that are NOT a verbatim substring of the source"
+        }
+      }
+    }
+    if ($emitted -gt $ceiling) {
+      $problems += "emitted $emitted bytes against a declared ceiling of $ceiling"
+    }
+    foreach ($frag in $userList.Kept) {
+      if ($content.IndexOf($frag, [StringComparison]::Ordinal) -lt 0) {
+        $problems += "a user message fragment of $(Get-Utf8ByteCount $frag) bytes is NOT a verbatim substring of the source"
+      }
+    }
+    foreach ($a in $asks) {
+      if ($a.text -and $content.IndexOf($a.text, [StringComparison]::Ordinal) -lt 0) {
+        $problems += "ask text '$($a.text)' is not a verbatim substring of the source"
+      }
+    }
+    $ok = ($problems.Count -eq 0)
+    [pscustomobject]@{
+      verify        = $(if ($ok) { 'pass' } else { 'fail' })
+      id            = $Id
+      path          = $path
+      source_bytes  = $sourceBytes
+      emitted_bytes = $emitted
+      ceiling_bytes = $ceiling
+      verbatim      = $ok
+      problems      = @($problems)
+    } | ConvertTo-Json -Depth 4
+    if (-not $ok) { exit 1 }
+    return
+  }
+
+  if ($Json) {
+    [pscustomobject]@{
+      id              = $Id
+      path            = $path
+      source_bytes    = $sourceBytes
+      emitted_bytes   = $emitted
+      elided_bytes    = [Math]::Max(0, $elided)
+      ceiling_bytes   = $ceiling
+      has_agent_block = $hasAgentBlock
+      status          = $ptr.Status
+      linked          = @($ptr.Linked)
+      deliverables    = @($ptr.Deliverables)
+      open_asks       = @($asks)
+      user_messages   = [pscustomobject]@{
+        newest_first  = @($userList.Kept)
+        shown         = $userList.Kept.Count
+        total         = $userMsgs.Count
+        dropped       = $userList.Dropped
+        elided_bytes  = $userList.ElidedBytes
+      }
+      head            = [pscustomobject]@{ text = ($slices.head.Head + $slices.head.Tail); truncated = $slices.head.Truncated; elided_bytes = $slices.head.ElidedBytes }
+      latest_turn     = [pscustomobject]@{ text = ($slices.turn.Head + $slices.turn.Tail); truncated = $slices.turn.Truncated; elided_bytes = $slices.turn.ElidedBytes }
+      trailing_user   = [pscustomobject]@{ text = ($slices.trailing.Head + $slices.trailing.Tail); truncated = $slices.trailing.Truncated; elided_bytes = $slices.trailing.ElidedBytes }
+    } | ConvertTo-Json -Depth 6
+    return
+  }
+
+  $nl = [Environment]::NewLine
+  $out = New-Object Text.StringBuilder
+  $w = { param($s) [void]$out.Append($s); [void]$out.Append($nl) }
+
+  & $w "# task-$Id -- BOUNDED EXTRACT (read-only)"
+  & $w ''
+  & $w "source: $path"
+  & $w ("source $(& $kb $sourceBytes) KB / emitted $(& $kb $emitted) KB " +
+        "(ceiling $(& $kb $ceiling) KB, ~$([math]::Round($emitted/4/1000,1))K tokens)")
+  & $w ''
+  & $w ('This is a BOUNDED extract, not the whole journal. Every line below is VERBATIM from the ' +
+        'source; nothing is summarised. ' +
+        $(if ($elided -gt 0) { "$(& $kb $elided) KB was NOT shown -- open the file directly if you need it." }
+          else { 'Nothing was elided: this is the complete journal.' }))
+
+  $section = {
+    param($title, $slice, $note)
+    & $w ''
+    & $w "## $title"
+    if ($note) { & $w "_${note}_" }
+    $body = ($slice.Head + $slice.Tail).Trim()
+    if ($body.Length -eq 0) { & $w '(empty)'; return }
+    & $w ''
+    if ($slice.Truncated) {
+      & $w ($slice.Head.TrimEnd())
+      & $w ''
+      & $w "> [... $(& $kb $slice.ElidedBytes) KB elided from the middle of this section ...]"
+      & $w ''
+      & $w ($slice.Tail.TrimEnd())
+    } else {
+      & $w $body
+    }
+  }
+
+  & $section 'HEAD -- the user''s framing' $slices.head 'Everything above the first machine turn: decisions, constraints, links.'
+
+  & $w ''
+  & $w '## OPEN ASKS (newest agent turn)'
+  if ($asks.Count -eq 0) {
+    & $w ''
+    & $w '(none)'
+  } else {
+    & $w ''
+    foreach ($a in $asks) {
+      & $w ("- **$($a.kind):** $($a.text)" + $(if ($a.blocking) { '  `[blocking]`' } else { '  `[offer]`' }))
+    }
+  }
+
+  & $w ''
+  & $w '## USER MESSAGES (newest first)'
+  & $w '_Attributed to the human. Later messages supersede earlier ones, so read top-down._'
+  & $w ''
+  if ($userList.Kept.Count -eq 0) {
+    & $w $(if ($userMsgs.Count) { '(none fit in the budget)' } else { '(none positively attributed -- see HEAD and TRAILING)' })
+  } else {
+    $n = 0
+    foreach ($m in $userList.Kept) {
+      $n++
+      & $w "### message $n of $($userMsgs.Count) (newest first)"
+      & $w ''
+      & $w $m.Trim()
+      & $w ''
+    }
+    if ($userList.Dropped -gt 0 -or $userList.ElidedBytes -gt 0) {
+      & $w "> [... $($userList.Dropped) older user message(s) not shown, $(& $kb $userList.ElidedBytes) KB ...]"
+    }
+  }
+
+  & $section 'LATEST AGENT TURN' $slices.turn 'The newest turn only. Earlier turns are deliberately not read.'
+  & $section 'TRAILING USER PROSE' $slices.trailing 'Below the turn-end stamp: the unanswered reply, if any.'
+
+  & $w ''
+  & $w '## POINTERS'
+  & $w ''
+  & $w ("- status: " + $(if ($ptr.Status) { $ptr.Status } else { '(none stated)' }))
+  & $w ("- linked: " + $(if ($ptr.Linked.Count) { (($ptr.Linked | ForEach-Object { "#$_" }) -join ', ') } else { '(none)' }))
+  if ($ptr.Deliverables.Count) {
+    & $w "- deliverables next to this journal (not read here):"
+    foreach ($d in $ptr.Deliverables) { & $w "    - $($d.name) ($($d.kb) KB)" }
+  } else {
+    & $w '- deliverables next to this journal: (none)'
+  }
+  & $w "- not shown: $(& $kb $elided) KB of $(& $kb $sourceBytes) KB"
+
+  Write-Output $out.ToString()
+}
+
 function Cmd-Gate {
   # The gate as this script actually reads it — so a human can diff what they wrote against what
   # the agent parsed, rather than trusting that the two agree. Rule text is verbatim.
@@ -2555,4 +3060,5 @@ switch ($Command) {
   'resnapshot' { Cmd-Resnapshot }
   'consent' { Cmd-Consent }
   'gate' { Cmd-Gate }
+  'extract' { Cmd-Extract }
 }
