@@ -177,8 +177,13 @@ function Add-DataDependentSweep {
     not a `mutcheck-*` (rule 4's glob misses it). So it was required by nothing.
 
     `probe-unused.json` is the narrowness control -- a data file nobody references, which
-    must stay out, so rule 6 cannot quietly become "deploy every .json in the repo". #>
-  param([string]$Repo)
+    must stay out, so rule 6 cannot quietly become "deploy every .json in the repo".
+
+    -WithHistory gives probe-manifest.json a SECOND committed version, so the fixture has
+    a real "older commit of this path" to match. That is the GH #388 case: without two
+    versions there is no ancestor to find and DATA-BEHIND cannot be distinguished from
+    DATA-STALE at all. #>
+  param([string]$Repo, [switch]$WithHistory)
   $chk = Join-Path $Repo 'plugins\overnight-agent\checks'
   $roster = @"
 # synthetic roster
@@ -203,6 +208,11 @@ console.log(rows.length)
   try {
     & git add -A 2>&1 | Out-Null
     & git commit --quiet -m 'data-dependent sweep' 2>&1 | Out-Null
+    if ($WithHistory) {
+      Set-Content -LiteralPath (Join-Path $chk 'probe-manifest.json') -Value '["v2"]' -NoNewline -Encoding utf8
+      & git add -A 2>&1 | Out-Null
+      & git commit --quiet -m 'data v2' 2>&1 | Out-Null
+    }
     & git branch -f main HEAD 2>&1 | Out-Null
   } finally { Pop-Location }
 }
@@ -392,6 +402,35 @@ Set-Content -LiteralPath (Join-Path $fxD3.Home 'probe-manifest.json') -Value '[]
 $rD3 = Invoke-Subject $Script $fxD3
 Assert ((Get-Class $rD3 'probe-manifest.json') -eq '<absent>') 'T_DATA_LIVE_QUIET' 'a live data file identical to the ref is not classified at all'
 
+# --- T_DATA_BEHIND: GH #388 -- stale is not the same as local -------------------------
+# The live copy holds an EARLIER COMMITTED version of the same path. Nothing local exists
+# to protect: those exact bytes are in the ref's own history. Refusing it was not caution,
+# it was a wrong deployment -- #387 shipped two .mjs and two .json as one feature, the code
+# half deployed and the data half was refused, so new code ran against an old baseline and
+# raised a data-loss alarm the merged design had already resolved. On the one machine that
+# runs the sweep every 30 minutes, and nowhere else.
+$fxD4 = New-Fixture 'forward-data-behind'
+Add-DataDependentSweep $fxD4.Repo -WithHistory
+Set-Content -LiteralPath (Join-Path $fxD4.Home 'probe-manifest.json') -Value '[]' -NoNewline -Encoding utf8
+$rD4 = Invoke-Subject $Script $fxD4
+Assert ((Get-Class $rD4 'probe-manifest.json') -eq 'DATA-BEHIND') 'T_DATA_BEHIND' 'a data file that is provably an older commit is DATA-BEHIND, not refused'
+Assert ((Get-Content -LiteralPath (Join-Path $fxD4.Home 'probe-manifest.json') -Raw) -match 'v2') 'T_DATA_BEHIND_WRITE' 'and is actually brought up to the ref'
+Assert ($rD4.Json.verifiedCurrent -eq $true) 'T_DATA_BEHIND_CURRENT' 'so the tree can reach verified-current without a human'
+Assert ($rD4.Exit -eq 0) 'T_DATA_BEHIND_EXIT' 'and it does not escalate as "needs a human"'
+
+# The narrowness control, and the half that must never regress: a data file whose content
+# is on NO commit is genuinely local, and is still refused. Overwriting it is a data-loss
+# class -- it is what the agent-gate.md floor exists for -- so the fix above must not
+# become "always overwrite data files". T_DATA_LIVE_KEPT above is the same claim measured
+# on the same shape; this one pins it in a fixture that HAS history to walk, so passing it
+# cannot be an accident of there being no ancestor to find.
+$fxD5 = New-Fixture 'forward-data-local-with-history'
+Add-DataDependentSweep $fxD5.Repo -WithHistory
+Set-Content -LiteralPath (Join-Path $fxD5.Home 'probe-manifest.json') -Value '["locally mutated"]' -NoNewline -Encoding utf8
+$rD5 = Invoke-Subject $Script $fxD5
+Assert ((Get-Class $rD5 'probe-manifest.json') -eq 'DATA-STALE') 'T_DATA_LOCAL_REFUSED' 'content on no commit is still refused even when the path has history'
+Assert ((Get-Content -LiteralPath (Join-Path $fxD5.Home 'probe-manifest.json') -Raw) -eq '["locally mutated"]') 'T_DATA_LOCAL_KEPT' 'and genuinely local state survives untouched'
+
 # --- T_MISSING_AMBIGUOUS: required, but the basename maps to two repo paths ----------
 # A flat home cannot say which path was meant. Same answer as for a live file: refuse.
 $fxA = New-Fixture 'forward-ambiguous'
@@ -467,9 +506,9 @@ function New-Mutant {
 
 # M1 - delete the historical-blob walk. Everything becomes DIVERGENT, so the tool can
 #      never say "safe" and the gap stays open forever. T_BEHIND must fail.
-$m1 = New-Mutant 'M1' '  $match = $null
-  $commits = Invoke-Git @(''rev-list'', $refSha, ''--'', $repoPath) -AllowFail' '  $match = $null
-  $commits = @()'
+#      Since GH #388 this walk is ONE reader shared by the code and data paths, so this
+#      mutant also removes DATA-BEHIND -- which is the point of having one reader.
+$m1 = New-Mutant 'M1' "  `$commits = Invoke-Git @('rev-list', `$refSha, '--', `$RepoRelPath) -AllowFail" '  $commits = @()'
 $fx = New-Fixture 'm1'
 Set-Content -LiteralPath (Join-Path $fx.Home 'probe.ps1') -Value "# probe v1`nWrite-Output 'v1'" -NoNewline -Encoding utf8
 $r = Invoke-Subject $m1 $fx
@@ -711,6 +750,46 @@ Assert ((Get-Class $rM15 'bomprobe.ps1') -ne 'CURRENT') 'M15' 'without the BOM s
 $m16 = New-Mutant 'M16' '    return (Get-NormalizedTextFromBytes ([IO.File]::ReadAllBytes($tmp)))' '    return (& git -C $Repo cat-file blob $Blob 2>$null | Out-String)'
 $rM16 = Invoke-Subject $m16 $fxB -WhatIf
 Assert ((Get-Class $rM16 'bomprobe.ps1') -ne 'CURRENT') 'M16' 'routing the blob back through the host reintroduces the false mismatch'
+
+# --- the GH #388 pair. One arm per DIRECTION, because a single arm cannot see both -------
+# The defect and its over-correction are mirror images, and each is a different kind of
+# harm: refusing a stale file half-deploys a feature, blindly writing a local one destroys
+# state a human put there. An arm that only measured one direction would be satisfied by
+# the other bug.
+
+# M17 - restore the unconditional refusal: never ask whether the data file is an older
+#       commit, just call anything that differs DATA-STALE. This is the code exactly as it
+#       stood when #387 half-deployed. T_DATA_BEHIND must fail.
+#       FRESH fixtures for both arms below. Reusing fxD4 would be worthless: the baseline
+#       run already deployed that manifest, so the mutant would find it CURRENT, classify
+#       nothing, and PASS WITHOUT THE MUTATION DOING ANYTHING -- an arm that reports
+#       "killed" while proving nothing, which is the failure this harness exists to catch.
+$m17find = @'
+              $dMatch = Find-AncestorMatch -RepoRelPath $dPaths[0] -LiveHash $liveDataHash
+'@
+$m17 = New-Mutant 'M17' ($m17find.TrimEnd("`r","`n")) '              $dMatch = $null'
+$fxM17 = New-Fixture 'm17'
+Add-DataDependentSweep $fxM17.Repo -WithHistory
+Set-Content -LiteralPath (Join-Path $fxM17.Home 'probe-manifest.json') -Value '[]' -NoNewline -Encoding utf8
+$rM17 = Invoke-Subject $m17 $fxM17
+Assert ((Get-Class $rM17 'probe-manifest.json') -ne 'DATA-BEHIND') 'M17' 'without the ancestor test a provably-stale data file is refused again'
+Assert ((Get-Content -LiteralPath (Join-Path $fxM17.Home 'probe-manifest.json') -Raw) -notmatch 'v2') 'M17_STUCK' 'and it stays frozen at the old commit, which is the half-deploy'
+
+# M18 - the over-correction, and the exact mirror of M17: make the ancestor test always
+#       say YES, which is "always overwrite data files". The live "locally mutated"
+#       baseline is silently destroyed while the run reports success. This is the arm that
+#       keeps the fix from becoming "copy main over production" for data, which is a
+#       data-loss class and sits on the agent-gate.md floor.
+#       It mutates the SAME line as M17 in the opposite direction on purpose: the defect
+#       and its over-correction are one decision, and pinning only one side of it would
+#       leave the other free to be introduced later.
+$m18 = New-Mutant 'M18' ($m17find.TrimEnd("`r","`n")) '              $dMatch = $refSha'
+$fxM18 = New-Fixture 'm18'
+Add-DataDependentSweep $fxM18.Repo -WithHistory
+Set-Content -LiteralPath (Join-Path $fxM18.Home 'probe-manifest.json') -Value '["locally mutated"]' -NoNewline -Encoding utf8
+$rM18 = Invoke-Subject $m18 $fxM18
+$afterM18 = Get-Content -LiteralPath (Join-Path $fxM18.Home 'probe-manifest.json') -Raw
+Assert ($afterM18 -notmatch 'locally mutated') 'M18' 'without the refusal, genuinely local data IS overwritten (this is the whole point)'
 
 Write-Host ''
 Write-Host ("[mutcheck-sync-oa-home] {0} passed, {1} failed" -f $script:pass, $script:fail)
