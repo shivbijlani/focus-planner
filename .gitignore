@@ -36,3 +36,6 @@ region-dropdown.md
 
 # Build artifact of scripts/spec/collect.mjs (regenerated every run).
 spec-facts.json
+
+# impeccable design-hook cache (local tool state)
+.impeccable/
