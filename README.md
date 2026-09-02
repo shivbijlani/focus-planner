@@ -36,6 +36,16 @@ Then open http://localhost:5173
 
 See `.github/copilot-instructions.md` for full Copilot integration details.
 
+## Working in a git worktree
+
+Run `npm ci` **inside** the worktree, and remove it with
+`pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path <worktree>`.
+
+Do **not** junction `node_modules` to the main checkout: `git worktree remove --force`
+deletes *through* a junction and empties the shared install for the main checkout and
+every other worktree at once, silently ([#321](https://github.com/shivbijlani/focus-planner/issues/321)).
+See [`docs/worktrees.md`](./docs/worktrees.md).
+
 ## Copilot CLI plugin marketplace
 
 This repo is also a **GitHub Copilot CLI plugin marketplace**. It publishes

@@ -98,6 +98,34 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-inbox-check.ps1
 
+  # A worktree teardown must not empty the shared node_modules (GH #321).
+  # `git worktree remove --force` deletes THROUGH a directory junction, so the
+  # documented "junction node_modules into the worktree" trick made routine
+  # cleanup wipe the dependencies of the main checkout and every sibling worktree
+  # at once -- exit code 0, no warning, and the damage surfacing later in an
+  # unrelated session as a missing binary.
+  #
+  # This job runs on windows-latest and nowhere else, because a junction is an
+  # NTFS reparse point: on Linux the hazard cannot be reproduced, and a guard that
+  # has never run where the failure happens is not a guard yet.
+  #
+  # The hazard is ALSO git-version-dependent -- measured: 2.53.0.windows.4 deletes
+  # through, 2.54.0.windows.1 and the runner's 2.55.0.windows.5 do not -- so the
+  # check probes for it and reports the arms it could not exercise as `skip`,
+  # never as `ok`. On this runner that means the guards' own behaviour is pinned
+  # here and the destructive arms are pinned on the affected machine.
+  #
+  # The check builds its own git repos, fake shared installs and real junctions
+  # under a temp directory; it touches no real checkout.
+  worktree-safety:
+    name: Worktree teardown guard
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (unlink before remove, verify the target survived)
+        shell: pwsh
+        run: ./scripts/mutcheck-worktree-safety.ps1
+
   # The read-path budget guard (GH #292/#293) is what stops an every-run file growing
   # until it eats the context window -- the defect that made runs stop finishing. Its
   # mutation check proves those guards are load-bearing, but until now it ran only on
