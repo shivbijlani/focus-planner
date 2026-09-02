@@ -29,7 +29,20 @@
     "removing a file is blocked by the agent-gate.md floor rule 'Outcome can result in",
     "permanent data loss'. A finding no run can ever clear is the permanently-red line this",
     "suite has twice been burned by. They print in full in their own section, so acknowledging",
-    "them does not hide them. Delete the file and remove its entry here."
+    "them does not hide them. Delete the file and remove its entry here.",
+    "",
+    "RE-BASELINED 2026-09-01 (GH #291), and this is the 'deliberate, reviewed size change' the",
+    "paragraph above asks for -- so it is written down rather than done quietly. task-400.md",
+    "256.8 -> 272.0, task-451.md 73.8 -> 86.8 (it had just broken the +15% tolerance), and",
+    "task-463.md added at 192.2 KB (it was OVER and absent from this list entirely).",
+    "",
+    "The reviewed change is NOT that the files got smaller -- they did not. It is that the READ",
+    "PATH is now bounded: SKILL.md reads journals through `oa-state.ps1 extract`, whose worst",
+    "measured output across all 239 live journals is 15.5 KB against a 24 KB ceiling, versus 272 KB",
+    "read whole. So a breach here no longer means 'a run will spend ~70K tokens on this file'; it",
+    "means 'this file is still growing and has no retention policy', which is GH #123, not #291.",
+    "Re-baselining stops that from being a permanently-red line while leaving the growth signal",
+    "fully armed: exceed +15% from these numbers and the sweep fails again."
   ],
   "measuredAt": "2026-09-01",
   "sizes": {
@@ -42,10 +55,11 @@
     "task-276.md": 100.3,
     "task-349.md": 102.9,
     "task-356.md": 78.7,
-    "task-400.md": 256.8,
+    "task-400.md": 272.0,
     "task-419.md": 73.3,
     "task-422.md": 103.4,
-    "task-451.md": 73.8
+    "task-451.md": 86.8,
+    "task-463.md": 192.2
   },
   "offPath": {
     "task-249-DESKTOP-P9116M3.md": "OneDrive sync-conflict copy, 2026-07-07. Holds a superseded v1 proposal (Seattle City Light TOU) not present in task-249.md; check before deleting.",

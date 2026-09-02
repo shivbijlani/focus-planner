@@ -85,11 +85,19 @@
       "writer": "agent+user",
       "readPath": "every-run",
       "budgetKB": 64,
-      "retention": "none today - this is the open defect",
+      "retention": "none today - file growth is still unbounded (GH #123 / #104)",
       "issue": 291,
+      "boundedReader": {
+        "command": "oa-state.ps1 extract -Id <id>",
+        "ceilingKB": 24,
+        "measuredMaxKB": 15.5,
+        "measuredAt": "2026-09-01",
+        "verifiedFiles": 239,
+        "note": "The READ PATH is now bounded (GH #291). SKILL.md no longer says to read a linked journal in full; it says to run `extract`, which emits the user's framing, every message the user wrote (newest first), the agent's newest turn, the open asks and any unanswered reply -- each region capped, every elision stated in bytes, every emitted byte a VERBATIM substring of the source. Measured across all 239 live journals: 4.01 MB of source reduced to 1.16 MB of extract, worst single file 272 KB -> 15.5 KB, all 239 pass `-Verify`, none over the ceiling. It is read-only, so `oa-state.ps1 scan` returned a byte-identical (SHA-256) result before and after 239 extract runs -- the reopen hash and the consent attribution cannot move."
+      },
       "contractException": {
         "issue": 291,
-        "reason": "SKILL.md instructs the agent to read a task's linked journal(s) in full before planning. Closing this needs a bounded extract (head + latest turn + open asks), not a size cap, so the violation is acknowledged and tracked rather than silenced. Growth beyond tolerance still fails."
+        "reason": "The READ-PATH half of this violation is closed: journals are now read through the bounded `extract` reader above, so planning a task costs at most ~24 KB regardless of journal size. The exception REMAINS because the other half is still open -- the files themselves still grow without bound (no retention policy, GH #123/#104), and this row stays budgeted so that growth keeps failing. Do not flip readPath away from 'every-run' to clear this: that would exempt the row from g2/g4 entirely and delete the growth signal, which is the one live alarm on these files."
       },
       "note": "SKILL.md says to read a task's linked journal(s) in full before planning. 95th percentile is ~41 KB, so 64 KB is above normal and flags genuine outliers rather than routine files.",
       "idPatternNote": "A real journal is task-<id>.md. The glob also matches OneDrive sync-conflict copies (task-463-DESKTOP-P9116M3.md), which no run reads -- oa-state.ps1 scan returned exactly 239 rows on 2026-09-01, the same count as files matching this pattern. Declaring the read-path SHAPE is deliberate: matching the conflict shape instead would need a guess per sync vendor and would miss a custom machine name.",
