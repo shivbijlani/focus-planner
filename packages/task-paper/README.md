@@ -84,10 +84,58 @@ false negatives:
 Both failure modes report a **correct** document as broken, which is the dangerous
 direction: the natural reaction is to "fix" a document that was already right.
 
-## Not yet built
+## The comment channel
 
-The **comment channel**. #286's load-bearing requirement is that the user can leave
-instructions on the doc and the agent reads them. This page is a read surface only, and
-says so in its own footer — anything typed into it is discarded on the next regeneration.
-Wiring that up means teaching the consent reader a fifth writer, which #325 shows must be
-done in the shared reader rather than per-channel.
+#286's load-bearing requirement: *"we will need a way for me to add comments. When
+continuing a task, you will have to read my comments because I might instruct there
+instead of journal or telegram."*
+
+**A comment is not stored anywhere new — it is appended to the task's own journal, by the
+app's own writer, as an ordinary attributed user message.** Everything else falls out of
+that one choice rather than being built:
+
+| #286 asked | how it is answered |
+| --- | --- |
+| where do comments live so they **survive regeneration**? | in the journal. The paper is a pure function of the journal, so a comment cannot be clobbered by regenerating the file it is not in — it reappears under **Your instructions**. |
+| how does the agent detect **new** ones? | it already does. `oa-state.ps1 mark` stamps a turn-end boundary and snapshots the journal; text after that boundary is `reopened: true` on the next `scan`. Zero new detection. |
+| **consent** — a comment can carry an instruction | the bytes are a normal `<!-- from: me -->` message, byte-identical to what the app and the Telegram bridge write, so the fail-closed reader already attributes it. No fourth shape to teach. |
+
+Verified end-to-end rather than argued: a comment typed into a generated paper in Edge 152
+produced `\n\n## <date>\n\n<!-- from: me -->\n<text>\n`, and the **unmodified**
+`oa-state.ps1 consent` read it as `human-authored-affirmative`, `affirmative_author: "me"`.
+The same journal without the comment returns `no-trailing-content`. Nothing in
+`oa-state.ps1` changed.
+
+### The writer is embedded verbatim, not re-implemented
+
+`src/journalChat.js` is dependency-free, so **the whole file is inlined byte-for-byte**
+into the paper's `<script type="module">`, read from disk at generation time and never
+transcribed. An inline module script tolerates its `export` declarations (measured in Edge
+152 on a `file://` origin), so no transformation is needed and a test holds the embed
+byte-identical to the source. If they ever drift, a test fails rather than a user's
+approval going quiet — which is exactly the #325 failure mode.
+
+### Why the File System Access API
+
+Measured on the live setup, not assumed: on a `file://` origin Edge 152 reports
+`isSecureContext: true` and exposes `showDirectoryPicker`, and IndexedDB persists across
+pages because every `file://` document shares one origin. That last property is what makes
+this usable rather than a chore — **the journal folder is granted once and all papers can
+then write**, instead of each paper asking separately.
+
+### Safety
+
+- **Append-only guard.** `createWritable()` truncates and rewrites, so a bug producing a
+  short string would destroy a journal rather than fail. Anything that is not the original
+  plus new text is refused before the handle is opened. A comment is worth losing; a
+  journal is not.
+- **Read-back verification.** The file is re-read after writing; an unverified write is
+  reported rather than claimed as saved.
+- **It can only write its own journal.** The filename is baked in at generation time; no
+  code path names a different file.
+- **It degrades instead of lying.** With no File System Access API the Save button is
+  disabled and a *Copy as markdown* fallback emits the same block — date and `from: me`
+  marker included — to paste into the journal by hand.
+- **Still additive.** `renderPaper` without a `writerSource` produces the previous
+  read-only page, and a paper with no task id never gets a box.
+
