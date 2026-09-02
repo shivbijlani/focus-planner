@@ -90,7 +90,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Mutation check (budgets, growth, off-path classification)
+      - name: Mutation check (budgets, growth, collapse, off-path classification)
         run: node ./plugins/overnight-agent/checks/mutcheck-read-path-budget.mjs
       - name: Manifest and baseline are valid JSON
         run: |

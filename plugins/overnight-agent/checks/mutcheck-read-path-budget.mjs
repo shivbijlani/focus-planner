@@ -17,6 +17,10 @@
 //   m9  idPattern classification disabled-> a stray file is measured as a journal    (g6)
 //   m10 a NEW stray treated as known     -> the offPath baseline swallows a new one  (g6)
 //   m11 a companion accused as a stray   -> the sweep tells you to delete your work  (g6)
+//   m12 collapse detection disabled      -> a journal loses 97% and passes           (g7)
+//   m13 collapse read from `sizes` only  -> a KNOWN file's collapse is invisible     (g7)
+//   m14 a NEW collapse treated as known  -> the shrank baseline swallows a new one   (g7)
+//   m15 collapse reported as OVER/GROWING-> the finding prints the wrong remedy      (g7)
 //
 // Each arm is verified in BOTH directions: the scenario must fail against the real script
 // (proving the scenario is live) and pass against the mutant (proving the guard is what
@@ -147,6 +151,37 @@ const S = {
     manifest: okManifest(),
     journals: { 'task-1.md': 10, 'task-1-healthy-living.md': 10, 'task-1-backlog.md': 200 },
   }),
+  // g7. THE #382 SHAPE, and the reason the guard reads `known` as well as `sizes`: the file
+  // was an ACKNOWLEDGED BREACH (200 KB against a 64 KB budget) that collapsed to 6 KB. That
+  // lands it under its budget and not growing, so every other test in the sweep passes it.
+  collapsedKnown: () => newFixture({
+    manifest: okManifest(),
+    journals: { 'task-1.md': 6 },
+    baseline: { known: { 'task-1.md': 200 } },
+  }),
+  // The within-budget half, via the `sizes` map.
+  collapsedUnderBudget: () => newFixture({
+    manifest: okManifest(),
+    journals: { 'task-8.md': 2 },
+    baseline: { known: {}, sizes: { 'task-8.md': 40 } },
+  }),
+  // Acknowledged in the baseline with a reason: recorded, printed, and NOT a finding.
+  collapsedAck: () => newFixture({
+    manifest: okManifest(),
+    journals: { 'task-1.md': 6 },
+    baseline: {
+      known: { 'task-1.md': 200 },
+      shrank: { 'task-1.md': 'app overwrote it 2026-09-01; history recovered to task-1.history.md' },
+    },
+  }),
+  // THE FALSE-POSITIVE DIRECTION. 200 -> 150 KB is a real edit, not a data-loss event, and
+  // it must stay silent. A collapse alarm that fires on ordinary editing is the permanently
+  // red line this suite has twice been burned by.
+  mildShrink: () => newFixture({
+    manifest: okManifest(),
+    journals: { 'task-1.md': 150 },
+    baseline: { known: { 'task-1.md': 200 } },
+  }),
 }
 
 // -------------------------------------------------------------------- baseline --
@@ -275,6 +310,39 @@ const check = (name, cond) => { asserts++; if (!cond) fails.push(name) }
   }))
   check('unparseable strayPattern exits 1', r16.code === 1)
   check('unparseable strayPattern names the field', /strayPattern/.test(r16.out))
+
+  // g7: collapse. The #382 shape -- an acknowledged breach that lost 97% of itself, which
+  // lands it under budget and not growing, so nothing else in this sweep can see it.
+  const r17 = run(S.collapsedKnown())
+  check('collapsed known file exits 1', r17.code === 1)
+  check('collapsed known file reported as SHRANK', /SHRANK\s+task-1\.md/.test(r17.out))
+  check('collapse names the size it fell from', /down from 200 KB/.test(r17.out))
+  // The class matters more than the count, exactly as with g6: OVER means "shrink this" and
+  // GROWING means "it is still getting bigger". Printing either against a file that just
+  // lost its history sends a human to do the wrong thing.
+  check('a collapse is NOT reported as a budget breach', !/OVER\s+task-1\.md/.test(r17.out))
+  check('a collapse is NOT reported as growth', !/GROWING\s+task-1\.md/.test(r17.out))
+  check('collapse names the real remedy', /whether history\s+was lost/.test(r17.out))
+
+  const r18 = run(S.collapsedUnderBudget())
+  check('collapsed within-budget file exits 1', r18.code === 1)
+  check('collapsed within-budget file reported as SHRANK', /SHRANK\s+task-8\.md/.test(r18.out))
+
+  const r19 = run(S.collapsedAck())
+  check('acknowledged collapse exits 0', r19.code === 0)
+  check('acknowledged collapse prints in its own section', /acknowledged collapse/.test(r19.out))
+  check('acknowledged collapse still names the file', /task-1\.md/.test(r19.out))
+  check('acknowledged collapse carries its reason', /history recovered/.test(r19.out))
+
+  // The negative direction. An ordinary edit must be silent, or the guard becomes noise.
+  const r20 = run(S.mildShrink())
+  check('a routine shrink exits 0', r20.code === 0)
+  check('a routine shrink is not reported', !/SHRANK/.test(r20.out))
+
+  // A file with no recorded baseline size cannot have collapsed -- there is nothing to
+  // compare against, and inventing one would accuse every newly-created file.
+  const r21 = run(newFixture({ manifest: okManifest(), journals: { 'task-99.md': 1 } }))
+  check('an unbaselined small file is not a collapse', r21.code === 0 && !/SHRANK/.test(r21.out))
 }
 
 if (fails.length) {
@@ -314,12 +382,46 @@ const arms = [
   // the list would swallow every future stray -- the g3 hole, in the new class.
   { name: 'm10 a new stray treated as known off-path', scenario: S.offPathStray,
     mutate: (s) => s.replace('if (wasKnown) {', 'if (true) {') },
+  // g7. Restores the pre-#382 state exactly: two one-sided size tests and no `<` anywhere,
+  // so a journal can lose 97% of itself and land in "stable within tolerance".
+  { name: 'm12 collapse detection disabled', scenario: S.collapsedKnown,
+    mutate: (s) => s.replace('if (recorded > 0 && sizeKB < recorded * shrinkFactor) {', 'if (false) {') },
+  // The half that is easy to get wrong while looking correct. Reading only `sizes` catches
+  // a within-budget file and misses the ACKNOWLEDGED BREACH -- which is the one class #382
+  // actually happened to, and the one that goes quiet under budget afterwards.
+  { name: 'm13 collapse read from `sizes` only', scenario: S.collapsedKnown,
+    mutate: (s) => s.replace(
+      'baseline.sizes?.[name] ?? baseline.known?.[name]', 'baseline.sizes?.[name]') },
+  // The acknowledgement must cover only what it names, or the first recorded collapse
+  // silently absorbs every later one -- "the app ate it" becoming the new normal, which is
+  // the specific outcome the issue asks this guard to prevent.
+  { name: 'm14 a new collapse treated as acknowledged', scenario: S.collapsedKnown,
+    mutate: (s) => s.replace('if (why) {', 'if (true) {') },
 ]
 
 const survived = []
+
+// A mutation anchor is plain source text, so it can match PROSE as easily as code -- and
+// this file is mostly prose. Found the hard way while adding g7: a new comment quoted the
+// m4 anchor verbatim, `String.replace` hit that first occurrence, and the mutant differed
+// from the original by one word inside a comment. The guard it was meant to disable was
+// still fully armed.
+//
+// That direction was safe (the arm reported SURVIVED). The other direction is not: if an
+// inert mutant happens to exit 0 for any unrelated reason, the arm prints `killed` and has
+// proven nothing -- a check that quietly does nothing while reporting clean, which is the
+// exact failure mode this file exists to detect, reproduced inside the detector itself.
+//
+// So a mutation must change CODE, not commentary. Comparing comment-stripped source is
+// enough here (the sweep uses only line comments) and needs no change to how arms are
+// written, which matters because the anchors live inside closures.
+const codeOnly = (s) => s.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
+const inert = (mutated) => codeOnly(mutated) === codeOnly(SRC)
+
 for (const arm of arms) {
   const mutated = arm.mutate(SRC)
   if (mutated === SRC) { survived.push(`${arm.name} (anchor did not match)`); continue }
+  if (inert(mutated)) { survived.push(`${arm.name} (anchor matched only a comment; mutation is inert)`); continue }
   const real = run(arm.scenario())
   const mutant = run(arm.scenario(), mutated)
   if (real.code !== 1) survived.push(`${arm.name} (scenario did not fail on the real script)`)
@@ -335,6 +437,7 @@ for (const arm of arms) {
     "const findings = []\n;(await import('node:fs')).writeFileSync(join(planner, 'mutant-write.txt'), 'x')"
   )
   if (mutated === SRC) survived.push(`${name} (anchor did not match)`)
+  else if (inert(mutated)) survived.push(`${name} (anchor matched only a comment; mutation is inert)`)
   else {
     const fx = newFixture({ manifest: okManifest(), journals: { 'task-9.md': 10 } })
     const before = snapshot(fx.planner)
@@ -352,6 +455,7 @@ for (const arm of arms) {
   const name = 'm11 a companion deliverable is accused as a stray'
   const mutated = SRC.replace('return { companion: full }', 'return { offPath: full }')
   if (mutated === SRC) survived.push(`${name} (anchor did not match)`)
+  else if (inert(mutated)) survived.push(`${name} (anchor matched only a comment; mutation is inert)`)
   else {
     const real = run(S.companionsOnly())
     const mutant = run(S.companionsOnly(), mutated)
@@ -363,11 +467,33 @@ for (const arm of arms) {
   }
 }
 
+// m15 is inverted for the same reason as m11: its kill signal is a finding appearing against
+// an innocent file. The threshold is deliberately LOOSE and deliberately SEPARATE from
+// `tolerancePct` (see the g7 note in the sweep). Binding the two together is the natural
+// tidy-up a future reader would make -- and it converts a data-loss alarm into one that
+// fires on ordinary editing, which is precisely how this suite's other detectors went red
+// permanently and stopped being read.
+{
+  const name = 'm15 collapse threshold tuned into tolerancePct'
+  const mutated = SRC.replace('manifest.shrinkFactor ?? 0.5', '1 - tolerance')
+  if (mutated === SRC) survived.push(`${name} (anchor did not match)`)
+  else if (inert(mutated)) survived.push(`${name} (anchor matched only a comment; mutation is inert)`)
+  else {
+    const real = run(S.mildShrink())
+    const mutant = run(S.mildShrink(), mutated)
+    if (real.code !== 0 || /SHRANK/.test(real.out)) {
+      survived.push(`${name} (the real script already fires on a routine shrink)`)
+    } else if (!/SHRANK\s+task-1\.md/.test(mutant.out)) {
+      survived.push(`${name} (the mutant's false positive went undetected)`)
+    } else console.log(`[mutcheck] killed:   ${name}`)
+  }
+}
+
 cleanup()
 if (survived.length) {
   console.log(`[mutcheck] FAIL - ${survived.length} mutation(s) survived:`)
   for (const s of survived) console.log(`  ${s}`)
   process.exit(1)
 }
-console.log(`[mutcheck] PASS - all ${arms.length + 2} mutations killed; every guard is load-bearing.`)
+console.log(`[mutcheck] PASS - all ${arms.length + 3} mutations killed; every guard is load-bearing.`)
 process.exit(0)

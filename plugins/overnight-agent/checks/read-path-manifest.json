@@ -21,6 +21,9 @@
 
   "tolerancePct": 15,
 
+  "shrinkFactor": 0.5,
+  "shrinkFactorNote": "g7, GH #382. A read-path file measuring below this fraction of its recorded baseline size is reported as SHRANK. SEPARATE FROM tolerancePct ON PURPOSE: tolerance is a drift question (is this creeping up?), while this is an order-of-magnitude one (did content just disappear?). Journals and settings files are append-mostly, so a HALVING is already extraordinary -- the event that motivated this lost 97% (202,489 -> 1,850 bytes, 41 agent turns and the user's own messages, when the planner app re-rendered a journal from its task description). Keep this LOOSE. A tight value turns a data-loss alarm into a routine-edit alarm, and this suite has twice been burned by a permanently-red line teaching every future run to skim it. Legitimate downward re-baselines are handled by the 'shrank' map in read-path-baseline.json, not by tuning this number.",
+
   "files": [
     {
       "id": "user-settings",
