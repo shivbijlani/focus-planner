@@ -21,6 +21,7 @@
 // rendered text stay byte-comparable.
 
 import { escapeHtml, renderMarkdown, renderInline } from './markdown.js'
+import { buildCommentScript, commentSectionHtml } from './comment.js'
 
 const STYLE = `
 :root {
@@ -93,6 +94,24 @@ th { background: #f6f8fa; }
 .msg:last-child { margin-bottom: 0; }
 .msg .when { color: var(--muted); font-size: .8rem; display: block; margin-bottom: .25rem; }
 .msg > :last-child { margin-bottom: 0; }
+section.comment { margin: 2rem 0 0; }
+section.comment h2 { margin-bottom: .3rem; }
+section.comment textarea {
+  width: 100%; margin: .5rem 0 .6rem; padding: .6rem .7rem; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--card); color: inherit; font: inherit; line-height: 1.5;
+  resize: vertical; min-height: 5.5rem;
+}
+section.comment textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.comment-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.comment-actions button {
+  font: inherit; font-size: .9rem; padding: .4rem .85rem; border-radius: 6px;
+  border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer;
+}
+.comment-actions button.secondary { background: var(--card); color: var(--accent); }
+.comment-actions button:disabled { opacity: .55; cursor: default; }
+.oa-status { font-size: .85rem; color: var(--muted); }
+.oa-status--ok { color: #1e6b3a; }
+.oa-status--warn { color: #8a5300; }
 .turn { border-top: 1px solid var(--line); padding-top: .9rem; margin-top: .9rem; }
 .turn:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
 .turn .when { color: var(--muted); font-size: .8rem; }
@@ -106,6 +125,7 @@ footer.paper-foot {
   details { border: 0; padding: 0; }
   details > summary { list-style: none; }
   details:not([open]) > *:not(summary) { display: revert; }
+  section.comment { display: none; }
 }
 `.trim()
 
@@ -151,8 +171,13 @@ function turnHtml(turn) {
 /**
  * Render the paper. `journalHref` / `boardHref` are optional links back to the
  * sources, so every claim in the doc can be traced to the file it came from.
+ *
+ * `writerSource` is the verbatim text of `src/journalChat.js`. Passing it turns on the
+ * comment channel (#286): the page gets a comment box that appends to this task's
+ * journal using that exact code. Omitting it renders a read-only paper, which is what
+ * every existing caller and test gets by default -- the feature is additive.
  */
-export function renderPaper(paper, { journalHref = null, telegramHref = null } = {}) {
+export function renderPaper(paper, { journalHref = null, telegramHref = null, writerSource = null } = {}) {
   const idLabel = paper.taskId ? `Task #${paper.taskId}` : 'Task'
   const lastDay = lastDayOf(paper)
 
@@ -266,10 +291,17 @@ export function renderPaper(paper, { journalHref = null, telegramHref = null } =
     }
   }
 
+  const commentsOn = Boolean(writerSource && paper.taskId)
+  if (commentsOn) parts.push(commentSectionHtml({ taskId: paper.taskId }))
+
   parts.push('<footer class="paper-foot">')
   parts.push(
-    `<p>Generated from the task journal, which stays the source of truth. This page is regenerated on every run, so edits made here are not read \u2014 ` +
-      `<strong>to leave an instruction, reply in the journal or in Telegram</strong> and it will be picked up next run.</p>`,
+    commentsOn
+      ? `<p>Generated from the task journal, which stays the source of truth. This page is regenerated on every ` +
+          `run, so <strong>a comment is saved into the journal rather than into this page</strong> \u2014 that is why ` +
+          `it survives, and why the agent reads it exactly as it reads a reply in the journal or in Telegram.</p>`
+      : `<p>Generated from the task journal, which stays the source of truth. This page is regenerated on every run, so edits made here are not read \u2014 ` +
+          `<strong>to leave an instruction, reply in the journal or in Telegram</strong> and it will be picked up next run.</p>`,
   )
   parts.push(
     `<p>Built from ${escapeHtml(formatBytes(paper.counts.sourceBytes))} of journal \u00B7 ` +
@@ -279,6 +311,7 @@ export function renderPaper(paper, { journalHref = null, telegramHref = null } =
   parts.push('</footer>')
 
   parts.push('</main>')
+  if (commentsOn) parts.push(buildCommentScript(writerSource, { taskId: paper.taskId }))
   parts.push('</body>')
   parts.push('</html>')
   return parts.join('\n') + '\n'

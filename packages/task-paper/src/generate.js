@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { buildPaper } from './paper.js'
 import { renderPaper } from './render.js'
+import { readSharedWriter } from './comment.js'
 
 const JOURNAL_RE = /^task-(\d+)\.md$/i
 
@@ -37,7 +38,7 @@ function telegramHrefFrom(content) {
  * property, regenerating would churn every file in OneDrive on every run and destroy
  * the only signal that matters -- whether the task actually moved.
  */
-export function generatePaper(journalPath, { outDir = null, fsImpl = fs } = {}) {
+export function generatePaper(journalPath, { outDir = null, fsImpl = fs, writerSource = undefined } = {}) {
   const filename = path.basename(journalPath)
   const m = JOURNAL_RE.exec(filename)
   const taskId = m ? m[1] : null
@@ -47,6 +48,9 @@ export function generatePaper(journalPath, { outDir = null, fsImpl = fs } = {}) 
   const html = renderPaper(paper, {
     journalHref: path.posix.join('..', filename),
     telegramHref: telegramHrefFrom(content),
+    // Read once per call unless the caller hoisted it (`generateAll` does, so a
+    // 237-journal sweep reads the shared writer once rather than 237 times).
+    writerSource: writerSource === undefined ? readSharedWriter() : writerSource,
   })
 
   const dir = outDir || path.join(path.dirname(journalPath), PAPER_DIRNAME)
@@ -85,8 +89,15 @@ export function generateAll(journalDir, {
   fsImpl = fs,
   taskIds = null,
   onlyWithAgentBlock = true,
+  writerSource = undefined,
 } = {}) {
   const wanted = taskIds ? new Set(taskIds.map(String)) : null
+  // Hoisted so a full sweep reads the shared writer once. Deliberately the REAL fs,
+  // never `fsImpl`: the writer is a repo source file, not a file in the planner
+  // folder the caller is sweeping, so a test's in-memory folder must not be asked
+  // for it. A failure here must be loud, not silent — a paper generated without it
+  // has no comment box, and the channel would go quiet with nothing to notice.
+  const writer = writerSource === undefined ? readSharedWriter() : writerSource
   const results = []
   const entries = fsImpl.readdirSync(journalDir)
   for (const name of entries.slice().sort(compareJournalNames)) {
@@ -102,7 +113,7 @@ export function generateAll(journalDir, {
           continue
         }
       }
-      results.push(generatePaper(full, { outDir, fsImpl }))
+      results.push(generatePaper(full, { outDir, fsImpl, writerSource: writer }))
     } catch (err) {
       // One unreadable journal must never abort the sweep -- these run unattended.
       results.push({ taskId: m[1], written: false, reason: 'error', error: String(err.message || err) })

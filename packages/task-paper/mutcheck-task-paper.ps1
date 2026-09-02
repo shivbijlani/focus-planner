@@ -70,6 +70,34 @@ $mutations = @(
   @{ name = 'M12 rewrites an unchanged paper every run'; file = 'generate.js'
      from = '  if (existing === html) {'
      to   = '  if (false) {' }
+
+  # --- the comment channel (#286, second half) ---
+  # These guard the two properties that fail SILENTLY: the page keeps saying "Saved"
+  # while writing bytes nobody attributes to the user, or it destroys a journal.
+  @{ name = 'M13 embedded writer transformed, not verbatim'; file = 'comment.js'
+     from = "    writerSource.replace(/\n+`$/, ''),"
+     to   = "    writerSource.replace(/\n+`$/, '').replace('export function appendJournalMessage', 'function appendJournalMessage')," }
+  @{ name = 'M14 script-breakout guard removed'; file = 'comment.js'
+     from = '  if (/<\/script/i.test(src)) {'
+     to   = '  if (false) {' }
+  @{ name = 'M15 append-only guard removed (a short write would truncate a journal)'; file = 'comment.js'
+     from = '  if (!after.startsWith(trimmed) || after.length <= trimmed.length) {'
+     to   = '  if (false) {' }
+  @{ name = 'M16 write never read back'; file = 'comment.js'
+     from = "  if (verify !== after) return { ok: false, code: 'verify-failed' }"
+     to   = "  if (false) return { ok: false, code: 'unused' }" }
+  @{ name = 'M17 clock in the comment script (breaks nightly determinism)'; file = 'comment.js'
+     from = "const OA_DB = 'oa-paper-comments'"
+     to   = "const OA_DB = 'oa-paper-comments' + Date.now()" }
+  @{ name = 'M18 no fallback when the browser cannot write files'; file = 'comment.js'
+     from = '  if (!OA_CAN_WRITE) {'
+     to   = '  if (false) {' }
+  @{ name = 'M19 box rendered for a paper with no task id'; file = 'render.js'
+     from = '  const commentsOn = Boolean(writerSource && paper.taskId)'
+     to   = '  const commentsOn = Boolean(writerSource)' }
+  @{ name = 'M20 footer still claims edits here are not read'; file = 'render.js'
+     from = '    commentsOn'
+     to   = '    false' }
 )
 
 # Capture pristine bytes up front so a restore can never depend on a decode.
