@@ -22,8 +22,7 @@
     "every-run files that are within budget, so the growth signal applies to them too.",
     "Update an entry here only together with a deliberate, reviewed size change.",
     "",
-    "`offPath` is the third list, added 2026-09-01. These files match a glob but not its",
-    "`idPattern`, so no run reads them -- they were previously misreported as OVER-budget",
+    "`offPath` is the third list, added 2026-09-01. These files match a glob but not its",    "`idPattern`, so no run reads them -- they were previously misreported as OVER-budget",
     "journals, whose stated remedy (shrink the file) was the wrong action on a file nobody",
     "opens. They are acknowledged rather than failing because the AGENT CANNOT CLEAR THEM:",
     "removing a file is blocked by the agent-gate.md floor rule 'Outcome can result in",
@@ -42,7 +41,21 @@
     "read whole. So a breach here no longer means 'a run will spend ~70K tokens on this file'; it",
     "means 'this file is still growing and has no retention policy', which is GH #123, not #291.",
     "Re-baselining stops that from being a permanently-red line while leaving the growth signal",
-    "fully armed: exceed +15% from these numbers and the sweep fails again."
+    "fully armed: exceed +15% from these numbers and the sweep fails again.",
+    "",
+    "`shrank` is the fourth list, added 2026-09-02 (GH #382). It is the ONLY way to re-baseline",
+    "a file DOWNWARD. Every other size test here points one way -- growth -- and that asymmetry",
+    "let a journal lose 97% of itself in silence: the planner app rewrote task-463.md from",
+    "202,489 bytes to 1,850, discarding 41 agent turns and the user's own <!-- from: me -->",
+    "messages, and this sweep reported the whole read path clean immediately afterwards. Worse,",
+    "task-463.md had been the sweep's LOUDEST live finding an hour earlier (OVER, 183.8 KB); the",
+    "collapse pushed it under budget, so destroying the content is what made the alarm stop.",
+    "",
+    "So a large drop must now SAY WHY IT DROPPED. An entry here is a human statement that the",
+    "shrink was examined and accounted for -- not a size, deliberately, because a number would",
+    "silently absorb the next collapse the way `known` absorbs a stable breach. Acknowledged",
+    "collapses print in full in their own section, so recording one never hides it. Remove the",
+    "entry once the file has grown past the threshold again and the comparison is moot."
   ],
   "measuredAt": "2026-09-01",
   "sizes": {
@@ -65,5 +78,9 @@
     "task-249-DESKTOP-P9116M3.md": "OneDrive sync-conflict copy, 2026-07-07. Holds a superseded v1 proposal (Seattle City Light TOU) not present in task-249.md; check before deleting.",
     "task-292-DESKTOP-P9116M3.md": "OneDrive sync-conflict copy, 2026-07-07. Verified 2026-09-01: zero lines absent from task-292.md, so it is redundant.",
     "task-463-DESKTOP-P9116M3.md": "OneDrive sync-conflict copy, 2026-08-31. Verified 2026-09-01: its only differing line is a SHORTER form of task-463.md line 8, so it is redundant."
+  },
+
+  "shrank": {
+    "task-463.md": "192.2 KB -> 6.6 KB at 2026-09-01T19:00 (-97%), GH #382: the planner app re-rendered the journal from the task description instead of appending to it. ACCOUNTED FOR, NOT DISMISSED -- the 41 discarded agent turns and the user's own messages were reassembled from the write-turn.ps1 pre-append snapshot and archived beside the journal as task-463.history-through-20260901-1900.md (202,540 bytes, verified present 2026-09-02). The app-side defect is still open; this entry acknowledges the ONE historical collapse so the guard is not permanently red, and a second collapse of this file would be a new finding."
   }
 }

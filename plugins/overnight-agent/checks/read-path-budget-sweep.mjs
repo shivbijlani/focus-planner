@@ -38,6 +38,50 @@
 //   g6 OFF-PATH.  A file that matches a glob but not that glob's declared `idPattern` is
 //                 NOT on the read path, so it is not budget-checked -- it is reported as
 //                 its own finding class. See below.
+//   g7 SHRANK.    A read-path file that has COLLAPSED against its recorded size is a
+//                 finding. Every other size test here points one way; this is the other
+//                 direction. See below.
+//
+// WHY g7 EXISTS -- COLLAPSE WAS INDISTINGUISHABLE FROM A FIX, AND IT SILENCED A LIVE ALARM
+// -----------------------------------------------------------------------------------------
+// GH #382: editing a task in the planner app rewrote `task-463.md` from 202,489 bytes to
+// 1,850 bytes -- 41 agent turns and the user's own `<!-- from: me -->` messages gone, in a
+// file that every other writer only ever appends to. The history survived only by luck,
+// because `write-turn.ps1` happens to snapshot a journal before appending.
+//
+// This sweep measured that file, before and after, and had nothing to say. Both of its size
+// comparisons were one-sided -- each asks only whether the file exceeded its recorded size
+// by more than the tolerance, and there was no less-than comparison anywhere in the file --
+// so a file could lose 97% of itself and land in "stable within tolerance".
+//
+// It was worse than silent. `task-463.md` was this sweep's loudest live finding earlier the
+// same evening (`OVER task-463.md: 183.8 KB exceeds the 64 KB budget`). After the overwrite
+// it was 6.6 KB: under budget, not growing, and the whole read path reported clean. The
+// content being destroyed is what made the alarm stop -- in the guard's own output, losing
+// the history looked like the mitigation landing.
+//
+// The asymmetry was not an oversight. This sweep is about unbounded GROWTH (#293), and in
+// that frame a shrinking journal is what success looks like. That holds right up until a
+// journal can shrink for a reason nobody intended. It now can, so "smaller is always better"
+// is no longer safe for this file class.
+//
+// Three deliberate choices, each mirroring an existing convention in this file:
+//   * A LOOSE, SEPARATE threshold. `tolerancePct` is a 15%-style question about drift; this
+//     is not. A journal is append-mostly, so a HALVING is already extraordinary and a 97%
+//     collapse is unambiguous. `shrinkFactor` (default 0.5) is its own manifest field so the
+//     two cannot be tuned into each other.
+//   * ITS OWN CLASS, because a finding names its own remedy (the g6 note). `SHRANK` asks a
+//     human "was content lost?"; `OVER` asks for a mitigation. Printing one when the other
+//     is true is the misclassification g6 exists to prevent.
+//   * AN ACKNOWLEDGEMENT IS REQUIRED to re-baseline downward, via `baseline.shrank`. A drop
+//     must say WHY it dropped, so "the app ate it" cannot be absorbed as the new normal on
+//     the next run -- and, exactly as with `offPath`, acknowledged entries print in full in
+//     their own section so acknowledging one never hides it.
+//
+// Both baseline maps are consulted (`sizes` AND `known`), and that is the whole point rather
+// than thoroughness: `task-463.md` lived in `known`, and a `known` file that collapses under
+// its budget hits the `sizeKB <= entry.budgetKB` early return and is never examined again.
+// Checking only `sizes` would have missed the very event this guard was written for.
 //
 // WHY g6 EXISTS -- A BUDGET FINDING NAMES ITS OWN REMEDY, SO MISFILING ONE IS NOT COSMETIC
 // ----------------------------------------------------------------------------------------
@@ -122,6 +166,10 @@ const skillDir = (() => {
 const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8'))
 const baseline = existsSync(BASELINE) ? JSON.parse(readFileSync(BASELINE, 'utf8')) : { known: {} }
 const tolerance = (manifest.tolerancePct ?? 15) / 100
+// g7. Deliberately NOT derived from tolerancePct -- see the g7 note at the top. Drift is a
+// percentage question; collapse is an order-of-magnitude one, and folding them into one knob
+// would let a tolerance tweak silently re-arm or disarm the data-loss alarm.
+const shrinkFactor = manifest.shrinkFactor ?? 0.5
 
 const expand = (p) => p.replace('{planner}', planner).replace('{skill}', skillDir)
 const kb = (bytes) => Math.round((bytes / 1024) * 10) / 10
@@ -172,6 +220,7 @@ function resolve(entry) {
 const findings = []
 const acknowledged = []
 const offPathAck = []
+const shrankAck = []
 let companions = 0
 const observed = {}
 
@@ -254,6 +303,35 @@ for (const entry of manifest.files) {
     const sizeKB = kb(statSync(target).size)
     const name = basename(target)
     observed[name] = sizeKB
+
+    // --- g7: collapse. The only check here that looks in the other direction. -----------
+    // Read from BOTH baseline maps. `sizes` holds within-budget files and `known` holds
+    // acknowledged breaches, and the #382 file was in `known` -- a `known` file that
+    // collapses under its budget falls straight through the early return below and is never
+    // looked at again, so consulting only `sizes` would miss the exact event this catches.
+    const recorded = baseline.sizes?.[name] ?? baseline.known?.[name]
+    if (recorded > 0 && sizeKB < recorded * shrinkFactor) {
+      const why = baseline.shrank?.[name]
+      const lost = Math.round(((recorded - sizeKB) / recorded) * 100)
+      if (why) {
+        shrankAck.push(`  ${name} ${sizeKB} KB (was ${recorded} KB, -${lost}%) -- ${why}`)
+      } else {
+        findings.push(
+          `SHRANK    ${name}: ${sizeKB} KB, down from ${recorded} KB at baseline (-${lost}%, ` +
+            `threshold ${Math.round((1 - shrinkFactor) * 100)}%). This file is append-mostly, so a ` +
+            `collapse this large usually means content was DESTROYED, not that it was tidied ` +
+            `(GH #382: the planner app rewrote a journal from 202 KB to 1.8 KB, discarding 41 ` +
+            `agent turns and the user's own messages). Remedy is to establish whether history ` +
+            `was lost and recover it -- NOT to shrink anything further. If the drop was ` +
+            `deliberate, record it in the 'shrank' map of read-path-baseline.json with the ` +
+            `reason, which is what re-baselines it downward.`
+        )
+      }
+      // A collapsed file is neither growing nor over budget; reporting it as either would
+      // print the wrong remedy, which is the misclassification g6 exists to prevent.
+      continue
+    }
+
     // --- g5: growth must not be gated on already being over budget. ---------------------
     // The budget answers "is this too big?". Only growth answers "is this doubling?", and
     // this file's own baseline calls growth "the live signal, because growth is the actual
@@ -313,12 +391,21 @@ if (offPathAck.length) {
   for (const a of offPathAck) console.log(a)
 }
 
+// Same treatment, and for the same reason: an acknowledged collapse is a record that content
+// went missing and was accounted for. Folding it into the truncated list above would hide the
+// one class where the acknowledgement itself is the evidence a human looked.
+if (shrankAck.length) {
+  console.log(`\n${shrankAck.length} acknowledged collapse(s) -- recorded in the baseline with a reason:`)
+  for (const a of shrankAck) console.log(a)
+}
+
 console.log(
   findings.length
     ? `\nread-path-budget: ${findings.length} finding(s).`
     : `\nread-path-budget: clean (${Object.keys(observed).length} files measured, ` +
         `${acknowledged.length} acknowledged` +
         `${companions ? `, ${companions} companion` : ''}` +
-        `${offPathAck.length ? `, ${offPathAck.length} off-path` : ''}).`
+        `${offPathAck.length ? `, ${offPathAck.length} off-path` : ''}` +
+        `${shrankAck.length ? `, ${shrankAck.length} acknowledged collapse` : ''}).`
 )
 process.exit(findings.length ? 1 : 0)
