@@ -173,6 +173,237 @@ describe('collapsing superseded turns (#205)', () => {
   })
 })
 
+describe('rate limits do not duplicate messages (#172)', () => {
+  const journalFor = (id) => AGENT_JOURNAL.replace('Task 42: Demo', `Task ${id}: Demo`)
+
+  // A 429 exactly as telegramClient.js now surfaces it.
+  const rateLimit = (retryAfter) => {
+    const err = new Error('Telegram sendMessage failed: Too Many Requests: retry after 41')
+    err.isRateLimit = true
+    err.errorCode = 429
+    if (retryAfter != null) err.retryAfter = retryAfter
+    return err
+  }
+
+  // Never actually wait in tests -- but DO record what the code asked to wait,
+  // because "honours retry_after" is the criterion, not "eventually succeeds".
+  const withFakeSleep = async (fn) => {
+    const waits = []
+    globalThis.__telegramBridgeSleep = (ms) => {
+      waits.push(ms)
+      return Promise.resolve()
+    }
+    try {
+      return await fn(waits)
+    } finally {
+      delete globalThis.__telegramBridgeSleep
+    }
+  }
+
+  it('a 14-task sweep that 429s partway posts each task exactly once across crash and resume', async () => {
+    const ids = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14']
+    const files = Object.fromEntries(ids.map((id) => [id, journalFor(id)]))
+
+    // Count how many times each task's turn is actually delivered.
+    const delivered = []
+    let failAfter = 10
+    let messageSeq = 0
+
+    const makeClient = () => ({
+      async createForumTopic({ name }) {
+        return { message_thread_id: Number(name.match(/\d+/)[0]) }
+      },
+      async sendMessage({ text }) {
+        if (delivered.length >= failAfter) throw rateLimit(41)
+        delivered.push(text.match(/Task (\d+)/)?.[1] ?? text.slice(0, 20))
+        return { message_id: ++messageSeq }
+      },
+      async deleteMessage() {
+        return true
+      },
+      async getUpdates() {
+        return []
+      },
+      async getMe() {
+        return { username: 'test_bot', id: 1 }
+      },
+    })
+
+    const io = {
+      async listJournals() {
+        return ids.map((taskId) => ({ taskId, filename: `task-${taskId}.md` }))
+      },
+      async readJournal(id) {
+        return files[id]
+      },
+      async writeJournal(id, content) {
+        files[id] = content
+      },
+      async readCompletedBoard() {
+        return ''
+      },
+      async readBoard() {
+        return ''
+      },
+      async readSyncRecords() {
+        return []
+      },
+    }
+
+    const config = { chatId: '-100', taskAllowlist: [] }
+
+    // The state store, persisted incrementally -- this is the fix under test.
+    let saved = null
+    const persist = (s) => {
+      saved = JSON.parse(JSON.stringify(s))
+    }
+
+    // Run 1: dies partway through, having posted 10.
+    const state1 = emptyState()
+    const bridge1 = createBridge({
+      client: makeClient(),
+      config,
+      state: state1,
+      io,
+      persist,
+    })
+    await withFakeSleep(async () => {
+      await expect(bridge1.syncUp()).rejects.toThrow(/Too Many Requests/)
+    })
+    expect(delivered).toHaveLength(10)
+    // Crucially, the crash did NOT prevent the first 10 from being recorded.
+    expect(saved).not.toBeNull()
+    expect(Object.keys(saved.tasks).filter((k) => saved.tasks[k].lastPostedHash)).toHaveLength(10)
+
+    // Run 2: resumes from the persisted state, limit lifted.
+    failAfter = Infinity
+    const state2 = { ...emptyState(), ...saved, tasks: saved.tasks }
+    const bridge2 = createBridge({
+      client: makeClient(),
+      config,
+      state: state2,
+      io,
+      persist,
+    })
+    await withFakeSleep(() => bridge2.syncUp())
+
+    // 14 deliveries total, not 24. Every task exactly once.
+    expect(delivered).toHaveLength(14)
+    const counts = {}
+    for (const id of delivered) counts[id] = (counts[id] || 0) + 1
+    expect(Object.values(counts).every((n) => n === 1)).toBe(true)
+  })
+
+  it('waits the server-advised retry_after and then succeeds, instead of failing the run', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    let calls = 0
+    const original = h.client.sendMessage
+    h.client.sendMessage = async (m) => {
+      calls++
+      if (calls === 1) throw rateLimit(41)
+      return original(m)
+    }
+
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const waits = await withFakeSleep(async (w) => {
+      await bridge.syncUp()
+      return w
+    })
+
+    expect(calls).toBe(2)
+    expect(h.sent).toHaveLength(1)
+    // 41 seconds, exactly as Telegram asked -- not a guess, not a scrape.
+    expect(waits).toEqual([41000])
+  })
+
+  it('backs off with a bounded wait when retry_after is absent', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    let calls = 0
+    const original = h.client.sendMessage
+    h.client.sendMessage = async (m) => {
+      calls++
+      if (calls <= 2) throw rateLimit(null)
+      return original(m)
+    }
+
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const waits = await withFakeSleep(async (w) => {
+      await bridge.syncUp()
+      return w
+    })
+
+    expect(calls).toBe(3)
+    expect(h.sent).toHaveLength(1)
+    expect(waits).toHaveLength(2)
+    // Bounded and increasing -- degrades safely rather than depending on the field.
+    expect(waits[1]).toBeGreaterThan(waits[0])
+    expect(Math.max(...waits)).toBeLessThanOrEqual(90000)
+  })
+
+  it('does NOT spend a plain-text retry on a rate limit', async () => {
+    // The fallback is for HTML/entity rejections. Using it on a 429 spends
+    // another call against the same exhausted quota.
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const attempts = []
+    h.client.sendMessage = async (m) => {
+      attempts.push(m.parseMode ? 'html' : 'plain')
+      throw rateLimit(1)
+    }
+
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await withFakeSleep(async () => {
+      await expect(bridge.syncUp()).rejects.toThrow(/Too Many Requests/)
+    })
+
+    // Retries, yes -- but every one of them HTML. Never the plain fallback.
+    expect(attempts.length).toBeGreaterThan(1)
+    expect(attempts.every((a) => a === 'html')).toBe(true)
+  })
+
+  it('still falls back to plain text for a non-rate-limit HTML rejection', async () => {
+    // The guard above must not cost us the fallback it was narrowing.
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const attempts = []
+    let messageSeq = 100
+    h.client.sendMessage = async (m) => {
+      attempts.push(m.parseMode ? 'html' : 'plain')
+      if (m.parseMode) throw new Error("Telegram sendMessage failed: can't parse entities")
+      return { message_id: ++messageSeq }
+    }
+
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+    await bridge.syncUp()
+
+    expect(attempts).toEqual(['html', 'plain'])
+  })
+
+  it('a failed checkpoint never costs the run', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({
+      client: h.client,
+      config: h.config,
+      state,
+      io: h.io,
+      persist: () => {
+        throw new Error('disk full')
+      },
+    })
+
+    // The message is already delivered; losing the run over bookkeeping would be
+    // strictly worse than the duplicate the checkpoint prevents.
+    await expect(bridge.syncUp()).resolves.toBeTruthy()
+    expect(h.sent).toHaveLength(1)
+  })
+})
+
 describe('syncUp', () => {
   it('creates a topic and posts the agent turn once, then dedups', async () => {
     const h = makeHarness({ 42: AGENT_JOURNAL })
