@@ -201,6 +201,194 @@ describe('agent sentinel detection (parse)', () => {
   })
 })
 
+// --- Fenced code is quoted text, not markup (#320 / #325) -------------------------------
+// The agent quotes journal markup in fenced examples constantly. Before this, the parser
+// read those examples as real markup: an illustration of a reply rendered as a bubble FROM
+// SHIV, and a fenced date fabricated a new day. `oa-state.ps1` masks fences (#344); these
+// pin the app-side half, which #320's third criterion called out as equally unpinned.
+describe('fenced code is quoted text, not markup (#320)', () => {
+  const F = '```'
+
+  const quotingAgentTurn = [
+    '# Task 962: probe',
+    '',
+    '## 2026-09-01',
+    '',
+    '<!-- from: me -->',
+    'how does attribution work?',
+    '',
+    '<!-- from: overnight-agent -->',
+    'A human reply carries its marker above it, like this:',
+    '',
+    F,
+    '<!-- from: me -->',
+    'yes, go ahead',
+    F,
+    '',
+    'and a new day starts a new entry:',
+    '',
+    F + 'markdown',
+    '## 2026-12-25',
+    'some example text',
+    F,
+    '',
+    'That is the whole mechanism.',
+  ].join('\n')
+
+  const parsed = parseJournalChat(quotingAgentTurn)
+
+  it('does not attribute the agent\'s fenced example to the user', () => {
+    const mine = parsed.groups.filter((g) => g.author === 'me')
+    // Exactly one real user bubble: the question. The fenced "yes, go ahead" is the
+    // agent's illustration and must never be shown as words Shiv typed.
+    expect(mine).toHaveLength(1)
+    expect(mine[0].lines.join('\n')).toContain('how does attribution work?')
+    expect(mine[0].lines.join('\n')).not.toContain('yes, go ahead')
+  })
+
+  it('does not let a fenced ## date open a new day', () => {
+    expect(parsed.groups.map((g) => g.day)).not.toContain('2026-12-25')
+  })
+
+  it('keeps the whole agent turn in one bubble instead of stacking fragments', () => {
+    expect(parsed.groups).toHaveLength(2)
+    const agent = parsed.groups.find((g) => g.author === 'agent')
+    const body = agent.lines.join('\n')
+    // The example survives verbatim inside the agent's own bubble.
+    expect(body).toContain('<!-- from: me -->')
+    expect(body).toContain('## 2026-12-25')
+    expect(body).toContain('That is the whole mechanism.')
+  })
+
+  // The mirror case: masking must not swallow REAL markup that merely follows a fence.
+  it('resumes normal parsing after the fence closes', () => {
+    const md = [
+      '# Task 963: probe',
+      '',
+      '## 2026-09-01',
+      '',
+      '<!-- from: overnight-agent -->',
+      'example:',
+      F,
+      '<!-- from: me -->',
+      F,
+      '',
+      '<!-- from: me -->',
+      'this one is real',
+    ].join('\n')
+    const r = parseJournalChat(md)
+    const mine = r.groups.filter((g) => g.author === 'me')
+    expect(mine).toHaveLength(1)
+    expect(mine[0].lines.join('\n')).toBe('this one is real')
+  })
+
+  it('treats a tilde fence and an indented fence as fences too', () => {
+    const md = [
+      '# Task 964: probe',
+      '',
+      '## 2026-09-01',
+      '',
+      '<!-- from: overnight-agent -->',
+      'examples:',
+      '~~~',
+      '<!-- from: me -->',
+      '~~~',
+      '   ' + F,
+      '<!-- from: me -->',
+      '   ' + F,
+      'done',
+    ].join('\n')
+    const r = parseJournalChat(md)
+    expect(r.groups.filter((g) => g.author === 'me')).toHaveLength(0)
+  })
+
+  it('does not treat inline code as a fence opener', () => {
+    const md = [
+      '# Task 965: probe',
+      '',
+      '## 2026-09-01',
+      '',
+      '<!-- from: overnight-agent -->',
+      'inline `a``b` code is not a fence',
+      '',
+      '<!-- from: me -->',
+      'still mine',
+    ].join('\n')
+    const r = parseJournalChat(md)
+    const mine = r.groups.filter((g) => g.author === 'me')
+    expect(mine).toHaveLength(1)
+    expect(mine[0].lines.join('\n')).toBe('still mine')
+  })
+})
+
+describe('appendJournalMessage is fence-blind no more (#320 / #325)', () => {
+  const F = '```'
+
+  // The load-bearing case. The writer decides whether to stamp a marker; the consent
+  // gate decides whether the text is attributable. When the writer counts a QUOTED
+  // marker as real it omits the stamp, the fence-aware gate then sees unattributed
+  // text, and Shiv's approval is discarded by the disagreement between them.
+  it('stamps from:me even when a fenced example quotes a from:me marker', () => {
+    const base = [
+      '# Task 966: probe',
+      '',
+      '## 2026-09-01',
+      '',
+      '<!-- from: overnight-agent -->',
+      'A reply looks like this:',
+      '',
+      F,
+      '<!-- from: me -->',
+      'yes, go ahead',
+      F,
+    ].join('\n')
+    const out = appendJournalMessage(base, 'yes, go ahead and merge it', '2026-09-01')
+    const added = out.slice(base.replace(/\s+$/, '').length)
+    expect(added).toContain(FROM_ME)
+  })
+
+  it('does not treat a fenced ## date as the journal\'s newest day', () => {
+    const base = [
+      '# Task 967: probe',
+      '',
+      '## 2026-09-01',
+      '',
+      '<!-- from: overnight-agent -->',
+      'example of a future entry:',
+      '',
+      F,
+      '## 2026-12-25',
+      F,
+    ].join('\n')
+    // Today differs from the only REAL date, so a new dated block must open.
+    const out = appendJournalMessage(base, 'ok', '2026-09-02')
+    expect(out).toContain('## 2026-09-02')
+    expect(out.match(/^## 2026-12-25$/gm)).toHaveLength(1) // still only the quoted one
+  })
+
+  // Mirror: a genuine marker that really does own the tail must still suppress a
+  // second stamp, so the fix cannot become "always stamp".
+  it('still merges under a real trailing from:me marker', () => {
+    const base = [
+      '# Task 968: probe',
+      '',
+      '## 2026-09-01',
+      '',
+      '<!-- from: overnight-agent -->',
+      'example:',
+      F,
+      '<!-- from: overnight-agent -->',
+      F,
+      '',
+      '<!-- from: me -->',
+      'first',
+    ].join('\n')
+    const out = appendJournalMessage(base, 'second', '2026-09-01')
+    expect(out.match(/<!-- from: me -->/g)).toHaveLength(1)
+    expect(out).toContain('first\nsecond')
+  })
+})
+
 describe('formatCloseOutComment', () => {
   it('formats both an outcome and a comment', () => {
     expect(formatCloseOutComment('Canceled', 'Client pulled the project.')).toBe(
