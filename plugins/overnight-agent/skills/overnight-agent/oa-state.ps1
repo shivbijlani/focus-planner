@@ -1938,8 +1938,36 @@ function Get-PriorityRank($wp) {
 # out of this list let a single unanswered Today row hold the whole Deferred backlog shut.
 $script:NonWorkableStatus = @('done', 'skip', 'proposed', 'blocked')
 
+# #170 cause 3: the CLOSED statuses. A reply arriving on one of these is a real message from a
+# real person, and it must still be SEEN -- but seeing it and reanimating the task are different
+# acts, and only the first one was ever asked for. Shiv, on task #400: "I don't think we need to
+# handle the case where a reply on a closed task is considered [a reopen]".
+#
+# `proposed`/`blocked` are deliberately NOT here. Those are waiting-on-the-user states, so a reply
+# is exactly the input they are waiting for and must reopen them normally. Only work the user has
+# CLOSED is protected from being reanimated by a passing remark.
+$script:ClosedStatus = @('done', 'skip')
+
+function Test-ReopenedClosed($row) {
+  # A reply landed on a task the user had closed. Reported, never worked.
+  return [bool]($row.reopened -and ($script:ClosedStatus -contains "$($row.status)"))
+}
+
 function Test-Workable($row) {
   if ($row.snoozed) { return $false }
+  # #170 cause 3, and this ORDER is the whole fix. `reopened` used to return $true here
+  # unconditionally, one line earlier than the status gate below -- so a reply on a `done` task
+  # jumped the gate that exists to keep finished work finished, and the run wrote a fresh turn
+  # into it. Measured on the live board 2026-08-22: task #385 (Levolor shades) was cancelled on
+  # 2026-07-28, sits on the completed board, and a JULY journal entry was re-posted into its
+  # Telegram topic, floating the finished task back to the top of the group. 4 of 23 recently
+  # re-posted tasks were completed-board tasks -- ~17% of mirror traffic going into closed work.
+  #
+  # The asymmetry is deliberate and is the reason this is safe: a missed nudge on a closed task
+  # is cheap and STAYS VISIBLE (the run reports it, quoted, under "Replies on closed tasks", and
+  # the row can be reopened by saying so or by moving it back onto the board). Silently
+  # reanimating finished work is the actual complaint, and it is not visible at all.
+  if (Test-ReopenedClosed $row) { return $false }
   if ($row.reopened) { return $true }   # a live reply is always workable (#223 rule 4)
   # A DUE timer outranks the awaiting-reply park. A poll/recheck is read-only agent work that
   # needs no reply, so parking it on "the user has not answered" would silently stop exactly the
@@ -2168,6 +2196,11 @@ function Cmd-Scan {
       # waiting on the user -- the same state `proposed` encodes, reached from `in-progress`.
       # `reopened` outranks it (Test-Workable checks that first), so a reply un-parks it at once.
       has_open_ask   = [bool]$facts.HasOpenAsk
+      # #170 cause 3: a reply that landed on a task the user had CLOSED. It is deliberately not
+      # workable -- see Test-Workable -- but it is emitted so the run can SURFACE it (quoted, in
+      # the wrap-up) rather than swallow it. Suppressing the work without reporting the message
+      # would trade one silent failure for another.
+      reopened_closed = [bool]($reopened -and ($script:ClosedStatus -contains "$status"))
       awaiting_reply = [bool]($facts.HasAgentBlock -and $facts.HasBlockingAsk -and -not $facts.HasTrailingUser)
       # When the agent last wrote a TURN here (`mark` stamps it; `seed` and `resnapshot`
       # deliberately do not). Since #310 this is NOT a release signal: it feeds the wedged-run
@@ -2213,7 +2246,15 @@ function Cmd-Scan {
     $order++
     $eligible = $false
     if (-not $r.snoozed) {
-      if ($r.reopened) { $eligible = $true }                       # rule 4 beats the gate
+      # #170 cause 3: `reopened` beating the gate is rule 4, and it is right -- a live reply is
+      # the highest-value work there is. But it must be a reply on work that is still OPEN.
+      # This shortcut is the SECOND place the old "a reply always wins" rule lived, above the
+      # `Test-Workable` calls below, so fixing only `Test-Workable` left the row ineligible by
+      # one reader and force-eligible by this one. Measured while fixing it: the gate verdict
+      # correctly read `not_workable` while `eligible` still came back `true`, so the run would
+      # have been handed a closed task anyway.
+      if (Test-ReopenedClosed $r) { $eligible = $false }
+      elseif ($r.reopened) { $eligible = $true }                  # rule 4 beats the gate
       elseif ($r.section -eq 'today') { $eligible = (Test-Workable $r) }
       elseif ($todayHolding -eq 0) { $eligible = (Test-Workable $r) }
     }
