@@ -62,6 +62,42 @@ The delete-through is **git's own removal code**, not PowerShell's. "Use `rmdir`
 instead of `Remove-Item`" therefore protects nothing; the fix is to unlink
 *before* git runs.
 
+### It is git-version-dependent, and this box has the bad one
+
+Same fixture, same machine, three gits:
+
+| git | target before | target after | verdict |
+| --- | --- | --- | --- |
+| 2.53.0.windows.4 | 4 | **0** | **deletes through** |
+| 2.54.0.windows.1 | 4 | 4 | safe |
+| 2.55.0.windows.5 (GitHub `windows-latest`) | 5 | 5 | safe |
+
+So it is fixed upstream in git for Windows 2.54 — and it is still live here,
+because `git` resolves to the **Copilot-bundled 2.53.0** ahead of the 2.54.0 in
+`C:\Program Files\Git`:
+
+```
+> git --version
+git version 2.53.0.windows.4
+> where.exe git
+C:\Users\<user>\AppData\Local\github-copilot-git-2.53.0-4\cmd\git.exe
+C:\Program Files\Git\cmd\git.exe
+```
+
+Agent sessions therefore get the destructive git. Two consequences worth holding
+onto:
+
+- Upgrading the git that agent sessions resolve to would remove the hazard at
+  source, and is worth doing independently.
+- The guard is still the durable fix. It does not depend on a git version, it
+  costs nothing when git is already safe, and it also covers the *other* things
+  that recursively delete a worktree directory.
+
+`scripts/mutcheck-worktree-safety.ps1` measures this rather than assuming it: it
+probes whether the git it is running under deletes through, prints the answer, and
+skips the damage-dependent arms — visibly, as `skip`, never as `ok` — when it does
+not.
+
 ## Do this instead
 
 ### Setting a worktree up
@@ -153,4 +189,7 @@ pwsh -NoProfile -File scripts/mutcheck-worktree-safety.ps1
 ```
 
 It is Windows-only (junctions are an NTFS feature) and self-skips elsewhere; CI
-runs it on `windows-latest`.
+runs it on `windows-latest`. Because that runner's git is already safe, CI
+exercises the guards' own behaviour (refusals, detection, ordering, verification)
+and reports the destructive arms as skipped — which is also a useful signal in its
+own right: it tells you which gits still carry the bug.

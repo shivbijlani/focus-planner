@@ -39,6 +39,26 @@
   NO mutant here for "used the wrong delete verb" -- it would assert a hazard that
   does not exist, and a check that pins a false belief is worse than no check.
 
+  THE HAZARD IS GIT-VERSION-DEPENDENT, WHICH IS WHY THIS FILE PROBES FOR IT
+  ------------------------------------------------------------------------
+  Same fixture, same box, three gits:
+
+      git 2.53.0.windows.4   before=4 after=0   DELETES THROUGH
+      git 2.54.0.windows.1   before=4 after=4   safe
+      git 2.55.0.windows.5   before=5 after=5   safe   (GitHub windows-latest runner)
+
+  It is fixed upstream, and it is still live here: `git` on the affected box
+  resolves to the Copilot-bundled 2.53.0 ahead of the 2.54.0 in Program Files, so
+  agent sessions get the destructive one.
+
+  That makes a hard-coded "the target must be emptied" assertion WRONG on a modern
+  runner -- it fails not because a guard broke but because git got better. So the
+  first thing this check does is MEASURE whether the git it is running under
+  deletes through, print the answer, and run the damage-dependent arms only when
+  the answer is yes. Arms whose kill signal is the helper's own behaviour run
+  everywhere. A skipped arm is reported as `skip`, never as `ok`: a check that
+  quietly stops measuring is the failure mode this suite exists to prevent.
+
   THE MUTANTS. Every one must be KILLED by its named arm.
     M1  the unlink pass is removed                 -> G1, killed by arm B
     M2  the "still linked -> do not run git" abort -> G4, killed by arm F
@@ -81,6 +101,7 @@ if (-not $psExe) { throw 'No PowerShell host found to run the probes in.' }
 
 $script:Pass = 0
 $script:Fail = 0
+$script:Skip = 0
 function Assert($name, $cond, $detail) {
     if ($cond) { $script:Pass++; Write-Host ("  ok    {0}" -f $name) -ForegroundColor Green }
     else { $script:Fail++; Write-Host ("  FAIL  {0}  {1}" -f $name, $detail) -ForegroundColor Red }
@@ -293,6 +314,33 @@ function Invoke-Probe {
 Write-Host "mutcheck-worktree-safety  (lib: $LibPath)" -ForegroundColor Cyan
 
 # ===========================================================================
+# CAPABILITY PROBE. Does the git on PATH actually delete through a junction?
+# Fixed in git for Windows 2.54; still live on any box pinned to 2.53. Arms whose
+# kill signal is "the shared target was emptied" can only run where the answer is
+# yes, and must SKIP -- visibly -- where it is no.
+# ===========================================================================
+$gitVersion = (& git --version) -join ' '
+$probe = New-Case
+$probeBefore = Count-Entries $probe.Shared
+& git -C $probe.Repo worktree remove --force $probe.Worktree 2>&1 | Out-Null
+$probeAfter = Count-Entries $probe.Shared
+$deletesThrough = ($probeAfter -ge 0 -and $probeAfter -lt $probeBefore)
+
+Write-Host ("`n{0}" -f $gitVersion) -ForegroundColor Cyan
+Write-Host ("delete-through-junction: {0}  (junction target {1} -> {2} entries after `git worktree remove --force`)" -f `
+        $(if ($deletesThrough) { 'YES -- this git is destructive' } else { 'no' }), $probeBefore, $probeAfter) `
+    -ForegroundColor $(if ($deletesThrough) { 'Red' } else { 'DarkGray' })
+
+function AssertDestructive($name, $cond, $detail) {
+    if (-not $deletesThrough) {
+        $script:Skip++
+        Write-Host ("  skip  {0}  (needs a git that deletes through a junction; this one does not)" -f $name) -ForegroundColor DarkGray
+        return
+    }
+    Assert $name $cond $detail
+}
+
+# ===========================================================================
 # A -- CONTROL. With BOTH halves of the unlink defence removed, the helper must
 # reproduce #321 exactly: shared target emptied. If this arm cannot see the
 # damage, nothing below it means anything.
@@ -304,7 +352,8 @@ $before = Count-Entries $c.Shared
 $rA = Invoke-Probe -Lib $libA -Path $c.Worktree
 $after = Count-Entries $c.Shared
 Assert 'A the fixture starts with a populated shared install' ($before -eq 5) "before=$before"
-Assert 'A without the guards the shared target is EMPTIED' ($after -eq 0) "after=$after (harness cannot see the damage)"
+AssertDestructive 'A without the guards the shared target is EMPTIED' ($after -eq 0) "after=$after (harness cannot see the damage)"
+Assert 'A without the guards git is invoked with the link in place' ($rA.Removed -eq $true) "Removed=$($rA.Removed)"
 
 # ===========================================================================
 # B -- M1 killed. The unlink pass is load-bearing: with it gone, G4 sees the
@@ -369,8 +418,11 @@ Write-Host "`nF: M2 (the still-linked abort) is killed" -ForegroundColor Cyan
 $c = New-Case
 $libF = New-Mutant -Name 'F-m2m3' -Edits @($M.UnlinkNoOp, $M.AbortOnSurvivor)
 $rF = Invoke-Probe -Lib $libF -Path $c.Worktree
-Assert 'F without G4 the shared target is emptied' ((Count-Entries $c.Shared) -eq 0) ("entries=" + (Count-Entries $c.Shared))
-Assert 'F and G5 still reports the damage'         ($rF.ok -and -not $rF.Result) "Result=$($rF.Result) (damage reported as success)"
+# Version-independent kill: arm E's identical fixture refused to call git at all.
+# Without G4 the same surviving link is handed straight to the destructive command.
+Assert 'F without G4 git is invoked despite a surviving link' ($rF.Removed -eq $true) "Removed=$($rF.Removed)"
+AssertDestructive 'F and the shared target is emptied'        ((Count-Entries $c.Shared) -eq 0) ("entries=" + (Count-Entries $c.Shared))
+AssertDestructive 'F but G5 still reports the damage'         ($rF.ok -and -not $rF.Result) "Result=$($rF.Result) (damage reported as success)"
 
 # ===========================================================================
 # G -- M4 killed. A junction that is not called `node_modules` is exactly as
@@ -381,7 +433,7 @@ $c = New-Case
 $libG = New-Mutant -Name 'G-m4' -Edits @($M.DetectByName, $M.DetectByNameFallback)
 $rG = Invoke-Probe -Lib $libG -Path $c.Worktree
 Assert 'G name-based detection misses a link' ($rG.LinkCount -lt 2) "LinkCount=$($rG.LinkCount)"
-Assert 'G the missed link''s target is emptied' ((Count-Entries $c.Store) -eq 0) ("entries=" + (Count-Entries $c.Store))
+AssertDestructive 'G the missed link''s target is emptied' ((Count-Entries $c.Store) -eq 0) ("entries=" + (Count-Entries $c.Store))
 
 # ===========================================================================
 # H -- M5 killed. Descending through a junction makes the teardown reach INSIDE
@@ -406,8 +458,8 @@ Write-Host "`nI: M6 (post-removal verification removed) is killed" -ForegroundCo
 $c = New-Case
 $libI = New-Mutant -Name 'I-m6' -Edits @($M.UnlinkNoOp, $M.AbortOnSurvivor, $M.VerifyTargets)
 $rI = Invoke-Probe -Lib $libI -Path $c.Worktree
-Assert 'I the run is still destructive'      ((Count-Entries $c.Shared) -eq 0) ("entries=" + (Count-Entries $c.Shared))
-Assert 'I but now it reports SUCCESS'        ($rI.ok -and $rI.Result) "Result=$($rI.Result)"
+AssertDestructive 'I the run is still destructive'      ((Count-Entries $c.Shared) -eq 0) ("entries=" + (Count-Entries $c.Shared))
+AssertDestructive 'I but now it reports SUCCESS'        ($rI.ok -and $rI.Result) "Result=$($rI.Result)"
 
 # ===========================================================================
 # J -- M7 killed. #321 success criterion 3: an empty-but-present node_modules
@@ -476,6 +528,9 @@ Assert 'every mutation anchor still applies' ($script:AnchorFailures -eq 0) "$sc
 Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host ''
-Write-Host ("mutcheck-worktree-safety: {0} passed, {1} failed" -f $script:Pass, $script:Fail) -ForegroundColor $(if ($script:Fail) { 'Red' } else { 'Green' })
+if ($script:Skip -gt 0) {
+    Write-Host ("{0} arm(s) skipped: {1} does not delete through a junction, so the destructive path could not be exercised here. The guards' own behaviour was still checked." -f $script:Skip, $gitVersion) -ForegroundColor Yellow
+}
+Write-Host ("mutcheck-worktree-safety: {0} passed, {1} failed, {2} skipped" -f $script:Pass, $script:Fail, $script:Skip) -ForegroundColor $(if ($script:Fail) { 'Red' } else { 'Green' })
 if ($script:Fail -gt 0) { exit 1 }
 exit 0
