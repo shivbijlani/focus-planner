@@ -13,6 +13,7 @@ import {
   topicName,
   appendUserReply,
 } from './journal.js'
+import { digestStatus } from './liveStatus.js'
 import {
   getTask,
   setTopic,
@@ -907,7 +908,25 @@ export function createBridge({
       if (!hasAgentBlock(content)) continue
       const turn = latestAgentTurn(content)
       const block = agentBlockText(content)
-      const status = agentBlockStatus(block)
+      // #202: the task's LIVE status, arbitrated by date across the newest
+      // Status-bearing turn and the sentinel block — NOT the block header alone.
+      //
+      // The header is frozen: `write-turn.ps1` is append-only by design, so nothing
+      // has rewritten a `**Status:**` line since 2026-08-26. Reading it meant a task
+      // the agent had FINISHED never left this queue — it kept its 2026-06-19
+      // `blocked` header while its newest turn said `Done` and `Needs from you:
+      // nothing`. Measured live: 10 of 239 journals disagreed, 9 on the active board,
+      // staleness up to 73 days, and every future close leaked the same way.
+      //
+      // This also retires the dialect fault: the old capture stopped at a space, so
+      // the human `In progress` became the bare token `in`, which is not a status but
+      // is a truthy string — so `TERMINAL.has(status)` answered "not terminal" for the
+      // wrong reason and looked correct. 18 of `drift-sweep [G]`'s 32 rows were this.
+      //
+      // The header is still passed in as the fallback, so this can only ever ADD
+      // information: where the live reader has a verdict it wins, and where it has
+      // none the previous behaviour stands exactly as before. See `digestStatus`.
+      const status = digestStatus(content, agentBlockStatus(block))
       // An unparseable turn must NOT end the task's chances. A journal whose
       // newest agent entry is malformed - e.g. the `<!-- from: overnight-agent
       // -->` marker written ABOVE its `## <date>` heading, which makes the turn
