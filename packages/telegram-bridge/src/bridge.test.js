@@ -2005,3 +2005,151 @@ describe('rebaseline-turn-end migration', () => {
     expect(res.pending).toEqual([])
   })
 })
+
+// ---------------------------------------------------------------------------
+// #202 — a task the agent has FINISHED must leave the approval queue.
+//
+// The queue used to gate on `agentBlockStatus(agentBlockText(content))`, a
+// `**Status:**` line near the top of the sentinel block. Nothing writes that line
+// any more: `write-turn.ps1` is append-only by design, so it has no parameter that
+// can touch an existing line. The header therefore freezes at whatever it said the
+// day the block was created, while the agent's real status moves on in appended
+// turns — and a finished, question-free task stayed in the queue forever.
+//
+// These tests are written in BOTH directions on purpose. The over-correction here
+// is worse than the bug: a reader that is too eager to call a task finished
+// silently drops real, still-open asks out of the only consolidated view the user
+// has, which looks like a quiet queue rather than a fault.
+// ---------------------------------------------------------------------------
+describe('syncDigest reads the live status, not the frozen block header (#202)', () => {
+  const SENT = '<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->'
+  const AGENT_MARK = '<!-- from: overnight-agent -->'
+
+  /** A journal whose block header says one thing and whose newest turn says another. */
+  const withTurn = ({ header, turnDate, turnStatus, turnBody }) =>
+    [
+      '# Task 42: Demo',
+      '',
+      '---',
+      SENT,
+      '',
+      '## \u{1F319} Overnight Agent',
+      '',
+      `**Status:** ${header}`,
+      '',
+      '**Needs from you:** one word - merge 150.',
+      '',
+      `## ${turnDate}`,
+      '',
+      AGENT_MARK,
+      '',
+      '## \u{1F319} Overnight Agent',
+      '',
+      turnStatus ? `**Status:** ${turnStatus}` : '',
+      '',
+      turnBody,
+      '',
+    ].join('\n')
+
+  const digestFor = async (files) => {
+    const h = makeHarness(files)
+    const bridge = createBridge({
+      client: h.client,
+      config: h.config,
+      state: emptyState(),
+      io: h.io,
+    })
+    await bridge.syncDigest()
+    if (!h.sent.length) return ''
+    return h.sent.map((m) => m.text || m.markdown || JSON.stringify(m)).join('\n')
+  }
+
+  it('drops a task whose newest turn says Done, though the header still says blocked', async () => {
+    // The issue's own controlled experiment, as a test: one frozen header line is
+    // the only thing keeping this task in the queue.
+    const text = await digestFor({
+      42: withTurn({
+        header: 'blocked \u00B7 plan v3 \u00B7 2026-06-19',
+        turnDate: '2026-08-27',
+        turnStatus: 'Done \u00B7 2026-08-27',
+        turnBody: '**Needs from you:** nothing.',
+      }),
+    })
+    expect(text).not.toContain('42')
+  })
+
+  it('drops it even when the finished turn still carries the boilerplate ask line', async () => {
+    // The `weak` path: SKILL.md's generic closing line survives verbatim into turns
+    // the agent has already closed, so on its own it must not hold a finished task in.
+    const text = await digestFor({
+      42: withTurn({
+        header: 'proposed \u00B7 plan v1 \u00B7 2026-06-19',
+        turnDate: '2026-08-27',
+        turnStatus: 'Done \u00B7 2026-08-27',
+        turnBody: '**Your call:** reply below in plain English.',
+      }),
+    })
+    expect(text).not.toContain('42')
+  })
+
+  it('KEEPS a task whose newest turn is still in progress and asks for something', async () => {
+    // The over-correction guard. If this ever fails, the queue has gone quiet for
+    // the wrong reason and the user stops being asked anything at all.
+    const text = await digestFor({
+      42: withTurn({
+        header: 'proposed \u00B7 plan v1 \u00B7 2026-06-19',
+        turnDate: '2026-08-27',
+        turnStatus: 'In progress \u00B7 2026-08-27',
+        turnBody: '**Needs from you:** one word - merge 150.',
+      }),
+    })
+    expect(text).toContain('42')
+  })
+
+  it('KEEPS a task whose newest turn reopens work the header had called done', async () => {
+    // The staleness fix has to cut both ways: a header that says `done` must not
+    // suppress a task the agent has since picked back up.
+    const text = await digestFor({
+      42: withTurn({
+        header: 'Done \u00B7 2026-06-19',
+        turnDate: '2026-08-27',
+        turnStatus: 'in-progress \u00B7 2026-08-27',
+        turnBody: '**Needs from you:** one word - merge 150.',
+      }),
+    })
+    expect(text).toContain('42')
+  })
+
+  it('respects a block that is NEWER than the turn, so position never beats date', async () => {
+    // The loop rewrites the block's Status line every run while a turn only
+    // sometimes restates one. Preferring the turn unconditionally would report a
+    // stale turn as live — the same wrong-turn bug, one level up.
+    //
+    // The turn's ask is deliberately the WEAK boilerplate here. A strong, explicit
+    // `Needs from you:` in the newest turn is honoured on any status by design —
+    // that rule predates this issue and is the safe direction, since over-asking is
+    // recoverable and silently dropping a real question is not. So the only way to
+    // exercise date arbitration at the digest level is through the weak path.
+    const text = await digestFor({
+      42: withTurn({
+        header: 'Done \u00B7 2026-08-30',
+        turnDate: '2026-08-01',
+        turnStatus: 'in-progress \u00B7 2026-08-01',
+        turnBody: '**Your call:** reply below in plain English.',
+      }),
+    })
+    expect(text).not.toContain('42')
+  })
+
+  it('keeps a task whose turn states no status at all, falling back to the block', async () => {
+    const text = await digestFor({
+      42: withTurn({
+        header: 'proposed \u00B7 plan v1 \u00B7 2026-06-19',
+        turnDate: '2026-08-27',
+        turnStatus: '',
+        turnBody: '**Needs from you:** one word - merge 150.',
+      }),
+    })
+    expect(text).toContain('42')
+  })
+})
