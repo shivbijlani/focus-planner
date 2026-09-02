@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why the overnight agent kept re-reading enormous files, and what changed</title>
+<style>
+  :root{
+    --ink:#16181d; --mut:#5b6270; --line:#e3e6ec; --bg:#fbfcfd; --card:#fff;
+    --good:#0a7d4b; --goodbg:#eaf7f0; --bad:#a8302a; --badbg:#fdeeed; --accent:#2b5fd9;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:760px;margin:0 auto;padding:40px 22px 90px}
+  h1{font-size:31px;line-height:1.25;margin:0 0 10px;letter-spacing:-.4px}
+  .sub{color:var(--mut);font-size:17px;margin:0 0 34px}
+  h2{font-size:21px;margin:40px 0 12px;letter-spacing:-.2px}
+  h3{font-size:16px;margin:26px 0 8px;color:var(--mut);text-transform:uppercase;letter-spacing:.6px}
+  p{margin:0 0 14px}
+  ul{margin:0 0 14px;padding-left:22px} li{margin:0 0 7px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;
+       background:#eef1f6;padding:1.5px 5px;border-radius:4px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin:20px 0}
+  .tldr{background:#eef3ff;border-color:#c9d8ff}
+  .tldr p:last-child{margin-bottom:0}
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:15px;background:var(--card)}
+  th,td{padding:9px 11px;border:1px solid var(--line);text-align:left;vertical-align:top}
+  th{background:#f3f5f9;font-weight:600}
+  td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .big{font-weight:700}
+  .good{color:var(--good)} .bad{color:var(--bad)}
+  .pill{display:inline-block;font-size:12px;font-weight:700;padding:2px 9px;border-radius:20px;letter-spacing:.3px}
+  .pill.g{background:var(--goodbg);color:var(--good)}
+  blockquote{margin:16px 0;padding:14px 18px;border:1px solid #ccd8f5;border-radius:10px;background:#f4f7ff;color:#2c3550}
+  blockquote p:last-child{margin-bottom:0}
+  .foot{margin-top:46px;padding-top:18px;border-top:1px solid var(--line);color:var(--mut);font-size:14px}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Why the overnight agent kept re-reading enormous files &mdash; and what changed</h1>
+<p class="sub">A plain-language walkthrough. No prior knowledge assumed.</p>
+
+<div class="card tldr">
+  <p><strong>In one paragraph.</strong> Every night an assistant works through your task list. Before it touches a
+  task, it was told to read that task's whole notebook &mdash; the running diary of everything you and it have ever
+  said about that task. Those notebooks only ever get longer. One of them had reached <strong>272 KB</strong>, which
+  costs roughly <strong>70,000 tokens of the assistant's limited reading capacity</strong> just to open. It now reads a
+  short, bounded briefing instead. The worst notebook went from <strong>272 KB to 15.5 KB</strong>, and
+  <strong>not one byte of any notebook was changed, moved, or deleted</strong>.</p>
+</div>
+
+<h2>1. The setup, for someone who has never seen this</h2>
+
+<p>There is a personal planner. Each task in it has a <strong>journal</strong> &mdash; a plain text file that reads like
+a chat thread between you and the assistant. You write what you want. The assistant replies with what it did, what it
+plans to do next, and what it needs from you. Everything gets <em>appended to the bottom</em>. Nothing is ever removed.</p>
+
+<p>That design is deliberate and good: the journal is the honest record. The project's own rulebook says that if the
+assistant's internal bookkeeping ever disagrees with what is written in the journal, <strong>the journal wins</strong>.
+It is the human source of truth.</p>
+
+<p>The assistant runs on a language model, and a language model can only hold a limited amount of text in mind at once.
+Call it a reading budget. Everything it reads on a given run comes out of that one budget.</p>
+
+<h2>2. The problem</h2>
+
+<p>The assistant's instructions contained this line, about any task it was about to work on:</p>
+
+<blockquote><p>Read each linked task's real material &mdash; its journal &mdash; <strong>in full</strong>.</p></blockquote>
+
+<p>That was a sensible instruction when journals were short. But journals only grow. Here is what they actually looked
+like when measured on <strong>1 September 2026</strong>:</p>
+
+<table>
+  <tr><th>Measurement</th><th class="n">Value</th></tr>
+  <tr><td>Journals in the folder</td><td class="n">239</td></tr>
+  <tr><td>Total size</td><td class="n">4.01 MB</td></tr>
+  <tr><td>Typical (median) journal</td><td class="n">8.3 KB</td></tr>
+  <tr><td>Largest journal (<code>task-400</code>)</td><td class="n big bad">272 KB &mdash; about 70,000 tokens</td></tr>
+  <tr><td>Second largest (<code>task-463</code>)</td><td class="n big bad">192 KB &mdash; and still growing</td></tr>
+  <tr><td>Journals over the 64 KB safety budget</td><td class="n">8</td></tr>
+</table>
+
+<p>A typical journal was harmless. The outliers were not. And because one task can be linked to two or three others,
+a single night's planning could have been asked to read several of these at once &mdash; spending most of the reading
+budget before doing any actual work.</p>
+
+<h2>3. Why this was urgent rather than theoretical</h2>
+
+<p>The exact same failure had already happened once, on a different file &mdash; the settings file. It also grew without
+limit, and it was also read in full at the start of every run. The end state was documented:</p>
+
+<ul>
+  <li>it reached about <strong>97% of the reading budget on every single call</strong>;</li>
+  <li>one run made <strong>49 round-trips</strong>, sat in a <em>running</em> state for about <strong>nine hours</strong>,
+      and <strong>never finished</strong>;</li>
+  <li>because it never finished, it <strong>blocked the every-30-minutes schedule behind it</strong>.</li>
+</ul>
+
+<p>Nothing prevented a journal from doing precisely that. The only reason it had not happened yet is luck: no single
+task had happened to link enough large journals in one night. And the safety net for this &mdash; an automatic
+&ldquo;this run has taken too long, stop it&rdquo; timeout &mdash; <strong>has not been built yet</strong>. So if it had
+happened, there would have been no automatic recovery.</p>
+
+<h2>4. The fix, and the option that was deliberately rejected</h2>
+
+<p>The obvious fix is the one used on the settings file: write a program that <em>rewrites</em> the file smaller.</p>
+
+<p><strong>That was rejected here, on purpose.</strong> A settings file is a settings file. A journal is your own words,
+and four separate pieces of machinery read a journal by looking at its <em>exact bytes</em>:</p>
+
+<ul>
+  <li>a fingerprint of the file decides <strong>&ldquo;has the human replied since I last wrote?&rdquo;</strong>;</li>
+  <li>the position of certain markers decides <strong>&ldquo;did the human actually approve this?&rdquo;</strong>;</li>
+  <li>the Telegram bridge finds messages by those same markers;</li>
+  <li>a sentinel line divides <em>your</em> space in the file from the assistant's.</li>
+</ul>
+
+<p>A rewriter that shifted one byte across any of those boundaries would either make the assistant re-answer finished
+tasks forever, or &mdash; much worse &mdash; make it believe it had your approval when it did not.</p>
+
+<p>So instead of making the file smaller, <strong>the assistant now reads less of it</strong>. A new command produces a
+short briefing:</p>
+
+<table>
+  <tr><th>Section</th><th>What it contains</th></tr>
+  <tr><td><strong>Your framing</strong></td><td>What you wrote at the top of the journal: the brief, the constraints, the links.</td></tr>
+  <tr><td><strong>Your messages</strong></td><td>Every message you wrote, <strong>newest first</strong> &mdash; because a later decision overrides an earlier one.</td></tr>
+  <tr><td><strong>Open questions</strong></td><td>Anything the assistant is currently waiting on you for.</td></tr>
+  <tr><td><strong>Latest reply</strong></td><td>The assistant's most recent turn only: current status, current plan, what it last did.</td></tr>
+  <tr><td><strong>Unanswered reply</strong></td><td>Anything you wrote after its last turn that it has not responded to.</td></tr>
+  <tr><td><strong>Pointers</strong></td><td>Linked tasks, and any attached documents listed by name and size &mdash; named, not read.</td></tr>
+</table>
+
+<p>What it leaves out is the middle: the blow-by-blow history of every previous night. That is the part that grows
+forever, and it is the part that is almost never needed to decide what to do next.</p>
+
+<h3>Said plainly: what is read now, and what is not</h3>
+
+<div class="card">
+  <p><strong>Still read, in full and word for word:</strong> everything <em>you</em> ever wrote in that journal &mdash;
+  your brief at the top, and every subsequent message of yours, newest first. Plus the assistant's most recent turn,
+  its open questions, and anything of yours it has not yet answered.</p>
+  <p style="margin-bottom:0"><strong>No longer read:</strong> the assistant's <em>older</em> turns &mdash; the previous
+  nights' run logs. Not your words. Its own.</p>
+</div>
+
+<p>That split is the entire safety argument, so it is worth being blunt about the risk it is managing. The thing a
+person would rightly worry about is: <strong>could the assistant now silently miss a decision you made?</strong>
+Three things are done specifically to prevent that:</p>
+
+<ul>
+  <li><strong>Your messages are prioritised over the assistant's.</strong> An earlier draft of this only kept &ldquo;your
+  notes at the top&rdquo;, which is what the old instructions literally said. On a journal that has been running for
+  weeks that is badly wrong &mdash; on the largest one, the top section ends on 30 July, and every decision made in the
+  five weeks after that sits below it. So a dedicated section collects <em>every</em> message of yours from anywhere in
+  the file, newest first, because a later decision overrides an earlier one. The automated test suite deliberately
+  breaks this and confirms the break is caught.</li>
+  <li><strong>Anything skipped is announced, with a number.</strong> The briefing ends by stating exactly how many bytes
+  it did not show, and the assistant is instructed that if the briefing suggests something is missing, it should open the
+  full file. The bounded read is the default, not a cage.</li>
+  <li><strong>The conclusions the assistant draws are unchanged.</strong> The machinery that decides &ldquo;is this task
+  waiting on the human?&rdquo; and &ldquo;did the human approve this?&rdquo; was re-run across all 239 real journals
+  before and after. <strong>All 239 verdicts were identical</strong> &mdash; including the single task that carries a
+  genuine recorded approval, which still reads as approved. (That detail matters: &ldquo;all 239 say no&rdquo; would be
+  easy to match by accident. Preserving the one <em>yes</em> is the real test.)</li>
+</ul>
+
+<p>The honest residual risk: if a decision of yours is buried in the middle of an <em>enormous</em> stretch of your own
+writing, its middle can be trimmed &mdash; and the briefing will say so, in bytes, at that exact spot. In practice your
+messages are short and the assistant's are long, which is why this trade works.</p>
+
+<h2>5. The two promises, and how they are proved rather than claimed</h2>
+
+<div class="card">
+  <p><span class="pill g">PROMISE 1</span> &nbsp;<strong>Word for word.</strong> Every line in the briefing is copied
+  <em>exactly</em> out of the journal. Nothing is summarised, condensed, or reworded. An AI-written summary of
+  <em>your</em> decisions would be a quiet way of losing them, which is the whole thing being avoided.</p>
+  <p><span class="pill g">PROMISE 2</span> &nbsp;<strong>Bounded.</strong> The briefing has a hard size ceiling no
+  matter how large the journal is. And when something <em>is</em> left out, it says so and prints exactly how many
+  bytes were skipped, plus how to read the full file if you really need it. Nothing is trimmed silently.</p>
+</div>
+
+<p>Both are checked by the tool itself, on demand, against the real file &mdash; not asserted in a comment. It was then
+run against <strong>every one of the 239 real journals</strong>:</p>
+
+<table>
+  <tr><th>&nbsp;</th><th class="n">Before</th><th class="n">After</th></tr>
+  <tr><td>Cost to read the whole folder</td><td class="n">4.01 MB</td><td class="n good big">1.16 MB</td></tr>
+  <tr><td>Worst single journal</td><td class="n bad big">272 KB (~70K tokens)</td><td class="n good big">15.5 KB (~4K tokens)</td></tr>
+  <tr><td>Files passing the word-for-word check</td><td class="n">&mdash;</td><td class="n good big">239 / 239</td></tr>
+  <tr><td>Files exceeding the ceiling</td><td class="n">&mdash;</td><td class="n good big">0</td></tr>
+</table>
+
+<h3>Nothing was touched</h3>
+<p>The strongest guarantee here is a structural one: <strong>the tool has no ability to write to a journal at all.</strong>
+It is a reader. There is no save path in it to get wrong.</p>
+<p>That was confirmed rather than assumed. The command that fingerprints all 239 journals and decides which tasks count
+as &ldquo;waiting on you&rdquo; was run <em>before</em> and <em>after</em> those 239 reads, and produced a
+<strong>byte-for-byte identical result</strong> (same 182,361 bytes, same SHA-256 fingerprint). Separately, the
+approval check was run task-by-task against both the old and the new code across all 239 journals:
+<strong>239 identical verdicts, 0 differences</strong>. No journal's last-modified time changed.</p>
+
+<h2>6. A bug found along the way &mdash; the ironic one</h2>
+
+<p>While building the size-trimming logic, the tool <strong>froze</strong> on one journal: over 100 seconds, no output,
+no error message.</p>
+
+<p>The cause is a genuinely nasty quirk. The code repeatedly halves a range to find where to cut. In this scripting
+language, halving <code>(1+2)</code> and rounding gives <strong>2, not 1</strong> &mdash; it rounds to the nearest
+<em>even</em> number. That meant the &ldquo;halfway point&rdquo; could land on the end of the range, the range never got
+smaller, and the loop ran forever.</p>
+
+<p>This mattered far more than a normal bug: <strong>a tool built to prevent runs from hanging, which itself hangs, is
+worse than doing nothing.</strong> It is fixed two ways &mdash; the arithmetic is now written explicitly, and both loops
+carry a hard limit so that even a future mistake stops safely instead of freezing the schedule.</p>
+
+<h2>7. How we know the safety checks actually work</h2>
+
+<p>A safety check that has quietly stopped doing anything still reports success. So the checks are themselves tested,
+by deliberately breaking the tool in six ways and confirming each break is caught:</p>
+
+<table>
+  <tr><th>Deliberate break</th><th>Must be caught by</th><th class="n">Result</th></tr>
+  <tr><td>Remove the size limit entirely</td><td>the &ldquo;bounded&rdquo; check</td><td class="n good">caught</td></tr>
+  <tr><td>Reword a copied section</td><td>the &ldquo;word for word&rdquo; check</td><td class="n good">caught</td></tr>
+  <tr><td>Restore the freeze bug, remove the safety limit</td><td>the stopwatch &mdash; it must actually hang</td><td class="n good">caught</td></tr>
+  <tr><td>Restore the freeze bug, keep the safety limit</td><td>must finish anyway &mdash; proves the limit works</td><td class="n good">caught</td></tr>
+  <tr><td>Drop your later messages from the briefing</td><td>a marker planted in the test data</td><td class="n good">caught</td></tr>
+  <tr><td>Make the tool write to the journal</td><td>the byte-for-byte comparison</td><td class="n good">caught</td></tr>
+</table>
+
+<p>Together with 15 checks on normal behaviour, that is <strong>21 out of 21 passing</strong>. Two of these arms exist
+only because the first version of the test <em>passed while proving nothing</em> &mdash; the fake journal put its bulk in
+the one place the tool deliberately ignores, so the size limits were never actually exercised. That was found and fixed.</p>
+
+<h2>8. What this does <em>not</em> fix</h2>
+
+<p>The journals themselves are still growing, and there is still no policy for retiring old entries. That is a separate,
+known piece of work. What changed is the <em>consequence</em>: an oversized journal used to mean &ldquo;tonight's run
+will burn most of its reading budget on this file&rdquo;. Now it only means &ldquo;this file has no cleanup policy yet&rdquo;.</p>
+
+<p>The size alarm was deliberately <strong>left switched on</strong>, so that if any journal grows more than 15% beyond
+where it is today, it still raises a flag.</p>
+
+<h2>9. How to undo it</h2>
+
+<p>Revert the one commit. Because the new tool only ever <em>reads</em>, removing it cannot leave any journal in a
+modified state &mdash; there is no change to roll back on your data. The only visible difference is that the assistant's
+instructions go back to saying &ldquo;read the whole journal&rdquo;.</p>
+
+<div class="card">
+  <p style="margin:0"><strong>Everything that was run before shipping:</strong> full test suite (893 tests) &mdash; pass &middot;
+  linter &mdash; clean &middot; state-engine tests (14) &mdash; pass &middot; size-budget guard &mdash; clean (it was reporting two
+  problems before this change) &middot; file-encoding guard &mdash; clean &middot; the approval- and reply-detection safety checks
+  &mdash; unchanged &middot; continuous integration &mdash; all four checks green.</p>
+</div>
+
+<p class="foot">Written for the pull request titled <em>&ldquo;oa-state: read journals through a bounded, verbatim
+extract&rdquo;</em>, which references issue&nbsp;#291 in <code>shivbijlani/focus-planner</code>. All figures measured on
+the live journal folder on 1&nbsp;September&nbsp;2026.</p>
+
+</div>
+</body>
+</html>
