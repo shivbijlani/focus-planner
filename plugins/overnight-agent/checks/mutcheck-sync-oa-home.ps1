@@ -218,11 +218,12 @@ console.log(rows.length)
 }
 
 function Invoke-Subject {
-  param([string]$ScriptPath, $Fx, [switch]$WhatIf)
+  param([string]$ScriptPath, $Fx, [switch]$WhatIf, [string[]]$ExtraArgs = @())
   $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath,
             '-Ref', 'main', '-Repo', $Fx.Repo, '-OaHome', $Fx.Home,
             '-StatePath', (Join-Path $Fx.Base 'state.json'), '-SkipFetch', '-SkipBackup', '-Json')
   if ($WhatIf) { $args += '-WhatIf' }
+  if ($ExtraArgs) { $args += $ExtraArgs }
   $out = & powershell @args 2>&1 | Out-String
   $json = $null
   # -Json prints the object after the human lines; take the last JSON object.
@@ -496,8 +497,12 @@ Write-Host ''
 Write-Host '[mutants] each must FLIP the case it protects'
 
 function New-Mutant {
-  param([string]$Name, [string]$Find, [string]$Replace)
-  $src = [IO.File]::ReadAllText($Script, (New-Object Text.UTF8Encoding($false)))
+  # -From lets a mutant STACK on another mutant's output instead of on the pristine subject.
+  # Needed because some properties are only observable under two simultaneous defects: the
+  # fallback is only proven load-bearing when the fast path is ALSO broken, and a single
+  # find/replace cannot express that.
+  param([string]$Name, [string]$Find, [string]$Replace, [string]$From)
+  $src = [IO.File]::ReadAllText(($(if ($From) { $From } else { $Script })), (New-Object Text.UTF8Encoding($false)))
   if ($src -notmatch [regex]::Escape($Find)) { throw "mutant $Name : anchor not found -> $Find" }
   $dst = Join-Path $root "mutant-$Name.ps1"
   [IO.File]::WriteAllText($dst, $src.Replace($Find, $Replace), (New-Object Text.UTF8Encoding($false)))
@@ -747,9 +752,63 @@ Assert ((Get-Class $rM15 'bomprobe.ps1') -ne 'CURRENT') 'M15' 'without the BOM s
 #       wrong: `| Out-String` decodes using host rules, so 5.1 and pwsh 7 disagreed on the
 #       same bytes. Killing it requires the fixture to carry non-ASCII, which is why the
 #       fixture above builds real code points instead of plain text.
-$m16 = New-Mutant 'M16' '    return (Get-NormalizedTextFromBytes ([IO.File]::ReadAllBytes($tmp)))' '    return (& git -C $Repo cat-file blob $Blob 2>$null | Out-String)'
+#
+#       RE-POINTED for GH #396. The prefetch means the BATCH reader, not the per-blob
+#       reader, is what actually decodes a tracked file now -- so mutating only the per-blob
+#       line would leave the live decode path unguarded while still reporting green. That is
+#       precisely the "three separate Out-String captures, fixing one changed nothing" drift
+#       the reader comment warns about, which is why there are now two arms: M16 covers the
+#       batch path that runs, M16_FALLBACK covers the per-blob path behind -NoPrefetch.
+$m16 = New-Mutant 'M16' '      $script:BlobCache[$parts[0]] = (Get-NormalizedTextFromBytes $content)' '      $script:BlobCache[$parts[0]] = ([Text.Encoding]::Unicode.GetString($content) | Out-String)'
 $rM16 = Invoke-Subject $m16 $fxB -WhatIf
-Assert ((Get-Class $rM16 'bomprobe.ps1') -ne 'CURRENT') 'M16' 'routing the blob back through the host reintroduces the false mismatch'
+Assert ((Get-Class $rM16 'bomprobe.ps1') -ne 'CURRENT') 'M16' 'routing the batched blob back through the host reintroduces the false mismatch'
+
+# M16_FALLBACK - the same defect in the per-blob reader, which is still reachable whenever
+#       the prefetch is off or a blob was not in the ref tip (the ancestor walk). Run with
+#       -NoPrefetch so the fallback is the path under test; without that the mutant would be
+#       masked by the cache and this arm would prove nothing.
+$m16f = New-Mutant 'M16_FALLBACK' '    $text = Get-NormalizedTextFromBytes ([IO.File]::ReadAllBytes($tmp))' '    $text = (& git -C $Repo cat-file blob $key 2>$null | Out-String)'
+$rM16f = Invoke-Subject $m16f $fxB -WhatIf -ExtraArgs @('-NoPrefetch')
+Assert ((Get-Class $rM16f 'bomprobe.ps1') -ne 'CURRENT') 'M16_FALLBACK' 'and the per-blob reader is still guarded behind -NoPrefetch'
+
+# T_PREFETCH_PARITY - the two readers must agree on EVERY file, not just the BOM probe.
+#       This is the property that makes the prefetch a pure speed-up: if the batch path and
+#       the per-blob path could ever classify the same tree differently, the fast path would
+#       be a second source of truth, which is the exact failure this file exists to prevent.
+$fxP1 = New-Fixture 'parity-on'
+$fxP2 = New-Fixture 'parity-off'
+foreach ($fxp in @($fxP1, $fxP2)) {
+  Set-Content -LiteralPath (Join-Path $fxp.Home 'probe.ps1') -Value "# probe v1`nWrite-Output 'v1'" -NoNewline -Encoding utf8
+}
+$rOn  = Invoke-Subject $Script $fxP1 -WhatIf
+$rOff = Invoke-Subject $Script $fxP2 -WhatIf -ExtraArgs @('-NoPrefetch')
+$sigOn  = (($rOn.Json.files  | Sort-Object file | ForEach-Object { "$($_.file)=$($_.class)" }) -join ';')
+$sigOff = (($rOff.Json.files | Sort-Object file | ForEach-Object { "$($_.file)=$($_.class)" }) -join ';')
+Assert ($sigOn.Length -gt 0) 'T_PREFETCH_PARITY_NONEMPTY' 'the parity fixture actually classified something'
+Assert ($sigOn -eq $sigOff) 'T_PREFETCH_PARITY' "prefetched and per-blob runs classify identically (on=$sigOn off=$sigOff)"
+
+# M_BATCH_FRAMING - desync the batch framing parser by one byte.
+#       The assertion here is deliberately NOT "the verdict flips". A corrupted batch must
+#       DEGRADE, not lie: every object the parser fails to frame is simply never cached, and
+#       Get-BlobNormalized then reads it the slow, correct way. So the property worth pinning
+#       is that a broken fast path produces the SAME classification as a working one.
+#       Measured while writing this: asserting a flip here failed, precisely because the
+#       fallback did its job -- which is the answer, not an inconvenience. If this arm ever
+#       goes red it means a malformed batch started changing verdicts, i.e. the fast path
+#       became a second source of truth.
+$mFrame = New-Mutant 'M_BATCH_FRAMING' '      $i += $size + 1   # git appends a LF after each object' '      $i += $size + 2   # git appends a LF after each object'
+$rFrame = Invoke-Subject $mFrame $fxB -WhatIf
+Assert ((Get-Class $rFrame 'bomprobe.ps1') -eq 'CURRENT') 'M_BATCH_FRAMING' 'a mis-framed batch degrades to the per-blob reader instead of changing the verdict'
+
+# M_BATCH_NOFALLBACK - and prove that degradation is REAL rather than assumed. This mutant
+#       STACKS on the mis-framing above: keep the batch broken, and additionally remove the
+#       per-blob fallback so a cache miss returns nothing instead of reading the blob. The
+#       verdict must now change. Without stacking, this arm would run against a WORKING batch
+#       (everything cached, fallback never reached) and would prove nothing at all -- which
+#       is exactly how it failed on first writing.
+$mNoFb = New-Mutant 'M_BATCH_NOFALLBACK' '  if ($script:BlobCache.ContainsKey($key)) { return $script:BlobCache[$key] }' '  if ($true) { return $script:BlobCache[$key] }' -From $mFrame
+$rNoFb = Invoke-Subject $mNoFb $fxB -WhatIf
+Assert ((Get-Class $rNoFb 'bomprobe.ps1') -ne 'CURRENT') 'M_BATCH_NOFALLBACK' 'and removing the per-blob fallback does change it, so the fallback is load-bearing'
 
 # --- the GH #388 pair. One arm per DIRECTION, because a single arm cannot see both -------
 # The defect and its over-correction are mirror images, and each is a different kind of
