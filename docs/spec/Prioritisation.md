@@ -162,6 +162,12 @@ a *consent* boundary, which is why consent is a separate, fail-closed reader (`T
 versus `Test-TrailingHasConsent`). Reopening a task is reversible; acting on a forged approval is
 not.
 
+**Preempting the sort is not the same as preempting the run.** Everything above is about *rank* —
+where a reopened row lands in the worklist `scan` emits. A reply that arrives while a run is already
+under way raises a second, separate question: may it run *in addition to* the priority work, or must
+it wait its turn behind it? That is a **dispatch** question, not a sort question, and it is answered
+in §4.1.
+
 ### 2.3 Snoozing — "not until this date"
 
 A snooze is the user's explicit "not now", and it **outranks everything the agent computes**: a
@@ -573,6 +579,44 @@ and the precedence is the same: an explicit argument, then the settings row, the
 default of 1; an absent, unreadable or malformed value yields 1 exactly, so a typo can never widen
 concurrency by accident. This is the safe direction for a pacing control — the failure of the
 setting narrows a run, never widens it.
+
+*Set by Shiv, 2026-09-02.*
+
+### 4.1 Collect trumps priority — the one sanctioned exception to the default of 1
+
+A run has two steps: **collect** (the agent inbox, folded Telegram replies, `scan`) and **execute**
+(PHASE 1/2). Collect gathers and hands off; it does not perform work. The distinction matters because
+without it the first thing collection surfaces is simply the first thing worked — which is neither the
+board order of §3.1 nor the reopen precedence of §2.2, but arrival order, and arrival order is not a
+priority at all.
+
+Dispatch therefore happens in **two waves, in this order**:
+
+1. **The priority wave** — the tasks selected by `scan` order behind the Today→Deferred gate (§3.1,
+   §3.2).
+2. **The collect wave** — the tasks woken by what collection found.
+
+The second wave **trumps** rather than queues: a collect-phase wake is dispatched **in addition to**
+the priority selection, not instead of it and not after it has finished. So a reply that arrives
+tonight is acted on tonight, without displacing the work the board says matters most.
+
+**This is a deliberate, bounded exception to the default concurrency of 1**, and it is the only one.
+The justification is provenance, not urgency: a collect-phase wake exists *because the user did
+something* — sent mail, replied on the phone, typed in a journal. A human action is allowed to widen
+the run; the agent's own judgement is not. That asymmetry is the same principle §3.2 applies to the
+Today gate, where the agent may not author the signal its own gate reads.
+
+Two consequences worth stating, because each is a way to get this wrong:
+
+- **The exception does not compound.** It widens the run by the wakes collection actually found — it
+  does not raise the concurrency setting, and the priority wave still holds one item in flight at the
+  default.
+- **It does not license the run session to do the work.** A trumping wake is dispatched to the task's
+  own session like any other item (#404); trumping changes *when* a task is woken, never *where* its
+  work happens.
+
+Without this rule, §2.2's *"preempts everything"* and §4's *"default 1"* read as a contradiction, and
+a run has to guess which governs. Tracked by issue #405.
 
 *Set by Shiv, 2026-09-02.*
 
