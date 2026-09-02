@@ -140,9 +140,14 @@ end marker, anything typed below gets read as part of *your own turn* and is nev
 writes the boundary down (the `<!-- /overnight-agent turn-end -->` stamp above) rather than inferring
 it, and `scan` treats everything past that stamp as the user speaking. On the next `scan`:
 - **`reopened: true`** means the user added content after your last turn (a new `## <date>` entry or
-  raw text at the bottom) and you haven't answered it — **even if the task was `done`/`skip`.** Treat it
+  raw text at the bottom) and you haven't answered it, **on a task that is still open**. Treat it
   as fresh input: read the newest message and act (approve→execute, new ask→re-plan). This is the rule
-  that stops tasks like a closed-then-reopened one from being silently skipped.
+  that stops a live reply from being silently skipped.
+- **`reopened_closed: true`** means that reply landed on a task the user had **closed**
+  (`done`/`skip`). It is **not** workable and `scan` will not offer it: write no turn, re-`mark` it
+  with its existing status, and surface it in the wrap-up under **Replies on closed tasks** with the
+  message quoted (GH issue #170, cause 3). A missed nudge on closed work is cheap and stays visible;
+  silently reanimating finished work is neither.
 - **`reopened: false` + `changed: false`** means you spoke last and nothing changed — leave it alone.
 - **`has_agent_block: false`** means there's no plan yet — a PHASE 2 propose candidate (subject to the
   board, below).
@@ -318,11 +323,21 @@ never have to know that.
 each journal to the hash you last left behind and reports **`reopened: true`** for any task where the
 user has spoken after your last turn:
 
-- Treat a `reopened` task as **fresh input**, regardless of its stored status: read the newest message
-  and act — an approval → execute; a new ask → re-plan as a new version (per "Revise → replace").
-- This holds **even when status is `done` or `skip`** — a reply after you closed a task means it's open
-  again. (This is exactly what was being silently dropped before: the user appended a new instruction
-  under a `done` block and the old marker-only logic never saw it.)
+- Treat a `reopened` task as **fresh input**: read the newest message and act — an approval →
+  execute; a new ask → re-plan as a new version (per "Revise → replace").
+- ⛔ **Except on a task the user CLOSED.** A reply on a `done`/`skip` task does **not** reopen it,
+  and `scan` will not offer it to you: the row comes back `reopened_closed: true` and
+  `eligible: false`. Write **no** turn, take **no** action — just `oa-state.ps1 mark -Id <ID>` with
+  its existing status so it stops re-surfacing, and **report it in the wrap-up under _Replies on
+  closed tasks_, quoting the message**. Shiv, on task #400: *"I don't think we need to handle the
+  case where a reply on a closed task is considered [a reopen]"* (GH issue #170, cause 3).
+  The asymmetry is deliberate: a missed nudge on closed work is cheap **and stays visible**, whereas
+  silently reanimating finished work is invisible and is the actual complaint. Measured 2026-08-22:
+  task #385 was cancelled in July, sat on the completed board, and a July journal entry was
+  re-posted into its Telegram topic — 4 of 23 recent re-posts went into completed tasks. Reopening
+  stays available and costs one sentence: the user says so, or moves the row back onto the board.
+- `proposed` and `blocked` are **not** closed — they are *waiting on the user*, so a reply there is
+  the input they were waiting for and reopens them normally.
 - After you respond, call `oa-state.ps1 mark -Id <ID> …` so the task goes quiet again until the user
   next touches it.
 
@@ -337,8 +352,9 @@ Do the phases **in this order** every time.
 
 > **Scan first (applies to PHASE 1 *and* PHASE 2):** before judging any task, run
 > `oa-state.ps1 scan` once and use its JSON as your worklist. Each row tells you what changed and
-> what's `reopened` (the user spoke after your last turn — active again, even if `done`/`skip`) or
-> `snoozed` (skip it). Don't
+> what's `reopened` (the user spoke after your last turn — active again) or
+> `snoozed` (skip it). A reply on a task the user **closed** comes back `reopened_closed` and
+> `eligible: false` — report it, never work it (see "Reopened after close"). Don't
 > reconstruct state by eyeballing 90+ journals; let the tool point you at the handful that need work.
 
 > **Work the rows in the order `scan` gives you (#223).** The scan output is already sorted, and
@@ -797,8 +813,12 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
      block the run. (Alexa/other external to-do sources: only if a corresponding MCP is available.)
 3. Use the `scan` worklist to triage:
    - **`reopened: true`** → the user replied after your last turn; pick it up as new input (approval →
-     PHASE 1; new ask → re-plan as a new version per "Revise → replace"). **Never skip a reopened task,
-     even if its status is `done`/`skip`/`proposed`.**
+     PHASE 1; new ask → re-plan as a new version per "Revise → replace"). **Never skip a reopened task
+     that is still open** — including a `proposed` or `blocked` one, where the reply is precisely the
+     answer being waited on.
+   - **`reopened_closed: true`** → the reply landed on a task the user had **closed** (`done`/`skip`).
+     **Do not work it and do not write a turn.** Re-`mark` it with its existing status and report it in
+     the wrap-up under **Replies on closed tasks**, quoting the message (GH issue #170, cause 3).
    - **`has_agent_block: false`** → no plan yet; propose if it's a board candidate.
    - **stored status `proposed`, `done`, or `skip` with `reopened: false`** → leave it alone (waiting on
      the user or settled); don't spam a new plan.
@@ -956,6 +976,10 @@ Report back to the user a short summary:
 - **Waiting on you:** which tasks now have a plan to approve (and any that are `blocked` with a
   specific question).
 - **Skipped:** anything intentionally left.
+- **Replies on closed tasks:** any task that came back `reopened_closed` — the user replied to work
+  they had already closed. **Quote the message** and name the task, so the nudge is visible even
+  though no turn was written. Say that a word from them (or moving the row back onto the board)
+  reopens it. Omit this line entirely when there were none.
 - **Mirrored to Telegram:** if Telegram is enabled, how many topics were created/updated (or a one-line
   note if the mirror was skipped or failed). Omit this line entirely when Telegram is `off`.
 
