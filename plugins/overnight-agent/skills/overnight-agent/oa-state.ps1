@@ -1083,6 +1083,25 @@ $script:DismissiveAskRe = '(?i)^[ \t]*(none|nothing|nada|n/a|no)\b'
 # decoded as the ANSI codepage under Windows PowerShell 5.1, so a literal dash here would be
 # silently mangled on the way in (this is what ps1-encoding-sweep.mjs exists to catch).
 $script:AskClauseBreakRe = '[.;:]|\u2014|\u2013|(?<=\s)-(?=\s)'
+# ...and a dismissive opener whose remainder marks ITSELF optional is still not an ask. This is
+# the third shape the two-way split above misses, and it is the one that starves the board:
+#
+#   **Needs from you:** nothing. Both items above are optional; say the word and I'll pick it up.
+#
+# The agent said no blocker, then offered extras. Nothing is owed, so parking the task contradicts
+# the turn's own first word -- precisely the "false yes" this function is documented to avoid,
+# because a false yes parks a genuinely workable task.
+#
+# Measured on the live board 2026-08-31 00:30 PT: 21 of the 83 open board asks opened with a
+# dismissive, and one of them was #448 -- the ONLY row in Today. With Deferred correctly held
+# behind Today, that single false park left 0 of 238 rows eligible and the run no permitted work
+# anywhere. Same silent-starvation shape as the #451 case above, reached from the other side.
+#
+# Deliberately narrow, because a false NO is the dangerous direction here (it would let a run
+# stack a turn onto a genuinely unanswered ask): this is consulted ONLY after a dismissive opener
+# has already matched, so an ordinary ask never reaches it, and `none - but tell me X` has no
+# optionality marker and therefore still parks.
+$script:OptionalRemainderRe = '(?i)\b(optional(ly)?|if you want|if you would like|if you ?d like|if you like|when you ?re ready|when you are ready|when you get to it|when you have time|no rush|not urgent|up to you|self-serve|whenever you)\b'
 
 function Get-NewestAgentTurn([string]$agentLeft) {
   # The agent's LAST turn only. Scoping is what keeps this honest: an ask answered three turns
@@ -1107,7 +1126,16 @@ function Test-AskTextIsOpen([string]$value) {
   if ($v -notmatch $script:DismissiveAskRe) { return $true }
   $m = [regex]::Match($v, $script:AskClauseBreakRe)
   if (-not $m.Success) { return $false }
-  return (($v.Substring($m.Index + $m.Length)).Trim().Length -gt 0)
+  $rest = ($v.Substring($m.Index + $m.Length)).Trim()
+  if ($rest.Length -eq 0) { return $false }
+  # The turn already said nothing is needed. An explicitly OPTIONAL remainder is an offer, so it
+  # does not re-create an obligation the same sentence just disclaimed. Apostrophes are folded
+  # first so `when you're ready` and the curly-quote form both reach the pattern. The curly quote
+  # is built with [char]0x2019 rather than written literally: this .ps1 is BOM-less, so PS 5.1
+  # decodes it as the ANSI codepage and a literal glyph would be silently mangled on the way in.
+  $flat = $rest -replace ("[" + [char]0x2019 + "']"), ' '
+  if ($rest -match $script:OptionalRemainderRe -or $flat -match $script:OptionalRemainderRe) { return $false }
+  return $true
 }
 
 function Test-HasOpenAsk([string]$agentLeft) {
