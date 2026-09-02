@@ -173,6 +173,128 @@ describe('collapsing superseded turns (#205)', () => {
   })
 })
 
+describe('the collapse boundary is the reply counter, not userEngaged (#278)', () => {
+  const secondTurn = AGENT_JOURNAL.replace('do the thing', 'do the other thing')
+  const thirdTurn = AGENT_JOURNAL.replace('do the thing', 'do a third thing')
+
+  // The exact shape run-telegram-mirror.ps1 produces: sync-down then once, in
+  // one invocation. The turn that goes out was authored before the reply landed,
+  // so it cannot have answered it -- and the turn ABOVE the reply is frozen.
+  const replyUpdate = (text) => [
+    {
+      update_id: 1,
+      message: { message_id: 900, text, message_thread_id: 1, from: { is_bot: false } },
+    },
+  ]
+
+  it('does NOT treat a turn posted in the same pass as a fold as an answer', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([1])
+    expect(state.tasks['42'].lastPostedReplyCount).toBe(0)
+
+    // 1. sync-down folds the reply.
+    h.queueUpdates(replyUpdate('here is my answer'))
+    await bridge.syncDown()
+    expect(state.tasks['42'].replyCount).toBe(1)
+
+    // 2. once posts a turn authored BEFORE that message existed.
+    h.store['42'] = secondTurn + '\n'
+    await bridge.syncUp()
+
+    // The turn the user replied to is frozen, not collapsed.
+    expect(h.sent.length).toBeGreaterThanOrEqual(2)
+    expect(h.deleted).toEqual([])
+    // ...and the boundary has moved with the new post, so it is not sticky.
+    expect(state.tasks['42'].lastPostedReplyCount).toBe(1)
+  })
+
+  it('collapses again on the NEXT turn, once one has genuinely been posted after the reply', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    h.queueUpdates(replyUpdate('answering you'))
+    await bridge.syncDown()
+
+    h.store['42'] = secondTurn + '\n'
+    await bridge.syncUp()
+    const frozen = state.tasks['42'].lastPostedMessageIds
+    expect(h.deleted).toEqual([])
+
+    // No fold this time -- so the previous turn is a superseded draft again.
+    h.store['42'] = thirdTurn + '\n'
+    await bridge.syncUp()
+    expect(h.deleted).toEqual(frozen)
+  })
+
+  it('is deterministic: two consecutive turns with no fold always collapse the first', async () => {
+    // Observation 2 in #278 -- same task, no reply, opposite outcome. Run the
+    // same sequence repeatedly; the answer must not drift.
+    for (let run = 0; run < 3; run++) {
+      const h = makeHarness({ 42: AGENT_JOURNAL })
+      const state = emptyState()
+      const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+      await bridge.syncUp()
+      h.store['42'] = secondTurn
+      await bridge.syncUp()
+      expect(h.deleted).toEqual([1])
+
+      h.store['42'] = thirdTurn
+      await bridge.syncUp()
+      expect(h.deleted).toEqual([1, 2])
+    }
+  })
+
+  it('keeps a turn whose links the replacement drops (collapse stays lossless)', async () => {
+    const withLink = AGENT_JOURNAL.replace(
+      'do the thing',
+      'watch https://www.youtube.com/watch?v=abc123 first',
+    )
+    const withoutLink = AGENT_JOURNAL.replace('do the thing', 'do the other thing')
+
+    const h = makeHarness({ 42: withLink })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(state.tasks['42'].lastPostedLinks).toEqual(['https://www.youtube.com/watch?v=abc123'])
+
+    h.store['42'] = withoutLink
+    await bridge.syncUp()
+
+    // Stacking is a cosmetic regression; deleting the only copy of that link is not.
+    expect(h.sent).toHaveLength(2)
+    expect(h.deleted).toEqual([])
+  })
+
+  it('still collapses when the replacement carries the link forward', async () => {
+    const withLink = AGENT_JOURNAL.replace(
+      'do the thing',
+      'watch https://www.youtube.com/watch?v=abc123 first',
+    )
+    const carriedForward = AGENT_JOURNAL.replace(
+      'do the thing',
+      'as noted, https://www.youtube.com/watch?v=abc123 -- and now do the other thing',
+    )
+
+    const h = makeHarness({ 42: withLink })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    h.store['42'] = carriedForward
+    await bridge.syncUp()
+
+    expect(h.deleted).toEqual([1])
+  })
+})
+
 describe('syncUp', () => {
   it('creates a topic and posts the agent turn once, then dedups', async () => {
     const h = makeHarness({ 42: AGENT_JOURNAL })
