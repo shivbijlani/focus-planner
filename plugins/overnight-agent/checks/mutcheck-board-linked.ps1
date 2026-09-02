@@ -58,9 +58,12 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $candidates = @(
   $Target,
   (Join-Path $here 'oa-state.ps1'),
-  (Join-Path $here '..' | Join-Path -ChildPath 'skills' | Join-Path -ChildPath 'overnight-agent' | Join-Path -ChildPath 'oa-state.ps1'),
-  (Join-Path $env:LOCALAPPDATA 'overnight-agent\oa-state.ps1')
+  (Join-Path (Join-Path (Join-Path (Split-Path -Parent $here) 'skills') 'overnight-agent') 'oa-state.ps1')
 )
+# Only if the variable exists. `Join-Path $null ...` is a hard binding error, not an empty result,
+# so building this candidate unconditionally kills the whole check on any non-Windows runner --
+# which is exactly how the first CI run of this file failed.
+if ($env:LOCALAPPDATA) { $candidates += (Join-Path (Join-Path $env:LOCALAPPDATA 'overnight-agent') 'oa-state.ps1') }
 $script:script = $null
 foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { $script:script = (Resolve-Path $c).Path; break } }
 if (-not $script:script) { throw ("oa-state.ps1 not found. Tried:`n  " + (($candidates | Where-Object { $_ }) -join "`n  ")) }
@@ -250,12 +253,16 @@ $l860 = Get-LinkedResolved (Invoke-Extract -ScriptPath $script:script -Root $roo
 Check 'b8a ...and on a well-formed row either' `
   ($l860 -match '#199' -and $l860 -notmatch '2099') "resolved links were: '$l860'"
 
-# READ-ONLY still holds: this change reads a second file and writes neither.
-$bBoard = [IO.File]::ReadAllBytes((Join-Path $root 'planner.md'))
-$bJrnl = [IO.File]::ReadAllBytes((Join-Path $root 'journal\task-861.md'))
+# READ-ONLY still holds: this change reads a second file and writes neither. Paths are composed
+# with Join-Path rather than a `journal\...` literal -- a backslash is a legal FILENAME character
+# on the Linux runner, not a separator.
+$boardPath = Join-Path $root 'planner.md'
+$jrnlPath = Join-Path (Join-Path $root 'journal') 'task-861.md'
+$bBoard = [IO.File]::ReadAllBytes($boardPath)
+$bJrnl = [IO.File]::ReadAllBytes($jrnlPath)
 Invoke-Extract -ScriptPath $script:script -Root $root -Id '861' | Out-Null
-$aBoard = [IO.File]::ReadAllBytes((Join-Path $root 'planner.md'))
-$aJrnl = [IO.File]::ReadAllBytes((Join-Path $root 'journal\task-861.md'))
+$aBoard = [IO.File]::ReadAllBytes($boardPath)
+$aJrnl = [IO.File]::ReadAllBytes($jrnlPath)
 Check 'b9 the board and the journal are byte-identical afterwards (READ-ONLY)' `
   ((-not (Compare-Object $bBoard $aBoard -SyncWindow 0)) -and (-not (Compare-Object $bJrnl $aJrnl -SyncWindow 0))) `
   'extract mutated one of the files it read'
