@@ -901,9 +901,28 @@ export function createBridge({
   async function syncDigest({ force = false } = {}) {
     const entries = []
     const journals = await io.listJournals()
+    // #174: the completed board is the authority on whether the user has closed
+    // a task, and it outranks anything written inside the journal.
+    //
+    // The terminal-status gates below read the journal's own `**Status:**`, and
+    // they only drop a *weak* ask. So a finished task whose newest turn happens
+    // to carry a strong `Needs from you:` / `Next:` marker stayed in the queue
+    // forever — measured live 2026-09-02, **11 completed tasks** were still
+    // being shown as open asks, every one of them strong.
+    //
+    // `isFinished()` is the predicate the posting path already uses, and it
+    // already resolves the dual-board case the right way: a row on BOTH boards
+    // is still live, so ambiguity resolves toward visible. Reusing it here means
+    // the digest and the mirror cannot disagree about what "closed" means.
+    const completedIds = await loadCompletedIds()
+    const activeIds = await loadActiveIds()
 
     for (const { taskId } of journals) {
       if (!isAllowed(taskId)) continue
+      // Closed on the board = out of the queue, whatever the journal says. A
+      // stale `**Status:**` line cannot resurrect it, and neither can a strong
+      // marker left behind in a turn the agent has already finished.
+      if (isFinished(completedIds, activeIds, taskId)) continue
       const content = await io.readJournal(taskId)
       if (!hasAgentBlock(content)) continue
       const turn = latestAgentTurn(content)

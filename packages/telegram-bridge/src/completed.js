@@ -6,8 +6,16 @@
 //
 //   | 401 | ✅ | Draft house-sitter directions doc | - | 2026-08-02 |
 //
-// We only treat rows whose first cell is all digits as tasks, so the header row
-// (`| # | 🎯 | ... |`) and the `|---|---|` separator are ignored.
+// We only treat rows whose first cell parses as a task ID as tasks, so the
+// header row (`| # | 🎯 | ... |`) and the `|---|---|` separator are ignored.
+//
+// The cell grammar is shared with the active board (`board.js`), because the app
+// writes both the same way: a bare number, or the task ID followed by its linked
+// external ticket, `401,[170](https://…)`. Keeping one parser means a completed
+// row carrying an External Ticket is recognised here too — otherwise the digest
+// would think that task was never closed (#171, #174).
+
+import { taskIdFromCell } from './board.js'
 
 /**
  * @param {string} markdown raw contents of planner-completed.md
@@ -23,11 +31,11 @@ export function parseCompletedTaskIds(markdown) {
     // First table cell = text between the first and second pipe.
     const secondPipe = line.indexOf('|', 1)
     if (secondPipe === -1) continue
-    const firstCell = line.slice(1, secondPipe).trim()
-    if (!/^\d+$/.test(firstCell)) continue
-    if (seen.has(firstCell)) continue
-    seen.add(firstCell)
-    ids.push(firstCell)
+    const id = taskIdFromCell(line.slice(1, secondPipe))
+    if (!id) continue
+    if (seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
   }
   return ids
 }
