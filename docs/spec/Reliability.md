@@ -2,8 +2,7 @@
 
 This page specifies **how the system keeps an unattended, autonomous agent running
 correctly on a single personal Windows machine, and how it heals itself when it does
-not.** It assumes no prior context. A competent engineer should be able to rebuild the
-entire reliability layer from this page alone.
+not.**
 
 The subject is the **Overnight Agent** (see [Domain-overnight-agent](Domain-overnight-agent)):
 a plugin that, on a schedule, wakes up, reads a markdown task board, makes real progress on

@@ -66,5 +66,11 @@ to the spec therefore means adding a row here, not only a link in `Home.md`.
 - Link between pages with relative wiki links, e.g. `[Architecture](Architecture)`.
 - Do not include a changelog, a generation timestamp, or any note that this was machine-written —
   the commit history already carries that, and it is noise in a spec.
+- **Do not restate the bar inside the page.** "This page assumes no prior context", "a competent
+  engineer should be able to rebuild X from this page alone", and similar are *these instructions*,
+  addressed to you — they are the acceptance test for the writing, not content for a reader, who
+  simply wants the system described. Meeting the bar is shown by the page being complete, never by
+  claiming it. Describing what a page *contains* ("this page is the format contract") is fine; what
+  a page *achieves* is not.
 
 Begin by reading `spec-facts.json`, then write the pages.
