@@ -18,6 +18,9 @@ import {
   setTopic,
   setLastPosted,
   setLastPostedMessageIds,
+  setLastPostedContext,
+  bumpReplyCount,
+  getReplyCount,
   setSuppressedHash,
   setArchived,
   setUserEngaged,
@@ -28,7 +31,7 @@ import {
 } from './state.js'
 import { extractAskEntry, buildDigest, hashDigest } from './digest.js'
 import { upsertTgMetaMarker, parseTgMeta } from './deepLink.js'
-import { mdToTelegramHtml, escapeHtml } from './telegramFormat.js'
+import { mdToTelegramHtml, escapeHtml, extractLinks } from './telegramFormat.js'
 import { parseCompletedTaskIds } from './completed.js'
 import { parseDeletedTaskIds } from './deleted.js'
 import { parseBoardOrder, boardRank, boardIndex } from './board.js'
@@ -467,14 +470,61 @@ export function createBridge({
       // superseded and gets deleted once this one is safely out. Shiv's words:
       // "if I haven't responded, assume it's unread and can be clobbered."
       //
-      // `userEngaged` is the boundary and it is exactly the right one: it is set
-      // when a reply is routed to this task and consumed below once answered. So
-      // it is true precisely when the user has spoken since our last post — and a
-      // turn the user has replied to is frozen forever and must never be deleted.
-      const supersedes =
-        task && !task.userEngaged && Array.isArray(task.lastPostedMessageIds)
-          ? task.lastPostedMessageIds
-          : []
+      // TWO gates, and each closes a way #205 was lossy in practice (#278):
+      //
+      // 1. THE BOUNDARY. `userEngaged` used to stand in for "has the user
+      //    replied?" and it is the wrong signal: it is consumed by ANY post,
+      //    including one authored before the user's message existed. The mirror
+      //    runs sync-down then once in a single pass, so that is the normal
+      //    case, not an edge case — the fold sets the flag and the very next
+      //    post clears it without having answered anything. `replyCount` cannot
+      //    be consumed by posting, so comparing it against the value captured
+      //    when those ids went out asks the real question: has a reply landed
+      //    SINCE? It is also stable, which is what #278's observation 2 (same
+      //    task, no reply, collapse then no collapse) was missing.
+      //
+      // 2. LOSSLESSNESS. Collapse assumes the new turn says everything the old
+      //    one did. When that is false the deletion is unrecoverable — it cost a
+      //    YouTube link the replacement never carried forward. So if the turn
+      //    being replaced holds a link this one does not, it is kept. Stacking
+      //    is a cosmetic regression; a deleted link is lost content.
+      //
+      // `userEngaged` is left alone: it is load-bearing for a different job
+      // (letting a closed task deliver one answer per user message) and
+      // consuming it there is correct. It is still read here as a THIRD, purely
+      // conservative freeze — it can only ever prevent a collapse, never cause a
+      // wrong one, and it is what keeps pre-existing state (written before
+      // `replyCount` existed, so it reads 0 === 0) safe across the upgrade.
+      const repliesNow = getReplyCount(state, taskId)
+      const repliesAtPost = task && Number.isInteger(task.lastPostedReplyCount)
+        ? task.lastPostedReplyCount
+        : 0
+      const userSpokeSincePost = repliesNow !== repliesAtPost || !!(task && task.userEngaged)
+
+      const turnLinks = extractLinks(turn)
+      const priorLinks = task && Array.isArray(task.lastPostedLinks) ? task.lastPostedLinks : []
+      const droppedLinks = priorLinks.filter((l) => !turnLinks.includes(l))
+
+      const canCollapse =
+        !!task &&
+        !userSpokeSincePost &&
+        !droppedLinks.length &&
+        Array.isArray(task.lastPostedMessageIds)
+      const supersedes = canCollapse ? task.lastPostedMessageIds : []
+
+      if (task && Array.isArray(task.lastPostedMessageIds) && task.lastPostedMessageIds.length) {
+        if (userSpokeSincePost) {
+          logger(
+            `not collapsing task #${taskId}: a reply was folded since that turn was posted ` +
+              `(${repliesAtPost} -> ${repliesNow})`,
+          )
+        } else if (droppedLinks.length) {
+          logger(
+            `not collapsing task #${taskId}: the new turn drops ${droppedLinks.length} link(s) ` +
+              `the previous one carried (${droppedLinks.join(', ')})`,
+          )
+        }
+      }
 
       const parts = formatForTelegramParts(taskId, title, turn)
       const postedIds = []
@@ -540,6 +590,14 @@ export function createBridge({
       }
 
       setLastPostedMessageIds(state, taskId, postedIds)
+      // Capture the boundary alongside the ids, in the same step, so the two can
+      // never disagree: a later collapse of THESE ids is allowed only while the
+      // reply count still reads what it read here, and only while the turn that
+      // replaces them still carries these links.
+      setLastPostedContext(state, taskId, {
+        replyCount: repliesNow,
+        links: turnLinks,
+      })
       setLastPosted(state, taskId, hash)
       // The pending-suppression marker has served its purpose once the turn is
       // out; clearing it keeps state from carrying a stale "we owe this task a
@@ -633,6 +691,12 @@ export function createBridge({
         // in syncUp would swallow the agent's reply and the user would be left
         // asking a question into a topic that never answers.
         setUserEngaged(state, entry.taskId, true)
+        // The collapse boundary (#278). Separate from `userEngaged` on purpose:
+        // this one is never consumed by a post, so "the user has spoken since
+        // that turn went out" stays true until a turn is actually posted after
+        // the reply — which is the only point at which the turn above it stops
+        // being frozen.
+        bumpReplyCount(state, entry.taskId)
         folded.push({ taskId: entry.taskId, text: entry.text })
         logger(`folded reply into task #${entry.taskId}`)
       }
