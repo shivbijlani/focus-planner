@@ -248,8 +248,10 @@ Under `## Overnight Agent behaviour`:
 | --- | --- | --- |
 | `Today gate backstop` | `6h` (default `6`; accepts `6`, `6h`, `off`) | How long a `Today` row may sit with no turn written to it before the backlog is released past it. |
 | `Today gate strict` | `off` (accepts `on`/`yes`/`true`) | The one-switch rollback: a workable `Today` row gates forever, with no release path at all. |
+| `Overnight Agent concurrency` | `1` (default `1`; any integer ≥ 1) | How many worklist items a run may hold in flight at once. At `1` — the default — one item at a time: isolation, not concurrency. Read by the run loop, not `oa-state.ps1`; described under §4, Pacing. Tracked by #391. |
 
-`oa-state.ps1` reads this file **itself**; the agent does not pass these as flags. That is deliberate
+These tunables are read **where they are used** — the gate tunables by `oa-state.ps1`, and the
+concurrency limit by the run loop — not passed as flags by the agent. That is deliberate
 and is the single most transferable lesson in this area: a forgotten *path* argument fails loudly —
 the journal folder is not found and the run stops — but a forgotten *number* fails **silently** on
 the built-in default while the run looks entirely normal. Reading the setting where it is used
@@ -531,7 +533,52 @@ marker the agent's own software writes.
 
 ---
 
-## 4. Verification model
+## 4. Pacing — how much of the worklist a run takes on
+
+Selection order answers *what to work on next*; it does not answer *how much*. A scheduled run is
+bounded twice over — by the context window it may spend, and by the wall-clock before the next
+`*/30` run starts — and an ordered worklist says nothing about either. Pacing is the discipline that
+keeps a run from starting more than it can finish. Where §3.3's liveness mechanisms stop a run doing
+*too little*, pacing stops it committing to *too much*.
+
+Unlike the gate, pacing is **not** a mechanism inside `oa-state.ps1`; it is run-loop guidance in
+`plugins/overnight-agent/skills/overnight-agent/SKILL.md`, and issue #391 tracks encoding it there.
+Three rules govern it.
+
+- **Concurrency is a user-owned tunable, default 1.** `user-settings.md` carries an
+  `Overnight Agent concurrency` value under `## Overnight Agent behaviour`; absent, unreadable or
+  malformed, it is **1**. At 1 the run holds a single item in flight — **per-item sub-sessions are
+  isolation, not concurrency**: one task, one workspace, one thing being verified at a time. A value
+  above 1 permits more items in flight but does not make the run faster; it makes each result harder
+  to verify and turns a clean pass into a tangle nobody can review. That is why the default is 1 and
+  raising it is a deliberate act, not the normal case.
+- **Before starting another item, estimate.** Take the rate actually observed *this run* — not an
+  optimistic one — and measure it against the time left before the next scheduled run. **Starting
+  what you cannot finish is worse than ending early.** An unfinished item costs a half-written branch
+  and a half-true report and a reader who must work out which half is which; ending early costs
+  nothing, because the worklist is data and the next run recomputes the same order unchanged.
+- **Done means verified and published, not code written.** An item is finished when the change is
+  proven and shipped where it takes effect — tests green, the deliverable written where the user will
+  see it, the journal updated. Code that exists only in a working tree is not progress, and counting
+  it as progress is how a run reports more than it delivered.
+
+```markdown
+## Overnight Agent behaviour
+
+Overnight Agent concurrency: 1
+```
+
+Like the §2.5 tunables, the concurrency value is read where it is used rather than passed as a flag,
+and the precedence is the same: an explicit argument, then the settings row, then the built-in
+default of 1; an absent, unreadable or malformed value yields 1 exactly, so a typo can never widen
+concurrency by accident. This is the safe direction for a pacing control — the failure of the
+setting narrows a run, never widens it.
+
+*Set by Shiv, 2026-09-02.*
+
+---
+
+## 5. Verification model
 
 Prioritisation's *selection* logic has no vitest unit tests; it is guarded by **mutation checks**,
 which is the right shape for it. (The app's *display* sort is separately unit-tested —
@@ -568,7 +615,7 @@ Two disciplines in these checks are worth copying:
   silently dead is a worse failure than a red one, because nothing in its output is false; it merely
   implies a check it never performed.
 
-## 5. Known gaps
+## 6. Known gaps
 
 | Issue | Gap |
 | --- | --- |
@@ -581,3 +628,4 @@ Two disciplines in these checks are worth copying:
 | #261 | A stuck run has no run-level timeout, which is the condition the staleness backstop mitigates rather than fixes. |
 | #343 | The board's `Wake` column is invisible to `Get-SnoozeMap`, so a task snoozed in the app can become eligible before its wake date (see 2.3). |
 | #328 | A bare `#NNN` is ambiguous — GitHub numbers and planner task ids already collide — so this page names the namespace explicitly wherever a number appears. |
+| #391 | Pacing is documented here but not yet a mechanism: the `Overnight Agent concurrency` tunable (default 1) and the estimate-before-starting rule are run-loop guidance in `SKILL.md`, enforced by no `oa-state.ps1` reader or `mutcheck`. |
