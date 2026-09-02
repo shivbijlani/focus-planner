@@ -173,6 +173,164 @@ describe('collapsing superseded turns (#205)', () => {
   })
 })
 
+// The collapse guard used to ask `userEngaged`, which is CONSUMED by the next
+// post and therefore reports "a turn went out since your message" rather than
+// "a turn ANSWERED your message". run-telegram-mirror.ps1 runs sync-down and
+// sync-up in one invocation, so a reply folded seconds earlier was marked
+// answered by a turn written before it existed -- and the next pass deleted
+// that turn. The boundary is now a monotonic fold count that nothing consumes.
+describe('collapse boundary is a fold count, not an answered flag (#278)', () => {
+  const secondTurn = AGENT_JOURNAL.replace('do the thing', 'do the other thing')
+  const thirdTurn = AGENT_JOURNAL.replace('do the thing', 'do a third thing')
+
+  const reply = (text) => [
+    {
+      update_id: 900,
+      message: { message_thread_id: 1, message_id: 77, text, from: { is_bot: false } },
+    },
+  ]
+
+  it('does not mark a folded reply answered with a turn posted in the same pass', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    // Establish the topic so the reply can be routed to it, exactly as live.
+    await bridge.syncUp()
+    const foldSeqBefore = state.tasks['42'].foldSeq ?? 0
+
+    // One invocation of the mirror: sync-down folds, then sync-up posts a turn
+    // the agent had already written before the reply arrived.
+    h.queueUpdates(reply('what about the video?'))
+    await bridge.syncDown()
+    expect(state.tasks['42'].foldSeq).toBe(foldSeqBefore + 1)
+
+    h.store['42'] = secondTurn
+    await bridge.syncUp()
+
+    // The debt is settled -- that half of `userEngaged` is still correct -- but
+    // the boundary is NOT: nothing consumed the fold count.
+    expect(state.tasks['42'].userEngaged).toBe(false)
+    expect(state.tasks['42'].foldSeq).toBe(foldSeqBefore + 1)
+  })
+
+  it('does not collapse a turn posted in the same pass as a fold', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp() // turn 1, message id 1
+
+    h.queueUpdates(reply('what about the video?'))
+    await bridge.syncDown()
+
+    h.store['42'] = secondTurn
+    await bridge.syncUp() // turn 2, message id 2 -- authored before the reply
+    expect(h.deleted).toEqual([]) // turn 1 is above his reply: frozen
+
+    h.store['42'] = thirdTurn
+    await bridge.syncUp() // turn 3, message id 3
+
+    // The old guard deleted message 2 here, because posting turn 2 had consumed
+    // `userEngaged`. Turn 2 could not have answered a reply that arrived after
+    // it was written, so it stays.
+    expect(h.sent).toHaveLength(3)
+    expect(h.deleted).toEqual([])
+  })
+
+  it('resumes collapsing on the turn after the boundary', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp() // 1
+    h.queueUpdates(reply('ping'))
+    await bridge.syncDown()
+    h.store['42'] = secondTurn
+    await bridge.syncUp() // 2 -- frozen at the boundary
+    h.store['42'] = thirdTurn
+    await bridge.syncUp() // 3 -- clear boundary again, so remembered
+    expect(h.deleted).toEqual([])
+
+    h.store['42'] = AGENT_JOURNAL.replace('do the thing', 'do a fourth thing')
+    await bridge.syncUp() // 4 supersedes 3
+
+    expect(h.deleted).toEqual([3])
+  })
+
+  // Observation 2 on the issue: the same task collapsed on one pass and stacked
+  // on the next, with no reply in between, because the answer depended on
+  // whether a fold had landed in the same invocation. Two stored numbers cannot
+  // drift like that.
+  it('collapses deterministically across consecutive turns with no fold between', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp() // 1
+    for (const [index, text] of ['second', 'third', 'fourth'].entries()) {
+      h.store['42'] = AGENT_JOURNAL.replace('do the thing', `do the ${text} thing`)
+      await bridge.syncUp()
+      // Every pass collapses exactly its predecessor -- no run is a special case.
+      expect(h.deleted).toEqual([1, 2, 3].slice(0, index + 1))
+    }
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([4])
+  })
+
+  // The losslessness rule from user-settings.md: collapsing may only remove a
+  // turn the replacement supersedes. Live, it removed a turn carrying a YouTube
+  // link that the next turn never repeated.
+  it('keeps a turn whose content the replacement does not carry forward', async () => {
+    const withLink = AGENT_JOURNAL.replace(
+      'do the thing',
+      'watched https://www.youtube.com/watch?v=abc123',
+    )
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    h.queueUpdates(reply('anything good on it?'))
+    await bridge.syncDown()
+
+    // The turn holding the link was written before the reply, so it goes out
+    // unchanged and is not an answer to anything.
+    h.store['42'] = withLink
+    await bridge.syncUp()
+    const linkMessage = h.sent.findIndex((m) => m.text.includes('youtube.com'))
+    expect(linkMessage).toBeGreaterThan(-1)
+
+    // A later turn that says nothing about the video must not take it away.
+    h.store['42'] = secondTurn
+    await bridge.syncUp()
+
+    expect(h.deleted).not.toContain(linkMessage + 1)
+    expect(h.deleted).toEqual([])
+  })
+
+  // State written before `lastPostedFoldSeq` existed has ids but no stamp. One
+  // skipped collapse is stacking; one wrong delete is unrecoverable.
+  it('declines to collapse ids carried over from state without a fold stamp', async () => {
+    const h = makeHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    state.tasks['42'] = {
+      topicId: 1,
+      name: '#42',
+      lastPostedHash: 'stale',
+      lastPostedMessageIds: [2511],
+    }
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(h.deleted).toEqual([])
+
+    // ...and heals on the very next pass, once a stamp exists.
+    h.store['42'] = secondTurn
+    await bridge.syncUp()
+    expect(h.deleted).toEqual([1])
+  })
+})
+
 describe('syncUp', () => {
   it('creates a topic and posts the agent turn once, then dedups', async () => {
     const h = makeHarness({ 42: AGENT_JOURNAL })

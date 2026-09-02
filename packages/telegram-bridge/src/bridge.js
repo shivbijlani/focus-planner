@@ -388,12 +388,35 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       // superseded and gets deleted once this one is safely out. Shiv's words:
       // "if I haven't responded, assume it's unread and can be clobbered."
       //
-      // `userEngaged` is the boundary and it is exactly the right one: it is set
-      // when a reply is routed to this task and consumed below once answered. So
-      // it is true precisely when the user has spoken since our last post — and a
-      // turn the user has replied to is frozen forever and must never be deleted.
+      // `userEngaged` was the boundary, and it answered the wrong question
+      // (#278). It is CONSUMED by the next post, so what it actually reports is
+      // "a turn went out since your message" — not "a turn ANSWERED your
+      // message". run-telegram-mirror.ps1 runs sync-down and this pass in ONE
+      // invocation, so a reply folded seconds earlier was marked answered by a
+      // turn the agent had written before that reply existed; the pass after
+      // that saw a clear boundary and deleted it, taking a link the replacement
+      // never repeated. The same flag made the opposite mistake too: whether a
+      // fold happened to land in the same invocation decided whether a turn
+      // collapsed at all, so the same task collapsed on one pass and stacked on
+      // the next.
+      //
+      // The boundary is now an explicit, monotonic count of folded replies that
+      // nothing consumes, compared against the count stamped when the remembered
+      // ids went out:
+      //
+      //     collapse iff  foldSeq === lastPostedFoldSeq
+      //
+      // Read strictly, with no default for the stamp: state written before this
+      // field existed has ids but no stamp, and skipping one collapse is a
+      // cosmetic regression to stacking, while a wrong delete is not recoverable.
+      // The stamp is written on the next post, so it self-heals after one pass.
+      //
+      // A turn that went out while a reply was still outstanding is frozen by not
+      // being remembered at all (see setLastPostedMessageIds), which is why the
+      // ids being absent is itself a "do not touch".
+      const foldSeq = Number.isInteger(task?.foldSeq) ? task.foldSeq : 0
       const supersedes =
-        task && !task.userEngaged && Array.isArray(task.lastPostedMessageIds)
+        task && task.lastPostedFoldSeq === foldSeq && Array.isArray(task.lastPostedMessageIds)
           ? task.lastPostedMessageIds
           : []
 
@@ -445,7 +468,17 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
         if (removed) logger(`collapsed ${removed} superseded message(s) for task #${taskId}`)
       }
 
-      setLastPostedMessageIds(state, taskId, postedIds)
+      // Remember these ids as clobberable only if the boundary was clear when
+      // they went out — no reply folded between our previous post and this one.
+      // A turn that lands on an outstanding reply may be the answer the user is
+      // reading, so it stays: the thread keeps [his message][that turn] intact
+      // and normal collapsing resumes from the turn after it. A task we have
+      // never posted for has no previous post to measure from, so the window is
+      // "since the beginning", i.e. no reply has ever been folded.
+      setLastPostedMessageIds(state, taskId, postedIds, {
+        foldSeq,
+        supersedable: (Number.isInteger(task?.lastPostedFoldSeq) ? task.lastPostedFoldSeq : 0) === foldSeq,
+      })
       setLastPosted(state, taskId, hash)
       // The pending-suppression marker has served its purpose once the turn is
       // out; clearing it keeps state from carrying a stale "we owe this task a
@@ -454,6 +487,10 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       // Consume the engagement: the user's message has now been answered. A
       // closed task therefore delivers one agent turn per user reply and then
       // goes quiet again, instead of the flag latching it permanently open.
+      //
+      // Consuming it is right for THAT job and wrong for the collapse boundary,
+      // which is why the two were split in #278. This does not move `foldSeq`,
+      // so the boundary above survives the debt being settled.
       if (task && task.userEngaged) setUserEngaged(state, taskId, false)
       posted.push(taskId)
       logger(

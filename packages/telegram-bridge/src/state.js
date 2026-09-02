@@ -60,9 +60,22 @@ export function setArchived(state, taskId, archived) {
 // the conversation". It is cleared as soon as that answer goes out, so a closed
 // task delivers exactly one agent turn per user message and cannot drift back
 // into posting unprompted.
+//
+// Raising it also bumps `foldSeq`, a monotonic count of replies folded into this
+// task, because this setter is called at exactly one place: the moment a reply is
+// folded. The two fields answer different questions and #278 was the cost of
+// pretending they were one. `userEngaged` is a debt ("we owe this task an answer")
+// and is CONSUMED when a turn goes out. `foldSeq` is a timestamp ("the user has
+// spoken N times") and is never consumed, so it can still answer "has the user
+// spoken since we posted message 2511?" long after the debt was settled.
 export function setUserEngaged(state, taskId, engaged) {
   const prev = state.tasks[taskId] || {}
-  state.tasks[taskId] = { ...prev, userEngaged: !!engaged }
+  const foldSeq = Number.isInteger(prev.foldSeq) ? prev.foldSeq : 0
+  state.tasks[taskId] = {
+    ...prev,
+    userEngaged: !!engaged,
+    foldSeq: engaged ? foldSeq + 1 : foldSeq,
+  }
   return state
 }
 
@@ -82,10 +95,28 @@ export function setUserEngaged(state, taskId, engaged) {
 // Cleared rather than kept once consumed, so a stale id can never be re-deleted —
 // deleting a message id that has been reused or already removed is the one
 // irreversible mistake available here.
-export function setLastPostedMessageIds(state, taskId, ids) {
+//
+// That same property is how a turn is FROZEN (#278). When `supersedable` is
+// false — the turn went out while one of the user's replies was still
+// outstanding, so it may be the answer he is reading — the ids are simply not
+// remembered. Freezing by forgetting rather than by a "do not delete" flag means
+// no later bug can talk itself past the guard: an id we never stored cannot be
+// passed to deleteMessage.
+//
+// `lastPostedFoldSeq` stamps the fold count at the moment these ids went out, so
+// the next pass can ask "has a reply been folded since?" by comparing two stored
+// numbers instead of consulting a flag another code path consumes. It is stamped
+// only when something was actually sent: a run that posted nothing must not move
+// the boundary forward.
+export function setLastPostedMessageIds(state, taskId, ids, { foldSeq = 0, supersedable = true } = {}) {
   const prev = state.tasks[taskId] || {}
   const list = Array.isArray(ids) ? ids.filter((n) => Number.isInteger(n)) : []
-  state.tasks[taskId] = { ...prev, lastPostedMessageIds: list.length ? list : undefined }
+  const sent = list.length > 0
+  state.tasks[taskId] = {
+    ...prev,
+    lastPostedMessageIds: sent && supersedable ? list : undefined,
+    lastPostedFoldSeq: sent ? foldSeq : prev.lastPostedFoldSeq,
+  }
   return state
 }
 
