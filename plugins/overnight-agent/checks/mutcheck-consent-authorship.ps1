@@ -251,6 +251,19 @@ body text
 approve
 '@
 
+# THE MIRROR OF M7, and #320's second success criterion. The anchor must reject a marker
+# quoted mid-line WITHOUT rejecting a genuine one that happens to be indented -- otherwise
+# the obvious "fix" for M7 is to over-anchor to hard column 0, which silently discards real
+# approvals. Nothing modelled that: every other fixture puts its marker at column 0, so
+# tightening `^[ \t]*` to `^` broke no case and would ship green.
+$indentedHumanApprove = "## 2026-08-29`n`n   <!-- from: me -->`napprove"
+
+# #320's fourth criterion: assert that an UNKNOWN marker value fails closed. `agent` is real
+# -- it occurs at task-385.md:64 in the live corpus and was modelled nowhere. It is safe today
+# only because anything that is not `me` is non-human, which is a property worth pinning
+# rather than rediscovering.
+$unknownAuthorApprove = "## 2026-08-29`n`n<!-- from: agent -->`napprove"
+
 # id -> expectations. `reopened` is asserted alongside `consent_ok` so a mutation that
 # collapses one into the other is caught rather than silently passing.
 $cases = [ordered]@{
@@ -273,6 +286,8 @@ $cases = [ordered]@{
   '956' = @{ entries = @($humanApproveNoFence);   consent = $true;  reopened = $true;  why = '#325 control: the same approval without a fence -> CONSENT' }
   '957' = @{ entries = @($midLineQuotedMarker);   consent = $false; reopened = $true;  why = '#320: a marker quoted MID-LINE in prose attributes nothing' }
   '958' = @{ entries = @($fenceThenHumanApprove); consent = $true;  reopened = $true;  why = '#320: an approval BELOW a fence survives (mask preserves offsets)' }
+  '959' = @{ entries = @($indentedHumanApprove);  consent = $true;  reopened = $true;  why = '#320 crit2: a GENUINE marker that is indented is still honoured' }
+  '960' = @{ entries = @($unknownAuthorApprove);  consent = $false; reopened = $false; why = '#320 crit4: an unknown marker value (`agent`) fails closed' }
 }
 
 function Invoke-Scan([string]$Script) {
@@ -370,6 +385,16 @@ $mutations = @(
     # apart. This mutation drops the newline-preserving/length-preserving property.
     name  = 'M9: #320 -- the mask stops preserving length, so offsets slide off the real text'
     apply = { param($s) $s -replace [regex]::Escape('[void]$sb.Append('' '', $line.Length)'), '[void]$sb.Append('''')' }
+  },
+  @{
+    # M7's mirror, and the reason M7 alone is not enough. The cheapest way to make M7's
+    # mid-line case fail is to anchor harder -- drop the optional indent and demand column 0.
+    # That kills M7 while silently discarding every genuine approval written with leading
+    # whitespace, which is a false NEGATIVE in the consent gate: Shiv approves and nothing
+    # happens. Only case 959 distinguishes the two, so without it the over-anchored build is
+    # indistinguishable from the correct one.
+    name  = 'M10: #320 crit2 -- the anchor is over-tightened to column 0, so an indented genuine marker is ignored'
+    apply = { param($s) $s -replace [regex]::Escape("`$script:ProvenanceRe  = '(?m)^[ \t]*<!--[ \t]*from:"), "`$script:ProvenanceRe  = '(?m)^<!--[ \t]*from:" }
   }
 )
 
