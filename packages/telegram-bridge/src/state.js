@@ -89,6 +89,53 @@ export function setLastPostedMessageIds(state, taskId, ids) {
   return state
 }
 
+// Monotonic count of user replies folded into this task, ever.
+//
+// This is the collapse boundary (#278), and it exists because `userEngaged`
+// answers a DIFFERENT question. `userEngaged` means "the user is owed an
+// answer" and is consumed the moment any turn goes out — including a turn that
+// was authored before their message existed. Read as a collapse guard it
+// therefore means "did a post happen since", not "was this message answered",
+// and `run-telegram-mirror.ps1` runs sync-down then once in a single pass, so
+// the two are routinely different things.
+//
+// A counter cannot be consumed by a post. Comparing it against the value
+// captured when the ids were posted (`lastPostedReplyCount`) answers exactly
+// the right question — "has a reply landed since those ids went out?" — and
+// gives the same answer every time it is asked, which is what observation 2 in
+// #278 (same task, no reply, opposite outcome) was missing.
+export function bumpReplyCount(state, taskId) {
+  const prev = state.tasks[taskId] || {}
+  const next = (Number.isInteger(prev.replyCount) ? prev.replyCount : 0) + 1
+  state.tasks[taskId] = { ...prev, replyCount: next }
+  return state
+}
+
+export function getReplyCount(state, taskId) {
+  const task = state.tasks[taskId]
+  return task && Number.isInteger(task.replyCount) ? task.replyCount : 0
+}
+
+// Snapshot, taken when a turn is posted, of the two facts a later collapse has
+// to check before it may delete that turn:
+//
+//   replyCount — how many replies had been folded at post time. If it has moved
+//                since, the user has spoken and the turn is frozen forever.
+//   links      — the URLs that turn carried. Collapsing is only lossless if the
+//                replacement still carries them, so a turn holding a link the
+//                new one drops is kept rather than deleted (#278 observation 1
+//                lost a YouTube link exactly this way).
+export function setLastPostedContext(state, taskId, { replyCount, links } = {}) {
+  const prev = state.tasks[taskId] || {}
+  const list = Array.isArray(links) ? links.filter((l) => typeof l === 'string' && l) : []
+  state.tasks[taskId] = {
+    ...prev,
+    lastPostedReplyCount: Number.isInteger(replyCount) ? replyCount : 0,
+    lastPostedLinks: list.length ? list : undefined,
+  }
+  return state
+}
+
 export function setOffset(state, offset) {
   state.updateOffset = offset
   return state

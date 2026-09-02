@@ -1,5 +1,44 @@
 import { describe, it, expect } from 'vitest'
-import { mdToTelegramHtml, escapeHtml } from './telegramFormat.js'
+import { mdToTelegramHtml, escapeHtml, extractLinks } from './telegramFormat.js'
+
+describe('extractLinks (#278 lossless collapse guard)', () => {
+  it('returns nothing for empty or link-free text', () => {
+    expect(extractLinks('')).toEqual([])
+    expect(extractLinks('just some prose, no links here')).toEqual([])
+  })
+
+  it('finds bare URLs and markdown links alike', () => {
+    expect(extractLinks('see https://example.com/a for details')).toEqual(['https://example.com/a'])
+    expect(extractLinks('see [the doc](https://example.com/b) for details')).toEqual([
+      'https://example.com/b',
+    ])
+  })
+
+  it('normalises trailing punctuation and slashes so the same link compares equal', () => {
+    // A link at the end of a sentence must not read as a DIFFERENT link from the
+    // same one mid-sentence, or the guard would block every collapse forever.
+    expect(extractLinks('go to https://example.com/a.')).toEqual(['https://example.com/a'])
+    expect(extractLinks('go to https://example.com/a/')).toEqual(['https://example.com/a'])
+    expect(extractLinks('(https://example.com/a)')).toEqual(['https://example.com/a'])
+  })
+
+  it('dedupes a link repeated in both forms', () => {
+    expect(
+      extractLinks('[doc](https://example.com/a) and again at https://example.com/a'),
+    ).toEqual(['https://example.com/a'])
+  })
+
+  it('ignores relative and non-http links, which cannot be lost content', () => {
+    expect(extractLinks('[spec](./task-363-design-spec.md)')).toEqual([])
+    expect(extractLinks('mail me at mailto:a@b.c')).toEqual([])
+  })
+
+  it('keeps genuinely different URLs apart', () => {
+    expect(
+      extractLinks('https://youtu.be/abc123 and https://youtu.be/def456').sort(),
+    ).toEqual(['https://youtu.be/abc123', 'https://youtu.be/def456'])
+  })
+})
 
 describe('escapeHtml', () => {
   it('escapes the three HTML-significant characters', () => {

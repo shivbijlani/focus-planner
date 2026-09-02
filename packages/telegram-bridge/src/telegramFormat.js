@@ -12,6 +12,44 @@
 
 const KNOWN_SCHEME = /^(https?:|tg:\/\/|mailto:)/i
 
+// Every http(s) URL a turn carries, deduped and normalised, from both markdown
+// links `[label](url)` and bare URLs.
+//
+// This is the input to the lossless half of the collapse guard (#278). Collapse
+// deletes a turn the user has not replied to, on the assumption that the newer
+// turn says everything the old one did. That assumption held right up until a
+// turn carrying a YouTube link was replaced by one that did not, and the link
+// was gone for good. Comparing link sets is a cheap, mechanical way to detect
+// that case: if the new turn does not carry a link the old one did, the old
+// turn is kept rather than deleted.
+//
+// Deliberately only URLs, not prose: a rewrite that rephrases everything is
+// still a legitimate collapse, whereas a dropped link is unrecoverable content.
+// Trailing punctuation is stripped so `see https://x/y.` and `https://x/y`
+// compare equal, and the trailing slash is normalised for the same reason.
+export function extractLinks(md) {
+  if (!md) return []
+  const text = String(md)
+  const found = new Set()
+
+  const add = (raw) => {
+    if (!raw) return
+    let u = String(raw).trim()
+    u = u.replace(/[)\]}>,.;:'"]+$/, '')
+    if (!/^https?:\/\//i.test(u)) return
+    found.add(u.replace(/\/+$/, ''))
+  }
+
+  for (const m of text.matchAll(/\[[^\]]*\]\(([^)\s]+)[^)]*\)/g)) add(m[1])
+  // Scan for bare URLs only AFTER removing the markdown links above. A lookbehind
+  // that skipped a URL preceded by "(" would also skip a legitimately
+  // parenthesised bare link, which is common in these turns.
+  const bare = text.replace(/\[[^\]]*\]\([^)]*\)/g, ' ')
+  for (const m of bare.matchAll(/https?:\/\/[^\s<>()[\]]+/gi)) add(m[0])
+
+  return [...found]
+}
+
 export function escapeHtml(s) {
   return String(s)
     .replace(/&/g, '&amp;')
