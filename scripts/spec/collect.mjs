@@ -213,6 +213,54 @@ if (withIssues) {
   }
 }
 
+// The set of #NNN references verify.mjs accepts on rationale/history pages.
+// It must be BROADER than open issues: a closed issue cited as shipped history,
+// or a merged PR cited as real design history, is legitimate evidence -- and
+// `prompt.md` rule 4 asks authors to cite exactly these. Two facts force the
+// shape of this query:
+//   - PRs share the issue-number namespace, and `gh issue list` EXCLUDES PRs,
+//     so we must union issues AND prs, or a ref like #313 (a merged PR) is
+//     unresolvable and gets flagged as invented.
+//   - `--state all` is required so closed issues resolve, not just open ones.
+// On failure this is left empty so verify degrades to open-only (see the
+// `?? [...openIssues]` fallback there) rather than crashing.
+const REF_LIMIT = 1000
+let validRefNumbers = []
+if (withIssues) {
+  // LIMIT GUARD: `--limit 1000` alone is not enough. `gh pr list` returns
+  // newest-first, so a silent truncation at the cap would drop the OLDEST PRs --
+  // exactly the historical ones rationale citations reach for -- and do it
+  // invisibly. Asserting the returned count is strictly under the limit turns a
+  // future overflow into a loud failure instead of a silently-shrunk valid set.
+  // (Measured on this repo: issues --state all = 99, prs = 244, union max = 343.)
+  const collectRefs = (kind) => {
+    const raw = execFileSync('gh', [
+      kind, 'list', '--state', 'all', '--limit', String(REF_LIMIT), '--json', 'number',
+    ], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
+    const rows = JSON.parse(raw)
+    if (rows.length >= REF_LIMIT) {
+      throw new Error(
+        `gh ${kind} list returned ${rows.length} rows (>= --limit ${REF_LIMIT}); ` +
+        'the set may be truncated. Raise --limit rather than validate against a partial set.',
+      )
+    }
+    return rows.map((r) => r.number)
+  }
+  try {
+    const refs = new Set(collectRefs('issue'))
+    // FAIL-CLOSED: if the issue call above succeeds but this pr call throws, the
+    // whole block falls to the catch and validRefNumbers is reset to [] (verify
+    // then degrades to open-only). We never keep an issue-only, PR-incomplete
+    // set: a populated validRefNumbers here always means BOTH calls succeeded,
+    // so a future reader must not read a non-empty field as "issues only".
+    for (const n of collectRefs('pr')) refs.add(n)
+    validRefNumbers = [...refs].sort((a, b) => a - b)
+  } catch (err) {
+    process.stderr.write(`[collect] warning: could not read valid refs (${err.message.split('\n')[0]})\n`)
+    validRefNumbers = []
+  }
+}
+
 let commit = 'unknown'
 try {
   commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
@@ -231,6 +279,7 @@ const facts = {
     testFiles: testFiles.length,
     tests: testFiles.reduce((n, t) => n + t.tests.length, 0),
     openIssues: issues.length,
+    validRefNumbers: validRefNumbers.length,
     workflows: workflows.length,
   },
   modules,
@@ -238,6 +287,7 @@ const facts = {
   workflows,
   dataFormats,
   issues,
+  validRefNumbers,
 }
 
 writeFileSync(outPath, JSON.stringify(facts, null, 2), 'utf8')
@@ -245,6 +295,6 @@ writeFileSync(outPath, JSON.stringify(facts, null, 2), 'utf8')
 process.stdout.write(
   `[collect] ${facts.counts.modules} modules, ${facts.counts.tests} tests in ` +
   `${facts.counts.testFiles} files, ${facts.counts.openIssues} open issues, ` +
-  `${facts.counts.workflows} workflows -> ${outPath}\n` +
+  `${facts.counts.validRefNumbers} valid refs, ${facts.counts.workflows} workflows -> ${outPath}\n` +
   `[collect] domains: ${facts.domains.join(', ')}\n`,
 )

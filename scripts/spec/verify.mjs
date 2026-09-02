@@ -61,8 +61,25 @@ const knownFiles = new Set(facts.modules.map((m) => m.path))
 for (const t of facts.testFiles) knownFiles.add(t.path)
 for (const w of facts.workflows) knownFiles.add(`.github/workflows/${w.name}`)
 
-const knownIssues = new Set(facts.issues.map((i) => String(i.number)))
+const openIssues = new Set(facts.issues.map((i) => String(i.number)))
+// The broad set accepted on rationale/history pages: open + closed issues + all
+// PRs (collect.mjs unions `gh issue list --state all` and `gh pr list --state all`,
+// because PRs share the issue-number namespace and `gh issue list` excludes them).
+// The `?? [...openIssues]` fallback is REQUIRED for back-compat: an old
+// spec-facts.json written before validRefNumbers existed still verifies at the
+// current (open-only) strictness -- no crash, no silent weakening.
+const validRefs = new Set((facts.validRefNumbers ?? [...openIssues]).map(String))
+
+// Gaps-style pages enumerate OPEN issues as the system's current state, so a
+// CLOSED issue presented there as a live gap is stale/false and must be caught
+// (this is the open-only check that flagged #226/#262 on Roadmap). Every other
+// page is rationale/history, where closed-issue and PR citations are legitimate
+// evidence, so it validates against the broad validRefs set instead. Splitting by
+// role is what lets us accept honest closed-ref citations without deleting the
+// staleness check where a closed ref genuinely lies.
+const GAPS_PAGES = new Set(['Roadmap.md'])
 const findings = []
+const closedRefsByPage = []
 let totalWords = 0
 
 // --- 1. INVENTION: every repo-ish path the spec names must exist -------------
@@ -92,13 +109,30 @@ for (const page of pages) {
     }
   }
 
-  // Issue references must resolve to a real open issue. A spec that cites a
-  // number nobody can look up is worse than one that cites none.
-  for (const m of text.matchAll(/(?:^|\s)#(\d{1,4})\b/g)) {
-    if (!knownIssues.has(m[1])) {
+  // Issue references must resolve to a real number. WHICH set is allowed depends
+  // on the page's role: gaps pages (Roadmap) accept OPEN issues only, so a closed
+  // ref framed as a live gap still fails; every other page accepts the broad
+  // validRefs (open + closed issues + PRs) so closed-issue/PR rationale is valid.
+  //
+  // The boundary is a negative lookbehind, NOT `(?:^|\s)`: Roadmap entries are
+  // written `- **#226 -- ...**`, so a `#` glued to `*`, `(` or `,` is real. The
+  // old whitespace boundary could not see those lines -- the very lines that
+  // ASSERT an issue is open -- so staleness there was caught only incidentally by
+  // passing prose mentions elsewhere. `(?<![\w\/])` still rejects a `#` after a
+  // word char or slash, so URL fragments like `/pull/342#issuecomment-123` (the
+  // `#` follows a digit) are not mistaken for issue refs. (Node 22 runs this.)
+  const allowed = GAPS_PAGES.has(page) ? openIssues : validRefs
+  const closedOnPage = []
+  for (const m of text.matchAll(/(?<![\w/])#(\d{1,4})\b/g)) {
+    if (!allowed.has(m[1])) {
       findings.push({ kind: 'unknown-issue', page, detail: `#${m[1]}` })
+    } else if (!openIssues.has(m[1])) {
+      // Resolves, but to a CLOSED issue or a PR. Accepted here (that is the fix),
+      // but recorded for the unconditional informational report below.
+      closedOnPage.push(`#${m[1]}`)
     }
   }
+  if (closedOnPage.length) closedRefsByPage.push({ page, refs: [...new Set(closedOnPage)] })
 }
 
 // --- 2. OMISSION: every domain must be described somewhere -------------------
@@ -143,8 +177,20 @@ if (!/```/.test(allText)) {
 // --- report -------------------------------------------------------------------
 process.stdout.write(
   `[verify] ${pages.length} page(s), ${totalWords} words, checked against ` +
-  `${knownFiles.size} known files / ${knownIssues.size} open issues\n`,
+  `${knownFiles.size} known files / ${openIssues.size} open issues / ${validRefs.size} valid refs\n`,
 )
+
+// UNCONDITIONAL, NON-FATAL: the per-page split preserves staleness detection for
+// gaps LISTS (Roadmap) but cannot catch a stale gap CITATION on a rationale page
+// -- "issue #226 is a currently-open gap" now passes because #226 is in validRefs,
+// and framing is not inferable from a number. So surface (never block) every ref
+// that resolves to a CLOSED issue or a PR, so the human reviewing the spec PR can
+// check the framing -- the only place that judgement can live. This deliberately
+// does NOT touch findings or the exit code, and is NOT behind a flag (an opt-in
+// drift check has the same "nobody turns it on" defect one level up).
+for (const { page, refs } of closedRefsByPage) {
+  process.stdout.write(`[verify] closed refs (informational): ${page}: ${refs.join(' ')}\n`)
+}
 
 if (findings.length === 0) {
   process.stdout.write('[verify] no findings: the spec references only things that exist, and covers every domain.\n')
