@@ -108,10 +108,17 @@ export function agentBlockText(content) {
 /**
  * The status word from a block's `**Status:** Proposed · plan v1 · <date>` line,
  * lowercased (e.g. `proposed`, `done`, `in-progress`). Null when absent.
+ *
+ * The word may be preceded by decoration. The agent writes its own terminal
+ * lines as `**Status:** ✅ **Done** · 2026-08-05 …`, and the original pattern
+ * could not skip the emoji, so that parsed as **null** — "no status", which is
+ * treated as non-terminal, which put a finished task back in the approval queue.
+ * Found live on #412. So anything that is not a letter, and not the newline that
+ * would end the line, is skipped before the word is read (#174).
  */
 export function agentBlockStatus(block) {
   if (!block) return null
-  const m = /^\s*\*{0,2}Status:?\*{0,2}\s*:?\s*\*{0,2}([A-Za-z-]+)/m.exec(block)
+  const m = /^[^\S\r\n]*\*{0,2}Status:?\*{0,2}[^\S\r\n]*:?[^A-Za-z\r\n]*([A-Za-z-]+)/m.exec(block)
   return m ? m[1].toLowerCase() : null
 }
 

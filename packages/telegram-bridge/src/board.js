@@ -99,6 +99,8 @@ function taskIdFromCell(cell) {
   return m ? m[1] : null
 }
 
+export { taskIdFromCell }
+
 /**
  * Parse `planner.md` into a lookup of task ID → board position.
  *

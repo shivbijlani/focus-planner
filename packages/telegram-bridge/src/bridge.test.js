@@ -2153,3 +2153,110 @@ describe('syncDigest reads the live status, not the frozen block header (#202)',
     expect(text).toContain('42')
   })
 })
+
+describe('syncDigest drops tasks the user has closed on the board (#174)', () => {
+  const SENT = '<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->'
+
+  /** A journal carrying a STRONG ask — the case the terminal-status gates miss. */
+  const strongAsk = (id, marker) =>
+    [
+      `# Task ${id}: Demo`,
+      '',
+      '---',
+      SENT,
+      '',
+      '## \u{1F319} Overnight Agent',
+      '',
+      '**Status:** Done \u00B7 2026-08-05',
+      '',
+      `${marker} the real start time, and the host address.`,
+      '',
+    ].join('\n')
+
+  const row = (id) => `| ${id} | \u2705 | Demo | - | 2026-08-05 |`
+
+  const digestFor = async ({ files, completed, active }) => {
+    const h = makeHarness(files)
+    if (completed !== undefined) h.setCompletedBoard(completed)
+    if (active !== undefined) h.setActiveBoard(active)
+    const bridge = createBridge({
+      client: h.client,
+      config: h.config,
+      state: emptyState(),
+      io: h.io,
+    })
+    await bridge.syncDigest()
+    return h.sent.map((m) => m.text || m.markdown || JSON.stringify(m)).join('\n')
+  }
+
+  // Criterion 6. A strong `Needs from you:` on a completed task survived every
+  // existing gate, because line 943 only drops a *weak* ask.
+  it('drops a completed-board task whose newest turn has a strong "Needs from you"', async () => {
+    const text = await digestFor({
+      files: { 341: strongAsk(341, '**Needs from you:**') },
+      completed: `## Week\n\n| ID | \u{1F3AF} | Task | P | Added |\n|---|---|---|---|---|\n${row(341)}\n`,
+      active: '## Today\n\n| ID | \u{1F3AF} | Task | P | Added | Linked ID |\n|---|---|---|---|---|---|\n',
+    })
+    expect(text).not.toContain('341')
+  })
+
+  // Criterion 7. Same, via the other strong marker.
+  it('drops a completed-board task whose newest turn has a strong "Next:"', async () => {
+    const text = await digestFor({
+      files: { 352: strongAsk(352, '**Next:**') },
+      completed: `## Week\n\n| ID | \u{1F3AF} | Task | P | Added |\n|---|---|---|---|---|\n${row(352)}\n`,
+      active: '## Today\n\n| ID | \u{1F3AF} | Task | P | Added | Linked ID |\n|---|---|---|---|---|---|\n',
+    })
+    expect(text).not.toContain('352')
+  })
+
+  // Criterion 8. Dual-board corruption: the active board is the surface the user
+  // works from, so ambiguity resolves toward VISIBLE.
+  it('keeps a task that is on BOTH boards', async () => {
+    const text = await digestFor({
+      files: { 389: strongAsk(389, '**Needs from you:**') },
+      completed: `## Week\n\n| ID | \u{1F3AF} | Task | P | Added |\n|---|---|---|---|---|\n${row(389)}\n`,
+      active: `## Today\n\n| ID | \u{1F3AF} | Task | P | Added | Linked ID |\n|---|---|---|---|---|---|\n| 389 | \u{1F7E1} | Demo | - | 2026-08-05 | |\n`,
+    })
+    expect(text).toContain('389')
+  })
+
+  // Criterion 4. No reduction in visibility for anything the user has not closed.
+  it('keeps a strong ask on a task that is not on the completed board at all', async () => {
+    const text = await digestFor({
+      files: { 451: strongAsk(451, '**Needs from you:**') },
+      completed: '## Week\n\n| ID | \u{1F3AF} | Task | P | Added |\n|---|---|---|---|---|\n',
+      active: `## Today\n\n| ID | \u{1F3AF} | Task | P | Added | Linked ID |\n|---|---|---|---|---|---|\n| 451 | \u{1F7E1} | Demo | - | 2026-08-05 | |\n`,
+    })
+    expect(text).toContain('451')
+  })
+
+  // An unreadable completed board must never silence the queue. Suppressing on a
+  // transient read failure would be a far worse failure than the bug being fixed.
+  it('suppresses nothing when the completed board cannot be read', async () => {
+    const h = makeHarness({ 341: strongAsk(341, '**Needs from you:**') })
+    delete h.io.readCompletedBoard
+    const bridge = createBridge({
+      client: h.client,
+      config: h.config,
+      state: emptyState(),
+      io: h.io,
+    })
+    await bridge.syncDigest()
+    expect(h.sent.map((m) => m.text || '').join('\n')).toContain('341')
+  })
+
+  // #171's cell grammar has to hold on the completed board too, or a task closed
+  // while carrying an External Ticket looks like it was never closed.
+  it('recognises a completed row whose id cell carries an external ticket', async () => {
+    const text = await digestFor({
+      files: { 447: strongAsk(447, '**Needs from you:**') },
+      completed:
+        '## Week\n\n| ID | \u{1F3AF} | Task | P | Added |\n|---|---|---|---|---|\n' +
+        '| 447,[171](https://github.com/shivbijlani/focus-planner/issues/171) | \u2705 | Demo | - | 2026-08-05 |\n',
+      active: '## Today\n\n| ID | \u{1F3AF} | Task | P | Added | Linked ID |\n|---|---|---|---|---|---|\n',
+    })
+    expect(text).not.toContain('447')
+  })
+})
+

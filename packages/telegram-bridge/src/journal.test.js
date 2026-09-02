@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   parseTitle,
+  agentBlockStatus,
   latestAgentTurn,
   appendUserReply,
   topicName,
@@ -250,3 +251,37 @@ describe('the turn-end stamp is a boundary, not content', () => {
     )
   })
 })
+
+describe('agentBlockStatus tolerates decoration before the status word (#174)', () => {
+  const block = (statusLine) =>
+    ['## \u{1F319} Overnight Agent', '', statusLine, '', '**Needs from you:** nothing.'].join('\n')
+
+  // The agent writes its own terminal lines this way. The old pattern could not
+  // step over the emoji, so this parsed as null — "no status" — which reads as
+  // non-terminal and put a finished task back in the approval queue. Live on #412.
+  it('reads a status preceded by an emoji', () => {
+    expect(agentBlockStatus(block('**Status:** \u2705 **Done** \u00B7 2026-08-05'))).toBe('done')
+  })
+
+  it('reads a status preceded by other decoration', () => {
+    expect(agentBlockStatus(block('**Status:** \u{1F534} **Blocked** \u00B7 2026-08-05'))).toBe('blocked')
+    expect(agentBlockStatus(block('**Status:** \u2014 Proposed \u00B7 plan v1'))).toBe('proposed')
+  })
+
+  it('still reads an undecorated status exactly as before', () => {
+    expect(agentBlockStatus(block('**Status:** Proposed \u00B7 plan v1 \u00B7 2026-08-27'))).toBe('proposed')
+    expect(agentBlockStatus(block('**Status:** in-progress'))).toBe('in-progress')
+  })
+
+  // The decoration skip must not cross a line boundary and adopt a word from the
+  // next line as the status — that would invent a verdict where there is none.
+  it('does not borrow a word from the following line when the status is empty', () => {
+    expect(agentBlockStatus(block('**Status:**\nDone'))).toBe(null)
+  })
+
+  it('returns null when there is no status line at all', () => {
+    expect(agentBlockStatus(block('**Needs from you:** something'))).toBe(null)
+    expect(agentBlockStatus(null)).toBe(null)
+  })
+})
+
