@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why the browser watchdog kept saying "all good" over three dead browsers</title>
+<style>
+  :root{
+    --ink:#12161c; --dim:#5b6673; --line:#e3e7ec; --bg:#fbfcfd;
+    --bad:#b4232c; --good:#127a4a; --warn:#8a5a00;
+    --badbg:#fdf1f1; --goodbg:#eef8f2; --warnbg:#fff8e9;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:860px;margin:0 auto;padding:48px 24px 80px}
+  h1{font-size:30px;line-height:1.25;margin:0 0 8px;letter-spacing:-.02em}
+  .sub{color:var(--dim);margin:0 0 32px;font-size:17px}
+  h2{font-size:21px;margin:44px 0 12px;letter-spacing:-.01em;
+     border-top:1px solid var(--line);padding-top:26px}
+  h3{font-size:16px;margin:26px 0 8px}
+  p{margin:0 0 14px}
+  code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.9em;
+       background:#eef1f5;padding:1px 5px;border-radius:4px}
+  pre{background:#12161c;color:#e6edf3;padding:14px 16px;border-radius:8px;
+      overflow-x:auto;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+      font-size:13px;line-height:1.55}
+  pre b{color:#ff7b72;font-weight:600}
+  pre i{color:#7ee787;font-style:normal}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14.5px}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:#f2f5f8;font-weight:600}
+  .card{border:1px solid var(--line);border-radius:8px;
+        padding:14px 18px;margin:18px 0;background:#fff}
+  .card.bad{border-color:#f0cfd2;background:var(--badbg)}
+  .card.bad h3{color:var(--bad)}
+  .card.good{border-color:#c8e6d6;background:var(--goodbg)}
+  .card.good h3{color:var(--good)}
+  .card.warn{border-color:#f0dcae;background:var(--warnbg)}
+  .card.warn h3{color:var(--warn)}
+  .card h3{margin-top:0}
+  .lede{font-size:18px;background:#fff;border:1px solid var(--line);
+        border-radius:10px;padding:20px 22px;margin:0 0 8px}
+  .tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;
+       text-transform:uppercase;padding:3px 8px;border-radius:20px;vertical-align:2px}
+  .tag.bad{background:#f7d7d9;color:var(--bad)}
+  .tag.good{background:#d7eee1;color:var(--good)}
+  .foot{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);
+        color:var(--dim);font-size:13.5px}
+  a{color:#0a58ca}
+  ul{margin:0 0 14px;padding-left:22px} li{margin:5px 0}
+  .sbs{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:680px){.sbs{grid-template-columns:1fr}}
+  .sbs pre{margin:0;height:100%}
+  .cap{font-size:12.5px;color:var(--dim);margin:4px 0 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Why the browser watchdog kept reporting "all good" over three dead browsers</h1>
+<p class="sub">Issue #197 &middot; Pull request #380 &middot; written 1 September 2026</p>
+
+<div class="lede">
+  <strong>In one sentence:</strong> an automated job checked every hour whether three
+  automation browsers were alive by asking "does the network port answer?" &mdash; but a
+  browser can answer its port perfectly while being completely unable to do any work,
+  and that is exactly the state all three were sitting in.
+</div>
+
+<h2>1. What these browsers are for</h2>
+<p>
+  Some of Shiv's automation needs a real web browser: log into a site, read a page,
+  fill a form. So three Microsoft Edge windows stay open permanently, each signed into a
+  different account. They are called <strong>slots</strong>.
+</p>
+<p>
+  Each slot exposes a small local control channel on a numbered port (9225, 9228, 9229)
+  so software can drive it. The automation does not launch a browser; it
+  <em>attaches</em> to one of these already-open windows. If a slot is broken, anything
+  needing a browser silently fails.
+</p>
+<p>
+  A scheduled job &mdash; the <strong>watchdog</strong> &mdash; runs every hour to make sure the
+  three windows are healthy.
+</p>
+
+<h2>2. What actually breaks</h2>
+<p>
+  When a browser window is hidden behind other windows for a while, Chrome and Edge
+  deliberately <strong>freeze</strong> the page to save battery and CPU. This is a normal,
+  intended feature.
+</p>
+<p>
+  A frozen page is a strange in-between state. It is not crashed. It is not closed. The
+  browser is still running and still answers everything you ask <em>about</em> it. But the
+  page's internal clock stops: anything that waits &mdash; even for a millisecond &mdash;
+  waits forever.
+</p>
+<p>
+  Browser automation waits constantly ("wait until this button is ready", "wait for the
+  page to settle"). So against a frozen page every operation hangs until it times out.
+  <strong>The slot is unusable while looking perfectly fine.</strong>
+</p>
+
+<div class="card warn">
+  <h3>The detail that makes it worse</h3>
+  <p style="margin:0">
+    The automation library inspects <em>every</em> open tab when it attaches. So
+    <strong>one</strong> frozen tab is enough to make the <strong>entire</strong> slot unusable.
+    Each of the three slots had exactly one tab, and it was frozen.
+  </p>
+</div>
+
+<h2>3. Why every health check said everything was fine</h2>
+<p>
+  This is the heart of it. The watchdog's entire health test was this &mdash; open a network
+  connection to the port, and if it succeeds, declare the slot healthy:
+</p>
+<pre>$iar = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
+if ($iar.AsyncWaitHandle.WaitOne(1000)) { ... return $true }
+
+<b>if ($up) { Note "[slot ...] port ... already live - reusing." }</b></pre>
+<p>
+  The catch: <strong>the part of the browser that answers the port is not the part that
+  freezes.</strong> A browser is really two pieces &mdash; the <em>browser process</em> (windows,
+  tabs, the control channel) and the <em>renderer</em> (the page itself). Freezing hits the
+  renderer. The browser process keeps answering cheerfully.
+</p>
+<p>So the watchdog was asking the one component that never breaks whether anything was broken.</p>
+
+<table>
+  <tr><th>What you can check</th><th>Frozen slot answers…</th><th>Useful?</th></tr>
+  <tr><td>Does the port accept a connection?</td><td>Yes ✅</td><td>No</td></tr>
+  <tr><td>Does it report its version?</td><td>Yes ✅</td><td>No</td></tr>
+  <tr><td>Does it list its open tabs?</td><td>Yes ✅</td><td>No</td></tr>
+  <tr><td>Can the page run code that waits on a timer?</td><td><strong>No ❌</strong></td><td><strong>Yes</strong></td></tr>
+</table>
+<p>
+  Only the last question separates a working slot from a frozen one, because a frozen
+  page's clock is precisely what has stopped.
+</p>
+
+<h2>4. The measurement</h2>
+<p>Two facts from the same evening, forty minutes apart, with nothing in between:</p>
+<table>
+  <tr><th>Time</th><th>What ran</th><th>What it concluded</th></tr>
+  <tr><td>17:18–17:20</td><td>The hourly watchdog</td>
+      <td><span class="tag bad">wrong</span> "All 3 automation slots are up." Success.</td></tr>
+  <tr><td>17:58</td><td>A separate tool that asks the page to do real work</td>
+      <td><span class="tag good">right</span> All three <strong>stuck</strong>, unusable.</td></tr>
+</table>
+<p>
+  The supervisor ran, succeeded, and left three unusable browsers. Re-running the old
+  script against that same state, side by side with the replacement:
+</p>
+<div class="sbs">
+<pre><b>OLD watchdog</b>
+port 9225 already live - reusing.
+port 9228 already live - reusing.
+port 9229 already live - reusing.
+
+<b>All 3 automation slots are up.</b>
+EXIT = 0   (nothing worked)</pre>
+<pre><i>NEW watchdog</i>
+[edge-cdp-1 :9225] STUCK
+[edge-cdp-bijlanis :9228] STUCK
+[edge-cdp-kiley :9229] STUCK
+PHASE 3 thawing 3 slots in place
+PHASE 4 re-probing to confirm...
+<i>stuck -> repaired -> up  (x3)</i>
+EXIT = 0   (they really work)</pre>
+</div>
+<p class="cap">Identical machine state. The left column is what had been running every hour.</p>
+
+<div class="card bad">
+  <h3>The most frustrating part</h3>
+  <p style="margin:0">
+    The good test <strong>already existed</strong> and was already installed. It had been built
+    earlier for this very issue. <strong>Nothing ever called it.</strong> Searching the watchdog for
+    any mention of it returned zero results. The capability was finished, shipped &mdash; and
+    wired to nothing.
+  </p>
+</div>
+
+<h2>5. What changed</h2>
+<p>
+  The new watchdog does not invent a new opinion about browser health. It calls the two
+  tools that already existed, in order:
+</p>
+<table>
+  <tr><th>Step</th><th>What it does</th></tr>
+  <tr><td><strong>1. Assess</strong></td><td>Ask each page to run code that waits on a timer. That is the question only a healthy slot can answer.</td></tr>
+  <tr><td><strong>2. Launch</strong></td><td>If a slot is genuinely closed, start it — the one thing the old watchdog did do.</td></tr>
+  <tr><td><strong>3. Repair</strong></td><td>If a slot is frozen, <strong>thaw it in place</strong>. Nothing is closed, killed or restarted.</td></tr>
+  <tr><td><strong>4. Confirm</strong></td><td>Ask again. A slot is only called recovered because it now <em>works</em>, never because a repair was attempted.</td></tr>
+</table>
+
+<div class="card good">
+  <h3>It will never close one of your windows</h3>
+  <p style="margin:0">
+    These are real signed-in windows and may hold work in progress. Because of how Edge
+    encrypts saved logins, a restart that goes wrong leaves that profile <strong>signed
+    out</strong>, and only you can fix that. So the recovery stops at the one step that closes
+    nothing. An automated test checks the code contains no way to kill a browser, so this
+    cannot be lost by accident later.
+  </p>
+</div>
+
+<h3>And it now tells the truth when it fails</h3>
+<p>
+  If a slot is still unusable after the repair, the job now <strong>exits with a failure
+  code</strong> instead of reporting success. That sounds small, but it is what lets anything
+  downstream notice and escalate rather than quietly carry on.
+</p>
+
+<h2>6. What is <em>not</em> fixed, honestly</h2>
+<div class="card warn">
+  <h3>The thaw does not hold</h3>
+  <p>
+    Un-freezing a page works immediately, but the window is still hidden, so the browser
+    re-freezes it &mdash; measured at <strong>about eight minutes</strong>. This was seen again
+    tonight: slots thawed at 18:20 were frozen again by 18:32.
+  </p>
+  <p style="margin:0">
+    So this change makes the hourly job able to <em>recover</em> the slots, which it
+    previously could not do at all. It does not stop them freezing.
+  </p>
+</div>
+<p>
+  The obvious durable fix is to launch the browsers with settings that disable the
+  freezing behaviour entirely &mdash; reasonable here, because these windows exist only to be
+  driven by automation while hidden. That was tested tonight with a controlled experiment:
+  two throwaway browsers, one with the settings and one without, both hidden.
+</p>
+<div class="card bad">
+  <h3>The experiment failed to reproduce the problem, so it proved nothing</h3>
+  <p style="margin:0">
+    <strong>The browser without the settings never froze either.</strong> With no failure to
+    prevent, there is no evidence the settings help. They are therefore
+    <strong>not</strong> included in this change. Claiming a fix on that basis would be a guess
+    dressed up as a measurement.
+  </p>
+</div>
+
+<h2>7. How to undo it</h2>
+<p>Two independent pieces, each reversible on its own:</p>
+<ul>
+  <li><strong>The code:</strong> revert pull request #380 on GitHub.</li>
+  <li><strong>The hourly job:</strong> the original script was preserved untouched beside the
+      new one. Restore it with:
+      <br><code>install-browser-watchdog-skill.ps1 -Revert</code></li>
+</ul>
+<p>Neither step touches a browser, a profile or a saved login.</p>
+
+<h2>8. Two things found along the way</h2>
+<ul>
+  <li><strong>An existing automated test is unreliable.</strong> It claims to use a made-up
+      configuration but actually contacts the three real browsers, so it passes or fails
+      depending on whether they happen to be frozen. It fails on the main branch for this
+      reason, unrelated to this change. Reported, not fixed &mdash; it belongs to a different
+      piece of work.</li>
+  <li><strong>A setup script would undo an earlier fix.</strong> A separate, rarely-run
+      "provision" step still installs the browser connectors in a style that was
+      deliberately removed. It is not part of the hourly job, so nothing is broken today,
+      but running that step would reintroduce it. Reported.</li>
+</ul>
+
+<div class="foot">
+  <strong>Verification:</strong> 893 automated tests pass; linting clean; three related
+  guard suites green (18/18, 11/11, 17/17); and the change was run end to end through the
+  real hourly entry point, taking three stuck slots to three working ones.<br><br>
+  Pull request: <a href="https://github.com/shivbijlani/focus-planner/pull/380">shivbijlani/focus-planner#380</a>
+  &middot; Issue: <a href="https://github.com/shivbijlani/focus-planner/issues/197">#197</a>
+</div>
+
+</div>
+</body>
+</html>
