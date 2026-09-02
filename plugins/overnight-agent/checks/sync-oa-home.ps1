@@ -52,6 +52,11 @@
 
     CURRENT      identical to the ref (after newline normalisation) - nothing to do.
     BEHIND       matches a historical blob of that path on the ref - safe, deploy it.
+    DATA-BEHIND  the same proof, for a non-code file: the live bytes were found on a
+                 commit of the ref, so they are STALE rather than local - deploy it.
+    DATA-STALE   a required non-code file whose live bytes are on NO commit of the ref -
+                 REFUSE. It may be locally mutated state, and a name match is not a
+                 licence to destroy it.
     DIVERGENT    matches no commit on the ref - REFUSE. May be a live fix.
     AMBIGUOUS    basename resolves to 2+ repo paths - REFUSE, cannot decide safely.
     LOCAL-ONLY   no counterpart in the repo - ignored (scratch//harness files live
@@ -142,10 +147,14 @@
                    rule 2 cannot see it, and the target is not code, so no roster, entry
                    list or glob names it either. It was required by nothing.
 
-                   A data file is NEVER overwritten -- it may be locally mutated state.
-                   But it IS now reported when the live copy differs from the ref
-                   (DATA-STALE), because "never overwrite" and "never mention" are
-                   different promises and only the first one is safe.
+                   A data file is never overwritten ON A NAME MATCH -- it may be locally
+                   mutated state. Since GH #388 it IS overwritten on the same PROOF a
+                   code file needs: if the live bytes are found on a commit of the ref
+                   they are stale, not local, and it deploys as DATA-BEHIND. Matching no
+                   commit still refuses (DATA-STALE), because destroying a real local
+                   acknowledgement is a data-loss class. Reporting a refusal is separate
+                   again: "never overwrite" and "never mention" are different promises
+                   and only the first one was ever safe.
 
                    MEASURED 2026-09-01, minutes after #336 merged and this tool printed
                    "0 behind, 186 current, verified-current True": the live
@@ -365,6 +374,52 @@ function Get-RefText {
   return (Get-BlobNormalized ("$blob".Trim()))
 }
 
+function Find-AncestorMatch {
+  # THE ONE READER for "are these live bytes a historical version of this path?".
+  #
+  # It answers exactly one question and it is the only thing in this file allowed to
+  # answer it. Both file classes route through it -- code files (BEHIND vs DIVERGENT)
+  # and data files (DATA-BEHIND vs DATA-STALE) -- because the two used to disagree, and
+  # the disagreement is GH #388: the code path walked history and correctly deployed a
+  # stale copy, while the data path compared against the ref tip ONLY and refused
+  # everything that differed, including copies that were provably an earlier commit of
+  # that same path with nothing local in them.
+  #
+  # MEASURED 2026-09-02, minutes after #387 merged. That change shipped four files as one
+  # feature: two .mjs and two .json. The .mjs half deployed (BEHIND, matched a2c...), the
+  # .json half was refused DATA-STALE -- yet both live .json files were content-identical
+  # to a24825a, the immediately-preceding tip of main. Nothing local existed to protect.
+  # The result was not a partial deployment but a WRONG one: new code ran against an old
+  # baseline and manufactured a data-loss alarm the merged design had already resolved,
+  # on the one machine that runs the sweep every 30 minutes.
+  #
+  # So the refusal itself was never the defect -- a data file CAN hold local state, and
+  # overwriting that is a data-loss class. The defect was that the refusal was
+  # UNCONDITIONAL when this test already distinguished the two cases one layer up.
+  # Returns the matching commit sha, or $null when the content is on no commit of the ref
+  # (genuinely local -- refuse it).
+  param([string]$RepoRelPath, [string]$LiveHash)
+  $commits = Invoke-Git @('rev-list', $refSha, '--', $RepoRelPath) -AllowFail
+  foreach ($c in $commits) {
+    $c = "$c".Trim()
+    if (-not $c) { continue }
+    # --verify --quiet, NOT a bare rev-parse: on a commit where this path does not exist
+    # (any commit before it was added, or after it was deleted) a bare rev-parse writes
+    # "fatal: path ... exists on disk, but not in <sha>" to stderr, and Windows
+    # PowerShell 5.1 turns native stderr into a TERMINATING error under
+    # $ErrorActionPreference='Stop'. `2>$null` does not suppress that on 5.1 - only on
+    # pwsh 7 - so this aborts the whole sync on the host it actually runs on. Same defect
+    # and same fix as auto-deploy-plugin.ps1's Test-IsSupersededByRef; it took the live
+    # deploy down on 2026-08-29 the first time a merge deleted a file.
+    $blob = & git -C $Repo rev-parse --verify --quiet "${c}:$RepoRelPath" 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $blob) { continue }
+    $txt = Get-BlobNormalized ("$blob".Trim())
+    if ($null -eq $txt) { continue }
+    if ((Get-Sha256 $txt) -eq $LiveHash) { return $c }
+  }
+  return $null
+}
+
 function Get-RosterNames {
   <# ROSTER (rule 1): parse the `$Suite = @( ... )` literal out of run-sweeps.ps1 AS IT
      EXISTS ON THE REF, and return the filenames it implies.
@@ -479,9 +534,10 @@ foreach ($p in $tracked) {
   $n = Split-Path $p -Leaf
   if ($p -notmatch '\.(ps1|mjs|js)$') {
     # DATA (rule 6): non-code files are indexed SEPARATELY and are only ever handled in
-    # the MISSING direction below. They are deliberately kept out of $byName so they can
-    # never be classified BEHIND or DIVERGENT -- a data file in the home may be locally
-    # mutated state, and this tool must never overwrite that on a name match.
+    # the MISSING direction below. Keeping them out of $byName is what makes the data
+    # decision a DELIBERATE one rather than a side effect of the code walk: they are
+    # classified DATA-BEHIND or DATA-STALE by the forward pass, where the "prove it is a
+    # historical commit, not local state" test is applied explicitly (GH #388).
     if (-not $dataByName.ContainsKey($n)) { $dataByName[$n] = @() }
     $dataByName[$n] += $p
     continue
@@ -523,30 +579,12 @@ foreach ($f in $live) {
     continue
   }
 
-  # BEHIND vs DIVERGENT. Walk the commits that touched this path on the ref and
-  # compare blob-by-blob. If the live bytes are any historical version, the ref
-  # supersedes them and deploying is safe. If they match none, this content was
-  # never on the ref - it may be a live fix, so refuse.
-  $match = $null
-  $commits = Invoke-Git @('rev-list', $refSha, '--', $repoPath) -AllowFail
-  foreach ($c in $commits) {
-    $c = "$c".Trim()
-    if (-not $c) { continue }
-    # --verify --quiet, NOT a bare rev-parse: on a commit where this path does not exist
-    # (any commit before it was added, or after it was deleted) a bare rev-parse writes
-    # "fatal: path ... exists on disk, but not in <sha>" to stderr, and Windows
-    # PowerShell 5.1 turns native stderr into a TERMINATING error under
-    # $ErrorActionPreference='Stop'. `2>$null` does not suppress that on 5.1 - only on
-    # pwsh 7 - so this aborts the whole sync on the host it actually runs on. Same defect
-    # and same fix as auto-deploy-plugin.ps1's Test-IsSupersededByRef; it took the live
-    # deploy down on 2026-08-29 the first time a merge deleted a file.
-    $blob = & git -C $Repo rev-parse --verify --quiet "${c}:$repoPath" 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not $blob) { continue }
-    $blob = "$blob".Trim()
-    $txt = Get-BlobNormalized $blob
-    if ($null -eq $txt) { continue }
-    if ((Get-Sha256 $txt) -eq $liveHash) { $match = $c; break }
-  }
+  # BEHIND vs DIVERGENT. If the live bytes are any historical version of this path on the
+  # ref, the ref supersedes them and deploying is safe. If they match none, this content
+  # was never on the ref - it may be a live fix, so refuse. One reader answers this for
+  # code and data files alike (see Find-AncestorMatch, and GH #388 for what happened when
+  # the two classes each had their own answer).
+  $match = Find-AncestorMatch -RepoRelPath $repoPath -LiveHash $liveHash
 
   if ($match) {
     $results += [pscustomobject]@{ file = $name; class = 'BEHIND'; repoPath = $repoPath; matchCommit = $match }
@@ -563,6 +601,7 @@ foreach ($f in $live) {
 $missing         = @()
 $missingRefused  = @()
 $dataStale       = @()
+$dataBehind      = @()
 $requiredCount   = 0
 
 if (-not $NoForward) {
@@ -639,23 +678,28 @@ if (-not $NoForward) {
     if ($liveNames.Contains($n)) { continue }        # already classified by the live walk
     if (-not $byName.ContainsKey($n)) {
       # DATA (rule 6): a required NON-code file, e.g. the manifest a sweep reads on its
-      # first line. NEVER overwritten -- a data file in the home may be locally mutated
-      # state, and a name match is not a licence to destroy it. But "never overwrite" and
-      # "never mention" are different promises, and only the first one is safe.
+      # first line. Never overwritten on a NAME MATCH -- a data file in the home may be
+      # locally mutated state, and a name is not a licence to destroy it. But "never
+      # overwrite" and "never mention" are different promises, and only the first was safe.
       #
       # MEASURED 2026-09-01, minutes after #336 merged and this tool reported
       # "0 behind, 186 current, verified-current True": the live
       # read-path-manifest.json was byte-identical to ad5e1d6 -- the commit that first
-      # DELIVERED it, five commits earlier. Rule 6 hands a data file over once and then
-      # freezes it forever, so #336's `idPattern`/`strayPattern` never arrived and the
+      # DELIVERED it, five commits earlier. Rule 6 handed a data file over once and then
+      # froze it forever, so #336's `idPattern`/`strayPattern` never arrived and the
       # code that reads them ran inert, silently reverting to the old behaviour. The
       # sweep's own guard shipped, deployed, verified -- and did nothing.
       #
       # That is #196's failure in its most deceptive form: not "the fix did not deploy"
       # but "the fix deployed and its configuration did not", which no code-level check
-      # can see. So a present-but-stale data file is now REPORTED and counted as a
-      # refusal. It is still never written; a human decides, because only a human can
-      # tell locally-mutated state from a stale copy.
+      # can see. Reporting it was the first half of the answer.
+      #
+      # The second half is GH #388, and note what the receipt above actually says: the
+      # live bytes matched ad5e1d6 EXACTLY. That file was never local state -- it was an
+      # older commit, provably, and the evidence needed to say so was already sitting in
+      # git history. So the decision is no longer "is it different?" but "is it on any
+      # commit of the ref?": DATA-BEHIND deploys, DATA-STALE still refuses and still asks
+      # a human, because only a human can bless overwriting genuinely local state.
       if ($dataByName.ContainsKey($n)) {
         $dPaths = $dataByName[$n]
         $dst = Join-Path $OaHome $n
@@ -671,8 +715,26 @@ if (-not $NoForward) {
           $refRaw = Get-RefText $refSha $dPaths[0]
           if ($null -ne $refRaw) {
             $refNorm = ($refRaw -replace "`r`n", "`n").TrimEnd("`n")
-            if ((Get-Sha256 (Get-NormalizedText $dst)) -ne (Get-Sha256 $refNorm)) {
-              $dataStale += [pscustomobject]@{ file = $n; class = 'DATA-STALE'; repoPath = $dPaths[0]; matchCommit = $null }
+            $liveDataHash = Get-Sha256 (Get-NormalizedText $dst)
+            if ($liveDataHash -ne (Get-Sha256 $refNorm)) {
+              # GH #388: STALE IS NOT THE SAME AS LOCAL, and refusing both was a wrong
+              # deployment rather than a cautious one. Ask the same question the code path
+              # asks -- are these bytes a historical version of this path? -- instead of
+              # refusing categorically on "it differs from the tip".
+              #
+              #   matches an ancestor  -> DATA-BEHIND: provably an older commit, nothing
+              #                           local to lose, deploy it and name the sha.
+              #   matches no commit    -> DATA-STALE:  genuinely local state. Refuse, as
+              #                           before. This half is why the walk cannot be
+              #                           replaced by a blanket overwrite: destroying a
+              #                           real local acknowledgement is a data-loss class,
+              #                           and it sits on the agent-gate.md floor.
+              $dMatch = Find-AncestorMatch -RepoRelPath $dPaths[0] -LiveHash $liveDataHash
+              if ($dMatch) {
+                $dataBehind += [pscustomobject]@{ file = $n; class = 'DATA-BEHIND'; repoPath = $dPaths[0]; matchCommit = $dMatch }
+              } else {
+                $dataStale += [pscustomobject]@{ file = $n; class = 'DATA-STALE'; repoPath = $dPaths[0]; matchCommit = $null }
+              }
             }
           }
         }
@@ -690,6 +752,7 @@ if (-not $NoForward) {
   $results += $missing
   $results += $missingRefused
   $results += $dataStale
+  $results += $dataBehind
 }
 
 $behind    = @($results | Where-Object { $_.class -eq 'BEHIND' })
@@ -700,26 +763,31 @@ $localOnly = @($results | Where-Object { $_.class -eq 'LOCAL-ONLY' })
 
 Write-Line ""
 foreach ($r in $behind)         { Write-Line ("  BEHIND     {0}   (live == {1})" -f $r.file, $r.matchCommit.Substring(0,8)) }
+foreach ($r in $dataBehind)     { Write-Line ("  BEHIND     {0}   (live == {1}) data file is provably an older commit, not local state - deploying" -f $r.file, $r.matchCommit.Substring(0,8)) }
 foreach ($r in $missing)        { Write-Line ("  MISSING    {0}   required by the roster, absent from this machine" -f $r.file) }
 foreach ($r in $divergent)      { Write-Line ("  REFUSE     {0}   live content is on no commit of {1} - may be a live fix" -f $r.file, $Ref) }
 foreach ($r in $ambiguous)      { Write-Line ("  REFUSE     {0}   basename is ambiguous: {1}" -f $r.file, $r.repoPath) }
 foreach ($r in $missingRefused) { Write-Line ("  REFUSE     {0}   required but basename is ambiguous: {1}" -f $r.file, $r.repoPath) }
-foreach ($r in $dataStale)      { Write-Line ("  DATA-STALE {0}   live data file differs from {1} - NOT overwritten; a human must reconcile it" -f $r.file, $Ref) }
+foreach ($r in $dataStale)      { Write-Line ("  DATA-STALE {0}   live data file is on no commit of {1} - NOT overwritten; it may be local state, so a human must reconcile it" -f $r.file, $Ref) }
 Write-Line ""
 Write-Line ("[sync-oa-home] {0} behind, {1} missing, {2} current, {3} refused, {4} local-only. ({5} required)" -f `
-            $behind.Count, $missing.Count, $current.Count,
+            ($behind.Count + $dataBehind.Count), $missing.Count, $current.Count,
             ($divergent.Count + $ambiguous.Count + $missingRefused.Count + $dataStale.Count), $localOnly.Count, $requiredCount)
 
 # --- deploy the safe class ----------------------------------------------------------
 # BEHIND (live bytes provably older) and MISSING (no live bytes at all) are both safe to
 # write; DIVERGENT and either flavour of ambiguity are not, and never reach here.
-$toWrite = @($behind) + @($missing)
+#
+# DATA-BEHIND joins them (GH #388) on exactly the same evidence a code file needs: the
+# live bytes were found on a commit of the ref, so there is nothing local to lose. A data
+# file that matches no commit is DATA-STALE and still never reaches this list.
+$toWrite = @($behind) + @($dataBehind) + @($missing)
 $deployed = 0
 $failed   = 0
 $backupDir = $null
 
 if ($toWrite.Count -gt 0 -and -not $WhatIf) {
-  if (-not $SkipBackup -and $behind.Count -gt 0) {
+  if (-not $SkipBackup -and ($behind.Count + $dataBehind.Count) -gt 0) {
     $backupDir = Join-Path $OaHome ("backups\oahome-sync-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
   }
@@ -852,12 +920,13 @@ if ($Json) {
     ref              = $Ref
     refSha           = $refSha
     oaHome           = $OaHome
-    behind           = $behind.Count
+    behind           = ($behind.Count + $dataBehind.Count)
     missing          = $missing.Count
     required         = $requiredCount
     current          = $current.Count
     refused          = ($divergent.Count + $ambiguous.Count + $missingRefused.Count + $dataStale.Count)
     dataStale        = $dataStale.Count
+    dataBehind       = $dataBehind.Count
     localOnly        = $localOnly.Count
     deployed         = $deployed
     failed           = $failed
