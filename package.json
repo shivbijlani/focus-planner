@@ -12,6 +12,8 @@
     "build": "vite build",
     "copy:sw": "node scripts/copy-sw.mjs",
     "lint": "eslint .",
+    "check:node-modules": "node scripts/check-node-modules.mjs",
+    "pretest": "node scripts/check-node-modules.mjs",
     "test": "vitest run",
     "merge-queue": "node scripts/merge-queue.mjs",
     "preview": "vite preview"

@@ -83,6 +83,12 @@ leaves an index of every archived heading.
   git repositories live here (e.g. `<your repos root>\focus-planner`), each a GitHub repo under
   `github.com/<your-github-username>`. Worktrees live alongside as `<your repos root>\<name>.worktrees\`.
   When a task is a code task, find the relevant repo here first. Shared package cache is `<your repos root>\packages\`.
+  **Worktree rule (GH #321):** run `npm ci` **inside** the worktree. Do **not**
+  `mklink /J node_modules <main checkout>\node_modules` — `git worktree remove --force` deletes
+  *through* a junction and empties the shared install for the main checkout and every other worktree
+  at once, exit code 0 and no warning. Tear worktrees down with
+  `pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path <worktree>`, never the raw
+  `git worktree remove --force`. Full guidance: `docs/worktrees.md` in the focus-planner repo.
 - **Agent email inbox: `<agent-inbox@example.com>`** (from `user-settings.md` → "Agent email account";
   the **Overnight Agent** account in the email
   MCP). This is how the user drops you new instructions out-of-band. Check it at the \*\*start of every
@@ -838,6 +844,15 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
 4. Board edits stay conservative: **propose** the child rows in the journal and add them to the board
    only on the user's one-word approve (or immediately when the parent's plan was already approved and
    the child is the obvious reversible next step). Never mutate the board unattended on a half-fix.
+5. **If the child gets its own worktree, the brief must say how to set it up and tear it down.**
+   This is a standing clause, not a judgement call, because the previous default was destructive
+   (GH #321) and it was handed to sub-sessions verbatim. Include, unedited:
+
+   > Run `npm ci` inside your worktree. **Do not** junction `node_modules` to the main checkout —
+   > `git worktree remove --force` deletes through a junction and empties the shared install for
+   > every other session at once. Tear the worktree down with
+   > `pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path <worktree>`. Never delete or reinstall
+   > the main checkout's `node_modules` to fix a local problem; other sessions are using it.
 
 ### PHASE 2 — Propose plans (for tasks without a current one)
 
