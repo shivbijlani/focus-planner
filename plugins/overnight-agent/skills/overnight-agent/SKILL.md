@@ -865,6 +865,39 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
 6. After writing a plan, record it: `oa-state.ps1 mark -Id <ID> -Status proposed -Version <n> -PlanId
    t<ID>-v<n>`. No checkboxes, no notes field — the user just replies in plain English under your block.
 
+### PHASE 2.5 — Generate the task papers (after journals, before Telegram)
+
+A journal is a chronological log, and a log is the wrong shape for understanding a complicated
+task: the current state is scattered across every turn that ever touched it, newest last,
+interleaved with corrections. Shiv, filing **#286**: *"The journal file is hard to understand and
+read. Same with telegram… What helps is one doc that assumes I have little context and is easy to
+read and comment on… It should be a paper. No talk about corrections and mistakes you made. That
+could go into appendix."*
+
+So once PHASE 1/2 have written your turns, regenerate the per-task papers:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\..\..\checks\generate-task-papers.ps1"
+```
+
+Each becomes `<planner>\journal\paper\task-<ID>.html`: the **newest** turn as the body (with
+collapsible sections), the ask lifted to the top, and every superseded turn plus the dated
+`Run log` moved into an **Appendix**. The chain-of-thought is not deleted, it is moved — which is
+exactly what the issue asks for, and it is done structurally, so nothing is rewritten or summarised.
+
+- ✅ **Additive, and revertible in one step.** It only ever writes into `journal\paper\`. It never
+  reads, moves or edits a journal, and never touches the board; deleting that folder reverts the
+  whole feature. This is the staging #286 asks for — *"a way to deliver without impacting old
+  features, then later we can make this primary."* The journal stays the source of truth.
+- ✅ **Safe on the nightly cadence, because rendering is deterministic.** There is deliberately no
+  "generated at &lt;now&gt;" stamp, so an unchanged journal produces byte-identical HTML and is not
+  rewritten. A clock in the output would churn every file in OneDrive every run and destroy the one
+  signal that matters — whether the task actually moved.
+- ⚠️ **The paper is a READ surface, not a channel.** It is regenerated, so anything typed into it is
+  discarded on the next run. The page says so in its own footer and points at the journal and
+  Telegram. Do not invite the user to reply there until the comment channel in #286 actually exists.
+- A failure here must never abort the run — note it in the wrap-up and carry on.
+
 ### PHASE 3 — Mirror to Telegram (do this after you've finished writing journals)
 
 If **Telegram** is enabled in `user-settings.md` (→ "Telegram", `Enabled = on`), then **as the last step of

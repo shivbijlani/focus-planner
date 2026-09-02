@@ -39,4 +39,22 @@ export default defineConfig([
       'react-refresh/only-export-components': 'off',
     },
   },
+  {
+    // Node-side task-paper generator (runs under Node, not the browser).
+    files: ['packages/task-paper/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: { ...globals.node },
+    },
+    rules: {
+      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      'react-refresh/only-export-components': 'off',
+      // The inline renderer masks code spans with NUL sentinels before running the
+      // emphasis rules over the rest of the line, so a NUL in the un-masking regex is
+      // the mechanism, not an accident. NUL cannot appear in journal markdown, which
+      // is what makes it a safe sentinel.
+      'no-control-regex': 'off',
+    },
+  },
 ])
