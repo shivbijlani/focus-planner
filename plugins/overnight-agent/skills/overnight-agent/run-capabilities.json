@@ -1,0 +1,61 @@
+{
+  "schema": "oa-run-capabilities/1",
+  "why": [
+    "The MCP capabilities an Overnight Agent run depends on, declared ONCE (GH #346).",
+    "Before this file existed the list was implied by prose scattered through SKILL.md,",
+    "which meant nothing could probe it: a capability the run silently lacked produced no",
+    "error at the point of use, because an absent tool is not a failing tool. The email row",
+    "is the load-bearing one -- PHASE 0 mandates an inbox read, and an unhealthy email client",
+    "answers a search with [], which is byte-identical to a genuinely empty inbox.",
+    "Read by check-agent-inbox.ps1. Add a row here rather than a sentence in SKILL.md."
+  ],
+  "capabilities": [
+    {
+      "id": "email",
+      "server": "email",
+      "mandatory": true,
+      "wrapUpSection": "From your inbox",
+      "why": "PHASE 0 reads the agent inbox for emailed instructions. Emptiness may only be reported after a POSITIVE health probe: a dropped instruction email is invisible and unrecoverable, so this fails closed and loud.",
+      "probe": {
+        "kind": "email-inbox",
+        "listTool": "email_list_accounts",
+        "healthTool": "email_test_account",
+        "healthField": "success",
+        "searchTool": "email_search",
+        "folder": "INBOX",
+        "limit": 50
+      },
+      "accountSelector": "",
+      "notes": [
+        "healthField is 'success' from email_test_account and NOT 'connected' from",
+        "email_list_accounts. Measured 2026-09-02 12:52 PT: the account reported",
+        "\"connected\": false while email_test_account returned",
+        "{\"success\":true,\"folderCount\":10} against the same live server. The field an agent",
+        "would naturally read is not the field that reflects reality, so the verdict is taken",
+        "from a call that does work, never from an advertised flag."
+      ]
+    },
+    {
+      "id": "telegram",
+      "server": "telegram",
+      "mandatory": false,
+      "wrapUpSection": "Mirrored to Telegram",
+      "why": "The mirror surfaces the run to the phone. Its absence degrades reach but does not drop an input channel, so it is reported rather than raised as an ask.",
+      "probe": {
+        "kind": "mcp-tools",
+        "requiredTools": ["message", "chat"]
+      }
+    },
+    {
+      "id": "browser-slot",
+      "server": null,
+      "mandatory": false,
+      "wrapUpSection": "",
+      "why": "Browser slot health has its own, much deeper probe (a bounded CDP work probe, GH #197). Listing it here without probing it would be a second, weaker opinion about the same subsystem, so this row names the owner instead of duplicating it.",
+      "probe": {
+        "kind": "delegated",
+        "owner": "check-browser-slots.ps1"
+      }
+    }
+  ]
+}

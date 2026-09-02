@@ -63,7 +63,9 @@ delay this release, never trigger it.
 ## Preferences
 
 - **Inbox check:** `on` — check the agent email inbox at the start of every run (PHASE 0). Set to `off`
-  if you don't want the agent to read an inbox for instructions.
+  if you don't want the agent to read an inbox for instructions. While it is `on`, an inbox the agent
+  **could not read** is reported as an ask, never as an empty inbox: `check-agent-inbox.ps1` probes the
+  capability first and says `NOT CHECKED` rather than "no new instructions" (GH #346).
 - **Code tasks open a draft PR:** `on` — prefer **draft** PRs for the reviewable deliverable.
 - **Default planning scope:** every task in `## Today` (expand to `## Deferred` as capacity allows).
 - **Email replies / sends:** `allowed` to anyone on the **Auto-send allow-list** above — keep replies

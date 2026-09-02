@@ -11,6 +11,14 @@
  * Usage:
  *   node mcp-probe.mjs <serverName> list
  *   node mcp-probe.mjs <serverName> call <toolName> '<jsonArgs>'
+ *   node mcp-probe.mjs <serverName> calls '[{"name":"t1","arguments":{}},{"name":"t2"}]'
+ *
+ * `calls` runs several tools inside ONE server session and prints one JSON array,
+ * element i being `{ result }` or `{ error }` for step i. That is not only cheaper
+ * than N spawns (one handshake, one IMAP connect): it is the only way a health probe
+ * can prove the SAME connection the payload call used. Two separate sessions can
+ * disagree — a probe that passes on connection A says nothing about connection B —
+ * which is the ambiguity GH #346 is about, reintroduced one layer down.
  */
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -29,7 +37,7 @@ function loadServer(name) {
   return s;
 }
 
-function runSession(server, steps, timeoutMs = 90000) {
+function runSession(server, steps, timeoutMs = Number(process.env.MCP_PROBE_TIMEOUT_MS) || 90000) {
   return new Promise((resolve, reject) => {
     const child = spawn(server.command, server.args ?? [], {
       env: { ...process.env, ...(server.env ?? {}) },
@@ -97,18 +105,39 @@ function runSession(server, steps, timeoutMs = 90000) {
 
 const [, , serverName, action, toolName, toolArgs] = process.argv;
 if (!serverName || !action) {
-  console.error('usage: mcp-probe.mjs <server> list | call <tool> <jsonArgs>');
+  console.error('usage: mcp-probe.mjs <server> list | call <tool> <jsonArgs> | calls <jsonSteps>');
   process.exit(2);
 }
 
 const server = loadServer(serverName);
+
+// `calls` takes its step list from argv[4] (there is no separate tool name), so the
+// positional destructuring above lands the JSON in `toolName`, not `toolArgs`.
+const callSteps =
+  action === 'calls'
+    ? JSON.parse(toolName || '[]').map((s) => ({
+        method: 'tools/call',
+        params: { name: s.name, arguments: s.arguments ?? {} },
+      }))
+    : [];
+
 const steps =
   action === 'list'
     ? [{ method: 'tools/list', params: {} }]
-    : [{ method: 'tools/call', params: { name: toolName, arguments: JSON.parse(toolArgs || '{}') } }];
+    : action === 'calls'
+      ? callSteps
+      : [{ method: 'tools/call', params: { name: toolName, arguments: JSON.parse(toolArgs || '{}') } }];
 
 runSession(server, steps)
   .then(({ results }) => {
+    if (action === 'calls') {
+      // One array, one element per step, in order. A step that errored is reported as
+      // `{ error }` rather than dropped: a short array would silently renumber the
+      // steps after it, so the caller could attribute one call's answer to another.
+      const out = results.map((r) => (r.error ? { error: r.error } : { result: r.result }));
+      console.log(JSON.stringify(out, null, 2));
+      return;
+    }
     for (const r of results) {
       if (r.error) { console.log(JSON.stringify({ error: r.error }, null, 2)); continue; }
       if (action === 'list') {
