@@ -169,19 +169,23 @@ snoozed row is never workable, never eligible, and reports `due_poll: false` / `
 however overdue those timers are. The timer object itself is left armed, so it fires on its own once
 the snooze lapses — snoozing does not silently disarm a poll.
 
-`Get-SnoozeMap` unions two sources, with the structured store winning on conflict:
+**`snooze.json` is the snooze store.** It is a flat `{ "<task id>": "YYYY-MM-DD" }` map (optionally
+wrapped in `tasks` or `snoozed`, and tolerating `{ "until": … }` values), owned by the web app and
+**read-only** to the agent. It is typed, tiny, and does not ride on `planner.md` — the most
+sync-conflicted and most human-edited file in the folder — which is why the snooze state lives in
+its own file rather than in board prose.
 
-1. **`snooze.json`** — a flat `{ "<task id>": "YYYY-MM-DD" }` map (optionally wrapped in `tasks` or
-   `snoozed`, and tolerating `{ "until": … }` values), specified as owned by the web app and
-   **read-only** to the agent. It is preferred because it is typed, tiny, and does not ride on
-   `planner.md`, the most sync-conflicted and most human-edited file in the folder.
-2. **`<!-- snooze:YYYY-MM-DD -->` markers** on board rows — the legacy path, kept so nothing breaks
-   during migration. The HTML-comment wrapper is required: without it a task whose *title* contains
-   `snooze:` matches its own title and hides itself from the board.
+A malformed store returns "no store" rather than an empty map, so a parse failure can never be read
+as "nothing is snoozed". A date counts as snoozed while it is today or later, so the agent holds off
+*through* the snooze date.
 
-A malformed store returns "no store" and falls back to the markers rather than reporting an empty
-map, so a parse failure can never be read as "nothing is snoozed". A date counts as snoozed while it
-is today or later, so the agent holds off *through* the snooze date.
+> The current implementation also still reads `<!-- snooze:YYYY-MM-DD -->` HTML-comment markers off
+> board rows, and `Get-SnoozeMap` unions the two with the store winning. That reader is a transitional
+> shim, not part of this specification: **a rebuild implements the store only.** Its removal is
+> tracked by #207. It is recorded here solely because it is live in the code today, and one property
+> of it is worth carrying as a lesson — the comment wrapper was required, because a task whose
+> *title* contained `snooze:` would otherwise match its own title and hide itself from the board.
+> Encoding state in prose invites exactly that collision, which is the reason the store exists.
 
 **The `Wake` column is a third representation that the agent does not read, and this is a real gap.**
 The app's snooze path is `opSnoozeTask`: a `Today` row is moved to `Deferred` carrying a `wakeUntil`
@@ -258,11 +262,13 @@ must never be the reason the gate stops working. `Today gate backstop` accepts `
 `disabled` to disable the backstop, and otherwise reads the value's **leading digits** as hours (so
 `6`, `6h` and `6 hours` are all six); a value with no leading digit and no disable word is ignored
 rather than guessed at, because a typo must not silently disable a safety backstop. `Today gate
-strict` is on for `on`, `yes` or `true` and off otherwise. The legacy `-TodayServedMinutes 0`
-spelling still forces strict mode whatever the file says, because an explicit command-line
-instruction outranks a stored preference. `scan` echoes the values that were actually in force onto
-every `Today` row as `gate_backstop_hours` and `gate_strict`, so a configured value that is not
-applying is visible rather than silent.
+strict` is on for `on`, `yes` or `true` and off otherwise. `scan` echoes the values that were
+actually in force onto every `Today` row as `gate_backstop_hours` and `gate_strict`, so a configured
+value that is not applying is visible rather than silent.
+
+The rollback switch is `-TodayGateStrict`. (The current implementation also honours a retired
+`-TodayServedMinutes 0` spelling for the same effect; it is a deprecated alias scheduled for removal
+under #207, and a rebuild implements only `-TodayGateStrict`.)
 
 The exhaustion TTL is deliberately **not** exposed, because it currently governs two different
 things at once — how long a declaration survives, and how recently a turn must have been written to
@@ -542,7 +548,7 @@ row would change results here for a reason no arm names.
 
 | Check | Asserts |
 | --- | --- |
-| `mutcheck-priority-order.ps1` | Today before Deferred; `P0 < P1 < unset`; red before yellow; the `## Priorities` list breaks ties; Deferred is *gated* and not merely sorted lower; a terminal Today row lets Deferred through; `reopened` preempts; the sort is deterministic; a declared row releases but keeps its rank; the legacy `-TodayServedMinutes 0` rollback re-shuts the gate; a reply reclaims exclusivity; writing does not release. |
+| `mutcheck-priority-order.ps1` | Today before Deferred; `P0 < P1 < unset`; red before yellow; the `## Priorities` list breaks ties; Deferred is *gated* and not merely sorted lower; a terminal Today row lets Deferred through; `reopened` preempts; the sort is deterministic; a declared row releases but keeps its rank; the strict rollback re-shuts the gate; a reply reclaims exclusivity; writing does not release. |
 | `mutcheck-today-served.ps1` | The release signal itself: 14 arms covering writing-does-not-release, a named declaration does, expiry/board-edit/supersede/empty-claim cancellation, the separate-call and recent-turn preconditions, the strict rollback, the backstop, and that the backstop comes from `user-settings.md` but an explicit argument outranks it. |
 | `mutcheck-awaiting-reply.ps1` | Parking, un-parking by reply and by due timer, newest-turn-only reading, and both directions of the dismissive-ask boundary. |
 | `mutcheck-blocked-recheck.ps1` | The recheck timer arms, echoes its `kind`, re-arms on `-RecheckDone`, retires on `-RecheckClear`; snooze suppresses both timers' verdicts, and a lapsed snooze lets the poll fire again — proving snooze *suppresses* rather than disarms; and a due recheck on a `blocked` row is actually `eligible` — the consequence, not just the signal. |

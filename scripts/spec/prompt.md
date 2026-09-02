@@ -37,7 +37,13 @@ open yourself). You may open any file in the repo to go deeper — prefer doing 
    it is primary evidence and it is what makes this a thesis rather than an inventory.
 5. **Be honest about gaps.** Open issues describe things that are broken or missing. A spec that
    presents the system as finished is wrong. Say what is unbuilt, and what the intended fix is.
-6. **No filler.** Do not pad. Every paragraph must carry information a rebuilder needs.
+6. **Specify the system going forward, not its compatibility shims.** This spec is what someone
+   would build *now*. Backward-compatibility paths, deprecated aliases, migration fallbacks and
+   legacy readers are **not** required behaviour and must not be written as though a rebuilder
+   should implement them. Where such a path is still live in the code, either omit it or confine it
+   to a short aside that names it as scheduled for removal (#207, #8) — never as part of the
+   contract. Prefer stating the single forward mechanism plainly.
+7. **No filler.** Do not pad. Every paragraph must carry information a rebuilder needs.
 
 ## Pages to write
 
@@ -55,6 +61,7 @@ to the spec therefore means adding a row here, not only a link in `Home.md`.
 | `Prioritisation.md` | Prioritisation as a product behaviour: how priority is expressed on the board (section, urgency icon, `Work Priority`, the `## Priorities` list, row order, id — the full sort key, in order), how the user changes it (the board, a journal reply, snoozing, `agent-gate.md`, `user-settings.md`), and how the Overnight Agent's `scan` turns it into an ordered worklist with a binding `eligible` flag. Must cover the Today→Deferred gate and **what releases it** — the exhaustion declaration, the four things that cancel it, and `today_release_reason` — the liveness mechanisms (`awaiting_reply` parking, poll/recheck timers, the staleness backstop, snooze precedence), and the recurring failure class this design guards against: *the agent authoring the signal its own gate reads*. Ground it in `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1` and the `mutcheck-*.ps1` checks, which are the executable statement of the intended behaviour. |
 | `Behaviour.md` | The system's required behaviour as testable statements, derived from `testFiles`. Group by area. This is the acceptance suite a rebuilt implementation must satisfy. |
 | `Rebuilding.md` | A build-order guide: what to construct first, dependencies between parts, and how to verify each stage. Written for someone starting from an empty directory. |
+| `Updating-the-Spec.md` | The maintenance guide for this spec itself, written for whoever edits it next. Must cover: the wiki is a mirror of `docs/spec` on `main` and must never be edited directly (the publish deletes any page not in the source); that adding a page needs a row in *this* table as well as a `Home.md` link, because `Home.md` is regenerated from this table and an unlisted page is silently dropped from the index; the collect → generate → verify → publish pipeline and how to run the mechanical halves locally; every finding `verify.mjs` can emit and what each means; that issue refs are validated against *open* issues, so closed issues and pull requests must be named in words rather than hidden from the pattern; both publish paths and the `WIKI_TOKEN` requirement; and the traps — `README.md` is not a page, wiki links fail silently as "create this page", a new wiki needs one-time UI initialisation, do not restate the bar, do not specify legacy paths. |
 | `Roadmap.md` | Known gaps and direction, grouped by priority label, derived from `issues`. Reference issues by number. |
 | `Reliability.md` | How the autonomous overnight agent is kept running unattended on one machine and heals itself: out-of-band supervision dispatched by the OS, liveness-gated stuck detection and orphan repair, silent auto-restart as the remedy, deploy propagation ("merged isn't running"), byte-level encoding safety, journal write safety, MCP process reaping, browser-slot health, the mutation-tested sweep harness, and the `user-settings.md` reconcile loop. Mine the `doc` comments of the `overnight-agent` and `scripts` domains and the reliability issues; cite scripts by name. Treat mechanisms described in issues as shipped. |
 
@@ -66,5 +73,11 @@ to the spec therefore means adding a row here, not only a link in `Home.md`.
 - Link between pages with relative wiki links, e.g. `[Architecture](Architecture)`.
 - Do not include a changelog, a generation timestamp, or any note that this was machine-written —
   the commit history already carries that, and it is noise in a spec.
+- **Do not restate the bar inside the page.** "This page assumes no prior context", "a competent
+  engineer should be able to rebuild X from this page alone", and similar are *these instructions*,
+  addressed to you — they are the acceptance test for the writing, not content for a reader, who
+  simply wants the system described. Meeting the bar is shown by the page being complete, never by
+  claiming it. Describing what a page *contains* ("this page is the format contract") is fine; what
+  a page *achieves* is not.
 
 Begin by reading `spec-facts.json`, then write the pages.
