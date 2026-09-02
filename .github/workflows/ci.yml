@@ -74,6 +74,30 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-browser-slots.ps1
 
+  # PHASE 0's mandated inbox check (GH #346) is the user's out-of-band channel into an
+  # overnight run, and its old implementation could not fail: a search on an unhealthy
+  # email client returns `[]`, which is byte-identical to a genuinely empty mailbox. This
+  # guard pins the distinction -- its arms D and E send the SAME `[]` payload and must
+  # produce OPPOSITE verdicts -- and proves each guard load-bearing by mutation.
+  #
+  # It runs against node fixtures standing in for the MCP prober, in a temp dir, and never
+  # touches a real mailbox or the planner folder, so it runs unmodified on the Linux
+  # runner. Same reasoning as the two jobs above: a guard that only runs on the one laptop
+  # where the drift happens cannot stop the drift from merging.
+  inbox-check:
+    name: Inbox check guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Capability manifest is valid JSON
+        run: node -e "JSON.parse(require('fs').readFileSync('plugins/overnight-agent/skills/overnight-agent/run-capabilities.json','utf8'))"
+      - name: Mutation check (an unreadable inbox is not an empty one)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-inbox-check.ps1
+
   # The read-path budget guard (GH #292/#293) is what stops an every-run file growing
   # until it eats the context window -- the defect that made runs stop finishing. Its
   # mutation check proves those guards are load-bearing, but until now it ran only on
