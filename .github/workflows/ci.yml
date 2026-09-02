@@ -106,3 +106,22 @@ jobs:
               }
             }
           "
+
+  # The linked-task pointer (GH #408). SKILL.md mandates an upstream walk before planning
+  # anything and names `extract` as the tool for it, so `linked: (none)` is not a cosmetic
+  # line -- it is the signal that decides whether the walk happens at all. It used to read
+  # only the journal, so a task whose parent was recorded on the BOARD reported "no parent"
+  # and the walk was skipped on the tool's own authority, silently.
+  #
+  # Runs here rather than only on the nightly laptop for the same reason the two jobs above
+  # do: a guard that only runs where the drift happens cannot stop the drift from merging.
+  # It is pure text work against synthetic fixtures in a temp dir -- it never reads the real
+  # planner folder -- so it runs unmodified on the Linux runner under pwsh.
+  board-linked-pointer:
+    name: Linked-task pointer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (board + journal merged, gaps reported)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-board-linked.ps1

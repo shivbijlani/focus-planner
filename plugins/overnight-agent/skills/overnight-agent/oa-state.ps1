@@ -299,6 +299,14 @@
     TRAILING       prose below the turn-end stamp -- the unanswered reply, if any.
     POINTERS       linked task ids, deliverable files, and the byte count NOT shown.
 
+  The LINKED pointer reads BOTH sources SKILL.md names -- the board's `Linked ID` column and the
+  journal's `**Linked:** #N` line -- and merges them (#408). It used to read only the journal, so
+  a task whose parent was recorded on the board (the normal case; task 468 -> 463 on 2026-09-02)
+  reported `linked: (none)` and the mandated upstream walk silently never happened. `(none)` is
+  now only ever printed when both sources were consulted and both were empty; if the board could
+  not be read the line says THAT instead, because a pointer block that cannot fail is worse than
+  one that reports its own gaps.
+
   Everything is sliced with the SAME parsers the reopen and consent readers use
   (Get-AgentEndIndex, Get-NewestAgentTurn, Get-AuthorSegments, Read-JournalText). Re-deriving
   those boundaries with a second, private parser is the drift bug this deliberately refuses to
@@ -1797,6 +1805,44 @@ function Get-BoardRowId {
   return $null
 }
 
+# The board's `Linked ID` column can never be one of the first five cells. Today is
+# `ID | urgency | Task | Work Priority | Added | Linked ID` and Deferred inserts a `Wake`
+# column before it, so the link is at index 5 or 6. The floor is what stops a short/ragged
+# row -- `| 123 | icon | 456 |` -- from having its TASK TITLE read as a linked id.
+$script:BoardLinkedMinIndex = 5
+
+function Get-BoardRowLinkedIds {
+  # The `Linked ID` cell of a planner.md row, as a list of task ids. This is the BOARD half of
+  # SKILL.md's "Resolve the chain" step -- the half `extract` used to drop on the floor (#408).
+  #
+  # Why this is not simply `$cells[5]`: the live board's Deferred rows are RAGGED. Some carry the
+  # `Wake` column and some do not, so the same table has 6- and 7-cell rows and a fixed index
+  # reads the wrong column on half of them. Measured on the live board 2026-09-02: row 467 has 6
+  # cells, row 437 has 7.
+  #
+  # So: prefer the index the table's own HEADER declares (future-proof if a column is ever
+  # appended after Linked ID), and fall back to the last non-empty cell, which is where the
+  # column sits in both shapes.
+  param([string]$Line, [int]$LinkedIndex = -1)
+  # Trailing `<!-- snooze:YYYY-MM-DD -->` markers live AFTER the final pipe (#353), so a naive
+  # last-cell read returns the COMMENT rather than the link. Strip comments before splitting.
+  $clean = [regex]::Replace($Line, '<!--.*?-->', '')
+  $cells = @(($clean.Trim().Trim('|') -split '\|') | ForEach-Object { $_.Trim() })
+  $last = $cells.Count - 1
+  while ($last -ge 0 -and [string]::IsNullOrWhiteSpace($cells[$last])) { $last-- }
+  if ($last -lt $script:BoardLinkedMinIndex) { return @() }
+  $idx = if ($LinkedIndex -ge $script:BoardLinkedMinIndex -and $LinkedIndex -le $last) { $LinkedIndex } else { $last }
+  $cell = $cells[$idx]
+  # A date is the `Added`/`Wake` column, never a link. Without this a Deferred row whose Linked ID
+  # is empty but whose Wake date is set would report the wake date as a linked task id.
+  if ($cell -match '^\d{4}-\d{2}-\d{2}') { return @() }
+  $ids = @()
+  foreach ($m in [regex]::Matches($cell, '(?<!\d)\d{1,6}(?!\d)')) {
+    if ($ids -notcontains $m.Value) { $ids += $m.Value }
+  }
+  return $ids
+}
+
 function Get-SnoozeFromBoard {
   # Legacy path: `<!-- snooze:YYYY-MM-DD -->` HTML comments stamped onto planner.md rows by
   # the #353 feature. Kept as a migration fallback so nothing breaks the day snooze.json
@@ -1847,7 +1893,7 @@ function Get-PrioritiesRank {
 }
 
 function Get-BoardMap {
-  # id -> { section, urgency, work_priority, board_pos } for every row on the board.
+  # id -> { section, urgency, work_priority, board_pos, linked } for every row on the board.
   #
   # Read with the explicit UTF-8 decoder, NOT Get-Content: the urgency cell is an emoji, and
   # under Windows PowerShell 5.1 a bare read decodes these BOM-less files as the ANSI codepage,
@@ -1857,10 +1903,18 @@ function Get-BoardMap {
   $lines = (Read-JournalText $PlannerBoard) -split "`r?`n"
   $section = 'other'
   $pos = 0
+  $linkedIdx = -1
   foreach ($line in $lines) {
-    if ($line -match '^##\s*Today\b') { $section = 'today'; continue }
-    elseif ($line -match '^##\s*Deferred\b') { $section = 'deferred'; continue }
-    elseif ($line -match '^##\s') { $section = 'other'; continue }
+    if ($line -match '^##\s*Today\b') { $section = 'today'; $linkedIdx = -1; continue }
+    elseif ($line -match '^##\s*Deferred\b') { $section = 'deferred'; $linkedIdx = -1; continue }
+    elseif ($line -match '^##\s') { $section = 'other'; $linkedIdx = -1; continue }
+    # A table's own header names the Linked ID column, so the parse follows the board rather than
+    # a hard-coded position. Learned per table because Today and Deferred put it at different
+    # indices; reset on every section so one table's header can never speak for another's rows.
+    if ($line -match '^\s*\|' -and $line -match '(?i)\bLinked\s*ID\b') {
+      $hdr = @((($line.Trim().Trim('|') -split '\|') | ForEach-Object { $_.Trim() }))
+      for ($i = 0; $i -lt $hdr.Count; $i++) { if ($hdr[$i] -match '(?i)^Linked\s*ID$') { $linkedIdx = $i; break } }
+    }
     $id = Get-BoardRowId $line
     if (-not $id) { continue }
     $cells = ($line.Trim().Trim('|') -split '\|') | ForEach-Object { $_.Trim() }
@@ -1873,9 +1927,50 @@ function Get-BoardMap {
       urgency       = if ($cells.Count -ge 2) { $cells[1] } else { '' }
       work_priority = $wp
       board_pos     = $pos
+      # #408: the upstream link, kept instead of discarded. It was parsed out of this very line
+      # and then dropped, so `extract` reported `linked: (none)` for a task whose board row named
+      # its parent -- and the mandated upstream walk never happened.
+      linked        = @(Get-BoardRowLinkedIds -Line $line -LinkedIndex $linkedIdx)
     }
   }
   return $map
+}
+
+function Get-BoardLinkFacts {
+  # The board half of the linked-task walk, with its OWN read state reported rather than folded
+  # into an empty result (#408 acceptance criterion 3).
+  #
+  # `Get-BoardMap` returns an empty hashtable for a board that is missing, unreadable, or simply
+  # has no rows -- three very different facts that all look identical downstream. Collapsing them
+  # is exactly how `(none)` came to mean "I did not check": a pointer block that cannot report its
+  # own gaps is worse than one that has them.
+  param([string]$Id)
+  $facts = [ordered]@{ Read = $false; RowFound = $false; Ids = @(); Note = ''; Path = "$PlannerBoard" }
+  if ([string]::IsNullOrWhiteSpace($PlannerBoard)) {
+    $facts.Note = 'no planner board path configured'
+    return [pscustomobject]$facts
+  }
+  if (-not (Test-Path -LiteralPath $PlannerBoard)) {
+    $facts.Note = "no board file at $PlannerBoard"
+    return [pscustomobject]$facts
+  }
+  $map = $null
+  try { $map = Get-BoardMap }
+  catch {
+    $facts.Note = "board unreadable: $($_.Exception.Message)"
+    return [pscustomobject]$facts
+  }
+  $facts.Read = $true
+  $row = $map["$Id"]
+  if (-not $row) {
+    # Read, but this task has no row -- e.g. it already moved to planner-completed.md. The board
+    # genuinely contributes nothing, and saying WHY costs one clause.
+    $facts.Note = "no board row for task $Id"
+    return [pscustomobject]$facts
+  }
+  $facts.RowFound = $true
+  $facts.Ids = @($row.linked)
+  return [pscustomobject]$facts
 }
 
 # Urgency icons, built from codepoints on purpose: a literal emoji in a comparison line is the
@@ -2157,11 +2252,13 @@ function Cmd-Scan {
     $urgency = ''
     $workPriority = $null
     $boardPos = 999999
+    $boardLinked = @()
     if ($b) {
       $section = $b.section
       $urgency = $b.urgency
       $workPriority = $b.work_priority
       $boardPos = $b.board_pos
+      $boardLinked = @($b.linked)
     }
     $pRank = 999999
     if ($prioRank.ContainsKey($facts.Id)) { $pRank = $prioRank[$facts.Id] }
@@ -2181,6 +2278,9 @@ function Cmd-Scan {
       urgency       = $urgency
       work_priority = $workPriority
       board_pos     = $boardPos
+      # #408: the row's `Linked ID`, carried through instead of discarded. SKILL.md's "Resolve
+      # the chain" step needs it before planning, and it was previously parsed and thrown away.
+      linked        = @($boardLinked)
       priorities_rank = $pRank
       due_poll      = [bool]((Test-PollDue $poll) -and -not $isSnoozed)
       poll_cadence  = if ($poll) { "$($poll.cadence)" } else { $null }
@@ -2509,6 +2609,61 @@ function Get-JournalPointers([string]$content, [string]$path) {
   return [pscustomobject]@{ Status = $status; Linked = $linked; Deliverables = $deliverables }
 }
 
+function Get-LinkedFacts {
+  # The MERGED upstream link: board `Linked ID` + journal `**Linked:** #N`, de-duplicated, with
+  # the provenance of each source kept so the pointer can state what it actually read (#408).
+  #
+  # Merged, not "one wins". The two sources disagree in both directions on the live folder: task
+  # 468's link exists only on the board, while journals routinely add links the board never
+  # carried. Letting either win would drop real parents; the union is the only answer that never
+  # loses one.
+  param([string]$Id, [string[]]$JournalIds)
+  $board = Get-BoardLinkFacts -Id $Id
+  $merged = @()
+  foreach ($n in @($board.Ids)) { if ($n -and $merged -notcontains $n) { $merged += $n } }
+  foreach ($n in @($JournalIds)) { if ($n -and $merged -notcontains $n) { $merged += $n } }
+  # A task never links to itself; a self-link would send the depth-3 upstream walk in a circle.
+  $merged = @($merged | Where-Object { $_ -ne "$Id" })
+  return [pscustomobject]@{
+    Ids       = $merged
+    Board     = @($board.Ids)
+    Journal   = @($JournalIds)
+    BoardRead = [bool]$board.Read
+    BoardRow  = [bool]$board.RowFound
+    BoardNote = "$($board.Note)"
+    BoardPath = "$($board.Path)"
+  }
+}
+
+function Format-LinkedPointer {
+  # The `- linked:` line. `(none)` is a POSITIVE claim -- "this task has no parent" -- so it is
+  # emitted ONLY when the board and the journal were both consulted and both were empty. When the
+  # board could not be read the line says so instead, naming the gap. #408: the previous version
+  # printed `(none)` unconditionally, which is how an unreadable board and a genuinely unlinked
+  # task became indistinguishable, and how the mandated upstream walk was skipped in silence.
+  param($Facts)
+  $journalNote = if (@($Facts.Journal).Count) { "journal: #$((@($Facts.Journal)) -join ', #')" } else { 'journal: no **Linked:** line' }
+  if (@($Facts.Ids).Count) {
+    $boardNote = if (@($Facts.Board).Count) { "board: #$((@($Facts.Board)) -join ', #')" }
+                 elseif (-not $Facts.BoardRead) { "board: NOT READ ($($Facts.BoardNote))" }
+                 elseif (-not $Facts.BoardRow) { "board: $($Facts.BoardNote)" }
+                 else { 'board: no Linked ID' }
+    return ('- linked: #' + ((@($Facts.Ids)) -join ', #') + "  ($boardNote; $journalNote)")
+  }
+  if (-not $Facts.BoardRead) {
+    return "- linked: (board not read -- $($Facts.BoardNote); $journalNote). NOT a finding of 'no parent': re-run with -PlannerBoard pointing at planner.md before concluding this task has no upstream."
+  }
+  $boardNote = if (-not $Facts.BoardRow) { $Facts.BoardNote }
+               elseif (@($Facts.Board).Count) {
+                 # The row DID name a link and it was dropped as a self-reference. Saying "no
+                 # Linked ID" here would be a second false negative of exactly the shape #408 is
+                 # about, so the discarded value is named instead.
+                 "board row read, Linked ID #$((@($Facts.Board)) -join ', #') is this task itself"
+               }
+               else { 'board row read, no Linked ID' }
+  return "- linked: (none -- $boardNote; $journalNote)"
+}
+
 function Cmd-Extract {
   if (-not $Id) { throw 'extract requires -Id' }
   $path = Join-Path $JournalDir "task-$Id.md"
@@ -2548,6 +2703,7 @@ function Cmd-Extract {
 
   $asks = @(Get-JournalOpenAsks $agentLeft)
   $ptr = Get-JournalPointers $content $path
+  $links = Get-LinkedFacts -Id $Id -JournalIds @($ptr.Linked)
 
   $emitted = 0
   foreach ($s in $slices.Values) { $emitted += (Get-Utf8ByteCount $s.Head) + (Get-Utf8ByteCount $s.Tail) }
@@ -2605,7 +2761,15 @@ function Cmd-Extract {
       ceiling_bytes   = $ceiling
       has_agent_block = $hasAgentBlock
       status          = $ptr.Status
-      linked          = @($ptr.Linked)
+      linked          = @($links.Ids)
+      # Provenance, so a consumer can tell "no parent" from "never looked" without re-reading the
+      # board itself. `board_read` false means the `linked` list is INCOMPLETE, not empty (#408).
+      linked_board    = @($links.Board)
+      linked_journal  = @($links.Journal)
+      board_read      = [bool]$links.BoardRead
+      board_row_found = [bool]$links.BoardRow
+      board_path      = $links.BoardPath
+      board_note      = $links.BoardNote
       deliverables    = @($ptr.Deliverables)
       open_asks       = @($asks)
       user_messages   = [pscustomobject]@{
@@ -2697,7 +2861,7 @@ function Cmd-Extract {
   & $w '## POINTERS'
   & $w ''
   & $w ("- status: " + $(if ($ptr.Status) { $ptr.Status } else { '(none stated)' }))
-  & $w ("- linked: " + $(if ($ptr.Linked.Count) { (($ptr.Linked | ForEach-Object { "#$_" }) -join ', ') } else { '(none)' }))
+  & $w (Format-LinkedPointer $links)
   if ($ptr.Deliverables.Count) {
     & $w "- deliverables next to this journal (not read here):"
     foreach ($d in $ptr.Deliverables) { & $w "    - $($d.name) ($($d.kb) KB)" }

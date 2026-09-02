@@ -687,6 +687,16 @@ plan or a subagent that only sees A's own journal will miss decisions, constrain
 that already exist upstream, and will redo or contradict them.
 
 1. **Resolve the chain.** Read A's `Linked ID` (board) and any `**Linked:** #B` note in its journal.
+   `extract -Id A` reads **both** sources for you and merges them — its `POINTERS` block's
+   `- linked:` line is the authoritative answer, and it names which source each id came from
+   (#408). Two rules about that line, because it is the signal that decides whether this whole
+   step happens:
+   - `(none)` means *both* sources were read and both were empty. It is a finding, and it is
+     the only form you may treat as "this task has no parent".
+   - `(board not read — …)` means the board could **not** be consulted, so the answer is
+     **incomplete, not empty**. Do not conclude there is no parent: fix the `-PlannerBoard`
+     path and ask again.
+
    Then follow it **upstream** — B's own `Linked ID`, and so on — building the ancestor chain
    (A → B → C…). **Cap the walk at depth 3** to avoid runaway; if it's deeper, note "deeper chain
    exists" and stop. Also glance at **sibling** tasks that share A's parent (other children with the
