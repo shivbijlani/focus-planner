@@ -64,12 +64,48 @@ function isUrgent(icon, workPriority) {
 }
 
 /**
+ * The two shapes the app writes into the ID cell.
+ *
+ * `opAddTask`/`opSetAdoLink` (`src/focusPlanOps.js`) emit either a bare task ID
+ * or the task ID followed by its linked external ticket:
+ *
+ *     | 439 | …
+ *     | 439,[170](https://github.com/…/issues/170) | …
+ *
+ * The app's own reader recovers the local ID by splitting on the literal `,[`,
+ * so that — and only that — is the grammar. Matching it here keeps the writer
+ * and the reader in agreement, which is the whole defect: this parser required
+ * the *entire* cell to be digits, so any row using the documented External
+ * Ticket field was dropped before it ever entered the board map, and then
+ * ranked as "not on the board" no matter where the user had put it.
+ *
+ * Whitespace around the comma is tolerated because a hand-edited row is cheap
+ * to accept. Anything else — `439,170`, `#439`, a header cell, the `|---|`
+ * separator — deliberately yields null and the row is skipped exactly as it is
+ * today. Falling through preserves current behaviour; guessing at an unknown
+ * shape would silently mis-rank a task, which is the failure being fixed.
+ */
+const ID_CELL = /^(\d+)(?:\s*,\s*\[.*)?$/
+
+/**
+ * Task ID from an ID cell, or null if the cell is not one the app writes.
+ *
+ * @param {string} cell trimmed contents of the first column
+ * @returns {string|null}
+ */
+function taskIdFromCell(cell) {
+  if (typeof cell !== 'string') return null
+  const m = ID_CELL.exec(cell.trim())
+  return m ? m[1] : null
+}
+
+/**
  * Parse `planner.md` into a lookup of task ID → board position.
  *
  * Columns are `ID | 🎯 | Task | Work Priority | Added | Linked ID`. Only rows
- * whose first cell is all digits are treated as tasks, which skips the header
- * and the `|---|---|` separator. The `## Priorities` section is a numbered
- * list rather than a table, so it contributes no rows.
+ * whose first cell parses as a task ID are treated as tasks, which skips the
+ * header and the `|---|---|` separator. The `## Priorities` section is a
+ * numbered list rather than a table, so it contributes no rows.
  *
  * @param {string} markdown raw contents of planner.md
  * @returns {Map<string, {section: string, index: number, urgent: boolean}>}
@@ -90,8 +126,8 @@ export function parseBoardOrder(markdown) {
 
     const cols = cells(rawLine)
     if (!cols || cols.length === 0) continue
-    const id = cols[0]
-    if (!/^\d+$/.test(id)) continue
+    const id = taskIdFromCell(cols[0])
+    if (!id) continue
     // First occurrence wins, so a task listed twice keeps its highest position.
     if (out.has(id)) continue
 

@@ -34,6 +34,24 @@ const BOARD = `## Today
 2. 191
 `
 
+// Issue #171: the shape the app writes when a task carries an External Ticket.
+// #439 was the first live row to use it, and it sat at row 1 of `## Today`.
+const EXTERNAL_ID_CELL = '439,[170](https://github.com/shivbijlani/focus-planner/issues/170)'
+
+const EXTERNAL_TICKET_BOARD = `## Today
+
+| ID | 🎯 | Task | Work Priority | Added | Linked ID |
+|---|---|------|---------------|-------|-----------|
+| ${EXTERNAL_ID_CELL} | 🔴 | Fix GH #170 | - | 2026-08-23 | |
+| 433 | 🔴 | Land GH #150 | P0 | 2026-08-22 | 371 |
+
+## Deferred
+
+| ID | 🎯 | Task | Work Priority | Added | Linked ID |
+|---|---|------|---------------|-------|-----------|
+| 252 | 🟡 | Print the week plan | - | 2026-06-12 | 191 |
+`
+
 describe('parseBoardOrder', () => {
   it('maps each task row to its section and position', () => {
     const board = parseBoardOrder(BOARD)
@@ -81,6 +99,63 @@ describe('parseBoardOrder', () => {
     expect(parseBoardOrder('').size).toBe(0)
     expect(parseBoardOrder(undefined).size).toBe(0)
     expect(parseBoardOrder('no table here').size).toBe(0)
+  })
+
+  // Issue #171. The app stores a task linked to an external ticket as
+  // `<localId>,[<ticketId>](<url>)`, so requiring the whole cell to be digits
+  // dropped the row before it entered the board map. The failure was silent:
+  // the task simply never appeared in the digest, and using a documented
+  // product feature was enough to trigger it.
+  it('reads the task id from a cell that also carries an external ticket', () => {
+    const board = parseBoardOrder(EXTERNAL_TICKET_BOARD)
+    expect(board.get('439')).toMatchObject({ section: 'today', index: 0, urgent: true })
+    // The linked ticket number is not a task and must not become one.
+    expect(board.has('170')).toBe(false)
+  })
+
+  it('ranks an external-ticket row identically to the same row with a bare id', () => {
+    const external = parseBoardOrder(EXTERNAL_TICKET_BOARD)
+    const bare = parseBoardOrder(EXTERNAL_TICKET_BOARD.replace(EXTERNAL_ID_CELL, '439'))
+    expect(external.get('439')).toEqual(bare.get('439'))
+    expect(boardRank(external, '439')).toBe(boardRank(bare, '439'))
+    expect(boardIndex(external, '439')).toBe(boardIndex(bare, '439'))
+    // Row 1 of Today with a 🔴 is the top tier, not the not-on-board tier.
+    expect(boardRank(external, '439')).toBe(RANK_TODAY_URGENT)
+    expect(boardIndex(external, '439')).toBe(0)
+  })
+
+  it('tolerates whitespace around the comma in an external-ticket cell', () => {
+    const board = parseBoardOrder('## Today\n\n| 439 , [170](https://x/170) | 🟡 | t | - | | |')
+    expect(board.get('439')).toMatchObject({ section: 'today', index: 0 })
+  })
+
+  it('keeps a bare numeric id working exactly as before', () => {
+    const board = parseBoardOrder(EXTERNAL_TICKET_BOARD)
+    expect(board.get('433')).toMatchObject({ section: 'today', index: 1 })
+    expect(board.get('252')).toMatchObject({ section: 'deferred' })
+    // And the original board, which has no external tickets at all, is untouched.
+    expect(parseBoardOrder(BOARD).get('435')).toMatchObject({ section: 'today', index: 0 })
+  })
+
+  it('skips a malformed id cell instead of throwing or mis-parsing it', () => {
+    // Shapes the app never writes. Each must fall through safely, leaving the
+    // row off the board rather than being guessed at.
+    const board = parseBoardOrder(
+      [
+        '## Today',
+        '',
+        '| 439,170 | 🟡 | comma but no link | - | | |',
+        '| #440 | 🟡 | hash prefix | - | | |',
+        '| 441abc | 🟡 | trailing text | - | | |',
+        '| | 🟡 | empty cell | - | | |',
+        '| 442 | 🟡 | the one good row | - | | |',
+      ].join('\n'),
+    )
+    expect(board.has('439')).toBe(false)
+    expect(board.has('440')).toBe(false)
+    expect(board.has('441')).toBe(false)
+    expect(board.get('442')).toMatchObject({ section: 'today', index: 0 })
+    expect(board.size).toBe(1)
   })
 })
 
