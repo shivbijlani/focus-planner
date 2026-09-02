@@ -1,0 +1,17 @@
+{
+  "name": "@focus/task-paper",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Generates a readable per-task 'paper' (collapsible HTML) from a Focus Planner task journal. Additive: the journal stays the source of truth.",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "task-paper": "bin/task-paper.js"
+  },
+  "scripts": {
+    "test": "vitest run"
+  }
+}
