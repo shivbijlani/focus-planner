@@ -60,7 +60,24 @@ export function createTelegramClient({
     }
     if (!data || data.ok !== true) {
       const desc = data && data.description ? data.description : `HTTP ${res.status}`
-      throw new Error(`Telegram ${method} failed: ${desc}`)
+      const err = new Error(`Telegram ${method} failed: ${desc}`)
+      // Surface the rate limit as STRUCTURED data, not only inside the message
+      // string (#172). Telegram tells us exactly how long to wait in
+      // `parameters.retry_after`, and reducing the error to `description` threw
+      // that away -- leaving callers to scrape it out of English prose, which
+      // nothing did. The result was that a 429 could not be waited out, so it
+      // killed the run and the retry re-posted everything.
+      err.telegramMethod = method
+      err.errorCode = data && Number.isInteger(data.error_code) ? data.error_code : res.status
+      const retryAfter =
+        data && data.parameters && Number.isFinite(Number(data.parameters.retry_after))
+          ? Number(data.parameters.retry_after)
+          : null
+      if (retryAfter != null) err.retryAfter = retryAfter
+      // A 429 has to be identifiable even when `parameters` is missing, because
+      // the handling differs in kind (wait and retry) rather than in degree.
+      err.isRateLimit = err.errorCode === 429 || /too many requests/i.test(desc)
+      throw err
     }
     return data.result
   }

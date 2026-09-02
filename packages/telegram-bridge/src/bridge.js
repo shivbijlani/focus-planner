@@ -39,6 +39,21 @@ import { parseReplyRouting, coalesceByTask } from './routeReply.js'
 
 const TELEGRAM_MAX = 4096
 
+// Rate-limit handling (#172). A 429 is a pause, not a failure -- but an unbounded
+// wait would be its own hang, so both the number of attempts and each individual
+// wait are capped, and the no-`retry_after` path backs off exponentially rather
+// than assuming the field is there.
+const RATE_LIMIT_MAX_RETRIES = 5
+const RATE_LIMIT_BASE_WAIT_MS = 2000
+const RATE_LIMIT_MAX_WAIT_MS = 90000
+
+// Injectable so tests never actually wait. Overridden via globalThis in the
+// suite; production always gets the real timer.
+const sleep = (ms) =>
+  typeof globalThis.__telegramBridgeSleep === 'function'
+    ? globalThis.__telegramBridgeSleep(ms)
+    : new Promise((resolve) => setTimeout(resolve, ms))
+
 // A turn longer than one message is SPLIT rather than truncated (see
 // `formatForTelegramParts`). Cap the split so a very long turn can't carpet-bomb
 // the phone with messages; past this we trim the middle and keep the ask.
@@ -219,8 +234,67 @@ function formatPlain(taskId, title, turn) {
   return body.length > TELEGRAM_MAX ? body.slice(0, TELEGRAM_MAX - 1) + '\u2026' : body
 }
 
-export function createBridge({ client, config, state, io, logger = () => {}, now = () => new Date() }) {
+export function createBridge({
+  client,
+  config,
+  state,
+  io,
+  logger = () => {},
+  now = () => new Date(),
+  // Called after each unit of durable progress (a posted turn, a folded reply).
+  // Default is a no-op so every existing caller and test is unaffected.
+  //
+  // Why this exists (#172): `saveState` ran ONCE, after `syncOnce()` resolved.
+  // `setLastPosted` only mutates memory, so anything that threw mid-loop -- a
+  // rate limit being the common case -- meant that write never happened and
+  // every task already posted looked unposted next run. A 14-task sweep that
+  // died on task 11 re-posted the first 10. Nothing was lost; it just arrived
+  // twice, on his phone.
+  //
+  // Checkpointing after each post makes an interrupted run resumable instead of
+  // repeatable. A failed checkpoint is deliberately non-fatal: the post itself
+  // already succeeded, and losing the run over a bookkeeping write would be a
+  // worse outcome than the duplicate it prevents.
+  persist = null,
+} = {}) {
   const { chatId, taskAllowlist } = config
+
+  async function checkpoint(label) {
+    if (typeof persist !== 'function') return
+    try {
+      await persist(state)
+    } catch (err) {
+      logger(`could not checkpoint state after ${label} (${err.message})`)
+    }
+  }
+
+  // Telegram's group budget is roughly 20 messages/minute, and a 429 tells us
+  // exactly how long to wait. Waiting it out turns a run-killing error into a
+  // pause; the alternative -- which is what happened -- is that the run dies and
+  // the retry duplicates everything it had already delivered.
+  //
+  // Bounded on both axes so a pathological `retry_after` cannot hang a run: at
+  // most RATE_LIMIT_MAX_RETRIES attempts, each capped at RATE_LIMIT_MAX_WAIT_MS.
+  // If `retry_after` is absent the fallback is exponential, so behaviour
+  // degrades safely rather than depending on the field being present.
+  async function withRateLimitRetry(label, fn) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await fn()
+      } catch (err) {
+        if (!err || !err.isRateLimit || attempt >= RATE_LIMIT_MAX_RETRIES) throw err
+        const advised = Number.isFinite(err.retryAfter) ? err.retryAfter * 1000 : null
+        const backoff = advised != null ? advised : RATE_LIMIT_BASE_WAIT_MS * 2 ** attempt
+        const waitMs = Math.min(backoff, RATE_LIMIT_MAX_WAIT_MS)
+        logger(
+          `rate limited on ${label}; waiting ${Math.round(waitMs / 1000)}s ` +
+            `(attempt ${attempt + 1}/${RATE_LIMIT_MAX_RETRIES}` +
+            `${advised != null ? ', server-advised' : ', no retry_after — backing off'})`,
+        )
+        await sleep(waitMs)
+      }
+    }
+  }
 
   function isAllowed(taskId) {
     return taskAllowlist.length === 0 || taskAllowlist.includes(taskId)
@@ -230,7 +304,12 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     const existing = getTask(state, taskId)
     if (existing && existing.topicId != null) return existing.topicId
     const name = topicName(taskId, title)
-    const result = await client.createForumTopic({ chatId, name })
+    // Creating a topic spends the same group quota as sending, and a new task
+    // costs TWO calls (create + send) -- which is why a sweep with several new
+    // topics hits the limit sooner than its task count suggests (#172).
+    const result = await withRateLimitRetry(`createForumTopic task #${taskId}`, () =>
+      client.createForumTopic({ chatId, name }),
+    )
     const topicId = result.message_thread_id
     setTopic(state, taskId, topicId, name)
     logger(`created topic ${topicId} for task #${taskId}`)
@@ -451,25 +530,40 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
       const postedIds = []
       for (const [index, text] of parts.entries()) {
         try {
-          const sent = await client.sendMessage({
-            chatId,
-            text,
-            messageThreadId: topicId,
-            parseMode: 'HTML',
-          })
+          const sent = await withRateLimitRetry(`sendMessage task #${taskId}`, () =>
+            client.sendMessage({
+              chatId,
+              text,
+              messageThreadId: topicId,
+              parseMode: 'HTML',
+            }),
+          )
           if (sent && Number.isInteger(sent.message_id)) postedIds.push(sent.message_id)
         } catch (err) {
-          // If Telegram rejects our HTML (e.g. an unexpected entity), don't lose
-          // the update — resend the same content as plain text.
+          // The plain-text fallback exists for ONE failure: Telegram rejecting
+          // our HTML (an unexpected entity). It is exactly wrong for a rate
+          // limit -- it spends another call against the same exhausted quota,
+          // and it used to have no catch of its own, so the second 429
+          // propagated and killed the run (#172). A 429 has already been waited
+          // out and retried above by the time it reaches here, so re-sending is
+          // pointless as well as harmful: let it stop this task, and keep the
+          // ids already posted.
+          if (err && err.isRateLimit) throw err
           logger(
             `HTML send failed for task #${taskId} part ${index + 1}/${parts.length} ` +
               `(${err.message}); retrying as plain text`,
           )
-          const sent = await client.sendMessage({
-            chatId,
-            text: formatPlain(taskId, parts.length > 1 ? `${title} (${index + 1}/${parts.length})` : title, turn),
-            messageThreadId: topicId,
-          })
+          const sent = await withRateLimitRetry(`sendMessage (plain) task #${taskId}`, () =>
+            client.sendMessage({
+              chatId,
+              text: formatPlain(
+                taskId,
+                parts.length > 1 ? `${title} (${index + 1}/${parts.length})` : title,
+                turn,
+              ),
+              messageThreadId: topicId,
+            }),
+          )
           if (sent && Number.isInteger(sent.message_id)) postedIds.push(sent.message_id)
         }
       }
@@ -518,6 +612,9 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
         `posted task #${taskId} to topic ${topicId}` +
           (parts.length > 1 ? ` in ${parts.length} parts` : ''),
       )
+      // Durable progress. Everything above is now on the user's phone, so the
+      // fact of it must survive whatever happens to the rest of this loop.
+      await checkpoint(`task #${taskId}`)
     }
 
     return { posted, created, suppressed }
@@ -613,6 +710,10 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
     }
 
     if (updates.length) setOffset(state, maxUpdateId + 1)
+    // The replies are already written into the journals at this point. If the
+    // offset advance is not persisted, the next run re-reads and re-folds the
+    // same updates, so checkpoint here too rather than only at the end.
+    if (folded.length || updates.length) await checkpoint('syncDown')
     return { folded, unrouted }
   }
 

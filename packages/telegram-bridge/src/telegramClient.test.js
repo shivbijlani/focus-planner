@@ -131,3 +131,48 @@ describe('telegram client request deadline', () => {
     expect(seen[0]).toBe(true)
   })
 })
+
+describe('rate-limit errors carry structured data (#172)', () => {
+  const errFetch = (payload, status = 429) => async () => ({
+    status,
+    json: async () => payload,
+  })
+
+  it('surfaces retry_after as a number on the error, not only in the message', async () => {
+    const client = createTelegramClient({
+      token: 't',
+      fetchImpl: errFetch({
+        ok: false,
+        error_code: 429,
+        description: 'Too Many Requests: retry after 41',
+        parameters: { retry_after: 41 },
+      }),
+    })
+    await expect(client.sendMessage({ chatId: '-100', text: 'hi' })).rejects.toMatchObject({
+      retryAfter: 41,
+      isRateLimit: true,
+      errorCode: 429,
+      telegramMethod: 'sendMessage',
+    })
+  })
+
+  it('flags a rate limit even when parameters are missing', async () => {
+    const client = createTelegramClient({
+      token: 't',
+      fetchImpl: errFetch({ ok: false, error_code: 429, description: 'Too Many Requests' }),
+    })
+    const err = await client.sendMessage({ chatId: '-100', text: 'hi' }).catch((e) => e)
+    expect(err.isRateLimit).toBe(true)
+    expect(err.retryAfter).toBeUndefined()
+  })
+
+  it('does not flag an ordinary API error as a rate limit', async () => {
+    const client = createTelegramClient({
+      token: 't',
+      fetchImpl: errFetch({ ok: false, error_code: 400, description: "can't parse entities" }, 400),
+    })
+    const err = await client.sendMessage({ chatId: '-100', text: 'hi' }).catch((e) => e)
+    expect(err.isRateLimit).toBe(false)
+    expect(err.message).toMatch(/can't parse entities/)
+  })
+})

@@ -44,7 +44,17 @@ async function build() {
     syncRecordPaths: config.syncRecordPaths,
   })
   const state = await loadState(config.stateDir)
-  const bridge = createBridge({ client, config, state, io, logger: log })
+  // Checkpoint after each posted turn, so a run killed partway (a rate limit is
+  // the usual cause) resumes rather than repeats -- see #172. The end-of-run
+  // save below still happens; this only makes progress durable earlier.
+  const bridge = createBridge({
+    client,
+    config,
+    state,
+    io,
+    logger: log,
+    persist: (s) => saveState(config.stateDir, s),
+  })
   return { config, client, state, bridge }
 }
 
