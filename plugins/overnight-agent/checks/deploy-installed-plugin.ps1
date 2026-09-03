@@ -52,7 +52,8 @@ param(
   [string]$Ref = 'origin/main',
   [string]$Repo = 'V:\repos\focus-planner',
   [string]$Installed = "$env:USERPROFILE\.copilot\installed-plugins\focus-planner",
-  [string]$RepoPrefix = 'plugins'
+  [string]$RepoPrefix = 'plugins',
+  [string]$ClassifierPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -60,7 +61,7 @@ $ErrorActionPreference = 'Stop'
 if (-not (Test-Path $Repo))      { throw "repo not found: $Repo" }
 if (-not (Test-Path $Installed)) { throw "installed plugin not found: $Installed" }
 
-$sweep = Join-Path $env:LOCALAPPDATA 'overnight-agent\installed-skill-drift-sweep.mjs'
+$sweep = if ($ClassifierPath) { $ClassifierPath } else { Join-Path $env:LOCALAPPDATA 'overnight-agent\installed-skill-drift-sweep.mjs' }
 if (-not (Test-Path $sweep)) { throw "classifier not found: $sweep" }
 
 $backupRoot = Join-Path $env:LOCALAPPDATA ('overnight-agent\backups\deploy-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))

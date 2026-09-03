@@ -221,7 +221,8 @@ if ($WhatIf) { Write-Note 'WHAT-IF - nothing will be written and no state will b
 
 # --- 2. DEPLOY (safe class only; -Force is never passed) -----------------------------
 $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$deployer,
-          '-Ref',$Ref,'-Repo',$Repo,'-Installed',$Installed,'-RepoPrefix',$RepoPrefix)
+          '-Ref',$Ref,'-Repo',$Repo,'-Installed',$Installed,'-RepoPrefix',$RepoPrefix,
+          '-ClassifierPath',$sweep)
 if (-not $WhatIf) { $args += '-Confirm' }
 
 $deployRun = Invoke-Bounded -FilePath 'powershell' -ArgumentList $args -BudgetMs (Get-RemainingMs)
