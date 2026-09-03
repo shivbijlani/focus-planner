@@ -42,9 +42,21 @@
 // WHAT IT REPORTS
 // ---------------
 //   NEVER_READ            bound, `observed_at` empty. The channel has never been read.
-//   SPOKE_WITHOUT_READING a turn was written AFTER the last observation. The agent spoke
-//                         without listening — the durable regression detector, because it
-//                         keeps firing after the loop is wired if a run skips the read.
+//   SPOKE_WITHOUT_READING the newest turn is more than READ_WINDOW_HOURS newer than the last
+//                         observation — the run wrote without reading first.
+//
+//                         THE WINDOW IS NOT A FUDGE FACTOR. PHASE 0.7 reads BEFORE the run
+//                         writes its turns, so in a perfectly healthy run `last_turn_at` is
+//                         always a few minutes newer than `observed_at`. A bare
+//                         `last_turn_at > observed_at` therefore fires on every doc-bound task
+//                         the run touches. Measured on the first live run after this sweep
+//                         shipped: observed 14:36:51, turn 14:43:50, flagged — a false positive
+//                         produced by the correct sequence. That is exactly the always-firing
+//                         advisory #433 warns about, and this file's own header argues against
+//                         it two paragraphs up, so shipping it here would have been the
+//                         detector flagging its own healthy path. Within the window the read and
+//                         the turn belong to one working session; beyond it, the run answered
+//                         from a read belonging to an earlier session, which is the real defect.
 //   UNACKED               `-Observe` reported comments and nothing ever `-Ack`ed them.
 //                         Two-phase is deliberate (#423), so this is the crash-window
 //                         residue that means an instruction was seen and dropped.
@@ -84,6 +96,13 @@ if (!STATE_DIR) {
 }
 
 const JOURNALS = path.join(PLANNER, 'journal');
+
+// How far a turn may trail its read and still count as the same working session. Configurable so
+// a long run can widen it without editing code, but a NUMBER, not a toggle: setting it to 0
+// restores the always-fires behaviour this constant exists to prevent, so 0 is treated as "unset"
+// and falls back to the default rather than silently arming the false positive.
+const READ_WINDOW_HOURS = Number(process.env.OA_DOC_READ_WINDOW_HOURS) || 6;
+const READ_WINDOW_MS = READ_WINDOW_HOURS * 3600 * 1000;
 
 const readJson = (file) => {
   try {
@@ -143,8 +162,9 @@ for (const id of activeIds) {
     continue;
   }
 
-  // gate FRESH: an observation at or after the newest turn is the healthy loop.
-  if (lastTurnAt && lastTurnAt > observedAt) {
+  // gate FRESH: an observation at, after, or within READ_WINDOW_MS before the newest turn is the
+  // healthy read-then-work-then-write loop of a single run.
+  if (lastTurnAt && lastTurnAt - observedAt > READ_WINDOW_MS) {
     findings.push({ ...row, kind: 'SPOKE_WITHOUT_READING' });
     continue;
   }
@@ -171,8 +191,8 @@ for (const f of findings) {
     console.log('        comment on the doc reaches nothing and `scan` reports 0 either way.');
   }
   if (f.kind === 'SPOKE_WITHOUT_READING') {
-    console.log('     -> the newest turn was written after the last observation: the run answered');
-    console.log('        without first reading what Shiv had said on the doc.');
+    console.log(`     -> the newest turn is more than ${READ_WINDOW_HOURS}h newer than the last read:`);
+    console.log('        the run answered from an observation belonging to an earlier session.');
   }
   if (f.kind === 'UNACKED') {
     console.log('     -> comments were reported new by -Observe and never -Ack`ed: seen and dropped.');
