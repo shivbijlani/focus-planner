@@ -37,5 +37,12 @@ region-dropdown.md
 # Build artifact of scripts/spec/collect.mjs (regenerated every run).
 spec-facts.json
 
+# Build artifacts of scripts/spec/conflicts.mjs (regenerated every run). The
+# workflow stages only docs/spec, so CI cannot commit these -- but a local run
+# leaves them in the tree, and committing a file that is rewritten four times a
+# day is pure churn.
+spec-decisions.json
+spec-decisions.md
+
 # impeccable design-hook cache (local tool state)
 .impeccable/

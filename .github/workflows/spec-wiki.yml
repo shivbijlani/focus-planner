@@ -19,9 +19,15 @@ name: Spec wiki
 #                               so each page gets a focused slice.
 #   verify.mjs   (no model)  -> fails the build if the prose references anything
 #                               that does not exist, or omits a domain.
+#   conflicts.mjs (no model) -> reports open issues that demand opposite things,
+#                               which verify.mjs cannot catch: both issues exist,
+#                               so both references are valid, and the
+#                               contradiction ships as design authority.
 #
 # Output lands as a PULL REQUEST, never a direct push: the spec is the design
 # authority for the system, so a machine may draft it but a human accepts it.
+# Since #470 that is ONE rolling pull request on a fixed `spec/auto` branch,
+# updated in place, rather than a new PR per run -- see the schedule note below.
 #
 # WIKI PUBLISHING NOTE
 # --------------------
@@ -33,8 +39,17 @@ name: Spec wiki
 
 on:
   schedule:
-    # Weekly, Sunday 09:00 UTC. The spec tracks design, which moves in weeks.
-    - cron: '0 9 * * 0'
+    # Every 6 hours (#470). The spec used to regenerate weekly on the theory that
+    # design moves in weeks. It does not: this repo lands design-bearing changes
+    # several times a day, so a weekly spec is stale for six of its seven days.
+    #
+    # Cadence alone would have made things worse, not better. The old job opened a
+    # NEW pull request on every run that produced a diff -- fine at 1/week, but 28
+    # PRs/week once it runs 4x/day, which is exactly the kind of self-inflicted
+    # noise that gets a channel muted. So the PR step below was changed at the
+    # same time to maintain ONE rolling pull request instead. The two changes are
+    # a pair; raising the frequency without the rolling branch is a regression.
+    - cron: '0 */6 * * *'
   workflow_dispatch:
     inputs:
       publish_wiki:
@@ -91,7 +106,17 @@ jobs:
       - name: Verify the spec against the code
         run: node scripts/spec/verify.mjs --facts spec-facts.json --dir docs/spec
 
-      - name: Open a pull request
+      - name: Flag conflicting requirements
+        # Runs whatever happened above, because a contradiction between two open
+        # issues is a fact about the issues, not about whether the prose built.
+        if: always()
+        run: |
+          node scripts/spec/conflicts.mjs \
+            --facts spec-facts.json \
+            --out spec-decisions.json \
+            --md spec-decisions.md
+
+      - name: Open or update the rolling pull request
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -101,7 +126,14 @@ jobs:
           # reach a commit -- and deleting it destroyed the diagnostic artifact
           # the next step uploads, which is the only way to see what the model was
           # actually given when a generated page looks wrong.
-          BRANCH="spec/auto-$(date -u +%Y%m%d-%H%M)"
+          #
+          # ONE ROLLING BRANCH, not one branch per run. At the previous weekly
+          # cadence a timestamped branch per run was harmless; at every 6h it
+          # produces 28 pull requests a week, each superseding the last, and the
+          # review queue becomes unusable. A fixed branch means the open PR is
+          # always "the current state of the spec" and its diff is always against
+          # main, which is the only version anyone wants to read.
+          BRANCH="spec/auto"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
@@ -126,29 +158,58 @@ jobs:
           covered.
 
           Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>"
-          git push -u origin "$BRANCH"
 
-          gh pr create \
-            --title "docs(spec): regenerate design specification" \
-            --body "Automated regeneration of the design spec in \`docs/spec\`.
+          # Force-with-lease is wrong here: the remote branch is owned solely by
+          # this job and is intentionally replaced, not advanced, so there is no
+          # concurrent writer whose work could be lost. The `concurrency` group at
+          # the top of this file already serialises runs.
+          git push --force origin "HEAD:$BRANCH"
 
-          This is the source of truth that is mirrored to the wiki. It was written
-          from \`spec-facts.json\` (module graph, exports, tests, workflows, open
-          issues) and passed \`scripts/spec/verify.mjs\`, which fails on any
-          reference to a file or issue that does not exist and on any uncovered
-          domain.
+          # The decisions block is regenerated into the body on every run, so the
+          # PR always states the CURRENT conflicts rather than accumulating a log
+          # of every conflict that ever existed.
+          {
+            echo "Automated regeneration of the design spec in \`docs/spec\`."
+            echo
+            echo "This is the source of truth that is mirrored to the wiki. It was written"
+            echo "from \`spec-facts.json\` (module graph, exports, tests, workflows, open"
+            echo "issues) and passed \`scripts/spec/verify.mjs\`, which fails on any"
+            echo "reference to a file or issue that does not exist and on any uncovered"
+            echo "domain."
+            echo
+            echo "**Review for judgement, not for facts** -- the structural claims are"
+            echo "machine-checked; what needs a human is whether the design rationale is"
+            echo "right."
+            echo
+            echo "---"
+            echo
+            cat spec-decisions.md
+            echo
+            echo "_This pull request is updated in place every 6 hours. Its branch is"
+            echo "\`spec/auto\` and it always shows the current spec, not a snapshot._"
+          } > pr-body.md
 
-          **Review for judgement, not for facts** -- the structural claims are
-          machine-checked; what needs a human is whether the design rationale is
-          right." \
-            --base main
+          EXISTING="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            gh pr edit "$EXISTING" --body-file pr-body.md
+            echo "Updated existing pull request #$EXISTING."
+          else
+            gh pr create \
+              --title "docs(spec): regenerate design specification" \
+              --body-file pr-body.md \
+              --head "$BRANCH" \
+              --base main
+          fi
 
-      - name: Upload facts as a build artifact
+      - name: Upload facts and decisions as build artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: spec-facts
-          path: spec-facts.json
+          path: |
+            spec-facts.json
+            spec-decisions.json
+            spec-decisions.md
           if-no-files-found: ignore
 
   publish-wiki:
