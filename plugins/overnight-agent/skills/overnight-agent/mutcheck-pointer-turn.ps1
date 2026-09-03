@@ -199,10 +199,11 @@ function Write-Journal([string]$id, [string]$template) {
 Write-Journal '801' $JournalBound     # doc-bound
 Write-Journal '802' $JournalUnbound   # no doc
 Write-Journal '803' $JournalFenced    # doc-meta only inside a fence
-Write-Journal '804' $JournalBound     # doc-bound, used for the real write in arms G/H
+Write-Journal '804' $JournalBound     # doc-bound, receives the real pointer turn (arms G/H)
+Write-Journal '805' $JournalBound     # doc-bound twin, receives the ask-stripped turn (arm G-)
 
 $boardText = "## Today`n`n| ID | Task |`n|---|---|`n"
-foreach ($id in 801, 802, 803, 804) { $boardText += "| $id | synthetic |`n" }
+foreach ($id in 801, 802, 803, 804, 805) { $boardText += "| $id | synthetic |`n" }
 [IO.File]::WriteAllText($board, $boardText, $utf8)
 [IO.File]::WriteAllText($store, '{}', $utf8)
 
@@ -341,43 +342,71 @@ Write-Host ("live body:      {0} chars" -f $liveLen)
 $w = Invoke-WriteTurn -Id 804 -BodyFile $bPointer
 $results['G- the pointer turn was actually written'] = ($w -and $w.ok -eq $true -and $script:LastExit -eq 0)
 
+# The negative control is a TRUE TWIN: the same write path, the same journal shape, the same
+# two-stage read -- differing only in the ask line. It needs -DisableGuard G11 because G11
+# refuses exactly this body, which is the point: task 805 is the world where G11 does not
+# exist, and it is what the digest sees there.
+#
+# This was originally asserted against the ask-stripped BODY FILE rather than a written
+# journal, which was weaker than it looked: it never ran latestAgentTurn at all, so it could
+# not distinguish a harness that isolates the newest turn from one that greps the whole file.
+# It matters here specifically -- task 805's EARLIER turn carries `**Needs from you:** nothing
+# blocking`, so a whole-file grep WOULD find an ask and this control would silently pass while
+# proving nothing. That is digest.js's own documented defect (the 06-30 ask superseded on
+# 07-07 and acted on anyway), reproduced in the check that is supposed to catch it.
+$w2 = Invoke-WriteTurn -Id 805 -BodyFile $bNoAsk -Extra @('-DisableGuard', 'G11')
+$results['G- the ask-stripped twin was written (G11 disabled)'] = ($w2 -and $w2.ok -eq $true)
+
 $probe = Join-Path $root 'probe.mjs'
 $probeSrc = @'
 import { readFileSync } from 'node:fs'
-import { latestAgentTurn } from '{JOURNAL}'
-import { extractAskEntry } from '{DIGEST}'
-const content = readFileSync(process.argv[2], 'utf8')
-const turn = latestAgentTurn(content)
+import { pathToFileURL } from 'node:url'
+
+// The module paths arrive as ARGV and are converted by node's own pathToFileURL rather
+// than by hand. A hand-rolled "file://" + path worked on Windows and threw on Linux --
+// `[Uri]` treats a POSIX path as RELATIVE, and .AbsoluteUri on a relative Uri throws --
+// so arm G failed on the CI runner alone, which is the one place it had to work.
+const { latestAgentTurn } = await import(pathToFileURL(process.argv[2]).href)
+const { extractAskEntry } = await import(pathToFileURL(process.argv[3]).href)
+
+const turn = latestAgentTurn(readFileSync(process.argv[4], 'utf8'))
 const entry = extractAskEntry(turn)
-// The negative control lives here too: the same pipeline over the ask-stripped body must
-// come back null. Without it, arm G would pass against a digest that reports an ask for
-// anything at all.
-const stripped = readFileSync(process.argv[3], 'utf8')
-const strippedEntry = extractAskEntry(stripped)
+// The negative control runs the IDENTICAL two-stage pipeline over the twin journal whose
+// newest turn has had its ask moved into the doc. Same read path, not a shortcut over the
+// raw body: that is what makes it able to tell "isolates the newest turn" apart from
+// "greps the whole file", since the twin's EARLIER turn does carry an ask.
+const strippedTurn = latestAgentTurn(readFileSync(process.argv[5], 'utf8'))
+const strippedEntry = extractAskEntry(strippedTurn)
 console.log(JSON.stringify({
   turnChars: turn ? turn.length : 0,
   ask: entry ? entry.text : null,
   source: entry ? entry.source : null,
+  strippedChars: strippedTurn ? strippedTurn.length : 0,
   strippedAsk: strippedEntry ? strippedEntry.text : null
 }))
 '@
-$toUrl = { param($p) ([Uri](Resolve-Path $p).Path).AbsoluteUri }
-[IO.File]::WriteAllText($probe,
-  $probeSrc.Replace('{JOURNAL}', (& $toUrl $journalJs)).Replace('{DIGEST}', (& $toUrl $digestJs)), $utf8)
+[IO.File]::WriteAllText($probe, $probeSrc, $utf8)
 
 $probeOut = ''
-try { $probeOut = & node $probe (Join-Path $jdir 'task-804.md') $bNoAsk 2>&1 | Out-String }
-catch { $probeOut = '' }
+try { $probeOut = & node $probe $journalJs $digestJs (Join-Path $jdir 'task-804.md') (Join-Path $jdir 'task-805.md') 2>&1 | Out-String }
+catch { $probeOut = "probe threw: $($_.Exception.Message)" }
 $global:LASTEXITCODE = 0
 $pj = $null
 $ps = $probeOut.IndexOf('{')
 if ($ps -ge 0) { try { $pj = $probeOut.Substring($ps) | ConvertFrom-Json } catch { $pj = $null } }
 
 # A missing node or missing bridge source FAILS rather than skips. A skipped arm that prints
-# green is the failure mode this whole folder exists to prevent.
+# green is the failure mode this whole folder exists to prevent -- and the probe's own output
+# is echoed on failure, because swallowing it is what let a Windows-only URL bug reach CI
+# looking like "the digest cannot read the turn".
+if (-not $pj) { Write-Host "  probe produced no JSON:`n$probeOut" }
 $results['G digest reads the ask out of the shortened turn'] =
-  ($null -ne $pj -and $pj.ask -and "$($pj.ask)" -match 'approve' -and "$($pj.source)" -eq 'needs')
-$results['G- and reads NO ask once it is moved to the doc'] = ($null -ne $pj -and $null -eq $pj.strippedAsk)
+  ($null -ne $pj -and $pj.ask -and "$($pj.ask)" -match 'approve' -and "$($pj.source)" -eq 'needs' -and $pj.turnChars -gt 0)
+# `strippedChars -gt 0` is not decoration. Without it this control passes when the twin turn
+# is empty or unreadable -- i.e. when the pipeline found nothing for a reason that has nothing
+# to do with the ask -- which is the degenerate-fixture failure #431 hit twice.
+$results['G- and reads NO ask once it is moved to the doc'] =
+  ($null -ne $pj -and $null -eq $pj.strippedAsk -and $pj.strippedChars -gt 0)
 
 # --- arm H: acceptance 3, against the REAL oa-state.ps1 -------------------------------
 [void](Invoke-Oa @('seed'))
