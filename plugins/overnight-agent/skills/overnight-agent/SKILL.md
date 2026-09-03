@@ -882,7 +882,16 @@ byte-identical to "he wrote nothing" (#346's defect, third surface). **`catchup-
 `NEVER_READ`, `SPOKE_WITHOUT_READING` (you answered without listening) and `UNACKED` (seen and
 dropped); it is quiet on a healthy loop. **Report a non-zero count in the wrap-up.**
 
-### PHASE 1 — Execute approved plans
+### PHASE 1 — Dispatch approved plans to each task's own session
+
+⛔ **The run session does not do task work.** It collects, orders, dispatches and reports. The work
+of a task happens in a **session dedicated to that task**, in **that task's own workspace**. This is
+not a style preference — measured live on 2026-09-02 against task #451, the run read the journal,
+edited four deliverable files and wrote the turn entirely inside the main overnight-agent session:
+nothing was isolated, nothing recorded where the work happened, and the next run cold-started the
+same task. #391 already states the rule — *"per-item sub-sessions are isolation, not concurrency:
+one task, one workspace, one thing being verified at a time"* — and this is the mechanism under it
+(#404).
 
 1. From the `scan` worklist — **taken in the order it returned, skipping `eligible: false` rows** —
    collect tasks whose stored `status` is `approved` (also continue any
@@ -891,18 +900,62 @@ dropped); it is quiet on a healthy loop. **Report a non-zero count in the wrap-u
    decision"). Use `oa-state.ps1 get -Id <ID>` if you need a task's full state.
    **Also pick up any row with `due_poll: true`** — a time-triggered recurring check that's now due
    (see "Polling"). Run its check, then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone`.
-2. For each, **execute the approved plan**:
 
-   - First, **gather linked-task context** per "Gather linked-task context FIRST" above — read the
-     upstream journal(s) and their deliverables, and **include that distilled context in any subagent
-     prompt** you use to do the work.
-   - Do the actual work the plan describes. Use whatever tools the task needs (web research/fetch,
-     a Playwright MCP browser slot for browser automation, reading the user's repos, writing
-     documents/code, etc.).
+2. **Check capacity before dispatching anything.** `oa-state.ps1 session -InFlight` reports the
+   resolved `Overnight Agent concurrency` (default **1**), how many tasks hold a live session, and
+   `admits` — how many more the priority wave may start. Dispatch at most `admits` items. The only
+   sanctioned exception is the **collect wave** (`Prioritisation.md` §4.1): a wake that exists
+   *because the user did something* may widen the run, and it is the one case where
+   `session ... -Force` past `session_at_capacity` is correct. Your own judgement is not.
+
+3. **For each task, resolve its session before doing anything else** — never create one on a hunch:
+
+   ```powershell
+   oa-state.ps1 session -Id <ID>     # -> verdict: create | reuse | replace
+   ```
+
+   - **`reuse`** — the task already has a live session. **Wake that one.** Do not create a second;
+     `session -SessionId <other>` over a live binding is refused (`session_bind_conflict`) precisely
+     so "reuse it" is a rule rather than an intention. Stamp `-SessionWoken` once it responds.
+   - **`replace`** — a previous run recorded the bound session as non-wakeable. Create a fresh one
+     and use the emitted **`kickoff_continuation`** *verbatim* as the opening of its kickoff: it
+     names the task and the prior session id, so the replacement knows it is continuing work rather
+     than starting clean. Then bind it — which records `prior_session_id`.
+   - **`create`** — no session yet. Create one, then bind it (step 4).
+   - If a session will not wake, record that fact rather than retrying blindly:
+     `oa-state.ps1 session -Id <ID> -SessionDead`. That is what turns the next verdict into
+     `replace` and arms the continuation.
+
+4. **Choose the project and workspace for the TASK, never inherit the run session's.** This is the
+   trap, and it is the default behaviour of every session API: omit the project and the new session
+   is created in the *caller's* project. Done from an overnight run, that yields a "per-task
+   session" sharing the run session's own folder — with no git repo in it — which is exactly the
+   isolation failure this phase exists to prevent, reintroduced by the delegation step itself.
+
+   - **Code task** → the **repository project** the change belongs to, `workspace_type: worktree`,
+     branched from a freshly fetched `origin/main`. Bind it as `code`, and the bind will refuse a
+     missing project (`session_project_required`), a missing workspace
+     (`session_workspace_required`), a `folder` workspace (`session_workspace_type`) and — the one
+     that catches the trap — a workspace equal to the run session's (`session_workspace_inherited`).
+   - **Non-code task** → `-SessionKind folder` is fine; it still gets its own session.
+
+   ```powershell
+   oa-state.ps1 session -Id <ID> -SessionId <new session id> `
+     -SessionKind code -SessionProject <repo project> `
+     -SessionWorkspace <worktree path> -WorkspaceType worktree
+   ```
+
+5. **Brief the session properly.** Its kickoff must carry: the task id and title, the approved plan,
+   the **distilled linked-task context** from "Gather linked-task context FIRST" (never just the
+   task's own journal), the `kickoff_continuation` line when the verdict was `replace`, and — when
+   it gets a worktree — the standing worktree clause in PHASE 1.5 §5, **unedited**.
+
+6. **The session does the work; the run session records the outcome.** When it reports back:
+
    - Put **small deliverables inline** in the journal. For **larger deliverables**, write a separate
      file (next to the journal as `journal\task-<ID>-<slug>.md`, or in the relevant project folder)
      and **link it** from the journal.
-   - Append a **Run log** entry with the date and what you did:
+   - Append a **Run log** entry with the date and what was done:
 
      ```markdown
      ### Run log
@@ -918,8 +971,13 @@ dropped); it is quiet on a healthy loop. **Report a non-zero count in the wrap-u
      **Proposed plan** for the next step, status `proposed`); `blocked` if you hit something only the
      user can resolve (write the exact ask in **Needs from you**). `mark` re-snapshots the journal so the
      task goes quiet until the user replies again.
+   - **Keep the session bound while the task is `in-progress`** — that binding *is* the continuity
+     that stops tomorrow's run cold-starting. Release it only when the task is finished:
+     `oa-state.ps1 session -Id <ID> -SessionRelease`, which prints the safe teardown command for the
+     workspace. Run **that** command — never a raw `git worktree remove --force`, which deletes
+     through a `node_modules` junction (#321) — and prune stale worktrees/branches as you go (#402).
 
-3. **Do not move the row on the board.** Completing a task (moving its row to
+7. **Do not move the row on the board.** Completing a task (moving its row to
    `planner-completed.md`) is the **user's** action in the Focus Planner app — never the agent's.
    Record `done` in agent state + the journal Run log only, and leave the board row in `planner.md`
    for the user to complete (see "Updating the planner board").

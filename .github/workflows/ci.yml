@@ -310,6 +310,33 @@ jobs:
           OA_SWEEP: ./plugins/overnight-agent/checks/catchup-doc-sweep.mjs
         run: node ./plugins/overnight-agent/checks/mutcheck-catchup-doc.mjs
 
+  # The per-task session (GH #404). The overnight agent used to do task work IN THE RUN SESSION --
+  # measured live on task #451: it read the journal, edited four deliverables and wrote the turn
+  # without ever leaving the main session. #391 already stated the rule ("one task, one workspace,
+  # one thing being verified at a time") but stated it about a mechanism that did not exist.
+  #
+  # Three arms carry the weight, and all three guard a SILENT bypass. D asserts that a second
+  # session cannot be bound over a live one, which is what makes "reuse the persisted session" a
+  # rule rather than an intention. I and J assert the two halves of the inheritance trap: every
+  # session API defaults the project to the CALLER's, so a per-task session created without naming
+  # a project lands in the run session's project, sharing the run session's workspace -- the exact
+  # isolation failure the issue exists to prevent, reintroduced by the delegation step itself. That
+  # was not hypothetical; it happened on the first attempt to delegate this very issue.
+  #
+  # It runs here rather than only on the nightly laptop for the reason the jobs above give: a guard
+  # that only runs where the drift happens cannot stop the drift from merging. Pure text work
+  # against synthetic journals in a temp dir with an isolated -JournalDir / -StateDir /
+  # -UserSettings, so it never reads the real planner folder or the user's real settings, and runs
+  # unmodified on the Linux runner under pwsh.
+  per-task-session:
+    name: Per-task session binding
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (reuse, replace, workspace isolation, concurrency)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-per-task-session.ps1
+
   auto-deploy:
     name: Auto-deploy safety and performance
     runs-on: windows-latest

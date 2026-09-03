@@ -74,6 +74,31 @@
                                 combined with -Status/-Version/-PlanId or any timer flag.
          [-ExhaustedNote <s>]   Optional free-text note recorded alongside the declaration.
          [-ExhaustionClear]     Withdraw a standing declaration (the row gates again at once).
+  session [-Id <id>]            The per-task SESSION binding (#404). Without any write flag this
+                                is a read: it prints the binding and a VERDICT -- `create`,
+                                `reuse` or `replace` -- so the run loop never decides for itself
+                                whether a second session is needed. See .SESSIONS below.
+          [-SessionId <sid>]    Bind the session that was just created for this task. Binding a
+                                DIFFERENT id over a LIVE one throws `session_bind_conflict`;
+                                binding over a DEAD one is the replacement path and records the
+                                prior id. `-Force` overrides.
+          [-SessionKind <k>]    `code` or `folder`. `code` REQUIRES -SessionProject and
+                                -SessionWorkspace, and refuses the run session's own workspace.
+          [-SessionProject <p>] The project the session must be created in -- the repository
+                                project for a code task, NOT the run session's project.
+          [-SessionWorkspace <p>] The worktree/branch/folder path the session works in.
+          [-WorkspaceType <t>]  `worktree` | `branch` | `folder`. Defaults from -SessionKind.
+          [-RunWorkspace <p>]   This run session's own workspace, so a bind that would reuse it
+                                can be refused. Defaults to the current directory.
+          [-SessionDead]        Record that the session could not be woken. Flips the verdict to
+                                `replace` and arms the continuation kickoff.
+          [-SessionWoken]       Record that the run reused this session (stamps last_woken_at).
+          [-SessionRelease]     Retire the binding (task finished, workspace torn down). Prints
+                                the teardown command; never runs it.
+          [-InFlight]           Omit -Id for the run-loop capacity view: the resolved
+                                concurrency, how many tasks hold a live session, and whether the
+                                run is at capacity.
+          [-Concurrency <n>]    Override the `Overnight Agent concurrency` setting for one call.
   resnapshot                    One-time migration after a change to how journals are decoded
                                 or hashed: re-baseline processed_file_hash for tasks with
                                 nothing pending. SKIPS any journal with trailing user content,
@@ -102,6 +127,58 @@
 
   A due recheck grants NO new permission: it is a read-only look at whether the blocker is gone.
   Acting on the result still obeys the reversibility gate.
+
+.SESSIONS (#404 -- one task, one session, one workspace)
+  Before this, the overnight agent DID THE WORK ITSELF, in the run session. Measured live on
+  2026-09-02 against task #451: the run read the journal, edited four deliverable files and wrote
+  the turn entirely inside the main overnight-agent session. Nothing was isolated, and nothing
+  recorded where the work had happened -- so the next run cold-started the same task. #391 already
+  states the rule ("per-item sub-sessions are isolation, not concurrency: one task, one workspace,
+  one thing being verified at a time"), but it stated it about a mechanism that did not exist.
+  This is that mechanism.
+
+  The binding lives HERE, in skill state, for the same reason every other machine fact does: the
+  journal is the user's prose and carries no metadata. A `session` member holds the session id,
+  the project and workspace it was created in, its liveness, and -- when it replaced one that
+  could not be woken -- the id it continues.
+
+  THE COMMAND RETURNS A VERDICT, NOT A FIELD. `session -Id <id>` answers the only question the
+  run loop actually has -- create, reuse, or replace? -- so that answer is computed from state
+  rather than inferred by the agent from a raw id. The three verdicts:
+
+    create   nothing bound. Create a session, then bind it with -SessionId.
+    reuse    bound and live. Wake THAT session. Do not create a second one.
+    replace  bound but marked dead by a previous `-SessionDead`. Create a fresh session whose
+             kickoff is `kickoff_continuation` (emitted verbatim), which names the task and the
+             prior session id, then bind it -- which records `prior_session_id`.
+
+  TWO REFUSALS CARRY THE WEIGHT, and both fail closed.
+
+    session_bind_conflict   Binding a different id over a LIVE one. Without this, "reuse the
+                            persisted session" is a suggestion: the second session gets created
+                            anyway and simply overwrites the pointer to the first, which then
+                            leaks (#345) with nothing recording that it ever existed.
+
+    session_workspace_inherited   A `code` bind whose workspace is the RUN SESSION's own. This is
+                            not hypothetical: the first attempt to delegate #404 called the
+                            session API without naming a project, so it defaulted to the run
+                            session's project -- a FOLDER project with no git repo -- and produced
+                            a "per-task session" sharing the run session's workspace. That is
+                            precisely the isolation failure this issue exists to prevent,
+                            reintroduced by the delegation step itself. Inheritance is the
+                            default everywhere, so it has to be refused explicitly.
+
+  CONCURRENCY (#391). `session -InFlight` reports the resolved `Overnight Agent concurrency`
+  (precedence: -Concurrency > the user-settings.md row > the built-in 1; absent, unreadable or
+  malformed yields 1 exactly), how many tasks hold a live session, and whether the run is at
+  capacity. A bind that would exceed capacity is refused with `session_at_capacity`. `-Force` is
+  the escape hatch, and it exists for exactly one sanctioned case: the collect-wave exception in
+  Prioritisation.md 4.1, where a wake exists BECAUSE THE USER DID SOMETHING. A human action may
+  widen the run; the agent's own judgement may not.
+
+  CLEANUP is emitted, never performed. `-SessionRelease` prints the teardown command
+  (`scripts/remove-worktree.ps1`), because the raw `git worktree remove --force` deletes THROUGH a
+  `node_modules` junction (#321) and this script must not be the thing that runs it.
 
 .CONSENT (#227 -- why this is NOT the same read as `reopened`)
   Approval for an irreversible action must not be inferable from text the agent can write.
@@ -380,7 +457,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract', 'doc')]
+  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract', 'doc', 'session')]
   [string]$Command = 'scan',
 
   [string]$Id,
@@ -434,6 +511,30 @@ param(
   [string]$RecheckKind,
   [switch]$RecheckDone,
   [switch]$RecheckClear,
+
+  # The per-task session binding (#404). See .SESSIONS in the header for the full rationale.
+  #
+  # `-SessionKind` is a CLOSED ENUM for the same reason `-Action` is: it selects which refusals
+  # apply, so free text would let the caller opt out of the workspace guard by mis-spelling the
+  # kind. `code` is the constrained one -- it demands a project and a workspace and refuses the
+  # run session's own.
+  [string]$SessionId,
+  [ValidateSet('code', 'folder')]
+  [string]$SessionKind,
+  [string]$SessionProject,
+  [string]$SessionWorkspace,
+  [ValidateSet('worktree', 'branch', 'folder')]
+  [string]$WorkspaceType,
+  # This run session's own workspace. Defaults to the current directory, which is where the run
+  # session actually is -- so the inheritance refusal works without the caller having to opt in.
+  [string]$RunWorkspace,
+  [switch]$SessionDead,
+  [switch]$SessionWoken,
+  [switch]$SessionRelease,
+  [switch]$InFlight,
+  # Overrides the `Overnight Agent concurrency` settings row for one invocation. -1 is the
+  # "not specified" sentinel; see Resolve-PacingSettings for the precedence.
+  [int]$Concurrency = -1,
 
   # Overridable so the skill stays shareable; defaults match user-settings.md.
   [string]$JournalDir = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\journal",
@@ -588,6 +689,41 @@ function Resolve-GateSettings {
   # A negative backstop is the "not specified" sentinel leaking through an explicit -1; treat it
   # as the default rather than as "never fires", so the sentinel can never disable the backstop.
   if ($script:BackstopHours -lt 0) { $script:BackstopHours = $script:GateDefaults.BackstopHours }
+}
+
+# --- Pacing: the concurrency tunable (#391, read here for #404) ----------------------------
+#
+# Same contract as the gate tunables above, and for the same reason: a NUMBER that reaches this
+# script as a flag the agent is told to pass fails SILENTLY when the flag is forgotten. So it is
+# read where it is used.
+#
+# The failure direction is deliberate and is the only one that is safe for a pacing control. An
+# absent, unreadable or malformed value yields 1 EXACTLY -- never "unlimited", never the last
+# value seen. A typo can therefore narrow a run; it can never widen one. A value below 1 is
+# clamped to 1, because "hold zero items in flight" is not a pacing setting, it is a stopped run.
+$script:PacingDefaults = @{ Concurrency = 1 }
+
+function Resolve-PacingSettings {
+  $explicit = $script:ExplicitArgs.ContainsKey('Concurrency')
+  $value = $script:PacingDefaults.Concurrency
+
+  if (-not $explicit) {
+    $path = Get-UserSettingsPath
+    if ($path) {
+      $text = $null
+      try { $text = Read-JournalText $path } catch { $text = $null }
+      if ($text) {
+        $v = Get-SettingRow $text 'Overnight Agent concurrency'
+        # Leading-integer only. `2`, `2 tasks` parse; `two`, `many`, `` and `-3` do not and fall
+        # through to 1. Matching loosely here would be matching a value nobody verified.
+        if ($v -and $v -match '^\s*(\d+)') { $value = [int]$Matches[1] }
+      }
+    }
+  }
+  else { $value = $Concurrency }
+
+  if ($value -lt 1) { $value = $script:PacingDefaults.Concurrency }
+  $script:ConcurrencyLimit = $value
 }
 
 function Ensure-StateDir {
@@ -2280,6 +2416,8 @@ function Cmd-Scan {
     if ($prioRank.ContainsKey($facts.Id)) { $pRank = $prioRank[$facts.Id] }
     # #423: resolve the doc binding for this row (state first, journal stamp as fallback).
     $docFacts = Get-DocState $st $f.FullName
+    # #404: the per-task session binding, read-only.
+    $sessFacts = Get-SessionState $st
     [pscustomobject]@{
       id            = $facts.Id
       status        = $status
@@ -2337,6 +2475,15 @@ function Cmd-Scan {
       # user has said something on the doc that this run has not answered -- the doc-surface
       # analogue of `reopened`.
       doc_new_comments = if ($docFacts.doc) { @($docFacts.doc.pending_ids).Count } else { 0 }
+      # #404: the per-task session, on the SAME worklist as everything else, for the reason #423
+      # gives -- a binding that lives on a second list the run has to remember to consult is a
+      # binding the run will forget. READ-ONLY here: `scan` reports the verdict, and only the
+      # `session` command writes. A run that sees `session_verdict: reuse` must wake THAT session
+      # rather than create a second one.
+      session_id      = if ($sessFacts) { "$($sessFacts.session_id)" } else { $null }
+      session_state   = if ($sessFacts) { "$($sessFacts.state)" } else { $null }
+      session_verdict = (Get-SessionVerdict $sessFacts)
+      session_workspace = if ($sessFacts -and "$($sessFacts.workspace)") { "$($sessFacts.workspace)" } else { $null }
       # The standing exhaustion declaration for this row, verbatim (#310), so a human can audit
       # what the run claimed to have examined and against which board it claimed it.
       exhaustion     = if ($st -and $st.PSObject.Properties['today_exhausted']) { $st.today_exhausted } else { $null }
@@ -3372,8 +3519,266 @@ function Cmd-Doc {
   } | ConvertTo-Json -Depth 5
 }
 
+# --- The per-task session binding (#404) ----------------------------------------------
+# See .SESSIONS in the header for why this exists. Everything below answers one question --
+# create, reuse, or replace? -- from stored state rather than from the agent's recollection.
+
+function ConvertTo-IsoText($value) {
+  # PowerShell's ConvertFrom-Json re-types an ISO-8601 STRING as a [datetime], so a timestamp read
+  # back out of the state file and re-stringified renders in the host's LOCAL format
+  # ("09/03/2026 15:16:45") instead of the ISO text that was stored. Every re-write of the record
+  # would then corrupt its own history -- silently, and worse each time.
+  #
+  # Normalising on the way OUT of state rather than on the way in is deliberate: it also repairs a
+  # record already written in the mangled format, so no migration is needed.
+  if ($null -eq $value) { return '' }
+  if ($value -is [datetime]) { return $value.ToString('yyyy-MM-ddTHH:mm:ssK') }
+  $s = "$value"
+  if (-not $s) { return '' }
+  if ($s -match '^\d{4}-\d{2}-\d{2}T') { return $s }
+  # A previously-mangled local-format stamp: parse what we can and re-emit it as ISO.
+  try { return ([datetime]::Parse($s)).ToString('yyyy-MM-ddTHH:mm:ssK') } catch { return $s }
+}
+
+function New-SessionObject {
+  param(
+    [string]$SessionIdValue, [string]$Kind, [string]$Project, [string]$Workspace,
+    [string]$WsType, $CreatedAt, $LastWokenAt, [string]$SessionState,
+    [string]$PriorSessionId, $ReplacedAt
+  )
+  [pscustomobject]@{
+    session_id       = $SessionIdValue
+    kind             = $Kind
+    # The project the session was created in. Recorded because the failure this guards against is
+    # INVISIBLE without it: a session that inherited the run session's project looks, from its id
+    # alone, exactly like one created in the right place.
+    project          = $Project
+    workspace        = $Workspace
+    workspace_type   = $WsType
+    created_at       = (ConvertTo-IsoText $CreatedAt)
+    last_woken_at    = (ConvertTo-IsoText $LastWokenAt)
+    # 'live' | 'dead'. Only a caller that actually TRIED to wake it may write 'dead'; nothing
+    # here infers death from age, because "we did not wake it tonight" and "it cannot be woken"
+    # are different facts and guessing between them either leaks a session or abandons a live one.
+    state            = $SessionState
+    # Set when this session REPLACED one that could not be woken. It is the continuity record:
+    # without it the replacement is indistinguishable from a first-ever session, which is the
+    # cold start the whole binding exists to remove.
+    prior_session_id = $PriorSessionId
+    replaced_at      = (ConvertTo-IsoText $ReplacedAt)
+  }
+}
+
+function Test-SamePath([string]$a, [string]$b) {
+  # Two paths naming the same directory. Deliberately textual (normalise separators, trailing
+  # slashes and case) rather than resolved against the filesystem: the guard has to work when the
+  # workspace has not been created yet, which is exactly when a bind is being validated. It is
+  # also the conservative direction -- an unresolvable path that LOOKS like the run session's is
+  # refused, and a false refusal costs one explicit re-run while a false pass costs the isolation.
+  if (-not $a -or -not $b) { return $false }
+  $na = ($a -replace '/', '\').TrimEnd('\')
+  $nb = ($b -replace '/', '\').TrimEnd('\')
+  return [string]::Equals($na, $nb, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-SessionState($st) {
+  if ($st -and $st.PSObject.Properties['session'] -and $st.session -and "$($st.session.session_id)") {
+    return $st.session
+  }
+  return $null
+}
+
+function Get-SessionVerdict($sess) {
+  # The whole decision, in one place. `create` and `replace` both mean "make a new session", but
+  # they are NOT the same instruction: `replace` carries a continuation the new session must be
+  # told about, and collapsing them is how continuity is lost while the code still looks correct.
+  if (-not $sess) { return 'create' }
+  if ("$($sess.state)" -eq 'dead') { return 'replace' }
+  return 'reuse'
+}
+
+function Get-LiveSessionCount {
+  # In-flight = tasks holding a LIVE session. Counted from the state store rather than tracked in
+  # a counter, because a counter drifts the first time a run dies mid-item -- and a run dying
+  # mid-item is the case the count exists to survive.
+  if (-not (Test-Path $StateDir)) { return 0 }
+  $n = 0
+  foreach ($f in (Get-ChildItem $StateDir -Filter 'task-*.json' -File -ErrorAction SilentlyContinue)) {
+    try { $obj = Get-Content -Raw $f.FullName | ConvertFrom-Json } catch { continue }
+    $s = Get-SessionState $obj
+    if ($s -and "$($s.state)" -eq 'live') { $n++ }
+  }
+  return $n
+}
+
+function Get-KickoffContinuation([string]$taskId, [string]$priorId) {
+  # Emitted VERBATIM so the caller cannot paraphrase the continuation away. The acceptance
+  # criterion is that the replacement's kickoff names the task AND the prior session id; a
+  # sentence the agent is merely asked to compose satisfies that only when it remembers to.
+  "This session continues work on planner task #$taskId. The previous session for this task " +
+  "($priorId) could not be woken, so this one replaces it -- you are not starting from scratch. " +
+  "Read the task journal for what has already been done before doing anything new."
+}
+
+function Cmd-Session {
+  # ---- capacity view: `session -InFlight`, no -Id ----------------------------------------
+  if (-not $Id) {
+    if (-not $InFlight) { throw 'session requires -Id (or -InFlight for the capacity view)' }
+    $live = Get-LiveSessionCount
+    return ([pscustomobject]@{
+        concurrency = [int]$script:ConcurrencyLimit
+        in_flight   = [int]$live
+        at_capacity = [bool]($live -ge $script:ConcurrencyLimit)
+        # How many MORE items the priority wave may start. Never negative: a run that is already
+        # over capacity (a -Force bind for a collect-wave wake) admits nothing further, and
+        # reporting -1 would invite a caller to do arithmetic with it.
+        admits      = [int][Math]::Max(0, $script:ConcurrencyLimit - $live)
+      } | ConvertTo-Json -Depth 4)
+  }
+
+  $st = Read-State $Id
+  if (-not $st) {
+    $st = [pscustomobject]@{ id = $Id; status = 'unknown'; version = 0; plan_id = ''; processed_file_hash = ''; has_agent_block = $false; seeded = $false; updated = $null }
+  }
+  $sess = Get-SessionState $st
+  $dirty = $false
+  $released = $false
+
+  if ($SessionRelease) {
+    $sess = $null
+    Set-Member $st 'session' $null
+    $st.updated = Now-Iso
+    Write-State $st
+    $released = $true
+  }
+  elseif ($SessionDead) {
+    if (-not $sess) { throw "session_not_bound: task $Id has no session to mark dead" }
+    $sess = New-SessionObject -SessionIdValue "$($sess.session_id)" -Kind "$($sess.kind)" `
+      -Project "$($sess.project)" -Workspace "$($sess.workspace)" -WsType "$($sess.workspace_type)" `
+      -CreatedAt $sess.created_at -LastWokenAt $sess.last_woken_at -SessionState 'dead' `
+      -PriorSessionId "$($sess.prior_session_id)" -ReplacedAt $sess.replaced_at
+    $dirty = $true
+  }
+  elseif ($SessionId) {
+    $prior = ''
+    if ($sess -and "$($sess.session_id)" -ne $SessionId) {
+      if ("$($sess.state)" -ne 'dead' -and -not $Force) {
+        # The refusal that makes "reuse the persisted session" a rule rather than an intention.
+        # Leading space-free token for the same reason `doc_bind_conflict` has one: with
+        # `pwsh -File` the CHILD formats the error at its own width, so only a token that cannot
+        # be wrapped is reliably matchable from captured output.
+        throw ("session_bind_conflict: task $Id is already bound to LIVE session $($sess.session_id); " +
+          "refusing to bind $SessionId over it. Wake the bound session instead. If it genuinely " +
+          'cannot be woken, record that with -SessionDead first -- that is the replacement path, ' +
+          'and it is what carries the continuation into the new session.')
+      }
+      # Replacing a dead one: the prior id is the continuity record.
+      $prior = "$($sess.session_id)"
+    }
+    elseif ($sess) { $prior = "$($sess.prior_session_id)" }
+
+    $kind = if ($SessionKind) { $SessionKind } elseif ($sess) { "$($sess.kind)" } else { 'folder' }
+    $project = if ($SessionProject) { $SessionProject } elseif ($sess) { "$($sess.project)" } else { '' }
+    $workspace = if ($SessionWorkspace) { $SessionWorkspace } elseif ($sess) { "$($sess.workspace)" } else { '' }
+    $wsType = if ($WorkspaceType) { $WorkspaceType } elseif ($sess -and "$($sess.workspace_type)") { "$($sess.workspace_type)" }
+    elseif ($kind -eq 'code') { 'worktree' } else { 'folder' }
+
+    if ($kind -eq 'code') {
+      # A code task without a named project is the inheritance trap: every session API defaults
+      # the project to the CALLER's, so omitting it silently produces a session in the run
+      # session's project. Demanding it converts a silent wrong answer into a loud refusal.
+      if (-not $project) {
+        throw ("session_project_required: a code task must name the repository project its session " +
+          "belongs to (-SessionProject). Omitting it inherits the RUN session's project, which is " +
+          'how a "per-task session" ends up sharing the run session workspace with no git repo in it.')
+      }
+      if (-not $workspace) {
+        throw ('session_workspace_required: a code task must name its own workspace ' +
+          '(-SessionWorkspace) -- a worktree or branch checkout, not a shared folder.')
+      }
+      if ($wsType -eq 'folder') {
+        throw ("session_workspace_type: a code task cannot use a 'folder' workspace; " +
+          'use worktree (preferred) or branch.')
+      }
+      $runWs = if ($RunWorkspace) { $RunWorkspace } else { (Get-Location).Path }
+      if ($runWs -and (Test-SamePath $workspace $runWs)) {
+        throw ("session_workspace_inherited: workspace '$workspace' is the RUN session's own " +
+          'workspace. One task, one workspace -- sharing one deadlocks the sessions and reproduces ' +
+          'the very isolation failure #404 exists to prevent.')
+      }
+    }
+
+    # Capacity is checked only when this bind ADDS an item to the run. Re-binding the same id, or
+    # replacing a dead session, does not increase what is in flight, so charging them against the
+    # limit would make the run narrower than the user asked for.
+    $adds = -not ($sess -and ("$($sess.session_id)" -eq $SessionId -or "$($sess.state)" -eq 'dead'))
+    if ($adds -and -not $Force) {
+      $live = Get-LiveSessionCount
+      if ($live -ge $script:ConcurrencyLimit) {
+        throw ("session_at_capacity: $live task(s) already hold a live session and the " +
+          'Overnight Agent concurrency setting is ' + $script:ConcurrencyLimit + '. Finish or ' +
+          'release one first. -Force is for the collect-wave exception only ' +
+          '(Prioritisation.md 4.1): a wake that exists because the USER did something may widen ' +
+          "the run; the agent's own judgement may not.")
+      }
+    }
+
+    $created = if ($sess -and "$($sess.session_id)" -eq $SessionId -and $sess.created_at) { $sess.created_at } else { Now-Iso }
+    $replacedAt = if ($prior -and "$($sess.session_id)" -ne $SessionId) { Now-Iso } elseif ($sess) { $sess.replaced_at } else { '' }
+    $sess = New-SessionObject -SessionIdValue $SessionId -Kind $kind -Project $project `
+      -Workspace $workspace -WsType $wsType -CreatedAt $created `
+      -LastWokenAt $(if ($sess -and "$($sess.session_id)" -eq $SessionId) { $sess.last_woken_at } else { '' }) `
+      -SessionState 'live' -PriorSessionId $prior -ReplacedAt $replacedAt
+    $dirty = $true
+  }
+
+  if ($SessionWoken) {
+    if (-not $sess) { throw "session_not_bound: task $Id has no session to wake" }
+    $sess = New-SessionObject -SessionIdValue "$($sess.session_id)" -Kind "$($sess.kind)" `
+      -Project "$($sess.project)" -Workspace "$($sess.workspace)" -WsType "$($sess.workspace_type)" `
+      -CreatedAt $sess.created_at -LastWokenAt (Now-Iso) -SessionState 'live' `
+      -PriorSessionId "$($sess.prior_session_id)" -ReplacedAt $sess.replaced_at
+    $dirty = $true
+  }
+
+  if ($dirty) {
+    Set-Member $st 'session' $sess
+    $st.updated = Now-Iso
+    Write-State $st
+  }
+
+  $verdict = Get-SessionVerdict $sess
+  $live = Get-LiveSessionCount
+  [pscustomobject]@{
+    id             = $Id
+    bound          = [bool]$sess
+    session_id     = if ($sess) { "$($sess.session_id)" } else { $null }
+    # create | reuse | replace. The run loop acts on THIS, not on `bound`.
+    verdict        = $verdict
+    state          = if ($sess) { "$($sess.state)" } else { $null }
+    kind           = if ($sess) { "$($sess.kind)" } else { $null }
+    project        = if ($sess -and "$($sess.project)") { "$($sess.project)" } else { $null }
+    workspace      = if ($sess -and "$($sess.workspace)") { "$($sess.workspace)" } else { $null }
+    workspace_type = if ($sess) { "$($sess.workspace_type)" } else { $null }
+    prior_session_id = if ($sess -and "$($sess.prior_session_id)") { "$($sess.prior_session_id)" } else { $null }
+    created_at     = if ($sess) { (ConvertTo-IsoText $sess.created_at) } else { $null }
+    last_woken_at  = if ($sess -and $sess.last_woken_at) { (ConvertTo-IsoText $sess.last_woken_at) } else { $null }
+    released       = [bool]$released
+    # Present ONLY on a `replace` verdict, and emitted ready to paste. See Get-KickoffContinuation.
+    kickoff_continuation = if ($verdict -eq 'replace') { (Get-KickoffContinuation $Id "$($sess.session_id)") } else { $null }
+    # Emitted, never executed (#321): the raw `git worktree remove --force` deletes THROUGH a
+    # node_modules junction, so the safe teardown is named here rather than performed here.
+    teardown_command = if ($sess -and "$($sess.workspace_type)" -eq 'worktree' -and "$($sess.workspace)") {
+      "pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path `"$($sess.workspace)`""
+    }
+    else { $null }
+    concurrency    = [int]$script:ConcurrencyLimit
+    in_flight      = [int]$live
+    at_capacity    = [bool]($live -ge $script:ConcurrencyLimit)
+  } | ConvertTo-Json -Depth 5
+}
+
 function Cmd-Resnapshot {
-  # One-time migration: re-record processed_file_hash for tasks that have NOTHING pending.
   #
   # Why this is needed. The hash is computed from the decoded journal text, so any change to
   # HOW the journal is decoded changes every hash at once -- even though not one byte on disk
@@ -3577,6 +3982,7 @@ function Cmd-Mark {
 # code path can read a half-resolved one. It is here rather than beside the parameter block
 # because it calls Read-JournalText, which is defined further down the file.
 Resolve-GateSettings
+Resolve-PacingSettings
 
 switch ($Command) {
   'seed' { Cmd-Seed }
@@ -3588,4 +3994,5 @@ switch ($Command) {
   'gate' { Cmd-Gate }
   'extract' { Cmd-Extract }
   'doc' { Cmd-Doc }
+  'session' { Cmd-Session }
 }
