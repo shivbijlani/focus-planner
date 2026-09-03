@@ -158,6 +158,7 @@ function Invoke-SUT {
   # stderr text is not evidence either way.
   $prevEap = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
+  $sw = [Diagnostics.Stopwatch]::StartNew()
   try {
     $out  = & powershell @a 2>&1
     $code = $LASTEXITCODE
@@ -168,7 +169,7 @@ function Invoke-SUT {
   $jsonLine = ($out | Where-Object { ([string]$_).TrimStart().StartsWith('{') } | Select-Object -Last 1)
   $obj = $null
   if ($jsonLine) { try { $obj = ([string]$jsonLine | ConvertFrom-Json) } catch { } }
-  [pscustomobject]@{ Exit = $code; Json = $obj; Raw = ($out -join "`n") }
+  [pscustomobject]@{ Exit = $code; Json = $obj; Raw = ($out -join "`n"); ElapsedMs = $sw.ElapsedMilliseconds }
 }
 
 # ------------------------------------------------------------------------------------
@@ -181,6 +182,7 @@ $r1 = Invoke-SUT -Script $SUT -Sandbox $sb
 if (-not $r1.Json -or $r1.Json.reason) { Write-Host ("  diagnostic: " + $r1.Raw) }
 
 Assert ($r1.Json -ne $null) 'G0 emits parseable JSON'
+Assert ($r1.ElapsedMs -lt 60000) "G14 one complete deploy finishes under 60s (measured $($r1.ElapsedMs)ms)"
 Assert ($r1.Json.deployed -contains 'overnight-agent/checks/newguard.ps1') `
        'G1 a MISSING file (on the ref, absent installed) is deployed'
 Assert (Test-Path $sb.NewGuard) 'G1 the missing file physically landed'
