@@ -168,6 +168,26 @@ oa-state.ps1 doc -Id <ID> -Ack                             # advance the waterma
 - ⛔ **Doc comments still cannot approve anything (#422).** Use them for direction and questions.
   Approval stays in the journal or Telegram until an author-separated posting identity exists (#421).
 
+**Once a task has a doc, its Telegram topic goes quiet (#424).** This is a behaviour change you
+should know about, because it looks like a failure if you don't: a doc-bound task's topic holds
+**one** message — the catch-up doc link — and a new turn posts **nothing** more. The doc changed;
+the link did not. That is the fix for the stacked-turn problem, and it works by removing the
+oversized per-turn post rather than getting better at rendering it (21 of 28 turns on #468 were
+individually too big for a Telegram message).
+
+- **Two exceptions, each one short line, never a turn:** a genuinely **blocking** ask, and a
+  **terminal** state (done / blocked / abandoned). A `**Needs from you:**` that opens dismissively
+  (`none`, `nothing blocking`, …) is *not* blocking and posts nothing — same rule as the
+  `awaiting_reply` gate, and for the same reason: you end nearly every turn with a courtesy offer,
+  and treating those as blocking would rebuild per-turn posting under another name.
+- **An unchanged ask is said once, not nightly.** It is re-announced if it is resolved and later
+  returns.
+- **The link's existence is verified, never assumed.** Each run probes the stored message id; if
+  the message was deleted or never sent, the link is reposted. Without that, a lost link and a
+  healthy silent task would look identical — the #346 shape — and the task would go quiet forever.
+- **Removing the `doc-meta` stamp restores per-turn posting**, and does *not* dump the backlog it
+  stayed quiet for.
+
 **Polling (time-triggered tasks the user never touches):** `scan` normally only flags journals the
 **user** has changed — so a purely time-based job (e.g. "each night, check the video-backup folder and
 upload any drops") would be invisible and silently stop the moment the user stops replying. A **poll**
