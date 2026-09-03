@@ -204,6 +204,31 @@ jobs:
           OA_SWEEP: ./plugins/overnight-agent/checks/installed-skill-drift-sweep.mjs
         run: node ./plugins/overnight-agent/checks/mutcheck-installed-skill-drift.mjs
 
+  # The durable task -> catch-up-doc binding (GH #423), prerequisite for #421/#424/#425.
+  #
+  # Before this, the one catch-up doc that existed was located by TITLE SEARCH. That fails in
+  # three ways that are all SILENT and all end in the same place -- a second document, with the
+  # user's comments stranded on the first: a renamed doc becomes invisible, task ids are reusable
+  # after completion (#132), and "found nothing" is indistinguishable from "found the wrong one".
+  #
+  # Two arms carry the weight. D asserts that binding a different doc over an existing one is
+  # REFUSED rather than silently applied; K/O assert that losing %LOCALAPPDATA% -- which is
+  # explicitly not synced -- rebinds from the journal stamp instead of reporting "unbound", the
+  # value that would make a caller create the duplicate.
+  #
+  # Runs here rather than only on the nightly laptop, for the reason the jobs above give: a guard
+  # that only runs where the drift happens cannot stop the drift from merging. It is pure text
+  # work against synthetic journals in a temp dir -- it never reads the real planner folder, and
+  # every path into it is passed explicitly -- so it runs unmodified on the Linux runner.
+  doc-binding:
+    name: Catch-up doc binding
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (exact binding, exactly-once watermark, self-healing)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-binding.ps1
+
   auto-deploy:
     name: Auto-deploy safety and performance
     runs-on: windows-latest
