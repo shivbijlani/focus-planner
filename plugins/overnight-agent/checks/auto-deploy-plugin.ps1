@@ -52,10 +52,21 @@
   auto-deploy from being a blind `copy main over production`, which would revert live
   fixes while looking like a repair.
 
+  BUDGETS
+  -------
+  Two separate budgets, on purpose. -BudgetSeconds (60) bounds the LOCAL classification
+  work, which is what grows with the repository. -FetchBudgetSeconds (30) bounds the
+  network fetch, whose latency has nothing to do with repository size. Sharing one budget
+  made a slow network report "merged code may not be running" about a deploy that was
+  completely healthy, and — because the fetch runs first — it surfaced the failure against
+  whichever phase happened to be last (#418). A fetch that exceeds its budget warns and
+  carries on against the cached ref with fetched=false, exactly as a failed fetch already did.
+
   EXIT CODES
     0  clean — nothing to do, or everything deployed and the live tree verified current
     1  hard failure — a write failed, or the classifier could not be run
-    2  needs attention — a refusal has persisted, or drift survived the deploy
+    2  needs attention — a refusal has persisted, drift survived the deploy, the local
+       budget expired, or a helper could not be found
 
   Usage:
     auto-deploy-plugin.ps1                 # fetch, deploy the safe class, verify
@@ -73,6 +84,7 @@ param(
   [int]$EscalateAfterCycles = 2,
   [string]$StatePath = "$env:LOCALAPPDATA\overnight-agent\auto-deploy-state.json",
   [int]$BudgetSeconds = 60,
+  [int]$FetchBudgetSeconds = 30,
   [string]$ClassifierPath,
   [string]$HistoryHelperPath,
   [string]$VerifyHelperPath,
@@ -101,7 +113,25 @@ function ConvertTo-QuotedArg([string]$Value) {
 }
 
 function Stop-Bounded($Process) {
+  # Kill the whole TREE, not just the process we spawned.
+  #
+  # Process.Kill([bool]) does not exist on .NET Framework, which is what Windows
+  # PowerShell 5.1 runs on, so the tree overload throws and the old code silently fell
+  # back to killing the parent only. Any grandchild survived - and because a grandchild
+  # inherits the redirected pipe, it also keeps that pipe OPEN, so a caller reading this
+  # process's output can block long after the process itself is gone. Measured 2026-09-03:
+  # a bounded `git fetch` that timed out left `git remote-ext` and its child alive for
+  # 15+ minutes and hung the harness reading the output. taskkill /T /F is PID-scoped and
+  # kills the descendants too.
+  $pid_ = $null
+  try { $pid_ = $Process.Id } catch { }
   try { $Process.Kill($true); return } catch { }
+  if ($pid_) {
+    try {
+      & taskkill.exe /PID $pid_ /T /F 2>&1 | Out-Null
+      if ($Process.WaitForExit(2000)) { return }
+    } catch { }
+  }
   try { $Process.Kill() } catch { }
 }
 
@@ -133,20 +163,57 @@ function Invoke-Bounded {
   }
 }
 
-$deployer = Join-Path $Repo "$RepoPrefix\overnight-agent\checks\deploy-installed-plugin.ps1"
 $sweep    = if ($ClassifierPath) { $ClassifierPath } else { Join-Path $env:LOCALAPPDATA 'overnight-agent\installed-skill-drift-sweep.mjs' }
-$historyHelper = if ($HistoryHelperPath) { $HistoryHelperPath } else { Join-Path $Repo "$RepoPrefix\overnight-agent\checks\ref-history-index.mjs" }
-$verifyHelper = if ($VerifyHelperPath) { $VerifyHelperPath } else { Join-Path $Repo "$RepoPrefix\overnight-agent\checks\verify-deployed-paths.mjs" }
+
+# Sub-tools resolve NEXT TO THIS SCRIPT first, and only then from the checkout.
+#
+# The other way round inverts this step's whole purpose. Its job is to make merged code
+# become running code WITHOUT requiring anyone to check that code out (#196); depending
+# on the working tree means it can only install commit N if the checkout is already at or
+# past N, which is the very condition it exists to remove. A checkout behind origin/main
+# is the NORMAL state - nothing in the run pulls it, and it is shared with worktree
+# sessions legitimately sitting on other branches. Measured 2026-09-02: the installed
+# tree was at b46edfd and carried ref-history-index.mjs, the checkout was 7 commits
+# behind, and the deploy died anyway (#419).
+#
+# This covers the DEPLOYER as well as the two .mjs helpers. #419 names only the history
+# helper, but the deployer has the identical dependency and the identical failure: against
+# a checkout at 93e9921 the stale deployer rejected -ClassifierPath and the run exited 0
+# having deployed nothing, which is worse than the crash because it looks like success.
+#
+# Preferring $PSScriptRoot does not risk running a stale sub-tool, because the SELF-BOOTSTRAP
+# below already guarantees freshness: when the repo copy of this script is the ref version
+# and the running one is not, the repo copy is re-executed and ITS $PSScriptRoot is the
+# checkout. So sub-tools always travel with whichever copy of the script is actually deciding.
+function Resolve-Helper {
+  param([string]$Override, [string]$FileName)
+  if ($Override) { return $Override }
+  $beside = Join-Path $PSScriptRoot $FileName
+  if (Test-Path $beside) { return $beside }
+  return (Join-Path $Repo "$RepoPrefix\overnight-agent\checks\$FileName")
+}
+$deployer = Resolve-Helper -FileName 'deploy-installed-plugin.ps1'
+$historyHelper = Resolve-Helper -Override $HistoryHelperPath -FileName 'ref-history-index.mjs'
+$verifyHelper  = Resolve-Helper -Override $VerifyHelperPath  -FileName 'verify-deployed-paths.mjs'
 
 if (-not (Test-Path $Repo))     { throw "repo not found: $Repo" }
 if (-not (Test-Path $deployer)) { throw "deployer not found: $deployer" }
 if (-not (Test-Path $sweep))    { throw "classifier not found: $sweep" }
-if (-not (Test-Path $historyHelper)) { throw "history helper not found: $historyHelper" }
-if (-not (Test-Path $verifyHelper)) { throw "verify helper not found: $verifyHelper" }
 
 $budget = [Diagnostics.Stopwatch]::StartNew()
+# Time spent in unbounded NETWORK work is excluded from the budget below. The budget
+# exists to bound LOCAL classification work, which is what grows with the repository and
+# what #412/#415 were about. Charging the network fetch to it makes a slow or flaky
+# network indistinguishable from a deploy that cannot finish - and because the fetch runs
+# FIRST, a slow one starves every later phase and the failure surfaces against whichever
+# phase happens to be last. Measured 2026-09-03: PHASE 0 reported "budget exceeded during
+# OA-home sync" on a cold run, yet the very same deploy completed in 8.2s end-to-end once
+# warm, and the OA-home sync alone measures 11.9s. Nothing was wrong with the deploy; the
+# fetch had eaten the window (#418). The fetch is still bounded - by its OWN budget.
+$script:excludedMs = 0
 function Get-RemainingMs {
-  return [Math]::Max(0, ($BudgetSeconds * 1000) - [int]$budget.ElapsedMilliseconds)
+  $spent = [int]$budget.ElapsedMilliseconds - $script:excludedMs
+  return [Math]::Max(0, ($BudgetSeconds * 1000) - $spent)
 }
 function Stop-ForBudget([string]$Phase) {
   $msg = "DEPLOY NOT VERIFIED - wall-clock budget of ${BudgetSeconds}s exceeded during $Phase."
@@ -158,6 +225,20 @@ function Stop-ForBudget([string]$Phase) {
   }
   exit 2
 }
+function Stop-ForMissingHelper([string]$What, [string]$Path) {
+  # Exit 2 with an ask, not a bare throw: the other failure paths in this script are
+  # careful to say what a human should do, and a hard throw made a stale checkout look
+  # identical to a broken install (#419).
+  if ($Json) {
+    [pscustomobject]@{ ok=$false; reason='helper-not-found'; helper=$What; path=$Path } | ConvertTo-Json -Compress
+  } else {
+    Write-Host "[auto-deploy] DEPLOY NOT VERIFIED - $What not found beside this script or in the checkout: $Path"
+    Write-Host '[auto-deploy] ASK: surface this failed deploy in the run wrap-up; merged code may not be running.'
+  }
+  exit 2
+}
+if (-not (Test-Path $historyHelper)) { Stop-ForMissingHelper 'history helper' $historyHelper }
+if (-not (Test-Path $verifyHelper))  { Stop-ForMissingHelper 'verify helper'  $verifyHelper }
 
 # --- 0. SELF-BOOTSTRAP ----------------------------------------------------------------
 # The running copy of this script decides whether the running copy gets updated. That is
@@ -168,28 +249,87 @@ function Stop-ForBudget([string]$Phase) {
 #
 # The escalation path would eventually have surfaced that to a human, but with actively
 # misleading advice ("merge the branch that carries it"), so leaving it to escalation is
-# not good enough. The repo copy is authoritative and always at least as new as the
-# installed one, so when they differ, hand the decision to the newer code and let IT
-# judge. OA_AUTODEPLOY_REEXEC bounds this to a single hop.
+# not good enough. When they differ, hand the decision to the NEWER code and let IT judge.
+# OA_AUTODEPLOY_REEXEC bounds this to a single hop.
+#
+# "Newer" has to be MEASURED, not assumed. The original rule was "the repo copy is
+# authoritative and always at least as new as the installed one" - and that premise is
+# false in precisely the situation #419 is about. A checkout behind origin/main holds an
+# OLDER copy of this script, so the hand-off ran the stale build and the deploy died.
+# Measured 2026-09-03 against a checkout at 93e9921 with origin/main at b46edfd: the
+# hand-off fired and the older copy aborted with "A parameter cannot be found that matches
+# parameter name 'BudgetSeconds'", exit 1. That defeats the #419 fix below at the exact
+# moment it is needed, so the two travel together.
+#
+# The ref blob is the tie-breaker: whichever copy matches the version ON THE REF is the
+# one main actually says should run. Hand off only when the repo copy is that version and
+# the running copy is not. If neither matches (a checkout behind, or a copy that only
+# exists on a side branch), stay in-process - unmerged or stale code should never take
+# over the deploy.
 if (-not $env:OA_AUTODEPLOY_REEXEC -and $PSCommandPath) {
   $selfRepo = Join-Path $Repo "$RepoPrefix\overnight-agent\checks\auto-deploy-plugin.ps1"
   if (Test-Path $selfRepo) {
     $here = (Resolve-Path $PSCommandPath).Path
     $there = (Resolve-Path $selfRepo).Path
-    if ($here -ne $there -and
-        (Get-NormHash ([IO.File]::ReadAllBytes($there))) -ne (Get-NormHash ([IO.File]::ReadAllBytes($here)))) {
+    $hereHash  = Get-NormHash ([IO.File]::ReadAllBytes($here))
+    $thereHash = Get-NormHash ([IO.File]::ReadAllBytes($there))
+
+    # The version of this script on the ref being deployed, if it can be read at all.
+    # Read the blob as RAW BYTES: decoding git's stdout as text does not round-trip (this
+    # file contains non-ASCII), and a hash taken over the decoded string silently never
+    # matches - which would quietly disable the hand-off instead of correcting it.
+    # Measured 2026-09-03: the text route and the byte route disagree on this very file.
+    $refSelfHash = $null
+    try {
+      $refPath = "$RepoPrefix/overnight-agent/checks/auto-deploy-plugin.ps1"
+      $bpsi = New-Object System.Diagnostics.ProcessStartInfo
+      $bpsi.FileName = 'git'
+      $bpsi.Arguments = (@('-C',$Repo,'show',"${Ref}:${refPath}") | ForEach-Object { ConvertTo-QuotedArg $_ }) -join ' '
+      $bpsi.RedirectStandardOutput = $true
+      $bpsi.RedirectStandardError = $true
+      $bpsi.UseShellExecute = $false
+      $bpsi.CreateNoWindow = $true
+      $bproc = [System.Diagnostics.Process]::Start($bpsi)
+      $ms = New-Object System.IO.MemoryStream
+      $bproc.StandardOutput.BaseStream.CopyTo($ms)
+      $bproc.StandardError.ReadToEnd() | Out-Null
+      if ($bproc.WaitForExit(10000) -and $bproc.ExitCode -eq 0 -and $ms.Length -gt 0) {
+        $refSelfHash = Get-NormHash ($ms.ToArray())
+      }
+      $ms.Dispose()
+    } catch { }
+
+    # Fall back to the old unconditional rule only when the ref cannot be read at all,
+    # so a repo with no readable ref behaves exactly as it did before.
+    $repoIsRefVersion = if ($null -ne $refSelfHash) { $thereHash -eq $refSelfHash } else { $true }
+    $hereIsRefVersion = ($null -ne $refSelfHash) -and ($hereHash -eq $refSelfHash)
+
+    if ($here -ne $there -and $thereHash -ne $hereHash -and $repoIsRefVersion -and -not $hereIsRefVersion) {
       Write-Note 'repo copy of this script differs - re-executing it so the NEWER logic decides.'
       $fwd = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$there,
                '-Ref',$Ref,'-Repo',$Repo,'-Installed',$Installed,'-RepoPrefix',$RepoPrefix,
                '-EscalateAfterCycles',$EscalateAfterCycles,'-StatePath',$StatePath,
-               '-BudgetSeconds',$BudgetSeconds,'-ClassifierPath',$sweep,'-HistoryHelperPath',$historyHelper)
+               '-BudgetSeconds',$BudgetSeconds,
+               '-ClassifierPath',$sweep,'-HistoryHelperPath',$historyHelper)
+      # Only forward a switch the target actually declares. The hand-off crosses a version
+      # boundary by definition, so passing a parameter the other build has never heard of
+      # turns a routine upgrade into a hard failure - measured 2026-09-03, where forwarding
+      # -FetchBudgetSeconds to an older copy killed the run with "A parameter cannot be
+      # found that matches parameter name 'FetchBudgetSeconds'", exit 1.
+      $thereSrc = [IO.File]::ReadAllText($there)
+      if ($thereSrc -match '\$FetchBudgetSeconds') { $fwd += @('-FetchBudgetSeconds',$FetchBudgetSeconds) }
       $fwd += @('-VerifyHelperPath',$verifyHelper)
       if ($WhatIf)    { $fwd += '-WhatIf' }
       if ($Json)      { $fwd += '-Json' }
       if ($SkipFetch) { $fwd += '-SkipFetch' }
       $env:OA_AUTODEPLOY_REEXEC = '1'
       try {
-        $reexec = Invoke-Bounded -FilePath 'powershell' -ArgumentList $fwd -BudgetMs (Get-RemainingMs)
+        # The child runs the whole script, including its own network fetch, and that fetch
+        # is deliberately NOT charged to the local-work budget. So the parent must allow
+        # for it here too, or the parent's bound would re-introduce the very coupling the
+        # exclusion removes and kill a healthy child mid-classification (#418).
+        $reexec = Invoke-Bounded -FilePath 'powershell' -ArgumentList $fwd `
+                    -BudgetMs ((Get-RemainingMs) + ($(if ($SkipFetch) { 0 } else { $FetchBudgetSeconds }) * 1000))
         if ($reexec.TimedOut) { Stop-ForBudget 'self-bootstrap handoff' }
         if ($reexec.StdOut) { Write-Host $reexec.StdOut.TrimEnd() }
         if ($reexec.StdErr) { Write-Host $reexec.StdErr.TrimEnd() }
@@ -205,10 +345,20 @@ if (-not $env:OA_AUTODEPLOY_REEXEC -and $PSCommandPath) {
 # success, so this cannot be left to the caller.
 $fetched = $false
 if (-not $SkipFetch) {
-  $fetchRun = Invoke-Bounded -FilePath 'git' -ArgumentList @('-C',$Repo,'fetch','origin','--quiet') -BudgetMs (Get-RemainingMs)
-  if ($fetchRun.TimedOut) { Stop-ForBudget 'git fetch' }
-  $fetched = ($fetchRun.ExitCode -eq 0)
-  if (-not $fetched) { Write-Note "WARNING: git fetch failed - '$Ref' may be stale." }
+  # The fetch gets its OWN budget and its elapsed time is excluded from the main one.
+  # A timed-out fetch is treated exactly like the already-handled `git fetch failed` case
+  # - warn, carry on against the cached ref, and report fetched=false - because that is
+  # strictly more useful than aborting: deploying a possibly-stale ref while SAYING it may
+  # be stale beats deploying nothing while claiming the deploy could not be verified.
+  $fetchStart = [int]$budget.ElapsedMilliseconds
+  $fetchRun = Invoke-Bounded -FilePath 'git' -ArgumentList @('-C',$Repo,'fetch','origin','--quiet') -BudgetMs ([Math]::Max(1, $FetchBudgetSeconds * 1000))
+  $script:excludedMs += ([int]$budget.ElapsedMilliseconds - $fetchStart)
+  if ($fetchRun.TimedOut) {
+    Write-Note "WARNING: git fetch exceeded its ${FetchBudgetSeconds}s budget - '$Ref' may be stale."
+  } else {
+    $fetched = ($fetchRun.ExitCode -eq 0)
+    if (-not $fetched) { Write-Note "WARNING: git fetch failed - '$Ref' may be stale." }
+  }
 }
 $refRun = Invoke-Bounded -FilePath 'git' -ArgumentList @('-C',$Repo,'rev-parse',$Ref) -BudgetMs (Get-RemainingMs)
 if ($refRun.TimedOut) { Stop-ForBudget 'ref resolution' }

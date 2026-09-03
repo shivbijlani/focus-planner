@@ -39,6 +39,11 @@ if (-not (Test-Path $SUT)) { throw "subject not found: $SUT" }
 $root = Join-Path $env:TEMP ('oa-autodeploy-mut-' + [guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Force -Path $root | Out-Null
 
+# Mutant copies are written into $root, so $root is THEIR $PSScriptRoot. The #419 arms
+# assert that helpers are found beside the running script, so they have to be here too.
+Copy-Item (Join-Path $PSScriptRoot 'ref-history-index.mjs')    (Join-Path $root 'ref-history-index.mjs')    -Force
+Copy-Item (Join-Path $PSScriptRoot 'verify-deployed-paths.mjs') (Join-Path $root 'verify-deployed-paths.mjs') -Force
+
 function New-Sandbox {
   <# A repo whose origin/main carries v2 of a file plus one extra file, and a side
      branch carrying v1. The installed tree gets v1 -> BRANCH-ONLY; the extra file is
@@ -130,9 +135,39 @@ function New-Sandbox {
   }
 }
 
+function Add-HangingRemote($Sandbox) {
+  # A fetch that BLOCKS rather than fails. That distinction is the whole defect: a broken
+  # fetch already fell through to a warning, a SLOW one silently ate the budget the later
+  # phases needed.
+  #
+  # Deliberately NOT a non-routable IP. That reproduces locally but is environment-
+  # dependent: on a hosted CI runner a private address can be rejected immediately, the
+  # fetch then fails fast instead of hanging, and M17 would survive in CI while passing on
+  # a laptop - a guard that is green because it stopped testing anything. git's `ext::`
+  # transport runs a command as the transport, so a command that simply never returns
+  # gives an identical hang on every machine with no network involved at all.
+  $hang = Join-Path $root 'fetch-hang.js'
+  if (-not (Test-Path $hang)) { Set-Content $hang 'setTimeout(function(){}, 600000);' -Encoding UTF8 }
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    & git -C $Sandbox.Repo remote remove origin 2>&1 | Out-Null
+    & git -C $Sandbox.Repo config protocol.ext.allow always 2>&1 | Out-Null
+    & git -C $Sandbox.Repo remote add origin ('ext::node ' + ($hang -replace '\\','/')) 2>&1 | Out-Null
+  } finally { $ErrorActionPreference = $prev }
+}
+
+function Remove-RepoHistoryHelper($Sandbox) {
+  # Simulates the NORMAL state that broke #419: a checkout sitting behind origin/main, so
+  # the helper that a later commit added is simply not in the working tree yet.
+  Remove-Item (Join-Path $Sandbox.Repo 'plugins\overnight-agent\checks\ref-history-index.mjs') -Force -ErrorAction SilentlyContinue
+  Remove-Item (Join-Path $Sandbox.Repo 'plugins\overnight-agent\checks\verify-deployed-paths.mjs') -Force -ErrorAction SilentlyContinue
+}
+
 function Invoke-SUT {
   param($Script, $Sandbox, [switch]$WhatIf, [switch]$NoJson, [switch]$WithOaHome,
-        [int]$BudgetSeconds = 120, [string]$HistoryHelper)
+        [int]$BudgetSeconds = 120, [string]$HistoryHelper,
+        [switch]$WithFetch, [int]$FetchBudgetSeconds = 0, [switch]$NoHelperOverride)
   # -NoOaHome by default: these assertions are about the plugin-deploy contract
   # (classification, refusal, streaks, hand-off). The OA-home sync is a separate
   # subsystem with its own mutcheck, and letting it run here would fold its exit code
@@ -141,11 +176,19 @@ function Invoke-SUT {
   # exited 2 for an unrelated reason. Isolate the unit; cover the seam separately.
   $a = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$Script,
          '-Repo',$Sandbox.Repo,'-Installed',$Sandbox.Installed,
-         '-StatePath',$Sandbox.State,'-SkipFetch',
+         '-StatePath',$Sandbox.State,
          '-BudgetSeconds',$BudgetSeconds,
-         '-ClassifierPath',$Sandbox.Classifier,
-         '-HistoryHelperPath',$(if ($HistoryHelper) { $HistoryHelper } else { $Sandbox.HistoryHelper }),
-         '-VerifyHelperPath',$Sandbox.VerifyHelper)
+         '-ClassifierPath',$Sandbox.Classifier)
+  # -SkipFetch by default. The fetch arms need the real fetch path, because the whole
+  # point of #418 is what a SLOW fetch does to the budget the later phases depend on.
+  if (-not $WithFetch) { $a += '-SkipFetch' }
+  if ($FetchBudgetSeconds -gt 0) { $a += @('-FetchBudgetSeconds',$FetchBudgetSeconds) }
+  # -NoHelperOverride exercises the script's OWN helper resolution, which is the subject
+  # of #419. Every other arm pins the paths so resolution cannot perturb it.
+  if (-not $NoHelperOverride) {
+    $a += @('-HistoryHelperPath',$(if ($HistoryHelper) { $HistoryHelper } else { $Sandbox.HistoryHelper }),
+            '-VerifyHelperPath',$Sandbox.VerifyHelper)
+  }
   if (-not $WithOaHome) { $a += '-NoOaHome' }
   if (-not $NoJson) { $a += '-Json' }
   if ($WhatIf) { $a += '-WhatIf' }
@@ -278,13 +321,58 @@ Assert (@($historyCalls | Where-Object { $_ -eq 'rev-list' }).Count -eq 0) `
        'P2 zero per-file rev-list walks'
 
 Section 'G13: wall-clock budget fails loud'
+# The helper must NEVER return, and the budget must be loose enough that the run actually
+# REACHES the history phase. With the old 1s budget it did not: the budget was already
+# exhausted in the preceding "safe deploy classification" phase, so B1/B2 passed for the
+# wrong reason and M14's mutation - which only touches the history phase - could not be
+# observed at all. Measured 2026-09-03: budget=1s -> phase "safe deploy classification";
+# budget=2s -> phase "combined ref history classification". A never-returning helper plus
+# a 5s budget puts the expiry unambiguously in the history phase on either outcome.
 $slow = Join-Path $root 'slow-history.mjs'
-Set-Content $slow "setTimeout(() => process.stdout.write('{`"matches`":{},`"onTip`":{}}'), 3000);" -Encoding UTF8
+Set-Content $slow "setTimeout(() => {}, 600000);" -Encoding UTF8
 $sbt = New-Sandbox
-$rt = Invoke-SUT -Script $SUT -Sandbox $sbt -BudgetSeconds 1 -HistoryHelper $slow
+$rt = Invoke-SUT -Script $SUT -Sandbox $sbt -BudgetSeconds 5 -HistoryHelper $slow
 Assert ($rt.Exit -eq 2) 'B1 budget exhaustion exits 2'
 Assert ($rt.Json -and $rt.Json.reason -eq 'wall-clock-budget') `
        'B2 budget exhaustion emits a machine-readable wrap-up signal'
+Assert ($rt.Json -and $rt.Json.phase -eq 'combined ref history classification') `
+       'B3 the signal names the phase that actually expired'
+
+# --- #418 / #419: the two ways PHASE 0 failed against a perfectly healthy deploy -------
+# Both of these reported "merged code may not be running" about a deploy that was fine.
+# G15 is about a SLOW network; G16 is about a checkout that is merely behind. Neither
+# condition says anything about whether the installed tree can be brought current, which
+# is the only question this script exists to answer.
+Section 'BASELINE - budget and helper resolution (#418, #419)'
+
+$sbFetch = New-Sandbox
+Add-HangingRemote $sbFetch
+$rf = Invoke-SUT -Script $SUT -Sandbox $sbFetch -WithFetch -FetchBudgetSeconds 3 -BudgetSeconds 5
+Assert ($rf.Exit -ne 2 -or -not $rf.Json -or $rf.Json.reason -ne 'wall-clock-budget') `
+       'G15 a fetch that blocks until its own budget expires does not consume the local-work budget'
+Assert ($rf.Json -and $rf.Json.deployed -contains 'overnight-agent/checks/newguard.ps1') `
+       'G15 the deploy still classifies and writes after a timed-out fetch'
+Assert ($rf.Json -and $rf.Json.fetched -eq $false) `
+       'G15 a timed-out fetch is reported as fetched=false, so possible staleness stays visible'
+
+# G19 has no killing mutant ON PURPOSE. The mutation that breaks it - reverting the bounded
+# kill to a parent-only Kill() - does not make the suite fail, it makes the suite HANG:
+# the surviving grandchild inherits the redirected pipe and holds it open, so the harness
+# blocks reading output that will never end. Measured 2026-09-03 before the fix: an
+# orphaned `git remote-ext` plus its child lived 15+ minutes and stalled the run. A guard
+# arm that wedges CI is worse than the defect, so this stays a plain assertion.
+$leaked = @(Get-CimInstance Win32_Process -Filter "Name='git.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -and $_.CommandLine -match 'fetch-hang' })
+Assert ($leaked.Count -eq 0) `
+       "G19 a timed-out bounded call leaves no orphaned descendants (found $($leaked.Count))"
+
+$sbHelper = New-Sandbox
+Remove-RepoHistoryHelper $sbHelper
+$rh = Invoke-SUT -Script $SUT -Sandbox $sbHelper -NoHelperOverride
+Assert ($rh.Exit -eq 0) `
+       'G16 a checkout missing the helper still deploys - it is resolved beside the script'
+Assert ($rh.Json -and $rh.Json.deployed -contains 'overnight-agent/checks/newguard.ps1') `
+       'G16 the deploy did real work rather than merely exiting 0'
 
 # ------------------------------------------------------------------------------------
 # Mutations — each must BREAK the test that claims to guard it
@@ -377,10 +465,21 @@ Test-Mutant -Name 'M14: wall-clock timeout ignored (outer runner must kill the s
     param($mut)
     $s = New-Sandbox
     $slowHelper = Join-Path $root 'mut-slow-history.mjs'
-    Set-Content $slowHelper "setTimeout(() => process.stdout.write('{`"matches`":{},`"onTip`":{}}'), 3000);" -Encoding UTF8
-    $b = Invoke-SUT -Script $mut -Sandbox $s -BudgetSeconds 1 -HistoryHelper $slowHelper
-    Assert ($b.Exit -ne 2 -or -not $b.Json -or $b.Json.reason -ne 'wall-clock-budget') `
-           'killed by B1/B2: an expired budget would not emit the required exit-2 signal'
+    Set-Content $slowHelper "setTimeout(() => {}, 600000);" -Encoding UTF8
+    $b = Invoke-SUT -Script $mut -Sandbox $s -BudgetSeconds 5 -HistoryHelper $slowHelper
+    # This arm was RED on main before #418/#419 touched it, and the alarm was false: with
+    # the history phase's own check removed, the NEXT phase ("safe deploy classification")
+    # still finds the budget exhausted and emits a correct exit-2 signal, so the script is
+    # not actually unsafe. The old assertion demanded that NO wall-clock signal appear at
+    # all, which is a property the mutation never removed. Measured 2026-09-03 on pristine
+    # main: exit=2, reason=wall-clock-budget, phase="safe deploy classification" -> the
+    # suite failed 71/1 with nothing wrong. Assert the phase instead, which is exactly what
+    # the mutation deletes, and pair it with B3 so the narrowing cannot hollow the arm out.
+    $namedHistory = ($b.Exit -eq 2 -and $b.Json -and
+                     $b.Json.reason -eq 'wall-clock-budget' -and
+                     $b.Json.phase -eq 'combined ref history classification')
+    Assert (-not $namedHistory) `
+           'killed by B1/B2/B3: the history phase would no longer report its own expired budget'
   }
 
 Test-Mutant -Name 'M6: far-end verification trusts the deployer instead of the tree' `
@@ -526,7 +625,147 @@ Test-Mutant -Name 'M10: re-exec guard removed (unbounded self-recursion)' `
            'killed: without the hop marker the hand-off could recurse without bound'
   }
 
+Test-Mutant -Name 'M17: fetch time charged back to the local-work budget (#418)' `
+  -Find '$script:excludedMs += ([int]$budget.ElapsedMilliseconds - $fetchStart)' `
+  -Replace '$script:excludedMs += 0' -Check {
+    param($mut)
+    # The fetch blocks for its full 3s budget; the local budget is 3s too. Unmutated, the
+    # local work gets all 3s and finishes. Mutated, the fetch has spent the entire local
+    # budget before classification starts, so it must die with the wall-clock signal.
+    $s = New-Sandbox
+    Add-HangingRemote $s
+    $r = Invoke-SUT -Script $mut -Sandbox $s -WithFetch -FetchBudgetSeconds 3 -BudgetSeconds 3
+    Assert ($r.Exit -eq 2 -and $r.Json -and $r.Json.reason -eq 'wall-clock-budget') `
+           'killed by G15: a slow network would again report the deploy as unverified'
+    Assert (-not (Test-Path $s.NewGuard)) `
+           'killed by G15: the healthy deploy would not happen at all'
+  }
+
+Test-Mutant -Name 'M18: helpers resolved from the checkout only (#419)' `
+  -Find '  $beside = Join-Path $PSScriptRoot $FileName
+  if (Test-Path $beside) { return $beside }' `
+  -Replace '  $beside = Join-Path $PSScriptRoot $FileName
+  if ($false) { return $beside }' -Check {
+    param($mut)
+    # A checkout behind origin/main simply does not have the helper yet. The running
+    # script does, right beside it. Resolving from the checkout only is what killed the
+    # deploy on 2026-09-02 even though every byte it needed was already on the machine.
+    $s = New-Sandbox
+    Remove-RepoHistoryHelper $s
+    $r = Invoke-SUT -Script $mut -Sandbox $s -NoHelperOverride
+    Assert ($r.Exit -ne 0) `
+           'killed by G16: a checkout merely behind the ref would block the deploy'
+    Assert (-not (Test-Path $s.NewGuard)) `
+           'killed by G16: merged code would stay uninstalled'
+  }
+
+Test-Mutant -Name 'M19: missing helper throws instead of asking (#419)' `
+  -Find "if (-not (Test-Path `$historyHelper)) { Stop-ForMissingHelper 'history helper' `$historyHelper }" `
+  -Replace "if (-not (Test-Path `$historyHelper)) { throw `"history helper not found: `$historyHelper`" }" -Check {
+    param($mut)
+    # Exit 1 with a raw throw made a stale checkout look identical to a broken install.
+    # The convention for "a human needs to look at this" is exit 2 with a stated ask.
+    $s = New-Sandbox
+    Remove-RepoHistoryHelper $s
+    $missing = Join-Path $root 'no-such-helper.mjs'
+    $r = Invoke-SUT -Script $mut -Sandbox $s -HistoryHelper $missing
+    Assert ($r.Exit -ne 2) `
+           'killed: a missing helper would exit 1 with no ask instead of the exit-2 convention'
+  }
+
+Section 'G17: the hand-off target must be the REF version, not merely "the repo copy"'
+# The old rule assumed the checkout is always at least as new as the installed tree. A
+# checkout BEHIND origin/main breaks that assumption, and the hand-off then runs the older
+# build - the #419 scenario - which defeats the helper-resolution fix at exactly the moment
+# it is needed. Measured 2026-09-03 against a checkout at 93e9921 with origin/main at
+# b46edfd: the older copy aborted with "A parameter cannot be found that matches parameter
+# name 'BudgetSeconds'" and the whole deploy exited 1.
+function New-SandboxStaleSelf {
+  $s = New-Sandbox
+  $selfPath = Join-Path $s.Repo 'plugins\overnight-agent\checks\auto-deploy-plugin.ps1'
+  # The REF carries a valid copy (marked, so it differs from the running one)...
+  Set-Content $selfPath ((Get-Content $SUT -Raw) -replace 'function Write-Note', "# REF VERSION MARKER`nfunction Write-Note") -Encoding UTF8
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    & git -C $s.Repo add -A 2>&1 | Out-Null
+    & git -C $s.Repo commit -m 'self on ref' --quiet 2>&1 | Out-Null
+    & git -C $s.Repo update-ref refs/remotes/origin/main HEAD 2>&1 | Out-Null
+  } finally { $ErrorActionPreference = $prev }
+  # ...while the WORKING TREE holds a stale build that fails loudly if it ever runs.
+  Set-Content $selfPath "Write-Host 'STALE BUILD RAN'; exit 3" -Encoding UTF8
+  return $s
+}
+
+$sbs = New-SandboxStaleSelf
+$rs = Invoke-SUT -Script $SUT -Sandbox $sbs -NoJson
+Assert ($rs.Raw -notmatch 'STALE BUILD RAN' -and $rs.Exit -ne 3) `
+       'G17 a checkout behind the ref does not take over the deploy'
+Assert (Test-Path $sbs.NewGuard) `
+       'G17 the running copy did the work itself instead'
+
+Test-Mutant -Name 'M20: hand off to the repo copy regardless of the ref (#419)' `
+  -Find '$repoIsRefVersion = if ($null -ne $refSelfHash) { $thereHash -eq $refSelfHash } else { $true }' `
+  -Replace '$repoIsRefVersion = $true' -Check {
+    param($mut)
+    $s = New-SandboxStaleSelf
+    $r = Invoke-SUT -Script $mut -Sandbox $s -NoJson
+    Assert ($r.Raw -match 'STALE BUILD RAN' -or $r.Exit -eq 3) `
+           'killed by G17: a stale checkout would seize the deploy again'
+  }
+
+Section 'G18: the hand-off only forwards switches the target declares'
+# The hand-off crosses a version boundary by definition, so it must not assume the other
+# build shares this one's parameter list. Measured 2026-09-03: forwarding the new
+# -FetchBudgetSeconds to a copy that predates it killed the run with "A parameter cannot
+# be found that matches parameter name 'FetchBudgetSeconds'", exit 1 - an upgrade path
+# breaking on the very mechanism that exists to make upgrades safe.
+function New-SandboxOldRefSelf {
+  $s = New-Sandbox
+  $selfPath = Join-Path $s.Repo 'plugins\overnight-agent\checks\auto-deploy-plugin.ps1'
+  # A build that declares every forwarded switch EXCEPT -FetchBudgetSeconds.
+  # [CmdletBinding()] is load-bearing: without it PowerShell quietly routes an unknown
+  # named argument into $args instead of failing, so the fixture would not reproduce the
+  # real failure and M21 could never be killed.
+  $stub = @'
+[CmdletBinding()]
+param([switch]$WhatIf,[switch]$Json,[string]$Ref,[string]$Repo,[string]$Installed,
+      [string]$RepoPrefix,[int]$EscalateAfterCycles,[string]$StatePath,[int]$BudgetSeconds,
+      [string]$ClassifierPath,[string]$HistoryHelperPath,[string]$VerifyHelperPath,
+      [switch]$SkipFetch,[switch]$NoOaHome)
+Write-Host 'OLD BUILD RAN'
+exit 0
+'@
+  Set-Content $selfPath $stub -Encoding UTF8
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    & git -C $s.Repo add -A 2>&1 | Out-Null
+    & git -C $s.Repo commit -m 'old self on ref' --quiet 2>&1 | Out-Null
+    & git -C $s.Repo update-ref refs/remotes/origin/main HEAD 2>&1 | Out-Null
+  } finally { $ErrorActionPreference = $prev }
+  return $s
+}
+
+$sbo = New-SandboxOldRefSelf
+$ro = Invoke-SUT -Script $SUT -Sandbox $sbo -NoJson
+Assert ($ro.Raw -match 'OLD BUILD RAN') `
+       'G18 the hand-off reaches a target that predates the newer switch'
+Assert ($ro.Raw -notmatch "parameter name 'FetchBudgetSeconds'") `
+       'G18 no unknown-parameter failure is produced'
+
+Test-Mutant -Name 'M21: forward the newer switch unconditionally (#418 upgrade path)' `
+  -Find "if (`$thereSrc -match '\`$FetchBudgetSeconds') { `$fwd += @('-FetchBudgetSeconds',`$FetchBudgetSeconds) }" `
+  -Replace "`$fwd += @('-FetchBudgetSeconds',`$FetchBudgetSeconds)" -Check {
+    param($mut)
+    $s = New-SandboxOldRefSelf
+    $r = Invoke-SUT -Script $mut -Sandbox $s -NoJson
+    Assert ($r.Raw -notmatch 'OLD BUILD RAN') `
+           'killed by G18: an older target would be handed a switch it cannot accept'
+  }
+
 Section 'G8: the OA-home seam (second deploy target)'
+
 # The reason this section exists: on first wiring, the sub-tool was resolved as
 # "next to me" only. The OA home is exactly where a brand-new check has NOT landed,
 # so the copy most in need of repair silently skipped its own sync and still printed
