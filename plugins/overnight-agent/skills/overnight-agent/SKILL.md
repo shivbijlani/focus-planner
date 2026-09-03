@@ -187,6 +187,9 @@ individually too big for a Telegram message).
   healthy silent task would look identical — the #346 shape — and the task would go quiet forever.
 - **Removing the `doc-meta` stamp restores per-turn posting**, and does *not* dump the backlog it
   stayed quiet for.
+- **The journal gets the same treatment (#425).** A doc-bound task's journal turn becomes a short
+  pointer too — see "Once a task has a catch-up doc, a journal turn is a POINTER" under the working
+  rules. Both surfaces, one trigger.
 
 **Polling (time-triggered tasks the user never touches):** `scan` normally only flags journals the
 **user** has changed — so a purely time-based job (e.g. "each night, check the video-backup folder and
@@ -1267,6 +1270,43 @@ See PHASE 0.
   It appends only, so it can never delete one of the user's replies, and it backs
   the journal up first. Add `-Validate` to lint without writing. This is a **guard, not a guideline**:
   each of these classes was documented in prose first and broken anyway.
+- **Once a task has a catch-up doc, a journal turn is a POINTER, not the story (#425).** This is the
+  journal half of #424 and the same trigger arms it: #423's `<!-- doc-meta … -->` stamp. A task with
+  **no** doc is unchanged — write turns exactly as before. For a doc-bound task, the narrative, tables
+  and evidence go **into the doc, amended in place**, so there is one current copy rather than one per
+  wake, and the turn keeps only:
+
+  ```markdown
+  ## 🌙 Overnight Agent — <one-line what changed>
+
+  <!-- from: overnight-agent -->
+
+  **Status:** <status> · <date>
+  📄 **[Catch-up doc](<url>)** — current state. **Comment there.**
+
+  <one or two sentences: what moved, what is next>
+
+  **Needs from you:** <the ask, or none>
+
+  <!-- /overnight-agent turn-end -->
+  ```
+
+  **Aim under ~800 characters.** `write-turn.ps1` refuses a doc-bound turn over **1,500** (**G9**),
+  and nudges above 800. The ceiling sits above the target on purpose — the first real pointer turn
+  was 901 chars, ~250 of which are structure — so it can refuse the shape this replaces (turns on
+  #468 averaged **5,305** chars, 21 of 28 too big for a single Telegram message) without ever
+  refusing a legitimate pointer.
+  - **G10 — the pointer must point.** The turn must contain the bound doc's URL or id. A short turn
+    that never links the doc is *worse* than the long turn it replaced: the detail has left the
+    journal and nothing in the journal leads to it.
+  - **G11 — the ask stays in the journal, duplicated, never moved.** The Telegram digest reads the
+    ask out of your newest turn, and since #424 a doc-bound task's topic posts nothing per turn — so
+    an ask that lives only in the doc reaches **no surface at all**. That failure is already on
+    record at scale: 148 open asks, 17 shown, 131 unnamed. `-DisableGuard G11` covers a genuinely
+    informational turn.
+  - This changes only what a **new** turn writes. It never migrates, rewrites or truncates history
+    (#463: a 202,489-byte journal became 1,850 bytes in one write). Removing the `doc-meta` stamp
+    restores the old behaviour.
 - **Ask narrowly, not broadly.** If you need something, put one precise question in \*\*Needs from
   you\*\* and set `blocked`; don't stall the whole run. You may also reply to the user's instruction
   email with that one question.

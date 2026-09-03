@@ -253,6 +253,34 @@ jobs:
       - name: Mutation check (one alignment rule, reader agrees with writer)
         run: node ./scripts/mutcheck-ragged-row.mjs
 
+  # The pointer turn (GH #425) -- the journal half of #424. Once a task has a catch-up doc, a
+  # new journal turn is a POINTER to it: status, doc link, a sentence or two, the ask. The
+  # narrative is amended into the doc instead of being restated on every wake (agent turns on
+  # task 468 averaged 5,305 chars across 28 turns; the corpus is 395 journals / 5.36 MB, and
+  # journals sit on the per-run read path -- #291).
+  #
+  # It runs here, and not only on the nightly laptop, because the two arms that matter cross
+  # component boundaries that no single-file check can see. G writes a real turn with the real
+  # write-turn.ps1 and then reads the ask back out with the real journal.js + digest.js, which
+  # is the Telegram approval digest's own code path; H runs the real oa-state.ps1 and asserts
+  # `reopened` flips from false to true for a reply typed under the shortened turn. Those are
+  # the two acceptance criteria a "just write less" change breaks silently, and both live in a
+  # different file from the one being changed.
+  #
+  # Needs node as well as pwsh for arm G. Pure text work against synthetic journals in a temp
+  # dir with an isolated -JournalDir/-StateDir; it never reads the real planner folder.
+  pointer-turn:
+    name: Pointer journal turn
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mutation check (size ceiling, the pointer points, the ask stays)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-pointer-turn.ps1
+
   auto-deploy:
     name: Auto-deploy safety and performance
     runs-on: windows-latest

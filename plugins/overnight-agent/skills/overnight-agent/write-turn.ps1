@@ -59,6 +59,40 @@
     a BOM -- the same class of encoding bug that made a sweep report a false zero on
     2026-08-25.
 
+  THE POINTER GUARDS (G9-G11), and why they are scoped rather than global
+  ----------------------------------------------------------------------
+  G1-G8 all ask "did this text survive the trip to disk?". G9-G11 ask a different question,
+  added for #425: once a task HAS a catch-up doc, is this turn still trying to be the doc?
+
+  Measured on the live journals 2026-09-03: `task-468.md` carries 28 agent turns averaging
+  5,305 chars (largest 9,094); `task-451.md` 23 averaging 4,354. Corpus-wide, 395 journals
+  and 5.36 MB. Journals sit on the per-run read path, which is why #291 exists and why
+  `oa-state.ps1 extract` has to cap a read at ~24 KB. That caps the symptom; this is the
+  cause.
+
+  ARMED ONLY BY #423's `<!-- doc-meta ... -->` STAMP, read from the TARGET journal. A task
+  with no doc is untouched -- byte for byte the same behaviour as before. This is the same
+  opt-in #424 used on the Telegram half, and it is deliberate: a silent global change to how
+  every turn is written is exactly the kind of edit that gets discovered by its damage.
+
+  Three guards rather than one, because they fail differently and a single "too long" verdict
+  would hide two of them:
+
+  G9  size ceiling -- the wall of detail this issue exists to remove.
+  G10 the pointer must POINT. A short turn that never names the doc is strictly worse than
+      the long turn it replaced: the narrative is gone from the journal AND unreachable from
+      it. This is the failure mode most worth guarding, because it reads perfectly.
+  G11 the ask must still be IN THE JOURNAL. The Telegram digest lifts asks out of the newest
+      agent turn (`extractAskEntry` in digest.js). Moving the ask into the doc blinds the
+      approval queue -- `user-settings.md` records that happening at scale already: 148 open
+      asks, 17 shown, 131 unnamed. The ask is duplicated, never moved.
+
+  WHY G11 REFUSES WHERE A5 ONLY WARNS. A5 (below) is advisory precisely because informational
+  turns legitimately ask for nothing. That reasoning does not survive #424: a doc-bound task's
+  Telegram topic now posts NOTHING per turn, so a doc-bound turn carrying no readable ask
+  reaches no surface at all. Same text, different blast radius. `-DisableGuard G11` is the
+  hatch for a genuinely informational turn.
+
   Usage:
     write-turn.ps1 -Id 448 -BodyFile turn.md            # validate, back up, append
     write-turn.ps1 -Id 448 -BodyFile turn.md -Validate  # validate only, write nothing
@@ -81,6 +115,64 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $MOON = [char]::ConvertFromUtf32(0x1F319)
+
+# --- #425 pointer-turn thresholds ----------------------------------------------------
+# REFUSE at 1500, NUDGE at 800. Both numbers are measured rather than chosen.
+#
+# The refusal has to sit ABOVE the shape the issue asks for, or the guard refuses its own
+# target and gets switched off. The first real pointer turn -- task 468, 2026-09-03 -- is
+# 902 chars, of which roughly 250 are structure that is not prose and cannot be shortened:
+# the moon heading, the provenance marker, a Google Docs URL (a bare docId is 44 chars
+# before the /edit), and the turn-end stamp. A hard 800 would have refused it.
+#
+# 1500 still refuses everything this issue is about: the mean agent turn on task 468 is
+# 5,305 chars and on 451 is 4,354, and 21 of 28 turns on 468 individually exceed Telegram's
+# own 4,096-char message limit. The gap between 902 and 1500 is headroom for a longer URL
+# or status line, not licence for a narrative.
+#
+# The nudge is where the issue's own target lives, so the author is aimed at 800 by the
+# tool while the refusal stays where it cannot produce a false positive.
+$POINTER_CEILING = 1500
+$POINTER_NUDGE   = 800
+
+# #423's binding stamp. Kept character-for-character in step with `$script:DocMetaRe` in
+# oa-state.ps1 -- this guard's entire job is to predict what that reader will conclude, and
+# a stricter or looser pattern here would arm the guard on a task the rest of the system
+# considers unbound (or vice versa).
+$DocMetaRe = '<!--\s*doc-meta\s+docId=(?<id>[A-Za-z0-9_\-]+)(?:\s+docUrl=(?<url>\S+))?\s*-->'
+
+function Get-FenceMaskedText([string]$text) {
+  # Blank out fenced regions, preserving line count and line endings, so a `doc-meta` shown
+  # INSIDE a fenced example is not read as this task's real binding.
+  #
+  # This is #320's rule and oa-state.ps1's `Get-DocMetaFromJournal` already applies it for
+  # exactly this reason. It matters more than it looks: the turn that DOCUMENTS this feature
+  # necessarily quotes the stamp format, and a journal whose only `doc-meta` is such a
+  # quotation would otherwise arm all three guards on a task that has no doc at all.
+  if (-not $text) { return '' }
+  $lines = $text -split "(`r?`n)"
+  $fence = $false
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($lines[$i] -match "^`r?`n$") { continue }
+    if ($lines[$i] -match '^[ \t]*```') { $fence = -not $fence; $lines[$i] = ' ' * $lines[$i].Length; continue }
+    if ($fence) { $lines[$i] = ' ' * $lines[$i].Length }
+  }
+  return ($lines -join '')
+}
+
+function Get-JournalDocMeta([string]$path) {
+  # READ ONLY, and read from the JOURNAL -- never from state, never written back. #423 owns
+  # the binding; #424 was explicit that a second store of "which doc does this task have" is
+  # the thing not to build, and the same applies here.
+  if (-not $path -or -not (Test-Path -LiteralPath $path)) { return $null }
+  $content = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $path))
+  $m = [regex]::Match((Get-FenceMaskedText $content), $DocMetaRe)
+  if (-not $m.Success) { return $null }
+  [pscustomobject]@{
+    doc_id  = $m.Groups['id'].Value
+    doc_url = if ($m.Groups['url'].Success) { $m.Groups['url'].Value } else { '' }
+  }
+}
 
 function New-Finding([string]$guard, [int]$line, [string]$snippet, [string]$why) {
   [pscustomobject]@{ guard = $guard; line = $line; snippet = $snippet; why = $why }
@@ -145,7 +237,7 @@ function Test-TurnAsk([string]$Body) {
 }
 
 function Test-TurnBody {
-  param([string]$Body, [string[]]$Disabled = @())
+  param([string]$Body, [string[]]$Disabled = @(), $Doc = $null)
 
   $findings = @()
   $lines = $Body -split "`r?`n"
@@ -350,6 +442,64 @@ function Test-TurnBody {
     }
   }
 
+  # --- G9/G10/G11: the pointer guards (#425) --------------------------------------
+  # All three are armed ONLY by a doc-meta stamp on the target journal. `$Doc` is null for
+  # a task with no catch-up doc and for `-Validate` with no `-Id`, and every one of these
+  # is skipped -- so this cannot become a silent global change to how turns are written.
+  if ($Doc) {
+    $len = $Body.Trim().Length
+
+    # G9 -- the wall of detail itself.
+    if (& $on 'G9') {
+      if ($len -gt $POINTER_CEILING) {
+        $findings += New-Finding 'G9' 1 "$len chars" (
+          "this task has a catch-up doc, so a turn is a POINTER, not the story: $len chars is over the " +
+          "$POINTER_CEILING ceiling (aim for ~$POINTER_NUDGE). Move the narrative, tables and evidence into " +
+          'the doc and amend it in place; leave behind the status, the doc link, a sentence or two, and the ask')
+      }
+    }
+
+    # G10 -- A POINTER THAT DOES NOT POINT.
+    # A short turn that never names the doc is strictly WORSE than the long turn it replaced:
+    # the detail has left the journal and there is nothing in the journal that leads to it.
+    # It also reads perfectly, which is why it needs a machine to catch it.
+    #
+    # The docId is the token, not the URL: every legitimate link to the doc contains it
+    # (a Google Docs URL is .../document/d/<docId>/edit), so this accepts a bare id, a raw
+    # URL and a markdown link, and rejects only a turn that mentions no route to the doc at
+    # all. Matched against the RAW body -- a link inside a fenced block is still a link a
+    # reader can follow, and this guard is about reachability, not about markup.
+    if (& $on 'G10') {
+      $names = $false
+      if ($Doc.doc_id -and $Body.Contains($Doc.doc_id)) { $names = $true }
+      if (-not $names -and $Doc.doc_url -and $Body.Contains($Doc.doc_url)) { $names = $true }
+      if (-not $names) {
+        $findings += New-Finding 'G10' 1 ("docId=" + $Doc.doc_id) (
+          'this turn is a pointer with nothing to point at -- it never links the catch-up doc it is ' +
+          'summarising, so the detail has left the journal and cannot be reached from it. Include the doc ' +
+          'URL (or its id) in the turn')
+      }
+    }
+
+    # G11 -- the ask stays in the JOURNAL, duplicated rather than moved.
+    # `extractAskEntry` (digest.js) reads the ask out of the NEWEST agent turn, so an ask
+    # that lives only in the doc is invisible to the approval digest. Since #424 a doc-bound
+    # task's Telegram topic also posts nothing per turn, so there is no second surface left
+    # to carry it: the ask would reach nobody.
+    #
+    # Dialects deliberately identical to Test-TurnAsk (A5) -- one definition of "an ask the
+    # digest can read", so a turn cannot be advisory-clean and guard-dirty at once.
+    if (& $on 'G11') {
+      if (-not (Test-TurnAsk -Body $Body)) {
+        $findings += New-Finding 'G11' 1 '(no ask marker)' (
+          'this task has a catch-up doc, and a doc-bound task posts nothing per turn to Telegram (#424) -- ' +
+          'so an ask that is not in this turn reaches no surface at all. Keep the ask in the journal ' +
+          '(duplicate it into the doc, never move it): "**Needs from you:** ...", "Reply `word`", ' +
+          '"**Next:** ..." or "**Your call:** ...". Use -DisableGuard G11 for a genuinely informational turn')
+      }
+    }
+  }
+
   return $findings
 }
 
@@ -359,6 +509,17 @@ if (-not (Test-Path -LiteralPath $BodyFile)) {
 }
 $body = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $BodyFile))
 if ($body.Trim().Length -eq 0) { Write-Error 'body file is empty'; exit 3 }
+
+# Resolve the target journal HERE rather than after validation, because the pointer guards
+# (#425) are a property of the destination, not of the text: whether a turn may be a
+# summary depends on whether the task it is being written to has somewhere to summarise
+# INTO. `-Validate` with an `-Id` therefore gets the same verdict as the real write, which
+# is the only way a validate step is worth running.
+#
+# No `-Id` (linting a fragment) or a journal that does not exist yet -> $doc stays null and
+# G9-G11 are inert, exactly like a task with no doc.
+$journal = if ($Id) { Join-Path $JournalDir "task-$Id.md" } else { $null }
+$doc = if ($journal) { Get-JournalDocMeta $journal } else { $null }
 
 # HOST-DEPENDENT COUNT (found 2026-08-27, by hitting it)
 # --------------------------------------------------------
@@ -374,7 +535,7 @@ if ($body.Trim().Length -eq 0) { Write-Error 'body file is empty'; exit 3 }
 # for `Get-Content -Raw` on a journal (HAZARD 4); it applies to the safety tool itself.
 #
 # `@(...)` forces an array on both hosts, so `.Count` is 0/1/n everywhere.
-$findings = @(Test-TurnBody -Body $body -Disabled $DisableGuard)
+$findings = @(Test-TurnBody -Body $body -Disabled $DisableGuard -Doc $doc)
 $hasAsk = Test-TurnAsk -Body $body
 
 if ($Json) {
@@ -383,6 +544,9 @@ if ($Json) {
     findings = @($findings)
     hasAsk   = $hasAsk
     id       = $Id
+    docBound = [bool]$doc
+    docId    = if ($doc) { $doc.doc_id } else { '' }
+    length   = $body.Trim().Length
   } | ConvertTo-Json -Depth 5
 } else {
   if ($findings.Count -gt 0) {
@@ -400,6 +564,15 @@ if ($Json) {
     Write-Host '      use one of: "**Needs from you:** ...", "Reply `word`", "**Next:** ...",'
     Write-Host '      or "**Your call:** ...". A bare "*Reply:* **`word`**" is NOT read as an ask.'
   }
+  # The #425 target, as a nudge rather than a refusal. G9's ceiling is where a turn stops
+  # being defensible; this is where it stops being a pointer. Keeping them apart is what
+  # lets the ceiling be loose enough never to refuse a legitimate turn while the author is
+  # still aimed at the number the issue actually asked for.
+  if ($doc -and $findings.Count -eq 0 -and $body.Trim().Length -gt $POINTER_NUDGE) {
+    Write-Host ("[write-turn] NOTE - {0} chars; this task has a catch-up doc, so aim under ~{1}." -f $body.Trim().Length, $POINTER_NUDGE) -ForegroundColor Yellow
+    Write-Host '      The narrative belongs in the doc (amended in place). The turn keeps the status,'
+    Write-Host '      the doc link, a sentence or two, and the ask.'
+  }
 }
 
 if ($findings.Count -gt 0) { exit 2 }
@@ -411,13 +584,18 @@ if ($Validate) {
 
 if (-not $Id) { Write-Error '-Id is required unless -Validate is set'; exit 3 }
 
-$journal = Join-Path $JournalDir "task-$Id.md"
 if (-not (Test-Path -LiteralPath $journal)) { Write-Error "journal not found: $journal"; exit 3 }
 
 # Back up before touching it. Cheap, and every repair this codebase has made started
 # from one of these.
+#
+# The directory is created rather than assumed. `-ErrorActionPreference Stop` turns a missing
+# backup dir into a THROWN write -- so on a machine where %LOCALAPPDATA%\overnight-agent does
+# not exist yet (a fresh install, or the state loss #423 exists to survive) the turn is not
+# merely un-backed-up, it is never written at all.
 $stamp  = Get-Date -Format 'yyyyMMdd-HHmm'
 $bakDir = Join-Path $env:LOCALAPPDATA 'overnight-agent'
+New-Item -ItemType Directory -Path $bakDir -Force | Out-Null
 Copy-Item -LiteralPath $journal -Destination (Join-Path $bakDir "task-$Id.bak-$stamp.md") -Force
 
 $existing = [IO.File]::ReadAllText($journal)
