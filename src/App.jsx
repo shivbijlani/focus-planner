@@ -21,6 +21,7 @@ import { selfHealOutlierIds } from './selfHealIds.js'
 import { recordDeletedId, getActiveTombstoneIds } from './idTombstones.js'
 import { scrollToAndFlashTask } from './scrollToTask.js'
 import { filterRowsAndRawLines, normalizeQuery, boardSearchPlaceholder } from './boardSearch.js'
+import { parseMarkdownTable, displayHeader } from './boardTable.js'
 import {
   addDaysToDateString,
   formatSnoozeDate,
@@ -953,117 +954,7 @@ function FileTree({ items, onSelect, selectedPath }) {
   )
 }
 
-// Calculate days since a date
-function daysSince(dateStr) {
-  if (!dateStr || dateStr === '-') return null
-  const date = new Date(dateStr)
-  if (isNaN(date.getTime())) return null
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const diffTime = today - date
-  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24))
-  return diffDays
-}
-
-// Parse markdown table into structured data
-function displayHeader(h) {
-  if (h === 'Mngr Priority' || h === 'Work Priority') return 'Priority'
-  return h
-}
-
-function parseMarkdownTable(lines) {
-  const rows = []
-  const rawLines = []
-  let headerParsed = false
-  let headers = []
-  let linkedIdIndex = -1
-  let wakeIndex = -1
-
-  for (const line of lines) {
-    const trimmed = line.trim()
-    if (!trimmed.startsWith('|')) continue
-
-    const cells = trimmed.split('|').slice(1, -1).map(c => c.trim())
-
-    if (!headerParsed) {
-      headers = cells
-      wakeIndex = headers.indexOf('Wake')
-      // Find and remove "Linked ID" column
-      linkedIdIndex = headers.findIndex(h => h.includes('Linked'))
-      if (linkedIdIndex !== -1) {
-        headers.splice(linkedIdIndex, 1)
-      }
-      // Replace "Added" column with "Age" (Added date shown on hover)
-      const addedIndex = headers.indexOf('Added')
-      if (addedIndex !== -1) {
-        headers.splice(addedIndex, 1, 'Age')
-      }
-      headerParsed = true
-      continue
-    }
-
-    // Skip separator row
-    if (cells.every(c => /^[-:]+$/.test(c))) continue
-
-    const row = {}
-    const wakeValue = wakeIndex !== -1 ? normalizeDateOnly(cells[wakeIndex]) : null
-    const snoozeUntil = wakeValue || parseSnoozeUntil(trimmed)
-    let cellIndex = 0
-    const linkedIdValue = linkedIdIndex !== -1 ? cells[linkedIdIndex] : ''
-
-    for (let i = 0; i < headers.length; i++) {
-      const h = headers[i]
-      if (h === 'Age') {
-        // Read the Added date from the cell, store it, and calculate age
-        if (linkedIdIndex !== -1 && cellIndex === linkedIdIndex) {
-          cellIndex++
-        }
-        const addedValue = cells[cellIndex] || ''
-        cellIndex++
-        row['Added'] = addedValue
-        const days = daysSince(addedValue)
-        row[h] = days !== null ? `${days}d` : ''
-      } else if (h === 'ID') {
-        // Parse ID cell — may contain comma-separated local ID and ADO link
-        // Format: "localId,[adoId](url)" or just "localId"
-        const idValue = cells[cellIndex] || ''
-        let localId = idValue
-        let adoLink = null
-        const commaIdx = idValue.indexOf(',[')
-        if (commaIdx !== -1) {
-          localId = idValue.substring(0, commaIdx)
-          const adoPart = idValue.substring(commaIdx + 1)
-          const adoMatch = adoPart.match(/\[(\d+)\]\(([^)]+)\)/)
-          if (adoMatch) {
-            adoLink = { id: adoMatch[1], url: adoMatch[2] }
-          }
-        }
-        if (linkedIdValue && linkedIdValue !== '-') {
-          row[h] = { id: localId, linkedId: linkedIdValue, adoLink }
-        } else {
-          row[h] = { id: localId, linkedId: null, adoLink }
-        }
-        cellIndex++
-        // Skip over the linked ID cell index
-        if (linkedIdIndex !== -1 && cellIndex === linkedIdIndex) {
-          cellIndex++
-        }
-      } else {
-        // Skip linked ID column when reading cells
-        if (linkedIdIndex !== -1 && cellIndex === linkedIdIndex) {
-          cellIndex++
-        }
-        row[h] = cells[cellIndex] || ''
-        cellIndex++
-      }
-    }
-    row.snoozeUntil = snoozeUntil
-    rows.push(row)
-    rawLines.push(trimmed)
-  }
-
-  return { headers, rows, rawLines }
-}
+// The board table reader lives in boardTable.js (#426) so it can be unit-tested.
 
 // Parse markdown links and render as clickable
 function parseLinks(text, onNavigate) {
@@ -3428,17 +3319,15 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sou
   }
 
   const handleChangeLinkedId = async (rawLine, newLinkedId) => {
-    const lines = content.split('\n')
-    const lineIndex = lines.findIndex(line => line.trim() === rawLine.trim())
-    
-    if (lineIndex !== -1) {
-      const parts = rawLine.split('|')
-      if (parts.length >= 7) {
-        parts[6] = ` ${newLinkedId || ''} `
-        lines[lineIndex] = parts.join('|')
-        await onContentUpdate(lines.join('\n'))
-      }
-    }
+    // #426: this used a hardcoded `parts[6]`, which is the last cell of the OLD
+    // 6-column schema. `Wake` is inserted immediately BEFORE `Linked ID`, so on
+    // a 7-column Deferred row `parts[6]` is the **Wake** cell — setting a task's
+    // parent wrote the parent id into the wake date and left the real link
+    // untouched. #307 fixed exactly this in `opChangeLinkedId` but missed this
+    // duplicate, which is the copy wired into the single-source view. Delegate
+    // rather than keeping a second implementation that can drift again.
+    const next = ops.opChangeLinkedId(content, rawLine, newLinkedId)
+    if (next !== content) await onContentUpdate(next)
   }
 
   const handleLinkToAdoBugDb = async (rawLine, adoLink) => {

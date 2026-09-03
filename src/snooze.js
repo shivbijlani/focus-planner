@@ -1,3 +1,5 @@
+import { alignRowToHeaders } from './boardRow.js'
+
 const SNOOZE_COMMENT_RE = /\s*<!--\s*snooze:(\d{4}-\d{2}-\d{2})\s*-->\s*$/i
 const WAKE_COLUMN = 'Wake'
 
@@ -5,6 +7,22 @@ function parseCells(rawLine) {
   const s = String(rawLine || '').trim()
   if (!s.startsWith('|')) return []
   return s.split('|').slice(1, -1).map(c => c.trim())
+}
+
+/**
+ * #426: read the row's cells **aligned to the header** before indexing `Wake`.
+ *
+ * Indexing the raw row is the same defect as the reader's: on a 6-field row
+ * under the 7-column Deferred header, `cells[wakeIndex]` is the misfiled
+ * `Linked ID`. That survived only because `normalizeDateOnly('191')` is null —
+ * luck, not design. A misfiled value that *does* parse as a date would have
+ * silently snoozed a live task.
+ */
+function wakeCells(rawLine, headers) {
+  const cells = parseCells(rawLine)
+  return Array.isArray(headers) && headers.length > 0
+    ? alignRowToHeaders(cells, headers)
+    : cells
 }
 
 function wakeColumnIndex(headers) {
@@ -17,14 +35,16 @@ function formatCells(cells) {
 }
 
 export function parseSnoozeUntil(rawLine, headers = null) {
-  const cells = parseCells(rawLine)
   const explicitWakeIndex = wakeColumnIndex(headers)
   if (explicitWakeIndex !== -1) {
-    const wake = normalizeDateOnly(cells[explicitWakeIndex])
+    const wake = normalizeDateOnly(wakeCells(rawLine, headers)[explicitWakeIndex])
     if (wake) return wake
-  } else if (cells.length >= 7) {
-    const inferredWake = normalizeDateOnly(cells[cells.length - 2])
-    if (inferredWake) return inferredWake
+  } else {
+    const cells = parseCells(rawLine)
+    if (cells.length >= 7) {
+      const inferredWake = normalizeDateOnly(cells[cells.length - 2])
+      if (inferredWake) return inferredWake
+    }
   }
 
   const match = String(rawLine || '').match(SNOOZE_COMMENT_RE)
@@ -66,7 +86,12 @@ export function clearSnoozeUntilFromLine(rawLine, headers = null) {
   const cleanLine = String(rawLine || '').replace(SNOOZE_COMMENT_RE, '').trimEnd()
   const wakeIndex = wakeColumnIndex(headers)
   if (wakeIndex === -1) return cleanLine
-  const cells = parseCells(cleanLine)
+  // #426: align first, and note this is the load-bearing one — `setSnooze…`
+  // clears before it writes, so THIS is the call that decides which cell the
+  // wake date lands in. Unaligned, `cells[wakeIndex]` on a ragged 6-field row is
+  // the misfiled `Linked ID`, so clearing "the wake cell" deleted the link and
+  // the subsequent write then put a date where the link had been.
+  const cells = wakeCells(cleanLine, headers)
   if (cells.length <= wakeIndex) return cleanLine
   cells[wakeIndex] = ''
   return formatCells(cells)
@@ -77,6 +102,10 @@ export function setSnoozeUntilOnLine(rawLine, snoozeUntil, headers = null) {
   const date = normalizeDateOnly(snoozeUntil)
   const wakeIndex = wakeColumnIndex(headers)
   if (wakeIndex !== -1) {
+    // #426: `clearSnoozeUntilFromLine` above has already aligned the row to the
+    // header, so plain `parseCells` is correct here. Aligning a second time
+    // would be unreachable defensive code — no mutation of it can be killed,
+    // which is this repo's definition of a decorative guard.
     const cells = parseCells(cleanLine)
     if (cells.length > wakeIndex) {
       cells[wakeIndex] = date || ''

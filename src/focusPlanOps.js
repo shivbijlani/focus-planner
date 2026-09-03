@@ -10,6 +10,13 @@
  * each operation routes to whichever source the rawLine belongs to).
  */
 import { diag, isDiagEnabled } from '../packages/diagnostics/src/index.js'
+import {
+  WAKE_COLUMN,
+  alignRowToHeaders,
+  formatRow,
+  isTableSeparatorCells,
+  rowCells,
+} from './boardRow.js'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import {
   clearSnoozeUntilFromLine,
@@ -21,20 +28,7 @@ import {
 } from './snooze.js'
 
 const PRIORITY_HEADING = '## Priorities'
-const WAKE_COLUMN = 'Wake'
 const MAX_TIMEOUT_MS = 2_147_483_647
-
-function rowCells(line) {
-  return String(line || '').trim().split('|').slice(1, -1).map(c => c.trim())
-}
-
-function formatRow(cells) {
-  return `| ${cells.join(' | ')} |`
-}
-
-function isTableSeparatorCells(cells) {
-  return cells.length > 0 && cells.every(c => /^[-:]+$/.test(c))
-}
 
 function findSectionTable(lines, section) {
   let currentSection = null
@@ -71,6 +65,13 @@ function shouldHaveWakeColumn(section, headers) {
   return section === 'Deferred' && headers.includes('Added') && headers.some(h => h.includes('Linked'))
 }
 
+/**
+ * Where a NEW `Wake` column gets inserted: immediately before `Linked ID`.
+ *
+ * Deliberately not `wakeSeamIndex` — that answers the different question "where
+ * is the seam once `Wake` already exists?". Conflating the two appends `Wake`
+ * *after* `Linked ID` and silently reorders the header.
+ */
 function wakeInsertIndex(headers) {
   const linkedIndex = headers.findIndex(h => h.includes('Linked'))
   return linkedIndex === -1 ? headers.length : linkedIndex
@@ -100,32 +101,14 @@ function reportWakeAnomaly(event, fields) {
  * guarantee 2: the writer must never emit a row whose cell count disagrees with
  * its section header).
  *
- * Padding position matters. The leading columns (ID, 🎯, Task, Priority, Added)
- * are positionally reliable, but the tail is not: a short row like
- * `| 446 | 🔴 | NVIDIA roles | - | 2026-08-24 | 295 |` carries `295` as its
- * **Linked ID**, and naively appending an empty cell at the end would leave
- * `295` sitting in the freshly inserted `Wake` slot — the live-board damage this
- * issue reports for #446/#356/#276 (a bogus wake value AND an apparently
- * parentless task, which breaks the upstream-context walk).
- *
- * So we split at `padIndex` (the Wake position): cells before it keep their
- * left-aligned positions, cells from it onward are kept **right-aligned** to the
- * end of the header. Missing cells are inserted at the seam.
+ * #426: the rule itself now lives in `boardRow.js`, because the *reader* has to
+ * apply the identical rule and previously did not — it indexed `Linked ID` off
+ * the raw, unaligned row, so a 6-field Deferred row read back as having no link
+ * at all. Keeping one implementation is what makes reader and writer agree by
+ * construction instead of by two edits staying in sync.
  */
-function normalizeRowToHeaders(cells, headers, padIndex) {
-  const width = headers.length
-  if (cells.length === width) return [...cells]
-  const seam = Math.max(0, Math.min(padIndex, width))
-  const head = cells.slice(0, seam)
-  const tail = cells.slice(seam)
-  if (cells.length < width) {
-    const fill = new Array(width - head.length - tail.length).fill('')
-    return [...head, ...fill, ...tail]
-  }
-  // Too many cells: keep the head and the right-most tail that still fits, so a
-  // trailing Linked ID stays in the last column rather than shifting left.
-  const keepTail = tail.slice(Math.max(0, tail.length - (width - head.length)))
-  return [...head.slice(0, width - keepTail.length), ...keepTail]
+function normalizeRowToHeaders(cells, headers) {
+  return alignRowToHeaders(cells, headers)
 }
 
 /**
@@ -195,7 +178,7 @@ function ensureWakeColumn(lines, section) {
     // Read the legacy comment off the RAW line first — `rowCells` is about to
     // throw the tail away, and that discard is the whole bug.
     const legacyWake = parseLegacySnoozeComment(rawLine)
-    const nextCells = normalizeRowToHeaders(cells, headers, insertIndex)
+    const nextCells = normalizeRowToHeaders(cells, headers)
     const existingWake = normalizeDateOnly(nextCells[insertIndex])
 
     if (legacyWake && !existingWake) {
@@ -591,9 +574,7 @@ export function opChangeLinkedId(content, rawLine, newLinkedId) {
     return lines.join('\n')
   }
 
-  const wakeIndex = headers.indexOf(WAKE_COLUMN)
-  const padIndex = wakeIndex === -1 ? headers.length : wakeIndex
-  const cells = normalizeRowToHeaders(rowCells(lines[lineIndex]), headers, padIndex)
+  const cells = normalizeRowToHeaders(rowCells(lines[lineIndex]), headers)
   cells[linkedIndex] = newLinkedId || ''
   const hadCarriageReturn = lines[lineIndex].endsWith('\r')
   lines[lineIndex] = formatRow(cells) + (hadCarriageReturn ? '\r' : '')
