@@ -12,6 +12,13 @@
 
 const TG_META_RE = /<!--\s*tg-meta\b([^>]*?)-->/i
 
+// The catch-up doc binding stamped by oa-state.ps1 (#423). The bridge READS this
+// and never writes it: the binding is owned by the agent's state store, and #424
+// is explicit that the suppression state must not become a second store of
+// "which doc does this task have". What the bridge owns is purely Telegram's
+// half -- the message id of the link it posted.
+const DOC_META_RE = /<!--\s*doc-meta\b([^>]*?)-->/i
+
 /**
  * Build a deep link that opens the Telegram app on a specific forum topic.
  * - Public supergroup (has @username): https://t.me/<username>/<threadId>
@@ -79,6 +86,33 @@ export function parseTgLink(content) {
   const url = telegramDeepLink(meta)
   if (!url) return null
   return { ...meta, url }
+}
+
+/**
+ * Read the catch-up doc binding stamped into a journal by oa-state.ps1 (#423).
+ *
+ * Returns `{ docId, docUrl }`, or null when the task has no doc. `docUrl` is
+ * derived from `docId` when the stamp did not carry one, so a binding written
+ * without the optional url still yields a usable link -- the id is the identity,
+ * the url is a convenience.
+ *
+ * NOTE this is deliberately read-only. #423 owns the binding; #424 only needs to
+ * know whether one exists and where it points.
+ *
+ * @param {string} content
+ * @returns {{docId: string, docUrl: string} | null}
+ */
+export function parseDocMeta(content) {
+  if (!content) return null
+  const m = DOC_META_RE.exec(content)
+  if (!m) return null
+  const { docId, docUrl } = parseAttrs(m[1])
+  const id = (docId ?? '').trim()
+  if (!id) return null
+  return {
+    docId: id,
+    docUrl: (docUrl ?? '').trim() || `https://docs.google.com/document/d/${id}/edit`,
+  }
 }
 
 /**

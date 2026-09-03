@@ -136,6 +136,44 @@ export function setLastPostedContext(state, taskId, { replyCount, links } = {}) 
   return state
 }
 
+// The catch-up link message for a task (#424): which doc it points at, and the
+// Telegram message id it was posted as.
+//
+// WHY THE MESSAGE ID LIVES HERE AND THE DOC ID DOES NOT.
+// #424 says the suppression state "belongs with the doc binding in #423, not in
+// a second store", and that is respected: the bridge never decides which doc a
+// task has — it READS the `<!-- doc-meta ... -->` stamp #423 writes. What is
+// kept here is the half #423 cannot know, because it is Telegram's: the id of
+// the message the link went out as. `docId` is stored alongside it only so a
+// REBINDING is detectable — if the stamp now names a different doc, the old link
+// message is stale and must be replaced rather than left pointing at the wrong
+// document.
+//
+// This is NOT the "already posted, therefore stay quiet" flag by itself. On its
+// own it would make silence and success identical: a link that was deleted, or
+// whose send failed, would leave the task permanently quiet with no trace. The
+// id is a place to PROBE, not a promise — see verifyLinkMessage in bridge.js.
+export function setDocLink(state, taskId, { docId, messageId } = {}) {
+  const prev = state.tasks[taskId] || {}
+  state.tasks[taskId] = {
+    ...prev,
+    docLinkDocId: docId || undefined,
+    docLinkMessageId: Number.isInteger(messageId) ? messageId : undefined,
+  }
+  return state
+}
+
+// The last short exception line (a blocking ask, or a terminal state change)
+// delivered for a task in link mode. Hashed, so an unchanged ask is not re-sent
+// every run — the whole point of #424 is that the steady state is silent, and an
+// exception that repeats itself nightly is just the old behaviour wearing a
+// smaller hat.
+export function setDocLinkNoticeHash(state, taskId, hash) {
+  const prev = state.tasks[taskId] || {}
+  state.tasks[taskId] = { ...prev, docLinkNoticeHash: hash || undefined }
+  return state
+}
+
 export function setOffset(state, offset) {
   state.updateOffset = offset
   return state

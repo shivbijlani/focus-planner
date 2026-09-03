@@ -151,5 +151,36 @@ export function createTelegramClient({
         chat_id: chatId,
         message_id: messageId,
       }),
+    // The EXISTENCE PROBE for the catch-up link message (#424).
+    //
+    // Telegram has no "does this message still exist?" call, and #424 is explicit
+    // that "already posted" must be VERIFIED rather than assumed -- otherwise a
+    // deleted or never-sent link makes the task go permanently silent, and silence
+    // is indistinguishable from success (the #346 defect shape).
+    //
+    // Editing a message to the text it already has is the probe: Telegram answers
+    // `message is not modified` when it exists, and `message to edit not found`
+    // when it does not. Both are errors, which is why the caller must read the
+    // MESSAGE and not merely the fact of failure. It is also the cheapest probe
+    // available -- one call, no new message, and nothing the user sees.
+    editMessageText: ({ chatId, messageId, text, parseMode, disablePreview = true }) =>
+      call('editMessageText', {
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+        ...(parseMode ? { parse_mode: parseMode } : {}),
+        link_preview_options: { is_disabled: disablePreview },
+      }),
+    // Pin the catch-up link so it stays reachable at the top of the topic (#424 asks for it
+    // "if practical"). Best-effort by design: the bot may lack the right in some groups, and an
+    // unpinned link is a cosmetic loss, so the caller swallows failures. `disableNotification`
+    // is on because a pin notification for a link that has not changed is exactly the noise
+    // this issue is removing.
+    pinChatMessage: ({ chatId, messageId, disableNotification = true }) =>
+      call('pinChatMessage', {
+        chat_id: chatId,
+        message_id: messageId,
+        disable_notification: disableNotification,
+      }),
   }
 }

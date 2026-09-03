@@ -25,13 +25,15 @@ import {
   setSuppressedHash,
   setArchived,
   setUserEngaged,
+  setDocLink,
+  setDocLinkNoticeHash,
   setOffset,
   setLastDigest,
   setDigestTopic,
   findTaskByTopic,
 } from './state.js'
 import { extractAskEntry, buildDigest, hashDigest } from './digest.js'
-import { upsertTgMetaMarker, parseTgMeta } from './deepLink.js'
+import { upsertTgMetaMarker, parseTgMeta, parseDocMeta } from './deepLink.js'
 import { mdToTelegramHtml, escapeHtml, extractLinks } from './telegramFormat.js'
 import { parseCompletedTaskIds } from './completed.js'
 import { parseDeletedTaskIds } from './deleted.js'
@@ -113,7 +115,88 @@ export function splitAsk(turn) {
   }
 }
 
+// --- #424: the catch-up link replaces the per-turn post -------------------------------
+//
+// Shiv: "Whenever the agent wakes up, it seems to add a post to the journal and telegram
+// thread with a lot of detail. Instead it should provide a link to the catch up document.
+// ... Once the link is already posted in telegram, no need to post anything more."
+//
+// So once a task has a catch-up doc, its topic holds ONE message: the link. The doc changes;
+// the link does not. Measured on the live journals, 21 of 28 turns on task 468 individually
+// exceed Telegram's 4096-char limit -- this removes the large per-turn post rather than
+// getting better at rendering it, which is the only fix that does not depend on a collapse
+// heuristic being right (#205, #278 both attacked it from the rendering side).
+
+const DISMISSIVE_ASK_RE = /^(none|nothing|no|n\/?a|nil|nope)\b/i
+
+/**
+ * The value of the turn's last `Needs from you:` line, or '' when the agent is not blocked.
+ *
+ * A DISMISSIVE opener ("none", "nothing needed - say the word and I'll pick it up") is not a
+ * blocking ask. That distinction is not a nicety: the agent ends nearly every turn with a
+ * courtesy offer, so treating any `Needs from you:` as blocking would make the exception fire
+ * every single run and rebuild the per-turn posting this issue exists to remove. The same rule,
+ * for the same reason, already gates `awaiting_reply` in oa-state.ps1.
+ */
+export function blockingAsk(turn) {
+  const lines = String(turn == null ? '' : turn).split('\n')
+  let value = null
+  for (const line of lines) {
+    const m = /^\s*\**\s*Needs from you\s*\**\s*:?\s*\**\s*(.*)$/i.exec(line)
+    if (m) value = m[1].replace(/\*+/g, '').trim()
+  }
+  if (value == null) return ''
+  if (!value || DISMISSIVE_ASK_RE.test(value)) return ''
+  return value
+}
+
+/** A terminal state worth one line, or '' — the other exception #424 keeps. */
+export function terminalStatus(turn) {
+  const m = /^[ \t]*\**[ \t]*Status[ \t]*\**[ \t]*:?[ \t]*\**[ \t]*(.*)$/im.exec(
+    String(turn == null ? '' : turn),
+  )
+  if (!m) return ''
+  const value = m[1].replace(/\*+/g, '').trim()
+  if (/^(done|complete|completed|shipped)\b/i.test(value)) return 'done'
+  if (/^blocked\b/i.test(value)) return 'blocked'
+  if (/^(abandoned|cancell?ed|skipped?)\b/i.test(value)) return 'abandoned'
+  return ''
+}
+
+/**
+ * The one message a task's topic holds in the steady state.
+ *
+ * Deliberately DETERMINISTIC for a given task/title/doc: the existence probe re-sends this
+ * exact text, and Telegram's `message is not modified` reply is what proves the message is
+ * still there. A timestamp or any other varying token would turn every probe into a real edit
+ * and destroy the signal.
+ */
+export function formatDocLink(taskId, title, docUrl) {
+  const heading = title ? `#${taskId} — ${escapeHtml(title)}` : `#${taskId}`
+  return (
+    `📄 <b>${heading}</b>\n` +
+    `<a href="${escapeHtml(docUrl)}">Catch-up doc</a> — the current state of this task, kept up to date.\n\n` +
+    `<i>Comment on the doc to reply. I read new comments each run.</i>`
+  )
+}
+
+/** The short exception line. One line, never a turn. */
+export function formatDocNotice(taskId, { ask, terminal, docUrl }) {
+  const bits = []
+  if (terminal === 'done') bits.push('✅ <b>Done.</b>')
+  else if (terminal === 'blocked') bits.push('⛔ <b>Blocked.</b>')
+  else if (terminal === 'abandoned') bits.push('🚫 <b>Abandoned.</b>')
+  if (ask) bits.push(escapeHtml(ask))
+  const body = bits.join(' ')
+  return `<b>#${taskId}</b> ${body}\n<a href="${escapeHtml(docUrl)}">Catch-up doc</a>`
+}
+
+export function hashNotice(ask, terminal) {
+  return hashTurn(`${terminal}\u0000${ask}`)
+}
+
 // Greedily pack whole markdown lines into chunks whose CONVERTED HTML fits
+
 // `room`. Converting per chunk is what keeps each one tag-balanced:
 // `mdToTelegramHtml` is line-based and closes <pre>/<blockquote> itself, so a
 // chunk boundary can never fall inside a tag.
@@ -381,6 +464,8 @@ export function createBridge({
     const posted = []
     const created = []
     const suppressed = []
+    const linked = []
+    const notified = []
     const journals = await io.listJournals()
     const completed = await loadCompletedIds()
     const active = await loadActiveIds()
@@ -395,6 +480,23 @@ export function createBridge({
 
       const hash = hashTurn(turn)
       const task = getTask(state, taskId)
+
+      // #424 — LINK MODE. Once #423 has bound a catch-up doc to this task, the topic holds one
+      // message: the link. This is checked BEFORE the unchanged-turn guard below, on purpose.
+      // The guard's job is "has the agent written something new?", and that is the wrong
+      // question here: the link can go missing without the journal changing at all (the user
+      // deletes it, or a send failed), and #424's acceptance requires that re-running restores
+      // it. Gating the check on a new turn would make recovery depend on unrelated work
+      // happening to occur.
+      const docMeta = parseDocMeta(content)
+      if (docMeta) {
+        const outcome = await syncDocLink({ taskId, content, turn, hash, task, docMeta, completed, active })
+        if (outcome.created) created.push(taskId)
+        if (outcome.linked) linked.push(taskId)
+        if (outcome.notified) notified.push(taskId)
+        if (outcome.suppressed) suppressed.push(taskId)
+        continue
+      }
 
       // Natural, incremental mirroring: only act when there's a NEW agent turn
       // since we last posted for this task. If nothing changed, skip the task
@@ -618,7 +720,158 @@ export function createBridge({
       await checkpoint(`task #${taskId}`)
     }
 
-    return { posted, created, suppressed }
+    return { posted, created, suppressed, linked, notified }
+  }
+
+  // #424's worker. Everything about it is shaped by one line in the issue: "Do not just
+  // suppress posts... 'already posted' must be VERIFIED, not assumed, or the task goes
+  // permanently silent. Silence and success would otherwise be identical."
+  //
+  // So a stored message id is treated as a place to PROBE, never as a promise. The probe is an
+  // edit to the text the message should already hold: Telegram answers `message is not
+  // modified` when it exists and `message to edit not found` when it does not. Both arrive as
+  // errors, so the MESSAGE is read rather than the mere fact of failure — reading only
+  // "did it throw?" would classify a healthy message as missing and repost it every run.
+  async function syncDocLink({ taskId, content, turn, hash, task, docMeta, completed, active }) {
+    const out = { created: false, linked: false, notified: false, suppressed: false }
+
+    // A finished task stays quiet here exactly as it does for turns (#186): the topic is
+    // archived and the user has closed it. A user reply reopens the conversation.
+    if (isFinished(completed, active, taskId) && !(task && task.userEngaged)) {
+      if (!task || task.suppressedHash !== hash) {
+        setSuppressedHash(state, taskId, hash)
+        logger(`suppressed doc link for completed task #${taskId} (no user reply since it closed)`)
+      }
+      out.suppressed = true
+      return out
+    }
+
+    // Adopt an existing topic from the journal marker before creating one, same as syncUp.
+    if (!task || task.topicId == null) {
+      const meta = parseTgMeta(content)
+      const existingThread = meta && `${meta.threadId}`.trim() !== '' ? Number(meta.threadId) : null
+      if (existingThread != null && !Number.isNaN(existingThread)) {
+        setTopic(state, taskId, existingThread, topicName(taskId, parseTitle(content)))
+      }
+    }
+
+    const current = getTask(state, taskId)
+    const hadTopic = current && current.topicId != null
+    const title = parseTitle(content)
+    const topicId = await ensureTopic(taskId, title)
+    if (!hadTopic) out.created = true
+
+    const withMeta = upsertTgMetaMarker(content, { chatId, threadId: topicId })
+    if (withMeta !== content) await io.writeJournal(taskId, withMeta)
+
+    const linkText = formatDocLink(taskId, title, docMeta.docUrl)
+    const entry = getTask(state, taskId)
+    // A rebinding invalidates the old message: it points at a document that is no longer this
+    // task's. Treat it as absent rather than editing it in place, so the stale link cannot
+    // survive as a second, wrong pointer.
+    const boundElsewhere = entry && entry.docLinkDocId && entry.docLinkDocId !== docMeta.docId
+    const knownId = entry && Number.isInteger(entry.docLinkMessageId) && !boundElsewhere
+      ? entry.docLinkMessageId
+      : null
+
+    let liveId = null
+    if (knownId != null) {
+      liveId = (await verifyLinkMessage(taskId, knownId, linkText)) ? knownId : null
+      if (liveId == null) {
+        logger(`doc link for task #${taskId} is gone from topic ${topicId}; reposting`)
+      }
+    }
+
+    if (liveId == null) {
+      const sent = await withRateLimitRetry(`sendMessage (doc link) task #${taskId}`, () =>
+        client.sendMessage({
+          chatId,
+          text: linkText,
+          messageThreadId: topicId,
+          parseMode: 'HTML',
+          disablePreview: false,
+        }),
+      )
+      if (sent && Number.isInteger(sent.message_id)) {
+        liveId = sent.message_id
+        setDocLink(state, taskId, { docId: docMeta.docId, messageId: liveId })
+        out.linked = true
+        logger(`posted catch-up doc link for task #${taskId} to topic ${topicId}`)
+        // Pin it when we can. Best-effort: an unpinned link is a cosmetic loss, and the bot
+        // may lack the right in some groups, so a failure must never stop the run.
+        if (typeof client.pinChatMessage === 'function') {
+          try {
+            await client.pinChatMessage({ chatId, messageId: liveId })
+          } catch (err) {
+            logger(`could not pin doc link for task #${taskId} (${err.message})`)
+          }
+        }
+      }
+    } else if (boundElsewhere) {
+      setDocLink(state, taskId, { docId: docMeta.docId, messageId: liveId })
+    }
+
+    // THE EXCEPTIONS. One short line, and only for the two things a link genuinely cannot
+    // carry: the agent is blocked on the user, or the task reached a terminal state. Hashed, so
+    // an unchanged ask is said once rather than nightly — an exception that repeats every run is
+    // the behaviour this issue removes, wearing a smaller hat.
+    const ask = blockingAsk(turn)
+    const terminal = terminalStatus(turn)
+    if (ask || terminal) {
+      const noticeHash = hashNotice(ask, terminal)
+      if (!entry || entry.docLinkNoticeHash !== noticeHash) {
+        await withRateLimitRetry(`sendMessage (doc notice) task #${taskId}`, () =>
+          client.sendMessage({
+            chatId,
+            text: formatDocNotice(taskId, { ask, terminal, docUrl: docMeta.docUrl }),
+            messageThreadId: topicId,
+            parseMode: 'HTML',
+          }),
+        )
+        setDocLinkNoticeHash(state, taskId, noticeHash)
+        out.notified = true
+        logger(`posted short notice for task #${taskId} (${terminal || 'ask'})`)
+      }
+    } else if (entry && entry.docLinkNoticeHash) {
+      // The ask was resolved. Forget it, so the same ask returning later is announced again
+      // rather than silently swallowed as "already said".
+      setDocLinkNoticeHash(state, taskId, null)
+    }
+
+    // Record the turn as accounted for. If the doc binding is ever removed, the task falls back
+    // to turn posting WITHOUT dumping the backlog it was quiet for -- which is the conservative
+    // direction: a missed turn is visible in the doc, whereas a sudden flood of historical turns
+    // is exactly the complaint this issue answers.
+    setLastPosted(state, taskId, hash)
+    if (task && task.suppressedHash) setSuppressedHash(state, taskId, null)
+    if (task && task.userEngaged) setUserEngaged(state, taskId, false)
+    await checkpoint(`task #${taskId} (doc link)`)
+    return out
+  }
+
+  // Does `messageId` still exist in the chat? See syncDocLink's header for why this is an edit.
+  //
+  // Returns true when the message is present (whether Telegram accepted the edit or reported it
+  // unmodified), false ONLY when Telegram says the message is not there. Any OTHER error is
+  // treated as "present": a network blip or a permissions problem is not evidence of deletion,
+  // and guessing "gone" would post a duplicate link every time the API had a bad minute.
+  async function verifyLinkMessage(taskId, messageId, text) {
+    try {
+      await client.editMessageText({ chatId, messageId, text, parseMode: 'HTML', disablePreview: false })
+      return true
+    } catch (err) {
+      const msg = String((err && err.message) || '').toLowerCase()
+      if (msg.includes('not modified')) return true
+      if (
+        msg.includes('message to edit not found') ||
+        msg.includes("message can't be edited") ||
+        msg.includes('message_id_invalid')
+      ) {
+        return false
+      }
+      logger(`doc link probe for task #${taskId} was inconclusive (${err.message}); assuming it is still there`)
+      return true
+    }
   }
 
   async function syncDown() {

@@ -63,7 +63,13 @@ async function runOnce() {
   const { up, archived, down, digest } = await bridge.syncOnce()
   await saveState(config.stateDir, state)
   log(
-    `up: posted ${up.posted.length}, new topics ${up.created.length}; ` +
+    `up: posted ${up.posted.length}, new topics ${up.created.length}` +
+      // #424: reported separately from `posted`, because they are different events. A run that
+      // stays quiet on a doc-bound task is the DESIRED steady state, and folding that into
+      // "posted 0" would make success indistinguishable from the bridge not running.
+      (up.linked && up.linked.length ? `, doc links ${up.linked.length}` : '') +
+      (up.notified && up.notified.length ? `, notices ${up.notified.length}` : '') +
+      '; ' +
       `archive: closed ${archived.archived.length}, reopened ${archived.reopened.length}; ` +
       `down: folded ${down.folded.length} repl${down.folded.length === 1 ? 'y' : 'ies'}` +
       (down.unrouted && down.unrouted.length ? `, ${down.unrouted.length} unrouted` : '') +
