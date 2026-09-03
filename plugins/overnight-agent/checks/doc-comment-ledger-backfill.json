@@ -1,0 +1,48 @@
+{
+  "_comment": [
+    "Backfill ledger for GH #422, acceptance criterion 3: 'The existing 8 unmarked replies on the",
+    "task-228 doc are handled explicitly (either back-filled with markers or recorded as",
+    "unattributable) rather than silently classified.'",
+    "",
+    "WHY THEY ARE RECORDED HERE INSTEAD OF BACK-FILLED WITH MARKERS",
+    "The Google Docs/Drive comment surface exposed to this agent has create and reply calls but no",
+    "comment-UPDATE call, so a provenance marker cannot be added to a comment after the fact. The",
+    "marker is only available to comments posted from now on. These eight predate it, so the only",
+    "honest handling is to record them by exact id -- which is what a ledger is for, and it is the",
+    "signal that survives a body edit anyway.",
+    "",
+    "EVIDENCE THAT THESE EIGHT ARE AGENT-AUTHORED (not inferred from writing style)",
+    "Two independent records agree, and they agree on the SPLIT as well as the total:",
+    "  1. journal/task-228.md records two answering passes -- 'your three comments, answered in the",
+    "     doc' and 'your five new comments, all answered' -- i.e. 3 + 5 = 8 agent replies.",
+    "  2. The live comment dump clusters the eight reply timestamps into exactly two tight batches",
+    "     matching those passes: 08:16:56-08:17:11Z (3 replies) and 17:14:29-17:15:11Z (5 replies).",
+    "     Shiv's own eight comments are spread across 06:56-16:18Z, as human typing is.",
+    "The batch timing is corroboration, NOT the test -- it is recorded because it independently",
+    "reproduces the 3+5 split the journal states. Nothing here classifies by prose style; #463",
+    "measured that approach misfiring on 17 of 18 samples, which is why it is not used.",
+    "",
+    "The eight top-level comments are deliberately NOT listed. Absence from this ledger does not",
+    "assert they are human -- the reader treats an unlisted, unmarked comment as 'unknown', never as",
+    "'human'. See the header of lib-doc-comments.mjs."
+  ],
+  "version": 1,
+  "docs": {
+    "16F7lGso6NUAZjz2aeThKPkDvr1EVFfYrHWZre6XwaNU": {
+      "title": "November Dubai trip — catch-up (task 228)",
+      "task": "228",
+      "backfilled_at": "2026-09-03",
+      "source": "journal/task-228.md run logs, corroborated by reply-timestamp batching",
+      "comments": [
+        { "id": "AAACGb8YArw", "kind": "reply", "created": "2026-09-02T08:16:56.472Z", "pass": "3-comment pass" },
+        { "id": "AAACGb8YAr0", "kind": "reply", "created": "2026-09-02T08:17:03.455Z", "pass": "3-comment pass" },
+        { "id": "AAACGb8YAr4", "kind": "reply", "created": "2026-09-02T08:17:11.862Z", "pass": "3-comment pass" },
+        { "id": "AAACGdxf9QA", "kind": "reply", "created": "2026-09-02T17:14:29.174Z", "pass": "5-comment pass" },
+        { "id": "AAACGdxf9QE", "kind": "reply", "created": "2026-09-02T17:14:29.487Z", "pass": "5-comment pass" },
+        { "id": "AAACGdxf9QI", "kind": "reply", "created": "2026-09-02T17:14:52.067Z", "pass": "5-comment pass" },
+        { "id": "AAACGdxf9QM", "kind": "reply", "created": "2026-09-02T17:14:52.225Z", "pass": "5-comment pass" },
+        { "id": "AAACGdxf9QU", "kind": "reply", "created": "2026-09-02T17:15:11.113Z", "pass": "5-comment pass" }
+      ]
+    }
+  }
+}
