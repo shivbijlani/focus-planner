@@ -3298,8 +3298,18 @@ function Cmd-Doc {
   if ($DocId) {
     if ($doc -and "$($doc.doc_id)" -and "$($doc.doc_id)" -ne $DocId -and -not $Force) {
       # The refusal that makes "find-or-create must be exact" true rather than merely intended.
-      throw ("task $Id is already bound to doc $($doc.doc_id) (source: $($resolved.source)); refusing to rebind to $DocId. " +
-        'A doc id that 404s is an error to report, not a cue to create a second doc. Use -Force only if the first doc is genuinely gone.')
+      #
+      # The leading `doc_bind_conflict` token is load-bearing, not decoration. A caller (and the
+      # guard) must recognise this refusal from captured output, and with `pwsh -File` the CHILD
+      # formats the error at ITS OWN terminal width and writes the formatted text to stderr --
+      # so the parent cannot unwrap it, and a phrase in the middle of the sentence may be split
+      # across lines on one platform and not another. That is precisely what happened: matching
+      # `refusing to rebind` passed on Windows and failed on the Linux runner with byte-identical
+      # BEHAVIOUR. The token is first in the message and contains no spaces or hyphens, so no
+      # word-boundary wrap can break it.
+      throw ("doc_bind_conflict: task $Id is already bound to doc $($doc.doc_id) (source: $($resolved.source)); " +
+        "refusing to rebind to $DocId. A doc id that 404s is an error to report, not a cue to create " +
+        'a second doc. Use -Force only if the first doc is genuinely gone.')
     }
     if (-not $doc -or "$($doc.doc_id)" -ne $DocId) {
       $doc = New-DocObject $DocId $DocUrl (Now-Iso) @() @() ''

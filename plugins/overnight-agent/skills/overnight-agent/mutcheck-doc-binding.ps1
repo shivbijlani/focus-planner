@@ -149,9 +149,20 @@ function Invoke-Oa {
   # otherwise "pre-fix fails" is indistinguishable from "the harness is broken".
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  try { $out = & $script:PsExe @all 2>&1 | Out-String }
+  # -Width is not cosmetic for the JSON-bearing calls: the default wraps captured output at the
+  # host's render width, which would split a long JSON line and defeat ConvertFrom-Json.
+  #
+  # It does NOT, however, control how a THROWN error looks. With `pwsh -File` the child formats
+  # its own error at ITS terminal width and writes formatted text to stderr, so the parent only
+  # ever sees the already-wrapped result. That is why the refusal arms below assert the EXIT CODE
+  # and a space-free token, never a phrase -- see the note on arm D.
+  try { $out = & $script:PsExe @all 2>&1 | Out-String -Width 4096 }
   catch { $out = '' }
-  finally { $ErrorActionPreference = $prev; $global:LASTEXITCODE = 0 }
+  finally {
+    $script:LastOaExit = $LASTEXITCODE
+    $ErrorActionPreference = $prev
+    $global:LASTEXITCODE = 0
+  }
   return $out
 }
 
@@ -214,8 +225,19 @@ Check 'C stamp sits beside tg-meta' {
 }
 
 # --- D/E: the refusal, and its escape hatch -------------------------------------------
+#
+# ARM D IS ASSERTED ON BEHAVIOUR, NOT ON THE MESSAGE, and the reason is worth keeping. Its first
+# version matched the phrase `refusing to rebind` in captured output. That passed on Windows and
+# FAILED on the Linux CI runner with byte-identical behaviour, because `pwsh -File` makes the
+# CHILD render its own error at ITS terminal width -- so a phrase in the middle of a long
+# sentence wraps on a narrow host and the match misses. The parent cannot unwrap it.
+#
+# So D now asserts the two things that are actually true of a refusal and cannot be reformatted:
+# a NON-ZERO EXIT, and a token containing no spaces or hyphens for a wrap to break on. D- then
+# asserts the consequence -- the binding did not move -- which is the property that matters.
 $d = Invoke-Oa @('doc', '-Id', '701', '-DocId', 'DOC_BBB')
-Check 'D conflicting rebind THROWS' { $d -match 'refusing to rebind' }
+$dExit = $script:LastOaExit
+Check 'D conflicting rebind THROWS' { $dExit -ne 0 -and $d -match 'doc_bind_conflict' }
 Check 'D- and the binding is unchanged' { "$((Invoke-OaJson @('doc','-Id','701')).doc_id)" -eq 'DOC_AAA' }
 
 $e = Invoke-OaJson @('doc', '-Id', '701', '-DocId', 'DOC_BBB', '-Force')
@@ -269,7 +291,9 @@ Check 'K- and it reports it HEALED' { $k.healed -eq $true -and "$($k.source)" -e
 # the heal produced a read-only view that binding ignored, a lost state store would still allow a
 # second doc to be created straight over the top of the first.
 $k2 = Invoke-Oa @('doc', '-Id', '703', '-DocId', 'DOC_OTHER')
-Check 'K-- healed binding still refuses' { $k2 -match 'refusing to rebind' }
+$k2Exit = $script:LastOaExit
+Check 'K-- healed binding still refuses' { $k2Exit -ne 0 -and $k2 -match 'doc_bind_conflict' }
+Check 'K--- and the healed binding held' { "$((Invoke-OaJson @('doc','-Id','703')).doc_id)" -eq 'DOC_703' }
 
 # --- L: scan must not write --------------------------------------------------------------
 # `scan` runs first in every phase and is documented as a read. Healing there would make the
