@@ -13,6 +13,9 @@
         deploy-installed-plugin.ps1 report a blocked deploy as success
     G4  a FIRST refusal does NOT escalate - otherwise G3 is just "always escalate"
     G5  -WhatIf writes nothing and records no state
+    G11 classification matches the legacy per-path algorithm for every safety state
+    G12 history traversal stays O(1) as file count grows
+    G13 the shared wall-clock budget fails loud with exit 2
 
   Everything runs in a throwaway sandbox: a real git repo and a fake installed tree
   under $env:TEMP. The live tree is never touched.
@@ -77,6 +80,7 @@ function New-Sandbox {
     Set-Content -Path (Join-Path $chk 'livefix.ps1')   -Value '# v2 from main' -Encoding UTF8 -NoNewline
     Set-Content -Path (Join-Path $chk 'divergent.ps1') -Value '# main v2'      -Encoding UTF8 -NoNewline
     Set-Content -Path (Join-Path $chk 'newguard.ps1')  -Value '# merged but not deployed' -Encoding UTF8 -NoNewline
+    Set-Content -Path (Join-Path $chk 'current.ps1')   -Value '# already current' -Encoding UTF8 -NoNewline
     # main DELETES gone.ps1 - the case that crashed the deploy on 2026-08-29 (#253)
     & git rm --quiet (Join-Path $chk 'gone.ps1') 2>&1 | Out-Null
     & git add -A 2>&1 | Out-Null
@@ -89,6 +93,10 @@ function New-Sandbox {
   # purpose: on a ref it would show up as its own MISSING file and pollute the fixture.
   Copy-Item (Join-Path $PSScriptRoot 'deploy-installed-plugin.ps1') `
             (Join-Path $chk 'deploy-installed-plugin.ps1') -Force
+  Copy-Item (Join-Path $PSScriptRoot 'installed-skill-drift-sweep.mjs') `
+            (Join-Path $chk 'installed-skill-drift-sweep.mjs') -Force
+  Copy-Item (Join-Path $PSScriptRoot 'ref-history-index.mjs') `
+            (Join-Path $chk 'ref-history-index.mjs') -Force
 
   # installed carries the v1 (ancestor-of-main) livefix, the branch-only divergent file,
   # and lacks newguard.ps1
@@ -102,6 +110,7 @@ function New-Sandbox {
   # which is the whole reason both are here.
   Set-Content -Path (Join-Path $idst 'gone.ps1')      -Value '# doomed v1'          -Encoding UTF8 -NoNewline
   Set-Content -Path (Join-Path $idst 'stray.ps1')     -Value '# only ever on sidefix' -Encoding UTF8 -NoNewline
+  Set-Content -Path (Join-Path $idst 'current.ps1')   -Value '# already current'       -Encoding UTF8 -NoNewline
 
   [pscustomobject]@{
     Repo      = $repo
@@ -112,11 +121,15 @@ function New-Sandbox {
     NewGuard  = (Join-Path $idst 'newguard.ps1')
     Gone      = (Join-Path $idst 'gone.ps1')
     Stray     = (Join-Path $idst 'stray.ps1')
+    Current   = (Join-Path $idst 'current.ps1')
+    Classifier = (Join-Path $chk 'installed-skill-drift-sweep.mjs')
+    HistoryHelper = (Join-Path $chk 'ref-history-index.mjs')
   }
 }
 
 function Invoke-SUT {
-  param($Script, $Sandbox, [switch]$WhatIf, [switch]$NoJson, [switch]$WithOaHome)
+  param($Script, $Sandbox, [switch]$WhatIf, [switch]$NoJson, [switch]$WithOaHome,
+        [int]$BudgetSeconds = 55, [string]$HistoryHelper)
   # -NoOaHome by default: these assertions are about the plugin-deploy contract
   # (classification, refusal, streaks, hand-off). The OA-home sync is a separate
   # subsystem with its own mutcheck, and letting it run here would fold its exit code
@@ -125,7 +138,10 @@ function Invoke-SUT {
   # exited 2 for an unrelated reason. Isolate the unit; cover the seam separately.
   $a = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$Script,
          '-Repo',$Sandbox.Repo,'-Installed',$Sandbox.Installed,
-         '-StatePath',$Sandbox.State,'-SkipFetch')
+         '-StatePath',$Sandbox.State,'-SkipFetch',
+         '-BudgetSeconds',$BudgetSeconds,
+         '-ClassifierPath',$Sandbox.Classifier,
+         '-HistoryHelperPath',$(if ($HistoryHelper) { $HistoryHelper } else { $Sandbox.HistoryHelper }))
   if (-not $WithOaHome) { $a += '-NoOaHome' }
   if (-not $NoJson) { $a += '-Json' }
   if ($WhatIf) { $a += '-WhatIf' }
@@ -194,6 +210,34 @@ Assert ((Get-Content $sb.Stray -Raw) -eq '# only ever on sidefix') `
        'G10 the live-only file was not modified either'
 Assert ($r1.Json.refused -contains 'overnight-agent/checks/stray.ps1') `
        'G10 it is refused instead - deleting it would destroy the only copy'
+Assert ($r1.Json.deployed -notcontains 'overnight-agent/checks/current.ps1' -and
+       $r1.Json.refused -notcontains 'overnight-agent/checks/current.ps1') `
+       'G11 already-current remains untouched'
+
+# Compare the new combined history result with the exact legacy per-path algorithm.
+function Test-LegacyInHistory($Sandbox, [string]$RepoPath, [string]$InstalledFile) {
+  $want = (Get-Content $InstalledFile -Raw) -replace "`r`n", "`n"
+  $commits = & git -C $Sandbox.Repo rev-list origin/main -- $RepoPath
+  foreach ($sha in $commits) {
+    $tmp = [IO.Path]::GetTempFileName()
+    try {
+      & cmd /c "cd /d `"$($Sandbox.Repo)`" && git cat-file blob $sha`:$RepoPath > `"$tmp`"" 2>&1 | Out-Null
+      if ($LASTEXITCODE -eq 0) {
+       $got = (Get-Content $tmp -Raw) -replace "`r`n", "`n"
+       if ($got -eq $want) { return $true }
+      }
+    } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+  }
+  return $false
+}
+$legacyBehind = Test-LegacyInHistory $sb 'plugins/overnight-agent/checks/livefix.ps1' $sb.LiveFix
+$legacyBranch = Test-LegacyInHistory $sb 'plugins/overnight-agent/checks/divergent.ps1' $sb.Divergent
+Assert ($legacyBehind -and ($r1.Json.superseded -contains 'overnight-agent/checks/livefix.ps1')) `
+       'G11 old and new agree: behind/safe-to-write'
+Assert ((-not $legacyBranch) -and ($r1.Json.refused -contains 'overnight-agent/checks/divergent.ps1')) `
+       'G11 old and new agree: branch-only live fix'
+Assert (Test-Path $sb.Current) 'G11 old and new agree: already-current'
+Assert (Test-Path $sb.NewGuard) 'G11 old and new agree: missing/new'
 
 # second cycle: same refusal, now persistent
 $r2 = Invoke-SUT -Script $SUT -Sandbox $sb
@@ -213,6 +257,27 @@ $rw = Invoke-SUT -Script $SUT -Sandbox $sbw -WhatIf
 Assert (-not (Test-Path $sbw.NewGuard)) 'G5 -WhatIf wrote no files'
 Assert (-not (Test-Path $sbw.State))    'G5 -WhatIf recorded no state'
 Assert (Test-Path $sbw.Gone)            'G9 -WhatIf deleted no files'
+
+Section 'G12: one history walk regardless of file count'
+$sbp = New-Sandbox
+$trace = Join-Path $root 'history-git.trace'
+$env:OA_HISTORY_GIT_TRACE = $trace
+try { $rp = Invoke-SUT -Script $SUT -Sandbox $sbp }
+finally { Remove-Item Env:\OA_HISTORY_GIT_TRACE -ErrorAction SilentlyContinue }
+$historyCalls = if (Test-Path $trace) { @(Get-Content $trace) } else { @() }
+Assert (@($historyCalls | Where-Object { $_ -eq 'log' }).Count -eq 1) `
+       'P1 exactly one combined git log history walk'
+Assert (@($historyCalls | Where-Object { $_ -eq 'rev-list' }).Count -eq 0) `
+       'P2 zero per-file rev-list walks'
+
+Section 'G13: wall-clock budget fails loud'
+$slow = Join-Path $root 'slow-history.mjs'
+Set-Content $slow "setTimeout(() => process.stdout.write('{`"matches`":{},`"onTip`":{}}'), 3000);" -Encoding UTF8
+$sbt = New-Sandbox
+$rt = Invoke-SUT -Script $SUT -Sandbox $sbt -BudgetSeconds 1 -HistoryHelper $slow
+Assert ($rt.Exit -eq 2) 'B1 budget exhaustion exits 2'
+Assert ($rt.Json -and $rt.Json.reason -eq 'wall-clock-budget') `
+       'B2 budget exhaustion emits a machine-readable wrap-up signal'
 
 # ------------------------------------------------------------------------------------
 # Mutations — each must BREAK the test that claims to guard it
@@ -250,10 +315,9 @@ Test-Mutant -Name 'M2: -Force passed (refusal defeated, live fix reverted)' `
            'killed: the divergent live fix would be overwritten by main'
   }
 
-Test-Mutant -Name 'M7: supersede check always true (divergence treated as merely stale)' `
-  -Find '  return $false
-}' -Replace '  return $true
-}' -Check {
+Test-Mutant -Name 'M7: combined history result always true (divergence treated as stale)' `
+  -Find '$inHistory = ($history.matches.PSObject.Properties.Name -contains $repoPath) -and [bool]$history.matches.$repoPath' `
+  -Replace '$inHistory = $true' -Check {
     param($mut)
     $s = New-Sandbox
     Invoke-SUT -Script $mut -Sandbox $s | Out-Null
@@ -261,9 +325,9 @@ Test-Mutant -Name 'M7: supersede check always true (divergence treated as merely
            'killed: a branch-only live fix would be silently reverted as "behind"'
   }
 
-Test-Mutant -Name 'M8: supersede check always false (a merely-stale file can never deploy)' `
-  -Find 'if ((Get-NormHash ([IO.File]::ReadAllBytes($tmp))) -eq $want) { return $true }' `
-  -Replace 'if ($false) { return $true }' -Check {
+Test-Mutant -Name 'M8: combined history result always false (stale file never deploys)' `
+  -Find '$inHistory = ($history.matches.PSObject.Properties.Name -contains $repoPath) -and [bool]$history.matches.$repoPath' `
+  -Replace '$inHistory = $false' -Check {
     param($mut)
     $s = New-Sandbox
     $a = Invoke-SUT -Script $mut -Sandbox $s
@@ -324,14 +388,14 @@ Test-Mutant -Name 'M6: far-end verification trusts the deployer instead of the t
 # produce the same silence. Note it can only be observed on Windows PowerShell 5.1,
 # where native stderr becomes a terminating error; under pwsh 7 the mutant survives.
 # That is precisely why it went unnoticed: it was hand-tested in the agent's own shell.
-Test-Mutant -Name 'M11: bare rev-parse restored (a deleted path aborts the whole deploy)' `
-  -Find 'rev-parse --verify --quiet "${sha}:${RepoPath}"' `
-  -Replace 'rev-parse "${sha}:${RepoPath}"' -Check {
+Test-Mutant -Name 'M11: tip existence forced true (a deleted path is rewritten, not removed)' `
+  -Find '$onTip = ($history.onTip.PSObject.Properties.Name -contains $repoPath) -and [bool]$history.onTip.$repoPath' `
+  -Replace '$onTip = $true' -Check {
     param($mut)
     $s = New-Sandbox
     $b = Invoke-SUT -Script $mut -Sandbox $s
-    Assert ($b.Json -eq $null -or $b.Exit -ne 0) `
-           'killed: a ref that deleted a file would crash the deploy instead of handling it'
+    Assert (Test-Path $s.Gone) `
+           'killed: a ref-deleted historical file would not take the removal path'
   }
 
 Test-Mutant -Name 'M12: no delete path (a file removed on the ref is refused forever)' `
