@@ -541,7 +541,7 @@ stale-artefact class as a stale CI tick), deploys only files that are plainly be
   #151 sat unnoticed for five days.
 - A first refusal is information and does not escalate; the *same* refusal on the next cycle is a
   decision nobody is making, and that is what gets surfaced.
-- The step has a 55-second wall-clock budget. `DEPLOY NOT VERIFIED` and exit `2` mean the budget
+- The step has a 60-second wall-clock budget. `DEPLOY NOT VERIFIED` and exit `2` mean the budget
   expired; surface that line as an ask in the wrap-up because merged code may still be inactive.
 - Add `-WhatIf` to see what it would do without writing. A failed deploy must never abort the run.
 

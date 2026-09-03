@@ -72,7 +72,7 @@ param(
   [string]$RepoPrefix = 'plugins',
   [int]$EscalateAfterCycles = 2,
   [string]$StatePath = "$env:LOCALAPPDATA\overnight-agent\auto-deploy-state.json",
-  [int]$BudgetSeconds = 55,
+  [int]$BudgetSeconds = 60,
   [string]$ClassifierPath,
   [string]$HistoryHelperPath,
   [switch]$SkipFetch,
@@ -256,7 +256,7 @@ foreach ($rel in $refused) {
   }
 }
 
-$history = [pscustomobject]@{ matches=@{}; onTip=@{} }
+$history = [pscustomobject]@{ matches=@{}; onTip=@{}; tipContent=@{} }
 if ($historyRows.Count -gt 0) {
   $historyInput = [pscustomobject]@{ paths=$historyRows } | ConvertTo-Json -Depth 4 -Compress
   $env:OA_REPO = $Repo
@@ -320,17 +320,15 @@ if ($superseded.Count -gt 0) {
     if (-not (Test-Path $bkParent)) { New-Item -ItemType Directory -Force -Path $bkParent | Out-Null }
     if (Test-Path $dst) { Copy-Item $dst $bk -Force }
 
-    $tmp = [IO.Path]::GetTempFileName()
     try {
-      & cmd /c "cd /d `"$Repo`" && git cat-file blob $Ref`:$repoPath > `"$tmp`"" 2>&1 | Out-Null
-      $want = [int](& git -C $Repo cat-file -s "$Ref`:$repoPath")
-      if ((Get-Item $tmp).Length -ne $want) { throw "size mismatch for $repoPath" }
-      Copy-Item $tmp $dst -Force
+      $encoded = $history.tipContent.$repoPath
+      if (-not $encoded) { throw "batched history result omitted tip content for $repoPath" }
+      [IO.File]::WriteAllBytes($dst, [Convert]::FromBase64String($encoded))
       $written += $rel
     } catch {
       Write-Note ("  FAILED   {0}: {1}" -f $rel, $_.Exception.Message)
       $stillRefused += $rel
-    } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+    }
   }
 }
 

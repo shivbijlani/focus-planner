@@ -62,6 +62,8 @@ const queries = [];
 for (const path of requested.keys()) {
   for (const sha of commitsByPath.get(path) || []) queries.push(`${sha}:${path}`);
 }
+const tipQueries = [...requested.keys()].map((path) => `${ref}:${path}`);
+queries.push(...tipQueries);
 
 const oidByQuery = new Map();
 if (queries.length) {
@@ -76,6 +78,7 @@ if (queries.length) {
 }
 
 const hashByOid = new Map();
+const bodyByOid = new Map();
 const uniqueOids = [...new Set([...oidByQuery.values()].filter(Boolean))];
 if (uniqueOids.length) {
   const raw = git(['cat-file', '--batch'], {
@@ -92,13 +95,16 @@ if (uniqueOids.length) {
     const start = newline + 1;
     const end = start + size;
     if (end >= raw.length) throw new Error(`truncated cat-file batch body for ${match[1]}`);
-    hashByOid.set(match[1], normHash(raw.subarray(start, end)));
+    const body = raw.subarray(start, end);
+    hashByOid.set(match[1], normHash(body));
+    bodyByOid.set(match[1], body);
     offset = end + 1;
   }
 }
 
 const matches = {};
 const onTip = {};
+const tipContent = {};
 for (const [path, installedFile] of requested) {
   const wanted = normHash(readFileSync(installedFile));
   matches[path] = (commitsByPath.get(path) || []).some((sha) => {
@@ -107,15 +113,11 @@ for (const [path, installedFile] of requested) {
   });
 }
 
-if (requested.size) {
-  const tips = [...requested.keys()].map((path) => `${ref}:${path}`);
-  const checked = git(['cat-file', '--batch-check=%(objectname) %(objecttype)'], {
-    input: tips.join('\n') + '\n',
-    encoding: 'utf8',
-  });
-  checked.split(/\r?\n/).filter(Boolean).forEach((line, index) => {
-    onTip[tips[index].slice(ref.length + 1)] = /^[0-9a-f]{40,64} blob$/.test(line);
-  });
+for (const query of tipQueries) {
+  const path = query.slice(ref.length + 1);
+  const oid = oidByQuery.get(query);
+  onTip[path] = Boolean(oid);
+  if (oid) tipContent[path] = bodyByOid.get(oid).toString('base64');
 }
 
-process.stdout.write(`${JSON.stringify({ matches, onTip })}\n`);
+process.stdout.write(`${JSON.stringify({ matches, onTip, tipContent })}\n`);

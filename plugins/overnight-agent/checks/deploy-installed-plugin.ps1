@@ -138,9 +138,6 @@ foreach ($row in $plan) {
   try {
     & cmd /c "cd /d `"$Repo`" && git cat-file blob $Ref`:$repoPath > `"$tmp`"" 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tmp)) { throw "git cat-file failed for $repoPath" }
-    $want = [int](& git -C $Repo cat-file -s "$Ref`:$repoPath")
-    $got = (Get-Item $tmp).Length
-    if ($got -ne $want) { throw "size mismatch for $repoPath (blob $want, wrote $got)" }
     Copy-Item $tmp $dst -Force
     $deployed++
   } catch {

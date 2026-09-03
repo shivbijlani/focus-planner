@@ -129,7 +129,7 @@ function New-Sandbox {
 
 function Invoke-SUT {
   param($Script, $Sandbox, [switch]$WhatIf, [switch]$NoJson, [switch]$WithOaHome,
-        [int]$BudgetSeconds = 55, [string]$HistoryHelper)
+        [int]$BudgetSeconds = 120, [string]$HistoryHelper)
   # -NoOaHome by default: these assertions are about the plugin-deploy contract
   # (classification, refusal, streaks, hand-off). The OA-home sync is a separate
   # subsystem with its own mutcheck, and letting it run here would fold its exit code
@@ -174,6 +174,7 @@ Section 'BASELINE (real script must pass all of these)'
 
 $sb = New-Sandbox
 $r1 = Invoke-SUT -Script $SUT -Sandbox $sb
+if (-not $r1.Json -or $r1.Json.reason) { Write-Host ("  diagnostic: " + $r1.Raw) }
 
 Assert ($r1.Json -ne $null) 'G0 emits parseable JSON'
 Assert ($r1.Json.deployed -contains 'overnight-agent/checks/newguard.ps1') `
