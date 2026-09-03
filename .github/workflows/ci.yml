@@ -177,3 +177,29 @@ jobs:
       - name: Mutation check (board + journal merged, gaps reported)
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-board-linked.ps1
+
+  # installed-skill-drift-sweep is what stops the agent running code that exists on no merged
+  # ref (GH #398). Its mutation check has always existed but ran ONLY on the nightly laptop,
+  # against the copy in %LOCALAPPDATA% -- the same gap the three jobs above were created to
+  # close: a guard that only runs where the drift happens cannot stop the drift from merging.
+  #
+  # It also now carries the BUDGET arms. That matters more than usual here, because the cost
+  # regression #398 fixed (429 s per invocation, twice per deploy, in PHASE 0 of a */30 job)
+  # was invisible to every verdict assertion -- the sweep was perfectly correct and unusably
+  # slow at the same time. T_SPAWN_INVARIANT and T_NO_CROSS_PRODUCT are the only things that
+  # would catch it coming back, so they belong where merges are gated.
+  #
+  # Pure text work against synthetic git repos in a temp dir -- it never reads the real
+  # installed plugin -- so OA_SWEEP points it at the repo copy and it runs on the Linux runner.
+  installed-skill-drift:
+    name: Installed-skill drift sweep guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Mutation check (4 guards + spawn/query budget + blob-id parity)
+        env:
+          OA_SWEEP: ./plugins/overnight-agent/checks/installed-skill-drift-sweep.mjs
+        run: node ./plugins/overnight-agent/checks/mutcheck-installed-skill-drift.mjs
