@@ -126,7 +126,47 @@ already processed in this journal") lives in the **skill's own working dir**, wh
     leaves that task blind to the user's next message.
   - **`mark -Id <id> -Poll <cadence>` / `-PollDone` / `-PollClear`** → manage a **time-triggered poll**
     on a task (see "Polling" below). Cadence is `hourly | daily | weekly | <N>h | <N>d | <N>m`.
+  - **`doc -Id <id> …`** → the durable **task → catch-up-doc binding** (#423). See
+    "The catch-up doc binding" below.
   - **`seed [-Force]`** → one-time/migration bootstrap of state for every existing journal.
+
+**The catch-up doc binding (#423) — never find a task's doc by searching for its title.** A task's
+catch-up doc is addressed by a **stored document id**, exactly the way its Telegram topic is. Title
+search was the previous method and it fails three ways, all silent and all ending in a **second
+document with the user's comments stranded on the first**: a renamed doc becomes invisible, task ids
+are reusable after completion (#132), and "the search found nothing" is indistinguishable from "the
+search found the wrong doc" (the same shape as #346).
+
+```powershell
+oa-state.ps1 doc -Id <ID>                                  # resolve: is this task bound, and to what?
+oa-state.ps1 doc -Id <ID> -DocId <docId> [-DocUrl <url>]   # bind, once, at create time
+oa-state.ps1 doc -Id <ID> -Observe <file>                  # what is NEW since last time? (does not advance)
+oa-state.ps1 doc -Id <ID> -Ack                             # advance the watermark
+```
+
+- **Create only when `bound: false`.** That is the whole find-or-create rule. A `doc -Id <ID>` that
+  comes back bound means **amend that document** — never create a second one. If the stored id
+  **404s**, that is an **error to report in the wrap-up**, not a cue to create a replacement.
+- **Binding is exact and a conflict throws.** `-DocId` naming a different document than the one
+  already bound is **refused**, not silently applied. `-Force` exists for a genuinely deleted doc and
+  should be rare enough to mention when you use it.
+- **It self-heals, so losing `%LOCALAPPDATA%` cannot duplicate a doc.** The id is written into the
+  journal as `<!-- doc-meta docId=… -->` beside the `tg-meta` stamp, and the state store is rebuilt
+  from it. State is the source of truth; the stamp is what makes it durable. `doc` reports
+  `healed: true` when it rebound this way — worth a line in the wrap-up, because it means state was
+  lost.
+- **Reading comments is two-phase on purpose.** `-Observe` takes the Google Workspace MCP's
+  `list_document_comments` dump (or a JSON array of `{id, created}`) and reports which are new;
+  `-Ack` is what marks them processed. A crash between the two **re-reports** a comment rather than
+  dropping it — the same fail-open direction as `readingView()` in `lib-doc-comments.mjs`, because
+  losing one of the user's instructions is the #170 defect and answering one twice is not.
+- **`scan` surfaces it on the one worklist** as `doc_id`, `doc_bound` and **`doc_new_comments`** —
+  so doc instructions are found the same way journal replies are, rather than on a second list you
+  have to remember to consult. A non-zero `doc_new_comments` is the doc-surface analogue of
+  `reopened`. ⚠️ It reflects the **last `-Observe`**: `scan` is offline and never calls Google, which
+  is what keeps it from hanging the run.
+- ⛔ **Doc comments still cannot approve anything (#422).** Use them for direction and questions.
+  Approval stays in the journal or Telegram until an author-separated posting identity exists (#421).
 
 **Polling (time-triggered tasks the user never touches):** `scan` normally only flags journals the
 **user** has changed — so a purely time-based job (e.g. "each night, check the video-backup folder and

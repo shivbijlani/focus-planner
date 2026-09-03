@@ -380,7 +380,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract')]
+  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract', 'doc')]
   [string]$Command = 'scan',
 
   [string]$Id,
@@ -412,6 +412,22 @@ param(
   [string]$Poll,
   [switch]$PollDone,
   [switch]$PollClear,
+
+  # Durable task -> catch-up-doc binding (#423). See Cmd-Doc for the full rationale.
+  #
+  # `-DocId` BINDS. It is deliberately not idempotent-by-overwrite: binding a DIFFERENT id over
+  # an existing one throws, because silently rebinding is how the user's comments end up on an
+  # orphaned document. `-Force` is the explicit, auditable override.
+  [string]$DocId,
+  [string]$DocUrl,
+  # A file holding the comments as read from the live surface -- either the Google Workspace
+  # MCP's `list_document_comments` text dump, or a JSON array of `{ id, created }`. Reports
+  # which are NEW against the watermark, and deliberately does NOT advance it.
+  [string]$Observe,
+  # Advance the watermark through the last `-Observe`. The second phase, on purpose.
+  [switch]$Ack,
+  # Drop the binding entirely (rare; the doc was deleted or replaced deliberately).
+  [switch]$Unbind,
 
   # Blocked-task rechecks (time-triggered re-test of a blocker). See .RECHECKING in the header.
   [string]$Recheck,
@@ -2262,6 +2278,8 @@ function Cmd-Scan {
     }
     $pRank = 999999
     if ($prioRank.ContainsKey($facts.Id)) { $pRank = $prioRank[$facts.Id] }
+    # #423: resolve the doc binding for this row (state first, journal stamp as fallback).
+    $docFacts = Get-DocState $st $f.FullName
     [pscustomobject]@{
       id            = $facts.Id
       status        = $status
@@ -2306,6 +2324,19 @@ function Cmd-Scan {
       # deliberately do not). Since #310 this is NOT a release signal: it feeds the wedged-run
       # backstop, where a FRESH stamp holds the gate and only a STALE one can release it.
       last_turn_at   = if ($st -and $st.PSObject.Properties['last_turn_at']) { "$($st.last_turn_at)" } else { $null }
+      # #423: the durable task->doc binding, surfaced on the ONE worklist rather than a second
+      # one. Resolved state-first with the journal stamp as fallback, so a lost state store still
+      # reports the right doc instead of reading as "unbound" (which is the value that would make
+      # a caller create a duplicate). This is READ-ONLY here -- `scan` never heals, because a
+      # read command that writes is a read command nobody can run twice safely; `doc -Id <id>`
+      # performs the heal.
+      doc_id        = if ($docFacts.doc) { "$($docFacts.doc.doc_id)" } else { $null }
+      doc_bound     = [bool]($docFacts.doc -and "$($docFacts.doc.doc_id)")
+      doc_source    = $docFacts.source
+      # Comments reported new by the last `doc -Observe` and not yet `-Ack`ed. Non-zero means the
+      # user has said something on the doc that this run has not answered -- the doc-surface
+      # analogue of `reopened`.
+      doc_new_comments = if ($docFacts.doc) { @($docFacts.doc.pending_ids).Count } else { 0 }
       # The standing exhaustion declaration for this row, verbatim (#310), so a human can audit
       # what the run claimed to have examined and against which board it claimed it.
       exhaustion     = if ($st -and $st.PSObject.Properties['today_exhausted']) { $st.today_exhausted } else { $null }
@@ -3051,6 +3082,276 @@ function Add-TurnTerminator([string]$path) {
   return $true
 }
 
+# --- Durable task -> catch-up-doc binding (#423) ------------------------------------------
+#
+# WHY THIS EXISTS
+# ---------------
+# The one catch-up doc that exists today (task #228) is found by TITLE SEARCH -- matching the
+# string `(task 228)` in a `search_docs "catch-up"` result. That is not an identity, it is a
+# guess that happens to work while exactly one such doc exists. Three ways it breaks, all silent:
+#
+#   * a RENAMED doc becomes invisible, so the next wake CREATES A SECOND ONE and every comment
+#     the user has already written is stranded on the orphan;
+#   * task ids are reusable after completion (#132), so `(task 392)` is not unique over time;
+#   * a search returning 0 rows and a search returning the WRONG doc are indistinguishable to
+#     the caller -- the same "a missing capability looks like an empty result" shape as #346.
+#
+# THE MODEL IS BORROWED, NOT INVENTED
+# -----------------------------------
+# Both halves are already solved in this repo, and #286 asked for exactly this reuse rather than
+# "inventing a second one":
+#
+#   IDENTITY          the Telegram bridge stamps `<!-- tg-meta chatId=... threadId=... -->` into
+#                     the journal on first post. The doc gets the direct analogue, `doc-meta`.
+#   CHANGE DETECTION  `scan` already answers "has the user spoken since my last turn?" from a
+#                     stored hash plus a boundary stamp. A comment watermark is the same
+#                     question asked of a different surface.
+#
+# TWO STORES, AND WHY BOTH ARE LOAD-BEARING
+# -----------------------------------------
+# The state store is the source of truth per SKILL.md; the journal stamp is what makes the
+# binding SELF-HEALING. `%LOCALAPPDATA%` is deliberately not synced, so it can be lost, and
+# losing it must not manufacture a duplicate doc. State is read first, the stamp is the fallback
+# that rebinds it. Neither alone is sufficient: state alone is not durable, and the stamp alone
+# cannot carry a watermark without rewriting one of the user's files on every single run.
+#
+# BINDING IS EXACT, AND A CONFLICT IS AN ERROR RATHER THAN A CHOICE
+# ----------------------------------------------------------------
+# `-DocId` naming a DIFFERENT document than the one already bound THROWS. It does not rebind and
+# it does not create. That refusal is the machine half of the issue's "find-or-create must be
+# exact": the create path is reachable only when nothing is bound at all, so a doc id that 404s
+# surfaces as an error for a human to look at -- never as a cue to quietly make a second one.
+#
+# THE WATERMARK IS TWO-PHASE ON PURPOSE
+# -------------------------------------
+# `-Observe` reports what is new and does NOT advance; `-Ack` advances. A crash between the two
+# re-reports a comment, which is the fail-OPEN direction and matches readingView() in
+# lib-doc-comments.mjs: dropping one of Shiv's instructions is the #170 defect, and re-reading
+# one costs a duplicate answer. A single-phase "observing advances it" would lose an instruction
+# on any failure between reading the comment and acting on it -- invisibly, which is the whole
+# class of bug this file keeps having to close.
+#
+# WHAT THIS DOES NOT DO
+# ---------------------
+# It never talks to Google. Every command here is offline and deterministic, which is what lets
+# `scan` report the binding without a network call and without being able to hang the run. The
+# caller fetches comments through the MCP and hands the result to `-Observe`.
+
+# Accepts the stamp with or without the optional docUrl, and tolerates arbitrary inner spacing.
+$script:DocMetaRe = '<!--\s*doc-meta\s+docId=(?<id>[A-Za-z0-9_\-]+)(?:\s+docUrl=(?<url>\S+))?\s*-->'
+
+function Get-DocMetaFromJournal([string]$path) {
+  # Read the self-healing stamp out of the journal. Fence-masked (#320) so a `doc-meta` shown
+  # inside a fenced example in a turn is never mistaken for this task's real binding -- the same
+  # rule the turn-end reader already applies, for the same reason.
+  $content = Read-JournalText $path
+  if (-not $content) { return $null }
+  $m = [regex]::Match((Get-FenceMaskedText $content), $script:DocMetaRe)
+  if (-not $m.Success) { return $null }
+  [pscustomobject]@{
+    doc_id  = $m.Groups['id'].Value
+    doc_url = if ($m.Groups['url'].Success) { $m.Groups['url'].Value } else { '' }
+  }
+}
+
+function Add-DocMetaStamp([string]$path, [string]$docId, [string]$docUrl) {
+  # Write the stamp into the journal, ONCE, near the top beside `tg-meta`.
+  #
+  # This is a read-modify-write on one of the user's files, so it uses Read-JournalText for the
+  # reason documented there (a wrong decode does not merely misread, it re-encodes the misreading
+  # and writes it back). It inserts a single line and never reorders or rewrites anything else.
+  #
+  # Returns $true if the file was modified.
+  $content = Read-JournalText $path
+  if ($null -eq $content) { $content = '' }
+  $existing = Get-DocMetaFromJournal $path
+  if ($existing) { return $false }   # already stamped; a conflicting id was refused upstream
+
+  $stamp = if ($docUrl) { "<!-- doc-meta docId=$docId docUrl=$docUrl -->" } else { "<!-- doc-meta docId=$docId -->" }
+  $nl = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }
+  if ($content.Length -eq 0) { [IO.File]::WriteAllText($path, $stamp + $nl, (New-Object Text.UTF8Encoding($false))); return $true }
+
+  $lines = $content -split "`r?`n"
+  # Preferred anchor: immediately after an existing tg-meta line, so the two identity stamps sit
+  # together. Otherwise immediately after the H1 title. Otherwise the very top.
+  $at = -1
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($lines[$i] -match '<!--\s*tg-meta\b') { $at = $i + 1; break }
+  }
+  if ($at -lt 0) {
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+      if ($lines[$i] -match '^#\s') { $at = $i + 1; break }
+    }
+  }
+  if ($at -lt 0) { $at = 0 }
+
+  $out = @()
+  if ($at -gt 0) { $out += $lines[0..($at - 1)] }
+  $out += $stamp
+  if ($at -lt $lines.Count) { $out += $lines[$at..($lines.Count - 1)] }
+  [IO.File]::WriteAllText($path, ($out -join $nl), (New-Object Text.UTF8Encoding($false)))
+  return $true
+}
+
+function Read-ObservedComments([string]$path) {
+  # Accept EITHER shape the caller might plausibly have, because a reader that only handles the
+  # tidy one is a reader that gets bypassed:
+  #   * a JSON array of { id, created } (what a caller with structured data has), or
+  #   * the Google Workspace MCP's `list_document_comments` text dump (what the live surface
+  #     actually hands back today).
+  # Ids are matched the same way in both, so the two paths cannot disagree about identity.
+  if (-not (Test-Path $path)) { throw "no such observation file: $path" }
+  $text = [IO.File]::ReadAllText($path, (New-Object Text.UTF8Encoding($false)))
+  $rows = @()
+  $trimmed = $text.Trim()
+  if ($trimmed.StartsWith('[') -or $trimmed.StartsWith('{')) {
+    try {
+      $parsed = $trimmed | ConvertFrom-Json
+      foreach ($e in @($parsed)) {
+        $eid = if ($e.PSObject.Properties['id']) { "$($e.id)" } else { '' }
+        if (-not $eid) { continue }
+        $rows += [pscustomobject]@{
+          id      = $eid
+          created = if ($e.PSObject.Properties['created']) { "$($e.created)" } else { '' }
+        }
+      }
+      return , $rows
+    }
+    catch {
+      # Fall through to the dump parser: a JSON-looking file that does not parse is far more
+      # likely to be a dump that happens to start with a brace than a caller error worth throwing
+      # over, and the dump parser simply finds nothing if it really was malformed JSON.
+    }
+  }
+  $lines = $text -split "`r?`n"
+  $cur = $null
+  foreach ($ln in $lines) {
+    $m = [regex]::Match($ln, '^\s*(?:Comment|Reply)\s+ID:\s*(\S+)\s*$')
+    if ($m.Success) {
+      if ($cur) { $rows += $cur }
+      $cur = [pscustomobject]@{ id = $m.Groups[1].Value; created = '' }
+      continue
+    }
+    if ($cur) {
+      $c = [regex]::Match($ln, '^\s*Created:\s*(.+?)\s*$')
+      if ($c.Success -and -not $cur.created) { $cur.created = $c.Groups[1].Value }
+    }
+  }
+  if ($cur) { $rows += $cur }
+  return , $rows
+}
+
+function New-DocObject([string]$docId, [string]$docUrl, [string]$boundAt, $seen, $pending, [string]$observedAt) {
+  [pscustomobject]@{
+    doc_id      = $docId
+    doc_url     = $docUrl
+    bound_at    = $boundAt
+    # Every comment id the run has ACKNOWLEDGED. The watermark is a SET of ids, not a
+    # timestamp: Google returns replies threaded under their parent, so "newest created" is not
+    # a monotonic frontier -- a reply added today can carry an older position in the dump than a
+    # comment already processed. An id set cannot be fooled by ordering.
+    seen_ids    = @($seen)
+    # Reported by the last -Observe and not yet acked. This is what `scan` counts.
+    pending_ids = @($pending)
+    observed_at = $observedAt
+  }
+}
+
+function Get-DocState($st, [string]$path) {
+  # Resolve the binding, state first, journal stamp as the self-healing fallback.
+  # Returns @{ doc = <object|null>; source = 'state'|'journal'|'none'; healed = $bool }
+  $doc = if ($st -and $st.PSObject.Properties['doc']) { $st.doc } else { $null }
+  if ($doc -and "$($doc.doc_id)") { return @{ doc = $doc; source = 'state'; healed = $false } }
+  $stamp = Get-DocMetaFromJournal $path
+  if ($stamp) {
+    # State was lost or never written, but the journal remembers. Rebind rather than create --
+    # this is the exact case the issue's third acceptance criterion names.
+    return @{
+      doc    = (New-DocObject $stamp.doc_id $stamp.doc_url (Now-Iso) @() @() '')
+      source = 'journal'
+      healed = $true
+    }
+  }
+  return @{ doc = $null; source = 'none'; healed = $false }
+}
+
+function Cmd-Doc {
+  if (-not $Id) { throw 'doc requires -Id' }
+  $path = Join-Path $JournalDir "task-$Id.md"
+  if (-not (Test-Path $path)) { throw "no journal at $path" }
+
+  $st = Read-State $Id
+  if (-not $st) {
+    $st = [pscustomobject]@{ id = $Id; status = 'unknown'; version = 0; plan_id = ''; processed_file_hash = ''; has_agent_block = $false; seeded = $false; updated = $null }
+  }
+  $resolved = Get-DocState $st $path
+  $doc = $resolved.doc
+  $stamped = $false
+
+  if ($Unbind) {
+    Set-Member $st 'doc' $null
+    $st.updated = Now-Iso
+    Write-State $st
+    return ([pscustomobject]@{ id = $Id; bound = $false; unbound = $true } | ConvertTo-Json -Depth 5)
+  }
+
+  if ($DocId) {
+    if ($doc -and "$($doc.doc_id)" -and "$($doc.doc_id)" -ne $DocId -and -not $Force) {
+      # The refusal that makes "find-or-create must be exact" true rather than merely intended.
+      throw ("task $Id is already bound to doc $($doc.doc_id) (source: $($resolved.source)); refusing to rebind to $DocId. " +
+        'A doc id that 404s is an error to report, not a cue to create a second doc. Use -Force only if the first doc is genuinely gone.')
+    }
+    if (-not $doc -or "$($doc.doc_id)" -ne $DocId) {
+      $doc = New-DocObject $DocId $DocUrl (Now-Iso) @() @() ''
+    }
+    elseif ($DocUrl) {
+      $doc = New-DocObject $doc.doc_id $DocUrl "$($doc.bound_at)" @($doc.seen_ids) @($doc.pending_ids) "$($doc.observed_at)"
+    }
+    $stamped = Add-DocMetaStamp $path $doc.doc_id "$($doc.doc_url)"
+  }
+
+  if ($Observe) {
+    if (-not $doc) { throw "task $Id has no bound doc; bind one with -DocId first" }
+    $obs = Read-ObservedComments $Observe
+    $seen = @($doc.seen_ids)
+    $new = @()
+    foreach ($c in $obs) { if ($seen -notcontains $c.id) { $new += $c.id } }
+    $doc = New-DocObject $doc.doc_id "$($doc.doc_url)" "$($doc.bound_at)" $seen $new (Now-Iso)
+  }
+
+  if ($Ack) {
+    if (-not $doc) { throw "task $Id has no bound doc; nothing to acknowledge" }
+    # Union, never replace. An -Ack after an -Observe that returned fewer rows (a partial read,
+    # a filtered dump) must not un-see anything already processed.
+    $seen = @($doc.seen_ids) + @($doc.pending_ids) | Select-Object -Unique
+    $doc = New-DocObject $doc.doc_id "$($doc.doc_url)" "$($doc.bound_at)" $seen @() "$($doc.observed_at)"
+  }
+
+  if ($doc -and ($DocId -or $Observe -or $Ack -or $resolved.healed)) {
+    Set-Member $st 'doc' $doc
+    $st.updated = Now-Iso
+    Write-State $st
+    if ($resolved.healed -and -not $stamped) { $stamped = $false }
+  }
+
+  [pscustomobject]@{
+    id             = $Id
+    bound          = [bool]($doc -and "$($doc.doc_id)")
+    doc_id         = if ($doc) { "$($doc.doc_id)" } else { $null }
+    doc_url        = if ($doc -and "$($doc.doc_url)") { "$($doc.doc_url)" } else { $null }
+    source         = $resolved.source
+    # True when state had lost the binding and the journal stamp put it back. Reported rather
+    # than silent, because "we rebound from the journal" and "we were already bound" are
+    # different facts and a run that cannot tell them apart cannot notice state loss.
+    healed         = [bool]$resolved.healed
+    journal_stamped = [bool]$stamped
+    new_comments   = if ($doc) { @($doc.pending_ids).Count } else { 0 }
+    new_comment_ids = if ($doc) { @($doc.pending_ids) } else { @() }
+    seen_comments  = if ($doc) { @($doc.seen_ids).Count } else { 0 }
+    observed_at    = if ($doc -and "$($doc.observed_at)") { "$($doc.observed_at)" } else { $null }
+  } | ConvertTo-Json -Depth 5
+}
+
 function Cmd-Resnapshot {
   # One-time migration: re-record processed_file_hash for tasks that have NOTHING pending.
   #
@@ -3266,4 +3567,5 @@ switch ($Command) {
   'consent' { Cmd-Consent }
   'gate' { Cmd-Gate }
   'extract' { Cmd-Extract }
+  'doc' { Cmd-Doc }
 }
