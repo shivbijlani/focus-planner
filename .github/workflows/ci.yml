@@ -281,6 +281,35 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-pointer-turn.ps1
 
+  # The doc comment channel is actually READ (GH #421). #422/#423/#424/#425 each shipped a
+  # primitive for the catch-up doc and a guard for that primitive. None of them asserts a run
+  # ever CALLS one -- and measured on the live state store the day after the binding shipped,
+  # the only doc-bound task had `doc.observed_at ""`. `-Observe` had never run once, so a
+  # comment on the doc Shiv was told is "the primary communication mechanism" reached nothing,
+  # and `scan` reported 0 new comments whether the channel was empty or unreadable. Identical
+  # bytes for both, which is #346's defect in a third surface.
+  #
+  # It runs here rather than only on the nightly laptop for the reason #398's guard was moved
+  # here: a guard that only runs on the one machine where the drift happens cannot stop the
+  # drift from merging -- and this one's whole subject is a step that gets silently skipped.
+  #
+  # Pure text work against a synthetic planner folder and state dir in a temp dir. OA_SWEEP
+  # points it at the repo copy and OA_STATE_DIR is passed into every child, so it never reads
+  # the real planner folder and never touches LOCALAPPDATA -- which is what makes it run
+  # unmodified on the Linux runner (#425's job went red on exactly that assumption).
+  catchup-doc-channel:
+    name: Catch-up doc comment channel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mutation check (unread channel detected, healthy loop stays quiet)
+        env:
+          OA_SWEEP: ./plugins/overnight-agent/checks/catchup-doc-sweep.mjs
+        run: node ./plugins/overnight-agent/checks/mutcheck-catchup-doc.mjs
+
   auto-deploy:
     name: Auto-deploy safety and performance
     runs-on: windows-latest

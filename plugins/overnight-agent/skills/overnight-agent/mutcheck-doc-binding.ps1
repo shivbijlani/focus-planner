@@ -130,13 +130,13 @@ $board = Join-Path $root 'planner.md'
 $store = Join-Path $root 'snooze.json'
 $utf8 = New-Object Text.UTF8Encoding($false)
 
-foreach ($id in 701, 702, 703, 704, 705, 706) {
+foreach ($id in 701, 702, 703, 704, 705, 706, 708) {
   [IO.File]::WriteAllText((Join-Path $jdir "task-$id.md"), $Journal.Replace('{ID}', "$id"), $utf8)
 }
 [IO.File]::WriteAllText((Join-Path $jdir 'task-707.md'), $FencedJournal.Replace('{ID}', '707'), $utf8)
 
 $boardText = "## Today`n`n| ID | Task |`n|---|---|`n"
-foreach ($id in 701, 702, 703, 704, 705, 706, 707) { $boardText += "| $id | synthetic |`n" }
+foreach ($id in 701, 702, 703, 704, 705, 706, 707, 708) { $boardText += "| $id | synthetic |`n" }
 [IO.File]::WriteAllText($board, $boardText, $utf8)
 [IO.File]::WriteAllText($store, '{}', $utf8)
 
@@ -278,6 +278,37 @@ $dumpNarrow = New-Dump @('C3')
 [void](Invoke-Oa @('doc', '-Id', '702', '-Ack'))
 $n = Invoke-OaJson @('doc', '-Id', '702', '-Observe', $dump123)
 Check 'N ack unions, never replaces' { $n.new_comments -eq 0 -and $n.seen_comments -eq 3 }
+
+# --- P: an ack with NOTHING pending must not invent a phantom id ------------------------
+# Found 2026-09-03 (GH #421), the first time the read loop was ever actually run: on a doc with
+# no comments, `-Ack` wrote `seen_ids [null]` and the command then reported `seen_comments 1`.
+#
+# The mechanism is a PowerShell trap worth naming, because nothing about the source looks wrong:
+# `@() + @() | Select-Object -Unique` emits NOTHING, so the receiving variable is $null, and
+# `@($null)` is an array containing one null. An empty set silently became a set of size one.
+#
+# It matches no real comment, so it cannot suppress one -- but `seen_comments` is the number a
+# human reads to check whether the agent has processed their comments, and "1 seen" on a document
+# nobody has ever commented on is a false answer on the one surface #423 added for auditing this.
+# On the channel Shiv was told is primary, a quietly wrong count is the whole failure mode.
+#
+# Asserted on the COUNT and on the stored array, because a filter applied only at the reporting
+# edge would leave the phantom in state and pass a count-only check.
+[void](Invoke-Oa @('doc', '-Id', '708', '-DocId', 'DOC_708'))
+$emptyDump = Join-Path $root 'dump-empty.txt'
+Set-Content -LiteralPath $emptyDump -Value 'No comments found in document DOC_708' -Encoding UTF8
+[void](Invoke-OaJson @('doc', '-Id', '708', '-Observe', $emptyDump))
+$p1 = Invoke-OaJson @('doc', '-Id', '708', '-Ack')
+Check 'P clean ack sees nothing' { $p1.seen_comments -eq 0 -and $p1.new_comments -eq 0 }
+Check 'P- and stores no phantom id' {
+  $raw = Get-Content (Join-Path $sdir 'task-708.json') -Raw | ConvertFrom-Json
+  @($raw.doc.seen_ids).Count -eq 0 -and @($raw.doc.pending_ids).Count -eq 0
+}
+# And the phantom must not have poisoned the watermark: a real comment arriving afterwards is
+# still new. (If a null had been unioned in, this would still pass -- which is exactly why P- above
+# asserts the stored array too, rather than trusting this one alone.)
+$p2 = Invoke-OaJson @('doc', '-Id', '708', '-Observe', (New-Dump @('C9')))
+Check 'P-- a later real comment is still new' { $p2.new_comments -eq 1 -and "$(@($p2.new_comment_ids) -join ',')" -eq 'C9' }
 
 # --- K: the acceptance criterion that state alone cannot satisfy ------------------------
 [void](Invoke-Oa @('doc', '-Id', '703', '-DocId', 'DOC_703'))

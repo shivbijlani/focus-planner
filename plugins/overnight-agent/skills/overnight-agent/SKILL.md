@@ -144,9 +144,9 @@ oa-state.ps1 doc -Id <ID> -Observe <file>                  # what is NEW since l
 oa-state.ps1 doc -Id <ID> -Ack                             # advance the watermark
 ```
 
-- **Create only when `bound: false`.** That is the whole find-or-create rule. A `doc -Id <ID>` that
-  comes back bound means **amend that document** — never create a second one. If the stored id
-  **404s**, that is an **error to report in the wrap-up**, not a cue to create a replacement.
+- **Create only when `bound: false`, and never search by title.** The find-or-create rule, the 404
+  rule and the two-phase `-Observe`/`-Ack` sequence are operative in **PHASE 0.7**, which is the
+  phase that runs them; they are not restated here.
 - **Binding is exact and a conflict throws.** `-DocId` naming a different document than the one
   already bound is **refused**, not silently applied. `-Force` exists for a genuinely deleted doc and
   should be rare enough to mention when you use it.
@@ -155,11 +155,11 @@ oa-state.ps1 doc -Id <ID> -Ack                             # advance the waterma
   from it. State is the source of truth; the stamp is what makes it durable. `doc` reports
   `healed: true` when it rebound this way — worth a line in the wrap-up, because it means state was
   lost.
-- **Reading comments is two-phase on purpose.** `-Observe` takes the Google Workspace MCP's
-  `list_document_comments` dump (or a JSON array of `{id, created}`) and reports which are new;
-  `-Ack` is what marks them processed. A crash between the two **re-reports** a comment rather than
-  dropping it — the same fail-open direction as `readingView()` in `lib-doc-comments.mjs`, because
-  losing one of the user's instructions is the #170 defect and answering one twice is not.
+- **Reading comments is two-phase on purpose**, and `-Observe` accepts the MCP's
+  `list_document_comments` dump or a JSON array of `{id, created}`. A crash between the two
+  **re-reports** a comment rather than dropping it — the same fail-open direction as `readingView()`
+  in `lib-doc-comments.mjs`, because losing one of the user's instructions is the #170 defect and
+  answering one twice is not.
 - **`scan` surfaces it on the one worklist** as `doc_id`, `doc_bound` and **`doc_new_comments`** —
   so doc instructions are found the same way journal replies are, rather than on a second list you
   have to remember to consult. A non-zero `doc_new_comments` is the doc-surface analogue of
@@ -851,6 +851,36 @@ that already exist upstream, and will redo or contradict them.
    can see you looked upstream.
 
 If a linked journal is missing or empty, note it and proceed with what you have — don't block on it.
+
+### PHASE 0.7 — Read the catch-up doc comments (doc-bound tasks only)
+
+Shiv, #468: *"The document comments will be the primary communication mechanism. Each turn, you
+will read the comments and amend the document."* **Run this before `scan`** — like the Telegram
+`sync-down`, these are the user speaking, and `mark` snapshots each journal as you leave it. Skip a
+task with no doc binding.
+
+For each row `scan` reported `doc_bound: true`, and any task you are about to work:
+
+1. `oa-state.ps1 doc -Id <ID>` → resolve the binding. **Never search by title.** Create only when
+   `bound: false`; a stored id that **404s is an error to report**, not a cue to create a second doc
+   (#423).
+2. Fetch comments with the Google Workspace MCP's `list_document_comments` (account:
+   `user-settings.md` → "Google account (Tasks)"); save the dump to a file.
+3. `oa-state.ps1 doc -Id <ID> -Observe <file>` — reports what is new, deliberately without advancing.
+4. Read them **fail-OPEN** via `readingView()` in `lib-doc-comments.mjs`: anything not provably your
+   own reply is an instruction. ⛔ **A comment approves nothing** — you post through Shiv's Google
+   identity, so the API stamps both halves of the conversation as him. ⛔-list actions still need
+   `oa-state.ps1 consent` (#422).
+5. **Amend the doc in place**, and reply to each comment you acted on with the body stamped by
+   `AGENT_MARKER`, so next run cannot read your own reply back as his instruction.
+6. `oa-state.ps1 doc -Id <ID> -Ack` — **last**. Two-phase on purpose: a crash between 3 and 6
+   re-reports a comment rather than dropping it (#170's direction).
+
+⚠️ **Skipping this is success-shaped, so it is measured, not trusted.** `doc_new_comments` comes
+from the last `-Observe` and never calls Google, so a run that never observes reports `0` —
+byte-identical to "he wrote nothing" (#346's defect, third surface). **`catchup-doc-sweep`** reports
+`NEVER_READ`, `SPOKE_WITHOUT_READING` (you answered without listening) and `UNACKED` (seen and
+dropped); it is quiet on a healthy loop. **Report a non-zero count in the wrap-up.**
 
 ### PHASE 1 — Execute approved plans
 

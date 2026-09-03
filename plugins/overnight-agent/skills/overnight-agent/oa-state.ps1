@@ -3250,9 +3250,19 @@ function New-DocObject([string]$docId, [string]$docUrl, [string]$boundAt, $seen,
     # timestamp: Google returns replies threaded under their parent, so "newest created" is not
     # a monotonic frontier -- a reply added today can carry an older position in the dump than a
     # comment already processed. An id set cannot be fooled by ordering.
-    seen_ids    = @($seen)
+    #
+    # Empties are filtered HERE, at the one constructor every path goes through, rather than at
+    # each call site. `@() + @() | Select-Object -Unique` emits NOTHING, so the caller's variable
+    # is $null, and `@($null)` is an array of one null -- a phantom id. Measured 2026-09-03 the
+    # first time the read loop was ever run (GH #421): an -Ack with nothing pending wrote
+    # `seen_ids [null]`, so `seen_comments` reported 1 on a doc with zero comments. Harmless to
+    # matching, because no real id equals null, but it is a false number on the exact surface
+    # #423 added for auditing whether the agent has processed a comment -- and "1 seen" on a doc
+    # you have never commented on is precisely the kind of quiet wrong answer this channel
+    # cannot afford.
+    seen_ids    = @(@($seen) | Where-Object { "$_" -ne '' })
     # Reported by the last -Observe and not yet acked. This is what `scan` counts.
-    pending_ids = @($pending)
+    pending_ids = @(@($pending) | Where-Object { "$_" -ne '' })
     observed_at = $observedAt
   }
 }
