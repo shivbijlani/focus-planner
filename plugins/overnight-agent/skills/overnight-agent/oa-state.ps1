@@ -701,11 +701,33 @@ function Resolve-GateSettings {
 # absent, unreadable or malformed value yields 1 EXACTLY -- never "unlimited", never the last
 # value seen. A typo can therefore narrow a run; it can never widen one. A value below 1 is
 # clamped to 1, because "hold zero items in flight" is not a pacing setting, it is a stopped run.
+#
+# THAT LAST GUARANTEE USED TO BE FALSE, and the way it failed is worth stating because it reads
+# as harmless. The parse was a LEADING-integer match, so that `2 tasks` would work -- but this
+# file's cells are prose, and prose in this settings file characteristically opens with a DATE.
+# Measured against the live user-settings.md conventions:
+#
+#     | Overnight Agent concurrency | 2026-09-02: set to 1 by Shiv |   ->  concurrency 2026
+#     | Overnight Agent concurrency | 3 - raised for the backlog   |   ->  concurrency 3
+#
+# A note about setting it to 1 therefore set it to 2026: unbounded in every practical sense, on
+# the one control whose entire job is to stop a run over-committing, silently, and in the exact
+# direction the paragraph above promises is impossible. So the parse is now ANCHORED: the cell
+# must be a bare whole number and nothing else.
+#
+# Anchoring costs the `2 tasks` leniency, and that trade is only safe because of the second half
+# of this change: a cell that does not parse is now REPORTED (`concurrency_source` =
+# `settings-malformed`) instead of silently becoming 1. Narrowing a run that the user can SEE was
+# narrowed is recoverable; widening one nobody can see is not.
 $script:PacingDefaults = @{ Concurrency = 1 }
 
 function Resolve-PacingSettings {
   $explicit = $script:ExplicitArgs.ContainsKey('Concurrency')
   $value = $script:PacingDefaults.Concurrency
+  # Where the value in force came from, so a cell that did not parse is visible rather than
+  # silently indistinguishable from an unset one. `settings-malformed` is the whole point: it is
+  # the difference between "1 because you asked for 1" and "1 because your row is a sentence".
+  $source = 'default'
 
   if (-not $explicit) {
     $path = Get-UserSettingsPath
@@ -714,16 +736,28 @@ function Resolve-PacingSettings {
       try { $text = Read-JournalText $path } catch { $text = $null }
       if ($text) {
         $v = Get-SettingRow $text 'Overnight Agent concurrency'
-        # Leading-integer only. `2`, `2 tasks` parse; `two`, `many`, `` and `-3` do not and fall
-        # through to 1. Matching loosely here would be matching a value nobody verified.
-        if ($v -and $v -match '^\s*(\d+)') { $value = [int]$Matches[1] }
+        # ANCHORED: the cell must be a bare whole number. `2` parses; `two`, `many`, `2 tasks`,
+        # `-3` and `2026-09-02: set to 1 by Shiv` do not, and all fall through to 1. See the
+        # block comment above for why the leading-integer form had to go -- it read a dated note
+        # as 2026, which is a WIDENING, and no pacing control may ever widen by accident.
+        if ($null -ne $v -and $v -ne '') {
+          $source = 'settings-malformed'
+          if ($v -match '^\s*(\d+)\s*$') {
+            $n = [int]$Matches[1]
+            if ($n -ge 1) { $value = $n; $source = 'settings' }
+          }
+        }
       }
     }
   }
-  else { $value = $Concurrency }
+  else { $value = $Concurrency; $source = 'argument' }
 
-  if ($value -lt 1) { $value = $script:PacingDefaults.Concurrency }
+  if ($value -lt 1) {
+    $value = $script:PacingDefaults.Concurrency
+    if ($source -eq 'argument') { $source = 'default' }
+  }
   $script:ConcurrencyLimit = $value
+  $script:ConcurrencySource = $source
 }
 
 function Ensure-StateDir {
@@ -3653,6 +3687,10 @@ function Cmd-Session {
     $live = Get-LiveSessionCount
     return ([pscustomobject]@{
         concurrency = [int]$script:ConcurrencyLimit
+        # `settings-malformed` here means the user WROTE a value and it did not parse, so the run
+        # is at 1 by accident rather than by choice. Reporting it is what makes the anchored parse
+        # safe to narrow on: a silent fallback is indistinguishable from agreement.
+        concurrency_source = "$script:ConcurrencySource"
         in_flight   = [int]$live
         at_capacity = [bool]($live -ge $script:ConcurrencyLimit)
         # How many MORE items the priority wave may start. Never negative: a run that is already
@@ -3799,6 +3837,7 @@ function Cmd-Session {
     }
     else { $null }
     concurrency    = [int]$script:ConcurrencyLimit
+    concurrency_source = "$script:ConcurrencySource"
     in_flight      = [int]$live
     at_capacity    = [bool]($live -ge $script:ConcurrencyLimit)
   } | ConvertTo-Json -Depth 5

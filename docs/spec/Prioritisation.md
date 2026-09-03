@@ -580,6 +580,18 @@ default of 1; an absent, unreadable or malformed value yields 1 exactly, so a ty
 concurrency by accident. This is the safe direction for a pacing control — the failure of the
 setting narrows a run, never widens it.
 
+That guarantee rests on two properties which are only safe together. The parse is **anchored**: the
+cell must be a bare whole number and nothing else. A leading-integer parse looks friendlier — it
+lets `2 tasks` work — but the cells in this file are prose, and prose here characteristically opens
+with a date, so `2026-09-02: set to 1 by Shiv` resolved to **2026**. A note recording that the value
+was set to 1 therefore set it to effectively unbounded, silently, on the one control whose purpose
+is to stop a run over-committing. Anchoring costs the leniency, which is acceptable only because of
+the second property: a cell that does not parse is **reported**, as
+`concurrency_source: settings-malformed`, rather than quietly becoming 1. Narrowing a run the user
+can see was narrowed is recoverable; widening one nobody can see is not. Guarded by
+`plugins/overnight-agent/skills/overnight-agent/mutcheck-pacing-concurrency.ps1`, whose arms pin the
+parse boundary, the argument-over-file precedence, and the visibility of every fallback.
+
 *Set by Shiv, 2026-09-02.*
 
 ### 4.1 Collect trumps priority — the one sanctioned exception to the default of 1

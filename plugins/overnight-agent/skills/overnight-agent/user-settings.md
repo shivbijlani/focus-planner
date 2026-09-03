@@ -50,10 +50,16 @@ a value here takes effect on the next run with nothing else to change.
 | --- | --- |
 | Today gate backstop | `6h` — if **nothing** has been written to a Today task for this long, the agent stops waiting on it and works the backlog. Guards against a run that jams. Accepts `6`, `6h`, or `off` to disable. |
 | Today gate strict | `off` — set to `on` to make a workable Today task block the backlog **always**, with no release at all. The one-switch rollback if the agent starts leaving Today too readily. |
+| Overnight Agent concurrency | `1` — how many items the agent may have **in flight** at once. At `1` it works one thing at a time; giving a task its own session is *isolation*, not permission to run several at once. Raising it does not make a run faster, it makes each result harder to check. **A bare whole number and nothing else** — put any explanation outside the cell, because a value like `2026-09-02: set to 1` does not parse and the agent falls back to `1`. |
 
 **Raising the backstop makes the agent wait longer before giving up on a stuck Today task; lowering
 it makes it give up sooner.** Writing to the task *resets* the timer, so the agent can only ever
 delay this release, never trigger it.
+
+**Concurrency fails narrow on purpose.** A missing row, an unreadable file or a value the agent
+can't parse all give you `1` — never more. The agent starting what it can't finish before the next
+run is worse than it stopping early, so a broken setting can only make it take on *less*. If it
+falls back, it says so in the run summary rather than quietly pretending you asked for `1`.
 
 > The third tunable — how long an "I'm out of work here" declaration stays valid — is deliberately
 > **not** exposed. It currently controls two different things at once, and raising it would let one
