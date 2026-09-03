@@ -659,6 +659,19 @@ $Suite = @(
 # past tolerance still fails, and growth is the live signal. 17 assertions, 6 mutations,
 # all killed (mutcheck-read-path-budget.mjs, auto-globbed by -IncludeMutchecks).
 @{ n = 'read-path-budget-sweep'; bridge = $false }
+# GH #421, added 2026-09-03. Shiv's instruction on #468 was that the catch-up doc's
+# COMMENTS become "the primary communication mechanism". Every primitive for that shipped
+# -- #422 attribution, #423 the durable binding plus a two-phase watermark, #424 the quiet
+# Telegram topic, #425 the pointer turn -- and each got a guard for ITSELF. None of them
+# asserts that a RUN ever calls one. Measured on the live state store the day after the
+# binding shipped, the only doc-bound task read `doc.observed_at ""`: `-Observe` had never
+# been called even once, so a comment on that doc reached nothing and `scan` reported
+# doc_new_comments 0 either way -- unreachable and empty are the same bytes. That is #346's
+# defect (a mandated check that silently does not run, whose skip is success-shaped) in a
+# third surface. This sweep is what makes the skip visible; it stays quiet on the healthy
+# read-then-write loop, so it can actually reach zero. 29 assertions, 5 mutations, each
+# killed by exactly one arm (mutcheck-catchup-doc.mjs, auto-globbed by -IncludeMutchecks).
+@{ n = 'catchup-doc-sweep'; bridge = $false }
 )
 
 if ($IncludeMutchecks) {
