@@ -48,6 +48,20 @@
                                      Losing %LOCALAPPDATA% is normally followed by `seed`, which
                                      rebuilds a doc-less state file for every journal -- so that,
                                      not "no file", is the shape the binding must survive)
+    P  a clean ack sees nothing     (kills: an -Ack with no prior -Observe inventing a watermark
+                                     entry, which would swallow the next real comment)
+    Q  stamped journal reads TRUE   (kills: #436 -- reporting whether THIS call wrote the stamp
+                                     instead of whether the journal carries one. False on every
+                                     plain resolve, AND on a re-bind, because Add-DocMetaStamp
+                                     returns $false when the journal is already stamped)
+    R  unstamped journal reads FALSE (kills: a field hard-wired to $true. Q's partner: the pre-fix
+                                     bug passes R alone and a always-true mutant passes Q alone,
+                                     so only the two together assert the field DISCRIMINATES)
+    S  wrong-doc stamp reads FALSE  (kills: asserting "a stamp exists" rather than "this doc's
+                                     stamp exists". What a -Force rebind leaves behind: bound and
+                                     stamped, but a state loss heals to the ABANDONED doc. The id
+                                     is named so this is distinguishable from R, which it is not
+                                     as a bare boolean, and the two need different repairs)
 
   D and K/O are the pair that matters. Every other arm asserts the happy path; those assert the
   two ways a binding stops being a binding -- one by being silently replaced, one by being
@@ -130,13 +144,19 @@ $board = Join-Path $root 'planner.md'
 $store = Join-Path $root 'snooze.json'
 $utf8 = New-Object Text.UTF8Encoding($false)
 
-foreach ($id in 701, 702, 703, 704, 705, 706, 708) {
+foreach ($id in 701, 702, 703, 704, 705, 706, 708, 709) {
   [IO.File]::WriteAllText((Join-Path $jdir "task-$id.md"), $Journal.Replace('{ID}', "$id"), $utf8)
 }
 [IO.File]::WriteAllText((Join-Path $jdir 'task-707.md'), $FencedJournal.Replace('{ID}', '707'), $utf8)
+# 710 arrives ALREADY stamped for a doc it will NOT be bound to. That is exactly what a -Force
+# rebind leaves behind: state moves to the new doc, the journal keeps naming the old one (arm S).
+$stamped710 = $Journal.Replace('{ID}', '710').Replace(
+  '<!-- tg-meta chatId=-100123 threadId=7 -->',
+  "<!-- tg-meta chatId=-100123 threadId=7 -->`n<!-- doc-meta docId=DOC_WRONG -->")
+[IO.File]::WriteAllText((Join-Path $jdir 'task-710.md'), $stamped710, $utf8)
 
 $boardText = "## Today`n`n| ID | Task |`n|---|---|`n"
-foreach ($id in 701, 702, 703, 704, 705, 706, 707, 708) { $boardText += "| $id | synthetic |`n" }
+foreach ($id in 701, 702, 703, 704, 705, 706, 707, 708, 709, 710) { $boardText += "| $id | synthetic |`n" }
 [IO.File]::WriteAllText($board, $boardText, $utf8)
 [IO.File]::WriteAllText($store, '{}', $utf8)
 
@@ -368,6 +388,50 @@ $m = Invoke-OaJson @('doc', '-Id', '707')
 Check 'M fenced doc-meta is ignored' { $m.bound -eq $false }
 $r707 = Get-Row '707'
 Check 'M- scan agrees it is unbound' { $r707.doc_bound -eq $false -and $r707.doc_new_comments -eq 0 }
+
+# --- Q/R/S: journal_stamped reports the JOURNAL'S STATE, not this call's side effect (#436) ---
+#
+# The field exists to answer exactly one question: if %LOCALAPPDATA% is lost tonight, does this
+# binding come back? Before #436 it answered a different one -- "did THIS invocation write the
+# stamp" -- which is false for almost every real call. So a durable binding and one that is about
+# to strand every comment the user has written printed the identical `false`, and the only field
+# that could have told them apart was the one lying. That is the #346 shape on a third surface:
+# "could not tell" rendered as "not healthy", indistinguishably.
+#
+# Q AND R ARE A PAIR AND ONLY MEAN ANYTHING TOGETHER. Q alone is passed by a mutant that returns
+# $true unconditionally; R alone is passed by the pre-fix bug itself, which returns $false
+# unconditionally. The arms are load-bearing only because the same call must report OPPOSITE
+# verdicts on the two journals.
+
+# Q: bound AND stamped -- the healthy, overwhelmingly common case, and the one that was wrong.
+[void](Invoke-Oa @('doc', '-Id', '706', '-DocId', 'DOC_706'))
+$q = Invoke-OaJson @('doc', '-Id', '706')
+Check 'Q plain resolve reports stamped' { $q.journal_stamped -eq $true }
+Check 'Q- and names no mismatch' { $null -eq $q.journal_stamp_id }
+# The second half of the same bug, independent of the first: Add-DocMetaStamp returns $false when
+# the journal is ALREADY stamped, so even the -DocId path reported `false` on the healthiest
+# possible input. A fix that only handles the plain-resolve path leaves this one live.
+$q2 = Invoke-OaJson @('doc', '-Id', '706', '-DocId', 'DOC_706')
+Check 'Q-- re-bind still reports stamped' { $q2.journal_stamped -eq $true }
+
+# R: bound in state, NOT stamped in the journal -- the genuinely at-risk binding the field exists
+# to surface. State is the only copy, so losing it loses the doc and the next run creates a second.
+[void](Invoke-Oa @('doc', '-Id', '709', '-DocId', 'DOC_709'))
+$j709 = Get-JournalText '709'
+[IO.File]::WriteAllText((Join-Path $jdir 'task-709.md'),
+  ($j709 -replace '(?m)^<!--\s*doc-meta[^>]*-->\r?\n?', ''), $utf8)
+$r = Invoke-OaJson @('doc', '-Id', '709')
+Check 'R unstamped journal reports NOT stamped' { $r.journal_stamped -eq $false }
+Check 'R- and the binding itself still resolves' { "$($r.doc_id)" -eq 'DOC_709' }
+
+# S: stamped, but for a DIFFERENT doc -- what a -Force rebind leaves behind. Every other signal
+# looks healthy: `bound` is true and a stamp is present. Yet a state loss heals to the ABANDONED
+# document, which is the duplicate-doc failure arriving by the self-heal path that exists to
+# prevent it. A bare boolean cannot separate this from R, and the two need different repairs
+# (write a stamp vs. correct the one that is there), so the offending id is named.
+$s = Invoke-OaJson @('doc', '-Id', '710', '-DocId', 'DOC_710', '-Force')
+Check 'S mismatched stamp is NOT stamped' { $s.journal_stamped -eq $false }
+Check 'S- and the wrong id is NAMED' { "$($s.journal_stamp_id)" -eq 'DOC_WRONG' }
 
 # --- report ---------------------------------------------------------------------------
 $pass = 0; $fail = 0

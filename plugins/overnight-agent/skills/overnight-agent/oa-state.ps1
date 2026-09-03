@@ -3296,7 +3296,6 @@ function Cmd-Doc {
   }
   $resolved = Get-DocState $st $path
   $doc = $resolved.doc
-  $stamped = $false
 
   if ($Unbind) {
     Set-Member $st 'doc' $null
@@ -3327,7 +3326,9 @@ function Cmd-Doc {
     elseif ($DocUrl) {
       $doc = New-DocObject $doc.doc_id $DocUrl "$($doc.bound_at)" @($doc.seen_ids) @($doc.pending_ids) "$($doc.observed_at)"
     }
-    $stamped = Add-DocMetaStamp $path $doc.doc_id "$($doc.doc_url)"
+    # Called for its side effect only. Its return value answers "did THIS call write the stamp",
+    # which is not what `journal_stamped` reports -- see the state read below.
+    [void](Add-DocMetaStamp $path $doc.doc_id "$($doc.doc_url)")
   }
 
   if ($Observe) {
@@ -3351,8 +3352,26 @@ function Cmd-Doc {
     Set-Member $st 'doc' $doc
     $st.updated = Now-Iso
     Write-State $st
-    if ($resolved.healed -and -not $stamped) { $stamped = $false }
   }
+
+  # `journal_stamped` reports the STATE of the journal, read back here, AFTER any write above.
+  #
+  # It used to report whether THIS invocation wrote the stamp, which is a different question and
+  # false for almost every real call (#436). Two ways that lied, both in the fail-open direction:
+  # a plain `doc -Id N` resolve never enters the -DocId branch at all, so it reported `false` on a
+  # correctly-stamped journal; and `Add-DocMetaStamp` returns `$false` when the journal is ALREADY
+  # stamped, so even a re-bind reported `false` on the healthiest possible input. A durable
+  # binding and one that is about to strand the user's comments therefore printed identically --
+  # and the only field that could tell them apart said "at risk" for both.
+  #
+  # The comparison is against the bound id, not merely "a stamp exists". A journal stamped with a
+  # DIFFERENT doc than state holds is not durable: it is the case where losing %LOCALAPPDATA%
+  # heals the binding to the WRONG document, silently. That reports `false` here and names the
+  # offending id in `journal_stamp_id`, so "no stamp" and "wrong stamp" are distinguishable
+  # rather than both being a bare false.
+  $journalStamp = Get-DocMetaFromJournal $path
+  $stampId = if ($journalStamp) { "$($journalStamp.doc_id)" } else { '' }
+  $stamped = [bool]($stampId -and $doc -and "$($doc.doc_id)" -and $stampId -eq "$($doc.doc_id)")
 
   [pscustomobject]@{
     id             = $Id
@@ -3364,7 +3383,14 @@ function Cmd-Doc {
     # than silent, because "we rebound from the journal" and "we were already bound" are
     # different facts and a run that cannot tell them apart cannot notice state loss.
     healed         = [bool]$resolved.healed
+    # True iff the journal currently carries a doc-meta stamp for THIS doc, i.e. the binding
+    # survives the loss of %LOCALAPPDATA%. False means state is the only copy.
     journal_stamped = [bool]$stamped
+    # The id the journal actually carries, when it disagrees with the binding. Null when the
+    # journal is unstamped or agrees. A bare `journal_stamped: false` cannot distinguish "no
+    # stamp" (heals to nothing) from "wrong stamp" (heals to the wrong document), and those need
+    # different repairs.
+    journal_stamp_id = if ($stampId -and -not $stamped) { $stampId } else { $null }
     new_comments   = if ($doc) { @($doc.pending_ids).Count } else { 0 }
     new_comment_ids = if ($doc) { @($doc.pending_ids) } else { @() }
     seen_comments  = if ($doc) { @($doc.seen_ids).Count } else { 0 }
