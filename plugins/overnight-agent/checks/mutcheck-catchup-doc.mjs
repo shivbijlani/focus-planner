@@ -61,7 +61,9 @@ fs.mkdirSync(journal, { recursive: true });
 fs.mkdirSync(stateDir, { recursive: true });
 
 const T0 = '2026-09-03T12:00:00-07:00';
-const T1 = '2026-09-03T13:00:00-07:00'; // strictly after T0
+const T1 = '2026-09-03T13:00:00-07:00'; // 1h after T0 — inside the 6h read window
+const TFAR = '2026-09-04T02:00:00-07:00'; // 14h after T0 — outside it
+const TSAME = '2026-09-03T12:07:00-07:00'; // 7 min after T0: the real read-then-write gap
 
 const rows = [];
 const task = (id, state) => {
@@ -81,8 +83,8 @@ const doc = (over = {}) => ({
 // A — POSITIVE CONTROL. Bound, never observed. This is the live 2026-09-03 shape of #468.
 task('901', { id: '901', status: 'in-progress', last_turn_at: T1, doc: doc() });
 
-// B — SPOKE_WITHOUT_READING. Observed at T0, then a turn written at T1.
-task('902', { id: '902', status: 'in-progress', last_turn_at: T1, doc: doc({ observed_at: T0 }) });
+// B — SPOKE_WITHOUT_READING. Read at T0, then a turn at TFAR, 14h later: a different session.
+task('902', { id: '902', status: 'in-progress', last_turn_at: TFAR, doc: doc({ observed_at: T0 }) });
 
 // C — UNACKED. Read after the newest turn, but -Observe's findings were never -Ack`ed.
 task('903', {
@@ -103,9 +105,18 @@ task('905', { id: '905', status: 'in-progress', last_turn_at: T1 });
 // F — TRUE NEGATIVE, the healthy loop. Read at T1, newest turn at T0, nothing pending.
 task('906', { id: '906', status: 'in-progress', last_turn_at: T0, doc: doc({ observed_at: T1 }) });
 
-// G — BOUNDARY. Read and written at the same instant: read-then-write within one run, which
-// is exactly what the wired loop produces. Must NOT fire, or the sweep can never reach zero.
+// G — BOUNDARY. Read and written at the same instant. Must NOT fire.
 task('907', { id: '907', status: 'in-progress', last_turn_at: T0, doc: doc({ observed_at: T0 }) });
+
+// H — THE REGRESSION FIXTURE, and the one that matters most. This is the live shape of a healthy
+// run: PHASE 0.7 reads at 12:00, the run works, the turn lands 7 minutes later. Under the original
+// bare `last_turn_at > observedAt` rule this FIRED, on every doc-bound task of every correct run
+// (measured live: observed 14:36:51, turn 14:43:50). Must stay quiet, or the detector flags its own
+// healthy path and gets ignored — #433's argument, and the sweep's own header argues it too.
+task('908', { id: '908', status: 'in-progress', last_turn_at: TSAME, doc: doc({ observed_at: T0 }) });
+
+// I — the window is a WINDOW, not "never fires": one hour inside it is still healthy.
+task('909', { id: '909', status: 'in-progress', last_turn_at: T1, doc: doc({ observed_at: T0 }) });
 
 // The board is the universe of live tasks. Header included so the row regex has real shape.
 fs.writeFileSync(
@@ -148,6 +159,8 @@ check('D 904 quiet: gate TERMINAL (done task)', !base.fired.has('904'));
 check('E 905 quiet: gate UNBOUND (no doc)', !base.fired.has('905'));
 check('F 906 quiet: healthy read-after-turn loop', !base.fired.has('906'));
 check('G 907 quiet: read and turn at the same instant', !base.fired.has('907'));
+check('H 908 quiet: the real read-then-write gap (7 min) — the regression', !base.fired.has('908'));
+check('I 909 quiet: 1h trail is still one session', !base.fired.has('909'));
 check('A names its kind (NEVER_READ)', /NEVER_READ/.test(base.out));
 check('B names its kind (SPOKE_WITHOUT_READING)', /SPOKE_WITHOUT_READING/.test(base.out));
 check('C names its kind (UNACKED)', /UNACKED/.test(base.out));
@@ -161,7 +174,7 @@ check('exit 0 when nothing is wrong', clean.code === 0, `got ${clean.code}`);
 check('no findings printed', /UNREAD: 0/.test(clean.out), clean.out.split('\n')[0]);
 for (const id of ['901', '902', '903']) {
   const st = { id, status: 'in-progress', last_turn_at: T1, doc: doc() };
-  if (id === '902') st.doc = doc({ observed_at: T0 });
+  if (id === '902') { st.last_turn_at = TFAR; st.doc = doc({ observed_at: T0 }); }
   if (id === '903') { st.last_turn_at = T0; st.doc = doc({ observed_at: T1, pending_ids: ['cmt-1', 'cmt-2'] }); }
   fs.writeFileSync(path.join(stateDir, `task-${id}.json`), JSON.stringify(st, null, 2), 'utf8');
 }
@@ -186,8 +199,8 @@ const MUTATIONS = [
     name: 'SPOKE_WITHOUT_READING detector disabled',
     kind: 'silences',
     guards: '902',
-    find: '  if (lastTurnAt && lastTurnAt > observedAt) {',
-    repl: '  if (false && lastTurnAt && lastTurnAt > observedAt) {',
+    find: '  if (lastTurnAt && lastTurnAt - observedAt > READ_WINDOW_MS) {',
+    repl: '  if (false && lastTurnAt && lastTurnAt - observedAt > READ_WINDOW_MS) {',
   },
   {
     name: 'UNACKED detector disabled',
@@ -197,15 +210,22 @@ const MUTATIONS = [
     repl: '',
   },
   {
-    name: 'freshness boundary loosened (> becomes >=)',
+    // The regression, restored exactly: the rule this sweep originally shipped with.
+    //
+    // Unlike the others this is a RULE REPLACEMENT, not a single gate deletion, so it legitimately
+    // moves every fixture whose turn trails its read — 908 (7 min) and 909 (1h). Both are named,
+    // and the assertion below is still exact: any OTHER fixture moving is a failure. Loosening this
+    // to "at least 908 fires" would have hidden the fact that the old rule swept in a whole class.
+    name: 'read window removed (back to bare last_turn_at > observed_at)',
     kind: 'unleashes',
-    guards: '907',
-    find: '  if (lastTurnAt && lastTurnAt > observedAt) {',
-    repl: '  if (lastTurnAt && lastTurnAt >= observedAt) {',
+    guards: '908',
+    alsoGuards: ['909'],
+    find: '  if (lastTurnAt && lastTurnAt - observedAt > READ_WINDOW_MS) {',
+    repl: '  if (lastTurnAt && lastTurnAt > observedAt) {',
   },
 ];
 
-const ALL = ['901', '902', '903', '904', '905', '906', '907'];
+const ALL = ['901', '902', '903', '904', '905', '906', '907', '908', '909'];
 
 console.log('\n== mutations (each killed by exactly one arm) ==');
 for (const m of MUTATIONS) {
@@ -221,12 +241,16 @@ for (const m of MUTATIONS) {
 
   if (m.kind === 'unleashes') {
     check(`${m.name} -> #${m.guards} now fires (gate is load-bearing)`, r.fired.has(m.guards), [...r.fired].join(','));
+    for (const extra of m.alsoGuards ?? []) {
+      check(`${m.name} -> #${extra} also fires (same class)`, r.fired.has(extra), [...r.fired].join(','));
+    }
   } else {
     check(`${m.name} -> #${m.guards} stops firing (detector is load-bearing)`, !r.fired.has(m.guards), [...r.fired].join(','));
   }
 
-  // Nothing else may move: the line guards only what it claims to.
-  const changed = ALL.filter((id) => id !== m.guards).filter((id) => r.fired.has(id) !== base.fired.has(id));
+  // Nothing outside the declared set may move: the line guards only what it claims to.
+  const declared = new Set([m.guards, ...(m.alsoGuards ?? [])]);
+  const changed = ALL.filter((id) => !declared.has(id)).filter((id) => r.fired.has(id) !== base.fired.has(id));
   check(`${m.name}: changes nothing else`, changed.length === 0, `also moved: ${changed.join(',')}`);
 }
 
