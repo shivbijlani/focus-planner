@@ -185,8 +185,11 @@ if (-not $env:OA_AUTODEPLOY_REEXEC -and $PSCommandPath) {
       if ($SkipFetch) { $fwd += '-SkipFetch' }
       $env:OA_AUTODEPLOY_REEXEC = '1'
       try {
-        & powershell @fwd
-        exit $LASTEXITCODE
+        $reexec = Invoke-Bounded -FilePath 'powershell' -ArgumentList $fwd -BudgetMs (Get-RemainingMs)
+        if ($reexec.TimedOut) { Stop-ForBudget 'self-bootstrap handoff' }
+        if ($reexec.StdOut) { Write-Host $reexec.StdOut.TrimEnd() }
+        if ($reexec.StdErr) { Write-Host $reexec.StdErr.TrimEnd() }
+        exit $reexec.ExitCode
       } finally { Remove-Item Env:\OA_AUTODEPLOY_REEXEC -ErrorAction SilentlyContinue }
     }
   }
@@ -198,13 +201,15 @@ if (-not $env:OA_AUTODEPLOY_REEXEC -and $PSCommandPath) {
 # success, so this cannot be left to the caller.
 $fetched = $false
 if (-not $SkipFetch) {
-  & git -C $Repo fetch origin --quiet 2>&1 | Out-Null
-  $fetched = ($LASTEXITCODE -eq 0)
+  $fetchRun = Invoke-Bounded -FilePath 'git' -ArgumentList @('-C',$Repo,'fetch','origin','--quiet') -BudgetMs (Get-RemainingMs)
+  if ($fetchRun.TimedOut) { Stop-ForBudget 'git fetch' }
+  $fetched = ($fetchRun.ExitCode -eq 0)
   if (-not $fetched) { Write-Note "WARNING: git fetch failed - '$Ref' may be stale." }
 }
-$refSha = (& git -C $Repo rev-parse $Ref 2>&1)
-if ($LASTEXITCODE -ne 0) { throw "cannot resolve ref '$Ref' in $Repo" }
-$refSha = ([string]$refSha).Trim()
+$refRun = Invoke-Bounded -FilePath 'git' -ArgumentList @('-C',$Repo,'rev-parse',$Ref) -BudgetMs (Get-RemainingMs)
+if ($refRun.TimedOut) { Stop-ForBudget 'ref resolution' }
+if ($refRun.ExitCode -ne 0) { throw "cannot resolve ref '$Ref' in $Repo" }
+$refSha = $refRun.StdOut.Trim()
 
 Write-Note "ref       = $Ref ($($refSha.Substring(0,12)))"
 Write-Note "installed = $Installed"
@@ -431,8 +436,12 @@ if (-not $NoOaHome) {
       $syncArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $syncScript,
                     '-Ref', $Ref, '-Repo', $Repo, '-SkipFetch')
       if ($WhatIf) { $syncArgs += '-WhatIf' }
-      & powershell @syncArgs 2>&1 | ForEach-Object { Write-Host ("  | " + $_) }
-      $oaHomeExit = $LASTEXITCODE
+      $syncRun = Invoke-Bounded -FilePath 'powershell' -ArgumentList $syncArgs -BudgetMs (Get-RemainingMs)
+      if ($syncRun.TimedOut) { Stop-ForBudget 'OA-home sync' }
+      $syncText = @($syncRun.StdOut, $syncRun.StdErr) -join "`n"
+      $syncText -split '\r?\n' |
+        Where-Object { $_ } | ForEach-Object { Write-Host ("  | " + $_) }
+      $oaHomeExit = $syncRun.ExitCode
     } catch {
       # A failed sync must never abort the run - it degrades to "not synced", which is
       # the status quo it replaces, and is reported rather than thrown.

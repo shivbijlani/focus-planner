@@ -365,6 +365,18 @@ Test-Mutant -Name 'M5: -WhatIf still writes (dry run is not dry)' `
     Assert (Test-Path $s.NewGuard) 'killed: -WhatIf would deploy files'
   }
 
+Test-Mutant -Name 'M14: wall-clock timeout ignored (outer runner must kill the script)' `
+  -Find "if (`$historyRun.TimedOut) { Stop-ForBudget 'combined ref history classification' }" `
+  -Replace "if (`$false) { Stop-ForBudget 'combined ref history classification' }" -Check {
+    param($mut)
+    $s = New-Sandbox
+    $slowHelper = Join-Path $root 'mut-slow-history.mjs'
+    Set-Content $slowHelper "setTimeout(() => process.stdout.write('{`"matches`":{},`"onTip`":{}}'), 3000);" -Encoding UTF8
+    $b = Invoke-SUT -Script $mut -Sandbox $s -BudgetSeconds 1 -HistoryHelper $slowHelper
+    Assert ($b.Exit -ne 2 -or -not $b.Json -or $b.Json.reason -ne 'wall-clock-budget') `
+           'killed by B1/B2: an expired budget would not emit the required exit-2 signal'
+  }
+
 Test-Mutant -Name 'M6: far-end verification trusts the deployer instead of the tree' `
   -Find '$verified = @($residual | Where-Object { $_.Verdict -eq ''MISSING'' }).Count -eq 0' `
   -Replace '$verified = $true' -Check {
@@ -422,6 +434,49 @@ Test-Mutant -Name 'M13: delete anything absent from the tip (destroys a live-onl
     Invoke-SUT -Script $mut -Sandbox $s | Out-Null
     Assert (-not (Test-Path $s.Stray)) `
            'killed: a live-only file would be deleted on the strength of absence alone'
+  }
+
+function Test-HistoryMutant {
+  param([string]$Name, [string]$Find, [string]$Replace, [scriptblock]$Check)
+  Section $Name
+  $helper = Join-Path $PSScriptRoot 'ref-history-index.mjs'
+  $src = Get-Content $helper -Raw
+  if (-not $src.Contains($Find)) {
+    Assert $false "history mutation anchor not found - mutcheck is stale: '$Find'"
+    return
+  }
+  $mut = Join-Path $root ('history-mut-' + [guid]::NewGuid().ToString('N').Substring(0,6) + '.mjs')
+  Set-Content $mut ($src.Replace($Find, $Replace)) -Encoding UTF8
+  Assert $true 'history mutation applied'
+  & $Check $mut
+}
+
+Test-HistoryMutant -Name 'M15: combined log duplicated (history walks no longer constant-one)' `
+  -Find 'const log = git(historyWalkArgs, {' `
+  -Replace 'git(historyWalkArgs, { encoding: ''utf8'' }); const log = git(historyWalkArgs, {' -Check {
+    param($mut)
+    $s = New-Sandbox
+    $trace = Join-Path $root 'm15.trace'
+    $env:OA_HISTORY_GIT_TRACE = $trace
+    try { Invoke-SUT -Script $SUT -Sandbox $s -HistoryHelper $mut | Out-Null }
+    finally { Remove-Item Env:\OA_HISTORY_GIT_TRACE -ErrorAction SilentlyContinue }
+    $calls = @(Get-Content $trace -ErrorAction SilentlyContinue)
+    Assert (@($calls | Where-Object { $_ -eq 'log' }).Count -gt 1) `
+           'killed by P1: more than one combined history walk is observed'
+  }
+
+Test-HistoryMutant -Name 'M16: per-file rev-list restored (history work grows with paths)' `
+  -Find 'const log = git(historyWalkArgs, {' `
+  -Replace 'for (const path of requested.keys()) git([''rev-list'', ref, ''--'', path]); const log = git(historyWalkArgs, {' -Check {
+    param($mut)
+    $s = New-Sandbox
+    $trace = Join-Path $root 'm16.trace'
+    $env:OA_HISTORY_GIT_TRACE = $trace
+    try { Invoke-SUT -Script $SUT -Sandbox $s -HistoryHelper $mut | Out-Null }
+    finally { Remove-Item Env:\OA_HISTORY_GIT_TRACE -ErrorAction SilentlyContinue }
+    $calls = @(Get-Content $trace -ErrorAction SilentlyContinue)
+    Assert (@($calls | Where-Object { $_ -eq 'rev-list' }).Count -gt 1) `
+           'killed by P2: per-file history walks are observed'
   }
 
 # ------------------------------------------------------------------------------------

@@ -41,7 +41,8 @@ function normHash(bytes) {
 }
 
 // PERFORMANCE GUARD: this is the sole history walk, outside every path loop.
-const log = git(['log', '--format=C %H', '--name-only', '--no-renames', ref, '--', scope], {
+const historyWalkArgs = ['log', '--format=C %H', '--name-only', '--no-renames', ref, '--', scope];
+const log = git(historyWalkArgs, {
   encoding: 'utf8',
 });
 
