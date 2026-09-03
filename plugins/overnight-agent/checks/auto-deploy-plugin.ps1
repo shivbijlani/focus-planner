@@ -41,9 +41,9 @@
     2. ESCALATE A PERSISTENT REFUSAL. A refusal on one cycle is information; the same
        refusal on the next cycle is a human decision that is not being made. Streaks
        are counted per file in state and surfaced as an ask once the threshold is hit.
-    3. VERIFY AT THE FAR END. The deploy tool reports what it *did*. This re-runs the
-       classifier against the LIVE tree afterwards and reports what is *true*. Those
-       are different claims, and only the second one is evidence.
+    3. VERIFY AT THE FAR END. The deploy tool reports what it *did*. This batch-checks
+       every changed path against the LIVE tree afterwards and reports what is *true*.
+       Those are different claims, and only the second one is evidence.
 
   SAFETY
   ------
@@ -75,6 +75,7 @@ param(
   [int]$BudgetSeconds = 60,
   [string]$ClassifierPath,
   [string]$HistoryHelperPath,
+  [string]$VerifyHelperPath,
   [switch]$SkipFetch,
   [switch]$NoOaHome
 )
@@ -135,11 +136,13 @@ function Invoke-Bounded {
 $deployer = Join-Path $Repo "$RepoPrefix\overnight-agent\checks\deploy-installed-plugin.ps1"
 $sweep    = if ($ClassifierPath) { $ClassifierPath } else { Join-Path $env:LOCALAPPDATA 'overnight-agent\installed-skill-drift-sweep.mjs' }
 $historyHelper = if ($HistoryHelperPath) { $HistoryHelperPath } else { Join-Path $Repo "$RepoPrefix\overnight-agent\checks\ref-history-index.mjs" }
+$verifyHelper = if ($VerifyHelperPath) { $VerifyHelperPath } else { Join-Path $Repo "$RepoPrefix\overnight-agent\checks\verify-deployed-paths.mjs" }
 
 if (-not (Test-Path $Repo))     { throw "repo not found: $Repo" }
 if (-not (Test-Path $deployer)) { throw "deployer not found: $deployer" }
 if (-not (Test-Path $sweep))    { throw "classifier not found: $sweep" }
 if (-not (Test-Path $historyHelper)) { throw "history helper not found: $historyHelper" }
+if (-not (Test-Path $verifyHelper)) { throw "verify helper not found: $verifyHelper" }
 
 $budget = [Diagnostics.Stopwatch]::StartNew()
 function Get-RemainingMs {
@@ -180,6 +183,7 @@ if (-not $env:OA_AUTODEPLOY_REEXEC -and $PSCommandPath) {
                '-Ref',$Ref,'-Repo',$Repo,'-Installed',$Installed,'-RepoPrefix',$RepoPrefix,
                '-EscalateAfterCycles',$EscalateAfterCycles,'-StatePath',$StatePath,
                '-BudgetSeconds',$BudgetSeconds,'-ClassifierPath',$sweep,'-HistoryHelperPath',$historyHelper)
+      $fwd += @('-VerifyHelperPath',$verifyHelper)
       if ($WhatIf)    { $fwd += '-WhatIf' }
       if ($Json)      { $fwd += '-Json' }
       if ($SkipFetch) { $fwd += '-SkipFetch' }
@@ -240,7 +244,14 @@ if (-not $Json) { $deployOut | ForEach-Object { Write-Host "  | $_" } }
 
 if ($deployExit -ne 0) {
   Write-Note "FAILED - deployer exited $deployExit."
-  if ($Json) { [pscustomobject]@{ ok=$false; reason='deployer-failed'; exit=$deployExit } | ConvertTo-Json -Compress }
+  if ($Json) {
+    [pscustomobject]@{
+      ok=$false
+      reason='deployer-failed'
+      exit=$deployExit
+      detail=($deployOut -join "`n")
+    } | ConvertTo-Json -Compress
+  }
   exit 1
 }
 
@@ -253,7 +264,10 @@ $superseded = @()
 $removed = @()
 $stillRefused = @()
 $historyRows = @()
-foreach ($rel in $refused) {
+$historySeen = @{}
+foreach ($rel in @($refused) + @($written)) {
+  if ($historySeen.ContainsKey($rel)) { continue }
+  $historySeen[$rel] = $true
   $instFile = Join-Path $Installed ($rel -replace '/', '\')
   $repoPath = "$RepoPrefix/$rel"
   if (Test-Path $instFile) {
@@ -341,23 +355,33 @@ if ($superseded.Count -gt 0) {
 $refused = $stillRefused
 
 # --- 3. VERIFY AT THE FAR END --------------------------------------------------------
-# The deployer reports what it did. This asks the live tree what is true. Re-classifying
-# after the write is the only thing that can prove the bytes landed, and it is also the
-# only way to notice a file that went straight back out of date.
+# The deployer reports what it attempted. Verify every changed path against the ref in
+# one batch so this remains proof of live bytes without paying for a second full-tree
+# classifier pass.
+$verifyInput = [pscustomobject]@{
+  ref = $Ref
+  written = @($written | Sort-Object -Unique | ForEach-Object {
+    [pscustomobject]@{
+      rel=$_
+      repoPath="$RepoPrefix/$_"
+      installedFile=(Join-Path $Installed ($_ -replace '/', '\'))
+      expectedBase64=$history.tipContent."$RepoPrefix/$_"
+    }
+  })
+  removed = @($removed | Sort-Object -Unique | ForEach-Object {
+    [pscustomobject]@{ rel=$_; installedFile=(Join-Path $Installed ($_ -replace '/', '\')) }
+  })
+} | ConvertTo-Json -Depth 5 -Compress
 $env:OA_REPO = $Repo
-$env:OA_INSTALLED_PLUGIN = $Installed
-$env:OA_REPO_PREFIX = $RepoPrefix
-$verifyRun = Invoke-Bounded -FilePath 'node' -ArgumentList @($sweep) -BudgetMs (Get-RemainingMs)
+$verifyRun = Invoke-Bounded -FilePath 'node' -ArgumentList @($verifyHelper) -BudgetMs (Get-RemainingMs) -InputText $verifyInput
 if ($verifyRun.TimedOut) { Stop-ForBudget 'far-end verification' }
-$verifyOut = @($verifyRun.StdOut, $verifyRun.StdErr) -join "`n"
-$verifyOut = $verifyOut -split '\r?\n'
-
-$residual = @()
-foreach ($line in $verifyOut) {
-  $m = [regex]::Match([string]$line, '^\s{2}(BRANCH-ONLY|UNVERSIONED|MISSING)\s+(\S+)\s+\[')
-  if ($m.Success) { $residual += [pscustomobject]@{ Verdict=$m.Groups[1].Value; Rel=$m.Groups[2].Value } }
-}
-$verified = @($residual | Where-Object { $_.Verdict -eq 'MISSING' }).Count -eq 0
+if ($verifyRun.ExitCode -ne 0) { throw "far-end verification failed: $($verifyRun.StdErr)" }
+$verifyResult = $verifyRun.StdOut | ConvertFrom-Json
+$residual = @($verifyResult.residual | ForEach-Object {
+  $parts = $_ -split ' ', 2
+  [pscustomobject]@{ Verdict=$parts[0]; Rel=$parts[1] }
+})
+$verified = $residual.Count -eq 0
 
 # --- 4. ESCALATE A PERSISTENT REFUSAL ------------------------------------------------
 # One refusal is information. The same refusal next cycle is a decision nobody is

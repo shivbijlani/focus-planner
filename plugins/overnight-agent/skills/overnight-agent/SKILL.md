@@ -518,8 +518,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\..\..\checks\auto-d
 
 It fetches `origin` first (deploying an unfetched `origin/main` ships a *cached* ref, which is the same
 stale-artefact class as a stale CI tick), deploys only files that are plainly behind `main`, and
-**re-classifies the live tree afterwards** so the result is what is *true* rather than what the deployer
-*did*.
+**batch-verifies every changed live path afterwards** so the result is what is *true* rather than what
+the deployer *did*.
 
 - ✅ **It syncs BOTH deploy targets.** `installed-plugins` is not the only place the running code lives,
   and it is not the copy most of `user-settings.md` actually invokes — those rows name

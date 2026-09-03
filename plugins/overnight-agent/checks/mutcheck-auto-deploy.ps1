@@ -97,6 +97,8 @@ function New-Sandbox {
             (Join-Path $chk 'installed-skill-drift-sweep.mjs') -Force
   Copy-Item (Join-Path $PSScriptRoot 'ref-history-index.mjs') `
             (Join-Path $chk 'ref-history-index.mjs') -Force
+  Copy-Item (Join-Path $PSScriptRoot 'verify-deployed-paths.mjs') `
+            (Join-Path $chk 'verify-deployed-paths.mjs') -Force
 
   # installed carries the v1 (ancestor-of-main) livefix, the branch-only divergent file,
   # and lacks newguard.ps1
@@ -124,6 +126,7 @@ function New-Sandbox {
     Current   = (Join-Path $idst 'current.ps1')
     Classifier = (Join-Path $chk 'installed-skill-drift-sweep.mjs')
     HistoryHelper = (Join-Path $chk 'ref-history-index.mjs')
+    VerifyHelper = (Join-Path $chk 'verify-deployed-paths.mjs')
   }
 }
 
@@ -141,7 +144,8 @@ function Invoke-SUT {
          '-StatePath',$Sandbox.State,'-SkipFetch',
          '-BudgetSeconds',$BudgetSeconds,
          '-ClassifierPath',$Sandbox.Classifier,
-         '-HistoryHelperPath',$(if ($HistoryHelper) { $HistoryHelper } else { $Sandbox.HistoryHelper }))
+         '-HistoryHelperPath',$(if ($HistoryHelper) { $HistoryHelper } else { $Sandbox.HistoryHelper }),
+         '-VerifyHelperPath',$Sandbox.VerifyHelper)
   if (-not $WithOaHome) { $a += '-NoOaHome' }
   if (-not $NoJson) { $a += '-Json' }
   if ($WhatIf) { $a += '-WhatIf' }
@@ -378,7 +382,7 @@ Test-Mutant -Name 'M14: wall-clock timeout ignored (outer runner must kill the s
   }
 
 Test-Mutant -Name 'M6: far-end verification trusts the deployer instead of the tree' `
-  -Find '$verified = @($residual | Where-Object { $_.Verdict -eq ''MISSING'' }).Count -eq 0' `
+  -Find '$verified = $residual.Count -eq 0' `
   -Replace '$verified = $true' -Check {
     param($mut)
     # Make the deploy a no-op by pointing the deployer at a ref-clean state, then delete
@@ -390,7 +394,7 @@ Test-Mutant -Name 'M6: far-end verification trusts the deployer instead of the t
     # Second run: deployer re-adds it, so use a mutant-only probe - assert the field is
     # hard-coded rather than measured.
     $src = Get-Content $mut -Raw
-    Assert ($src -notmatch [regex]::Escape('$_.Verdict -eq ''MISSING''')) `
+    Assert ($src -notmatch [regex]::Escape('$verified = $residual.Count -eq 0')) `
            'killed: verifiedCurrent is asserted, not measured against the live tree'
   }
 
