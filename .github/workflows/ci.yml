@@ -229,6 +229,30 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-binding.ps1
 
+  # The board's ragged rows (GH #426). `## Deferred` carries a `Wake` column that
+  # `## Today` does not, so a hand-edited or pre-#307 row has one field too few --
+  # and the reader indexed `Linked ID` off the RAW row, so `cells[6]` on a 6-field
+  # row was `undefined` and the link silently vanished from the UI. #307 fixed the
+  # writer; this is the reader half, and the two now share one alignment rule so
+  # they cannot drift apart again.
+  #
+  # It runs here because the arms span four files (boardRow, boardTable, snooze,
+  # App.jsx) -- a check that could only mutate one of them reported green while the
+  # bug was live, which is exactly how #426 survived #307. Pure text work against
+  # in-memory fixtures; it never reads the real planner folder.
+  ragged-rows:
+    name: Ragged board rows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Mutation check (one alignment rule, reader agrees with writer)
+        run: node ./scripts/mutcheck-ragged-row.mjs
+
   auto-deploy:
     name: Auto-deploy safety and performance
     runs-on: windows-latest
