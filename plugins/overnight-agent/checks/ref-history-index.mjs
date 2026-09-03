@@ -19,7 +19,7 @@ const scope = process.env.OA_HISTORY_SCOPE || 'plugins/overnight-agent';
 
 if (!repo) throw new Error('OA_REPO is required');
 
-const input = JSON.parse(readFileSync(0, 'utf8'));
+const input = JSON.parse(readFileSync(0, 'utf8').replace(/^\uFEFF/, ''));
 const requested = new Map(
   (input.paths || []).map((row) => [row.repoPath.replaceAll('\\', '/'), row.installedFile]),
 );

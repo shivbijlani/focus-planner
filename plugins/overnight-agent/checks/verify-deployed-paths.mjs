@@ -2,7 +2,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
-const input = JSON.parse(readFileSync(0, 'utf8'));
+const input = JSON.parse(readFileSync(0, 'utf8').replace(/^\uFEFF/, ''));
 const written = input.written || [];
 const removed = input.removed || [];
 const residual = [];
