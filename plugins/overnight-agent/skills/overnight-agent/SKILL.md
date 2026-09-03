@@ -518,8 +518,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\..\..\checks\auto-d
 
 It fetches `origin` first (deploying an unfetched `origin/main` ships a *cached* ref, which is the same
 stale-artefact class as a stale CI tick), deploys only files that are plainly behind `main`, and
-**re-classifies the live tree afterwards** so the result is what is *true* rather than what the deployer
-*did*.
+**batch-verifies every changed live path afterwards** so the result is what is *true* rather than what
+the deployer *did*.
 
 - ✅ **It syncs BOTH deploy targets.** `installed-plugins` is not the only place the running code lives,
   and it is not the copy most of `user-settings.md` actually invokes — those rows name
@@ -541,6 +541,8 @@ stale-artefact class as a stale CI tick), deploys only files that are plainly be
   #151 sat unnoticed for five days.
 - A first refusal is information and does not escalate; the *same* refusal on the next cycle is a
   decision nobody is making, and that is what gets surfaced.
+- The step has a 60-second wall-clock budget. `DEPLOY NOT VERIFIED` and exit `2` mean the budget
+  expired; surface that line as an ask in the wrap-up because merged code may still be inactive.
 - Add `-WhatIf` to see what it would do without writing. A failed deploy must never abort the run.
 
 **Third, keep the settings file readable (GH #262).** `user-settings.md` is read at the start of every

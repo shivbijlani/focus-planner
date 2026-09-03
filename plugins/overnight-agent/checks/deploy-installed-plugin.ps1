@@ -52,7 +52,8 @@ param(
   [string]$Ref = 'origin/main',
   [string]$Repo = 'V:\repos\focus-planner',
   [string]$Installed = "$env:USERPROFILE\.copilot\installed-plugins\focus-planner",
-  [string]$RepoPrefix = 'plugins'
+  [string]$RepoPrefix = 'plugins',
+  [string]$ClassifierPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -60,7 +61,7 @@ $ErrorActionPreference = 'Stop'
 if (-not (Test-Path $Repo))      { throw "repo not found: $Repo" }
 if (-not (Test-Path $Installed)) { throw "installed plugin not found: $Installed" }
 
-$sweep = Join-Path $env:LOCALAPPDATA 'overnight-agent\installed-skill-drift-sweep.mjs'
+$sweep = if ($ClassifierPath) { $ClassifierPath } else { Join-Path $env:LOCALAPPDATA 'overnight-agent\installed-skill-drift-sweep.mjs' }
 if (-not (Test-Path $sweep)) { throw "classifier not found: $sweep" }
 
 $backupRoot = Join-Path $env:LOCALAPPDATA ('overnight-agent\backups\deploy-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
@@ -138,9 +139,6 @@ foreach ($row in $plan) {
   try {
     & cmd /c "cd /d `"$Repo`" && git cat-file blob $Ref`:$repoPath > `"$tmp`"" 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tmp)) { throw "git cat-file failed for $repoPath" }
-    $want = [int](& git -C $Repo cat-file -s "$Ref`:$repoPath")
-    $got = (Get-Item $tmp).Length
-    if ($got -ne $want) { throw "size mismatch for $repoPath (blob $want, wrote $got)" }
     Copy-Item $tmp $dst -Force
     $deployed++
   } catch {

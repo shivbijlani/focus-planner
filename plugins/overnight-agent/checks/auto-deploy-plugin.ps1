@@ -41,9 +41,9 @@
     2. ESCALATE A PERSISTENT REFUSAL. A refusal on one cycle is information; the same
        refusal on the next cycle is a human decision that is not being made. Streaks
        are counted per file in state and surfaced as an ask once the threshold is hit.
-    3. VERIFY AT THE FAR END. The deploy tool reports what it *did*. This re-runs the
-       classifier against the LIVE tree afterwards and reports what is *true*. Those
-       are different claims, and only the second one is evidence.
+    3. VERIFY AT THE FAR END. The deploy tool reports what it *did*. This batch-checks
+       every changed path against the LIVE tree afterwards and reports what is *true*.
+       Those are different claims, and only the second one is evidence.
 
   SAFETY
   ------
@@ -72,6 +72,10 @@ param(
   [string]$RepoPrefix = 'plugins',
   [int]$EscalateAfterCycles = 2,
   [string]$StatePath = "$env:LOCALAPPDATA\overnight-agent\auto-deploy-state.json",
+  [int]$BudgetSeconds = 60,
+  [string]$ClassifierPath,
+  [string]$HistoryHelperPath,
+  [string]$VerifyHelperPath,
   [switch]$SkipFetch,
   [switch]$NoOaHome
 )
@@ -89,101 +93,71 @@ function Get-NormHash([byte[]]$bytes) {
   finally { $sha.Dispose() }
 }
 
-function Test-IsSupersededByRef {
-  <#
-    Is this installed file simply BEHIND the ref, or genuinely DIVERGED from it?
-
-    The classifier answers neither question. It reports BRANCH-ONLY whenever the
-    installed bytes match some ref that is not the deploy ref -- but "an older commit of
-    main" and "a live fix that only exists on a side branch" both satisfy that, and they
-    are OPPOSITE situations. Issue #196 names this directly: "'Behind main' and
-    'diverged from main' look identical in a size comparison and are opposite
-    situations."
-
-    Treating them alike is wrong in both directions. Deploy blindly and a live fix is
-    reverted; refuse blindly and an ordinary stale file can NEVER auto-deploy, which
-    defeats the whole point of the wire.
-
-    The distinction is decidable and exact: if the installed content equals the content
-    this path had at ANY commit reachable from the ref, then the ref's history already
-    contains it and the ref strictly supersedes it -- safe. If it matches no point in
-    that history, it is real divergence -- refuse.
-
-    Measured on the case that prompted this (2026-08-28): the installed SKILL.md hashed
-    to blob 5b35b7d, exactly the blob at d895007, the parent of the merge commit. It was
-    main-minus-one-commit and would otherwise have been refused forever.
-  #>
-  param([string]$Repo, [string]$RefName, [string]$RepoPath, [string]$InstalledFile, [int]$MaxCommits = 400)
-
-  if (-not (Test-Path $InstalledFile)) { return $false }
-  $want = Get-NormHash ([IO.File]::ReadAllBytes($InstalledFile))
-
-  $commits = & git -C $Repo rev-list -n $MaxCommits $RefName -- $RepoPath 2>$null
-  if ($LASTEXITCODE -ne 0 -or -not $commits) { return $false }
-
-  $seen = @{}
-  foreach ($c in $commits) {
-    $sha = ([string]$c).Trim()
-    if (-not $sha) { continue }
-    # --verify --quiet, NOT a bare rev-parse. A bare `rev-parse <sha>:<path>` on a path
-    # that does not exist at that commit writes "fatal: path ... exists on disk, but not
-    # in <sha>" to stderr, and Windows PowerShell 5.1 - which is what `powershell` resolves
-    # to here - turns native stderr into a terminating NativeCommandError under
-    # $ErrorActionPreference = 'Stop'. `2>$null` does NOT suppress that (it does under
-    # pwsh 7, which is why this is invisible when tested by hand in the agent's own shell).
-    # So the moment any commit DELETED this path, the whole deploy aborted with exit 1.
-    # --verify --quiet exits 1 with no stderr and no output, on both hosts.
-    $oid = (& git -C $Repo rev-parse --verify --quiet "${sha}:${RepoPath}" 2>$null)
-    if ($LASTEXITCODE -ne 0 -or -not $oid) { continue }
-    $oid = ([string]$oid).Trim()
-    if ($seen.ContainsKey($oid)) { continue }
-    $seen[$oid] = $true
-
-    # Go through git's own byte stream. `git show > file` in PowerShell re-encodes, which
-    # is the documented hazard that has silently corrupted files in this repo before.
-    $tmp = [IO.Path]::GetTempFileName()
-    try {
-      & cmd /c "cd /d `"$Repo`" && git cat-file blob $oid > `"$tmp`"" 2>&1 | Out-Null
-      if (Test-Path $tmp) {
-        if ((Get-NormHash ([IO.File]::ReadAllBytes($tmp))) -eq $want) { return $true }
-      }
-    } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
-  }
-  return $false
+function ConvertTo-QuotedArg([string]$Value) {
+  if ($null -eq $Value) { return '""' }
+  $escaped = [regex]::Replace($Value, '(\\*)"', '$1$1\"')
+  $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
+  return '"' + $escaped + '"'
 }
 
-function Test-PathIsOnRefTip {
-  <#
-    Does this path exist AT the ref tip at all?
+function Stop-Bounded($Process) {
+  try { $Process.Kill($true); return } catch { }
+  try { $Process.Kill() } catch { }
+}
 
-    This is the question the classifier never asks. `installed-skill-drift-sweep.mjs`
-    compares CONTENT and answers "which ref carries these bytes", so a file the ref has
-    since DELETED looks exactly like a live fix on a side branch: neither is at the tip,
-    and both come back BRANCH-ONLY -> REFUSED.
-
-    They are opposite situations, and the difference is decidable in one call. Refusing
-    both is not the safe default - it means a file removed from the ref can never be
-    removed from the live tree, so it lingers forever, is refused every cycle, and (per
-    step 4) escalates to exit 2 permanently. That pins the exit code at "a human is
-    needed" for a condition no human can clear, which is exactly the trained-to-ignore
-    failure #253's own PR body warned about at the deploy layer.
-
-    Measured 2026-08-29: merging #253 deleted two guard scripts from main. The next
-    deploy refused all five paths and then ABORTED (see the --verify note above). The
-    two orphans were the wrong-version copies #253 deliberately removed - still live,
-    still being run by run-sweeps.
-  #>
-  param([string]$Repo, [string]$RefName, [string]$RepoPath)
-  & git -C $Repo rev-parse --verify --quiet "${RefName}:${RepoPath}" 2>$null | Out-Null
-  return ($LASTEXITCODE -eq 0)
+function Invoke-Bounded {
+  param([string]$FilePath, [string[]]$ArgumentList, [int]$BudgetMs, [string]$InputText = '')
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $FilePath
+  $psi.Arguments = (($ArgumentList | ForEach-Object { ConvertTo-QuotedArg $_ }) -join ' ')
+  $psi.RedirectStandardInput = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $proc = [System.Diagnostics.Process]::Start($psi)
+  $outTask = $proc.StandardOutput.ReadToEndAsync()
+  $errTask = $proc.StandardError.ReadToEndAsync()
+  if ($InputText) { $proc.StandardInput.Write($InputText) }
+  $proc.StandardInput.Close()
+  $timedOut = -not $proc.WaitForExit([Math]::Max(1, $BudgetMs))
+  if ($timedOut) { Stop-Bounded $proc }
+  try { [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]@($outTask, $errTask), 2000) | Out-Null } catch { }
+  $code = -1
+  try { if ($proc.HasExited) { $code = $proc.ExitCode } } catch { }
+  [pscustomobject]@{
+    TimedOut = $timedOut
+    ExitCode = $code
+    StdOut = $(try { $outTask.Result } catch { '' })
+    StdErr = $(try { $errTask.Result } catch { '' })
+  }
 }
 
 $deployer = Join-Path $Repo "$RepoPrefix\overnight-agent\checks\deploy-installed-plugin.ps1"
-$sweep    = Join-Path $env:LOCALAPPDATA 'overnight-agent\installed-skill-drift-sweep.mjs'
+$sweep    = if ($ClassifierPath) { $ClassifierPath } else { Join-Path $env:LOCALAPPDATA 'overnight-agent\installed-skill-drift-sweep.mjs' }
+$historyHelper = if ($HistoryHelperPath) { $HistoryHelperPath } else { Join-Path $Repo "$RepoPrefix\overnight-agent\checks\ref-history-index.mjs" }
+$verifyHelper = if ($VerifyHelperPath) { $VerifyHelperPath } else { Join-Path $Repo "$RepoPrefix\overnight-agent\checks\verify-deployed-paths.mjs" }
 
 if (-not (Test-Path $Repo))     { throw "repo not found: $Repo" }
 if (-not (Test-Path $deployer)) { throw "deployer not found: $deployer" }
 if (-not (Test-Path $sweep))    { throw "classifier not found: $sweep" }
+if (-not (Test-Path $historyHelper)) { throw "history helper not found: $historyHelper" }
+if (-not (Test-Path $verifyHelper)) { throw "verify helper not found: $verifyHelper" }
+
+$budget = [Diagnostics.Stopwatch]::StartNew()
+function Get-RemainingMs {
+  return [Math]::Max(0, ($BudgetSeconds * 1000) - [int]$budget.ElapsedMilliseconds)
+}
+function Stop-ForBudget([string]$Phase) {
+  $msg = "DEPLOY NOT VERIFIED - wall-clock budget of ${BudgetSeconds}s exceeded during $Phase."
+  if ($Json) {
+    [pscustomobject]@{ ok=$false; reason='wall-clock-budget'; phase=$Phase; budgetSeconds=$BudgetSeconds } | ConvertTo-Json -Compress
+  } else {
+    Write-Host "[auto-deploy] $msg"
+    Write-Host '[auto-deploy] ASK: surface this failed deploy in the run wrap-up; merged code may not be running.'
+  }
+  exit 2
+}
 
 # --- 0. SELF-BOOTSTRAP ----------------------------------------------------------------
 # The running copy of this script decides whether the running copy gets updated. That is
@@ -207,14 +181,19 @@ if (-not $env:OA_AUTODEPLOY_REEXEC -and $PSCommandPath) {
       Write-Note 'repo copy of this script differs - re-executing it so the NEWER logic decides.'
       $fwd = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$there,
                '-Ref',$Ref,'-Repo',$Repo,'-Installed',$Installed,'-RepoPrefix',$RepoPrefix,
-               '-EscalateAfterCycles',$EscalateAfterCycles,'-StatePath',$StatePath)
+               '-EscalateAfterCycles',$EscalateAfterCycles,'-StatePath',$StatePath,
+               '-BudgetSeconds',$BudgetSeconds,'-ClassifierPath',$sweep,'-HistoryHelperPath',$historyHelper)
+      $fwd += @('-VerifyHelperPath',$verifyHelper)
       if ($WhatIf)    { $fwd += '-WhatIf' }
       if ($Json)      { $fwd += '-Json' }
       if ($SkipFetch) { $fwd += '-SkipFetch' }
       $env:OA_AUTODEPLOY_REEXEC = '1'
       try {
-        & powershell @fwd
-        exit $LASTEXITCODE
+        $reexec = Invoke-Bounded -FilePath 'powershell' -ArgumentList $fwd -BudgetMs (Get-RemainingMs)
+        if ($reexec.TimedOut) { Stop-ForBudget 'self-bootstrap handoff' }
+        if ($reexec.StdOut) { Write-Host $reexec.StdOut.TrimEnd() }
+        if ($reexec.StdErr) { Write-Host $reexec.StdErr.TrimEnd() }
+        exit $reexec.ExitCode
       } finally { Remove-Item Env:\OA_AUTODEPLOY_REEXEC -ErrorAction SilentlyContinue }
     }
   }
@@ -226,13 +205,15 @@ if (-not $env:OA_AUTODEPLOY_REEXEC -and $PSCommandPath) {
 # success, so this cannot be left to the caller.
 $fetched = $false
 if (-not $SkipFetch) {
-  & git -C $Repo fetch origin --quiet 2>&1 | Out-Null
-  $fetched = ($LASTEXITCODE -eq 0)
+  $fetchRun = Invoke-Bounded -FilePath 'git' -ArgumentList @('-C',$Repo,'fetch','origin','--quiet') -BudgetMs (Get-RemainingMs)
+  if ($fetchRun.TimedOut) { Stop-ForBudget 'git fetch' }
+  $fetched = ($fetchRun.ExitCode -eq 0)
   if (-not $fetched) { Write-Note "WARNING: git fetch failed - '$Ref' may be stale." }
 }
-$refSha = (& git -C $Repo rev-parse $Ref 2>&1)
-if ($LASTEXITCODE -ne 0) { throw "cannot resolve ref '$Ref' in $Repo" }
-$refSha = ([string]$refSha).Trim()
+$refRun = Invoke-Bounded -FilePath 'git' -ArgumentList @('-C',$Repo,'rev-parse',$Ref) -BudgetMs (Get-RemainingMs)
+if ($refRun.TimedOut) { Stop-ForBudget 'ref resolution' }
+if ($refRun.ExitCode -ne 0) { throw "cannot resolve ref '$Ref' in $Repo" }
+$refSha = $refRun.StdOut.Trim()
 
 Write-Note "ref       = $Ref ($($refSha.Substring(0,12)))"
 Write-Note "installed = $Installed"
@@ -240,11 +221,15 @@ if ($WhatIf) { Write-Note 'WHAT-IF - nothing will be written and no state will b
 
 # --- 2. DEPLOY (safe class only; -Force is never passed) -----------------------------
 $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$deployer,
-          '-Ref',$Ref,'-Repo',$Repo,'-Installed',$Installed,'-RepoPrefix',$RepoPrefix)
+          '-Ref',$Ref,'-Repo',$Repo,'-Installed',$Installed,'-RepoPrefix',$RepoPrefix,
+          '-ClassifierPath',$sweep)
 if (-not $WhatIf) { $args += '-Confirm' }
 
-$deployOut = & powershell @args 2>&1
-$deployExit = $LASTEXITCODE
+$deployRun = Invoke-Bounded -FilePath 'powershell' -ArgumentList $args -BudgetMs (Get-RemainingMs)
+if ($deployRun.TimedOut) { Stop-ForBudget 'safe deploy classification' }
+$deployOut = @($deployRun.StdOut, $deployRun.StdErr) -join "`n"
+$deployOut = $deployOut -split '\r?\n'
+$deployExit = $deployRun.ExitCode
 
 $written = @()
 $refused = @()
@@ -260,7 +245,14 @@ if (-not $Json) { $deployOut | ForEach-Object { Write-Host "  | $_" } }
 
 if ($deployExit -ne 0) {
   Write-Note "FAILED - deployer exited $deployExit."
-  if ($Json) { [pscustomobject]@{ ok=$false; reason='deployer-failed'; exit=$deployExit } | ConvertTo-Json -Compress }
+  if ($Json) {
+    [pscustomobject]@{
+      ok=$false
+      reason='deployer-failed'
+      exit=$deployExit
+      detail=($deployOut -join "`n")
+    } | ConvertTo-Json -Compress
+  }
   exit 1
 }
 
@@ -272,12 +264,34 @@ if ($deployExit -ne 0) {
 $superseded = @()
 $removed = @()
 $stillRefused = @()
-foreach ($rel in $refused) {
+$historyRows = @()
+$historySeen = @{}
+foreach ($rel in @($refused) + @($written)) {
+  if ($historySeen.ContainsKey($rel)) { continue }
+  $historySeen[$rel] = $true
   $instFile = Join-Path $Installed ($rel -replace '/', '\')
   $repoPath = "$RepoPrefix/$rel"
-  $inHistory = Test-IsSupersededByRef -Repo $Repo -RefName $Ref -RepoPath $repoPath -InstalledFile $instFile
-  $onTip     = Test-PathIsOnRefTip     -Repo $Repo -RefName $Ref -RepoPath $repoPath
+  if (Test-Path $instFile) {
+    $historyRows += [pscustomobject]@{ repoPath=$repoPath; installedFile=$instFile }
+  }
+}
 
+$history = [pscustomobject]@{ matches=@{}; onTip=@{}; tipContent=@{} }
+if ($historyRows.Count -gt 0) {
+  $historyInput = [pscustomobject]@{ paths=$historyRows } | ConvertTo-Json -Depth 4 -Compress
+  $env:OA_REPO = $Repo
+  $env:OA_REF = $Ref
+  $env:OA_HISTORY_SCOPE = "$RepoPrefix/overnight-agent"
+  $historyRun = Invoke-Bounded -FilePath 'node' -ArgumentList @($historyHelper) -BudgetMs (Get-RemainingMs) -InputText $historyInput
+  if ($historyRun.TimedOut) { Stop-ForBudget 'combined ref history classification' }
+  if ($historyRun.ExitCode -ne 0) { throw "history classifier failed: $($historyRun.StdErr)" }
+  $history = $historyRun.StdOut | ConvertFrom-Json
+}
+
+foreach ($rel in $refused) {
+  $repoPath = "$RepoPrefix/$rel"
+  $inHistory = ($history.matches.PSObject.Properties.Name -contains $repoPath) -and [bool]$history.matches.$repoPath
+  $onTip = ($history.onTip.PSObject.Properties.Name -contains $repoPath) -and [bool]$history.onTip.$repoPath
   if (-not $onTip) {
     # The ref does not have this path at all. Two sub-cases, and only one is safe:
     #   content IS in the ref's history -> the ref DELETED a file we still carry. The
@@ -326,17 +340,15 @@ if ($superseded.Count -gt 0) {
     if (-not (Test-Path $bkParent)) { New-Item -ItemType Directory -Force -Path $bkParent | Out-Null }
     if (Test-Path $dst) { Copy-Item $dst $bk -Force }
 
-    $tmp = [IO.Path]::GetTempFileName()
     try {
-      & cmd /c "cd /d `"$Repo`" && git cat-file blob $Ref`:$repoPath > `"$tmp`"" 2>&1 | Out-Null
-      $want = [int](& git -C $Repo cat-file -s "$Ref`:$repoPath")
-      if ((Get-Item $tmp).Length -ne $want) { throw "size mismatch for $repoPath" }
-      Copy-Item $tmp $dst -Force
+      $encoded = $history.tipContent.$repoPath
+      if (-not $encoded) { throw "batched history result omitted tip content for $repoPath" }
+      [IO.File]::WriteAllBytes($dst, [Convert]::FromBase64String($encoded))
       $written += $rel
     } catch {
       Write-Note ("  FAILED   {0}: {1}" -f $rel, $_.Exception.Message)
       $stillRefused += $rel
-    } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+    }
   }
 }
 
@@ -344,20 +356,33 @@ if ($superseded.Count -gt 0) {
 $refused = $stillRefused
 
 # --- 3. VERIFY AT THE FAR END --------------------------------------------------------
-# The deployer reports what it did. This asks the live tree what is true. Re-classifying
-# after the write is the only thing that can prove the bytes landed, and it is also the
-# only way to notice a file that went straight back out of date.
+# The deployer reports what it attempted. Verify every changed path against the ref in
+# one batch so this remains proof of live bytes without paying for a second full-tree
+# classifier pass.
+$verifyInput = [pscustomobject]@{
+  ref = $Ref
+  written = @($written | Sort-Object -Unique | ForEach-Object {
+    [pscustomobject]@{
+      rel=$_
+      repoPath="$RepoPrefix/$_"
+      installedFile=(Join-Path $Installed ($_ -replace '/', '\'))
+      expectedBase64=$history.tipContent."$RepoPrefix/$_"
+    }
+  })
+  removed = @($removed | Sort-Object -Unique | ForEach-Object {
+    [pscustomobject]@{ rel=$_; installedFile=(Join-Path $Installed ($_ -replace '/', '\')) }
+  })
+} | ConvertTo-Json -Depth 5 -Compress
 $env:OA_REPO = $Repo
-$env:OA_INSTALLED_PLUGIN = $Installed
-$env:OA_REPO_PREFIX = $RepoPrefix
-$verifyOut = & node $sweep 2>&1
-
-$residual = @()
-foreach ($line in $verifyOut) {
-  $m = [regex]::Match([string]$line, '^\s{2}(BRANCH-ONLY|UNVERSIONED|MISSING)\s+(\S+)\s+\[')
-  if ($m.Success) { $residual += [pscustomobject]@{ Verdict=$m.Groups[1].Value; Rel=$m.Groups[2].Value } }
-}
-$verified = @($residual | Where-Object { $_.Verdict -eq 'MISSING' }).Count -eq 0
+$verifyRun = Invoke-Bounded -FilePath 'node' -ArgumentList @($verifyHelper) -BudgetMs (Get-RemainingMs) -InputText $verifyInput
+if ($verifyRun.TimedOut) { Stop-ForBudget 'far-end verification' }
+if ($verifyRun.ExitCode -ne 0) { throw "far-end verification failed: $($verifyRun.StdErr)" }
+$verifyResult = $verifyRun.StdOut | ConvertFrom-Json
+$residual = @($verifyResult.residual | ForEach-Object {
+  $parts = $_ -split ' ', 2
+  [pscustomobject]@{ Verdict=$parts[0]; Rel=$parts[1] }
+})
+$verified = $residual.Count -eq 0
 
 # --- 4. ESCALATE A PERSISTENT REFUSAL ------------------------------------------------
 # One refusal is information. The same refusal next cycle is a decision nobody is
@@ -436,8 +461,12 @@ if (-not $NoOaHome) {
       $syncArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $syncScript,
                     '-Ref', $Ref, '-Repo', $Repo, '-SkipFetch')
       if ($WhatIf) { $syncArgs += '-WhatIf' }
-      & powershell @syncArgs 2>&1 | ForEach-Object { Write-Host ("  | " + $_) }
-      $oaHomeExit = $LASTEXITCODE
+      $syncRun = Invoke-Bounded -FilePath 'powershell' -ArgumentList $syncArgs -BudgetMs (Get-RemainingMs)
+      if ($syncRun.TimedOut) { Stop-ForBudget 'OA-home sync' }
+      $syncText = @($syncRun.StdOut, $syncRun.StdErr) -join "`n"
+      $syncText -split '\r?\n' |
+        Where-Object { $_ } | ForEach-Object { Write-Host ("  | " + $_) }
+      $oaHomeExit = $syncRun.ExitCode
     } catch {
       # A failed sync must never abort the run - it degrades to "not synced", which is
       # the status quo it replaces, and is reported rather than thrown.
