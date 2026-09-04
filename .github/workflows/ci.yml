@@ -252,7 +252,7 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-catchup-doc-prefs.ps1
 
-  # Comment provenance, on both surfaces the agent speaks through (GH #422, GH #453).
+  # Comment and body provenance, on both surfaces the agent speaks through (GH #422, #453, #456).
   #
   # The agent posts through Shiv's identity on Google Docs AND on GitHub, so on neither surface
   # does the API's author field distinguish the two of them. The surfaces then need OPPOSITE
@@ -265,11 +265,16 @@ jobs:
   # and until #453 that comment was identified only by there happening to be exactly one -- so
   # the first time Shiv commented, an edit could overwrite his words.
   #
+  # Issue BODIES (#456) need a different fix again: both writers there are legitimately the agent,
+  # so a marker cannot separate them and the answer is a precondition. `gh issue edit --body` is
+  # an unconditional whole-document overwrite -- and its own sibling flags (--add-label, and the
+  # rest) are all additive, so the destructive shape is chosen rather than imposed.
+  #
   # `mutcheck-doc-comments.mjs` predates this job and was running nowhere: it shipped as a guard,
   # was extended by PR #451, and no workflow ever invoked it. That is this repo's own
   # merged-but-not-running failure applied to a reliability check, so it is wired up here.
   #
-  # Pure in-memory fixtures; neither reads the planner folder or calls a network API.
+  # Pure in-memory fixtures; none of them reads the planner folder or calls a network API.
   comment-provenance:
     name: Comment provenance (Docs + GitHub)
     runs-on: ubuntu-latest
@@ -279,6 +284,8 @@ jobs:
         run: node ./plugins/overnight-agent/checks/mutcheck-doc-comments.mjs
       - name: Mutation check (GitHub — stamp, resolve by marker, refuse to edit unmarked)
         run: node ./plugins/overnight-agent/checks/mutcheck-issue-comments.mjs
+      - name: Mutation check (GitHub — issue bodies refuse to overwrite a moved document)
+        run: node ./plugins/overnight-agent/checks/mutcheck-issue-body.mjs
 
   # The board's ragged rows (GH #426). `## Deferred` carries a `Wake` column that
   # `## Today` does not, so a hand-edited or pre-#307 row has one field too few --
