@@ -1020,7 +1020,25 @@ one task, one workspace, one thing being verified at a time"* — and this is th
    task's own journal), the `kickoff_continuation` line when the verdict was `replace`, and — when
    it gets a worktree — the standing worktree clause in PHASE 1.5 §5, **unedited**.
 
-6. **The session does the work; the run session records the outcome.** When it reports back:
+6. **The session does the work AND writes the turn; the run session does not.** (GH #473)
+
+   ⛔ **Exactly one author per wake, and it is the task sub-session.** It holds ground truth, so it
+   is the one that can be accurate about what shipped. When a bound sub-session exists, the run
+   session **must not** also append a turn — two turns for one wake is the stacked-response shape
+   #425 exists to remove, arriving through a door no per-turn guard watches. Measured on task #466:
+   two turns four minutes apart, describing the same PR, **disagreeing** on both the count and the
+   timestamp, and every guard passed because G1–G11 each judge one turn in isolation.
+
+   This is enforced, not conventional: `write-turn.ps1` **G12** refuses a second turn while the
+   previous one is unanswered and inside the wake window. A human reply releases it immediately, and
+   so does time, so answering him and writing on a later night both still work.
+
+   The same rule applies to the **catch-up doc** — one amender per wake. A count that one writer
+   increments and another re-increments is a read-modify-write race on English, and it produced a
+   wrong number the same night. Prefer prose that carries no derived total: a number nobody writes
+   down cannot be double-incremented.
+
+   When it reports back:
 
    - Put **small deliverables inline** in the journal. For **larger deliverables**, write a separate
      file (next to the journal as `journal\task-<ID>-<slug>.md`, or in the relevant project folder)
