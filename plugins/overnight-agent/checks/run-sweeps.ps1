@@ -745,6 +745,26 @@ $Suite = @(
 # so a by-age pruner would silently break #404 continuity. 28 assertions, 6 mutations,
 # every veto load-bearing (mutcheck-session-prune.mjs, auto-globbed by -IncludeMutchecks).
 @{ n = 'session-state-prune-sweep'; bridge = $false }
+# GH #492, added 2026-09-04. A task sub-session recommended a travel routing and described its
+# cost as "her allowance with nothing unpaid" while the SAME document's fixed-points table read
+# "4 days paid, then unpaid" and the prose asserted a spend of 5. Five against four is one
+# unpaid day, so the option advertised as free cost a day of his partner's pay -- and the false
+# premise was load-bearing for the advice, then propagated to the notification email. Every
+# guard passed: write-turn G7/G9/G10/G11, catchup-doc-sweep, the never-comment invariant, 63
+# sweeps / 9 findings. All of them check that a turn is WELL-FORMED; none asks whether a claim
+# agrees with the numbers in the same file, which was a category this repo did not measure at
+# all. It is #471's family with the evidence one step closer -- #471 asserts state never
+# queried, this asserts state queried, present, and contradicted. The defect lives at the SEAM
+# between material authored at different times, and a catch-up doc grows a seam every time a
+# turn amends it, so it recurs by construction rather than by carelessness. Deliberately narrow:
+# it fires only where the document states a number, the prose states a conflicting one, AND the
+# prose makes an ABSOLUTE claim -- the combination that made this actionable rather than vague.
+# Both narrowings are load-bearing and were found by running it: pairing on paragraphs matched a
+# run-log bullet against an unrelated outings table, and taking the first cost-ish column
+# measured "nothing unpaid" against a `Leave` column so the table rule never fired at all.
+# 0.6s over 407 files. 15 assertions, 4 mutations, each killed by exactly its own negative
+# fixture (mutcheck-doc-claim-consistency.mjs, auto-globbed by -IncludeMutchecks).
+@{ n = 'doc-claim-consistency-sweep'; bridge = $false }
 )
 
 if ($IncludeMutchecks) {
