@@ -1,4 +1,4 @@
-<#
+﻿<#
   write-turn.ps1 -- the sanctioned way to write an Overnight Agent turn into a journal.
 
   WHY THIS EXISTS
