@@ -448,3 +448,31 @@ jobs:
         run: node ./plugins/overnight-agent/checks/ps1-encoding-sweep.mjs
         env:
           PS1_SWEEP_ROOT: ${{ github.workspace }}
+
+  # Nothing was watching the watchers (GH #261).
+  #
+  # #261 is "a stuck run freezes the */30 schedule and no timeout fails it". The recovery
+  # mechanism for that already exists AND is already running -- measured 2026-09-03:
+  # oa-supervisor-daemon pid 18196 and browser-watchdog pid 4144, both launched by Explorer
+  # from the Startup folder, because `install-oa-supervisor.ps1` cannot register a scheduled
+  # task without elevation and falls back to a Startup shim. A check that queries only
+  # Get-ScheduledTask sees neither and concludes the machine is unprotected, which is exactly
+  # how this was almost mis-diagnosed.
+  #
+  # The real gap was that both daemons are UNOBSERVED. The supervisor writes a heartbeat every
+  # 15 min, the watchdog logs hourly, and a repo-wide grep found zero readers of either -- while
+  # oa-supervisor-daemon.ps1's own header states that if it dies "it stays dead until next
+  # logon". So supervision could lapse in silence and #261 would return with no signal.
+  #
+  # This job is in CI for the reason the ps1-encoding job above spells out: a guard that only
+  # runs on the nightly laptop is a guard that can rot. The mutation check drives the real sweep
+  # file through its -FactsJson replay path, so it needs no daemon, no scheduled task and no
+  # Windows, and runs unmodified here under pwsh.
+  supervisor-liveness:
+    name: Supervisor liveness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (absent vs dead vs wedged, and healthy stays quiet)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-supervisor-liveness.ps1
