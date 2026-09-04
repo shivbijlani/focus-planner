@@ -690,6 +690,23 @@ $Suite = @(
 # read-then-write loop, so it can actually reach zero. 29 assertions, 5 mutations, each
 # killed by exactly one arm (mutcheck-catchup-doc.mjs, auto-globbed by -IncludeMutchecks).
 @{ n = 'catchup-doc-sweep'; bridge = $false }
+# GH #476, added 2026-09-04. #473 named exactly one author for a wake -- the bound task
+# sub-session -- and #474/#475 enforced it with write-turn.ps1 G12. That closed the "at most
+# one turn per wake" half and made the other half worse: the sole author became a single
+# point of failure with NO detector. Measured live the same night on task #466: woken
+# 05:36:53, host spawned 05:44:44, host gone by ~06:07, and the output was nothing anywhere
+# -- no branch, no PR, journal frozen at the PREVIOUS wake's turn, no doc amendment. `scan`
+# still reported an ordinary `in-progress` row; the only reason it was noticed is that the
+# run session happened to poll process CPU by hand. Every guard in write-turn.ps1 is a
+# property of a turn BEING WRITTEN, so not one of them can fire when nothing is written.
+# That is #346's shape ("nothing to report" and "never reported" are the same bytes) on the
+# authorship surface. This sweep supplies the missing third fact -- the wake is OVER --
+# from the session host's own `inuse.<pid>.lock`, the signal stuck-run-sweep verified live
+# on 2026-08-27, which has the property that a live session (INCLUDING the one running this
+# sweep) can never be mistaken for a closed one. So it stays quiet on the healthy in-flight
+# path and can actually reach zero. 61 assertions, 12 mutations, each killed by exactly the
+# arms it declares (mutcheck-zero-writer.mjs, auto-globbed by -IncludeMutchecks).
+@{ n = 'zero-writer-sweep'; bridge = $false }
 )
 
 if ($IncludeMutchecks) {
