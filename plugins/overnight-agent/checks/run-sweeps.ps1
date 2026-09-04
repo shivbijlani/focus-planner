@@ -486,6 +486,16 @@ $Suite = @(
   # and a commit editing `description` is not a release. Exits 1 when it cannot
   # locate the repo, rather than passing, per the BRIDGE_SRC lesson. 7 fixtures,
   # 5 mutations, every guard load-bearing (mutcheck-version-bump.mjs).
+  #
+  # SINCE 2026-09-04 THIS ALSO GATES IN CI, and the reason is this line's own history.
+  # Detecting was never the problem: this sweep worked, ran nightly, and printed FLAGGED
+  # into a report nobody acted on. Measured at 244b6e3 -- 19 commits and 31 files behind
+  # the last bump, including oa-state.ps1, write-turn.ps1 and both SKILL.md contracts.
+  # That is the stuck-run-sweep lesson verbatim ("a detector goes red and the report is
+  # skimmed", 16 consecutive runs) and #151's five silent days. A finding that only ever
+  # lands in a nightly log is a finding that accumulates, so the CI job
+  # `plugin-version-bump` blocks the merge instead. This entry stays because the nightly
+  # run is what catches drift committed by any path CI does not see.
   @{ n = 'version-bump-sweep';       bridge = $false }
   # journal-encoding-invariant (added 2026-08-27 12:50 PT) — the COMPLEMENT of the line
   # above. installed-skill-drift-sweep asks "does the live file differ from a git ref?",
