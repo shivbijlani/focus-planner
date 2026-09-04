@@ -69,12 +69,19 @@ function New-World([string]$name) {
 
 # A journal whose newest agent turn carries an open ask and has NO trailing user prose is what
 # the scan row calls `awaiting_reply`. Written to match that expression, not a paraphrase of it.
-$journalParked = @'
+# The agent-block heading carries U+1F319 in real journals, and Get-JournalFacts keys on it.
+# Built from its code point rather than typed literally so this file stays pure ASCII: a
+# BOM-less .ps1 containing non-ASCII is mangled by PowerShell 5.1 before it runs, which
+# `ps1-encoding-sweep` refuses (and it caught this file). Every sibling mutcheck here is
+# BOM-less, so matching that convention is what keeps the guard honest.
+$moon = [char]::ConvertFromUtf32(0x1F319)
+
+$journalParked = @"
 # Task {ID}: fixture
 
 ## 2026-09-04
 
-## 🌙 Overnight Agent
+## $moon Overnight Agent
 <!-- from: overnight-agent -->
 
 **Status:** In progress - fixture.
@@ -82,7 +89,7 @@ $journalParked = @'
 **Needs from you:** please confirm the approach before I continue.
 
 <!-- /overnight-agent turn-end -->
-'@
+"@
 
 $journalAnswered = $journalParked + "`r`n`r`nyes go ahead, that sounds right`r`n"
 
