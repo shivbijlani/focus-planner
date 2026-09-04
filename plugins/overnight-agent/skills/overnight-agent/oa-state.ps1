@@ -3648,12 +3648,60 @@ function Get-SessionState($st) {
   return $null
 }
 
+function Test-WorkspaceUsable([string]$path, [string]$wsType) {
+  # Does this workspace still CONTAIN a checkout? (GH #452)
+  #
+  # Measured 2026-09-03: task #466's binding reported `bound: true, verdict: reuse, state: live`
+  # while its workspace was an EMPTY directory -- deregistered from `git worktree list`, no `.git`,
+  # no package.json. The verdict directed the next run to reuse a workspace with no repository in
+  # it. `remove-worktree.ps1` deletes the workspace and knows nothing about bindings; this command
+  # releases bindings and knew nothing about workspaces, so teardown-without-release left the pair
+  # inconsistent and NOTHING checked.
+  #
+  # That is the #261 / #346 shape: a status that reports healthy continuity while the thing it
+  # points at is absent. The repair existed (`-SessionDead`) and worked -- but only because a human
+  # noticed and ran it. This makes the verdict answer the question itself.
+  #
+  # ⛔ ABSENCE OF EVIDENCE IS NOT EVIDENCE OF ABSENCE. Every failure to inspect returns $true.
+  # A path we cannot read -- a disconnected network drive, a permissions blip -- is not proof the
+  # checkout is gone, and guessing "gone" would DISCARD a live session's continuity, which is the
+  # expensive direction. Only a directory that is provably there and provably has no checkout is
+  # reported unusable.
+  if (-not $path) { return $true }
+  # A non-worktree workspace (a plain folder session) has no checkout to look for, so there is
+  # nothing here that could distinguish healthy from broken.
+  if ($wsType -and $wsType -ne 'worktree') { return $true }
+  try {
+    # Is the VOLUME even reachable? `Test-Path` answers $false for a path on a disconnected drive
+    # exactly as it does for a directory that was deleted, so consulting it alone cannot tell
+    # "torn down" from "cannot look" -- and that conflation is the very thing this function's
+    # fail-open rule exists to prevent. Checked first, because it is the difference between
+    # reporting a fact and guessing one.
+    $root = [IO.Path]::GetPathRoot($path)
+    if ($root -and -not (Test-Path -LiteralPath $root)) { return $true }
+
+    if (-not (Test-Path -LiteralPath $path)) { return $false }
+    # `.git` in a worktree is a FILE (`gitdir: ...`), not a directory, so this must not test for a
+    # container. Its absence beside a directory that still exists is the measured signature of a
+    # torn-down worktree.
+    if (Test-Path -LiteralPath (Join-Path $path '.git')) { return $true }
+    return $false
+  } catch {
+    return $true
+  }
+}
+
 function Get-SessionVerdict($sess) {
   # The whole decision, in one place. `create` and `replace` both mean "make a new session", but
   # they are NOT the same instruction: `replace` carries a continuation the new session must be
   # told about, and collapsing them is how continuity is lost while the code still looks correct.
   if (-not $sess) { return 'create' }
   if ("$($sess.state)" -eq 'dead') { return 'replace' }
+  # A live binding whose workspace no longer holds a checkout is `replace`, never `create` (#452).
+  # The distinction is the whole point: this task HAS prior work, and `create` would cold-start it
+  # -- losing exactly the continuity the binding exists to provide. `replace` re-creates the
+  # workspace and tells the new session it is continuing.
+  if (-not (Test-WorkspaceUsable "$($sess.workspace)" "$($sess.workspace_type)")) { return 'replace' }
   return 'reuse'
 }
 
