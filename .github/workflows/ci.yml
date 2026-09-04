@@ -547,3 +547,39 @@ jobs:
           node-version: '22'
       - name: A hung run is failed and the schedule is released (and a working one is not)
         run: node ./plugins/overnight-agent/checks/stuck-run-sweep.test.mjs
+
+  # The at-LEAST-one half of "exactly one turn per wake" (GH #476).
+  #
+  # #473 named one author for a wake and #474/#475 enforced it with write-turn.ps1 G12, which
+  # is the at-MOST-one half. It also made that author a single point of failure with no
+  # detector: every guard in write-turn.ps1 is a property of a turn BEING WRITTEN, reachable
+  # only from the write path, so none of them can fire when nothing is written at all.
+  # Measured live on 2026-09-04, task #466: woken 05:36:53, host spawned 05:44:44, host gone
+  # by ~06:07, and no branch, no PR, no journal turn and no doc amendment anywhere -- while
+  # `scan` still reported an ordinary in-progress row. "Nothing to report" and "never
+  # reported" were the same bytes, which is #346's defect on the authorship surface.
+  #
+  # It runs here rather than only on the nightly laptop for the reason the two jobs above
+  # give, and with extra force: a guard for a silent failure that itself fails silently is
+  # worse than useless, because it will be believed. The harness therefore asserts an
+  # id -> KIND map rather than a fired-set, so a mutation that keeps a finding but relabels
+  # it is still caught, and it proves the cannot-measure path exits 2 rather than reporting a
+  # clean 0.
+  #
+  # Pure text work against a synthetic planner folder, state dir and session-state root in a
+  # temp dir. PLANNER_PATH, OA_STATE_DIR and OA_SESSION_ROOT are all passed into every child,
+  # so nothing depends on LOCALAPPDATA or USERPROFILE and nothing reads the real planner
+  # (#425's job went red on exactly that assumption). Liveness is probed with signal 0 on
+  # this harness's own pid, which works unmodified on the Linux runner.
+  zero-writer-wake:
+    name: Zero-writer wake
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check (a wake that closed without writing is caught; in-flight stays quiet)
+        env:
+          OA_SWEEP: ./plugins/overnight-agent/checks/zero-writer-sweep.mjs
+        run: node ./plugins/overnight-agent/checks/mutcheck-zero-writer.mjs
