@@ -14,7 +14,7 @@
  * `undefined` and the row read back as having no link — while the stray value
  * still rendered in the trailing `Wake` column. Aligning first is the whole fix.
  */
-import { alignRowToHeaders } from './boardRow.js'
+import { normalizeRowCells } from './boardRow.js'
 import { normalizeDateOnly, parseSnoozeUntil } from './snooze.js'
 
 // Calculate days since a date
@@ -76,7 +76,9 @@ export function parseMarkdownTable(lines) {
 
     // #426: align BEFORE indexing. A ragged row's trailing value is its
     // `Linked ID`, not its `Wake`.
-    const aligned = alignRowToHeaders(cells, sourceHeaders)
+    // #446: and recover the full-width case, where the parent id was written
+    // into `Wake` and left `Linked ID` empty — raggedness cannot detect that.
+    const aligned = normalizeRowCells(cells, sourceHeaders)
 
     const row = {}
     const wakeValue = wakeIndex !== -1 ? normalizeDateOnly(aligned[wakeIndex]) : null

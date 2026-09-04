@@ -1,4 +1,4 @@
-import { alignRowToHeaders } from './boardRow.js'
+import { normalizeRowCells } from './boardRow.js'
 
 const SNOOZE_COMMENT_RE = /\s*<!--\s*snooze:(\d{4}-\d{2}-\d{2})\s*-->\s*$/i
 const WAKE_COLUMN = 'Wake'
@@ -17,11 +17,16 @@ function parseCells(rawLine) {
  * `Linked ID`. That survived only because `normalizeDateOnly('191')` is null —
  * luck, not design. A misfiled value that *does* parse as a date would have
  * silently snoozed a live task.
+ *
+ * #446: `normalizeRowCells` additionally relocates a full-width row's misfiled
+ * `Linked ID` out of `Wake` first. This is the load-bearing call for that fix —
+ * `clearSnoozeUntilFromLine` blanks the wake cell, so without the relocation
+ * the parent id is simply deleted and the wake date written on top of it.
  */
 function wakeCells(rawLine, headers) {
   const cells = parseCells(rawLine)
   return Array.isArray(headers) && headers.length > 0
-    ? alignRowToHeaders(cells, headers)
+    ? normalizeRowCells(cells, headers)
     : cells
 }
 
