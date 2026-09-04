@@ -50,7 +50,7 @@ model, not the model itself.
   installed plugin at PHASE 0 of every run, so fixes do ship — the watchdog itself is just
   not among the things checked for staleness.
 
-## High (5 open)
+## High (3 open)
 
 - **#250 — Consent still rests on a marker the agent's own software writes** (a follow-up
   to its now-closed predecessor issue, which made the consent *reader* fail closed — an
@@ -59,24 +59,13 @@ model, not the model itself.
   channel such as the reply's originating `from_user` id. The predecessor's third success
   criterion (an approval record the agent's own journal-writing path cannot reach) is
   still open.
-- **#202 — A finished task stays in the approval queue forever.** The queue decides
-  "is this done?" by reading a frozen Status header near the top of the journal, not the
-  agent's latest turn — so a task that explicitly says "Needs from you: nothing" keeps
-  costing a read on every scan. The same complaint was addressed once before, in merged
-  pull request 232, and the fix did not hold.
 - **#181 — A green CI check must mean all tests ran and passed.** 25 of 30 open PRs, at
   filing time, had run zero CI checks yet showed `mergeStateStatus: CLEAN` — the exact
   inversion of the obvious reading, since `CLEAN` here is strictly weaker evidence than
   `UNSTABLE`.
-- **#172 — A rate-limited `telegram-bridge` run loses all state and re-posts every
-  message on retry.** State is persisted once, at the very end of a run; a run that trips
-  Telegram's rate limit mid-sweep dies before that save, so the resume re-posts every
-  message the dead run already sent — a duplicate-flood risk in the exact path
-  `packages/telegram-bridge/src/state.js` (see [Domain-telegram-bridge](Domain-telegram-bridge))
-  exists to make idempotent.
 - **#170 — The Overnight Agent writes turns into tasks that are already closed.**
 
-## Medium (10 open)
+## Medium (7 open)
 
 - **#184 — Dailies:** recurring items need self check-off, a cadence+predicate form, and
   agent-run activity visibility. Two of the four requested flavors (agent-run FYI, scheduled
@@ -86,16 +75,6 @@ model, not the model itself.
   and one issue trail.** Today the same work is tracked across ~41 board tasks, ~19 GitHub
   issues and ~20 Telegram topics, and the triple-tracking itself is the problem: the same
   defect drifts across all three and becomes impossible to see as "open" in one place.
-- **#174 — The approval digest keeps completed tasks in the queue.** Distinct from #170:
-  this is the digest *listing* closed tasks as open asks (some months old, some provably
-  dead — a completed task still asking "merge 154" for a PR already merged), not the agent
-  writing new turns into them.
-- **#173 — Lint is red on `main`**, so every PR inherits `mergeStateStatus: UNSTABLE`
-  regardless of its own quality — the CI signal a prior fix added to make a green badge
-  mean "verified" is degraded by the repo itself being red.
-- **#171 — A task carrying an External Ticket is invisible to the Telegram digest
-  ordering**, because the board parser rejects that ID-cell shape and the task falls to the
-  worst ordering tier — observed on a row that was literally the first row in `## Today`.
 - **#132 — Task IDs can be reused after completion**, because the completed board is not
   part of the allocation-collision universe (see `idTombstones.js` in
   [Domain-app](Domain-app), which addresses the related deletion case but not this one) — a
