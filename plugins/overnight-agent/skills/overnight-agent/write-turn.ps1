@@ -247,8 +247,24 @@ function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$Window
   # He has spoken since the last turn -> the wake is answered and a reply is welcome.
   if ($lastHuman -gt $lastTurn) { return $null }
 
-  # --- recency ---------------------------------------------------------------------------
+  # --- is the existing turn THIS wake's? -------------------------------------------------
+  # The precise token first. `session.last_woken_at` is stamped when this task's session is
+  # woken for a run, so a turn written at or after it belongs to THIS wake and a turn written
+  # before it belongs to a previous one. That is the per-wake token #473 asked for, and it
+  # needs no window at all.
+  #
+  # WHY THE WINDOW ALONE WAS WRONG, measured on live data within an hour of shipping it: the
+  # agent wakes every 30 minutes, so ANY window wide enough to span one wake's two writers is
+  # also wide enough to swallow the next legitimate wake. A 45-minute window refused this very
+  # task's next turn at 41 minutes - a real new wake with real new work, blocked. Comparing
+  # against the wake boundary makes the two cases distinguishable instead of trading one
+  # false positive for the other.
+  #
+  # The window survives as a FALLBACK for a task whose state has no wake stamp yet (a fresh
+  # install, or the state loss #423 exists to survive), where the boundary is unknown and
+  # something is better than nothing.
   $written = $null
+  $wokenAt = $null
   $statePath = Join-Path $OA_HOME "state\task-$taskId.json"
   if (Test-Path -LiteralPath $statePath) {
     try {
@@ -256,10 +272,18 @@ function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$Window
       if ($st.PSObject.Properties['last_turn_at'] -and $st.last_turn_at) {
         $written = [datetime]::Parse("$($st.last_turn_at)", [Globalization.CultureInfo]::InvariantCulture)
       }
+      if ($st.PSObject.Properties['session'] -and $st.session -and
+          $st.session.PSObject.Properties['last_woken_at'] -and $st.session.last_woken_at) {
+        $wokenAt = [datetime]::Parse("$($st.session.last_woken_at)", [Globalization.CultureInfo]::InvariantCulture)
+      }
     }
-    catch { $written = $null }
+    catch { $written = $null; $wokenAt = $null }
   }
   # The backup trail, which this script writes itself: task-<id>.bak-yyyyMMdd-HHmm.md.
+  # Consulted because `last_turn_at` is stamped by `oa-state.ps1 mark`, so keying only on it
+  # would fail OPEN on exactly the stamp a writer might skip (#465). A backup cannot be
+  # forgotten without also not writing the turn. Minute-resolution, so it is floored to the
+  # minute on both sides of any comparison below.
   $bakDir = $OA_HOME
   if (Test-Path -LiteralPath $bakDir) {
     foreach ($f in Get-ChildItem -LiteralPath $bakDir -Filter "task-$taskId.bak-*.md" -ErrorAction SilentlyContinue) {
@@ -275,12 +299,23 @@ function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$Window
   if ($null -eq $written) { return $null }
 
   $ageMin = ((Get-Date) - $written).TotalMinutes
-  if ($ageMin -ge $WindowMin) { return $null }
+  if ($null -ne $wokenAt) {
+    # Backup stamps are minute-resolution, so compare on whole minutes or a turn written in
+    # the same minute the session woke reads as older than the wake and slips through.
+    $w = $written.AddSeconds(-$written.Second).AddMilliseconds(-$written.Millisecond)
+    $k = $wokenAt.AddSeconds(-$wokenAt.Second).AddMilliseconds(-$wokenAt.Millisecond)
+    if ($w -lt $k) { return $null }   # the turn predates this wake - a new turn is the first
+    $why = 'a turn for THIS wake already exists'
+  }
+  else {
+    if ($ageMin -ge $WindowMin) { return $null }
+    $why = 'a turn was written {0:N0} min ago and this task has no wake stamp to compare against' -f $ageMin
+  }
 
   $line = ($content.Substring(0, [Math]::Min($content.Length, $offset + $lastTurn)) -split "`r?`n").Count
   $head = (($managed.Substring($lastTurn) -split "`r?`n")[0]).Trim()
   New-Finding 'G12' $line $head (
-    ('a turn for this wake already exists ({0:N0} min ago, nothing from him since). ' -f $ageMin) +
+    ('{0} ({1:N0} min ago, nothing from him since). ' -f $why, $ageMin) +
     'The task sub-session owns the turn; the run session must not also write one (#473). ' +
     'If you are deliberately replacing a turn you just wrote, pass -DisableGuard G12.')
 }
