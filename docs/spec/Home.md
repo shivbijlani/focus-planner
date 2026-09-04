@@ -95,6 +95,7 @@ compose and [Rebuilding](Rebuilding) for the order to build them in.
 - [Domain-folder-sync](Domain-folder-sync) — the record-merge sync engine and service worker.
 - [Domain-telegram-bridge](Domain-telegram-bridge) — the Telegram forum mirror.
 - [Domain-overnight-agent](Domain-overnight-agent) — the autonomous agent plugin and its check suite.
+- [Domain-task-paper](Domain-task-paper) — per-task HTML papers and their comment channel.
 - [Domain-diagnostics](Domain-diagnostics) — the shared diagnostics event bus.
 - [Domain-install-prompt](Domain-install-prompt) — PWA install UX.
 - [Domain-mcp-cred-vault](Domain-mcp-cred-vault) — the Windows secret pointer-file schema.
