@@ -85,6 +85,23 @@ export async function loadConfig({ env = process.env, repoRoot } = {}) {
   // re-runs reuse the same topic instead of creating a new one each night.
   const digestTopic = (env.TELEGRAM_BRIDGE_DIGEST_TOPIC || '').trim()
 
+  // #483 — whether to DELETE the turn messages a task posted before it was bound to a catch-up
+  // doc, so its topic converges on the single message #424 specifies.
+  //
+  // Note the default is OFF, which is the opposite of every other flag in this file, and the
+  // asymmetry is deliberate rather than an oversight. The others change what the bridge SAYS;
+  // this one permanently removes messages from the user's own thread, and Telegram offers no
+  // undo. Worse, link mode cannot establish that the removal is lossless the way the turn path
+  // can: there the replacement is another turn, so "does the new text still carry the old
+  // links?" is a question about two strings this process holds. Here the replacement is a
+  // document the bridge never reads, so the honest answer is that it does not know.
+  //
+  // So the default is to REPORT what it would remove and leave the judgement with the user.
+  // Only an explicit on/true/1/yes turns the report into an action.
+  const tidyBoundTopics = /^(on|true|1|yes)$/i.test(
+    (env.TELEGRAM_BRIDGE_TIDY_BOUND || '').trim(),
+  )
+
   return {
     token,
     chatId,
@@ -105,6 +122,7 @@ export async function loadConfig({ env = process.env, repoRoot } = {}) {
     archiveCompleted,
     digestEnabled,
     digestTopic,
+    tidyBoundTopics,
   }
 }
 
