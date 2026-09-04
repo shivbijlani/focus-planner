@@ -41,6 +41,7 @@
 // home directly would drown in its historical backups/ tree, which is deliberately frozen.
 import fs from 'node:fs';
 import path from 'node:path';
+import url from 'node:url';
 
 // ROOT RESOLUTION -- and this is not incidental plumbing, it is the one thing this sweep
 // got wrong on its first live run.
@@ -53,12 +54,39 @@ import path from 'node:path';
 // A detector that reports 131 findings about other people's files is one that gets switched
 // off in a week, which is the same failure repo-drift-sweep's header warns about.
 //
-// Resolved the way repo-drift-sweep already does it: explicit env wins, then probe the known
-// checkout. Deliberately NOT "walk up until a .git turns up" -- from the flat home that finds
-// nothing, and from a worktree it finds the wrong root.
+// Resolved the way repo-drift-sweep already does it: explicit env wins, then the copy locates
+// itself, then the known checkout is probed. Deliberately NOT "walk up until a .git turns up" --
+// from the flat home that finds nothing.
+//
+// SELF-LOCATION (#461) -- added after the hardcoded list was measured scanning the WRONG TREE.
+// The list below names `V:\repos\focus-planner`, the main checkout. Every per-task session now
+// runs in a WORKTREE, so from a worktree this sweep scanned the main checkout instead and
+// reported "clean" about files it had never opened -- the exact class of defect this repo keeps
+// filing. Measured in one instant: the default invocation scanned 80 files and found 0 problems;
+// pointed at the actual worktree it scanned 81 and found 1. Because every task session is a
+// worktree, the default was not occasionally wrong, it was ALWAYS wrong.
+//
+// The fix is structural rather than another absolute path: if this file sits at
+// `<root>/plugins/overnight-agent/checks/`, then `<root>` is the repo that owns THIS COPY, which
+// is true in the main checkout and in every worktree, present and future, with nothing to keep
+// up to date. It is validated by requiring `<root>/package.json`, so a coincidentally-shaped
+// directory cannot win.
+//
+// It cannot fire from the flat OA home -- the file sits directly in the home there, not under
+// plugins/overnight-agent/checks -- so the deployed case still falls through to the list below
+// and keeps the behaviour the 1,004-file measurement above pinned down.
 function firstExisting(paths) {
   for (const p of paths) { if (p && fs.existsSync(p)) return p; }
   return null;
+}
+
+const HERE = path.dirname(url.fileURLToPath(import.meta.url));
+function selfLocatedRepo(dir) {
+  const parts = dir.split(/[\\/]/);
+  const tail = parts.slice(-3).join('/').toLowerCase();
+  if (tail !== 'plugins/overnight-agent/checks') return null;
+  const root = path.resolve(dir, '..', '..', '..');
+  return fs.existsSync(path.join(root, 'package.json')) ? root : null;
 }
 
 const CHECKS_REPO = process.env.OA_CHECKS_REPO || firstExisting([
@@ -67,10 +95,12 @@ const CHECKS_REPO = process.env.OA_CHECKS_REPO || firstExisting([
 ]);
 
 // PS1_SWEEP_ROOT stays the explicit override (the mutation check drives the sweep with it).
-// Otherwise scan the repo the checks archive belongs to; if neither resolves, say so and exit
-// 0 rather than scanning an arbitrary directory -- a sweep that cannot find its subject must
-// report that, not invent a corpus.
+// Then the self-located root, so a worktree scans ITSELF. Then the repo the checks archive
+// belongs to; if none resolves, say so and exit 0 rather than scanning an arbitrary directory --
+// a sweep that cannot find its subject must report that, not invent a corpus.
 const REPO = process.env.PS1_SWEEP_ROOT
+  || (process.env.OA_CHECKS_REPO ? path.resolve(process.env.OA_CHECKS_REPO, '..', '..', '..') : null)
+  || selfLocatedRepo(HERE)
   || (CHECKS_REPO ? path.resolve(CHECKS_REPO, '..', '..', '..') : null);
 
 if (!REPO || !fs.existsSync(REPO)) {
@@ -173,6 +203,10 @@ findings.sort((a, b) => order[a.severity] - order[b.severity] || a.file.localeCo
 
 const loadBearing = findings.filter((f) => f.severity === 'LOAD-BEARING');
 
+// The tree being scanned is REPORTED, not merely resolved (#461). A sweep whose subject is
+// invisible can report "clean" about a tree it never opened, and nobody reading the output can
+// tell. Printing the root makes a wrong root a one-line diff instead of an investigation.
+console.log(`repo scanned                              : ${REPO}`);
 console.log(`.ps1 files scanned                        : ${files.length}`);
 console.log(`BOM-less files containing non-ASCII       : ${findings.length}`);
 console.log(`  of those, LOAD-BEARING (logic at risk)  : ${loadBearing.length}`);

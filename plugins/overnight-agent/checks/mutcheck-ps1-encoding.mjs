@@ -189,6 +189,40 @@ function runDeployedCopy() {
   }
 }
 
+// The WORKTREE shape (#461), and the mirror of runDeployedCopy above. A copy of the sweep placed
+// at <root>/plugins/overnight-agent/checks/ -- the layout every per-task session runs in -- with a
+// BOM-less .ps1 planted inside that same tree. With no env overrides at all, the sweep must scan
+// the tree it is PART OF and find that file.
+//
+// Before the fix it resolved to a hardcoded `V:\repos\focus-planner`, so from a worktree it
+// scanned the main checkout and reported "clean" about files it had never opened. That is the
+// defect this case exists to keep dead, and it is invisible without a synthetic root: run in
+// place, the hardcoded path and the self-located path agree.
+//
+// `package.json` is required because it is what makes self-location an assertion rather than a
+// guess -- a directory that merely has the right three trailing segments is not a repo.
+function runWorktreeCopy() {
+  const root = mkdtempSync(join(tmpdir(), 'ps1-worktree-'));
+  try {
+    writeFileSync(join(root, 'package.json'), '{"name":"synthetic-worktree"}\n', 'utf8');
+    const checks = join(root, 'plugins', 'overnight-agent', 'checks');
+    mkdirSync(checks, { recursive: true });
+    copyFileSync(sweep, join(checks, 'ps1-encoding-sweep.mjs'));
+    writeFileSync(join(checks, 'worktree-only.ps1'), `Write-Host "${WARN} in the worktree"\n`, 'utf8');
+    try {
+      const out = execFileSync('node', [join(checks, 'ps1-encoding-sweep.mjs')], {
+        encoding: 'utf8',
+        env: { ...process.env, PS1_SWEEP_ROOT: '', OA_CHECKS_REPO: '' },
+      });
+      return { code: 0, out };
+    } catch (err) {
+      return { code: err.status ?? -1, out: `${err.stdout ?? ''}${err.stderr ?? ''}` };
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 const rootCases = [
   {
     name: 'ROOT: an unresolvable root scans nothing and exits 0 (never a guessed corpus)',
@@ -240,7 +274,20 @@ for (const c of rootCases) {
   }
 }
 
-const total = cases.length + rootCases.length + 1;
+const total = cases.length + rootCases.length + 2;
+
+{
+  const r = runWorktreeCopy();
+  const name = 'ROOT: a copy inside a WORKTREE scans that worktree, not the main checkout (#461)';
+  if (!r.out.includes('worktree-only.ps1')) {
+    failed += 1;
+    console.log(`FAIL  ${name}`);
+    console.log('      the sweep did not scan the tree it is part of - it reported on some other checkout');
+    console.log(`      ${r.out.trim().split('\n').slice(0, 8).join('\n      ')}`);
+  } else {
+    console.log(`ok    ${name}`);
+  }
+}
 
 {
   const r = runDeployedCopy();
