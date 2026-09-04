@@ -1,4 +1,4 @@
-<#
+﻿<#
   generate-task-papers.ps1 — PHASE 2.5 of an Overnight Agent run (issue #286).
 
   WHY THIS EXISTS
