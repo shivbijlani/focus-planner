@@ -105,6 +105,9 @@ param(
   [string]$Id,
   [Parameter(Mandatory = $true)][string]$BodyFile,
   [string]$JournalDir = 'C:\Users\shiv\OneDrive\Apps\Focus Planner\journal',
+  # #477: overrides the calling session's identity. Only so the arms can drive it; a real run
+  # leaves it unset and the identity comes from COPILOT_AGENT_SESSION_ID, which the harness sets.
+  [string]$Author,
   [switch]$Validate,
   [switch]$Json,
   # Test hooks: named guards to disable, so a mutation check can prove each one is
@@ -194,7 +197,7 @@ function Get-JournalDocMeta([string]$path) {
   }
 }
 
-function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$WindowMin) {
+function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$WindowMin, [string]$Author) {
   # G12 -- ONE TURN PER WAKE (GH #473). The only guard here that is a property of the
   # DESTINATION rather than of the text, which is why it cannot live in Test-TurnBody.
   #
@@ -265,6 +268,8 @@ function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$Window
   # something is better than nothing.
   $written = $null
   $wokenAt = $null
+  $owner = $null
+  $turnBy = $null
   $statePath = Join-Path $OA_HOME "state\task-$taskId.json"
   if (Test-Path -LiteralPath $statePath) {
     try {
@@ -272,12 +277,22 @@ function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$Window
       if ($st.PSObject.Properties['last_turn_at'] -and $st.last_turn_at) {
         $written = [datetime]::Parse("$($st.last_turn_at)", [Globalization.CultureInfo]::InvariantCulture)
       }
-      if ($st.PSObject.Properties['session'] -and $st.session -and
-          $st.session.PSObject.Properties['last_woken_at'] -and $st.session.last_woken_at) {
-        $wokenAt = [datetime]::Parse("$($st.session.last_woken_at)", [Globalization.CultureInfo]::InvariantCulture)
+      if ($st.PSObject.Properties['last_turn_by'] -and $st.last_turn_by) { $turnBy = "$($st.last_turn_by)" }
+      if ($st.PSObject.Properties['session'] -and $st.session) {
+        if ($st.session.PSObject.Properties['last_woken_at'] -and $st.session.last_woken_at) {
+          $wokenAt = [datetime]::Parse("$($st.session.last_woken_at)", [Globalization.CultureInfo]::InvariantCulture)
+        }
+        # THE OWNER IS THE BINDING (#477 point 3): whichever session this task is bound to owns
+        # its turn. Deliberately NOT a second notion of ownership -- it is read from the same
+        # `session` object #475 reads the wake boundary from, so the two halves cannot disagree
+        # about whose wake it is. A dead or replaced binding owns nothing.
+        if ($st.session.PSObject.Properties['session_id'] -and $st.session.session_id -and
+            "$($st.session.state)" -eq 'live') {
+          $owner = "$($st.session.session_id)"
+        }
       }
     }
-    catch { $written = $null; $wokenAt = $null }
+    catch { $written = $null; $wokenAt = $null; $owner = $null; $turnBy = $null }
   }
   # The backup trail, which this script writes itself: task-<id>.bak-yyyyMMdd-HHmm.md.
   # Consulted because `last_turn_at` is stamped by `oa-state.ps1 mark`, so keying only on it
@@ -311,6 +326,38 @@ function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$Window
     if ($ageMin -ge $WindowMin) { return $null }
     $why = 'a turn was written {0:N0} min ago and this task has no wake stamp to compare against' -f $ageMin
   }
+
+  # --- WHOSE turn was it? (#477) ---------------------------------------------------------
+  # G12 shipped enforcing "at most one turn per wake" and nothing about WHICH author, and the
+  # hole showed up on the very first wake after it landed: the run session wrote first, and the
+  # guard then refused the sub-session - the author the contract names as sole owner. The
+  # invariant held; the wrong account survived, and the guard actively defended it.
+  #
+  # So authorship decides between three cases, and only the middle one is new:
+  #
+  #   caller wrote it        -> REFUSE. A genuine same-author duplicate, which is #473 proper.
+  #   OWNER over a NON-OWNER -> ALLOW.  The owner is never locked out by someone else's turn.
+  #   anyone else            -> REFUSE. A non-owner cannot write over anybody.
+  #
+  # 'unknown' (a turn written before authorship was recorded, or by a caller the runtime gave
+  # no identity) is a NON-OWNER, so the owner may supersede it. That direction is deliberate:
+  # treating an unattributed turn as the owner's would let it lock the real owner out, which is
+  # the bug being fixed, one level down.
+  #
+  # SUPERSEDE MEANS APPEND-AND-WIN, not overwrite. This script is append-only by design and
+  # nothing here deletes another author's words: the owner's turn lands below and is the newest,
+  # so it is the account that reads as current. That leaves two turns in the rare case a
+  # non-owner wrote first - a deliberate trade, because the alternative is losing the owner's
+  # account entirely, and an ordered pair is at least attributable.
+  $caller = if ($Author) { $Author } elseif ($env:COPILOT_AGENT_SESSION_ID) { $env:COPILOT_AGENT_SESSION_ID } else { '' }
+  $callerIsOwner = ($owner -and $caller -and ($caller -eq $owner))
+  $sameAuthor = ($caller -and $turnBy -and ($caller -eq $turnBy))
+
+  if ($callerIsOwner -and -not $sameAuthor) {
+    return $null   # the owner supersedes a turn that is not its own
+  }
+  $whoTxt = if ($sameAuthor) { 'by you' } elseif ($turnBy) { "by '$turnBy'" } else { 'by an unrecorded author' }
+  $why = "$why $whoTxt"
 
   $line = ($content.Substring(0, [Math]::Min($content.Length, $offset + $lastTurn)) -split "`r?`n").Count
   $head = (($managed.Substring($lastTurn) -split "`r?`n")[0]).Trim()
@@ -688,7 +735,7 @@ $findings = @(Test-TurnBody -Body $body -Disabled $DisableGuard -Doc $doc)
 # duplicate on a spent one. `-Validate` sees it too, so a validate step gives the same verdict
 # as the real write - which is the only thing that makes validating worth doing.
 if ($Id -and ($DisableGuard -notcontains 'G12')) {
-  $wake = Get-WakeTurnFinding $journal $Id $WAKE_WINDOW_MIN
+  $wake = Get-WakeTurnFinding $journal $Id $WAKE_WINDOW_MIN $Author
   if ($wake) { $findings = @($findings) + @($wake) }
 }
 $findings = @($findings)
