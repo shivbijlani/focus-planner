@@ -280,8 +280,15 @@ $arms = [ordered]@{
     # gate were consulted at all without -Action, this arm would see it.
     gate    = (New-Gate -Allow @($RULE_EMAIL_SELF, $RULE_CREATE_PR) -Ask @($FLOOR_MANY, $FLOOR_FRESH))
     entries = @($HumanApprove)
+    # The list pins the ABSENCE of the gate's fields (`action`, `gate_state`, `gate_list`,
+    # `gate_rule`, `gate_path`) on this path -- that is what M7 mutates and what this arm exists
+    # to catch. It is not a freeze on the consent reader's own vocabulary, which legitimately
+    # grows: `affirmative_answered` was added by #465 so a SPENT approval stays distinguishable
+    # from one that was never given. When a consent fact is added, extend this list; if a field
+    # starting with `gate_` or named `action` ever appears here, the short-circuit has leaked.
     fields  = @('id', 'consent_ok', 'reason', 'human_segments', 'affirmative_phrase',
-      'affirmative_author', 'affirmative_unattributed', 'trailing_has_user', 'path')
+      'affirmative_author', 'affirmative_unattributed', 'affirmative_answered',
+      'trailing_has_user', 'path')
     queries = @(
       @{ args = @(); expect = @{ consent_ok = $true; reason = 'human-authored-affirmative' } }
     )

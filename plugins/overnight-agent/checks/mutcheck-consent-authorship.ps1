@@ -20,6 +20,14 @@
   A case where those two disagree is the fix doing its job. If a mutation makes them agree
   everywhere, the boundary has collapsed back into the reopen reader and a case here fails.
 
+  #465 ADDS A THIRD QUESTION, asked of the same fixtures: has the affirmative been SPENT?
+  Attribution ("is this his?") and consumption ("has it been served?") are independent, and the
+  gate needs both. An approval the agent already replied to must stop authorising, but only THIS
+  agent's reply spends it, and only when it sits BELOW the approval. Cases 961-965 pin each of
+  those discriminations, and `reason` is asserted there because a spent approval and one that was
+  never given are both `consent_ok: false` -- without the reason, a mutation that loses his
+  approval entirely passes as if it had correctly reported it as served.
+
   Runs the REAL oa-state.ps1 against an isolated synthetic journal folder (-JournalDir /
   -StateDir), so live state and live journals are never touched.
 
@@ -151,6 +159,14 @@ Short answer: yes, I approve this approach and it is approved on my side.
 # The human's approval sits in HIS OWN segment, above the heading -- the real shape of #443, where
 # Shiv genuinely typed `approve`. Clamping at the heading must not touch this: a fix that closes
 # the false positive by also closing the true positive has broken the gate, not repaired it.
+#
+# #465 RECLASSIFIED THIS CASE, and the distinction is the point. Attribution is unchanged: the
+# `approve` is still found and still attributed to Shiv. What changed is that the agent has
+# REPLIED beneath it, so the approval has been served and must not authorise a second action.
+# The verdict is therefore `human-affirmative-already-answered` -- consent_ok false, but with the
+# phrase and author still reported, so "he approved and I acted on it" stays distinguishable from
+# "he never approved". Asserting the REASON here is what keeps this case guarding #272: a
+# mutation that swallows his segment entirely also fails, because it reports nothing at all.
 $humanApproveThenAgentTurn = @'
 ## 2026-08-29
 
@@ -162,6 +178,101 @@ approve
 **Status:** Done
 
 Your approve is drained; nothing here needs a decision.
+'@
+
+# #465's PARITY CONTROL, and the measurement that motivated the whole change. Byte-identical to
+# the fixture above except for the turn-end stamp the agent writes about its OWN turn. Before
+# #465 these two returned opposite verdicts -- `human-authored-affirmative` without the stamp,
+# `no-trailing-content` with it -- which means a marker the agent forgot decided whether a
+# week-old approval could authorise an irreversible action, and forgetting it failed OPEN.
+#
+# They must now agree on consent_ok. They legitimately differ on `reason`: with the stamp the
+# trailing window has moved past the approval entirely, so there is nothing left to report.
+$humanApproveThenAgentTurnStamped = $humanApproveThenAgentTurn + "`n`n<!-- /overnight-agent turn-end -->"
+
+# #465 NARROWNESS, and the case that stops the fix becoming a blanket "any text below spends it".
+# A sibling skill appends its own turn below Shiv's approval. The overnight agent has NOT answered
+# him, so his approval is still live. Consuming here would be a false NEGATIVE in the gate -- he
+# approves, a scheduled sibling posts, and his approval silently evaporates.
+#
+# It doubles as #272's surviving narrowness guard: there is still a `## ` heading below his
+# segment, so a clamp that swallows the human's own text still fails this case.
+$humanApproveThenSiblingTurn = @'
+## 2026-08-29
+
+<!-- from: me -->
+approve
+
+## 2026-08-30
+
+<!-- from: dance-church -->
+Added 3 classes to the calendar.
+'@
+
+# #465: spending must not deadlock the gate closed. He approves, the agent replies, he approves
+# AGAIN. The second affirmative has nothing beneath it and is live. A fix that returns on the
+# first spent affirmative instead of continuing the scan would make re-approval impossible --
+# the task could never be authorised again, which is a fail-closed hang rather than a guard.
+$humanApproveSpentThenReapproved = @'
+## 2026-08-29
+
+<!-- from: me -->
+approve
+
+## Overnight Agent
+
+**Status:** Done
+
+Handled.
+
+## 2026-08-31
+
+<!-- from: me -->
+yes go ahead
+'@
+
+# #465 x #320: an agent turn heading QUOTED INSIDE A FENCE is an example, not a turn. If agent-turn
+# detection reads raw text instead of the mask, then pasting a turn heading into a message -- which
+# is what every postmortem in this repo does -- silently spends the approval sitting above it.
+$humanApproveThenFencedHeading = @'
+## 2026-08-29
+
+<!-- from: me -->
+approve
+
+```
+## Overnight Agent
+```
+'@
+
+# #465 ORDERING. The agent replied to an earlier message, and he approved AFTER that reply. Nothing
+# has answered the approval, so it is live. It pins the comparison as positional: a mutation that
+# spends an affirmative whenever an agent turn exists anywhere in the region kills real approvals,
+# and only a case with an agent turn sitting ABOVE the human's word can tell that apart.
+#
+# The agent's turn here is deliberately UNSTAMPED, and the shape is deliberately
+# [human] -> [agent] -> [human]. Both are load-bearing, and an earlier draft of this fixture was
+# inert because neither was: an `<!-- from: overnight-agent -->` marker is what Get-AgentEndIndex
+# anchors the turn boundary on, and a managed heading with no unmanaged heading above it is
+# stepped over by the boundary walk -- either way the agent turn ends up ABOVE the trailing region
+# instead of inside it, so there is nothing for a position mutation to get wrong. Opening with the
+# user's own dated heading is what holds the boundary open above all three entries.
+$agentTurnThenHumanApprove = @'
+## 2026-08-28
+
+<!-- from: me -->
+should the watchdog agent be doing reaps?
+
+## Overnight Agent
+
+**Status:** In progress
+
+Answered above; no decision needed from you yet.
+
+## 2026-08-29
+
+<!-- from: me -->
+approve
 '@
 
 # --- #320 / #325: a fenced code block is QUOTED TEXT, not markup -------------------------
@@ -266,6 +377,11 @@ $unknownAuthorApprove = "## 2026-08-29`n`n<!-- from: agent -->`napprove"
 
 # id -> expectations. `reopened` is asserted alongside `consent_ok` so a mutation that
 # collapses one into the other is caught rather than silently passing.
+#
+# `reason` is OPTIONAL and asserted only where it carries information consent_ok cannot. #465's
+# cases need it: a spent approval and a never-given one are both `consent_ok: false`, so without
+# the reason a mutation that loses Shiv's approval entirely is indistinguishable from one that
+# correctly reports it as served.
 $cases = [ordered]@{
   '940' = @{ entries = @();                  consent = $false; reopened = $false; why = 'nothing below the block -> no consent, quiet' }
   '941' = @{ entries = @($humanApprove);     consent = $true;  reopened = $true;  why = 'human-marked "approve" -> CONSENT' }
@@ -279,7 +395,7 @@ $cases = [ordered]@{
   '949' = @{ entries = @($humanNegative);    consent = $false; reopened = $true;  why = 'explicit refusal -> no consent' }
   '950' = @{ entries = @($mixedAgentAffirm); consent = $false; reopened = $false; why = 'agent answered inline; its own "approve" is not consent' }
   '951' = @{ entries = @($trappedAgentTurn); consent = $false; reopened = $true;  why = '#272: unmarked agent turn under its own heading -> NOT the human''s approval' }
-  '952' = @{ entries = @($humanApproveThenAgentTurn); consent = $true; reopened = $true; why = '#272 narrowness: human approved above the heading -> still CONSENT' }
+  '952' = @{ entries = @($humanApproveThenAgentTurn); consent = $false; reopened = $true; reason = 'human-affirmative-already-answered'; why = '#465: his approval is FOUND, and already served by the turn below -> SPENT' }
   '953' = @{ entries = @($fencedHumanMarker);     consent = $false; reopened = $true;  why = '#320: a `me` marker inside a FENCE is quoted text -> NOT consent' }
   '954' = @{ entries = @($fencedAgentMarker);     consent = $false; reopened = $true;  why = '#320 control: same fence, agent marker -> NOT consent either' }
   '955' = @{ entries = @($humanApproveWithFence); consent = $true;  reopened = $true;  why = '#325: a real approval is not erased by a fence pasted under it' }
@@ -288,6 +404,11 @@ $cases = [ordered]@{
   '958' = @{ entries = @($fenceThenHumanApprove); consent = $true;  reopened = $true;  why = '#320: an approval BELOW a fence survives (mask preserves offsets)' }
   '959' = @{ entries = @($indentedHumanApprove);  consent = $true;  reopened = $true;  why = '#320 crit2: a GENUINE marker that is indented is still honoured' }
   '960' = @{ entries = @($unknownAuthorApprove);  consent = $false; reopened = $false; why = '#320 crit4: an unknown marker value (`agent`) fails closed' }
+  '961' = @{ entries = @($humanApproveThenAgentTurnStamped); consent = $false; reopened = $false; why = '#465 PARITY: same journal + turn-end stamp -> same consent verdict as 952' }
+  '962' = @{ entries = @($humanApproveThenSiblingTurn);      consent = $true;  reopened = $true;  reason = 'human-authored-affirmative'; why = '#465 narrowness: a SIBLING turn below does not spend his approval' }
+  '963' = @{ entries = @($humanApproveSpentThenReapproved);  consent = $true;  reopened = $true;  reason = 'human-authored-affirmative'; why = '#465: spent, then re-approved -> the NEWER approval is live' }
+  '964' = @{ entries = @($humanApproveThenFencedHeading);    consent = $true;  reopened = $true;  reason = 'human-authored-affirmative'; why = '#465 x #320: a turn heading inside a FENCE cannot spend an approval' }
+  '965' = @{ entries = @($agentTurnThenHumanApprove);        consent = $true;  reopened = $true;  reason = 'human-authored-affirmative'; why = '#465 ordering: an agent turn ABOVE his approval does not spend it' }
 }
 
 function Invoke-Scan([string]$Script) {
@@ -320,8 +441,19 @@ function Test-Cases($byId, [string]$Label) {
     $ec = [bool]$cases[$id].consent
     $er = [bool]$cases[$id].reopened
     $ok = ($ac -eq $ec) -and ($ar -eq $er)
+    # Asserted only where declared -- see the note on $cases. A reason mismatch is a real
+    # failure, not a warning: for #465's cases it is the ONLY signal that distinguishes
+    # "his approval was found and spent" from "his approval was lost".
+    $why = $cases[$id].why
+    if ($cases[$id].reason) {
+      $areason = "$($row.consent_reason)"
+      if ($areason -ne $cases[$id].reason) {
+        $ok = $false
+        $why = "$why  [reason: expected $($cases[$id].reason), got $areason]"
+      }
+    }
     if ($ok) { $pass++ } else { $fail++ }
-    Write-Host ("{0,-5} {1,-9} {2,-9} {3,-9} {4,-9} {5}  [{6}]" -f $id, $ec, $ac, $er, $ar, $cases[$id].why, $(if ($ok) { 'PASS' } else { 'FAIL' }))
+    Write-Host ("{0,-5} {1,-9} {2,-9} {3,-9} {4,-9} {5}  [{6}]" -f $id, $ec, $ac, $er, $ar, $why, $(if ($ok) { 'PASS' } else { 'FAIL' }))
   }
   Write-Host "passed $pass / $($pass + $fail)"
   return $fail
@@ -342,7 +474,7 @@ $mutations = @(
     name  = 'M1: consent falls back to the reopen reader (the original #227 bug)'
     apply = { param($s) $s -replace [regex]::Escape('return [bool](Get-ConsentFacts $trailing).consent_ok'), 'return (Test-TrailingHasUser $trailing)' }
     hook  = 'Consent         = (Get-ConsentFacts $trailing)'
-    swap  = 'Consent         = ([pscustomobject]@{ consent_ok = (Test-TrailingHasUser $trailing); reason = "mutated"; human_segments = 0; affirmative_phrase = $null; affirmative_author = $null; affirmative_unattributed = $false })'
+    swap  = 'Consent         = ([pscustomobject]@{ consent_ok = (Test-TrailingHasUser $trailing); reason = "mutated"; human_segments = 0; affirmative_phrase = $null; affirmative_author = $null; affirmative_unattributed = $false; affirmative_answered = $false })'
   },
   @{
     name  = 'M2: unmarked text is attributed to the human (fail OPEN instead of closed)'
@@ -395,6 +527,52 @@ $mutations = @(
     # indistinguishable from the correct one.
     name  = 'M10: #320 crit2 -- the anchor is over-tightened to column 0, so an indented genuine marker is ignored'
     apply = { param($s) $s -replace [regex]::Escape("`$script:ProvenanceRe  = '(?m)^[ \t]*<!--[ \t]*from:"), "`$script:ProvenanceRe  = '(?m)^<!--[ \t]*from:" }
+  },
+  @{
+    # #465's core arm: consumption removed entirely, which is the pre-#465 behaviour. A week-old
+    # approval the agent already answered goes back to authorising irreversible actions.
+    name  = 'M11: #465 -- an affirmative is never spent, so a served approval authorises forever'
+    apply = { param($s) $s -replace [regex]::Escape('$served = @($agentTurnAt | Where-Object { $_ -gt $at }).Count -gt 0'), '$served = $false' }
+  },
+  @{
+    # The over-correction, and the mirror of M11. Spending on ANY agent turn regardless of where
+    # it sits kills approvals the agent has not answered -- he approves below a turn and the gate
+    # discards it. Only a case with the agent ABOVE the human (965) can see the difference.
+    name  = 'M12: #465 -- position is ignored, so an agent turn ABOVE the approval also spends it'
+    apply = { param($s) $s -replace [regex]::Escape('Where-Object { $_ -gt $at }'), 'Where-Object { $true }' }
+  },
+  @{
+    # Widening consumption to any machine author. A sibling skill posting on its own schedule
+    # would then silently evaporate a live approval -- a false negative that looks exactly like
+    # Shiv never answering.
+    name  = 'M13: #465 -- ANY author''s turn spends the approval, not just this agent''s'
+    apply = { param($s) $s -replace [regex]::Escape('if ($m.Groups[1].Value.Trim() -eq $script:SelfAuthor) { $agentTurnAt += $m.Index }'), 'if ($true) { $agentTurnAt += $m.Index }' }
+  },
+  @{
+    # Detecting only the provenance marker and not the managed heading. This is the arm that
+    # matters most in practice: 164 of 244 live journals carry NO provenance marker, so a
+    # marker-only rule spends nothing on exactly the journals #465 was filed about.
+    name  = 'M14: #465 -- only a provenance marker counts, so an UNSTAMPED agent turn spends nothing'
+    apply = { param($s) $s -replace [regex]::Escape("foreach (`$m in [regex]::Matches(`$scan, '(?m)^[ \t]*##[^\r\n]*Overnight Agent')) {"), "foreach (`$m in @()) {" }
+  },
+  @{
+    # Agent-turn detection reading raw text instead of the fence mask. A postmortem that quotes
+    # a turn heading inside a fence would then spend the approval sitting above it.
+    name  = 'M15: #465 x #320 -- agent turns are located on raw text, so a FENCED heading spends an approval'
+    apply = { param($s) $s -replace [regex]::Escape('$scan = Get-FenceMaskedText $trailing
+  $agentTurnAt = @()'), '$scan = $trailing
+  $agentTurnAt = @()' }
+  },
+  @{
+    # Returning on the first spent affirmative instead of continuing the scan. Re-approval after
+    # the agent has replied becomes impossible: the gate hangs closed forever, which is a
+    # different bug from the one #465 fixes and would be invisible without case 963.
+    name  = 'M16: #465 -- the scan stops at the first spent affirmative, so re-approving never works'
+    apply = { param($s) $s -replace [regex]::Escape('        continue
+      }
+      $result.consent_ok = $true'), '        return [pscustomobject]$result
+      }
+      $result.consent_ok = $true' }
   }
 )
 

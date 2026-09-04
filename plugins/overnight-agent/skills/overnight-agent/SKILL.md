@@ -342,6 +342,7 @@ text positively attributed to `<!-- from: me -->`). Every other verdict fails cl
 | `reason` | means |
 | --- | --- |
 | `human-authored-affirmative` | ✅ the human approved — proceed |
+| `human-affirmative-already-answered` | they approved, and this agent has **already replied beneath it** — the approval is spent. **Do not act**: it authorised the turn that answered it, not this one. `affirmative_phrase` still reports the word, so a spent approval stays distinguishable from silence. Ask again if you need a fresh one |
 | `affirmative-not-attributable-to-human` | an approval word exists but a machine (or nobody) wrote it — **do not act**; if you believe it is genuinely the user's, ask them to say it again rather than assuming |
 | `human-spoke-but-no-affirmative` | they replied, but did not approve |
 | `no-human-authored-content` / `no-trailing-content` | nobody approved |
@@ -385,6 +386,18 @@ The narrow half matters as much: an approval typed under `<!-- from: me -->` wit
 untouched, so a genuine `approve` still reads as one. **The verdict now means what the table says it
 means** — but it only stays true while every turn stamps itself, which is why `write-turn.ps1` **G7**
 refuses to write one that does not, and `unstamped-turn-sweep` reports the ones already on disk.
+
+⚠️ **An affirmative is SPENT once you have replied beneath it (#465, fixed 2026-09-04).** Approval
+authorises the turn that answers it, not every turn after. Until this fix nothing expired one: the only
+`consent_ok: true` on the whole 244-row board was a `approve` from seven days earlier, on a task the
+agent had already marked `done` and whose own turn read *"your `approve` is fully drained"*. Worse, whether
+it expired was decided by a marker the agent writes **about itself** — two journals identical but for the
+`turn-end` stamp returned `human-authored-affirmative` and `no-trailing-content`, so a forgotten stamp
+failed **open**. Consumption is now derived from structure that survives a forgotten stamp: this agent's
+own provenance marker, or its `## … Overnight Agent` heading, appearing *below* the affirmative. It is
+deliberately narrow — a **sibling** skill's turn does not spend his approval (it never answered him), a
+turn **above** it does not, one quoted inside a fence does not, and a **later** affirmative is live again,
+so re-approving always works.
 
 ### Reopened after close (the user replied below your block)
 
