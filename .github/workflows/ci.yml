@@ -125,6 +125,15 @@ jobs:
       - name: Mutation check (unlink before remove, verify the target survived)
         shell: pwsh
         run: ./scripts/mutcheck-worktree-safety.ps1
+      # The other half of the same lifecycle (GH #452). Teardown removes the workspace and knows
+      # nothing about session bindings, so a torn-down worktree left its binding reporting
+      # `reuse, live` at an empty directory -- the next run told to resume a workspace with no
+      # repository in it. Measured on task #466. The verdict now verifies its own workspace, and
+      # fails OPEN: a path it cannot inspect is never called dead, because discarding a live
+      # session's continuity is the expensive direction.
+      - name: Mutation check (the session verdict verifies its workspace)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-workspace-verdict.ps1
 
   # The read-path budget guard (GH #292/#293) is what stops an every-run file growing
   # until it eats the context window -- the defect that made runs stop finishing. Its
