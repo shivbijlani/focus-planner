@@ -13,7 +13,7 @@
 // Method: the REAL module source is mutated textually and imported, against an in-memory fake of
 // the `gh` transport. No reimplementation of the primitive lives here — a guard that grades its
 // own copy grades nothing. Nothing in this file touches the network.
-import { readFileSync, writeFileSync, mkdtempSync } from 'fs'
+import { readFileSync, writeFileSync, mkdtempSync, readdirSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
 import { tmpdir } from 'os'
 import { fileURLToPath, pathToFileURL } from 'url'
@@ -27,14 +27,48 @@ const SOURCE = readFileSync(SRC, 'utf8').replace(/\r\n/g, '\n')
 const TMP = mkdtempSync(join(tmpdir(), 'mutcheck-issue-body-'))
 
 let counter = 0
+// Sibling `lib-*.mjs` modules are copied alongside each mutant. The harness mutates ONE file and
+// imports it from a temp directory, so a relative import that resolves in the repo (and in the
+// flat OA home, where every check lands in one directory) resolves to nothing here. Copying them
+// keeps the shared temp-file writer single-sourced rather than duplicated per library to suit the
+// test harness.
+const SIBLING_SRC = new Map()
+const SIBLINGS = readdirSync(HERE).filter((f) => /^lib-.*\.mjs$/.test(f) && f !== 'lib-issue-body.mjs')
+for (const f of SIBLINGS) SIBLING_SRC.set(f, readFileSync(join(HERE, f), 'utf8').replace(/\r\n/g, '\n'))
+
+/**
+ * Load the primitive, optionally with one mutation applied.
+ *
+ * A mutation may name a `file`: the shared temp-file writer lives in a sibling module, and a
+ * guarantee that module provides (no BOM) is asserted by an arm here, so it must be mutable from
+ * here too. Without that, the arm would be unfalsifiable — it would pass against any writer,
+ * which is the "guard that is decoration" this whole file exists to rule out.
+ *
+ * Each mutant gets its OWN directory, so a mutated sibling cannot leak into the next load.
+ */
 async function load(mutation) {
+  const dir = join(TMP, `m${counter++}`)
+  mkdirSync(dir, { recursive: true })
+
   let src = SOURCE
-  if (mutation) {
-    const next = mutation.apply(src)
-    if (next === src) throw new Error(`mutation ${mutation.name} did not change the source`)
-    src = next
+  let applied = false
+  for (const [name, text] of SIBLING_SRC) {
+    let out = text
+    if (mutation && mutation.file === name) {
+      out = mutation.apply(text)
+      if (out === text) throw new Error(`mutation ${mutation.name} did not change ${name}`)
+      applied = true
+    }
+    writeFileSync(join(dir, name), out, 'utf8')
   }
-  const file = join(TMP, `m${counter++}.mjs`)
+  if (mutation && !mutation.file) {
+    src = mutation.apply(SOURCE)
+    if (src === SOURCE) throw new Error(`mutation ${mutation.name} did not change the source`)
+    applied = true
+  }
+  if (mutation && !applied) throw new Error(`mutation ${mutation.name} named an unknown file '${mutation.file}'`)
+
+  const file = join(dir, 'subject.mjs')
   writeFileSync(file, src, 'utf8')
   return import(pathToFileURL(file).href)
 }
@@ -289,13 +323,63 @@ const ARMS = [
       return null
     },
   },
+  {
+    name: 'K_the_safe_call_is_the_SHORT_call_writeFile_is_defaulted',
+    why: 'GH #462 trap 1 — a guard that costs more boilerplate than the unguarded one-liner gets routed around',
+    run: async (m) => {
+      // No `writeFile` argument at all. Before the default this threw
+      // `TypeError: writeFile is not a function` from inside the library, AFTER the pre-read had
+      // already run — so the guarded path required mkdtempSync + writeFileSync + return-the-path
+      // at every call site, while `gh issue edit --body-file` needed one line. That ratio is the
+      // defect: GH #456's own argument, turned on GH #456's fix.
+      let live = 'original body'
+      let sent = null
+      const run = (args) => {
+        if (args[0] === 'api' && !args.includes('-X')) return JSON.stringify({ body: live })
+        if (args.includes('-X')) {
+          const file = String(args[args.length - 1]).replace(/^body=@/, '')
+          sent = readFileSync(file, 'utf8')
+          live = sent
+          return '{}'
+        }
+        return '{}'
+      }
+      const r = m.updateIssueBody({ repo: REPO, issue: 462, body: 'new body', baseDigest: m.bodyDigest(live), run })
+      if (!r.ok) return `a call with no injected writeFile failed: ${r.reason}`
+      if (sent !== 'new body') return `the default writer sent ${JSON.stringify(sent)}, not the body given`
+      // A BOM would arrive as three stray characters at the top of the issue body, above the
+      // provenance marker — which is anchored to the first non-empty line and would stop matching.
+      if (sent.charCodeAt(0) === 0xFEFF) return 'the default writer emitted a BOM'
+
+      // Injection must still work, or the default has removed the seam every guard here needs.
+      let injected = false
+      const r2 = m.updateIssueBody({
+        repo: REPO, issue: 462, body: 'newer body', baseDigest: m.bodyDigest(live), run,
+        writeFile: (b) => { injected = true; const p = join(TMP, `inj-${counter++}.md`); writeFileSync(p, b, 'utf8'); return p },
+      })
+      if (!r2.ok) return `the injected-writeFile call failed: ${r2.reason}`
+      if (!injected) return 'an injected writeFile was ignored — the default overrode it'
+      return null
+    },
+  },
 ]
 
-// ---------------------------------------------------------------------------------------------
-// MUTATIONS — each restores a different version of the unguarded write. Each MUST be killed.
-// ---------------------------------------------------------------------------------------------
-
 const MUTATIONS = [
+  {
+    name: 'writeFile_loses_its_default',
+    breaks: 'GH #462 trap 1 — the guarded path costs boilerplate the unguarded one-liner does not, so it gets routed around',
+    apply: (s) => s.replace(
+      'export function updateIssueBody({ repo, issue, body, baseDigest, run = defaultRun, writeFile = defaultWriteFile }) {',
+      'export function updateIssueBody({ repo, issue, body, baseDigest, run = defaultRun, writeFile }) {'),
+  },
+  {
+    name: 'the_default_writer_emits_a_BOM',
+    file: 'lib-gh-write-file.mjs',
+    breaks: 'three stray characters land above the provenance marker, which is anchored to the first line',
+    apply: (s) => s.replace(
+      "writeFileSync(file, String(body ?? ''), { encoding: 'utf8' })",
+      "writeFileSync(file, '\\uFEFF' + String(body ?? ''), { encoding: 'utf8' })"),
+  },
   {
     name: 'drop_the_precondition_entirely',
     breaks: 'restores `gh issue edit --body`: an unconditional whole-document overwrite',

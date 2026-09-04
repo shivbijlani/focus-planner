@@ -45,6 +45,7 @@
 // answers precisely the question asked: is the text I am replacing still the text I read?
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
+import { defaultWriteFile } from './lib-gh-write-file.mjs'
 
 /**
  * Digest of an issue body.
@@ -89,7 +90,7 @@ export function readIssueBody({ repo, issue, run = defaultRun }) {
  * what the body should say, and the refusal is inconvenient. Re-applying onto `liveBody` is always
  * available and is never destructive, so nothing legitimate needs forcing.
  */
-export function updateIssueBody({ repo, issue, body, baseDigest, run = defaultRun, writeFile }) {
+export function updateIssueBody({ repo, issue, body, baseDigest, run = defaultRun, writeFile = defaultWriteFile }) {
   // ALWAYS re-read immediately before writing (#456 requirement 1). A digest taken earlier in the
   // run is not evidence about now; the whole point is that the body may have moved since, and a
   // precondition checked against a stale read is not a precondition.
@@ -129,7 +130,7 @@ export function updateIssueBody({ repo, issue, body, baseDigest, run = defaultRu
  * because appending onto a body that moved can duplicate a section that the other write already
  * added — the append is safe about LOSS, not about correctness.
  */
-export function appendToIssueBody({ repo, issue, addition, baseDigest, run = defaultRun, writeFile }) {
+export function appendToIssueBody({ repo, issue, addition, baseDigest, run = defaultRun, writeFile = defaultWriteFile }) {
   const live = readIssueBody({ repo, issue, run })
   if (!baseDigest) {
     return { ok: false, reason: 'no-base-digest', liveBody: live.body, digest: live.digest }
