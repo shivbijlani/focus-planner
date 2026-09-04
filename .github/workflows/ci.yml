@@ -644,3 +644,32 @@ jobs:
           # updates, which had it reporting a permanently-red wrong number until 2026-09-04.
           OA_PLUGIN_REF: HEAD
         run: node ./plugins/overnight-agent/checks/version-bump-sweep.mjs
+  # The supervisor could report HEALTHY while the machine was unusable (GH #403).
+  #
+  # Every state its classifier could reach was derived from the overnight-agent run slot, so
+  # "the app is responsive and runs start on time" was the whole definition of healthy. A
+  # process that is responsive AND eating a quarter of the machine satisfied it completely.
+  # Measured on shiv-devbox 2026-09-02 while Shiv reported the box unusable: CPU pinned,
+  # processor queue length 21 on 4 cores, disk 99% idle -- and the app's own WebView2 tree had
+  # burned 7.05 CPU-hours in 14.7 hours of uptime. The supervisor logged HEALTHY / action none
+  # throughout, and reached STUCK three times that day while correctly vetoing action, because
+  # it had no way to say "this live run is pathologically expensive rather than merely slow".
+  #
+  # The hard part is not the restart, which already worked; it is defining "leaking" so it
+  # cannot fire on a healthy machine under legitimate load. So the arms are the point, and CI
+  # runs them: a busy-but-healthy machine must stay quiet, an interactive session must never be
+  # restarted merely for being long-lived (#178), and failed sampling must not read as health
+  # (#346). The harness mutates the REAL oa-supervisor.ps1 rather than a copy of its logic --
+  # unlike the older mutcheck-supervisor.ps1, whose reimplemented classifier can drift from the
+  # file that actually ships, which is #463's "green where it was written, broken where it runs".
+  #
+  # Pure text work: it lifts the two pure functions out of the source and drives them against
+  # recorded samples, so there is no database, no app, no daemon and no Windows-only API here.
+  supervisor-resource-detector:
+    name: Supervisor resource detector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (a real leak fires; a busy-but-healthy machine stays quiet)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-supervisor-resource.ps1
