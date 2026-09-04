@@ -155,6 +155,21 @@ const pidAlive = (pid) => {
 /**
  * Is the wake over? Derived from the session host, never from the session's own cooperation —
  * a process that dies mid-turn cannot file a report about having died.
+ *
+ * ⛔ THE PID IS PROBED, NOT ASSUMED. A lock FILE proves a host once claimed this session; only
+ * a live PID proves one still holds it, and nothing removes the file when a host dies. Measured
+ * on this machine 2026-09-04 (GH #481): `session-state` has never been pruned — 4,109 dirs,
+ * 2.6 GB — and of 493 `inuse.*.lock` files, 488 name a PID THAT NO LONGER EXISTS while only 5
+ * dirs are held by a live `copilot.exe`. Simplifying this to `locks.length > 0` therefore reads
+ * ~99% of the store as permanently working and silently disables this sweep for the exact
+ * population it exists for. It looks like a harmless cleanup and it is the defect this file was
+ * built to detect, so mutcheck pins it with its own arm rather than trusting this comment.
+ *
+ * Residual, bounded on purpose: Windows recycles PIDs, so a recycled PID can make a long-dead
+ * session read alive (#481). That degrades a ZERO_WRITER into a WAKE_UNSERVICED — the task is
+ * still named and still reported, because a host that never serviced this wake has no event
+ * after it — it does not go silent. Under-reporting the REASON is acceptable; under-reporting
+ * the TASK would not be.
  */
 const closure = (sessionId) => {
   const dir = path.join(SESSION_ROOT, sessionId);
