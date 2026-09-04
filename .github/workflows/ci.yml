@@ -520,3 +520,30 @@ jobs:
       - name: Mutation check (absent vs dead vs wedged, and healthy stays quiet)
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-supervisor-liveness.ps1
+
+  # The OTHER half of GH #261, and the half that actually freezes the schedule.
+  #
+  # `supervisor-liveness` above proves the daemons are watched. This proves a hung RUN is
+  # recovered. stuck-run-sweep already had two arms, and both need proof about the run's
+  # OUTCOME - a dead process, or a `session.task_complete` that already fired. #261's own
+  # incident had neither: the process was alive and it never finished, so the sweep printed
+  # it as `ok` while `running` sat for 9 hours and `nextRunAt` went 8.5h overdue.
+  #
+  # Arm 3 closes that, and the controls are the point rather than the arm. GH #330 measured
+  # real runs of 50 minutes and 2+ hours, so a plain max-runtime would fail healthy work on
+  # the largest runs first; arm 3 therefore requires SILENCE as well as age. The test asserts
+  # both directions, and keying it on age alone is caught by two dedicated control fixtures.
+  #
+  # In CI for the reason the two jobs above give: a guard that only runs on the nightly
+  # laptop is a guard that can rot. The test builds its own throwaway SQLite fixture, so it
+  # needs no app, no daemon and no Windows. Node 22+ for `node:sqlite`.
+  stuck-run-recovery:
+    name: Stuck run recovery
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: A hung run is failed and the schedule is released (and a working one is not)
+        run: node ./plugins/overnight-agent/checks/stuck-run-sweep.test.mjs

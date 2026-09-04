@@ -9,8 +9,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const SWEEP = path.join(process.env.LOCALAPPDATA, 'overnight-agent', 'stuck-run-sweep.mjs');
+// The sweep under test is the one SITTING NEXT TO THIS FILE, not the installed copy.
+//
+// This previously resolved to %LOCALAPPDATA%\overnight-agent\stuck-run-sweep.mjs, which meant
+// the test graded whatever was already deployed rather than the change being reviewed - so it
+// could not run in CI at all, and locally it would pass or fail for reasons unrelated to the
+// diff. That is GH #461's defect in a test: a check that reports on a file it was never
+// pointed at. Sibling resolution is correct in the repo AND in the flat OA home, since the
+// sweep and its test are siblings in both.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const SWEEP = process.env.STUCK_RUN_SWEEP || path.join(HERE, 'stuck-run-sweep.mjs');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stuck-run-test-'));
 const dbPath = path.join(root, 'data.db');
 const sessRoot = path.join(root, 'session-state');
@@ -47,6 +57,9 @@ db.prepare('insert into workflows values (?,?)').run('wf1', 'Fixture watchdog');
 
 const oldIso = new Date(Date.now() - 5 * 3600 * 1000).toISOString();   // 5h ago
 const freshIso = new Date(Date.now() - 2 * 60 * 1000).toISOString();   // 2m ago
+const nineHoursIso = new Date(Date.now() - 9 * 3600 * 1000).toISOString();  // the #261 incident
+const fourHoursIso = new Date(Date.now() - 4 * 3600 * 1000).toISOString();
+const ninetyMinIso = new Date(Date.now() - 90 * 60 * 1000).toISOString();
 
 function addRun(id, sessionId, startedAt, status = 'running') {
   db.prepare(
@@ -114,8 +127,10 @@ addRun('r-busy-done', mkSession('s-busy-done', {
   events: [{ type: 'session.task_complete', timestamp: new Date().toISOString() }],
 }), oldIso);
 
-// 9. Process alive, log idle a long time, but task NEVER completed -> a genuinely
-//    slow/blocked run. Must NOT be touched: we have no proof its work is done.
+// 9. Process alive, log idle a long time, but task NEVER completed. Arm 2 must not touch
+//    it (no proof its work is done), and arm 3 must not either: at 45m idle it is under
+//    the 60m stall gate. It is the control that keeps arm 3 from collapsing into "old and
+//    quietish", which would fail runs that are merely between long tool calls.
 {
   const s9 = mkSession('s-idle-unfinished', {
     lockPid: LIVE_PID,
@@ -125,6 +140,45 @@ addRun('r-busy-done', mkSession('s-busy-done', {
   const old = new Date(Date.now() - 45 * 60 * 1000);
   fs.utimesSync(f, old, old);
   addRun('r-idle-unfinished', s9, oldIso);
+}
+
+// --- arm 3 fixtures: the GH #261 shape -------------------------------------
+// 10. THE #261 RUN. Alive, never fired task_complete, running far past the budget and
+//     silent for hours. Arms 1 and 2 both decline it - there is no dead process and no
+//     completion to point at - so before arm 3 this row sat at `running` forever and the
+//     */30 schedule never fired again.
+{
+  const s10 = mkSession('s-timed-out', {
+    lockPid: LIVE_PID,
+    events: [{ type: 'tool.execution_start', timestamp: nineHoursIso }],
+  });
+  const f = path.join(sessRoot, s10, 'events.jsonl');
+  const old = new Date(Date.now() - 9 * 60 * 60 * 1000);
+  fs.utimesSync(f, old, old);
+  addRun('r-timed-out', s10, nineHoursIso);
+}
+
+// 11. THE CONTROL THAT MATTERS MOST (GH #330). A run well past the age budget - 4 hours -
+//     that is STILL EMITTING EVENTS. Real runs do this: one measured run spanned 50
+//     minutes, another was still going after two hours. If arm 3 keyed on age alone this
+//     row would be failed, and a plain max-runtime would kill the biggest runs first.
+//     It must be untouched.
+addRun('r-long-but-working', mkSession('s-long-but-working', {
+  lockPid: LIVE_PID,
+  events: [{ type: 'tool.execution_start', timestamp: new Date().toISOString() }],
+}), fourHoursIso);
+
+// 12. Silent far past the stall gate, but only 90 minutes old - under the age budget.
+//     Isolates the age gate: without it, a run in one long build step is failed.
+{
+  const s12 = mkSession('s-stalled-young', {
+    lockPid: LIVE_PID,
+    events: [{ type: 'tool.execution_start', timestamp: ninetyMinIso }],
+  });
+  const f = path.join(sessRoot, s12, 'events.jsonl');
+  const old = new Date(Date.now() - 80 * 60 * 1000);
+  fs.utimesSync(f, old, old);
+  addRun('r-stalled-young', s12, ninetyMinIso);
 }
 
 function run(args = []) {
@@ -156,7 +210,7 @@ const preState = JSON.stringify(
 // --- pass 1: detect-only must find exactly the 3 orphans and change nothing ---
 const d = run();
 check('detect: exit 1 on findings', d.code === 1, `exit=${d.code}`);
-check('detect: reports 4 orphans', /orphaned runs blocking their workflow: 4/.test(d.out));
+check('detect: reports 5 orphans', /orphaned runs blocking their workflow: 5/.test(d.out));
 check('detect: flags the finished orphan', /r-orphan-done/.test(d.out));
 check('detect: flags the unfinished orphan', /r-orphan-fail/.test(d.out));
 check('detect: flags the vanished-dir orphan', /r-nodir/.test(d.out));
@@ -169,6 +223,14 @@ check('detect: does NOT flag an already-terminal run', !/r-done/.test(d.out));
 check('arm2: does NOT flag a run still emitting events', !/run=r-busy-done/.test(d.out));
 check('arm2: does NOT flag an idle run whose task never completed',
   !/run=r-idle-unfinished/.test(d.out));
+check('arm3: flags the #261 run (alive, unfinished, 9h, silent)', /run=r-timed-out/.test(d.out));
+check('arm3: labels it timed-out', /arm\s*:\s*timed-out/.test(d.out));
+check('arm3: verdict is failed, never completed', /run=r-timed-out[\s\S]{0,400}?verdict\s*:\s*failed/.test(d.out));
+check('arm3: says the process was NOT killed', /TIMEOUT[\s\S]{0,200}?process is NOT killed/.test(d.out));
+check('arm3 CONTROL: a 4h run still emitting events is NOT flagged (GH #330)',
+  !/run=r-long-but-working/.test(d.out));
+check('arm3 CONTROL: a stalled but young run is NOT flagged (age gate)',
+  !/run=r-stalled-young/.test(d.out));
 check('detect: verdict completed for finished orphan', /verdict\s*:\s*completed/.test(d.out));
 check('detect: verdict failed for unfinished orphan', /verdict\s*:\s*failed/.test(d.out));
 
@@ -180,7 +242,7 @@ check('detect: WROTE NOTHING', afterDetect === preState, afterDetect);
 // --- pass 2: repair must fix exactly those 3, from evidence ---
 const r = run(['--repair']);
 check('repair: exit 1 (findings were present)', r.code === 1, `exit=${r.code}`);
-check('repair: reports 4 repaired', /repaired 4 orphaned run/.test(r.out));
+check('repair: reports 5 repaired', /repaired 5 orphaned run/.test(r.out));
 
 const rows = Object.fromEntries(
   db.prepare('select id, status, completed_at, error_message from workflow_runs').all()
@@ -206,10 +268,21 @@ check('arm2: still-emitting run UNTOUCHED', rows['r-busy-done'].status === 'runn
   rows['r-busy-done'].status);
 check('arm2: idle-but-unfinished run UNTOUCHED',
   rows['r-idle-unfinished'].status === 'running', rows['r-idle-unfinished'].status);
+check('arm3: the #261 run -> failed', rows['r-timed-out'].status === 'failed',
+  rows['r-timed-out'].status);
+check('arm3: records the arm that fired, not a borrowed reason',
+  /arm: timed-out/.test(rows['r-timed-out'].error_message ?? ''),
+  rows['r-timed-out'].error_message);
+check('arm3 CONTROL: long-but-working run UNTOUCHED',
+  rows['r-long-but-working'].status === 'running', rows['r-long-but-working'].status);
+check('arm3 CONTROL: stalled-but-young run UNTOUCHED',
+  rows['r-stalled-young'].status === 'running', rows['r-stalled-young'].status);
+check('arm2: the hung-alive repair no longer claims the process was dead',
+  /arm: hung-alive/.test(rows['r-hung'].error_message ?? ''), rows['r-hung'].error_message);
 check('repair: leaves an explanation', /orphaned at status=running/.test(rows['r-nodir'].error_message ?? ''));
 
 // backups exist and match the pre-state
-for (const id of ['r-orphan-done', 'r-orphan-fail', 'r-nodir', 'r-hung']) {
+for (const id of ['r-orphan-done', 'r-orphan-fail', 'r-nodir', 'r-hung', 'r-timed-out']) {
   const f = path.join(backupDir, `${id}.before.json`);
   const ok = fs.existsSync(f) && JSON.parse(fs.readFileSync(f, 'utf8')).status === 'running';
   check(`repair: backed up ${id} in its pre-repair state`, ok);
