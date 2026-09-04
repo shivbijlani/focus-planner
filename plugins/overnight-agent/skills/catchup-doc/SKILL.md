@@ -117,6 +117,36 @@ The rules, all enforced by `lib-issue-comments.mjs` and pinned by `mutcheck-issu
    consulted. Comments predating the marker are adopted by explicit id
    (`BACKFILL_COMMENT_IDS`), which is why no prefix matching is needed anywhere.
 
+### Issue BODIES need a precondition, not a marker (#456)
+
+A marker cannot help here: both writers are legitimately the agent, so there is nobody to tell
+apart. `gh issue edit --body` is an **unconditional whole-document overwrite** — `gh issue edit
+--help` exposes no `sha`, `base`, `revision` or `if-match` flag at all. Note the asymmetry in that
+same command: every other mutation it offers (`--add-label`, `--remove-label`, `--add-assignee`)
+is additive and concurrency-safe by construction. **The destructive shape is chosen, not imposed.**
+
+Use `lib-issue-body.mjs`, which mirrors the pull-request editing contract already used one object
+type away — carry a digest, refuse when the object moved, hand back the live content:
+
+1. **Re-read immediately before writing.** A digest taken earlier in the run is not evidence about
+   now, and a precondition checked against a stale read is not a precondition.
+2. **Refuse when the digest differs**, and **return the live body** so the change can be re-applied
+   onto it. A refusal that withholds the current text leaves forcing as the only way forward.
+3. **Prefer `appendToIssueBody`** when the intent is additive. A correction that adds a row does
+   not need to rewrite the document.
+4. **Hold the digest returned on success.** It is read back from the issue, not from what was sent.
+
+⛔ **There is no `force`, deliberately.** An override on this guard gets taken under exactly the
+conditions it exists for. Re-applying onto the returned live body is always available.
+
+**Why this matters even with no second writer.** The absence of a precondition has a cost reached
+without any concurrency at all: *"was my work overwritten?"* is undecidable in **both** directions.
+GitHub attributes every session's writes to the same account, bodies carry no provenance, and the
+API exposes no edit history — so all that remains is a session's memory of what it wrote. A session
+has already reached a confident, specific, **false** conclusion about the authorship of text it had
+written itself minutes earlier, with measurements attached, and nothing in the system could
+contradict it. A digest is the thing that makes that question answerable.
+
 ### On `titled-id-links` — the one that regresses
 
 This is the highest-value item and the easiest to get wrong, and the reason is structural rather
