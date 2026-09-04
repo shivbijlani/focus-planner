@@ -1,0 +1,44 @@
+name: PR auto-close
+
+# A shipped PR must not close its issue (GH #428).
+#
+# The operating contract is that the issue staying OPEN is the signal that something is waiting
+# for Shiv's review. A closing keyword in the PR body deletes that signal on merge: the issue
+# drops off his review surface, reads as "finished" when it is actually "shipped, unreviewed",
+# and takes the one agentic comment down with it.
+#
+# This is its own workflow rather than a job in ci.yml because the thing it reads -- the PR body
+# and its labels -- changes on events that push no commit. `edited` and `labeled`/`unlabeled`
+# must re-run the check, and making all of ci.yml re-run on every description edit would be the
+# fastest possible way to get this turned off.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-auto-close-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  body:
+    name: PR does not auto-close its issue
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # The body is attacker-controlled text. It is passed through the environment and read by
+      # node from there -- never interpolated into a shell command line.
+      - name: This PR body must not carry a closing reference
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: node ./plugins/overnight-agent/checks/pr-closing-keyword.mjs --from-env
