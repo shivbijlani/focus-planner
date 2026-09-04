@@ -531,6 +531,9 @@ param(
   [switch]$SessionDead,
   [switch]$SessionWoken,
   [switch]$SessionRelease,
+  # The path of a workspace that has just been REMOVED. Marks any binding pointing at it dead,
+  # so the next verdict is `replace` rather than `reuse` at a workspace that is gone (#452).
+  [string]$WorkspaceGone,
   [switch]$InFlight,
   # Overrides the `Overnight Agent concurrency` settings row for one invocation. -1 is the
   # "not specified" sentinel; see Resolve-PacingSettings for the precedence.
@@ -3728,9 +3731,67 @@ function Get-KickoffContinuation([string]$taskId, [string]$priorId) {
 }
 
 function Cmd-Session {
+  # ---- workspace teardown: `session -WorkspaceGone <path>`, no -Id -----------------------
+  #
+  # The other half of #452, and it is NOT the half `Get-SessionVerdict` can cover. Measured
+  # 2026-09-04 against a REAL worktree torn down with the sanctioned `remove-worktree.ps1`:
+  #
+  #   before teardown : exists=True  items=23  .git=True   -> verdict reuse   (correct)
+  #   after teardown  : exists=FALSE                        -> verdict reuse   (WRONG)
+  #
+  # The verdict cannot fix that one. A path that is absent is either a torn-down workspace or a
+  # session that has been bound but has not materialised its checkout yet, and nothing on the
+  # filesystem separates them -- so judging absence would discard live young sessions, which is
+  # worse than the bug. #466's directory happened to SURVIVE its teardown (a live session's cwd
+  # blocked the final delete), leaving the empty-directory signature the verdict does catch; a
+  # clean teardown leaves nothing to look at.
+  #
+  # So teardown has to SAY SO. This is the coupling #452 asks for, from the side that holds the
+  # fact: `remove-worktree.ps1` knows the workspace is gone because it removed it.
+  #
+  # It marks the binding DEAD rather than releasing it, deliberately. Releasing leaves the task
+  # unbound, so the next verdict is `create` -- a cold start that discards the continuity the
+  # binding exists to provide. `dead` yields `replace`, which carries the continuation. That is
+  # also exactly what the manual repair of #466 used.
+  if ($WorkspaceGone) {
+    $hits = @()
+    if (Test-Path $StateDir) {
+      foreach ($f in (Get-ChildItem $StateDir -Filter 'task-*.json' -File -ErrorAction SilentlyContinue)) {
+        try { $obj = Get-Content -Raw $f.FullName | ConvertFrom-Json } catch { continue }
+        $s = Get-SessionState $obj
+        if (-not $s) { continue }
+        # EXACT path match only, via the same textual comparison the bind guard uses. A prefix
+        # match would let tearing down a parent directory silently kill every binding beneath it.
+        if (-not (Test-SamePath "$($s.workspace)" $WorkspaceGone)) { continue }
+        $hits += [pscustomobject]@{ id = "$($obj.id)"; was = "$($s.state)" }
+        if ("$($s.state)" -eq 'dead') { continue }
+        $newSess = New-SessionObject -SessionIdValue "$($s.session_id)" -Kind "$($s.kind)" `
+          -Project "$($s.project)" -Workspace "$($s.workspace)" -WsType "$($s.workspace_type)" `
+          -CreatedAt $s.created_at -LastWokenAt $s.last_woken_at -SessionState 'dead' `
+          -PriorSessionId "$($s.prior_session_id)" -ReplacedAt $s.replaced_at
+        Set-Member $obj 'session' $newSess
+        # Set-Member, not a direct assignment: a state object written by an older version (or a
+        # hand-built one) may not carry `updated` at all, and assigning to an absent property
+        # throws -- which would abort the teardown release halfway through the state store,
+        # leaving some bindings marked and others not. Found exactly that way.
+        Set-Member $obj 'updated' (Now-Iso)
+        Write-State $obj
+      }
+    }
+    return ([pscustomobject]@{
+        workspace = $WorkspaceGone
+        # Zero is a perfectly ordinary answer -- most worktrees are not bound to a task -- so this
+        # is reported rather than treated as an error. A caller that cannot tell "nothing was
+        # bound here" from "the lookup failed" is back in the #346 shape.
+        marked_dead = @($hits | Where-Object { $_.was -ne 'dead' }).Count
+        already_dead = @($hits | Where-Object { $_.was -eq 'dead' }).Count
+        tasks = @($hits | ForEach-Object { $_.id })
+      } | ConvertTo-Json -Depth 4)
+  }
+
   # ---- capacity view: `session -InFlight`, no -Id ----------------------------------------
   if (-not $Id) {
-    if (-not $InFlight) { throw 'session requires -Id (or -InFlight for the capacity view)' }
+    if (-not $InFlight) { throw 'session requires -Id (or -InFlight for the capacity view, or -WorkspaceGone for teardown)' }
     $live = Get-LiveSessionCount
     return ([pscustomobject]@{
         concurrency = [int]$script:ConcurrencyLimit
