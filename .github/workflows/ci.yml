@@ -420,3 +420,31 @@ jobs:
       - name: Mutation check (grammar is load-bearing in both directions)
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-pr-closing-keyword.ps1
+
+  # A BOM-less .ps1 containing non-ASCII is decoded as Windows-1252 by the PowerShell 5.1
+  # engine BEFORE the script runs, so the bytes the parser sees are not the bytes on disk.
+  # Comment-only today is not safe tomorrow: the failure is silent, and the same file gaining
+  # one non-ASCII string literal or `-match` pattern turns a cosmetic mojibake into a guard
+  # that quietly stops matching.
+  #
+  # mutcheck-ps1-encoding.mjs already existed and CI never ran it -- the same "merged and never
+  # once executed" class the reaper-cohort guard hit. Wiring it here is what makes the sweep a
+  # guard rather than a report nobody reads.
+  #
+  # PS1_SWEEP_ROOT is explicit on purpose: the sweep resolves its own root from hard-coded
+  # developer checkout paths that do not exist on a runner, and it exits 0 when it cannot find
+  # a subject. Without this env the job would pass by scanning nothing.
+  ps1-encoding:
+    name: PowerShell script encoding
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Mutation check (the BOM is detected, not the character)
+        run: node ./plugins/overnight-agent/checks/mutcheck-ps1-encoding.mjs
+      - name: Every .ps1 carrying non-ASCII is saved UTF-8 with BOM
+        run: node ./plugins/overnight-agent/checks/ps1-encoding-sweep.mjs
+        env:
+          PS1_SWEEP_ROOT: ${{ github.workspace }}
