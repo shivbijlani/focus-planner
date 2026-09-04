@@ -583,3 +583,59 @@ jobs:
         env:
           OA_SWEEP: ./plugins/overnight-agent/checks/zero-writer-sweep.mjs
         run: node ./plugins/overnight-agent/checks/mutcheck-zero-writer.mjs
+  # "Merged" only means "running" if the version moved (GH #448 / #196).
+  #
+  # There are TWO update mechanisms with two different definitions of "current".
+  # `auto-deploy-plugin.ps1` compares FILE CONTENT, copies everything, and truthfully
+  # reports `verified-current True`. The watchdog and the CLI compare `plugin.json`'s
+  # VERSION, see an unchanged version, and correctly decide there is nothing to do. So a
+  # change can be fully deployed by one and completely invisible to the other, and THE
+  # BLIND ONE REPORTS SUCCESS. Same shape as #346: a second mechanism silently
+  # compensating for a broken first, so "it works" and "it is correct" stop being
+  # distinguishable.
+  #
+  # WHY THIS JOB, WHEN THE DETECTOR ALREADY EXISTED
+  # ----------------------------------------------
+  # `version-bump-sweep.mjs` and its mutation check both shipped and both work. Neither
+  # was wired to anything that blocks. The sweep ran only on the nightly laptop, went
+  # FLAGGED, and was skimmed -- measured 2026-09-04 at `244b6e3`: **19 commits and 31
+  # files** behind the last bump, including `oa-state.ps1` (the state engine),
+  # `write-turn.ps1` (the mandated journal writer, and G12 with it), and both `SKILL.md`
+  # contracts. That is `stuck-run-sweep`'s recorded lesson repeating exactly -- it printed
+  # a correct warning in 16 consecutive runs and not one acted on it -- and #151, which sat
+  # unnoticed for five days on a surface that only logged. A detector nothing gates on
+  # accumulates silently, so this gates.
+  #
+  # WHY IT CAN BE GREEN AT ALL
+  # --------------------------
+  # Only because the same pull request clears the debt to zero (1.18.0 -> 1.19.0). A gate
+  # added on its own would have been red on every unrelated PR from the first day, which is
+  # the always-firing detector this repo keeps warning about and switching off. The bump
+  # and the gate are one change for that reason, not two.
+  #
+  # MEASURED, NOT ASSUMED: the PR merge ref is safe here. `actions/checkout` gives the
+  # merge commit, whose FIRST parent is the base -- so the obvious worry is that a PR's own
+  # bump, sitting on parent 2, is invisible to the sweep's first-parent walk and every PR
+  # goes red. It is not: the sweep compares `plugin.json`'s parsed value against the same
+  # field in the first parent, so a merge commit that carries the bump IS a bump. Simulated
+  # both directions against real merge commits before wiring this -- a bumped PR reads
+  # `commits since 0` and exits 0, an unbumped plugin change reads `commits since 1` and
+  # exits 1, at the merge ref and at the PR head alike. Hence plain `checkout`, with
+  # `fetch-depth: 0` because the sweep walks `plugin.json`'s whole history.
+  plugin-version-bump:
+    name: Plugin version bump
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # The guard first, so a green gate below cannot be a guard that stopped working.
+      - name: Mutation check (every guard in the sweep is load-bearing)
+        run: node ./plugins/overnight-agent/checks/mutcheck-version-bump.mjs
+      - name: Plugin content has not changed since the last version bump
+        env:
+          OA_PLUGIN_REPO: ${{ github.workspace }}
+        run: node ./plugins/overnight-agent/checks/version-bump-sweep.mjs
