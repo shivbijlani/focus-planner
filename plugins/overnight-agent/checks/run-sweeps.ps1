@@ -704,7 +704,7 @@ $Suite = @(
 # from the session host's own `inuse.<pid>.lock`, the signal stuck-run-sweep verified live
 # on 2026-08-27, which has the property that a live session (INCLUDING the one running this
 # sweep) can never be mistaken for a closed one. So it stays quiet on the healthy in-flight
-# path and can actually reach zero. 61 assertions, 12 mutations, each killed by exactly the
+# path and can actually reach zero. 67 assertions, 13 mutations, each killed by exactly the
 # arms it declares (mutcheck-zero-writer.mjs, auto-globbed by -IncludeMutchecks).
 @{ n = 'zero-writer-sweep'; bridge = $false }
 )

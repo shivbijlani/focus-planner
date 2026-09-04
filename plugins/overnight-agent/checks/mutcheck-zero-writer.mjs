@@ -264,6 +264,26 @@ task('913', {
 // must be unaccusable down every path, not merely down the first one.
 task('914', { id: '914', status: 'in-progress', last_turn_at: T_BEFORE, last_turn_by: 'run' });
 
+// O — THE ONE THAT PINS THE LIVENESS PROBE ITSELF, and the only fixture the sweep goes
+// completely SILENT on if that probe is weakened. A dead lock holder, but woken recently
+// enough to still be inside the grace. Baseline: the pid is probed, reads gone, the wake is
+// closed -> ZERO_WRITER. Replace the probe with "a lock file exists, so it is held" -- the
+// obvious, harmless-looking simplification -- and this wake reads as in flight and vanishes.
+//
+// This is not hypothetical. Measured on this machine 2026-09-04 (GH #481): `session-state`
+// holds 4,109 directories that have never been pruned, with 493 `inuse.*.lock` files of which
+// 488 name a PID that no longer exists. Under the existence check those 488 sessions would all
+// read as permanently working -- the sweep silently disabled for ~99% of the store, while every
+// other arm here still passed. A one-line refactor away from the guard carrying the exact
+// defect it was built to detect.
+task('915', {
+  id: '915',
+  status: 'in-progress',
+  last_turn_at: T_BEFORE,
+  last_turn_by: 'S-915',
+  session: bind(session('S-915', 'dead-pid', 80 * MIN), { last_woken_at: T_RECENT }),
+});
+
 // The board is the universe of live tasks. Header included so the row regex has real shape.
 fs.writeFileSync(
   path.join(root, 'planner.md'),
@@ -315,6 +335,7 @@ check('J 910 quiet: wake still inside the grace (7m51s spawn latency is healthy)
 check('K 911 quiet: turn at the exact wake instant', !base.kinds.has('911'));
 check('L 912 MASKED_WRITER: last_turn_by present and "unknown"', base.kinds.get('912') === 'MASKED_WRITER', shown(base.kinds));
 check('M 913 ZERO_WRITER: closure via a missing session dir', base.kinds.get('913') === 'ZERO_WRITER', shown(base.kinds));
+check('O 915 ZERO_WRITER: dead lock holder, still inside the grace', base.kinds.get('915') === 'ZERO_WRITER', shown(base.kinds));
 check('exit 1 with findings, so run-sweeps reads FINDINGS not CRASH', base.code === 1, `got ${base.code}`);
 
 // A probe that cannot look must not report the same bytes as one that looked and found nothing
@@ -329,7 +350,7 @@ check('and says so on stderr', /session-state root missing/.test(blind.stderr ||
 
 // A clean corpus must exit 0, or the sweep is permanently red and gets skimmed (#381/#398).
 console.log('\n== clean corpus (only the healthy fixtures) ==');
-const NOISY = ['901', '902', '903', '912', '913'];
+const NOISY = ['901', '902', '903', '912', '913', '915'];
 const saved = new Map(NOISY.map((id) => [id, fs.readFileSync(path.join(stateDir, `task-${id}.json`), 'utf8')]));
 for (const id of NOISY) fs.rmSync(path.join(stateDir, `task-${id}.json`));
 const clean = run(SWEEP);
@@ -429,6 +450,31 @@ const MUTATIONS = [
     alsoGuards: ['910', '903'],
     find: "  if (live.length) return { closed: false, why: `held by live pid ${live.join(',')}`, dir };",
     repl: '  if (false) return { closed: false, why: `held by live pid ${live.join(",")}`, dir };',
+  },
+  {
+    // THE ARM THAT PINS THE PROBE, not the branch. The one above disables the whole
+    // live-holder branch; this replaces only the CLASSIFICATION -- "there is a lock file, so
+    // it is held" -- which is the refactor that actually gets written, because it reads as a
+    // harmless simplification and deletes an unfamiliar `process.kill(pid, 0)` call.
+    //
+    // Without this arm the guarantee is one line deep and undefended: the simplification
+    // passes every other assertion in this file. Measured 2026-09-04 (GH #481), 488 of 493
+    // `inuse.*.lock` files on this machine name a PID that no longer exists, so the mutant
+    // would read ~99% of the session store as permanently working and the sweep would go
+    // quiet on exactly the population it exists for.
+    //
+    // 915 is SILENCED outright (dead holder, inside the grace -> nothing left to fire).
+    // 901 and 902 survive as findings but RELABEL to WAKE_UNSERVICED, because a dead holder
+    // misread as live still has no events since its wake. That relabel is also the bound on
+    // the PID-reuse hazard #481 raises: a recycled PID degrades ZERO_WRITER to
+    // WAKE_UNSERVICED, it does not silence the task -- provided the wake is past the grace.
+    // A fired/not-fired harness would have scored both of those green.
+    name: 'liveness PROBE replaced by lock existence (locks.length > 0 means held)',
+    kind: 'silences',
+    guards: '915',
+    alsoGuards: ['901', '902'],
+    find: '    (pidAlive(pid) ? live : gone).push(pid);',
+    repl: '    (true ? live : gone).push(pid);',
   },
   {
     name: 'missing-session-dir closure branch removed',
