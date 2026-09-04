@@ -1,4 +1,4 @@
-<#
+﻿<#
   run-sweeps.ps1 — the ONLY sanctioned way to run the sweep suite.
 
   WHY THIS EXISTS
