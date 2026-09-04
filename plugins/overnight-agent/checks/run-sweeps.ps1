@@ -212,6 +212,24 @@ $Suite = @(
   # log rather than guessing, and backs up every row before writing. Arms proven in
   # both directions by stuck-run-sweep.test.mjs (26/26).
   @{ n = 'stuck-run-sweep';          bridge = $false; args = @('--repair') }
+  # The SUPERVISOR half of the two lines above (GH #261, added 2026-09-03). Both of
+  # those repair a stuck run from INSIDE a run, so neither can fire when no run is
+  # happening -- which is the state #261 actually produces. The out-of-band daemons
+  # exist for exactly that and both are running (measured: oa-supervisor-daemon pid
+  # 18196, browser-watchdog pid 4144, dispatched by Explorer from the Startup folder
+  # because registering a scheduled task is denied without elevation on this box).
+  #
+  # What was missing is a READER. The supervisor writes a heartbeat every 15 min and
+  # the watchdog logs hourly; a repo-wide grep found ZERO consumers of either, and
+  # oa-supervisor-daemon.ps1 says in its own header that if it dies "it stays dead
+  # until next logon". So supervision could lapse silently and #261 would come back
+  # with no signal at all. This is that reader, and it is deliberately dispatched
+  # from a run: the daemons watch the app, a run watches the daemons, which is two
+  # dispatch domains watching each other rather than the circular self-heal of #243.
+  # 4 arms, each mutation-proven load-bearing by mutcheck-supervisor-liveness.ps1,
+  # plus two must-stay-green fixtures so it cannot become the permanently red line
+  # that the workflow-health-sweep note above is a warning about.
+  @{ n = 'supervisor-liveness-sweep'; bridge = $false; ext = '.ps1' }
   @{ n = 'recurring-liveness-sweep'; bridge = $false }
   @{ n = 'stale-trigger-sweep';      bridge = $false }
   @{ n = 'parked-age';               bridge = $false }
