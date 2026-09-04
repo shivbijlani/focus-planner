@@ -482,6 +482,74 @@ function Test-McpTools {
     -Verdict 'available' -Reason '' -Detail "$($required.Count)/$($required.Count) required tools present" -Unread $null -ElapsedMs $sw.ElapsedMilliseconds
 }
 
+function Test-ScriptExit {
+  param($Cap)
+  # A capability whose health is already owned by a purpose-built script, verified by RUNNING it
+  # and reading its exit code -- as opposed to `delegated`, which only names an owner and probes
+  # nothing.
+  #
+  # It exists because `mcp-tools` answers the wrong question for an OAuth-backed server. Measured
+  # 2026-09-04: `tools/list` needs no authorization, so the google-workspace server enumerates all
+  # 36 tools whether or not it can actually reach Google. A Google MCP whose refresh token has
+  # expired is therefore GREEN under mcp-tools while every real call fails -- and that is not a
+  # hypothetical: `check-google-token.ps1` exists precisely because a testing-mode refresh token
+  # expires about every 7 days, "which silently breaks every Google Workspace tool until you
+  # re-consent". A probe that is green through that window would be worse than no probe on the
+  # channel Shiv reads, because it converts an outage into a clean bill of health.
+  #
+  # Exit codes are mapped explicitly rather than "0 = good, anything else = bad": a script that
+  # cannot tell (a transient network error) must not be reported as a failure, or the check
+  # becomes the one nobody reads. `okExit` / `failExit` are declared per row, so this stays
+  # generic and the meaning of each code lives with the capability that owns it.
+  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+  $mandatory = [bool]$Cap.mandatory
+  $script = [string]$Cap.probe.script
+  $okExit = @($Cap.probe.okExit)
+  $failExit = @($Cap.probe.failExit)
+
+  $resolved = $script
+  if (-not [IO.Path]::IsPathRooted($resolved)) { $resolved = Join-Path $PSScriptRoot $script }
+  if (-not (Test-Path $resolved)) {
+    return New-Row -Id $Cap.id -Server ([string]$Cap.server) -Mandatory $mandatory -Kind 'script-exit' `
+      -Verdict 'unavailable' -Reason 'script-missing' -Detail "not found: $script" -Unread $null -ElapsedMs $sw.ElapsedMilliseconds
+  }
+
+  # Re-enter the SAME host this check is running under, rather than hard-coding powershell.exe:
+  # the probe scripts are host-agnostic, and pinning a host is how a check starts passing on one
+  # machine's shell and failing on another's.
+  $psHostPath = $null
+  try { $psHostPath = (Get-Process -Id $PID).Path } catch { }
+  if (-not $psHostPath) { $psHostPath = (Get-Command powershell -ErrorAction SilentlyContinue).Source }
+  if (-not $psHostPath) {
+    return New-Row -Id $Cap.id -Server ([string]$Cap.server) -Mandatory $mandatory -Kind 'script-exit' `
+      -Verdict 'unavailable' -Reason 'no-host' -Detail 'could not resolve a PowerShell host to run the probe' -Unread $null -ElapsedMs $sw.ElapsedMilliseconds
+  }
+
+  $run = Invoke-Bounded -FilePath $psHostPath -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $resolved) -Budget $BudgetMs
+  if ($run.TimedOut) {
+    return New-Row -Id $Cap.id -Server ([string]$Cap.server) -Mandatory $mandatory -Kind 'script-exit' `
+      -Verdict 'unavailable' -Reason 'timeout' -Detail "$([IO.Path]::GetFileName($resolved)) exceeded ${BudgetMs}ms and was killed" -Unread $null -ElapsedMs $sw.ElapsedMilliseconds
+  }
+
+  $detail = ($run.StdOut + ' ' + $run.StdErr).Trim()
+  if ($detail.Length -gt 300) { $detail = $detail.Substring(0, 300) }
+  $code = [int]$run.ExitCode
+
+  if ($okExit -contains $code) {
+    return New-Row -Id $Cap.id -Server ([string]$Cap.server) -Mandatory $mandatory -Kind 'script-exit' `
+      -Verdict 'available' -Reason '' -Detail $detail -Unread $null -ElapsedMs $sw.ElapsedMilliseconds
+  }
+  if ($failExit -contains $code) {
+    return New-Row -Id $Cap.id -Server ([string]$Cap.server) -Mandatory $mandatory -Kind 'script-exit' `
+      -Verdict 'unavailable' -Reason 'probe-failed' -Detail "exit $code -- $detail" -Unread $null -ElapsedMs $sw.ElapsedMilliseconds
+  }
+  # Neither declared: the script could not form an opinion. Reported as its own verdict so an
+  # inconclusive probe is never silently rounded to healthy -- but it is not `unavailable`
+  # either, because raising an ask on a transient error is how a check gets ignored.
+  return New-Row -Id $Cap.id -Server ([string]$Cap.server) -Mandatory $mandatory -Kind 'script-exit' `
+    -Verdict 'inconclusive' -Reason 'undeclared-exit' -Detail "exit $code -- $detail" -Unread $null -ElapsedMs $sw.ElapsedMilliseconds
+}
+
 function Test-Delegated {
   param($Cap)
   return New-Row -Id $Cap.id -Server ([string]$Cap.server) -Mandatory ([bool]$Cap.mandatory) -Kind 'delegated' `
@@ -533,6 +601,7 @@ function Resolve-Verdict {
     switch ($kind) {
       'email-inbox' { $rows += (Test-EmailInbox $cap) }
       'mcp-tools'   { $rows += (Test-McpTools $cap) }
+      'script-exit' { $rows += (Test-ScriptExit $cap) }
       'delegated'   { $rows += (Test-Delegated $cap) }
       default {
         $rows += (New-Row -Id $cap.id -Server ([string]$cap.server) -Mandatory ([bool]$cap.mandatory) -Kind $kind `
@@ -542,7 +611,11 @@ function Resolve-Verdict {
   }
 
   $inbox = @($rows | Where-Object { $_.kind -eq 'email-inbox' }) | Select-Object -First 1
-  $badMandatory = @($rows | Where-Object { $_.mandatory -and ($_.verdict -ne 'checked') -and ($_.verdict -ne 'available') -and ($_.verdict -ne 'delegated') })
+  # `inconclusive` is deliberately NOT a failure: it means a probe ran and could not form an
+  # opinion (a transient network error), and raising a mandatory ask on that is how a check
+  # becomes the one nobody reads. It is still reported in its own right, so it can never be
+  # mistaken for a clean pass.
+  $badMandatory = @($rows | Where-Object { $_.mandatory -and ($_.verdict -ne 'checked') -and ($_.verdict -ne 'available') -and ($_.verdict -ne 'delegated') -and ($_.verdict -ne 'inconclusive') })
   $code = if ($badMandatory.Count -gt 0) { 2 } else { 0 }
 
   return [pscustomobject]@{
@@ -587,12 +660,18 @@ if ($Json) {
 } else {
   Write-Host "[inbox] manifest : $($result.manifest)"
   Write-Host "[inbox] prober   : $ProberCommand $proberPath (budget $([int]($BudgetMs/1000))s per call)"
+  # Both columns are derived, not hard-coded: `google-workspace` (16) overflowed the old fixed
+  # -14 id column, and `INCONCLUSIVE` (12) exactly fills the old -12 verdict column, so each new
+  # value butted straight against the next field. Widths tied to the data cannot be invalidated
+  # by adding a row or a verdict, which is the whole point of capabilities living in a manifest.
+  $idWidth = 2 + (@(@($result.capabilities) | ForEach-Object { "$($_.id)".Length } ) | Measure-Object -Maximum).Maximum
+  $vWidth = 2 + (@(@($result.capabilities) | ForEach-Object { "$($_.verdict)".Length } ) | Measure-Object -Maximum).Maximum
   foreach ($r in @($result.capabilities)) {
     $v = $r.verdict.ToUpperInvariant()
     $tail = $r.detail
     if ($r.verdict -eq 'checked') { $tail = "$($r.unread) unread  ($($r.detail))" }
     elseif ($r.reason) { $tail = "$($r.reason): $($r.detail)" }
-    Write-Host ("[inbox] {0,-14}{1,-12}{2}" -f $r.id, $v, $tail)
+    Write-Host ("[inbox] {0}{1}{2}" -f "$($r.id)".PadRight($idWidth), $v.PadRight($vWidth), $tail)
   }
   Write-Host '[inbox]'
   Write-Host "[inbox] $($result.wrapUp)"
