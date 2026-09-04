@@ -48,11 +48,22 @@ $ErrorActionPreference = 'Stop'
 
 $RequiredKeys = @('no-context-reader','no-correction-narration','collapsible-sections','titled-id-links')
 
+function Read-Utf8([string]$p) { [IO.File]::ReadAllText($p, (New-Object Text.UTF8Encoding($false))) }
+
+# Cross-platform path join. A literal 'a\b\c' passed to Join-Path is ONE filename on Linux, not
+# three segments, so this guard would fail on the CI runner while passing on the author's box --
+# a guard that only runs where the drift happens cannot stop the drift from merging.
+function Join-Parts { param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Parts)
+  $p = $Parts[0]
+  foreach ($x in $Parts[1..($Parts.Length - 1)]) { $p = Join-Path $p $x }
+  return $p
+}
+
 # --- resolve the skill ----------------------------------------------------------------------
 if (-not $SkillPath) {
   $candidates = @(
-    (Join-Path $PSScriptRoot '..\skills\catchup-doc\SKILL.md'),
-    "$env:USERPROFILE\.copilot\installed-plugins\focus-planner\overnight-agent\skills\catchup-doc\SKILL.md"
+    (Join-Parts $PSScriptRoot '..' 'skills' 'catchup-doc' 'SKILL.md'),
+    (Join-Parts $HOME '.copilot' 'installed-plugins' 'focus-planner' 'overnight-agent' 'skills' 'catchup-doc' 'SKILL.md')
   )
   foreach ($c in $candidates) { if (Test-Path $c) { $SkillPath = (Resolve-Path $c).Path; break } }
 }
@@ -61,8 +72,6 @@ if (-not $SkillPath -or -not (Test-Path $SkillPath)) {
 }
 $SkillPath = (Resolve-Path $SkillPath).Path
 $PluginRoot = (Resolve-Path (Join-Path (Split-Path (Split-Path $SkillPath)) '..')).Path
-
-function Read-Utf8([string]$p) { [IO.File]::ReadAllText($p, (New-Object Text.UTF8Encoding($false))) }
 
 # --- the assertions, as one reusable function so the arms run the REAL check ------------------
 function Test-CatchupSkill {
@@ -151,17 +160,17 @@ $arms = @()
 function New-Sandbox {
   param([string]$Name)
   $root = Join-Path $tmp $Name
-  $sk   = Join-Path $root 'plugins\overnight-agent\skills\catchup-doc'
+  $sk   = Join-Parts $root 'plugins' 'overnight-agent' 'skills' 'catchup-doc'
   New-Item -ItemType Directory -Path $sk -Force | Out-Null
   Copy-Item $SkillPath (Join-Path $sk 'SKILL.md') -Force
   $res = Join-Path (Split-Path $SkillPath) 'resolve-ids.ps1'
   if (Test-Path $res) { Copy-Item $res (Join-Path $sk 'resolve-ids.ps1') -Force }
   $mf = Join-Path $PluginRoot 'plugin.json'
-  if (Test-Path $mf) { Copy-Item $mf (Join-Path $root 'plugins\overnight-agent\plugin.json') -Force }
+  if (Test-Path $mf) { Copy-Item $mf (Join-Parts $root 'plugins' 'overnight-agent' 'plugin.json') -Force }
   return [pscustomobject]@{
     Root   = $root
     Skill  = (Join-Path $sk 'SKILL.md')
-    Plugin = (Join-Path $root 'plugins\overnight-agent')
+    Plugin = (Join-Parts $root 'plugins' 'overnight-agent')
     Dir    = $sk
   }
 }
@@ -194,7 +203,7 @@ try {
 
   # E -- move the skill out of the globbed skills/ directory
   $s = New-Sandbox 'E_moveOutOfGlob'
-  $outside = Join-Path $s.Root 'plugins\overnight-agent\docs\catchup-doc'
+  $outside = Join-Parts $s.Root 'plugins' 'overnight-agent' 'docs' 'catchup-doc'
   New-Item -ItemType Directory -Path $outside -Force | Out-Null
   Copy-Item $s.Skill (Join-Path $outside 'SKILL.md') -Force
   Copy-Item (Join-Path $s.Dir 'resolve-ids.ps1') (Join-Path $outside 'resolve-ids.ps1') -Force
