@@ -43,8 +43,10 @@ if (-not $ScriptPath) {
 if (-not (Test-Path $ScriptPath)) { Write-Host "FAIL cannot find oa-supervisor.ps1 at $ScriptPath"; exit 2 }
 
 $src = [IO.File]::ReadAllText($ScriptPath, (New-Object Text.UTF8Encoding($false)))
-$root = Join-Path $env:TEMP ('mutcheck-res-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-New-Item -ItemType Directory -Force -Path $root | Out-Null
+# No temp directory: the harnesses are in-process modules now, and $env:TEMP is NULL on the
+# Linux runner, so `Join-Path $env:TEMP ...` threw "Cannot bind argument to parameter 'Path'
+# because it is null" before any assertion ran. Needing no scratch space is the fix, not
+# picking a better scratch path.
 $pass = 0; $fail = 0
 
 function Check([string]$label, [bool]$cond, [string]$detail) {
@@ -178,7 +180,6 @@ Write-Host '== age is not a signal (#178) =='
 Check 'OLD and LEAK share an age but not a verdict' ($baseStates['OLD'] -ne $baseStates['LEAK']) `
   "OLD=$($baseStates['OLD']) LEAK=$($baseStates['LEAK'])"
 
-Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ''
 Write-Host "$pass passed, $fail failed"
 exit $(if ($fail) { 1 } else { 0 })
