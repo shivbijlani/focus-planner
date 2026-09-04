@@ -396,9 +396,10 @@ function Clear-G12Recency {
 function Set-G12Backup([datetime]$when) {
   [IO.File]::WriteAllText((Join-Path $g12Home ("task-901.bak-" + $when.ToString('yyyyMMdd-HHmm') + '.md')), 'x', (New-Object Text.UTF8Encoding($false)))
 }
-function Set-G12State([datetime]$when) {
-  $o = @{ id = '901'; last_turn_at = $when.ToString('yyyy-MM-ddTHH:mm:ssK') } | ConvertTo-Json
-  [IO.File]::WriteAllText((Join-Path $g12Home 'state\task-901.json'), $o, (New-Object Text.UTF8Encoding($false)))
+function Set-G12State([datetime]$when, $woken = $null) {
+  $h = [ordered]@{ id = '901'; last_turn_at = $when.ToString('yyyy-MM-ddTHH:mm:ssK') }
+  if ($null -ne $woken) { $h['session'] = @{ last_woken_at = ([datetime]$woken).ToString('yyyy-MM-ddTHH:mm:ssK') } }
+  [IO.File]::WriteAllText((Join-Path $g12Home 'state\task-901.json'), ($h | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
 }
 function Invoke-G12([string[]]$disable) {
   $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $target,
@@ -440,6 +441,23 @@ $g12Arms = @(
   @{ name = 'CONTROL no recency evidence at all'; fires = $false
      why  = 'structure alone must not refuse - that would block every later night'
      setup = { Set-G12Journal ''; Clear-G12Recency } }
+
+  # --- the WAKE BOUNDARY, and the pair that makes it a discrimination -------------------
+  # These two are identical except for which side of the wake stamp the turn falls on, and
+  # they are minutes apart in both cases - so a rule that judges by AGE cannot separate them.
+  # The false positive was measured live: with a 45-minute window, this task's own next turn
+  # was refused at 41 minutes, a genuinely new wake with new work.
+  @{ name = 'SAME wake: turn written after waking'; fires = $true
+     why  = 'the #473 defect proper - a second writer inside one wake'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12State $now $now.AddMinutes(-10) } }
+
+  @{ name = 'NEXT wake: turn predates the waking'; fires = $false
+     why  = 'a new wake may write, even minutes later - age alone would refuse this'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12State $now.AddMinutes(-12) $now.AddMinutes(-2) } }
+
+  @{ name = 'NEXT wake wins over a fresh BACKUP'; fires = $false
+     why  = 'the backup is recency evidence, not wake evidence; the boundary still decides'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12State $now.AddMinutes(-12) $now.AddMinutes(-2); Set-G12Backup $now.AddMinutes(-12) } }
 )
 
 foreach ($arm in $g12Arms) {
