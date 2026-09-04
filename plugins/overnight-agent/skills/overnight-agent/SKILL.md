@@ -416,6 +416,44 @@ user has spoken after your last turn:
 
 Do the phases **in this order** every time.
 
+> **Pacing — how MUCH a run takes on (#391).** Everything else in this section decides *what* to
+> work on next; none of it decides *how much*, and an ordered worklist says nothing about that. A
+> run is bounded twice over — by the context it may spend, and by the wall-clock before the next
+> `*/30` run. #404 gives you the capacity view; these are the three rules that govern using it.
+>
+> 1. **One item in flight, by default.** The limit is the user's
+>    (`user-settings.md` → `## Overnight Agent behaviour`), and it is **1** unless he says
+>    otherwise. Read it from `session -InFlight`, never assume it. ⚠️ **Giving an item its own
+>    session is ISOLATION, not concurrency** — it is *where* that item's work happens, not
+>    permission to have three of them running. An item already dispatched and still working
+>    **counts against the limit**; you do not get a free second item because the first one is
+>    elsewhere.
+> 2. **Estimate before starting another.** Use the rate you actually observed **this run**, not an
+>    optimistic one, against the time left before the next scheduled run. **Starting what you
+>    cannot finish is worse than ending early.** An unfinished item costs a half-written branch, a
+>    half-true report, and a reader who has to work out which half is which. Ending early costs
+>    nothing: the worklist is data, and the next run recomputes the same order unchanged.
+> 3. **Done means verified and published, not code written.** Tests green, the deliverable written
+>    where the user will see it, the journal updated. Code sitting in a working tree is not
+>    progress, and counting it as progress is how a run reports more than it delivered.
+>
+> **Read `concurrency_source`, and say what it says.** `settings-malformed` means he wrote a value
+> and it did **not** parse — so the run is at 1 *by accident*, not by his choice. Quote the row in
+> the wrap-up; silence there is indistinguishable from agreement. The setting always fails
+> **narrow** (absent, unreadable, malformed, zero and negative all yield 1), so a broken value can
+> only ever make a run take on less. The parse is anchored to a bare whole number for that reason:
+> a dated note in the cell used to read as `2026`, which is a *widening*, and no pacing control may
+> ever widen by accident.
+>
+> **The one sanctioned exception is a collect-phase wake**, and its justification is provenance,
+> not urgency: an item woken by something *the user did* — mail in the agent inbox, a folded
+> Telegram reply, a journal reply — is dispatched **in addition to** the priority selection, not
+> instead of it. A human action may widen the run; your own judgement may not. It does not
+> compound, it does not raise the setting, and it changes *when* a task is woken, never *where* its
+> work happens.
+>
+> Guarded by `mutcheck-pacing-concurrency.ps1`. Published spec: `docs/spec/Prioritisation.md` §4.
+
 > **Telegram mirror runs last.** PHASE 3 mirrors the journals to Telegram *after* PHASE 1/2 have written
 > your turns, so a task's thread reflects the work you just did. It's gated on `user-settings.md → Telegram`.
 

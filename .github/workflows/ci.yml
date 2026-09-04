@@ -360,6 +360,28 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-per-task-session.ps1
 
+  # Pacing: how the `Overnight Agent concurrency` tunable (#391) is READ. #404's job above guards
+  # its ENFORCEMENT (capacity refusal, release, the in-flight view); this one guards the parse
+  # boundary, the argument-over-file precedence, and whether a fallback is visible.
+  #
+  # It runs in CI because the failure it was written for has no tell. The parse was a leading-
+  # integer match, and this settings file's cells are prose that characteristically opens with a
+  # date -- so `| Overnight Agent concurrency | 2026-09-02: set to 1 by Shiv |` resolved to 2026.
+  # A note about setting it to 1 set it to effectively unbounded, on the one control that stops a
+  # run over-committing, in the exact direction the code comment promised was impossible. A run
+  # that widened itself by a typo is indistinguishable from one configured that way on purpose.
+  #
+  # Pure text work against synthetic settings files in a temp dir, driven through -UserSettings
+  # and an isolated -StateDir. It never reads the real planner folder and never writes state.
+  pacing-concurrency:
+    name: Pacing concurrency tunable
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (prose never widens, argument outranks the file, fallbacks are visible)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-pacing-concurrency.ps1 -Matrix
+
   auto-deploy:
     name: Auto-deploy safety and performance
     runs-on: windows-latest
