@@ -43,13 +43,29 @@
     G_unbornIsDead     call an uncreated workspace dead   -> A6   (also breaks A4)
 #>
 [CmdletBinding()]
-param()
+param([string]$ScriptPath)
 
 $ErrorActionPreference = 'Stop'
 
-$Here    = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Subject = Join-Path (Split-Path -Parent $Here) 'skills\overnight-agent\oa-state.ps1'
-if (-not (Test-Path $Subject)) { throw "subject not found: $Subject" }
+$Here = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# The subject lives in a DIFFERENT place depending on which tree this runs from, and resolving it
+# only one way is how a guard ships merged-but-not-running. In the repo it is a sibling directory
+# away; in the OA home every check and skill is flattened into ONE directory, so the repo-relative
+# path does not exist there and the check dies with exit 1 rather than skipping. Measured: this
+# file passed in the repo and threw `subject not found` from the installed tree on its first
+# deploy. Same candidate list as `mutcheck-consent-authorship.ps1`, so the two cannot drift.
+if (-not $ScriptPath) {
+  $candidates = @(
+    (Join-Path $Here '..\skills\overnight-agent\oa-state.ps1'),
+    (Join-Path $Here 'oa-state.ps1'),
+    (Join-Path $env:LOCALAPPDATA 'overnight-agent\oa-state.ps1'),
+    "$env:USERPROFILE\.copilot\installed-plugins\focus-planner\overnight-agent\skills\overnight-agent\oa-state.ps1"
+  )
+  foreach ($c in $candidates) { if (Test-Path $c) { $ScriptPath = (Resolve-Path $c).Path; break } }
+}
+$Subject = $ScriptPath
+if (-not $Subject -or -not (Test-Path $Subject)) { throw "subject not found: $Subject" }
 
 # Normalised to LF before any mutation. The working tree is CRLF on Windows, so patterns written
 # against LF would match NOTHING and every mutant would "survive" for a reason unrelated to the
