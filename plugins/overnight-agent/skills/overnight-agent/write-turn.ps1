@@ -141,6 +141,26 @@ $POINTER_NUDGE   = 800
 # considers unbound (or vice versa).
 $DocMetaRe = '<!--\s*doc-meta\s+docId=(?<id>[A-Za-z0-9_\-]+)(?:\s+docUrl=(?<url>\S+))?\s*-->'
 
+# Where this script keeps its backups and where `oa-state.ps1` keeps its state. Overridable
+# ONLY so G12 can be proven hermetically: its recency evidence lives in both places, and a
+# guard whose evidence can only be produced by writing into the real OA home is a guard that
+# cannot be tested in CI - which is how it ends up unverified (#461's lesson, applied here
+# before it bites rather than after).
+$OA_HOME = if ($env:WRITE_TURN_OA_HOME) { $env:WRITE_TURN_OA_HOME } else { Join-Path $env:LOCALAPPDATA 'overnight-agent' }
+
+# --- #473 one-turn-per-wake ------------------------------------------------------------
+# A managed agent turn heading. Deliberately the SAME shape oa-state.ps1's ManagedHeadingRe
+# matches and the Telegram bridge anchors on, so all three agree on what a turn is; a looser
+# pattern here would let a heading that nothing else considers a turn spend the wake.
+$script:ManagedTurnRe = '^[ \t]*##[^\r\n]*(' + [regex]::Escape($MOON) + '|Overnight Agent)'
+
+# How long a written turn owns its wake. Sized against the schedule, not against a run: the
+# agent wakes every 30 minutes, so a window at or below 30 would let two CONSECUTIVE wakes
+# each add a turn to a thread he has not replied to, which is the stacking #425 exists to
+# remove. 45 covers the cadence with margin while staying far short of the next night, so a
+# genuinely new day is never blocked. A reply from him clears it immediately at any age.
+$WAKE_WINDOW_MIN = [int]($env:WRITE_TURN_WAKE_WINDOW_MIN | ForEach-Object { if ($_) { $_ } else { 45 } })
+
 function Get-FenceMaskedText([string]$text) {
   # Blank out fenced regions, preserving line count and line endings, so a `doc-meta` shown
   # INSIDE a fenced example is not read as this task's real binding.
@@ -172,6 +192,97 @@ function Get-JournalDocMeta([string]$path) {
     doc_id  = $m.Groups['id'].Value
     doc_url = if ($m.Groups['url'].Success) { $m.Groups['url'].Value } else { '' }
   }
+}
+
+function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$WindowMin) {
+  # G12 -- ONE TURN PER WAKE (GH #473). The only guard here that is a property of the
+  # DESTINATION rather than of the text, which is why it cannot live in Test-TurnBody.
+  #
+  # THE DEFECT. Task #466 received two `## <moon>` turns four minutes apart, both describing
+  # the same merged PR and DISAGREEING - one claimed five fixes, one implied six, and one
+  # carried a wrong timestamp. Both were written by the agent: the task sub-session reported,
+  # and the run session recorded the outcome, because SKILL.md PHASE 1 step 6 assigns the
+  # second job while the gh-issue-work contract assigns the first. #404 moved WORK into
+  # per-task sessions and never assigned TURN AUTHORSHIP to exactly one side.
+  #
+  # Every existing guard passed, and necessarily so: G1-G11 are all properties of one turn in
+  # isolation, and this script is append-only by design, so it cannot notice it is the second
+  # writer. The failure therefore scales with CORRECTNESS - it fires precisely when both
+  # halves do their job.
+  #
+  # THE RULE, and both halves are load-bearing:
+  #   structure : the newest managed turn has NO human content after it, so another turn
+  #               would stack on top of an unanswered one. Alone this is too strict - the
+  #               agent legitimately writes on consecutive nights while Shiv says nothing.
+  #   recency   : that turn was written inside the wake window. Alone this is too strict the
+  #               other way - it would refuse a turn that ANSWERS a reply he just made.
+  # A human reply un-spends the token, and so does time. That is #465's spent-affirmative
+  # shape: spentness is derived, not asserted, and it is released by evidence.
+  #
+  # RECENCY SURVIVES A FORGOTTEN `mark`, which is the whole lesson of #465. `last_turn_at` is
+  # stamped by `oa-state.ps1 mark`, so a run that writes a turn and never marks would leave it
+  # stale and the second turn would sail through - fail OPEN, on the exact stamp the writer
+  # might skip. So the backup this script writes on EVERY append is consulted too, and the
+  # newer of the two wins. A backup cannot be forgotten without also not writing the turn.
+  if (-not $journalPath -or -not (Test-Path -LiteralPath $journalPath)) { return $null }
+  $content = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $journalPath))
+  $scan = Get-FenceMaskedText $content
+
+  $sentinel = $scan.LastIndexOf('OVERNIGHT-AGENT do not edit')
+  if ($sentinel -lt 0) { return $null }
+  $managed = $scan.Substring($sentinel)
+  $offset = $sentinel
+
+  # Newest managed turn heading, and newest human marker, in the managed region.
+  $lastTurn = -1
+  foreach ($m in [regex]::Matches($managed, '(?m)^[ \t]*##[ \t][^\r\n]*')) {
+    if ($m.Value -match $script:ManagedTurnRe) { $lastTurn = $m.Index }
+  }
+  if ($lastTurn -lt 0) { return $null }
+
+  $lastHuman = -1
+  foreach ($m in [regex]::Matches($managed, '(?m)^[ \t]*<!--[ \t]*from:[ \t]*me[ \t]*-->[ \t]*$')) {
+    $lastHuman = $m.Index
+  }
+  # He has spoken since the last turn -> the wake is answered and a reply is welcome.
+  if ($lastHuman -gt $lastTurn) { return $null }
+
+  # --- recency ---------------------------------------------------------------------------
+  $written = $null
+  $statePath = Join-Path $OA_HOME "state\task-$taskId.json"
+  if (Test-Path -LiteralPath $statePath) {
+    try {
+      $st = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+      if ($st.PSObject.Properties['last_turn_at'] -and $st.last_turn_at) {
+        $written = [datetime]::Parse("$($st.last_turn_at)", [Globalization.CultureInfo]::InvariantCulture)
+      }
+    }
+    catch { $written = $null }
+  }
+  # The backup trail, which this script writes itself: task-<id>.bak-yyyyMMdd-HHmm.md.
+  $bakDir = $OA_HOME
+  if (Test-Path -LiteralPath $bakDir) {
+    foreach ($f in Get-ChildItem -LiteralPath $bakDir -Filter "task-$taskId.bak-*.md" -ErrorAction SilentlyContinue) {
+      $m = [regex]::Match($f.Name, 'bak-(\d{8})-(\d{4})\.md$')
+      if (-not $m.Success) { continue }
+      try {
+        $t = [datetime]::ParseExact($m.Groups[1].Value + $m.Groups[2].Value, 'yyyyMMddHHmm', [Globalization.CultureInfo]::InvariantCulture)
+        if ($null -eq $written -or $t -gt $written) { $written = $t }
+      }
+      catch { continue }
+    }
+  }
+  if ($null -eq $written) { return $null }
+
+  $ageMin = ((Get-Date) - $written).TotalMinutes
+  if ($ageMin -ge $WindowMin) { return $null }
+
+  $line = ($content.Substring(0, [Math]::Min($content.Length, $offset + $lastTurn)) -split "`r?`n").Count
+  $head = (($managed.Substring($lastTurn) -split "`r?`n")[0]).Trim()
+  New-Finding 'G12' $line $head (
+    ('a turn for this wake already exists ({0:N0} min ago, nothing from him since). ' -f $ageMin) +
+    'The task sub-session owns the turn; the run session must not also write one (#473). ' +
+    'If you are deliberately replacing a turn you just wrote, pass -DisableGuard G12.')
 }
 
 function New-Finding([string]$guard, [int]$line, [string]$snippet, [string]$why) {
@@ -536,6 +647,16 @@ $doc = if ($journal) { Get-JournalDocMeta $journal } else { $null }
 #
 # `@(...)` forces an array on both hosts, so `.Count` is 0/1/n everywhere.
 $findings = @(Test-TurnBody -Body $body -Disabled $DisableGuard -Doc $doc)
+
+# G12 is appended here rather than inside Test-TurnBody because it is the one guard that is a
+# property of the DESTINATION, not of the text: the same body is fine on a fresh wake and a
+# duplicate on a spent one. `-Validate` sees it too, so a validate step gives the same verdict
+# as the real write - which is the only thing that makes validating worth doing.
+if ($Id -and ($DisableGuard -notcontains 'G12')) {
+  $wake = Get-WakeTurnFinding $journal $Id $WAKE_WINDOW_MIN
+  if ($wake) { $findings = @($findings) + @($wake) }
+}
+$findings = @($findings)
 $hasAsk = Test-TurnAsk -Body $body
 
 if ($Json) {
@@ -594,7 +715,7 @@ if (-not (Test-Path -LiteralPath $journal)) { Write-Error "journal not found: $j
 # not exist yet (a fresh install, or the state loss #423 exists to survive) the turn is not
 # merely un-backed-up, it is never written at all.
 $stamp  = Get-Date -Format 'yyyyMMdd-HHmm'
-$bakDir = Join-Path $env:LOCALAPPDATA 'overnight-agent'
+$bakDir = $OA_HOME
 New-Item -ItemType Directory -Path $bakDir -Force | Out-Null
 Copy-Item -LiteralPath $journal -Destination (Join-Path $bakDir "task-$Id.bak-$stamp.md") -Force
 

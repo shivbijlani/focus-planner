@@ -346,11 +346,128 @@ foreach ($g in @('G1', 'G2', 'G3', 'G4', 'G5', 'G7')) {
   Write-Host ("  {0} disabled -> broke [{1}] collateral [{2}]  {3}" -f $g, ($broke -join ','), ($collateral -join ','), $verdict)
 }
 
+# --- 3. G12: ONE TURN PER WAKE (GH #473) ---------------------------------------------
+# G12 gets its own section because it is the only guard that is a property of the
+# DESTINATION. The fixtures above are bodies with no `-Id`, so G12 cannot even be reached
+# from them - the same body is clean on a fresh wake and a duplicate on a spent one.
+#
+# Everything here is hermetic: a throwaway journal dir and a throwaway OA home, so the arms
+# can produce the recency evidence (a state file, a backup file) without writing into the
+# real one. That is deliberate - a guard whose evidence can only be made by touching the live
+# OA home is a guard that never runs in CI, and #461 is what that costs.
+Write-Host ''
+Write-Host '--- G12: one turn per wake (#473) ---'
+$g12Root = Join-Path $tmp 'g12'
+$g12Journal = Join-Path $g12Root 'journal'
+$g12Home = Join-Path $g12Root 'oa-home'
+New-Item -ItemType Directory -Path $g12Journal, (Join-Path $g12Home 'state') -Force | Out-Null
+
+$g12Turn = @"
+## $MOON Overnight Agent
+<!-- from: overnight-agent -->
+
+**Status:** Done - 2026-09-04
+
+Doc: https://docs.google.com/document/d/ABC123DEF456/edit
+
+**Needs from you:** nothing blocking.
+
+<!-- /overnight-agent turn-end -->
+"@
+$g12Head = @"
+# Task 901: fixture
+
+---
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+<!-- doc-meta docId=ABC123DEF456 docUrl=https://docs.google.com/document/d/ABC123DEF456/edit -->
+
+"@
+$g12Body = Join-Path $g12Root 'body.md'
+[IO.File]::WriteAllText($g12Body, $g12Turn, (New-Object Text.UTF8Encoding($false)))
+
+function Set-G12Journal([string]$extra) {
+  [IO.File]::WriteAllText((Join-Path $g12Journal 'task-901.md'), ($g12Head + $g12Turn + $extra), (New-Object Text.UTF8Encoding($false)))
+}
+function Clear-G12Recency {
+  Get-ChildItem -LiteralPath $g12Home -Filter 'task-901.bak-*.md' -ErrorAction SilentlyContinue | Remove-Item -Force
+  Remove-Item -LiteralPath (Join-Path $g12Home 'state\task-901.json') -Force -ErrorAction SilentlyContinue
+}
+function Set-G12Backup([datetime]$when) {
+  [IO.File]::WriteAllText((Join-Path $g12Home ("task-901.bak-" + $when.ToString('yyyyMMdd-HHmm') + '.md')), 'x', (New-Object Text.UTF8Encoding($false)))
+}
+function Set-G12State([datetime]$when) {
+  $o = @{ id = '901'; last_turn_at = $when.ToString('yyyy-MM-ddTHH:mm:ssK') } | ConvertTo-Json
+  [IO.File]::WriteAllText((Join-Path $g12Home 'state\task-901.json'), $o, (New-Object Text.UTF8Encoding($false)))
+}
+function Invoke-G12([string[]]$disable) {
+  $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $target,
+         '-Id', '901', '-BodyFile', $g12Body, '-JournalDir', $g12Journal, '-Validate', '-Json')
+  if ($disable.Count -gt 0) { $a += @('-DisableGuard', ($disable -join ',')) }
+  $prev = $env:WRITE_TURN_OA_HOME
+  $env:WRITE_TURN_OA_HOME = $g12Home
+  try { $raw = & powershell @a 2>&1 | Out-String } finally { $env:WRITE_TURN_OA_HOME = $prev }
+  try { $o = $raw | ConvertFrom-Json } catch { throw "unparseable G12 output:`n$raw" }
+  return @($o.findings | ForEach-Object { $_.guard } | Sort-Object -Unique)
+}
+
+$now = Get-Date
+$g12Arms = @(
+  @{ name = 'the #473 repro: 2nd turn, same wake'; fires = $true
+     why  = 'a turn exists, he has not replied, and it was written minutes ago'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12Backup $now; Set-G12State $now } }
+
+  @{ name = 'RECENCY from the BACKUP alone'; fires = $true
+     why  = 'the forgotten-mark path: no state file, so last_turn_at cannot help (#465)'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12Backup $now } }
+
+  @{ name = 'RECENCY from last_turn_at alone'; fires = $true
+     why  = 'the other source on its own, so neither silently carries both'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12State $now } }
+
+  @{ name = 'CONTROL he replied since the turn'; fires = $false
+     why  = 'a reply un-spends the wake at any age, or the guard blocks answering him'
+     setup = { Set-G12Journal "`n## 2026-09-04`n`n<!-- from: me -->`nwhat about X?`n"; Clear-G12Recency; Set-G12Backup $now; Set-G12State $now } }
+
+  @{ name = 'CONTROL the turn is OLD'; fires = $false
+     why  = 'time un-spends it too, or tomorrow night can never write'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12Backup $now.AddMinutes(-600); Set-G12State $now.AddMinutes(-600) } }
+
+  @{ name = 'CONTROL no prior turn'; fires = $false
+     why  = 'a first turn is never a duplicate'
+     setup = { [IO.File]::WriteAllText((Join-Path $g12Journal 'task-901.md'), $g12Head, (New-Object Text.UTF8Encoding($false))); Clear-G12Recency; Set-G12Backup $now } }
+
+  @{ name = 'CONTROL no recency evidence at all'; fires = $false
+     why  = 'structure alone must not refuse - that would block every later night'
+     setup = { Set-G12Journal ''; Clear-G12Recency } }
+)
+
+foreach ($arm in $g12Arms) {
+  & $arm.setup
+  $got = Invoke-G12 @()
+  $fired = ($got -contains 'G12')
+  $ok = ($fired -eq $arm.fires)
+  if (-not $ok) { $failures += "G12 arm '$($arm.name)': expected fires=$($arm.fires) got [$($got -join ',')]" }
+  Write-Host ("  {0,-38} fires={1,-5} {2}   {3}" -f $arm.name, $fired, $(if ($ok) { 'ok  ' } else { 'FAIL' }), $arm.why)
+}
+
+# G12 must be the thing doing the refusing, not another guard reacting to the fixture.
+& $g12Arms[0].setup
+$withG12 = Invoke-G12 @()
+$withoutG12 = Invoke-G12 @('G12')
+if (($withG12 -contains 'G12') -and ($withoutG12.Count -eq 0)) {
+  Write-Host '  G12 disabled -> the same fixture is clean                          LOAD-BEARING'
+}
+else {
+  $failures += "G12 is not load-bearing: with=[$($withG12 -join ',')] without=[$($withoutG12 -join ',')]"
+  Write-Host ("  G12 disabled -> with[{0}] without[{1}]  SUSPECT" -f ($withG12 -join ','), ($withoutG12 -join ','))
+}
+
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host ''
 if ($failures.Count -eq 0) {
-  Write-Host ("PASS - {0} fixtures, 6 guards, each load-bearing." -f $fixtures.Count) -ForegroundColor Green
+  Write-Host ("PASS - {0} fixtures + {1} G12 arms, 7 guards, each load-bearing." -f $fixtures.Count, $g12Arms.Count) -ForegroundColor Green
   exit 0
 }
 Write-Host 'FAIL' -ForegroundColor Red
