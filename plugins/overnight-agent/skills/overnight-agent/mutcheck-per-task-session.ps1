@@ -1,4 +1,4 @@
-<#
+﻿<#
   mutcheck-per-task-session.ps1 -- mutation check for #404: a per-task session, in its own
   workspace, persisted across runs, and paced by the #391 concurrency setting.
 
@@ -114,7 +114,7 @@ $board = Join-Path $root 'planner.md'
 $store = Join-Path $root 'snooze.json'
 $utf8 = New-Object Text.UTF8Encoding($false)
 
-$ids = 801, 802, 803, 804, 805, 806, 807, 808, 809, 810
+$ids = 801, 802, 803, 804, 805, 806, 807, 808, 809, 810, 812
 foreach ($id in $ids) {
   [IO.File]::WriteAllText((Join-Path $jdir "task-$id.md"), $Journal.Replace('{ID}', "$id"), $utf8)
 }
@@ -244,6 +244,40 @@ Check 'C-w- and it is replace, so prior work is not cold-started' { "$($tornVerd
 Set-Content -Path (Join-Path $wsTorn '.git') -Value 'gitdir: /repo/.git/worktrees/wt-802' -Encoding utf8
 Check 'C-w-- a workspace holding a checkout is reused again' {
   "$((Invoke-OaJson @('session', '-Id', '802')).verdict)" -eq 'reuse'
+}
+
+# C-t: teardown must SAY the workspace is gone (#452, the half the verdict cannot cover).
+#
+# Measured 2026-09-04 against a REAL worktree removed with the sanctioned remove-worktree.ps1: a
+# clean teardown leaves NO directory at all. #466's survived only because a live session's cwd
+# blocked the final delete, which is what produced the empty-directory signature C-w tests. The
+# verdict cannot judge the clean case -- an absent path is equally a workspace that was never
+# materialised, and treating absence as death would discard live young sessions.
+#
+# So the fact travels from the side that holds it: the remover knows it removed the workspace.
+$wsClean = Join-Path $root 'wt-812'
+$null = New-Bind -Id '812' -SessionId 'SESS_812' -WithForce
+Check 'C-t before teardown a bound task reads reuse' {
+  "$((Invoke-OaJson @('session', '-Id', '812')).verdict)" -eq 'reuse'
+}
+$gone = Invoke-OaJson @('session', '-WorkspaceGone', $wsClean)
+Check 'C-t- the removal marks exactly that task' {
+  [int]$gone.marked_dead -eq 1 -and ($gone.tasks -contains '812')
+}
+$after812 = Invoke-OaJson @('session', '-Id', '812')
+# `replace`, not `create`: releasing would leave the task unbound and cold-start it, discarding
+# the continuity the binding exists to provide. Dead carries the continuation.
+Check 'C-t-- and the verdict becomes replace, carrying continuity' {
+  "$($after812.verdict)" -eq 'replace' -and "$($after812.state)" -eq 'dead'
+}
+Check 'C-t--- the continuation is emitted, so the next session is not cold-started' {
+  "$($after812.kickoff_continuation)" -match 'continues work on planner task'
+}
+# EXACT path only. A prefix match would let tearing down a parent directory silently kill every
+# binding beneath it -- one command, every task on the machine unbound.
+$parentGone = Invoke-OaJson @('session', '-WorkspaceGone', $root)
+Check 'C-t---- a PARENT path does not cascade to bindings beneath it' {
+  [int]$parentGone.marked_dead -eq 0
 }
 
 # --- D/E: the refusal that makes reuse a rule ------------------------------------------
