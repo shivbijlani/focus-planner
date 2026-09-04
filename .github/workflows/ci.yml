@@ -344,3 +344,30 @@ jobs:
       - name: Mutation check (safe verdicts, bounded runtime, O(1) history)
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-auto-deploy.ps1
+
+  # A shipped PR must not close its issue (GH #428). This job guards the CHECKER; the check
+  # itself runs from .github/workflows/pr-closing-keyword.yml, which triggers on the PR events
+  # that can change a body or a label without pushing a commit (`edited`, `labeled`,
+  # `unlabeled`). Splitting them keeps a one-word description edit from re-running all 15 jobs
+  # here, while still re-checking the thing that actually changed.
+  #
+  # Prose did not hold this rule. Measured over the 40 most recent merged PRs: 15 auto-closed an
+  # issue. The decisive case is PR #443, which carried no literal `Closes #N` at all -- it
+  # carried a sentence written to promise the opposite:
+  # "**This does not close [issue #441](.../issues/441)**". GitHub resolves a closing keyword
+  # followed by a markdown LINK by its href, so the disclaimer WAS the closing reference, and
+  # issue #441 closed unreviewed two seconds after the merge.
+  #
+  # Hence the mutation arms below matter in BOTH directions: too narrow lets a real closer
+  # merge, too wide makes the job fire on ordinary prose until someone disables it.
+  pr-closing-keyword:
+    name: PR auto-close guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mutation check (grammar is load-bearing in both directions)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-pr-closing-keyword.ps1
