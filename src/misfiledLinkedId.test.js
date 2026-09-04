@@ -39,6 +39,11 @@ const ROW_451 = '| 451 | 🔴 | Report hit and run | - | 2026-08-30 | 191 |'
 const ROW_210 = '| 210 | 🔴 | Fix heater | - | 2026-05-08 |  | 215 |'
 // Genuinely snoozed: a real date in `Wake`, with a link.
 const ROW_SNOOZED = '| 300 | 🟡 | Something later | - | 2026-08-01 | 2026-09-20 | 215 |'
+// Genuinely snoozed with NO parent. This is the row only the is-a-date guard
+// protects: `Linked ID` is empty, so the empty-link guard does not fire, and
+// without the date check the wake date would be moved into `Linked ID` and the
+// snooze destroyed. A parentless snoozed task is ordinary, not a corner case.
+const ROW_SNOOZED_NO_PARENT = '| 301 | 🟡 | Snoozed, no parent | - | 2026-08-01 | 2026-09-20 |  |'
 
 const LINK = 'Linked ID'
 
@@ -53,6 +58,20 @@ describe('#446 recoverMisfiledLinkedId', () => {
     const out = recoverMisfiledLinkedId(rowCells(ROW_SNOOZED), DEFERRED_HEADERS)
     expect(out[DEFERRED_HEADERS.indexOf('Wake')]).toBe('2026-09-20')
     expect(out[DEFERRED_HEADERS.indexOf(LINK)]).toBe('215')
+  })
+
+  it('leaves a real wake date alone even when Linked ID is empty', () => {
+    // The empty-link guard cannot help here, so this isolates the date check.
+    // Without it, the snooze is moved into `Linked ID` and silently destroyed.
+    const out = recoverMisfiledLinkedId(rowCells(ROW_SNOOZED_NO_PARENT), DEFERRED_HEADERS)
+    expect(out[DEFERRED_HEADERS.indexOf('Wake')]).toBe('2026-09-20')
+    expect(out[DEFERRED_HEADERS.indexOf(LINK)]).toBe('')
+  })
+
+  it('keeps a parentless snoozed row readable as snoozed', () => {
+    expect(parseSnoozeUntil(ROW_SNOOZED_NO_PARENT, DEFERRED_HEADERS)).toBe('2026-09-20')
+    expect(cellByHeader(rowCells(ROW_SNOOZED_NO_PARENT), DEFERRED_HEADERS, 'Wake')).toBe('2026-09-20')
+    expect(cellByHeader(rowCells(ROW_SNOOZED_NO_PARENT), DEFERRED_HEADERS, LINK)).toBe('')
   })
 
   it('never clobbers a Linked ID that is already populated', () => {
