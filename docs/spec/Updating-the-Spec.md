@@ -15,6 +15,7 @@ This page is for whoever — human or agent — does that next.
 | **Which pages exist** | the *Pages to write* table in `scripts/spec/prompt.md` |
 | The facts the prose must match | `scripts/spec/collect.mjs` output (`spec-facts.json`, gitignored) |
 | The gate that enforces the match | `scripts/spec/verify.mjs` |
+| The conflicting-requirement report | `scripts/spec/conflicts.mjs` output (`spec-decisions.json`, gitignored) |
 | Regeneration and publication | `.github/workflows/spec-wiki.yml` |
 
 ## The trap: adding a page needs two edits, not one
@@ -47,17 +48,44 @@ model          writes docs/spec/*.md from those facts, following prompt.md
      ↓
 verify.mjs    (no model)   → fails on invention, omission, or thinness
      ↓
+conflicts.mjs (no model)   → spec-decisions.json: open issues that demand opposite things
+     ↓
 pull request → review → main
      ↓
 publish job    mirrors docs/spec/*.md into the wiki
 ```
 
-Run the two mechanical halves locally before opening a pull request:
+Run the mechanical halves locally before opening a pull request:
 
 ```powershell
 node scripts/spec/collect.mjs --out spec-facts.json
 node scripts/spec/verify.mjs --facts spec-facts.json --dir docs/spec
+node scripts/spec/conflicts.mjs --facts spec-facts.json --out spec-decisions.json --md spec-decisions.md
 ```
+
+## What `conflicts.mjs` reports
+
+`verify.mjs` asks "does the prose reference things that exist?". It cannot catch the case where two
+**open issues demand opposite things** — both exist, so both references are valid, and whichever the
+model read last ships as design authority.
+
+`conflicts.mjs` reads the same facts and reports requirement pairs that cannot both hold:
+
+| Rule | Fires when |
+| --- | --- |
+| `polarity` | one issue requires a behaviour, another forbids the same behaviour |
+| `value` | two issues give different values for the same setting (durations/cadences) |
+| `lifecycle` | one issue wants a thing added, another wants the same thing removed |
+
+It is **tuned for precision, not recall**, and that choice is the whole design. At four runs a day a
+detector that cries wolf is muted inside a week, and then its silence reads as a verdict. So every
+rule demands a specific shared target before it will pair two statements, a sentence that cites the
+other issue by number is treated as commentary rather than contradiction, and every finding carries
+the verbatim sentences it came from so a wrong one is visible in a single line. Measured against the
+live corpus of 70 open issues it reports **0** conflicts.
+
+It exits 0 even when it finds something: a disagreement between two issues is information for a
+human, not a broken build, and a job that goes red four times a day is one nobody reads.
 
 ## What `verify.mjs` rejects
 
@@ -84,10 +112,17 @@ Two properties of that gate are worth knowing before you fight it:
 
 Two paths, both writing to the same place:
 
-- **Automated** — `.github/workflows/spec-wiki.yml`, on a weekly schedule or manual dispatch. It
-  regenerates, verifies, opens a pull request, and publishes what is on `main`. Publication needs a
-  `WIKI_TOKEN` secret, because Actions' `GITHUB_TOKEN` cannot push to a wiki repository; without it
-  the publish job is skipped rather than failed.
+- **Automated** — `.github/workflows/spec-wiki.yml`, **every 6 hours** or on manual dispatch. It
+  regenerates, verifies, flags conflicting requirements, opens or updates a pull request, and
+  publishes what is on `main`. Publication needs a `WIKI_TOKEN` secret, because Actions'
+  `GITHUB_TOKEN` cannot push to a wiki repository; without it the publish job is skipped rather than
+  failed.
+
+  It maintains **one rolling pull request** on the fixed `spec/auto` branch, updated in place, rather
+  than opening a new PR per run. That pairing is deliberate and load-bearing: at the old weekly
+  cadence a branch per run was harmless, but at 6h it would open 28 pull requests a week, each
+  superseding the last. Raising the frequency without the rolling branch is a regression, not a
+  tuning choice.
 - **Manual** — a wiki is a plain git repository with no pull-request gate, so anyone with a
   `repo`-scoped token can push to it directly:
 
