@@ -229,6 +229,29 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-binding.ps1
 
+  # The catch-up doc skill and Shiv's four doc preferences (GH #441).
+  #
+  # The preferences used to live in three places -- SKILL.md prose, a skill folder outside the
+  # repo, and one task journal's operating contract -- so they were re-derived per run and a new
+  # machine picked up none of them. They now ship inside the plugin.
+  #
+  # Two things silently undo that, and neither surfaces as a failure anywhere else: a preference
+  # disappearing (or being left as an empty cell, so it is still "documented" while saying
+  # nothing), and the skill moving out of the directory plugin.json globs -- which stops it being
+  # discovered and deployed at all. That second one is the merged-but-not-running failure this
+  # repo has already paid for twice, so it is asserted rather than assumed.
+  #
+  # Pure text work against copies in a temp dir; it never reads the real planner folder, so it
+  # runs unmodified on the Linux runner.
+  catchup-doc-prefs:
+    name: Catch-up doc preferences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (four preferences present, skill inside the deployed glob)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-catchup-doc-prefs.ps1
+
   # The board's ragged rows (GH #426). `## Deferred` carries a `Wake` column that
   # `## Today` does not, so a hand-edited or pre-#307 row has one field too few --
   # and the reader indexed `Linked ID` off the RAW row, so `cells[6]` on a 6-field
