@@ -32,9 +32,12 @@ param([string]$ScriptPath)
 
 $ErrorActionPreference = 'Stop'
 if (-not $ScriptPath) {
-  # Resolved in the BODY: under `powershell -File` a param-default referencing $PSScriptRoot
-  # is evaluated before it is populated, and Join-Path then throws on an empty path.
-  $here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+  # Resolved in the BODY, and from THREE sources, because CI invokes this as
+  # `pwsh -command ". '<file>'"` where $PSScriptRoot and $MyInvocation.MyCommand.Path are both
+  # null -- Split-Path then throws "Cannot bind argument to parameter 'Path' because it is
+  # null" before a single assertion runs. $PSCommandPath survives that form.
+  $self = if ($PSCommandPath) { $PSCommandPath } elseif ($MyInvocation.MyCommand.Path) { $MyInvocation.MyCommand.Path } else { $null }
+  $here = if ($PSScriptRoot) { $PSScriptRoot } elseif ($self) { Split-Path -Parent $self } else { Join-Path (Get-Location) 'plugins/overnight-agent/checks' }
   $ScriptPath = Join-Path $here 'oa-supervisor.ps1'
 }
 if (-not (Test-Path $ScriptPath)) { Write-Host "FAIL cannot find oa-supervisor.ps1 at $ScriptPath"; exit 2 }
@@ -49,9 +52,10 @@ function Check([string]$label, [bool]$cond, [string]$detail) {
   else { $script:fail++; Write-Host "  FAIL  $label$(if ($detail) { " -- $detail" })" }
 }
 
-# Lift the two pure functions out of the real source. Extracting them by name rather than
-# running the whole script keeps this a UNIT check with no DB, no app and no side effects,
-# while still testing the shipped text.
+# Lift the two pure functions out of the real source and load them as an isolated in-process
+# module. No child process: `powershell.exe` does not exist on the Linux runner, and spawning
+# one per fixture per mutation would be both non-portable and slow. New-Module gives each
+# variant its own scope, so a mutant cannot leak into the baseline.
 function New-Harness([string]$source, [string]$tag) {
   $names = @('Get-ResourceVerdict', 'Get-SupervisorAction')
   $sb = New-Object Text.StringBuilder
@@ -68,9 +72,8 @@ function New-Harness([string]$source, [string]$tag) {
     }
     [void]$sb.AppendLine($source.Substring($i, $j - $i))
   }
-  $p = Join-Path $root "harness-$tag.ps1"
-  [IO.File]::WriteAllText($p, $sb.ToString(), (New-Object Text.UTF8Encoding($false)))
-  return $p
+  [void]$sb.AppendLine("Export-ModuleMember -Function $($names -join ',')")
+  return New-Module -Name "res-$tag" -ScriptBlock ([scriptblock]::Create($sb.ToString())) | Import-Module -PassThru -Force
 }
 
 # --- fixtures --------------------------------------------------------------------------
@@ -94,21 +97,13 @@ $fixtures = [ordered]@{
   NOSAMPLE = @{ sample = $null;                                                                         state = 'RESOURCE-UNKNOWN' }
 }
 
-function Invoke-Verdict([string]$harness, $sample) {
-  $out = & powershell -NoProfile -ExecutionPolicy Bypass -Command "
-    . '$harness'
-    `$s = if ('$(if ($null -eq $sample) { 'null' } else { 'obj' })' -eq 'null') { `$null } else { '$($sample | ConvertTo-Json -Compress)' | ConvertFrom-Json }
-    (Get-ResourceVerdict -Sample `$s).state
-  " 2>&1
-  return ("$out").Trim()
+function Invoke-Verdict($harness, $sample) {
+  $s = if ($null -eq $sample) { $null } else { [pscustomobject]$sample }
+  return "$(& $harness { param($x) (Get-ResourceVerdict -Sample $x).state } $s)".Trim()
 }
 
-function Invoke-Action([string]$harness, [string]$state, [bool]$appRunning) {
-  $out = & powershell -NoProfile -ExecutionPolicy Bypass -Command "
-    . '$harness'
-    Get-SupervisorAction -State '$state' -FlaggedOrphans 0 -HasHungAlive `$false -AppRunning `$$($appRunning.ToString().ToLower())
-  " 2>&1
-  return ("$out").Trim()
+function Invoke-Action($harness, [string]$state, [bool]$appRunning) {
+  return "$(& $harness { param($st, $ar) Get-SupervisorAction -State $st -FlaggedOrphans 0 -HasHungAlive $false -AppRunning $ar } $state $appRunning)".Trim()
 }
 
 $base = New-Harness $src 'base'
