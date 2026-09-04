@@ -105,6 +105,12 @@ param(
   [switch]$Repair,
   [switch]$NoAlert,
   [switch]$TestAlert,
+  # Replay a recorded resource sample instead of measuring the machine (GH #403).
+  # The mutation harness drives the REAL classifier in this file through this parameter, so
+  # what is proven load-bearing is the shipped code rather than a copy of it that can drift --
+  # mutcheck-supervisor.ps1 predates this and reimplements the classifier, which is exactly the
+  # weakness this avoids.
+  [string]$ResourceFactsJson,
   [switch]$Json
 )
 
@@ -160,6 +166,104 @@ function Get-SupervisorVerdict {
   return @{ state = 'HEALTHY'; detail = "last run started $ageMin min ago, status $($NewestRun.status)"; ageMin = $ageMin }
 }
 
+# --- the RESOURCE detector: a second, independent verdict (GH #403) -------------------
+#
+# WHY THIS EXISTS
+# ---------------
+# Every state the schedule classifier above can reach is derived from the run slot, so
+# "the app is responsive and runs are starting on time" was the entire definition of
+# healthy. A process that is responsive AND eating a quarter of the machine satisfies it
+# completely. Measured on shiv-devbox 2026-09-02, while Shiv reported the machine
+# unusable: CPU pinned at 100%, processor queue length 21 on 4 cores, disk 99% idle --
+# and the app's own WebView2 renderer plus GPU helper had burned 7.05 CPU-hours in 14.7
+# hours of uptime, about 48% of one core continuously since boot. The supervisor logged
+# `"state":"HEALTHY","action":"none"` throughout. It reached STUCK three times that day
+# and correctly recorded `action: none` each time, because the owning process was alive:
+# it saw the symptom and had no way to say "this live run is pathologically expensive
+# rather than merely slow".
+#
+# THE HARD PART IS NOT THE RESTART, IT IS DEFINING "LEAKING" SO IT CANNOT FIRE ON A
+# HEALTHY MACHINE UNDER LEGITIMATE LOAD. Three independent conditions must hold at once,
+# and each exists to refuse a specific false positive:
+#
+#   1. SUSTAINED, not instantaneous. The rate is accumulated CPU-hours per wall-hour of
+#      PROCESS AGE, so a brief legitimate burst -- a build, a test run, a video call --
+#      cannot reach the threshold no matter how hard it spikes. Keying on instantaneous
+#      CPU is the obvious wrong implementation and has its own mutation arm.
+#   2. THE MACHINE IS ACTUALLY CONTENDED. Processor queue length is the metric that
+#      tracked the felt sluggishness (21 when bad, 0 after remediation). Expensive work
+#      on a machine that is keeping up is not a fault; it is a machine doing its job.
+#   3. IT IS OUR TREE. Only the app's own WebView2 family is attributable. Restarting the
+#      app cannot fix somebody else's compiler, so a foreign hog is reported and never
+#      acted on.
+#
+# AGE IS DELIBERATELY NOT A CONDITION. #178 recorded that age-only heuristics kill
+# legitimate work, and Shiv keeps interactive sessions open for hours. A long-lived
+# process with a low rate is healthy and must stay HEALTHY; that has its own arm too.
+function Get-ResourceVerdict {
+  param(
+    [psobject]$Sample,              # $null when sampling failed or was skipped
+    [double]$LeakCpuRatio = 0.35,   # CPU-hours burned per wall-hour of process age
+    [int]$QueueThreshold = 8        # runnable threads waiting; 4-core box reads 0 when healthy
+  )
+
+  # Sampling failure is NOT health. A detector that cannot look must not report the same
+  # bytes as one that looked and found nothing (#346), so it says so and stays out of the
+  # way of the schedule verdict rather than silently voting HEALTHY.
+  if ($null -eq $Sample) {
+    return @{ state = 'RESOURCE-UNKNOWN'; detail = 'resource sampling unavailable'; ratio = $null; queue = $null }
+  }
+
+  $queue = [double]$Sample.queueLength
+  $ratio = if ([double]$Sample.appAgeHours -gt 0) {
+    [math]::Round(([double]$Sample.appCpuHours / [double]$Sample.appAgeHours), 3)
+  } else { 0 }
+
+  $detail = "app tree {0} CPU-h over {1} h uptime (rate {2}), queue {3}" -f `
+    [math]::Round([double]$Sample.appCpuHours, 2), [math]::Round([double]$Sample.appAgeHours, 1), $ratio, $queue
+
+  # Condition 2 first, so a contended machine is required before anything is called a leak.
+  if ($queue -lt $QueueThreshold) {
+    return @{ state = 'HEALTHY'; detail = "machine keeping up - $detail"; ratio = $ratio; queue = $queue }
+  }
+  # Condition 1: sustained cost, not a spike.
+  if ($ratio -lt $LeakCpuRatio) {
+    return @{ state = 'RESOURCE-CONTENDED'; detail = "contended but not attributable to the app - $detail"; ratio = $ratio; queue = $queue }
+  }
+  return @{ state = 'RESOURCE-LEAK'; detail = $detail; ratio = $ratio; queue = $queue }
+}
+
+# Measure the machine. Kept separate from the classifier so the classifier stays pure and
+# replayable, and so a sampling failure degrades to $null rather than throwing the tick away.
+function Get-ResourceSample {
+  try {
+    # Processor queue length: the metric that actually tracked the felt sluggishness.
+    $queue = 0
+    try {
+      $q = Get-Counter '\System\Processor Queue Length' -ErrorAction Stop
+      $queue = [double]$q.CounterSamples[0].CookedValue
+    } catch { return $null }   # cannot measure contention -> cannot judge -> RESOURCE-UNKNOWN
+
+    # The app's own WebView2 tree, identified the way the app itself names it. Attribution
+    # matters: restarting the app cannot fix a foreign process, so only our tree counts.
+    $procs = @(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" -ErrorAction Stop |
+      Where-Object { "$($_.CommandLine)" -match '--webview-exe-name=github\.exe' })
+    if (-not $procs) { return @{ queueLength = $queue; appCpuHours = 0; appAgeHours = 0; procCount = 0 } }
+
+    $cpuSec = 0.0
+    $oldest = [datetime]::MaxValue
+    foreach ($p in $procs) {
+      $perf = Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess=$($p.ProcessId)" -ErrorAction SilentlyContinue
+      $ps = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
+      if ($ps) { $cpuSec += [double]$ps.CPU }
+      $start = $p.CreationDate
+      if ($start -and $start -lt $oldest) { $oldest = $start }
+    }
+    $ageH = if ($oldest -ne [datetime]::MaxValue) { ($NowUtc - $oldest.ToUniversalTime()).TotalHours } else { 0 }
+    return @{ queueLength = $queue; appCpuHours = ($cpuSec / 3600.0); appAgeHours = $ageH; procCount = $procs.Count }
+  } catch { return $null }
+}
+
 # --- the ACTION is a pure function of (state, orphan findings, app-running) ----------
 # Kept side-effect-free so mutcheck-supervisor.ps1 can prove each arm is load-bearing.
 function Get-SupervisorAction {
@@ -179,6 +283,19 @@ function Get-SupervisorAction {
       if ($AppRunning) { return 'restart' }             # app up but scheduler wedged
       return 'launch'                                   # app down: just bring it back
     }
+    # GH #403. The condition the supervisor is already trusted to fix, for a fault it could
+    # not previously name. It ADDS a trigger and relaxes no guard: the caller applies the
+    # same `-RestartCooldownMinutes` anti-loop, so a persistent leak cannot become a restart
+    # loop. Gated on the app running, because there is nothing to restart otherwise -- and
+    # notably NOT on the run slot, since the whole point is that the schedule looked fine.
+    'RESOURCE-LEAK' {
+      if ($AppRunning) { return 'restart' }
+      return 'none'
+    }
+    # Contended, but not attributable to our tree. Reported so the next investigation does
+    # not start from zero, never acted on: restarting the app cannot fix somebody else's
+    # process, and acting on an unattributable signal is how a detector earns being ignored.
+    'RESOURCE-CONTENDED' { return 'none' }
     default { return 'none' }                           # HEALTHY / unknown
   }
 }
@@ -336,6 +453,30 @@ if ($verdict.state -eq 'STUCK') {
 $action = Get-SupervisorAction -State $verdict.state -FlaggedOrphans $flaggedOrphans `
             -HasHungAlive $hasHungAlive -AppRunning $appRunning
 
+# --------------------------------------------- arm 2: the resource detector (GH #403) --
+# Sampled EVERY tick and recorded in supervisor-log.jsonl regardless of verdict, so a future
+# investigation reads history instead of being done by hand at 100% CPU, which is how #403
+# was found in the first place.
+#
+# The schedule verdict wins when it already has something to say: it is the older, vetted
+# signal and it carries the orphan/liveness veto. The resource verdict only takes over when
+# the schedule says HEALTHY -- which is exactly the blind spot, since the machine was
+# unusable while the schedule looked perfect.
+$resSample = $null
+if ($ResourceFactsJson) {
+  if (-not (Test-Path $ResourceFactsJson)) { Write-Error "resource facts file not found: $ResourceFactsJson"; exit 2 }
+  $resSample = [IO.File]::ReadAllText($ResourceFactsJson, (New-Object Text.UTF8Encoding($false))) | ConvertFrom-Json
+} else {
+  $resSample = Get-ResourceSample
+}
+$resVerdict = Get-ResourceVerdict -Sample $resSample
+
+if ($verdict.state -eq 'HEALTHY' -and $resVerdict.state -ne 'HEALTHY') {
+  $verdict = @{ state = $resVerdict.state; detail = $resVerdict.detail; ageMin = $verdict.ageMin }
+  $action = Get-SupervisorAction -State $resVerdict.state -FlaggedOrphans 0 `
+              -HasHungAlive $false -AppRunning $appRunning
+}
+
 # ---------------------------------------------------------------- anti-loop cooldown --
 # One incident (state + the run it is about) may drive at most one restart per cooldown,
 # so a state that keeps looking stuck cannot become a reboot loop.
@@ -388,6 +529,16 @@ $result = @{
   flaggedOrphans = $flaggedOrphans
   hasHungAlive   = $hasHungAlive
   sweep          = $sweepResult
+  # GH #403: recorded on EVERY tick, not only when it fires, so the history exists before
+  # the next investigation needs it.
+  resource       = @{
+    state       = $resVerdict.state
+    detail      = $resVerdict.detail
+    cpuRatio    = $resVerdict.ratio
+    queueLength = $resVerdict.queue
+    sampled     = [bool]($null -ne $resSample)
+    replayed    = [bool]$ResourceFactsJson
+  }
   thresholds     = @{ stuckMin = $StuckMinutes; deadMin = $DeadMinutes; restartCooldownMin = $RestartCooldownMinutes }
 }
 Write-Log $result
