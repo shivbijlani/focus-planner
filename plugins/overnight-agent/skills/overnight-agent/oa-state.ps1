@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Skill-owned memory for the Overnight Agent. Tracks, per task, what the agent has
   already processed in each journal — so a user message appended at the BOTTOM of a
