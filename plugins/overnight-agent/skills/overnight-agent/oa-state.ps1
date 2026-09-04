@@ -462,6 +462,9 @@ param(
 
   [string]$Id,
   [string]$Status,
+  # #477: overrides the author recorded by `mark`. Exists so the guard's arms can drive it from
+  # a fixture; a real run leaves it unset and the identity comes from the runtime.
+  [string]$TurnBy,
   [int]$Version,
   [string]$PlanId,
   [switch]$Force,
@@ -4214,7 +4217,26 @@ function Cmd-Mark {
   # Absent still means "never worked", which keeps the row gating.
   $timerOnly = ($PollDone -or $PollClear -or $RecheckDone -or $RecheckClear -or ($RecheckKind -and -not $Recheck))
   $isTurn = -not ($timerOnly -and -not $Status -and $Version -le 0 -and -not $PlanId)
-  if ($isTurn) { Set-Member $st 'last_turn_at' (Now-Iso) }
+  if ($isTurn) {
+    Set-Member $st 'last_turn_at' (Now-Iso)
+    # WHO wrote it (#477). `last_turn_at` alone made the wake token anonymous, so G12 could tell
+    # that a turn existed but not whose it was -- and on the first wake after it shipped, the run
+    # session wrote first and the guard then locked out the sub-session the contract names as sole
+    # author. Recording the author is what lets the OWNER supersede a non-owner instead.
+    #
+    # Taken from the runtime rather than from a parameter, so it is DERIVED and cannot be
+    # forgotten: `COPILOT_AGENT_SESSION_ID` is set by the harness for whichever session is
+    # running, and it is the same value the session binding already stores as
+    # `session.session_id`. Ownership is therefore checkable - the two are compared - rather than
+    # asserted by whoever happens to be calling.
+    #
+    # UNSET RECORDS 'unknown', NEVER THE OWNER. An undefaulted value that fails toward the
+    # outcome it is meant to prevent is #462, and here that failure would be silent and exactly
+    # backwards: an unattributed turn would inherit the owner's authority and lock the real owner
+    # out. 'unknown' is supersedable, which is the safe direction.
+    $by = if ($TurnBy) { $TurnBy } elseif ($env:COPILOT_AGENT_SESSION_ID) { $env:COPILOT_AGENT_SESSION_ID } else { 'unknown' }
+    Set-Member $st 'last_turn_by' $by
+  }
   Write-State $st
   $st | ConvertTo-Json -Depth 6
 }

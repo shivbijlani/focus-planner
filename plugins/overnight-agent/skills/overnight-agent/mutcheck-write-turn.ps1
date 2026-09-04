@@ -401,15 +401,33 @@ function Set-G12State([datetime]$when, $woken = $null) {
   if ($null -ne $woken) { $h['session'] = @{ last_woken_at = ([datetime]$woken).ToString('yyyy-MM-ddTHH:mm:ssK') } }
   [IO.File]::WriteAllText((Join-Path $g12Home 'state\task-901.json'), ($h | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
 }
-function Invoke-G12([string[]]$disable) {
+function Invoke-G12([string[]]$disable, [string]$asAuthor = '') {
   $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $target,
          '-Id', '901', '-BodyFile', $g12Body, '-JournalDir', $g12Journal, '-Validate', '-Json')
   if ($disable.Count -gt 0) { $a += @('-DisableGuard', ($disable -join ',')) }
+  if ($asAuthor) { $a += @('-Author', $asAuthor) }
   $prev = $env:WRITE_TURN_OA_HOME
   $env:WRITE_TURN_OA_HOME = $g12Home
   try { $raw = & powershell @a 2>&1 | Out-String } finally { $env:WRITE_TURN_OA_HOME = $prev }
   try { $o = $raw | ConvertFrom-Json } catch { throw "unparseable G12 output:`n$raw" }
   return @($o.findings | ForEach-Object { $_.guard } | Sort-Object -Unique)
+}
+
+# #477 fixtures: the state now carries WHO wrote the turn and WHO owns the task.
+$OWNER = 'owner-session-0001'
+$OTHER = 'run-session-0002'
+function Set-G12Owned([datetime]$when, [datetime]$woken, [string]$by, [string]$ownerId = $OWNER, [string]$sessState = 'live') {
+  $h = [ordered]@{
+    id = '901'
+    last_turn_at = $when.ToString('yyyy-MM-ddTHH:mm:ssK')
+  }
+  # An EMPTY $by omits the field entirely, which is not the same thing as recording 'unknown'.
+  # It is the state every task is in right now - every turn written before #477 shipped - so a
+  # reader that treats ABSENT as the owner would lock the real owner out of exactly the journals
+  # that already exist. The mutation arm that models that survived until this fixture existed.
+  if ($by) { $h['last_turn_by'] = $by }
+  $h['session'] = [ordered]@{ session_id = $ownerId; state = $sessState; last_woken_at = $woken.ToString('yyyy-MM-ddTHH:mm:ssK') }
+  [IO.File]::WriteAllText((Join-Path $g12Home 'state\task-901.json'), ($h | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
 }
 
 $now = Get-Date
@@ -458,11 +476,40 @@ $g12Arms = @(
   @{ name = 'NEXT wake wins over a fresh BACKUP'; fires = $false
      why  = 'the backup is recency evidence, not wake evidence; the boundary still decides'
      setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12State $now.AddMinutes(-12) $now.AddMinutes(-2); Set-G12Backup $now.AddMinutes(-12) } }
+
+  # --- WHOSE turn (#477) ---------------------------------------------------------------
+  # G12 shipped green against 19 body fixtures and 7 arms and still had this hole, because
+  # every one of those arms asked "is there a turn for this wake?" and none asked "whose?".
+  # These four are the same wake in all four cases - only the author differs.
+  @{ name = 'OWNER supersedes a NON-OWNER turn'; fires = $false; author = $OWNER
+     why  = 'THE #477 DEFECT: the owner must never be locked out by someone else writing first'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12Owned $now $now.AddMinutes(-10) $OTHER } }
+
+  @{ name = 'NON-OWNER cannot supersede the OWNER'; fires = $true; author = $OTHER
+     why  = 'the reverse must stay refused, or the fix simply moves the race'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12Owned $now $now.AddMinutes(-10) $OWNER } }
+
+  @{ name = 'OWNER cannot duplicate its OWN turn'; fires = $true; author = $OWNER
+     why  = 'a genuine same-author duplicate is still #473, and must stay refused'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12Owned $now $now.AddMinutes(-10) $OWNER } }
+
+  @{ name = 'OWNER supersedes an UNATTRIBUTED turn'; fires = $false; author = $OWNER
+     why  = 'unknown is a non-owner; inheriting the owner would lock the real owner out (#462)'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12Owned $now $now.AddMinutes(-10) 'unknown' } }
+
+  @{ name = 'OWNER supersedes a turn with NO author field'; fires = $false; author = $OWNER
+     why  = 'every turn written before #477 is in this state - absent must not read as the owner'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12Owned $now $now.AddMinutes(-10) '' } }
+
+  @{ name = 'a DEAD binding owns nothing'; fires = $true; author = $OWNER
+     why  = 'ownership comes from a LIVE binding, not from a session id that once matched'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12Owned $now $now.AddMinutes(-10) $OTHER $OWNER 'replaced' } }
 )
 
 foreach ($arm in $g12Arms) {
   & $arm.setup
-  $got = Invoke-G12 @()
+  $asAuthor = if ($arm.ContainsKey('author')) { $arm.author } else { '' }
+  $got = Invoke-G12 @() $asAuthor
   $fired = ($got -contains 'G12')
   $ok = ($fired -eq $arm.fires)
   if (-not $ok) { $failures += "G12 arm '$($arm.name)': expected fires=$($arm.fires) got [$($got -join ',')]" }
