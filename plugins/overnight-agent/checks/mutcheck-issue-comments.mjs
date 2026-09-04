@@ -12,7 +12,7 @@
 //
 // Method: the REAL module source is mutated textually and imported. No reimplementation of the
 // reader lives in this file — a guard that grades its own copy grades nothing.
-import { readFileSync, writeFileSync, mkdtempSync } from 'fs'
+import { readFileSync, writeFileSync, mkdtempSync, readdirSync } from 'fs'
 import { join, dirname } from 'path'
 import { tmpdir } from 'os'
 import { fileURLToPath, pathToFileURL } from 'url'
@@ -27,6 +27,14 @@ const SOURCE = readFileSync(SRC, 'utf8').replace(/\r\n/g, '\n')
 const TMP = mkdtempSync(join(tmpdir(), 'mutcheck-issue-comments-'))
 
 let counter = 0
+// Sibling `lib-*.mjs` modules are copied alongside each mutant. The harness mutates ONE file and
+// imports it from a temp directory, so a relative import that resolves fine in the repo (and in
+// the flat OA home, where every check lands in one directory) resolves to nothing here. Copying
+// the siblings keeps the shared helper single-sourced instead of duplicating it per library to
+// suit the test harness — the tail wagging the dog, and a second copy is a second thing to drift.
+const SIBLINGS = readdirSync(HERE).filter((f) => /^lib-.*\.mjs$/.test(f) && f !== 'lib-issue-comments.mjs')
+for (const f of SIBLINGS) writeFileSync(join(TMP, f), readFileSync(join(HERE, f), 'utf8'), 'utf8')
+
 async function load(mutation) {
   let src = SOURCE
   if (mutation) {
@@ -184,6 +192,74 @@ const ARMS = [
       return null
     },
   },
+  {
+    name: 'G_the_edit_verdict_is_usable_by_a_caller_that_reads_dot_id',
+    why: 'GH #462 trap 2 — `resolved.id` read undefined on an EDIT verdict, so the caller posted a duplicate',
+    run: async (m) => {
+      // The caller from GH #457, reproduced in shape rather than described: duck-type on `.id`.
+      const branch = (comments) => {
+        const r = m.resolveAgenticComment(comments)
+        return r && r.id ? `edit:${r.id}` : 'post'
+      }
+      if (branch([AGENT, SHIV]) !== `edit:${AGENT.id}`) {
+        return `a caller reading .id on an EDIT verdict got ${branch([AGENT, SHIV])} — this is the duplicate-posting path`
+      }
+      // The alias must not become a second, disagreeing source of truth.
+      const v = m.resolveAgenticComment([AGENT, SHIV])
+      if (v.id !== v.commentId) return `id (${v.id}) and commentId (${v.commentId}) disagree`
+      // ...and it must stay falsy where editing is unsafe, or the alias BECOMES the bug.
+      if (m.resolveAgenticComment([SHIV]).id) return 'a post verdict handed back a truthy id'
+      if (m.resolveAgenticComment([AGENT, { id: 9003, body: `${MARKER}\nolder` }]).id) {
+        return 'a refuse verdict handed back a truthy id — that would edit one of two marked comments'
+      }
+      return null
+    },
+  },
+  {
+    name: 'H_the_write_helper_owns_the_branch_so_no_caller_can_get_it_wrong',
+    why: 'GH #462 acceptance — a caller using the documented entry point cannot produce a second comment',
+    run: async (m) => {
+      // Effects are injected, so this asserts WHICH HTTP writes happen without touching GitHub.
+      const harness = (comments) => {
+        const writes = []
+        const run = (args) => {
+          if (!args.includes('-X')) return JSON.stringify(comments) // the read
+          writes.push(args.join(' '))
+          return JSON.stringify({ id: 777 })
+        }
+        return { writes, run, writeFile: (b) => { harnessBody = b; return '/tmp/body.md' } }
+      }
+      let harnessBody = null
+
+      // One marked comment AND his reply: must PATCH the agent's comment, and post nothing.
+      let h = harness([AGENT, SHIV])
+      let res = m.writeAgenticComment({ repo: 'o/r', issue: 7, body: 'update', run: h.run, writeFile: h.writeFile })
+      if (res.action !== 'edit') return `one marked comment resolved to ${res.action}`
+      if (h.writes.length !== 1) return `expected exactly one write, got ${h.writes.length}`
+      if (!h.writes[0].includes('PATCH') || !h.writes[0].includes(`comments/${AGENT.id}`)) {
+        return `edit did not PATCH the agent's comment: ${h.writes[0]}`
+      }
+      if (h.writes.some((w) => w.includes('POST'))) return 'an EDIT verdict still POSTed — this is the duplicate'
+      // The body it wrote must be stamped, or next pass cannot find it and posts a second one.
+      if (!m.isAgentComment(harnessBody)) return 'the written body was not stamped'
+
+      // No marked comment: post exactly one.
+      h = harness([SHIV])
+      res = m.writeAgenticComment({ repo: 'o/r', issue: 7, body: 'first', run: h.run, writeFile: h.writeFile })
+      if (res.action !== 'post') return `no marked comment resolved to ${res.action}`
+      if (h.writes.length !== 1 || !h.writes[0].includes('POST')) return `expected one POST, got ${JSON.stringify(h.writes)}`
+
+      // Two marked: THROW, and — the part that matters — write nothing at all.
+      h = harness([AGENT, { id: 9003, body: `${MARKER}\nolder` }])
+      let threw = false
+      try {
+        m.writeAgenticComment({ repo: 'o/r', issue: 7, body: 'x', run: h.run, writeFile: h.writeFile })
+      } catch { threw = true }
+      if (!threw) return 'two marked comments did not throw — refusal returned quietly and can be ignored'
+      if (h.writes.length !== 0) return `refusal still wrote: ${JSON.stringify(h.writes)}`
+      return null
+    },
+  },
 ]
 
 // ---------------------------------------------------------------------------------------------
@@ -195,21 +271,21 @@ const MUTATIONS = [
     name: 'edit_the_only_comment_regardless_of_marker',
     breaks: 'restores the count-based contract — one comment means edit it, even when it is his',
     apply: (s) => s.replace('if (marked.length === 1) {', 'if (rows.length === 1) {')
-      .replace('commentId: marked[0].id', 'commentId: rows[0].id'),
+      .replace('const id = marked[0].id', 'const id = rows[0].id'),
   },
   {
     name: 'fall_back_to_editing_the_newest_when_none_is_marked',
     breaks: 'the destructive fallback: the newest comment is very often his reply',
     apply: (s) => s.replace(
-      "return { action: 'post', commentId: null, marked, unmarked, reason: 'no-marked-comment' }",
-      "return { action: 'edit', commentId: rows.length ? rows[rows.length - 1].id : null, marked, unmarked, reason: 'no-marked-comment' }"),
+      "return { action: 'post', commentId: null, id: null, marked, unmarked, reason: 'no-marked-comment' }",
+      "return { action: 'edit', commentId: rows.length ? rows[rows.length - 1].id : null, id: null, marked, unmarked, reason: 'no-marked-comment' }"),
   },
   {
     name: 'guess_when_several_are_marked',
     breaks: 'picking one of two marked comments silently discards the other',
     apply: (s) => s.replace(
-      "return { action: 'refuse', commentId: null, marked, unmarked, reason: 'multiple-marked-comments' }",
-      "return { action: 'edit', commentId: marked[0].id, marked, unmarked, reason: 'multiple-marked-comments' }"),
+      "return { action: 'refuse', commentId: null, id: null, marked, unmarked, reason: 'multiple-marked-comments' }",
+      "return { action: 'edit', commentId: marked[0].id, id: marked[0].id, marked, unmarked, reason: 'multiple-marked-comments' }"),
   },
   {
     name: 'marker_anywhere_in_the_body',
@@ -232,6 +308,40 @@ const MUTATIONS = [
     name: 'roster_loses_an_entry',
     breaks: 'a stranded comment is DUPLICATED on the next pass, not merely left alone',
     apply: (s) => s.replace('  { issue: 261, id: 5535544915 },\n', ''),
+  },
+  {
+    name: 'verdict_drops_the_id_alias',
+    breaks: 'GH #462 trap 2 — a caller duck-typing on `.id` reads undefined on an EDIT verdict and posts a duplicate',
+    apply: (s) => s.replace(
+      "return { action: 'edit', commentId: id, id, marked, unmarked, reason: 'one-marked-comment' }",
+      "return { action: 'edit', commentId: id, marked, unmarked, reason: 'one-marked-comment' }"),
+  },
+  {
+    // NOTE: disabling the refuse check ALONE does not restore the hole, and that is worth knowing
+    // rather than working around — control then falls to the unrecognised-action throw at the
+    // bottom, which stops it a second time. The defence is genuinely two-deep. To model the real
+    // GH #462 outcome the mutation has to remove the stop AND route the verdict into a write,
+    // which is exactly what a caller re-implementing the branch did.
+    name: 'write_helper_falls_through_to_post_on_refuse',
+    breaks: 'the exact GH #462 outcome, one level up: a verdict that means STOP becomes a third comment',
+    apply: (s) => s.replace("if (verdict.action === 'refuse') {", 'if (false) {')
+      .replace("if (verdict.action === 'post') {", 'if (true) {'),
+  },
+  {
+    name: 'write_helper_refusal_returns_quietly_instead_of_throwing',
+    breaks: 'a refusal that can be ignored by the same inattention that caused the bug is not a refusal',
+    apply: (s) => s.replace("if (verdict.action === 'refuse') {", 'if (false) {')
+      .replace('throw new Error(`unrecognised verdict action', 'return ({ ok: false }) || new Error(`unrecognised verdict action'),
+  },
+  {
+    name: 'write_helper_posts_instead_of_editing',
+    breaks: 'the duplicate itself: a resolvable EDIT verdict still adds a second comment',
+    apply: (s) => s.replace("if (verdict.action === 'edit') {", 'if (false) {'),
+  },
+  {
+    name: 'write_helper_does_not_stamp',
+    breaks: 'an unstamped comment is unfindable next pass, so the duplicate arrives one run later instead of now',
+    apply: (s) => s.replace('const stamped = stampIssueComment(body)', 'const stamped = String(body ?? \'\')'),
   },
 ]
 

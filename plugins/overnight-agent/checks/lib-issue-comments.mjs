@@ -50,6 +50,9 @@
 // reintroduced BY ITS OWN FIX. The pre-existing comments are adopted by explicit ID below, so the
 // prefix is never needed and never consulted.
 
+import { execFileSync } from 'node:child_process'
+import { defaultWriteFile } from './lib-gh-write-file.mjs'
+
 // Deliberately identical to the journal turn convention that `write-turn.ps1` guard G7 already
 // enforces, so there is ONE provenance string across the agent's surfaces rather than a second
 // convention invented for this one.
@@ -115,10 +118,24 @@ export function unstampIssueComment(body) {
  * `id`/`databaseId` used only to report WHICH comment to edit. The `author` field is ignored
  * entirely — it says `shivbijlani` for both halves of the conversation, which is the defect.
  *
- * Returns `{ action, commentId, marked, unmarked, reason }` where action is one of:
+ * Returns `{ action, commentId, id, marked, unmarked, reason }` where action is one of:
  *   'edit'   — exactly one marked comment; `commentId` is safe to update in place
  *   'post'   — no marked comment; add a new one (NEVER edit an unmarked comment instead)
  *   'refuse' — more than one marked comment; a human has to look
+ *
+ * ⚠️ `id` IS AN ALIAS FOR `commentId`, AND IT EXISTS BECAUSE ITS ABSENCE POSTED A DUPLICATE (GH #462).
+ * This returns a VERDICT, not a comment — but every other object in this area IS a comment, so
+ * `resolved.id` is the natural thing for a caller to reach for. It read `undefined` even on an
+ * `edit` verdict, so the caller took its `else` branch and posted a second comment. Measured on
+ * GH #457: `resolved={"action":"edit","commentId":5536563203}` followed by `POSTED new stamped
+ * comment`. Nothing detected it — the write succeeded and exit was 0.
+ *
+ * ⛔ THE ALIAS IS A MITIGATION, NOT THE FIX, and the residue is worth stating plainly: a caller
+ * that branches on `if (resolved.id) edit(); else post()` is now correct for 'edit' and 'post',
+ * and STILL WRONG for 'refuse' — where `id` is null and posting a third comment is exactly what
+ * refusing was for. A truthy-but-unusable id would be worse, and a throwing getter would break
+ * `JSON.stringify` on the verdict, which is how these are logged. So the branch cannot be made
+ * safe by shape alone: use `writeAgenticComment`, which does not have a branch to get wrong.
  */
 export function resolveAgenticComment(comments) {
   const rows = (comments ?? []).map((c, i) => ({
@@ -130,10 +147,67 @@ export function resolveAgenticComment(comments) {
   const unmarked = rows.filter((r) => !r.marked)
 
   if (marked.length === 1) {
-    return { action: 'edit', commentId: marked[0].id, marked, unmarked, reason: 'one-marked-comment' }
+    const id = marked[0].id
+    return { action: 'edit', commentId: id, id, marked, unmarked, reason: 'one-marked-comment' }
   }
   if (marked.length === 0) {
-    return { action: 'post', commentId: null, marked, unmarked, reason: 'no-marked-comment' }
+    return { action: 'post', commentId: null, id: null, marked, unmarked, reason: 'no-marked-comment' }
   }
-  return { action: 'refuse', commentId: null, marked, unmarked, reason: 'multiple-marked-comments' }
+  return { action: 'refuse', commentId: null, id: null, marked, unmarked, reason: 'multiple-marked-comments' }
+}
+
+const defaultRun = (args) =>
+  execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
+
+/** Read an issue's comments in the shape `resolveAgenticComment` expects. */
+export function readIssueComments({ repo, issue, run = defaultRun }) {
+  const out = run(['api', `repos/${repo}/issues/${issue}/comments`, '--jq',
+    '[.[] | {id: .id, body: .body}]'])
+  return JSON.parse(out)
+}
+
+/**
+ * Write the agent's ONE comment on an issue: resolve, branch, and write — in a single call.
+ *
+ * THIS IS THE ENTRY POINT. `resolveAgenticComment` is exported for guards and for reading, but a
+ * caller that uses it to decide a write has to re-implement the branch, and GH #462 is the record
+ * of what that costs: the branch was implemented once, guessed the verdict's shape, and posted a
+ * duplicate within an hour of the contract shipping. A contract enforced by every caller repeating
+ * three lines correctly is not enforced. So the branch lives here, once.
+ *
+ * Returns { ok, action, commentId, reason }. Refusal is a THROW rather than a falsy return,
+ * because the entire hazard in this file is a caller falling through a failed check into 'post':
+ * a return value can be ignored by the same inattention that caused the bug, and an exception
+ * cannot. Same reason an unknown action throws instead of defaulting.
+ *
+ * The body is stamped here, so a caller cannot forget the marker and thereby make its own comment
+ * unfindable on the next pass — which would produce a duplicate one run later instead of now.
+ */
+export function writeAgenticComment({ repo, issue, body, run = defaultRun, writeFile = defaultWriteFile }) {
+  const stamped = stampIssueComment(body)
+  const verdict = resolveAgenticComment(readIssueComments({ repo, issue, run }))
+
+  if (verdict.action === 'refuse') {
+    throw new Error(
+      `refusing to write on ${repo}#${issue}: ${verdict.marked.length} marked agent comments ` +
+      `(${verdict.reason}). An earlier invariant already broke; guessing which to keep is how one ` +
+      `gets silently discarded. A human has to look.`
+    )
+  }
+
+  const file = writeFile(stamped)
+  if (verdict.action === 'edit') {
+    run(['api', '-X', 'PATCH', `repos/${repo}/issues/comments/${verdict.commentId}`, '-F', `body=@${file}`])
+    return { ok: true, action: 'edit', commentId: verdict.commentId, reason: verdict.reason }
+  }
+  if (verdict.action === 'post') {
+    const out = run(['api', '-X', 'POST', `repos/${repo}/issues/${issue}/comments`, '-F', `body=@${file}`])
+    let id = null
+    try { id = JSON.parse(out).id ?? null } catch { /* id is a convenience, not the outcome */ }
+    return { ok: true, action: 'post', commentId: id, reason: verdict.reason }
+  }
+
+  // Unreachable today. It throws rather than falling through because 'fall through to post' is
+  // precisely the defect: a verdict this function does not understand must never become a write.
+  throw new Error(`unrecognised verdict action '${verdict.action}' for ${repo}#${issue}`)
 }
