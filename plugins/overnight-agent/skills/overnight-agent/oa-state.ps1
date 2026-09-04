@@ -1669,6 +1669,7 @@ function Get-AuthorSegments([string]$region) {
   # this "fix" has merely broken the gate in the other direction.
   if ($null -eq $region) { return @() }
   $segments = @()
+  # (Each segment also carries `Index`, its offset within $region -- see below.)
   # Markers and headings are located on the fence mask (#320): a `<!-- from: me -->` that only
   # exists inside a quoted example must not open a human-attributed segment. Offsets are
   # mask-identical, so every Substring below still slices the ORIGINAL region -- the segment
@@ -1678,14 +1679,19 @@ function Get-AuthorSegments([string]$region) {
   $headings = [regex]::Matches($scan, '(?m)^[ \t]*##[ \t]+\S')
   if ($marks.Count -eq 0) {
     if ($region.Trim().Length -gt 0) {
-      $segments += [pscustomobject]@{ Author = 'unknown'; Text = $region }
+      $segments += [pscustomobject]@{ Author = 'unknown'; Text = $region; Index = 0 }
     }
     return $segments
   }
 
+  # `Index` is the offset of the segment's TEXT within $region. It exists so a caller can ask
+  # where a segment sits relative to other structure -- specifically, whether one of this agent's
+  # turns was opened below an affirmative, which is how #465 decides an approval has been spent.
+  # Without it a segment is just floating text and "did anything happen after this?" is
+  # unanswerable, which is exactly how a week-old approve stayed live.
   $preamble = $region.Substring(0, $marks[0].Index)
   if ($preamble.Trim().Length -gt 0) {
-    $segments += [pscustomobject]@{ Author = 'unknown'; Text = $preamble }
+    $segments += [pscustomobject]@{ Author = 'unknown'; Text = $preamble; Index = 0 }
   }
   for ($i = 0; $i -lt $marks.Count; $i++) {
     $start = $marks[$i].Index + $marks[$i].Length
@@ -1700,12 +1706,12 @@ function Get-AuthorSegments([string]$region) {
     }
 
     $text = $region.Substring($start, $cut - $start)
-    $segments += [pscustomobject]@{ Author = $marks[$i].Groups[1].Value.Trim(); Text = $text }
+    $segments += [pscustomobject]@{ Author = $marks[$i].Groups[1].Value.Trim(); Text = $text; Index = $start }
 
     if ($cut -lt $end) {
       $orphan = $region.Substring($cut, $end - $cut)
       if ($orphan.Trim().Length -gt 0) {
-        $segments += [pscustomobject]@{ Author = 'unknown'; Text = $orphan }
+        $segments += [pscustomobject]@{ Author = 'unknown'; Text = $orphan; Index = $cut }
       }
     }
   }
@@ -1723,12 +1729,17 @@ function Get-ConsentFacts([string]$trailing) {
   # exists but cannot be attributed to the human. It is surfaced rather than silently dropped
   # so a run can tell "nobody approved" apart from "something approved and it wasn't provably
   # you" -- the second is worth reporting, the first is just a quiet task.
+  # `affirmative_answered` is #465: the affirmative IS his, and this agent has already opened a
+  # turn below it, so it has been served. Reported as its own fact rather than folded into a bare
+  # `false`, because "he approved and I acted on it" and "he never approved" call for different
+  # behaviour -- the first means stop and ask again, the second means the task is simply quiet.
   $result = [ordered]@{
     consent_ok               = $false
     human_segments           = 0
     affirmative_phrase       = $null
     affirmative_author       = $null
     affirmative_unattributed = $false
+    affirmative_answered     = $false
     reason                   = 'no-trailing-content'
   }
   if ([string]::IsNullOrWhiteSpace($trailing)) { return [pscustomobject]$result }
@@ -1736,10 +1747,54 @@ function Get-ConsentFacts([string]$trailing) {
   $segments = @(Get-AuthorSegments $trailing)
   $result.human_segments = @($segments | Where-Object { $_.Author -eq $script:HumanAuthor }).Count
 
+  # --- Where THIS agent opened a turn (#465) ----------------------------------------------
+  # An affirmative is spent once this agent has replied beneath it. The written-down mechanism
+  # for that is the turn-end stamp, which moves the trailing boundary past the approval -- but
+  # it is a marker the writer must remember, and a turn that forgets it leaves the approval live
+  # FOREVER. Measured: two journals identical except for that one line returned
+  # `human-authored-affirmative` and `no-trailing-content` respectively. A gate whose verdict
+  # turns on the agent's own bookkeeping about itself fails OPEN when the bookkeeping is missed,
+  # which is the direction #227 exists to prevent.
+  #
+  # So consumption is derived from STRUCTURE instead, and structure survives a forgotten stamp:
+  # this agent's own provenance marker, or its managed `## ... Overnight Agent` turn heading.
+  # The heading is what makes it robust -- it is present even on the unstamped turns that are the
+  # whole problem (164 of 244 journals carry no provenance marker today).
+  #
+  # ONLY THIS AGENT'S TURNS COUNT, and the narrowness is load-bearing: a sibling skill appending
+  # below Shiv's `approve` has not answered him, so treating it as consumption would silently
+  # discard a live approval -- a false negative in the gate, which is the mirror of the bug.
+  #
+  # Located on the fence mask (#320) for the same reason attribution is: a turn heading quoted
+  # inside a code fence is an example, and an example must not be able to spend an approval.
+  $scan = Get-FenceMaskedText $trailing
+  $agentTurnAt = @()
+  foreach ($m in [regex]::Matches($scan, $script:ProvenanceRe)) {
+    if ($m.Groups[1].Value.Trim() -eq $script:SelfAuthor) { $agentTurnAt += $m.Index }
+  }
+  foreach ($m in [regex]::Matches($scan, '(?m)^[ \t]*##[^\r\n]*Overnight Agent')) {
+    $agentTurnAt += $m.Index
+  }
+
   foreach ($seg in $segments) {
     $m = [regex]::Match($seg.Text, $script:ConsentAffirmRe)
     if (-not $m.Success) { continue }
     if ($seg.Author -eq $script:HumanAuthor) {
+      # Absolute offset of the affirmative itself, not of its segment: an approval typed at the
+      # END of a long message must still be compared against what came after the WORD.
+      $at = [int]$seg.Index + $m.Index
+      $served = @($agentTurnAt | Where-Object { $_ -gt $at }).Count -gt 0
+      if ($served) {
+        # Spent. Keep scanning rather than returning: he may have approved AGAIN further down,
+        # and a later affirmative with nothing beneath it is live. Without this, re-approving
+        # after the agent replied would be impossible and the gate would deadlock closed.
+        if (-not $result.affirmative_answered) {
+          $result.affirmative_answered = $true
+          $result.affirmative_phrase = $m.Value
+          $result.affirmative_author = $seg.Author
+        }
+        continue
+      }
       $result.consent_ok = $true
       $result.affirmative_phrase = $m.Value
       $result.affirmative_author = $seg.Author
@@ -1750,12 +1805,22 @@ function Get-ConsentFacts([string]$trailing) {
     # genuine human approval, and finding one must win over having seen a machine one first.
     if (-not $result.affirmative_unattributed) {
       $result.affirmative_unattributed = $true
-      $result.affirmative_phrase = $m.Value
-      $result.affirmative_author = $seg.Author
+      # Do not overwrite a spent HUMAN affirmative with a machine one. Which words the agent
+      # used matters far less than the fact that Shiv's own approval was found and consumed.
+      if (-not $result.affirmative_answered) {
+        $result.affirmative_phrase = $m.Value
+        $result.affirmative_author = $seg.Author
+      }
     }
   }
 
-  $result.reason = if ($result.affirmative_unattributed) {
+  # `human-affirmative-already-answered` outranks `affirmative-not-attributable-to-human`: both
+  # can be true at once, and knowing his approval was found and spent is strictly more actionable
+  # than knowing some machine said `yes` somewhere.
+  $result.reason = if ($result.affirmative_answered) {
+    'human-affirmative-already-answered'
+  }
+  elseif ($result.affirmative_unattributed) {
     'affirmative-not-attributable-to-human'
   }
   elseif ($result.human_segments -gt 0) { 'human-spoke-but-no-affirmative' }
@@ -3203,6 +3268,9 @@ function Cmd-Consent {
     affirmative_phrase       = $c.affirmative_phrase
     affirmative_author       = $c.affirmative_author
     affirmative_unattributed = [bool]$c.affirmative_unattributed
+    # #465: his approval was found and is provably his, and this agent has already replied
+    # beneath it. Distinct from `consent_ok: false` with no phrase at all -- that is silence.
+    affirmative_answered     = [bool]$c.affirmative_answered
     # `reopened` uses the opposite default on purpose; both are reported so the difference is
     # visible at the call site instead of being a footnote in a comment.
     trailing_has_user        = [bool]$facts.HasTrailingUser
