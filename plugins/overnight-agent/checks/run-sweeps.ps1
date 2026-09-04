@@ -1,4 +1,4 @@
-﻿<#
+<#
   run-sweeps.ps1 — the ONLY sanctioned way to run the sweep suite.
 
   WHY THIS EXISTS
@@ -730,6 +730,21 @@ $Suite = @(
 # path and can actually reach zero. 67 assertions, 13 mutations, each killed by exactly the
 # arms it declares (mutcheck-zero-writer.mjs, auto-globbed by -IncludeMutchecks).
 @{ n = 'zero-writer-sweep'; bridge = $false }
+# GH #481, added 2026-09-04. ~/.copilot/session-state has never been pruned: measured
+# 4,120 directories / 2.56 GB, oldest file 27 April, and 500 inuse.<pid>.lock files of
+# which 477 name a PID that no longer exists while only 23 dirs are held by a live
+# process. That is unbounded growth in the exact directory stuck-run-sweep and
+# zero-writer-sweep read to decide whether a session is alive, so it is substrate rather
+# than housekeeping -- and 477 recorded PIDs on a recycling Windows PID space is #480's
+# failure mode reached by a second route. REPORTS ONLY: deleting session history sits on
+# the agent gate FLOOR ("Outcome can result in permanent data loss"), which outranks this
+# repo's YOLO mode and outranks an approve, and consent -Action delete_data returns
+# gate-floor-blocks. So the shippable half is the measurement and the policy: 1.70 GB
+# across 2,951 dirs reclaimable, with LIVE / BOUND / RECENT vetoes. BOUND is the one age
+# cannot see -- a bound-but-idle session is byte-identical to an abandoned one by mtime,
+# so a by-age pruner would silently break #404 continuity. 28 assertions, 6 mutations,
+# every veto load-bearing (mutcheck-session-prune.mjs, auto-globbed by -IncludeMutchecks).
+@{ n = 'session-state-prune-sweep'; bridge = $false }
 )
 
 if ($IncludeMutchecks) {

@@ -673,3 +673,36 @@ jobs:
       - name: Mutation check (a real leak fires; a busy-but-healthy machine stays quiet)
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-supervisor-resource.ps1
+  # session-state has never been pruned (GH #481).
+  #
+  # Measured 2026-09-04: 4,120 directories, 2.56 GB, oldest file 27 April, and 500
+  # `inuse.<pid>.lock` files of which 477 name a PID that no longer exists while only 23
+  # directories are held by a live process. That is unbounded growth in the exact directory
+  # `stuck-run-sweep` and `zero-writer-sweep` read to decide whether a session is alive.
+  #
+  # This job exists because the sweep NAMES DIRECTORIES FOR DELETION. Every other detector in
+  # the suite is wrong in the direction of noise; a broken veto here is wrong in the direction
+  # of destroying a running session or a task's continuity. So the vetoes are the subject: LIVE
+  # (probed with `process.kill(pid, 0)`, never "a lock file exists" -- 477 of 500 locks are
+  # dead, so the cheap check would protect essentially nothing while appearing to protect
+  # everything), BOUND (the one age CANNOT see: a bound-but-idle session is byte-identical to
+  # an abandoned one by mtime, so a by-age pruner silently breaks #404 continuity), and RECENT.
+  #
+  # It also asserts the floor holds: dry run is the default and `--apply` still refuses.
+  # Deleting session history is on the agent gate's "permanent data loss" floor, which outranks
+  # this repo's YOLO mode and outranks a human approve.
+  #
+  # Pure text work against a synthetic session root and state dir in a temp dir; liveness is
+  # probed against the harness's own pid, so it runs unmodified on the Linux runner.
+  session-state-prune:
+    name: Session-state prune vetoes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check (every veto load-bearing; deletion stays unreachable)
+        env:
+          OA_SWEEP: ./plugins/overnight-agent/checks/session-state-prune-sweep.mjs
+        run: node ./plugins/overnight-agent/checks/mutcheck-session-prune.mjs
