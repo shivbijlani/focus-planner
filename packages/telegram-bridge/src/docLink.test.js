@@ -59,6 +59,12 @@ function makeHarness(files) {
   // unconditionally can never exercise a successful in-place update.
   const bodies = new Map()
   let editError = null
+  // #483 — what the bridge actually removed, and the ids Telegram refuses to let it remove
+  // (older than the 48h window, or already gone).
+  const deleted = []
+  const undeletable = new Set()
+  let deleteError = null
+  let dropSendIds = false
 
   const client = {
     async createForumTopic({ name }) {
@@ -70,7 +76,9 @@ function makeHarness(files) {
       const id = ++messageSeq
       live.add(id)
       bodies.set(id, m.text)
-      return { message_id: id }
+      // Simulates a send whose result the bridge cannot read a message id from, so `liveId`
+      // stays null and the replacement is unconfirmed.
+      return dropSendIds ? {} : { message_id: id }
     },
     async editMessageText({ messageId, text }) {
       edits.push({ messageId, text })
@@ -86,7 +94,11 @@ function makeHarness(files) {
     async pinChatMessage({ messageId }) {
       pinned.push(messageId)
     },
-    async deleteMessage() {
+    async deleteMessage({ messageId }) {
+      if (deleteError) throw new Error(deleteError)
+      if (undeletable.has(messageId)) throw new Error("Bad Request: message can't be deleted")
+      deleted.push(messageId)
+      live.delete(messageId)
       return true
     },
     async closeForumTopic() {},
@@ -125,12 +137,20 @@ function makeHarness(files) {
     sent,
     edits,
     pinned,
+    deleted,
     client,
     io,
     config: { chatId: '-100', taskAllowlist: [] },
     deleteMessageFromTelegram: (id) => live.delete(id),
+    refuseDeleteOf: (id) => undeletable.add(id),
     failEditWith: (msg) => {
       editError = msg
+    },
+    failDeleteWith: (msg) => {
+      deleteError = msg
+    },
+    sendWithoutMessageIds: () => {
+      dropSendIds = true
     },
   }
 }
@@ -386,5 +406,145 @@ describe('#424 — the readers', () => {
     const client = createTelegramClient({ token: 'x:y' })
     expect(typeof client.editMessageText).toBe('function')
     expect(typeof client.pinChatMessage).toBe('function')
+  })
+})
+
+// #483 — the turns a task posted BEFORE it was bound to a doc.
+//
+// Link mode returns before the turn path runs, and the collapse that removes a superseded
+// message lives on that turn path -- it only ever fires as a side effect of posting the next
+// turn. A doc-bound task never posts another turn, so those messages are unreachable: the one
+// thing that would tidy them is the very post the feature exists to prevent. That is why Shiv's
+// topic still showed a stack after every part of #424 shipped and was working.
+//
+// The load-bearing property here is NOT the deletion. It is that the deletion does not happen
+// on the bridge's own authority: these are messages in the user's thread, Telegram has no undo,
+// and link mode cannot prove the removal is lossless (the replacement is a document this
+// process never reads). So OFF reports, ON acts, and a replied-to message is never touched by
+// either.
+describe('#483 — pre-binding turns above the doc link', () => {
+  function bound(state, { ids = [1001, 1002], replyCount = 0, postedAt = 0, links = [] } = {}) {
+    state.tasks['42'] = {
+      topicId: 7,
+      lastPostedMessageIds: ids,
+      lastPostedReplyCount: postedAt,
+      replyCount,
+      ...(links.length ? { lastPostedLinks: links } : {}),
+    }
+    return state
+  }
+
+  it('reports what it would remove and deletes NOTHING by default', async () => {
+    const h = makeHarness({ 42: journal() })
+    const state = bound(emptyState())
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncUp()
+
+    expect(h.deleted).toEqual([])
+    expect(res.tidyPending).toEqual([{ taskId: '42', messageIds: [1001, 1002] }])
+    expect(res.tidied).toEqual([])
+    // Still remembered, because nothing else records them: forgetting here would strand them.
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([1001, 1002])
+  })
+
+  it('removes them once told it may, and forgets them', async () => {
+    const h = makeHarness({ 42: journal() })
+    const state = bound(emptyState())
+    const bridge = createBridge({
+      client: h.client,
+      config: { ...h.config, tidyBoundTopics: true },
+      state,
+      io: h.io,
+    })
+
+    const res = await bridge.syncUp()
+
+    expect(h.deleted).toEqual([1001, 1002])
+    expect(res.tidied).toEqual([{ taskId: '42', messageIds: [1001, 1002] }])
+    expect(res.tidyPending).toEqual([])
+    expect(state.tasks['42'].lastPostedMessageIds).toBeUndefined()
+  })
+
+  it('NEVER removes a message the user has replied to, even when enabled', async () => {
+    const h = makeHarness({ 42: journal() })
+    // A reply landed after those ids went out: 0 at post time, 1 now.
+    const state = bound(emptyState(), { replyCount: 1, postedAt: 0 })
+    const bridge = createBridge({
+      client: h.client,
+      config: { ...h.config, tidyBoundTopics: true },
+      state,
+      io: h.io,
+    })
+
+    await bridge.syncUp()
+
+    expect(h.deleted).toEqual([])
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([1001, 1002])
+  })
+
+  it('never deletes the doc link or the notice, even if state lists them as turns', async () => {
+    const h = makeHarness({ 42: journal({ needs: 'the API key for the PROD box' }) })
+    const state = bound(emptyState())
+    const bridge = createBridge({
+      client: h.client,
+      config: { ...h.config, tidyBoundTopics: true },
+      state,
+      io: h.io,
+    })
+
+    // First run posts the link (id 1) and the notice (id 2), and tidies the stranded pair.
+    await bridge.syncUp()
+    const linkId = state.tasks['42'].docLinkMessageId
+    const noticeId = state.tasks['42'].docLinkNoticeMessageId
+    expect(h.deleted).toEqual([1001, 1002])
+
+    // Now corrupt state so the live link and notice look like superseded turns. Nothing should
+    // delete the message the user is meant to read, or the ask that exists nowhere else.
+    state.tasks['42'].lastPostedMessageIds = [linkId, noticeId]
+    h.deleted.length = 0
+    await bridge.syncUp()
+
+    expect(h.deleted).toEqual([])
+    expect(state.tasks['42'].docLinkMessageId).toBe(linkId)
+  })
+
+  it('keeps the survivors when only some deletes succeed', async () => {
+    const h = makeHarness({ 42: journal() })
+    const state = bound(emptyState(), { ids: [1001, 1002, 1003] })
+    h.refuseDeleteOf(1002)
+    const bridge = createBridge({
+      client: h.client,
+      config: { ...h.config, tidyBoundTopics: true },
+      state,
+      io: h.io,
+    })
+
+    const res = await bridge.syncUp()
+
+    expect(h.deleted).toEqual([1001, 1003])
+    expect(res.tidied).toEqual([{ taskId: '42', messageIds: [1001, 1003] }])
+    // 1002 is still up there, so it must still be recorded -- a blanket clear would lose the
+    // only record that it exists and no later run could retry it.
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([1002])
+  })
+
+  it('deletes nothing while the replacement link is unconfirmed', async () => {
+    const h = makeHarness({ 42: journal() })
+    const state = bound(emptyState())
+    h.sendWithoutMessageIds()
+    const bridge = createBridge({
+      client: h.client,
+      config: { ...h.config, tidyBoundTopics: true },
+      state,
+      io: h.io,
+    })
+
+    await bridge.syncUp()
+
+    // Same ordering rule as the turn path: a failed delete is cosmetic, but deleting before the
+    // replacement is confirmed can leave the topic holding neither.
+    expect(h.deleted).toEqual([])
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([1001, 1002])
   })
 })

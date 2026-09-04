@@ -466,6 +466,11 @@ export function createBridge({
     const suppressed = []
     const linked = []
     const notified = []
+    // #483 — what link mode removed, and what it would remove but has not been told it may.
+    // `tidyPending` is the reportable half: it is the answer to "why does my topic still show
+    // three messages when this feature shipped?", and it must be visible without reading logs.
+    const tidied = []
+    const tidyPending = []
     const journals = await io.listJournals()
     const completed = await loadCompletedIds()
     const active = await loadActiveIds()
@@ -495,6 +500,8 @@ export function createBridge({
         if (outcome.linked) linked.push(taskId)
         if (outcome.notified) notified.push(taskId)
         if (outcome.suppressed) suppressed.push(taskId)
+        if (outcome.tidied) tidied.push({ taskId, messageIds: outcome.tidied })
+        if (outcome.tidyPending) tidyPending.push({ taskId, messageIds: outcome.tidyPending })
         continue
       }
 
@@ -720,7 +727,7 @@ export function createBridge({
       await checkpoint(`task #${taskId}`)
     }
 
-    return { posted, created, suppressed, linked, notified }
+    return { posted, created, suppressed, linked, notified, tidied, tidyPending }
   }
 
   // #424's worker. Everything about it is shaped by one line in the issue: "Do not just
@@ -809,6 +816,89 @@ export function createBridge({
       }
     } else if (boundElsewhere) {
       setDocLink(state, taskId, { docId: docMeta.docId, messageId: liveId })
+    }
+
+    // #483 — THE PRE-BINDING TURNS. A task bound to a doc after it had already been posting
+    // turns leaves those turns sitting above the link forever, so its topic never reaches the
+    // one message #424 specifies. The collapse that would remove them already exists, but it
+    // lives on the turn path and only ever runs as a SIDE EFFECT of posting the next turn --
+    // which a doc-bound task never does. So the one thing that could tidy them is the very post
+    // this feature was built to stop, and no number of correct runs can reach them.
+    //
+    // Nothing here deletes by default. These are messages in the user's own thread and they are
+    // the record of what happened; the flag is his word, not a setting the agent may assume.
+    // See loadConfig for why link mode cannot judge losslessness for itself.
+    if (liveId != null) {
+      const bound = getTask(state, taskId)
+      const noticeId =
+        bound && Number.isInteger(bound.docLinkNoticeMessageId) ? bound.docLinkNoticeMessageId : null
+      // The link is the replacement and the notice carries the one thing a link cannot, so
+      // neither is ever a candidate. Both are managed by their own code above; excluding them
+      // here is cheap insurance against a state file that ever conflates them with a turn.
+      const original = Array.isArray(bound && bound.lastPostedMessageIds)
+        ? bound.lastPostedMessageIds
+        : []
+      const stranded = original.filter(
+        (id) => Number.isInteger(id) && id !== liveId && id !== noticeId,
+      )
+
+      if (stranded.length) {
+        // The same freeze as the turn path, for the same reason: a message the user has replied
+        // to is not a superseded draft, it is a conversation. `lastPostedReplyCount` is the
+        // count as it stood when those ids went out, so this asks whether a reply landed SINCE
+        // -- not whether one has ever landed at all.
+        const repliesNow = getReplyCount(state, taskId)
+        const repliesAtPost = Number.isInteger(bound.lastPostedReplyCount)
+          ? bound.lastPostedReplyCount
+          : 0
+        const spokeSince = repliesNow !== repliesAtPost || !!bound.userEngaged
+        const strandedLinks = Array.isArray(bound.lastPostedLinks) ? bound.lastPostedLinks : []
+        const carried = strandedLinks.length
+          ? `, carrying ${strandedLinks.length} link(s) the doc link does not: ${strandedLinks.join(', ')}`
+          : ''
+
+        if (spokeSince) {
+          logger(
+            `not tidying ${stranded.length} pre-binding message(s) for task #${taskId}: a reply ` +
+              `landed since they were posted (${repliesAtPost} -> ${repliesNow})`,
+          )
+        } else if (config.tidyBoundTopics !== true) {
+          out.tidyPending = stranded.slice()
+          logger(
+            `task #${taskId} has ${stranded.length} pre-binding message(s) above its doc link ` +
+              `(${stranded.join(', ')})${carried}. ` +
+              'Set TELEGRAM_BRIDGE_TIDY_BOUND=on to remove them.',
+          )
+        } else if (typeof client.deleteMessage === 'function') {
+          const removed = []
+          for (const messageId of stranded) {
+            try {
+              await client.deleteMessage({ chatId, messageId })
+              removed.push(messageId)
+            } catch (err) {
+              // Older than Telegram's 48h window, already gone, or lacking rights. Never fatal:
+              // the worst case is the stacking that was there before this existed.
+              logger(`could not tidy message ${messageId} for task #${taskId} (${err.message})`)
+            }
+          }
+          // Only what is actually gone is forgotten, and the filter runs over the ORIGINAL list
+          // so an id excluded above survives in state. Clearing the whole list on a partial
+          // failure would strand the survivors permanently -- nothing else records them, so the
+          // next run would not know they were ever there.
+          if (removed.length) {
+            setLastPostedMessageIds(
+              state,
+              taskId,
+              original.filter((id) => !removed.includes(id)),
+            )
+            out.tidied = removed.slice()
+            logger(
+              `tidied ${removed.length} pre-binding message(s) for task #${taskId}` +
+                (strandedLinks.length ? `; they carried ${strandedLinks.join(', ')}` : ''),
+            )
+          }
+        }
+      }
     }
 
     // THE EXCEPTIONS. One short line, and only for the two things a link genuinely cannot
