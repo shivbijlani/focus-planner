@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
   Skill-owned memory for the Overnight Agent. Tracks, per task, what the agent has
   already processed in each journal — so a user message appended at the BOTTOM of a
@@ -3672,18 +3672,17 @@ function Test-WorkspaceUsable([string]$path, [string]$wsType) {
   # nothing here that could distinguish healthy from broken.
   if ($wsType -and $wsType -ne 'worktree') { return $true }
   try {
-    # Is the VOLUME even reachable? `Test-Path` answers $false for a path on a disconnected drive
-    # exactly as it does for a directory that was deleted, so consulting it alone cannot tell
-    # "torn down" from "cannot look" -- and that conflation is the very thing this function's
-    # fail-open rule exists to prevent. Checked first, because it is the difference between
-    # reporting a fact and guessing one.
-    $root = [IO.Path]::GetPathRoot($path)
-    if ($root -and -not (Test-Path -LiteralPath $root)) { return $true }
-
-    if (-not (Test-Path -LiteralPath $path)) { return $false }
+    # A path that does not exist is NOT judged. "Never created yet" and "torn down" are different
+    # facts and only the second is a defect: a workspace is bound before the session materialises
+    # it, which `Test-SamePath` below records as "the guard has to work when the workspace has not
+    # been created yet, which is exactly when a bind is being validated". This is also what makes
+    # the function safe on an unreachable volume, where `Test-Path` answers $false for a
+    # disconnected drive exactly as it does for a deleted directory -- the two are indistinguishable
+    # here, so neither is treated as evidence.
+    if (-not (Test-Path -LiteralPath $path)) { return $true }
     # `.git` in a worktree is a FILE (`gitdir: ...`), not a directory, so this must not test for a
-    # container. Its absence beside a directory that still exists is the measured signature of a
-    # torn-down worktree.
+    # container. Its absence beside a directory that STILL EXISTS is the measured signature of a
+    # torn-down worktree: #466's workspace was present, empty, and deregistered.
     if (Test-Path -LiteralPath (Join-Path $path '.git')) { return $true }
     return $false
   } catch {

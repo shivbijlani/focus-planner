@@ -211,6 +211,41 @@ Check 'B- and it is stored under the task id' {
 }
 Check 'C live binding -> verdict reuse' { "$($b2.verdict)" -eq 'reuse' -and "$($b2.state)" -eq 'live' }
 
+# C-workspace: the verdict must verify that the workspace still HOLDS a checkout (#452).
+#
+# Measured 2026-09-03: task #466 was torn down with the sanctioned `remove-worktree.ps1`, which
+# deletes the workspace and knows nothing about bindings. The binding went on reporting
+# `bound: true, verdict: reuse, state: live` at a directory that was empty and deregistered from
+# `git worktree list` -- so the next run was told to reuse a workspace with no repository in it.
+# Nothing checked, so `reuse` looked authoritative. That is the #261/#346 shape on the binding.
+#
+# `replace`, never `create`: this task HAS prior work, and `create` cold-starts it, discarding the
+# continuity the binding exists to provide.
+#
+# Note the two directory states below are NOT interchangeable, and that distinction is the arm's
+# real content. A workspace that EXISTS and is EMPTY is the torn-down signature. A workspace that
+# does not exist AT ALL is a session that has been bound but has not materialised its checkout yet
+# -- which `Test-SamePath` in the subject already calls out as "exactly when a bind is being
+# validated" -- and calling that dead would refuse to reuse a perfectly healthy young session.
+$wsTorn = Join-Path $root 'wt-802'
+New-Item -ItemType Directory -Path $wsTorn -Force | Out-Null
+# -WithForce because task 801 above already holds a live session and the default concurrency is 1.
+# Without it the bind is refused for CAPACITY, task 802 stays unbound, and the arm would then read
+# `create` for a reason that has nothing to do with the workspace -- passing arm C-w while proving
+# nothing about it.
+$null = New-Bind -Id '802' -SessionId 'SESS_802' -WithForce
+$tornVerdict = Invoke-OaJson @('session', '-Id', '802')
+Check 'C-w a torn-down workspace is not reused' { "$($tornVerdict.verdict)" -ne 'reuse' }
+Check 'C-w- and it is replace, so prior work is not cold-started' { "$($tornVerdict.verdict)" -eq 'replace' }
+
+# The same binding, once the workspace holds a checkout again. A worktree's `.git` is a FILE
+# (`gitdir: ...`), not a directory, so a guard testing for a container would report every healthy
+# worktree as dead -- which is worse than the bug, since it discards live sessions.
+Set-Content -Path (Join-Path $wsTorn '.git') -Value 'gitdir: /repo/.git/worktrees/wt-802' -Encoding utf8
+Check 'C-w-- a workspace holding a checkout is reused again' {
+  "$((Invoke-OaJson @('session', '-Id', '802')).verdict)" -eq 'reuse'
+}
+
 # --- D/E: the refusal that makes reuse a rule ------------------------------------------
 #
 # ASSERTED ON BEHAVIOUR AND A SPACE-FREE TOKEN, never on a phrase: with `pwsh -File` the CHILD
