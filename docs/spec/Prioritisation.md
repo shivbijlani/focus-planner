@@ -620,6 +620,82 @@ a run has to guess which governs. Tracked by issue #405.
 
 *Set by Shiv, 2026-09-02.*
 
+### 4.2 Where the work happens — one task, one session, one workspace
+
+§4 says how *much* a run takes on. This says *where* each item is worked, and it is the mechanism
+§4's "isolation, not concurrency" was describing before one existed.
+
+Until #404, the agent did the work **itself, in the run session**. Measured live on 2026-09-02
+against planner task 451: the run read the journal, edited four deliverable files and wrote the turn
+entirely inside the main overnight-agent session. Nothing was isolated, and nothing recorded where
+the work had happened, so the next run cold-started the same task. Three costs followed, each
+already visible in the repo: no isolation (every task's work in one workspace), no continuity (a
+task worked three nights running is three cold starts, which is why journals became the only
+carry-over and grew until #291 had to bound the read), and the context cost landing on the run
+session rather than the task.
+
+The rule is therefore: **the run session collects, orders, dispatches and reports; it does not
+perform task work.** Each task's work happens in a session dedicated to that task, in that task's
+own workspace.
+
+**The binding is state, and it answers a question rather than storing a fact.** Per-task state
+carries a `session` record — the session id, the project and workspace it was created in, its
+liveness, and, when it replaced one that could not be woken, the id it continues. It lives in the
+skill's state store for the same reason every other machine fact does (§1: nothing about the
+agent's bookkeeping lives in the journal, which is the user's prose). But `oa-state.ps1 session -Id
+<id>` does not return the id; it returns a **verdict**, because a raw id still leaves the decision
+in the agent's head, which is where it was when the run session did everything itself:
+
+| Verdict | Meaning | What the run does |
+| --- | --- | --- |
+| `create` | nothing bound | create a session, then bind it |
+| `reuse` | bound and live | wake **that** session — never create a second |
+| `replace` | bound, and a previous run recorded it non-wakeable | create a fresh session whose kickoff opens with the emitted `kickoff_continuation` |
+
+A session that will not wake is **not an error to retry**. The run records it (`-SessionDead`),
+which flips the next verdict to `replace` and arms a continuation line naming the task and the
+prior session id — so the replacement knows it is continuing work rather than starting clean. The
+new binding records `prior_session_id`, which is what makes a replacement distinguishable from a
+first-ever session afterwards.
+
+**Two refusals do the load-bearing work, and both fail closed.**
+
+- `session_bind_conflict` — binding a different id over a **live** one. Without it, "reuse the
+  persisted session" is a suggestion: the second session gets created anyway and overwrites the
+  pointer to the first, which then leaks with nothing recording that it existed (#345).
+- `session_workspace_inherited` — a `code` bind whose workspace is the **run session's own**. This
+  is the trap, not a hypothetical: every session API defaults the new session's project to the
+  *caller's*, so a per-task session created without naming a project lands in the run session's
+  project. The first attempt to delegate #404 did exactly that and produced a "per-task session"
+  sharing the run session's folder, with no git repo in it — the isolation failure the issue exists
+  to prevent, reintroduced by the delegation step itself. A `code` bind therefore also refuses a
+  missing project (`session_project_required`), a missing workspace (`session_workspace_required`)
+  and a `folder` workspace (`session_workspace_type`).
+
+**Workspace by task kind.** A code task gets a **worktree** in the repository project the change
+belongs to, branched from a freshly fetched `origin/main`; a non-code task gets a folder session.
+Teardown is **emitted, never performed**: `-SessionRelease` prints
+`scripts/remove-worktree.ps1 -Path <workspace>`, because the raw `git worktree remove --force`
+deletes *through* a `node_modules` junction (#321), and worktrees are pruned as they are released
+so they do not accumulate (#402).
+
+**Capacity is enforced, not merely reported.** `session -InFlight` resolves the §4 concurrency
+setting and counts the tasks holding a live session; a bind that would exceed it is refused with
+`session_at_capacity`. The count is derived from the state store rather than tracked in a counter,
+because a counter drifts the first time a run dies mid-item — which is the case the count exists to
+survive. `-Force` is the escape hatch and it exists for exactly one sanctioned case, §4.1's collect
+wave: a wake that exists *because the user did something* may widen the run; the agent's own
+judgement may not. Two binds are deliberately **not** charged against the cap — re-binding the same
+id, and replacing a dead session — because neither adds an item to the run, and charging the second
+would strand precisely the task whose session just died.
+
+The binding is surfaced on `scan`'s rows (`session_id`, `session_state`, `session_verdict`,
+`session_workspace`) rather than on a second worklist, for the reason §5 gives about the doc
+binding: a list the run has to remember to consult is a list the run will forget. `scan` remains
+**read-only** — it reports the verdict and never writes a binding.
+
+*Set by Shiv, 2026-09-02; implemented 2026-09-03 (#404).*
+
 ---
 
 ## 5. Verification model
@@ -644,6 +720,7 @@ row would change results here for a reason no arm names.
 | `mutcheck-awaiting-reply.ps1` | Parking, un-parking by reply and by due timer, newest-turn-only reading, and both directions of the dismissive-ask boundary. |
 | `mutcheck-blocked-recheck.ps1` | The recheck timer arms, echoes its `kind`, re-arms on `-RecheckDone`, retires on `-RecheckClear`; snooze suppresses both timers' verdicts, and a lapsed snooze lets the poll fire again — proving snooze *suppresses* rather than disarms; and a due recheck on a `blocked` row is actually `eligible` — the consequence, not just the signal. |
 | `mutcheck-board-compound-id.ps1` | A compound ID cell still yields a board row. |
+| `mutcheck-per-task-session.ps1` | §4.2's mechanism: an unbound task reads `create`; a binding survives into a new process and reads `reuse`; a conflicting bind over a live session is refused and the binding does not move; `-SessionDead` yields `replace` with a continuation naming the task **and** the prior session id; the replacement records `prior_session_id`; a `code` bind is refused without a project, on the run session's workspace (including the same path spelled with a trailing or forward slash), and with a `folder` workspace; concurrency is 1 when absent or malformed and 2 when configured, and the configured value is actually enforced on a bind; `-Force` admits the collect-wave exception; a replacement is not charged against the cap; `scan` carries the verdict and writes nothing; release frees capacity and names the safe teardown; ISO timestamps survive two state round-trips. |
 
 Two disciplines in these checks are worth copying:
 
@@ -672,4 +749,4 @@ Two disciplines in these checks are worth copying:
 | #261 | A stuck run has no run-level timeout, which is the condition the staleness backstop mitigates rather than fixes. |
 | #343 | The board's `Wake` column is invisible to `Get-SnoozeMap`, so a task snoozed in the app can become eligible before its wake date (see 2.3). |
 | #328 | A bare `#NNN` is ambiguous — GitHub numbers and planner task ids already collide — so this page names the namespace explicitly wherever a number appears. |
-| #391 | Pacing is documented here but not yet a mechanism: the `Overnight Agent concurrency` tunable (default 1) and the estimate-before-starting rule are run-loop guidance in `SKILL.md`, enforced by no `oa-state.ps1` reader or `mutcheck`. |
+| #391 | Pacing's *estimate-before-starting* rule is run-loop guidance in `SKILL.md`, enforced by no reader. The `Overnight Agent concurrency` tunable is now read and enforced by `oa-state.ps1 session` (§4.2), but the settings **form** in the app does not yet expose it, so it must be typed into `user-settings.md` by hand. |
