@@ -144,7 +144,7 @@ $board = Join-Path $root 'planner.md'
 $store = Join-Path $root 'snooze.json'
 $utf8 = New-Object Text.UTF8Encoding($false)
 
-foreach ($id in 701, 702, 703, 704, 705, 706, 708, 709) {
+foreach ($id in 701, 702, 703, 704, 705, 706, 708, 709, 711) {
   [IO.File]::WriteAllText((Join-Path $jdir "task-$id.md"), $Journal.Replace('{ID}', "$id"), $utf8)
 }
 [IO.File]::WriteAllText((Join-Path $jdir 'task-707.md'), $FencedJournal.Replace('{ID}', '707'), $utf8)
@@ -156,7 +156,7 @@ $stamped710 = $Journal.Replace('{ID}', '710').Replace(
 [IO.File]::WriteAllText((Join-Path $jdir 'task-710.md'), $stamped710, $utf8)
 
 $boardText = "## Today`n`n| ID | Task |`n|---|---|`n"
-foreach ($id in 701, 702, 703, 704, 705, 706, 707, 708, 709, 710) { $boardText += "| $id | synthetic |`n" }
+foreach ($id in 701, 702, 703, 704, 705, 706, 707, 708, 709, 710, 711) { $boardText += "| $id | synthetic |`n" }
 [IO.File]::WriteAllText($board, $boardText, $utf8)
 [IO.File]::WriteAllText($store, '{}', $utf8)
 
@@ -407,7 +407,15 @@ Check 'M- scan agrees it is unbound' { $r707.doc_bound -eq $false -and $r707.doc
 [void](Invoke-Oa @('doc', '-Id', '706', '-DocId', 'DOC_706'))
 $q = Invoke-OaJson @('doc', '-Id', '706')
 Check 'Q plain resolve reports stamped' { $q.journal_stamped -eq $true }
-Check 'Q- and names no mismatch' { $null -eq $q.journal_stamp_id }
+Check 'Q- and names no mismatch' { $null -eq $q.journal_stamp_mismatch_id }
+# The old field name is GONE, not merely shadowed. `journal_stamp_id` read as "the id in the
+# journal stamp", so its null on a healthy task read as "there is no id" -- false, and filed twice
+# as a defect (#494) by readers who consumed the field without its `journal_stamped` partner. A
+# rename only helps if the misleading name cannot come back, and re-adding it alongside would
+# restore the exact ambiguity this removed.
+Check 'Q--- the misleading old field name is gone' {
+  -not ($q.PSObject.Properties.Name -contains 'journal_stamp_id')
+}
 # The second half of the same bug, independent of the first: Add-DocMetaStamp returns $false when
 # the journal is ALREADY stamped, so even the -DocId path reported `false` on the healthiest
 # possible input. A fix that only handles the plain-resolve path leaves this one live.
@@ -431,7 +439,26 @@ Check 'R- and the binding itself still resolves' { "$($r.doc_id)" -eq 'DOC_709' 
 # (write a stamp vs. correct the one that is there), so the offending id is named.
 $s = Invoke-OaJson @('doc', '-Id', '710', '-DocId', 'DOC_710', '-Force')
 Check 'S mismatched stamp is NOT stamped' { $s.journal_stamped -eq $false }
-Check 'S- and the wrong id is NAMED' { "$($s.journal_stamp_id)" -eq 'DOC_WRONG' }
+Check 'S- and the wrong id is NAMED' { "$($s.journal_stamp_mismatch_id)" -eq 'DOC_WRONG' }
+
+# T: a MALFORMED stamp -- `docId=` with no id, so the doc-meta regex does not match and
+# Get-DocMetaFromJournal returns null, exactly as it does for a journal with no stamp at all.
+#
+# This arm pins that collapse as DELIBERATE rather than leaving it undiscovered. It is safe in a
+# way the R-vs-S collapse would not be: an unparseable stamp and an absent one both mean the
+# journal can heal state to nothing, and both are repaired identically by writing a correct stamp.
+# The distinction that must never collapse is "heals to nothing" (R and T) versus "heals to the
+# WRONG document" (S) -- so T is asserted to look like R, and to look nothing like S.
+[void](Invoke-Oa @('doc', '-Id', '711', '-DocId', 'DOC_711'))
+$j711 = Get-JournalText '711'
+[IO.File]::WriteAllText((Join-Path $jdir 'task-711.md'),
+  ($j711 -replace '(?m)^<!--\s*doc-meta[^>]*-->', '<!-- doc-meta docId= -->'), $utf8)
+$t = Invoke-OaJson @('doc', '-Id', '711')
+Check 'T malformed stamp reports NOT stamped' { $t.journal_stamped -eq $false }
+Check 'T- and names no mismatch (it heals to NOTHING, not to a wrong doc)' {
+  $null -eq $t.journal_stamp_mismatch_id
+}
+Check 'T-- and the binding itself still resolves' { "$($t.doc_id)" -eq 'DOC_711' }
 
 # --- report ---------------------------------------------------------------------------
 $pass = 0; $fail = 0

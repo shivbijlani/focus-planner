@@ -3622,8 +3622,8 @@ function Cmd-Doc {
   # The comparison is against the bound id, not merely "a stamp exists". A journal stamped with a
   # DIFFERENT doc than state holds is not durable: it is the case where losing %LOCALAPPDATA%
   # heals the binding to the WRONG document, silently. That reports `false` here and names the
-  # offending id in `journal_stamp_id`, so "no stamp" and "wrong stamp" are distinguishable
-  # rather than both being a bare false.
+  # offending id in `journal_stamp_mismatch_id`, so "no stamp" and "wrong stamp" are
+  # distinguishable rather than both being a bare false.
   $journalStamp = Get-DocMetaFromJournal $path
   $stampId = if ($journalStamp) { "$($journalStamp.doc_id)" } else { '' }
   $stamped = [bool]($stampId -and $doc -and "$($doc.doc_id)" -and $stampId -eq "$($doc.doc_id)")
@@ -3641,11 +3641,29 @@ function Cmd-Doc {
     # True iff the journal currently carries a doc-meta stamp for THIS doc, i.e. the binding
     # survives the loss of %LOCALAPPDATA%. False means state is the only copy.
     journal_stamped = [bool]$stamped
-    # The id the journal actually carries, when it disagrees with the binding. Null when the
-    # journal is unstamped or agrees. A bare `journal_stamped: false` cannot distinguish "no
-    # stamp" (heals to nothing) from "wrong stamp" (heals to the wrong document), and those need
-    # different repairs.
-    journal_stamp_id = if ($stampId -and -not $stamped) { $stampId } else { $null }
+    # The id the journal actually carries, WHEN IT DISAGREES with the binding. Null when the
+    # journal is unstamped or agrees.
+    #
+    # The name says `mismatch` because it was `journal_stamp_id`, and that name is a trap when the
+    # field is read on its own. It reads as "the id in the journal stamp", so a null reads as "the
+    # journal has no stamp id" -- which is FALSE on a healthy task, where the journal does carry an
+    # id and the null only means there is nothing to complain about. Two readers reached that wrong
+    # conclusion independently in one run (GH #494), each filing a healthy binding as a defect. The
+    # pair was never ambiguous -- `journal_stamped: true` + null is unambiguously healthy -- so the
+    # name was safe when consumed as designed and unsafe when read in isolation, with nothing in
+    # the output to say which mode the reader was in. `mismatch_id: null` is instead TRUE read
+    # alone: there is no mismatch. The rename does not change a single verdict; it makes the
+    # cheapest possible misreading produce a true statement rather than a false one.
+    #
+    # A bare `journal_stamped: false` cannot distinguish "no stamp" (heals to nothing) from "wrong
+    # stamp" (heals to the wrong document), and those need different repairs -- hence the id.
+    #
+    # KNOWN AND DELIBERATE: an UNPARSEABLE stamp is reported exactly like no stamp at all (false,
+    # null), because `Get-DocMetaFromJournal` returns null for both. That collapse is safe in a way
+    # the wrong-stamp one is not: both mean the journal cannot heal state to anything, and both are
+    # repaired the same way -- write a correct stamp. The distinction that MUST survive is
+    # "heals to nothing" vs "heals to the wrong document", and it does.
+    journal_stamp_mismatch_id = if ($stampId -and -not $stamped) { $stampId } else { $null }
     new_comments   = if ($doc) { @($doc.pending_ids).Count } else { 0 }
     new_comment_ids = if ($doc) { @($doc.pending_ids) } else { @() }
     seen_comments  = if ($doc) { @($doc.seen_ids).Count } else { 0 }
