@@ -3779,17 +3779,94 @@ function Get-SessionVerdict($sess) {
 }
 
 function Get-LiveSessionCount {
-  # In-flight = tasks holding a LIVE session. Counted from the state store rather than tracked in
-  # a counter, because a counter drifts the first time a run dies mid-item -- and a run dying
-  # mid-item is the case the count exists to survive.
+  # In-flight = tasks holding a LIVE session AND able to be worked. Counted from the state store
+  # rather than tracked in a counter, because a counter drifts the first time a run dies mid-item --
+  # and a run dying mid-item is the case the count exists to survive.
+  #
+  # WHY WORKABILITY IS PART OF THE COUNT (GH #487)
+  # ---------------------------------------------
+  # It was not, and that produced a live dispatch DEADLOCK. Measured 2026-09-04 07:45 PT:
+  #
+  #   concurrency 1 (default) | in_flight 2 | at_capacity true | admits 0
+  #     #466  live session, being worked
+  #     #468  live session, NEVER WOKEN (last_woken_at ""), awaiting_reply TRUE
+  #
+  # #468 is parked on a human reply, so it cannot progress by itself -- yet it held the only
+  # capacity slot, so the run could dispatch NOTHING. Nothing self-heals: `admits` stays 0 until
+  # Shiv happens to reply. SKILL.md PHASE 1 step 6 also forbids releasing the binding while the
+  # task is `in-progress`, so the contract holds the slot open and the accounting counts it.
+  #
+  # This is a defect ALREADY FIXED ONE LEVEL UP and not carried down. The Today gate had the
+  # identical shape -- one unanswered row froze the whole Deferred backlog -- and the resolution
+  # was `Test-Workable`, which treats `awaiting_reply` as a waiting state (see its own comment:
+  # "Leaving it out of this list let a single unanswered Today row hold the whole Deferred backlog
+  # shut"). The capacity accounting never got the same treatment. The aggravating detail is that
+  # the two readers DISAGREE: the very signal that says "this task cannot be worked" is the one
+  # that leaves its session holding the slot.
+  #
+  # THIS DOES NOT RELEASE ANYTHING, and that is what makes it safe. The binding is untouched --
+  # continuity across nights is exactly what it exists for (#404), and losing it is the failure
+  # mode that matters. Only the CAPACITY ARITHMETIC changes: a task that cannot be worked stops
+  # being counted as work in flight.
+  #
+  # UNKNOWN COUNTS. If the journal cannot be read, or anything throws, the task is COUNTED. The
+  # dangerous direction here is over-dispatch (two sessions racing one workspace, #404's deadlock),
+  # so an undefaulted value must not fail toward it -- #462's rule, applied deliberately.
+  #
+  # The cost is bounded by construction: this only reads journals for tasks that ALREADY hold a
+  # live session, which concurrency keeps to a handful -- never the 244-row board.
   if (-not (Test-Path $StateDir)) { return 0 }
   $n = 0
   foreach ($f in (Get-ChildItem $StateDir -Filter 'task-*.json' -File -ErrorAction SilentlyContinue)) {
     try { $obj = Get-Content -Raw $f.FullName | ConvertFrom-Json } catch { continue }
     $s = Get-SessionState $obj
-    if ($s -and "$($s.state)" -eq 'live') { $n++ }
+    if (-not ($s -and "$($s.state)" -eq 'live')) { continue }
+    if (Test-SessionHoldsCapacity $obj) { $n++ }
   }
   return $n
+}
+
+function Test-SessionHoldsCapacity($st) {
+  # Does this task's live session represent work actually in flight? Separated from the counting
+  # loop so the mutation harness can drive the predicate directly rather than inferring it from a
+  # total, and so the "unknown counts" default has one place to live.
+  $id = "$($st.id)"
+  if (-not $id) { return $true }   # unidentifiable -> count it
+
+  # Terminal work holds nothing. A `done`/`skip` row with a live session is a pure leak, and
+  # counting it means finished work can starve the run indefinitely.
+  $status = "$($st.status)".ToLowerInvariant()
+  if ($script:ClosedStatus -contains $status) { return $false }
+
+  try {
+    $jp = Join-Path $JournalDir ("task-$id.md")
+    if (-not (Test-Path $jp)) { return $true }   # cannot read -> count it
+    $facts = Get-JournalFacts $jp
+
+    # Deliberately the SAME expression the scan row uses for `awaiting_reply`, not a
+    # paraphrase of it. Two readers of one condition that drift apart is precisely the
+    # bug being fixed here, so they are kept textually identical.
+    #
+    # Note what the third term already buys: `-not HasTrailingUser` means a user reply
+    # un-parks the task by construction (#223 rule 4), so no separate "a reply outranks the
+    # park" branch is needed. An earlier draft had one; mutation testing proved it dead --
+    # deleting it changed no fixture -- and a guard that can be removed with everything still
+    # green is decoration pretending to be a safeguard. The behaviour is pinned by the
+    # trailing-reply fixture against a mutation of THIS line instead.
+    $awaiting = [bool]($facts.HasAgentBlock -and $facts.HasBlockingAsk -and -not $facts.HasTrailingUser)
+
+    # A due timer outranks the park, for the reason Test-Workable gives -- poll/recheck is
+    # read-only agent work that needs no reply, so parking it would silently stop the recurring
+    # duty polling exists to protect. Read exactly as the scan row reads it.
+    $poll = if ($st.PSObject.Properties['poll']) { $st.poll } else { $null }
+    $recheck = if ($st.PSObject.Properties['recheck']) { $st.recheck } else { $null }
+    if ((Test-PollDue $poll) -or (Test-PollDue $recheck)) { return $true }
+
+    if ($awaiting) { return $false }
+  }
+  catch { return $true }   # anything unexpected -> count it
+
+  return $true
 }
 
 function Get-KickoffContinuation([string]$taskId, [string]$priorId) {
