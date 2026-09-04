@@ -104,6 +104,19 @@ $env:BRIDGE_SRC   = $BridgeSrcUrl
 # Same failure shape as the BRIDGE_SRC bug this wrapper already exists to prevent: a
 # variable every run was expected to remember, that nothing actually set.
 $env:OA_TODAY = (Get-Date).ToString('yyyy-MM-dd')
+# version-bump-sweep measures WHAT IS SHIPPED, not this laptop's working tree. The suite
+# runs from the flat OA home, so that sweep falls through to the known checkout
+# V:\repos\focus-planner -- which nothing updates. Measured 2026-09-04: it sat 11 commits
+# behind origin/main, so the sweep reported "1.18.0, 9 commits behind" while the shipped
+# truth was 1.19.0 with nothing outstanding. A stale tree can never observe the bump that
+# fixes it, so that finding is PERMANENTLY red and no correct action clears it -- which is
+# how a real signal gets skimmed and then switched off. CI pins the same sweep to HEAD,
+# because there the subject IS the pull request.
+$env:OA_PLUGIN_REF = 'origin/main'
+# ...and refresh it first, because a remote-tracking ref is only as fresh as the last fetch.
+# Measuring origin/main without fetching would just move the staleness one layer out, to the
+# layer where it is invisible. A failed fetch degrades to NOT MEASURED, never to OK.
+$env:OA_PLUGIN_FETCH = '1'
 
 # --- Capability floor: REPAIR the running agent before measuring it ------------------
 # installed-capability-sweep (below) DETECTS a reverted plugin. Detection alone left the
