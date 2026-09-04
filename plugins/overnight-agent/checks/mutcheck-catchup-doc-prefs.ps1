@@ -46,7 +46,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$RequiredKeys = @('no-context-reader','no-correction-narration','collapsible-sections','titled-id-links')
+$RequiredKeys = @('no-context-reader','no-correction-narration','collapsible-sections','titled-id-links','answer-in-the-document')
 
 function Read-Utf8([string]$p) { [IO.File]::ReadAllText($p, (New-Object Text.UTF8Encoding($false))) }
 

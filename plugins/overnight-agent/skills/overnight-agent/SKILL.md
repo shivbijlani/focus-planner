@@ -165,8 +165,13 @@ oa-state.ps1 doc -Id <ID> -Ack                             # advance the waterma
   have to remember to consult. A non-zero `doc_new_comments` is the doc-surface analogue of
   `reopened`. ⚠️ It reflects the **last `-Observe`**: `scan` is offline and never calls Google, which
   is what keeps it from hanging the run.
-- ⛔ **Doc comments still cannot approve anything (#422).** Use them for direction and questions.
-  Approval stays in the journal or Telegram until an author-separated posting identity exists (#421).
+- ⛔ **Never comment on the doc — amend the doc instead (Shiv, 2026-09-04).** A question in a
+  comment is answered by editing the prose until the document answers it; an instruction is
+  carried out. This is what makes attribution positive: if you never write a comment, every
+  comment is provably his. **Doc comments still cannot approve anything today (#422)** — the
+  mechanism exists (`neverCommentView()`, and `consentView(…, { neverComment: true })`) but is
+  deliberately opt-in and not yet wired into `oa-state.ps1 consent`, so approval stays in the
+  journal or Telegram until it is (#421, #442).
 
 **Once a task has a doc, its Telegram topic goes quiet (#424).** This is a behaviour change you
 should know about, because it looks like a failure if you don't: a doc-bound task's topic holds
@@ -906,11 +911,25 @@ For each row `scan` reported `doc_bound: true`, and any task you are about to wo
    `user-settings.md` → "Google account (Tasks)"); save the dump to a file.
 3. `oa-state.ps1 doc -Id <ID> -Observe <file>` — reports what is new, deliberately without advancing.
 4. Read them **fail-OPEN** via `readingView()` in `lib-doc-comments.mjs`: anything not provably your
-   own reply is an instruction. ⛔ **A comment approves nothing** — you post through Shiv's Google
-   identity, so the API stamps both halves of the conversation as him. ⛔-list actions still need
-   `oa-state.ps1 consent` (#422).
-5. **Amend the doc in place**, and reply to each comment you acted on with the body stamped by
-   `AGENT_MARKER`, so next run cannot read your own reply back as his instruction.
+   own reply is an instruction. ⛔ **A comment still approves nothing today** — ⛔-list actions
+   need `oa-state.ps1 consent` (#422). See the never-comment rule below for why that is now a
+   wiring gap rather than an impossibility.
+5. ⛔ **Never post a comment. Answer by AMENDING THE DOCUMENT.** Shiv, 2026-09-04:
+   *"I don't expect you to reply to any of my comments … If I ask you a question in the document
+   I don't expect you to reply to the comment I expect you to update the document in a way that
+   answers the question … you never comment on the document you update the document with the
+   answer in a way that flows with the document readability."*
+   - A **question** is answered by editing the prose so the document answers it — not by a
+     "Re: your comment" section bolted on the end, which is a reply wearing a different hat.
+   - An **instruction** ("cut this") is carried out.
+   - Edit **surgically**. Rewriting the whole document to change one sentence loses his place in
+     it and re-writes text he has already accepted.
+   **This is not a style rule, it is the attribution mechanism.** If you never write a comment,
+   every comment on the doc is provably his — positively, rather than inferred from the absence of
+   a marker, which is the inference #422 refuses as the #227 hole. `neverCommentView()` in
+   `lib-doc-comments.mjs` re-proves that invariant against the live comment list every time it is
+   consulted; an agent comment created after `NEVER_COMMENT_SINCE` breaks it and refuses consent.
+   Replies written before that cutoff are `legacy` and do not break it.
 6. `oa-state.ps1 doc -Id <ID> -Ack` — **last**. Two-phase on purpose: a crash between 3 and 6
    re-reports a comment rather than dropping it (#170's direction).
 

@@ -51,7 +51,7 @@ bitten before:
 
 ## Shiv's standing preferences
 
-These four are his, stated in his own words, and they are the reason this skill exists. They are
+These are his, stated in his own words, and they are the reason this skill exists. They are
 listed here in a machine-checkable block so the skill and its guard cannot drift apart — the
 same construction the approval vocabulary uses.
 
@@ -62,7 +62,27 @@ same construction the approval vocabulary uses.
 | `no-correction-narration` | Assume the reader has **not seen previous versions**. | Do **not** narrate corrections or missteps. No "previously I said X, that was wrong". Report what is true now; put superseded history in an appendix if it must be kept. |
 | `collapsible-sections` | Use **collapsible sections** where the output format supports them. | `<details>`/`<summary>` for GitHub, PR comments and journal turns. Where the format does not support folds — notably Google Docs — use a plain heading instead, and never emit a broken fold. |
 | `titled-id-links` | **Every ID is a link, and carries the underlying resource's title.** | Never write a bare `#NNN`. Every task id, issue, PR or run id renders as a link whose text or parenthetical names the resource: `[issue #441](url) ("Catch-up doc creation should be a plugin skill…")`. |
+| `answer-in-the-document` | **Never reply to his comment. Update the document so it answers.** | A question left in a comment is answered by editing the prose until the document answers it — not by a reply, and not by a "Re: your comment" section, which is a reply wearing a different hat. An instruction ("cut this") is carried out. Edit **surgically**: rewriting the whole doc to change one sentence re-writes text he has already accepted and loses his place in it. |
 <!-- CATCHUP-DOC-PREFS:END -->
+
+### On `answer-in-the-document` — why it is more than a style rule
+
+Shiv, 2026-09-04: *"I don't expect you to reply to any of my comments … If I ask you a question in
+the document I don't expect you to reply to the comment I expect you to update the document in a
+way that answers the question … Dissolves the issue about whose comment is it mine or yours you
+never comment on the document you update the document with the answer … So then if I approve
+something in the document you know it's coming from me."*
+
+That last clause is the load-bearing one, and it is a better fix than the one it replaces. The
+agent posts through Shiv's own Google identity, so the API stamps both halves of the conversation
+with his name; comments therefore could not be told apart, and approval by comment was impossible
+(#422). The standing answer was to build a second posting identity. **This rule removes the
+premise instead:** if the agent never authors a comment, every comment is his by construction —
+positively, not by the "unmarked therefore human" inference that #422 refuses as the #227 hole.
+
+It only holds if it is **enforced rather than intended**, which is why it is not left as prose:
+`neverCommentView()` in `lib-doc-comments.mjs` re-proves it against the live comment list, and an
+agent-authored comment created after the cutoff refuses consent instead of degrading quietly.
 
 ### On `titled-id-links` — the one that regresses
 

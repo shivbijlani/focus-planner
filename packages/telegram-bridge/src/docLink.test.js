@@ -54,6 +54,10 @@ function makeHarness(files) {
   // The set of message ids Telegram still knows about. Deleting from here is how a test
   // simulates the user removing the link message.
   const live = new Set()
+  // What each live message currently SAYS. Needed so a genuine edit can succeed: Telegram only
+  // answers "not modified" when the new text is byte-identical, and a harness that throws that
+  // unconditionally can never exercise a successful in-place update.
+  const bodies = new Map()
   let editError = null
 
   const client = {
@@ -65,6 +69,7 @@ function makeHarness(files) {
       sent.push(m)
       const id = ++messageSeq
       live.add(id)
+      bodies.set(id, m.text)
       return { message_id: id }
     },
     async editMessageText({ messageId, text }) {
@@ -74,7 +79,9 @@ function makeHarness(files) {
       // Telegram's answer when the text is byte-identical to what is already there. This is
       // the healthy steady state, and it arrives as an ERROR — which is exactly why the probe
       // must read the message rather than just catching.
-      throw new Error('Bad Request: message is not modified')
+      if (bodies.get(messageId) === text) throw new Error('Bad Request: message is not modified')
+      bodies.set(messageId, text)
+      return { message_id: messageId }
     },
     async pinChatMessage({ messageId }) {
       pinned.push(messageId)
@@ -240,6 +247,73 @@ describe('#424 — the catch-up link replaces the per-turn post', () => {
     h.store['42'] = journal({ status: 'Done', needs: 'none' })
     await bridge.syncUp()
     expect(h.sent).toHaveLength(3)
+  })
+
+  it('UPDATES the notice in place when the ask changes, instead of stacking a second one', async () => {
+    // Shiv, on the catch-up doc: "Task 468 telegram has recent message postings. I expected it
+    // to update or delete the last one." Hashing alone made "say it once" true per ASK and false
+    // per TOPIC — three runs with three slightly different asks left three messages, rebuilding
+    // the stack through the only path still allowed to post.
+    const h = makeHarness({ 42: journal({ needs: 'the API key for the staging box' }) })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(2) // link + first notice
+    const noticeId = state.tasks['42'].docLinkNoticeMessageId
+    expect(noticeId).toBe(2)
+
+    h.store['42'] = journal({ needs: 'the API key for the PROD box' })
+    await bridge.syncUp()
+
+    // Nothing new was sent...
+    expect(h.sent).toHaveLength(2)
+    // ...the existing notice now carries the new ask...
+    const rewrite = h.edits.filter((e) => e.messageId === noticeId).pop()
+    expect(rewrite.text).toContain('the API key for the PROD box')
+    // ...and the id is retained, so the run after this one can update it again rather than
+    // starting a fresh stack from a forgotten pointer.
+    expect(state.tasks['42'].docLinkNoticeMessageId).toBe(noticeId)
+  })
+
+  it('posts a fresh notice when the one it meant to update is gone', async () => {
+    // The opposite fail direction from the link probe, on purpose: a notice carries information
+    // that exists nowhere else in the topic, so an unconfirmed edit must never be taken as
+    // delivered. One duplicate line is cheaper than silently losing a blocking ask.
+    const h = makeHarness({ 42: journal({ needs: 'the API key for the staging box' }) })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    const noticeId = state.tasks['42'].docLinkNoticeMessageId
+    h.deleteMessageFromTelegram(noticeId)
+
+    h.store['42'] = journal({ needs: 'the API key for the PROD box' })
+    await bridge.syncUp()
+
+    expect(h.sent).toHaveLength(3)
+    expect(h.sent[2].text).toContain('the API key for the PROD box')
+    expect(state.tasks['42'].docLinkNoticeMessageId).toBe(3)
+  })
+
+  it('forgets the notice id when the ask is resolved, so a returning ask is a NEW message', async () => {
+    // He has already read and acted on the old line. Editing it later would rewrite history
+    // under him — which is why the id is cleared with the hash rather than kept for reuse.
+    const h = makeHarness({ 42: journal({ status: 'Done', needs: 'none' }) })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(state.tasks['42'].docLinkNoticeMessageId).toBe(2)
+
+    h.store['42'] = journal({ status: 'In-progress', needs: 'none' })
+    await bridge.syncUp()
+    expect(state.tasks['42'].docLinkNoticeMessageId).toBeUndefined()
+
+    h.store['42'] = journal({ status: 'Done', needs: 'none' })
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(3)
+    expect(state.tasks['42'].docLinkNoticeMessageId).toBe(3)
   })
 
   it('replaces the link when the task is rebound to a different doc', async () => {

@@ -815,22 +815,43 @@ export function createBridge({
     // carry: the agent is blocked on the user, or the task reached a terminal state. Hashed, so
     // an unchanged ask is said once rather than nightly — an exception that repeats every run is
     // the behaviour this issue removes, wearing a smaller hat.
+    //
+    // A CHANGED ask REPLACES the notice already in the topic rather than stacking a second one
+    // under it. The hash alone made "say it once" true per ask and false per topic: successive
+    // runs with slightly different asks each appended a message, so the topic re-grew the stack
+    // through the only path still allowed to post. Shiv, on the catch-up doc: "Task 468 telegram
+    // has recent message postings. I expected it to update or delete the last one."
     const ask = blockingAsk(turn)
     const terminal = terminalStatus(turn)
     if (ask || terminal) {
       const noticeHash = hashNotice(ask, terminal)
       if (!entry || entry.docLinkNoticeHash !== noticeHash) {
-        await withRateLimitRetry(`sendMessage (doc notice) task #${taskId}`, () =>
-          client.sendMessage({
-            chatId,
-            text: formatDocNotice(taskId, { ask, terminal, docUrl: docMeta.docUrl }),
-            messageThreadId: topicId,
-            parseMode: 'HTML',
-          }),
-        )
-        setDocLinkNoticeHash(state, taskId, noticeHash)
+        const noticeText = formatDocNotice(taskId, { ask, terminal, docUrl: docMeta.docUrl })
+        const priorId =
+          entry && Number.isInteger(entry.docLinkNoticeMessageId) ? entry.docLinkNoticeMessageId : null
+
+        let noticeId = null
+        if (priorId != null) {
+          noticeId = (await editNotice(taskId, priorId, noticeText)) ? priorId : null
+        }
+
+        if (noticeId == null) {
+          const sent = await withRateLimitRetry(`sendMessage (doc notice) task #${taskId}`, () =>
+            client.sendMessage({
+              chatId,
+              text: noticeText,
+              messageThreadId: topicId,
+              parseMode: 'HTML',
+            }),
+          )
+          if (sent && Number.isInteger(sent.message_id)) noticeId = sent.message_id
+        }
+
+        setDocLinkNoticeHash(state, taskId, noticeHash, noticeId)
         out.notified = true
-        logger(`posted short notice for task #${taskId} (${terminal || 'ask'})`)
+        logger(
+          `${noticeId === priorId && priorId != null ? 'updated' : 'posted'} short notice for task #${taskId} (${terminal || 'ask'})`,
+        )
       }
     } else if (entry && entry.docLinkNoticeHash) {
       // The ask was resolved. Forget it, so the same ask returning later is announced again
@@ -847,6 +868,31 @@ export function createBridge({
     if (task && task.userEngaged) setUserEngaged(state, taskId, false)
     await checkpoint(`task #${taskId} (doc link)`)
     return out
+  }
+
+  // Rewrite the notice already in the topic. Returns true only when Telegram CONFIRMS the edit
+  // landed.
+  //
+  // The fail direction here is deliberately the OPPOSITE of verifyLinkMessage above, and the
+  // difference is the point. The link never changes, so an inconclusive probe should assume the
+  // message is fine and stay quiet — guessing "gone" would post a duplicate link every time the
+  // API had a bad minute. A notice is the opposite: it carries NEW information (the agent is
+  // blocked, or the task ended) that exists nowhere else in the topic. Assuming an unconfirmed
+  // edit worked would silently drop the one message the user needs, which is #170's defect. So
+  // anything short of a confirmed edit falls through to sending a fresh message: the worst case
+  // is one duplicate line, against losing a blocking ask entirely.
+  async function editNotice(taskId, messageId, text) {
+    try {
+      await client.editMessageText({ chatId, messageId, text, parseMode: 'HTML' })
+      return true
+    } catch (err) {
+      const msg = String((err && err.message) || '').toLowerCase()
+      // Already says exactly this. The message is present and correct, so there is nothing to
+      // send — treating it as a failure would post a duplicate of a line already on screen.
+      if (msg.includes('not modified')) return true
+      logger(`could not update the notice for task #${taskId} (${err.message}); posting a new one`)
+      return false
+    }
   }
 
   // Does `messageId` still exist in the chat? See syncDocLink's header for why this is an edit.
