@@ -84,6 +84,39 @@ It only holds if it is **enforced rather than intended**, which is why it is not
 `neverCommentView()` in `lib-doc-comments.mjs` re-proves it against the live comment list, and an
 agent-authored comment created after the cutoff refuses consent instead of degrading quietly.
 
+## GitHub issue comments: the opposite invariant (#453)
+
+The contract for issue work is *exactly one agentic comment per issue, and it is the catch-up
+doc*, edited in place on later passes — and *never touch human comments*.
+
+⛔ **Do not reuse the Docs answer here.** On Google Docs the agent solves attribution by never
+posting. On GitHub the contract **requires** it to post exactly one comment, so "never posts" is
+not available. This surface takes the mirror-image invariant: **always stamps.**
+
+| surface | invariant | why |
+| --- | --- | --- |
+| Google Doc comments | the agent **never** posts | so every comment is provably Shiv's |
+| GitHub issue comments | the agent **always** stamps | so exactly one comment is provably the agent's |
+
+The rules, all enforced by `lib-issue-comments.mjs` and pinned by `mutcheck-issue-comments.mjs`:
+
+1. **Stamp every agent-authored issue comment** with `<!-- from: overnight-agent -->` as its
+   **first line** — invisible when rendered, and the same provenance string `write-turn.ps1`
+   guard G7 already enforces on journal turns. Use `stampIssueComment()`; it is idempotent.
+2. **Resolve "the agentic comment" by marker — never by count or position.** The contract used to
+   be satisfied only because there happened to be exactly one comment, which is a property of the
+   data and not of the system.
+3. **Fail closed.** `resolveAgenticComment()` returns `post` when nothing is marked and `refuse`
+   when several are. ⛔ **Never fall back to editing the most recent comment** — the most recent
+   comment is very often Shiv's reply, and that fallback *is* the defect. Losing an agent comment
+   costs a duplicate; overwriting one of his destroys something only he can reproduce.
+4. ⛔ **Never infer authorship from the body.** Every pre-existing agentic comment opens with the
+   same catch-up-doc link line, and reaching for that as the identifying rule is the obvious move.
+   It is banned: Shiv can paste that line, and his comment instantly becomes adoptable and
+   overwritable — the data-loss path above, rebuilt by its own fix. The marker is the only thing
+   consulted. Comments predating the marker are adopted by explicit id
+   (`BACKFILL_COMMENT_IDS`), which is why no prefix matching is needed anywhere.
+
 ### On `titled-id-links` — the one that regresses
 
 This is the highest-value item and the easiest to get wrong, and the reason is structural rather

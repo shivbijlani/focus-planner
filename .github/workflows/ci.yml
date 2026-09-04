@@ -248,9 +248,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Mutation check (four preferences present, skill inside the deployed glob)
+      - name: Mutation check (preferences present, skill inside the deployed glob)
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-catchup-doc-prefs.ps1
+
+  # Comment provenance, on both surfaces the agent speaks through (GH #422, GH #453).
+  #
+  # The agent posts through Shiv's identity on Google Docs AND on GitHub, so on neither surface
+  # does the API's author field distinguish the two of them. The surfaces then need OPPOSITE
+  # invariants, which is why both guards run here rather than one standing in for the other:
+  #
+  #   Docs   the agent never posts  -> every comment is provably Shiv's
+  #   GitHub the agent always stamps -> exactly one comment is provably the agent's
+  #
+  # GitHub is the destructive half. The contract says "edit the one agentic comment in place",
+  # and until #453 that comment was identified only by there happening to be exactly one -- so
+  # the first time Shiv commented, an edit could overwrite his words.
+  #
+  # `mutcheck-doc-comments.mjs` predates this job and was running nowhere: it shipped as a guard,
+  # was extended by PR #451, and no workflow ever invoked it. That is this repo's own
+  # merged-but-not-running failure applied to a reliability check, so it is wired up here.
+  #
+  # Pure in-memory fixtures; neither reads the planner folder or calls a network API.
+  comment-provenance:
+    name: Comment provenance (Docs + GitHub)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (Docs — attribution, and the never-comment invariant)
+        run: node ./plugins/overnight-agent/checks/mutcheck-doc-comments.mjs
+      - name: Mutation check (GitHub — stamp, resolve by marker, refuse to edit unmarked)
+        run: node ./plugins/overnight-agent/checks/mutcheck-issue-comments.mjs
 
   # The board's ragged rows (GH #426). `## Deferred` carries a `Wake` column that
   # `## Today` does not, so a hand-edited or pre-#307 row has one field too few --
