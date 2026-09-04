@@ -47,6 +47,71 @@
       }
     },
     {
+      "id": "google-workspace",
+      "server": "google-workspace",
+      "mandatory": true,
+      "wrapUpSection": "Catch-up doc channel",
+      "why": "PHASE 0.7 reads the catch-up doc comments, which Shiv designated the PRIMARY communication mechanism. doc_new_comments comes from the last -Observe and never calls Google, so a run whose server is dead reports '0 new comments' -- byte-identical to a document he has not commented on. That is the #346 defect on its third surface, and on the channel he was told to prefer over email.",
+      "probe": {
+        "kind": "mcp-tools",
+        "requiredTools": ["list_document_comments", "get_doc_content"]
+      },
+      "notes": [
+        "mandatory:true is a judgement call, and #459 left it explicitly open. Taken because",
+        "(a) it is his stated primary channel, so a silent loss is at least as bad as a lost",
+        "inbox, which is exactly what mandatory exists for; (b) the alarm-fatigue argument is",
+        "weak for THIS probe kind -- mcp-tools only enumerates tools, so it fires when the",
+        "server cannot start at all, not on a transient Google API error; (c) reverting is one",
+        "character. Flip it to false if it proves noisy.",
+        "Measured 2026-09-04: `node mcp-probe.mjs google-workspace list` exited 0 with 36 tools,",
+        "both list_document_comments and get_doc_content present -- so this ships GREEN on a",
+        "healthy server rather than as a permanently-red check. Discrimination measured the",
+        "other way too: an unreachable server name yields verdict=unavailable/mcp-unavailable,",
+        "and requiring a tool the server does not expose yields missing-tools, both exit 2.",
+        "SCOPE -- READ THIS BEFORE TREATING A GREEN ROW AS 'THE DOC CHANNEL IS UP'. This row",
+        "does NOT detect the mode-B mid-run death that motivated #459, and that was measured,",
+        "not reasoned: at 01:2x PT on 2026-09-04 the agent session's google-workspace server",
+        "returned 'Transport closed' on two consecutive calls and never recovered, while this",
+        "probe -- run in the same minute -- exited 0 with all 36 tools present. mcp-probe.mjs",
+        "SPAWNS A FRESH SERVER from mcp-config.json, so it answers 'can a server be started?',",
+        "never 'is the connection my session is using still alive?'. Its own header says so:",
+        "'a probe that passes on connection A says nothing about connection B'. The email row",
+        "escapes this because the run READS the inbox through the probe, so probe-session and",
+        "work-session are the same one; PHASE 0.7 reads doc comments through the agent's own",
+        "MCP tools, so they are not. What this row does cover is real and worth having: a",
+        "server that cannot start, is absent from mcp-config.json, fails its handshake, or has",
+        "renamed/dropped a required tool. What it does not cover is tracked separately."
+      ]
+    },
+    {
+      "id": "google-auth",
+      "server": "google-workspace",
+      "mandatory": true,
+      "wrapUpSection": "Catch-up doc channel",
+      "why": "The google-workspace row above proves the SERVER is reachable. It cannot prove the server can reach GOOGLE, because tools/list needs no authorization -- measured 2026-09-04, the server enumerates all 36 tools regardless of credential state. This row tests the refresh token itself, which is the half that actually fails: a testing-mode OAuth refresh token expires about every 7 days and silently breaks every Google Workspace tool until Shiv re-consents. Without it the doc channel's probe would be green through the entire outage window.",
+      "probe": {
+        "kind": "script-exit",
+        "script": "check-google-token.ps1",
+        "okExit": [0],
+        "failExit": [2, 4]
+      },
+      "notes": [
+        "Exit codes are check-google-token.ps1's own documented contract: 0=ok, 2=expired",
+        "(re-auth needed), 3=transient error, 4=credential file missing. 3 is deliberately in",
+        "NEITHER list -- it maps to `inconclusive`, which is reported but does not raise the ask,",
+        "because a check that cries wolf on a flaky network is a check nobody reads.",
+        "Measured 2026-09-04: exit 0, status=ok, 'Refresh token valid; Google issued a fresh",
+        "access token', so this ships green. Discrimination measured by pointing the row at a",
+        "missing script (script-missing) and by a non-zero declared exit (probe-failed), both",
+        "verdict=unavailable and both taking the run to exit 2.",
+        "The credential store is single-user and holds shiv@bijlanis.com. Calling a Google tool",
+        "with a DIFFERENT address does not fall back -- it starts an interactive OAuth flow and",
+        "wedges the server for the rest of the session ('Transport closed' on every later call).",
+        "That was observed live on 2026-09-04 and is worth knowing before debugging a 'dead'",
+        "Google server: check the address before concluding the server died."
+      ]
+    },
+    {
       "id": "browser-slot",
       "server": null,
       "mandatory": false,
