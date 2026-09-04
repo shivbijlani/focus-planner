@@ -226,13 +226,91 @@ export function readingView(entries, ledger = {}) {
   }))
 }
 
+// ── THE NEVER-COMMENT RULE ────────────────────────────────────────────────────────────────────
+//
+// Shiv, on this module's own catch-up doc, 2026-09-04:
+//
+//     "I don't expect you to reply to any of my comments. […] you never comment on the document
+//      you update the document with the answer […] Dissolves the issue about whose comment is it
+//      mine or yours […] So then if I approve something in the document you know it's coming
+//      from me"
+//
+// This does not SOLVE the attribution problem described in the header. It REMOVES ITS PREMISE.
+// The header's problem is that two authors share one identity, so neither can be told apart. If
+// only one author ever writes, there is nothing to tell apart: every comment is his, positively,
+// and not by the "unmarked therefore human" inference that #422 rightly refuses.
+//
+// WHY THIS IS STRONGER THAN THE INFERENCE IT REPLACES, AND WHERE IT STILL IS NOT
+// ------------------------------------------------------------------------------
+// The rejected inference rests on "the agent never posts UNMARKED", which is unobservable: an
+// unmarked agent comment is indistinguishable from a human one, which is the whole defect. The
+// rule rests on "the agent never posts AT ALL", and the violating case of that — an agent comment
+// that DOES exist — is observable by exactly the attribution this module already computes. A
+// convention you can audit is a different object from one you cannot.
+//
+// It is still not free. Two residuals, stated rather than buried:
+//
+//   1. Enforcement, not intent. `ok` below is computed against the live comment list every time
+//      it is consulted. It is never cached and never assumed — that is the difference between a
+//      gate and a promise, and this repo has measured promises failing (114 of 238 journals lack
+//      a stamp that a reader once assumed was always present).
+//   2. An agent comment posted unmarked AND unledgered is still invisible here. That case is
+//      closed upstream, by the agent having no sanctioned step that posts a comment at all
+//      (SKILL.md PHASE 0.7), not by this function. What this function guarantees is that every
+//      violation the agent could plausibly commit — through its own stamped posting path — is
+//      caught, and that catching one refuses consent rather than degrading quietly.
+//
+// PRE-RULE REPLIES ARE LEGACY, NOT VIOLATIONS
+// -------------------------------------------
+// Agent replies written before the rule existed are real and must stay readable, so they are
+// partitioned as `legacy` instead of permanently breaking the invariant. Without a cutoff the
+// three replies already on task #468's doc would pin `ok:false` forever, and an invariant that
+// can never hold is one nobody consults.
+export const NEVER_COMMENT_SINCE = '2026-09-04T03:32:12Z'
+
 /**
- * FAIL-CLOSED reader for consent. See the header: `human` is never inferred, so today this
- * always refuses. It reports WHICH affirmative it refused, so a run can tell "nobody approved"
- * from "something approved and it was not provably you" — the second is worth surfacing.
+ * Does the never-comment rule HOLD on this comment list?
+ *
+ * An agent-attributed entry created at or after `since` is a violation. An agent entry with no
+ * readable `created` is ALSO a violation: this gate guards consent, so the unknown case must fail
+ * towards refusing. Treating an undated agent comment as legacy would make "strip the date" a way
+ * to launder a violation into a tolerated one.
  */
-export function consentView(entries, ledger = {}) {
-  const rows = attribute(entries, ledger)
+export function neverCommentView(entries, ledger = {}, { since = NEVER_COMMENT_SINCE } = {}) {
+  const cutoff = Date.parse(String(since ?? ''))
+  const violations = []
+  const legacy = []
+  for (const row of attribute(entries, ledger)) {
+    if (row.author !== AUTHOR.AGENT) continue
+    const at = Date.parse(String(row.created ?? ''))
+    if (Number.isNaN(at) || Number.isNaN(cutoff) || at >= cutoff) violations.push(row)
+    else legacy.push(row)
+  }
+  return {
+    ok: violations.length === 0,
+    since,
+    violations,
+    legacy,
+    reason: violations.length ? 'agent-commented-after-rule' : 'no-agent-comment-after-rule',
+  }
+}
+
+/**
+ * FAIL-CLOSED reader for consent. `human` is never INFERRED — see the header.
+ *
+ * `neverComment: true` opts into the rule above, and is the only way this function can ever
+ * report a human author. It is opt-in rather than the default on purpose: turning it on weakens
+ * a gate, so it is a decision a caller makes explicitly and per call, not one that arrives by
+ * upgrading this file. And it grants nothing on its own — the invariant is re-proven against the
+ * comments in hand each time, so a doc carrying an agent comment refuses exactly as before.
+ */
+export function consentView(entries, ledger = {}, { neverComment = false, since = NEVER_COMMENT_SINCE } = {}) {
+  const attributed = attribute(entries, ledger)
+  const invariant = neverComment ? neverCommentView(entries, ledger, { since }) : null
+  const rows =
+    invariant && invariant.ok
+      ? attributed.map((r) => (r.author === AUTHOR.UNKNOWN ? { ...r, author: AUTHOR.HUMAN, evidence: 'never-comment-rule' } : r))
+      : attributed
   const result = {
     consent_ok: false,
     human_comments: 0,
@@ -260,6 +338,16 @@ export function consentView(entries, ledger = {}) {
       result.affirmative_phrase = m[0]
       result.affirmative_author = r.author
     }
+  }
+
+  // A broken invariant outranks the ordinary diagnoses. `affirmative_unattributed` is still
+  // populated above, so the caller can see WHAT it refused as well as why — but the reason it
+  // reports is the violation, because "an agent comment exists on this doc" is the fact that has
+  // to be repaired, and reporting it as an ordinary "no attribution channel" would hide a rule
+  // breach behind the message the gate prints on every healthy pre-rule doc.
+  if (invariant && !invariant.ok) {
+    result.reason = invariant.reason
+    return result
   }
 
   result.reason = result.affirmative_unattributed

@@ -168,9 +168,23 @@ export function setDocLink(state, taskId, { docId, messageId } = {}) {
 // every run — the whole point of #424 is that the steady state is silent, and an
 // exception that repeats itself nightly is just the old behaviour wearing a
 // smaller hat.
-export function setDocLinkNoticeHash(state, taskId, hash) {
+//
+// The MESSAGE ID is kept beside the hash so a CHANGED ask can replace the notice
+// already in the topic instead of stacking a second one under it. Storing only the
+// hash made "say it once" true per ask and false per topic: three runs with three
+// slightly different asks left three messages, which is the stack this whole
+// feature exists to remove, arriving through the one path still allowed to post.
+// A hash can prove a notice was sent; only an id can go back and change it.
+export function setDocLinkNoticeHash(state, taskId, hash, messageId) {
   const prev = state.tasks[taskId] || {}
-  state.tasks[taskId] = { ...prev, docLinkNoticeHash: hash || undefined }
+  state.tasks[taskId] = {
+    ...prev,
+    docLinkNoticeHash: hash || undefined,
+    // Cleared together with the hash. An id kept after the ask was resolved points
+    // at a message that no longer represents anything, and editing it later would
+    // silently rewrite a line Shiv has already read and acted on.
+    docLinkNoticeMessageId: hash && Number.isInteger(messageId) ? messageId : undefined,
+  }
   return state
 }
 

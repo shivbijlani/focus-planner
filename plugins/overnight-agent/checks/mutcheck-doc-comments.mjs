@@ -97,7 +97,7 @@ function entries(...rows) {
     kind: r.kind ?? 'comment',
     parentId: r.parentId ?? null,
     author: r.author ?? 'Shiv Bijlani', // the API always says this — for BOTH of us
-    created: '2026-09-03T00:00:00.000Z',
+    created: r.created ?? '2026-09-03T00:00:00.000Z',
     quoted: null,
     content: r.content,
   }))
@@ -282,6 +282,74 @@ const ARMS = [
       return null
     },
   },
+  {
+    name: 'N_the_never_comment_rule_is_opt_in',
+    why: 'turning it on WEAKENS a gate, so it must never arrive by default on an existing caller',
+    run: async (m) => {
+      const rows = entries({ id: 'c1', content: 'approve' })
+      const off = m.consentView(rows, {})
+      if (off.consent_ok) return 'an unattributed "approve" granted consent with no options passed'
+      const on = m.consentView(rows, {}, { neverComment: true })
+      if (!on.consent_ok) return `the rule was requested and consent still refused (reason=${on.reason})`
+      if (on.affirmative_author !== 'human') return `granted, but author=${on.affirmative_author}`
+      return null
+    },
+  },
+  {
+    name: 'O_an_agent_comment_after_the_rule_refuses_everything',
+    why: 'the rule licenses positive attribution only while it actually holds, re-proven per call',
+    run: async (m) => {
+      const rows = entries(
+        { id: 'c1', content: 'approve' },
+        {
+          id: 'r1', kind: 'reply', parentId: 'c1',
+          created: '2026-09-04T09:00:00.000Z',
+          content: `On it.\n\n${MARKER}`,
+        },
+      )
+      const inv = m.neverCommentView(rows, {})
+      if (inv.ok) return 'an agent comment written AFTER the rule did not break the invariant'
+      if (inv.violations.length !== 1) return `expected 1 violation, got ${inv.violations.length}`
+      const v = m.consentView(rows, {}, { neverComment: true })
+      if (v.consent_ok) return 'consent granted on a doc the agent had itself commented on'
+      if (v.reason !== 'agent-commented-after-rule') return `reason=${v.reason}, expected the violation`
+      return null
+    },
+  },
+  {
+    name: 'P_pre_rule_agent_replies_are_legacy_not_violations',
+    why: 'three real replies predate the rule; counting them would pin the invariant false forever',
+    run: async (m) => {
+      // The live ids and timestamps on task #468's own catch-up doc, measured 2026-09-04. All
+      // three agent replies were written at 00:05Z, before the rule landed at 03:32Z.
+      const rows = entries(
+        { id: 'AAACGhcT3Qw', created: '2026-09-04T03:32:12.115Z', content: 'approve' },
+        { id: 'AAACCk6l6ME', kind: 'reply', created: '2026-09-04T00:05:21.343Z', content: `Filed as #441.\n\n${MARKER}` },
+        { id: 'AAACCk6l6MA', kind: 'reply', created: '2026-09-04T00:05:12.779Z', content: `Added to #421.\n\n${MARKER}` },
+        { id: 'AAACCk6l6L8', kind: 'reply', created: '2026-09-04T00:05:02.878Z', content: `Filed as #442.\n\n${MARKER}` },
+      )
+      const inv = m.neverCommentView(rows, {})
+      if (!inv.ok) return `pre-rule replies broke the invariant: ${inv.violations.map((v) => v.id).join(', ')}`
+      if (inv.legacy.length !== 3) return `expected 3 legacy replies, got ${inv.legacy.length}`
+      return null
+    },
+  },
+  {
+    name: 'Q_an_undated_agent_comment_is_a_violation',
+    why: 'otherwise dropping the timestamp launders a violation into a tolerated legacy row',
+    run: async (m) => {
+      const rows = entries(
+        { id: 'c1', content: 'approve' },
+        { id: 'r1', kind: 'reply', parentId: 'c1', content: `On it.\n\n${MARKER}` },
+      )
+      rows[1].created = ''
+      const inv = m.neverCommentView(rows, {})
+      if (inv.ok) return 'an agent comment with no readable date was tolerated as legacy'
+      const v = m.consentView(rows, {}, { neverComment: true })
+      if (v.consent_ok) return 'consent granted despite an undated agent comment on the doc'
+      return null
+    },
+  },
 ]
 
 // ---------------------------------------------------------------------------------------------
@@ -289,6 +357,30 @@ const ARMS = [
 // ---------------------------------------------------------------------------------------------
 
 const MUTATIONS = [
+  {
+    name: 'promote_regardless_of_invariant',
+    breaks: 'grants positive attribution even on a doc the agent has itself commented on',
+    apply: (s) => s.replace('invariant && invariant.ok', 'invariant'),
+  },
+  {
+    name: 'never_comment_on_by_default',
+    breaks: 'weakens the consent gate for every existing caller without them asking for it',
+    apply: (s) => s.replace('{ neverComment = false, since', '{ neverComment = true, since'),
+  },
+  {
+    name: 'undated_agent_comment_is_legacy',
+    breaks: 'lets a violation launder itself simply by losing its timestamp',
+    apply: (s) => s.replace(
+      'if (Number.isNaN(at) || Number.isNaN(cutoff) || at >= cutoff) violations.push(row)',
+      'if (at >= cutoff) violations.push(row)'),
+  },
+  {
+    name: 'cutoff_swallows_every_violation',
+    breaks: 'no agent comment ever counts, so the invariant is decoration over a granted gate',
+    apply: (s) => s.replace(
+      'if (Number.isNaN(at) || Number.isNaN(cutoff) || at >= cutoff) violations.push(row)',
+      'if (false) violations.push(row)'),
+  },
   {
     name: 'unknown_becomes_human',
     breaks: 'infers a human from the absence of the agent marker — the #227 hole, mail-merged',
