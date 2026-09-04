@@ -117,6 +117,68 @@ function resolveRepo() {
   return null;
 }
 
+/**
+ * Which commit to measure. Default HEAD, so an ad-hoc run and CI both behave as before.
+ *
+ * WHY THIS IS A PARAMETER (measured 2026-09-04, and it was reporting confident nonsense)
+ * -------------------------------------------------------------------------------------
+ * The nightly suite runs from the flat OA home, so `resolveRepo()` falls through to the
+ * known checkout `V:\repos\focus-planner` -- a WORKING TREE that nothing updates. On
+ * 2026-09-04 it sat at `0e7e372`, ELEVEN commits behind `origin/main`, so the sweep read
+ * `1.18.0 / 9 commits` while the shipped truth at `779703b` was `1.19.0 / 0`. It was
+ * answering a question nobody asked, about a tree nobody runs.
+ *
+ * That direction is the dangerous one. A stale tree can never observe the bump that fixes
+ * it, so the finding is PERMANENTLY red and no correct action can clear it -- which
+ * desensitises the signal and gets the detector switched off. This file's own header
+ * argues the opposite failure ("a check that cannot see must not report clean"); this is
+ * the same rule on the other side, because a check that reports a confident WRONG red is
+ * no better. It is #461 exactly: a check resolving its root to the wrong tree and
+ * reporting about files it never opened.
+ *
+ * So the two callers now say what they mean, rather than both inheriting a default that is
+ * right for only one of them:
+ *
+ *   CI  (`plugin-version-bump`)  OA_PLUGIN_REF=HEAD        gate THIS pull request
+ *   nightly (`run-sweeps.ps1`)   OA_PLUGIN_REF=origin/main gate WHAT IS SHIPPED
+ *
+ * An unresolvable ref is a finding, not a pass, for the reason above.
+ */
+function resolveRef(repo) {
+  const want = (process.env.OA_PLUGIN_REF || 'HEAD').trim();
+
+  // A remote-tracking ref is only as fresh as the last fetch, so measuring `origin/main`
+  // without fetching just MOVES the staleness rather than removing it -- the same defect
+  // one layer out, and the layer where it would be invisible. Callers that measure a
+  // remote ref therefore ask for the fetch explicitly.
+  //
+  // A FAILED FETCH IS NOT A PASS. Offline, or a dead remote, means the ref on disk is of
+  // unknown age, and reporting `OK` from it is the false-green this whole file exists to
+  // prevent. It degrades to NOT MEASURED (exit 1) instead, which is the direction #346
+  // and this sweep's own "cannot see must not report clean" rule both demand.
+  if (process.env.OA_PLUGIN_FETCH === '1' && want.includes('/')) {
+    const [remote, ...rest] = want.split('/');
+    const branch = rest.join('/');
+    if (git(repo, ['fetch', '--quiet', remote, branch]) === null) {
+      return { want, sha: null, stale: `could not fetch ${remote}/${branch}` };
+    }
+  }
+
+  const sha = (git(repo, ['rev-parse', want]) || '').trim();
+  return { want, sha: sha || null };
+}
+
+/**
+ * Is this checkout behind the ref we are measuring? Reported even when the measurement is
+ * otherwise fine, because "the number is right but the tree is stale" is the state that
+ * produced the wrong answer above, and it is invisible from the output otherwise.
+ */
+function behindBy(repo, sha) {
+  const out = git(repo, ['rev-list', '--count', `HEAD..${sha}`]);
+  const n = Number((out || '').trim());
+  return Number.isFinite(n) ? n : 0;
+}
+
 function versionAt(repo, commit) {
   const raw = git(repo, ['show', `${commit}:${PLUGIN_JSON}`]);
   if (raw === null) return null; // file absent at that commit
@@ -171,13 +233,30 @@ if (!repo) {
   process.exit(1);
 }
 
-const head = (git(repo, ['rev-parse', 'HEAD']) || '').trim();
+const ref = resolveRef(repo);
+if (!ref.sha) {
+  console.log('version-bump-sweep: NOT MEASURED - the ref could not be resolved.');
+  console.log(`  ref  : ${ref.want}`);
+  console.log(`  repo : ${repo}`);
+  if (ref.stale) console.log(`  why  : ${ref.stale}`);
+  console.log('  Reporting this as a finding rather than passing: a check that cannot');
+  console.log('  see must not report clean, and a ref of unknown age is not seeing.');
+  process.exit(1);
+}
+
+const head = ref.sha;
 const headVersion = versionAt(repo, head);
 const bump = lastBump(repo, head);
+const behind = behindBy(repo, head);
 
 console.log(`repo            : ${repo}`);
+console.log(`ref             : ${ref.want}`);
 console.log(`head            : ${short(repo, head)}`);
 console.log(`plugin version  : ${headVersion ?? '(unreadable)'}`);
+if (behind > 0) {
+  console.log(`stale checkout  : this working tree is ${behind} commit(s) behind ${ref.want};`);
+  console.log(`                  measuring ${ref.want}, not the tree.`);
+}
 
 if (!bump) {
   console.log('last version bump: NONE FOUND in history');

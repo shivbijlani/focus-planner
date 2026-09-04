@@ -638,4 +638,9 @@ jobs:
       - name: Plugin content has not changed since the last version bump
         env:
           OA_PLUGIN_REPO: ${{ github.workspace }}
+          # Pinned to HEAD because here the subject IS this pull request. The nightly
+          # `run-sweeps.ps1` pins the same sweep to origin/main instead, because there the
+          # subject is what is shipped -- and it runs against a working tree nothing
+          # updates, which had it reporting a permanently-red wrong number until 2026-09-04.
+          OA_PLUGIN_REF: HEAD
         run: node ./plugins/overnight-agent/checks/version-bump-sweep.mjs

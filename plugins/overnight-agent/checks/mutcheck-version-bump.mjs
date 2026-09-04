@@ -66,11 +66,13 @@ function makeRepo(name, commits) {
   return root;
 }
 
-function runSweep(sweepPath, repo) {
+function runSweep(sweepPath, repo, extraEnv = {}) {
   try {
     const out = execFileSync(process.execPath, [sweepPath], {
       encoding: 'utf8',
-      env: { ...process.env, OA_PLUGIN_REPO: repo },
+      // OA_PLUGIN_REF/FETCH are cleared unless a fixture sets them, so a value inherited
+      // from the shell that launched this harness cannot silently change what is measured.
+      env: { ...process.env, OA_PLUGIN_REF: '', OA_PLUGIN_FETCH: '', OA_PLUGIN_REPO: repo, ...extraEnv },
     });
     return { code: 0, out };
   } catch (err) {
@@ -173,11 +175,75 @@ const fixtures = [
     expect: (r) => r.code === 1 && /no version-change commit/.test(r.out),
     why: 'nothing to compare against is not the same as nothing wrong',
   },
+  {
+    // g5 -- MEASURE A REF, NOT A PATH. The live defect (GH #485): the nightly suite runs
+    // from the flat OA home, so the sweep falls through to the known checkout, which
+    // nothing pulls. On 2026-09-04 that tree sat 11 commits behind origin/main and the
+    // sweep read "1.18.0, 9 commits" while the shipped truth was "1.19.0, 0". A stale tree
+    // can never observe the bump that fixes it, so the finding is PERMANENTLY red and no
+    // correct action clears it -- which is how a real signal gets skimmed, then switched off.
+    //
+    // The fixture is that exact shape: the working tree is checked out at the OLD commit
+    // while the branch ref carries the bump. Reading the tree flags; reading the ref is clean.
+    name: 'g5-measures-the-ref-not-the-working-tree',
+    guards: ['g5'],
+    commits: [
+      { msg: 'init', files: { [PLUGIN_JSON]: pluginJson('1.0.0'), [SKILL]: 'a\n' } },
+      { msg: 'change the plugin', files: { [SKILL]: 'b\n' } },
+      { msg: 'bump with the change', files: { [PLUGIN_JSON]: pluginJson('1.1.0'), [SKILL]: 'c\n' } },
+    ],
+    // Detach the WORKING TREE one commit back, leaving the branch (and the bump) ahead.
+    extra: (root) => git(root, ['checkout', '-q', 'HEAD~1']),
+    env: { OA_PLUGIN_REF: 'BRANCH' },
+    expect: (r) => r.code === 0 && /commits since\s*:\s*0/.test(r.out),
+    why: 'a tool must resolve "the repo" to a ref, not to a path that nothing updates',
+  },
+  {
+    // g6 -- A FAILED FETCH IS NOT A PASS. Measuring a remote-tracking ref without
+    // refreshing it only MOVES the staleness to the layer where it is invisible, so the
+    // nightly caller asks for a fetch. When that fetch cannot run -- offline, dead remote --
+    // the ref on disk is of unknown age, and answering OK from it is precisely the false
+    // green this file exists to prevent. It must degrade to NOT MEASURED instead.
+    name: 'g6-unfetchable-remote-is-not-measured-not-ok',
+    // Guarded by BOTH, and that is a real dependency rather than bookkeeping: the fetch
+    // only happens for a ref containing '/', so honouring OA_PLUGIN_REF (g5) is a
+    // precondition for the fetch path (g6) existing at all. Forcing the ref back to HEAD
+    // therefore removes this fixture's behaviour too. Declared instead of loosening the
+    // collateral assertion, so the harness still refuses any movement that is NOT declared.
+    guards: ['g5', 'g6'],
+    commits: [
+      { msg: 'init', files: { [PLUGIN_JSON]: pluginJson('1.0.0'), [SKILL]: 'a\n' } },
+      { msg: 'bump with the change', files: { [PLUGIN_JSON]: pluginJson('1.1.0'), [SKILL]: 'b\n' } },
+    ],
+    // A remote that cannot possibly resolve. The repo is otherwise CLEAN, so a sweep that
+    // ignored the failed fetch would confidently print OK -- which is exactly the bug.
+    extra: (root) => git(root, ['remote', 'add', 'origin', 'file:///nonexistent-remote-xyz']),
+    env: { OA_PLUGIN_REF: 'origin/main', OA_PLUGIN_FETCH: '1' },
+    expect: (r) => r.code === 1 && /NOT MEASURED/.test(r.out) && /could not fetch/.test(r.out),
+    why: 'a ref of unknown age is not seeing, and blindness must never read as health',
+  },
 ];
 
 // --- baseline -------------------------------------------------------------------------
+
+/**
+ * Per-fixture env, with `BRANCH` resolved to whatever `git init` actually named the default
+ * branch. Hardcoding `master` or `main` here would make this harness pass or fail on the
+ * git version of the host rather than on the sweep -- and it would fail on the Linux runner
+ * or the Windows laptop but not both, which is the least useful kind of red.
+ */
+function resolveFixtureEnv(f, repo) {
+  if (!f.env) return {};
+  const out = {};
+  for (const [k, v] of Object.entries(f.env)) {
+    out[k] = v === 'BRANCH' ? (git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']) || 'master').trim() : v;
+  }
+  return out;
+}
+
 console.log('--- baseline (real sweep on each fixture) ---');
 const repos = {};
+const fixtureEnv = {};
 for (const f of fixtures) {
   if (f.commits === null) {
     const root = path.join(tmpRoot, f.name);
@@ -185,9 +251,13 @@ for (const f of fixtures) {
     repos[f.name] = root;
   } else {
     repos[f.name] = makeRepo(f.name, f.commits);
+    // Resolved BEFORE `extra`, because g5's extra detaches HEAD on purpose and
+    // `rev-parse --abbrev-ref HEAD` would then answer "HEAD" rather than the branch.
+    fixtureEnv[f.name] = resolveFixtureEnv(f, repos[f.name]);
     if (f.extra) f.extra(repos[f.name]);
   }
-  const r = runSweep(SWEEP, repos[f.name]);
+  fixtureEnv[f.name] ??= resolveFixtureEnv(f, repos[f.name]);
+  const r = runSweep(SWEEP, repos[f.name], fixtureEnv[f.name]);
   const ok = f.expect(r);
   console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${f.name}`);
   if (!ok) failures.push(`baseline ${f.name}: exit=${r.code}\n${r.out}`);
@@ -245,6 +315,28 @@ const mutations = [
       "['diff', '--name-only', `${bump.commit}..${head}`]",
     ),
   },
+  {
+    // Ignore OA_PLUGIN_REF and go back to reading the working tree -- the #485 behaviour,
+    // restored exactly. This is the mutation that matters most here, because the bug it
+    // models produced a CONFIDENT WRONG RED that no correct action could clear.
+    guard: 'g5',
+    label: 'ignore OA_PLUGIN_REF and measure the working tree again',
+    apply: (s) => s.replace(
+      "  const want = (process.env.OA_PLUGIN_REF || 'HEAD').trim();",
+      "  const want = 'HEAD';",
+    ),
+  },
+  {
+    // Treat an unfetchable remote as fine and answer from a ref of unknown age. The repo in
+    // that fixture is otherwise clean, so the mutant prints a confident OK -- the false
+    // green, which is the silent direction and the one that actually gets believed.
+    guard: 'g6',
+    label: 'a failed fetch is ignored and the stale ref is measured anyway',
+    apply: (s) => s.replace(
+      '      return { want, sha: null, stale: `could not fetch ${remote}/${branch}` };',
+      '      void 0;',
+    ),
+  },
 ];
 
 console.log('');
@@ -261,7 +353,7 @@ for (const m of mutations) {
 
   const broke = [];
   for (const f of fixtures) {
-    const r = runSweep(mutPath, repos[f.name]);
+    const r = runSweep(mutPath, repos[f.name], fixtureEnv[f.name]);
     if (!f.expect(r)) broke.push(f.name);
   }
 
