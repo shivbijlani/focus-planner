@@ -96,6 +96,14 @@ $ErrorActionPreference = 'Stop'
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
 if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
 
+# Launch the host that actually EXISTS here. `powershell` is Windows-only, so hardcoding it makes
+# the guard die on the Linux runner with "The term 'powershell' is not recognized". This file
+# never ran in CI until #501 wired it in, which is why it still had the Windows-only spelling.
+# Same idiom as mutcheck-cadence-rearm.ps1: under Core, re-launch the very executable running
+# this script; under 5.1, `powershell`.
+$script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
+if (-not $script:PsExe) { $script:PsExe = 'pwsh' }
+
 $script:pass = 0
 $script:fail = 0
 function Ok   { param([string]$n, [string]$m = '') $script:pass++; Write-Host ("  ok    {0} {1}" -f $n, $m) }
@@ -204,7 +212,7 @@ function New-Sandbox {
 
 function Invoke-Oa {
   param([string]$Subject, $Sx, [string[]]$OaArgs)
-  return (& powershell -NoProfile -ExecutionPolicy Bypass -File $Subject @OaArgs `
+  return (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File $Subject @OaArgs `
     -JournalDir $Sx.JDir -StateDir $Sx.SDir -PlannerBoard $Sx.Board -PlannerCompleted $Sx.Done -SnoozeStore $Sx.Store 2>&1)
 }
 

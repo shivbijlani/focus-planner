@@ -24,6 +24,12 @@ $ErrorActionPreference = 'Stop'
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
 if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
 
+# Launch the host that actually EXISTS here. `powershell` is Windows-only, so hardcoding it makes
+# this die on the Linux runner with "The term 'powershell' is not recognized". These fixtures
+# never ran in CI until #501 wired them in. Same idiom as mutcheck-cadence-rearm.ps1.
+$script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
+if (-not $script:PsExe) { $script:PsExe = 'pwsh' }
+
 $AgentBlock = @'
 # Task {ID}: synthetic
 
@@ -136,7 +142,9 @@ $cases = [ordered]@{
   '917' = @{ entries = @($danceTurn);                     block = $UnstampedBlock; new = $false; old = $true;  why = 'sibling turn, unstamped block -> quiet' }
 }
 
-$root = Join-Path $env:TEMP ("oa-mutcheck-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+# `[IO.Path]::GetTempPath()`, not `$env:TEMP`: TEMP is unset on the Linux runner, so Join-Path
+# would throw on a null base before a single fixture ran.
+$root = Join-Path ([IO.Path]::GetTempPath()) ("oa-mutcheck-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $jdir = Join-Path $root 'journal'
 $sdir = Join-Path $root 'state'
 New-Item -ItemType Directory -Path $jdir -Force | Out-Null
@@ -148,8 +156,8 @@ try {
     New-Journal -Dir $jdir -Id $id -Entries $cases[$id].entries -Block $block
   }
 
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath seed -JournalDir $jdir -StateDir $sdir | Out-Null
-  $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath scan -JournalDir $jdir -StateDir $sdir
+  & $script:PsExe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath seed -JournalDir $jdir -StateDir $sdir | Out-Null
+  $raw = & $script:PsExe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath scan -JournalDir $jdir -StateDir $sdir
   $rows = ($raw -join "`n") | ConvertFrom-Json
   $byId = @{}
   foreach ($r in $rows) { $byId["$($r.id)"] = $r }
