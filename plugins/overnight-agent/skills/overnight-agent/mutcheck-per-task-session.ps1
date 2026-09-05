@@ -1,4 +1,4 @@
-﻿<#
+<#
   mutcheck-per-task-session.ps1 -- mutation check for #404: a per-task session, in its own
   workspace, persisted across runs, and paced by the #391 concurrency setting.
 
@@ -432,6 +432,43 @@ Check 'V created_at survives two round-trips as ISO' {
 Check 'V- last_woken_at is stamped, and ISO' {
   $stored -match '"last_woken_at"\s*:\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'
 }
+
+# --- W: `-SessionWoken` on the wrong subcommand REFUSES (GH #532) -----------------------
+#
+# `$SessionWoken` sits in the SHARED param block, so PowerShell binds it for every subcommand,
+# but only `Cmd-Session` reads it. `mark -SessionWoken` therefore parsed, did nothing and exited
+# 0 -- and that silence is worse than a wrong answer, because an empty `last_woken_at` afterwards
+# cannot be distinguished from never having called it at all. Five of the eight tasks holding
+# live sessions were in exactly that state when this arm was written.
+#
+# Acts on 807 because $storedPath is 807: an arm that reads one task while acting on another
+# passes trivially, which is exactly how the first draft of W- reported green.
+#
+# The arm asserts REFUSAL rather than stamping on purpose. Making `mark` stamp would hand the
+# turn author a second lever to reset its own wake window (#514), and G12 judges that author.
+$wokeBefore = if (Test-Path $storedPath) {
+  ([regex]::Match([IO.File]::ReadAllText($storedPath), '"last_woken_at"\s*:\s*"([^"]*)"')).Groups[1].Value
+} else { '' }
+[void](Invoke-Oa @('mark', '-Id', '807', '-SessionWoken'))
+$wokeExit = $script:LastOaExit
+$wokeAfter = if (Test-Path $storedPath) {
+  ([regex]::Match([IO.File]::ReadAllText($storedPath), '"last_woken_at"\s*:\s*"([^"]*)"')).Groups[1].Value
+} else { '' }
+
+Check 'W mark -SessionWoken refuses instead of exiting 0' { $wokeExit -ne 0 }
+# The load-bearing half: refusing must also mean CHANGING NOTHING. A refusal that still wrote
+# would be the #514 lever wearing an error message.
+Check 'W- a refused mark -SessionWoken leaves the stamp untouched' { $wokeAfter -eq $wokeBefore }
+# Discrimination: the CORRECT call must keep working, or this trades one broken path for another.
+[void](Invoke-Oa @('session', '-Id', '807', '-SessionWoken'))
+$sessExit = $script:LastOaExit
+$wokeVia = if (Test-Path $storedPath) {
+  ([regex]::Match([IO.File]::ReadAllText($storedPath), '"last_woken_at"\s*:\s*"([^"]*)"')).Groups[1].Value
+} else { '' }
+Check 'W-- session -SessionWoken still stamps' { $sessExit -eq 0 -and $wokeVia -ne '' }
+# ...and an ordinary mark is unaffected, so the refusal is scoped to the flag and not the verb.
+[void](Invoke-Oa @('mark', '-Id', '807', '-Status', 'in-progress'))
+Check 'W--- an ordinary mark still succeeds' { $script:LastOaExit -eq 0 }
 
 # --- report ---------------------------------------------------------------------------
 $pass = 0; $fail = 0
