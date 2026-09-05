@@ -1,0 +1,329 @@
+/*
+ * First-run tutorial — styles tuned for iPhone 13 mini (375 × 812).
+ * Dark navy palette matches the app shell (#1a1a2e / #16213e / #0f3460, accent #e94560).
+ * Touch targets ≥ 44px; safe-area insets respected; no horizontal scroll.
+ */
+
+.fp-tour {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(120% 80% at 50% -10%, rgba(99, 102, 241, 0.18), transparent 60%),
+    #1a1a2e;
+  color: #e8ecf6;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+  overflow: hidden;
+}
+
+/* ---- Header + progress -------------------------------------------------- */
+.tour-header {
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.tour-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.tour-kicker {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #8ea2c9;
+}
+.tour-skip {
+  background: none;
+  border: none;
+  color: #8ea2c9;
+  font-size: 14px;
+  padding: 8px;
+  min-height: 44px;
+}
+.tour-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.tour-progress-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.tour-progress-fill {
+  height: 100%;
+  width: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #6366f1, #e94560);
+  transform-origin: left center;
+  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.tour-progress-label {
+  font-size: 12px;
+  color: #8ea2c9;
+  font-variant-numeric: tabular-nums;
+}
+.tour-checklist {
+  list-style: none;
+  display: flex;
+  gap: 8px;
+  padding: 12px 0 2px;
+  margin: 0;
+}
+.tour-check {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 17px;
+  opacity: 0.55;
+  transition: all 0.25s ease;
+}
+.tour-check.is-active {
+  opacity: 1;
+  background: rgba(99, 102, 241, 0.25);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.5);
+}
+.tour-check.is-done {
+  opacity: 1;
+  background: rgba(46, 204, 113, 0.16);
+}
+
+/* ---- Stage -------------------------------------------------------------- */
+.tour-stage {
+  position: relative;
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 14px 16px 8px;
+}
+.tour-board { display: flex; flex-direction: column; gap: 8px; }
+.tour-section-label {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #7f93bb;
+  margin: 6px 2px 2px;
+}
+.today-label { margin-top: 14px; }
+
+/* Priority chips */
+.tour-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.tour-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e8ecf6;
+  border: 1.5px solid transparent;
+  background: #0f3460;
+}
+.tour-chip.ghost {
+  background: transparent;
+  border: 1.5px dashed rgba(142, 162, 201, 0.5);
+  color: #9fb2d6;
+}
+.tour-chip.committed {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.35), rgba(233, 69, 96, 0.25));
+  border-color: rgba(99, 102, 241, 0.6);
+}
+.chip-emoji { font-size: 15px; }
+.chip-star { color: #f2c94c; margin-left: 2px; }
+
+/* Task cards */
+.tour-task-list { display: flex; flex-direction: column; gap: 8px; }
+.tour-task {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px;
+  border-radius: 14px;
+  background: #16213e;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  text-align: left;
+  color: inherit;
+}
+.tour-task.primary {
+  background: linear-gradient(135deg, rgba(233, 69, 96, 0.1), #16213e 60%);
+}
+.tour-task.ghost-task {
+  background: transparent;
+  border: 1.5px dashed rgba(142, 162, 201, 0.5);
+}
+.task-eisenhower { font-size: 16px; }
+.task-main { flex: 1; min-width: 0; }
+.task-name { font-size: 15px; font-weight: 600; }
+.task-tag {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: rgba(46, 204, 113, 0.14);
+  color: #7ee0a6;
+}
+.task-tag.ghost { background: rgba(142, 162, 201, 0.12); color: #9fb2d6; }
+.task-actions { display: flex; gap: 6px; }
+.task-icon-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 18px;
+  color: inherit;
+}
+.task-icon-btn.ai { background: rgba(99, 102, 241, 0.16); }
+.tour-empty-hint { color: #6b7ca3; font-size: 13px; padding: 8px 2px; }
+
+/* Journal */
+.tour-journal { display: flex; flex-direction: column; gap: 10px; }
+.journal-head { display: flex; align-items: center; gap: 8px; }
+.journal-back {
+  background: none;
+  border: none;
+  color: #8ea2c9;
+  font-size: 15px;
+  min-height: 44px;
+  padding: 8px 4px;
+}
+.journal-title { font-size: 15px; font-weight: 600; }
+.journal-thread { display: flex; flex-direction: column; gap: 8px; }
+.bubble {
+  max-width: 85%;
+  padding: 10px 12px;
+  border-radius: 14px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.bubble.me {
+  align-self: flex-end;
+  background: linear-gradient(135deg, #0f3460, #163a6e);
+  border-bottom-right-radius: 4px;
+}
+.todo-bubble { display: flex; flex-direction: column; gap: 8px; }
+.todo-line { display: flex; align-items: center; gap: 8px; }
+.todo-line input { width: 18px; height: 18px; }
+.promote-btn,
+.journal-add-todo {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(99, 102, 241, 0.5);
+  background: rgba(99, 102, 241, 0.16);
+  color: #cdd6f4;
+  font-size: 14px;
+  font-weight: 600;
+}
+.journal-add-todo { margin-top: 2px; }
+
+/* ---- Coach mark --------------------------------------------------------- */
+.tour-coach {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 8px 12px calc(12px + env(safe-area-inset-bottom));
+  padding: 14px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(233, 69, 96, 0.12));
+  border: 1px solid rgba(99, 102, 241, 0.35);
+}
+.coach-icon { font-size: 22px; }
+.coach-title { font-size: 15px; font-weight: 700; }
+.coach-text { font-size: 13px; color: #c3cfe8; margin-top: 2px; line-height: 1.4; }
+
+/* ---- Flash / celebration ------------------------------------------------ */
+.tour-flash {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: rgba(46, 204, 113, 0.92);
+  color: #062;
+  font-weight: 700;
+  font-size: 13px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  animation: flash-pop 0.3s ease;
+}
+@keyframes flash-pop {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* ---- Pulse hint --------------------------------------------------------- */
+.pulse { position: relative; }
+.pulse::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: inherit;
+  box-shadow: 0 0 0 0 rgba(233, 69, 96, 0.6);
+  animation: pulse-ring 1.6s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(233, 69, 96, 0.55); }
+  70% { box-shadow: 0 0 0 12px rgba(233, 69, 96, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(233, 69, 96, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pulse::after { animation: none; }
+  .tour-progress-fill { transition: none; }
+}
+
+/* ---- Welcome back / graduation ------------------------------------------ */
+.tour-welcome-back,
+.tour-grad {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 20px calc(24px + env(safe-area-inset-bottom));
+}
+.tour-welcome-back h2,
+.tour-grad h2 { font-size: 22px; margin: 6px 0 10px; }
+.wb-list,
+.grad-list { list-style: none; padding: 0; margin: 12px 0; display: flex; flex-direction: column; gap: 8px; }
+.wb-list li,
+.grad-list li { font-size: 15px; display: flex; align-items: center; gap: 8px; color: #b9c4de; }
+.wb-list li.done { color: #e8ecf6; }
+.wb-next { margin-top: 12px; color: #c3cfe8; }
+.grad-note { color: #9fb2d6; font-size: 14px; margin-top: 10px; line-height: 1.5; }
+.grad-confetti { font-size: 46px; }
+.grad-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
+
+.tour-primary {
+  width: 100%;
+  min-height: 50px;
+  border-radius: 14px;
+  border: none;
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #6366f1, #e94560);
+}
+.tour-ghost-btn {
+  width: 100%;
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: #c3cfe8;
+  font-size: 15px;
+}
