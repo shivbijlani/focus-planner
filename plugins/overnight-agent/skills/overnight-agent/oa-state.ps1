@@ -3453,12 +3453,38 @@ function Read-ObservedComments([string]$path) {
   # tidy one is a reader that gets bypassed:
   #   * a JSON array of { id, created } (what a caller with structured data has), or
   #   * the Google Workspace MCP's `list_document_comments` text dump (what the live surface
-  #     actually hands back today).
-  # Ids are matched the same way in both, so the two paths cannot disagree about identity.
+  #     actually hands back today) -- bare, OR still inside the MCP's JSON envelope.
+  # Ids are matched the same way in all of them, so the paths cannot disagree about identity.
+  #
+  # WHY THE ENVELOPE IS HANDLED HERE, AND WHY "0 ROWS" IS NEVER TRUSTED (GH #502)
+  # ----------------------------------------------------------------------------
+  # The MCP does not hand back the bare dump. It hands back `{ content: [ { text } ],
+  # structuredContent: { result } }`, with the dump's newlines escaped as literal `\n` two-character
+  # sequences inside the JSON string. That file starts with `{`, so it took the JSON branch, parsed
+  # fine, contained no top-level `id` -- and returned ZERO rows. `-Observe` then reported
+  # `new_comments: 0`, which is byte-identical to "the user said nothing".
+  #
+  # Measured live 2026-09-04 on task #228, whose doc is Shiv's PRIMARY communication channel
+  # (#468): the document held 17 comments, one of them posted 24 minutes earlier
+  # ("dont care, drop from this doc, other events are low pri"), the ledger had seen 16 -- and
+  # `-Observe` on the MCP's own output reported `new_comments: 0`. Re-parsed by hand into the
+  # array shape, the same observation reported 9. The instruction was not dropped by luck alone.
+  #
+  # This is the #346 defect class -- a reader that CANNOT read is indistinguishable from a surface
+  # with nothing on it -- landing on the one channel where a dropped message is an instruction the
+  # user believes was received. So there are two independent fixes, not one:
+  #   1. unwrap the envelope and un-escape the dump, so the live shape parses; and
+  #   2. NEVER let an empty JSON result stand while the raw text plainly names comments. Fix (1)
+  #      alone would break again the next time the MCP changes its envelope shape; fix (2) fails
+  #      toward re-reading a comment, which costs a duplicate answer, rather than toward silence,
+  #      which costs an instruction.
   if (-not (Test-Path $path)) { throw "no such observation file: $path" }
   $text = [IO.File]::ReadAllText($path, (New-Object Text.UTF8Encoding($false)))
   $rows = @()
   $trimmed = $text.Trim()
+  # The dump text to fall back on. Normally the file itself; when the file is an MCP envelope,
+  # the payload lifted out of it (with escaped newlines restored so the line parser can see them).
+  $dumpText = $text
   if ($trimmed.StartsWith('[') -or $trimmed.StartsWith('{')) {
     try {
       $parsed = $trimmed | ConvertFrom-Json
@@ -3470,7 +3496,20 @@ function Read-ObservedComments([string]$path) {
           created = if ($e.PSObject.Properties['created']) { "$($e.created)" } else { '' }
         }
       }
-      return , $rows
+      if ($rows.Count -gt 0) { return , $rows }
+      # Zero rows from a well-formed JSON document. Before believing that, look for the MCP
+      # envelope's payload and hand it to the dump parser below.
+      $payload = @()
+      if ($parsed -and $parsed.PSObject.Properties['content']) {
+        foreach ($c in @($parsed.content)) {
+          if ($c -and $c.PSObject.Properties['text'] -and "$($c.text)") { $payload += "$($c.text)" }
+        }
+      }
+      if ($parsed -and $parsed.PSObject.Properties['structuredContent']) {
+        $sc = $parsed.structuredContent
+        if ($sc -and $sc.PSObject.Properties['result'] -and "$($sc.result)") { $payload += "$($sc.result)" }
+      }
+      if ($payload.Count -gt 0) { $dumpText = ($payload -join "`n") }
     }
     catch {
       # Fall through to the dump parser: a JSON-looking file that does not parse is far more
@@ -3478,21 +3517,48 @@ function Read-ObservedComments([string]$path) {
       # over, and the dump parser simply finds nothing if it really was malformed JSON.
     }
   }
-  $lines = $text -split "`r?`n"
-  $cur = $null
-  foreach ($ln in $lines) {
-    $m = [regex]::Match($ln, '^\s*(?:Comment|Reply)\s+ID:\s*(\S+)\s*$')
-    if ($m.Success) {
-      if ($cur) { $rows += $cur }
-      $cur = [pscustomobject]@{ id = $m.Groups[1].Value; created = '' }
-      continue
+  # Restore newlines that survived JSON encoding as the two characters `\` `n`.
+  #
+  # This is deliberately NOT keyed on "the text has no real newlines". Measured on the live #228
+  # dump: the payload contains BOTH -- escaped `\n` between every field, and a real newline inside
+  # at least one comment body -- so any "only if there are no real newlines" guard silently
+  # declines to un-escape exactly the input that needs it. The rule that holds is behavioural:
+  # parse first, and only un-escape when the parse found nothing while the text plainly names
+  # comments. That fails toward re-reading, never toward silence.
+  $parseDump = {
+    param([string]$src)
+    $acc = @()
+    $cur2 = $null
+    foreach ($ln in ($src -split "`r?`n")) {
+      $m = [regex]::Match($ln, '^\s*(?:Comment|Reply)\s+ID:\s*(\S+?)\s*$')
+      if ($m.Success) {
+        if ($cur2) { $acc += $cur2 }
+        $cur2 = [pscustomobject]@{ id = $m.Groups[1].Value; created = '' }
+        continue
+      }
+      if ($cur2) {
+        $c = [regex]::Match($ln, '^\s*Created:\s*(.+?)\s*$')
+        if ($c.Success -and -not $cur2.created) { $cur2.created = $c.Groups[1].Value }
+      }
     }
-    if ($cur) {
-      $c = [regex]::Match($ln, '^\s*Created:\s*(.+?)\s*$')
-      if ($c.Success -and -not $cur.created) { $cur.created = $c.Groups[1].Value }
-    }
+    if ($cur2) { $acc += $cur2 }
+    # Emitted WITHOUT the array-wrapping comma operator on purpose. `, $acc` from a scriptblock
+    # survives `@(& $parseDump ...)` as ONE element that is itself the array, so `$rows.Count` read
+    # 1 for every input -- which silently disabled the un-escape fail-safe below and produced a
+    # single phantom row with a null id. Plain emission unrolls, so Count means what it says.
+    $acc
   }
-  if ($cur) { $rows += $cur }
+
+  $rows = @(& $parseDump $dumpText)
+  if ($rows.Count -eq 0 -and $dumpText -match 'Comment ID:') {
+    $rows = @(& $parseDump ($dumpText -replace '\\r\\n', "`n" -replace '\\n', "`n"))
+  }
+  # De-duplicate by id, keeping first occurrence. The MCP envelope carries the SAME dump twice --
+  # once in `content[].text` and again in `structuredContent.result` -- and both are read, because
+  # relying on whichever one happens to be populated is how this reader went blind in the first
+  # place. Reading both and de-duplicating is strictly safer than picking one and being wrong.
+  $seenIds = New-Object 'System.Collections.Generic.HashSet[string]'
+  $rows = @($rows | Where-Object { $_ -and "$($_.id)" -ne '' -and $seenIds.Add("$($_.id)") })
   return , $rows
 }
 
