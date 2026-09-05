@@ -113,6 +113,12 @@ regardless of internal structure.
   prose, and an unroutable reply must be reported, never silently discarded.
 - A catch-up-doc link must replace the per-turn post and stay quiet across repeated unchanged runs,
   updating in place rather than stacking a second notice when the ask changes.
+- A retraction (only when the turn explicitly states one, never inferred) must correct the notice
+  in place, striking the original ask through above the reason; a merely resolved ask must be left
+  untouched, and the message id must still be forgotten afterwards so a returning ask posts as new.
+- Turns stranded above a task's catch-up-doc link must be collapsed to a one-line pointer in place,
+  never deleted; collapsing is on by default, carries forward any links the original message held,
+  never touches a message the user has replied to, and retries a message whose edit failed.
 
 ## Task papers
 

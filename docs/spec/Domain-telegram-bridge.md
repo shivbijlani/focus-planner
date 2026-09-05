@@ -25,7 +25,9 @@ active tasks.
 
 ## Public surface (representative exports)
 
-`createBridge, blockingAsk, terminalStatus, hashTurn` (`bridge.js`); `buildDigest, extractAsk,
+`createBridge, blockingAsk, terminalStatus, hashTurn, formatDocLink, formatDocNotice,
+formatDocRetraction, formatCollapsedTurn, retractedAsk, splitAsk, formatForTelegramParts, hashNotice`
+(`bridge.js`); `buildDigest, extractAsk,
 extractAskEntry, hashDigest` (`digest.js`); `boardRank, boardIndex, parseBoardOrder` (`board.js`);
 `liveStatus, digestStatus, normaliseStatus` (`liveStatus.js`); `latestAgentTurn, agentBlockStatus,
 appendUserReply, hasAgentBlock` (`journal.js`); `parseReplyRouting, coalesceByTask` (`routeReply.js`);
@@ -57,6 +59,25 @@ appendUserReply, hasAgentBlock` (`journal.js`); `parseReplyRouting, coalesceByTa
   (dollar amounts, slot numbers, years) — an unroutable reply is reported, never silently discarded.
 - **The catch-up-doc link replaces the per-turn post and stays quiet** across repeated unchanged runs
   (issue #424), updating in place rather than stacking a second notice when the ask changes.
+- **A retraction corrects the notice in place; a resolution never touches it again** (issue #424): a
+  resolved ask deliberately leaves its notice standing and forgets the message id — rewriting it later
+  would rewrite history the user may already have acted on. A retraction (the turn explicitly states
+  the ask no longer stands, never inferred from a dismissive or absent `Retracts` line) is different:
+  the ask could not have been actionable, so leaving it stand is what would misrepresent history.
+  `formatDocRetraction` edits the notice to show the original ask struck through above the reason,
+  annotating rather than deleting; the message id is still forgotten afterwards, so a returning ask is
+  still posted as a new message.
+- **Turns stranded above a task's catch-up-doc link are collapsed in place, never deleted** (issues
+  #483/#521): once a doc link is posted, earlier turns for that task are edited down to a one-line
+  pointer (`formatCollapsedTurn`) rather than removed, because deleting the user's own messages sits on
+  the agent-gate floor ("outcome can result in permanent data loss") and cannot legitimately fire even
+  under an explicit approval. Collapsing is not data loss — the collapsed text is a mirror of a journal
+  turn the bridge re-reads every run — so it needs no consent and defaults ON
+  (`TELEGRAM_BRIDGE_COLLAPSE_BOUND`, off only for explicit `off`/`false`/`0`/`no`); the separate delete
+  path (`TELEGRAM_BRIDGE_TIDY_BOUND`) is unchanged and unreachable in practice. Any links the original
+  message carried are re-emitted in the pointer so they are not lost from the phone entirely; a message
+  the user has replied to is frozen and never collapsed, and a message whose edit fails is remembered so
+  a later run can retry it.
 
 ## Failure modes this domain guards against
 
