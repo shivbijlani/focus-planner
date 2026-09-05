@@ -111,10 +111,68 @@ const G = `# Task fixture — key and claim in different bullets
 - Separately, option 7 comes in with nothing unpaid.
 `;
 
+const MOON = '\u{1F319}';
+
+// H (negative): a JOURNAL whose contradiction sits in a SUPERSEDED turn. Append-only means no
+//    sanctioned operation can edit it, so demanding a fix would pin a permanent finding (#499).
+const H = `# Task fixture — superseded journal turn
+
+| | |
+| --- | --- |
+| Kiley's leave | 4 days paid, then unpaid |
+
+## ${MOON} Overnight Agent — an older turn
+
+<!-- from: overnight-agent -->
+
+**Business days Kiley spends: exactly 5** (Mon 16 -> Fri 20). That is her allowance with nothing
+unpaid.
+
+<!-- /overnight-agent turn-end -->
+
+## ${MOON} Overnight Agent — the newest turn
+
+<!-- from: overnight-agent -->
+
+Nothing to report on leave this time.
+
+<!-- /overnight-agent turn-end -->
+`;
+
+// I (positive): the same contradiction, but in the NEWEST turn -- current, fixable, a finding.
+const I = `# Task fixture — current journal turn
+
+| | |
+| --- | --- |
+| Kiley's leave | 4 days paid, then unpaid |
+
+## ${MOON} Overnight Agent — an older turn
+
+<!-- from: overnight-agent -->
+
+Priced a few shapes, nothing decided.
+
+<!-- /overnight-agent turn-end -->
+
+## ${MOON} Overnight Agent — the newest turn
+
+<!-- from: overnight-agent -->
+
+**Business days Kiley spends: exactly 5** (Mon 16 -> Fri 20). That is her allowance with nothing
+unpaid.
+
+<!-- /overnight-agent turn-end -->
+`;
+
 const fixtures = { A, B, C, D, E, F, G };
 for (const [k, v] of Object.entries(fixtures)) {
   fs.writeFileSync(path.join(jdir, `task-90${k.charCodeAt(0) - 64}-fixture-${k}.md`), v, 'utf8');
 }
+// H and I must be JOURNAL filenames (`task-<ID>.md`, no slug), because that is what selects the
+// newest-turn scoping. Writing them with a slug would silently test the deliverable path instead
+// and both arms would pass for the wrong reason.
+fs.writeFileSync(path.join(jdir, 'task-911.md'), H, 'utf8');
+fs.writeFileSync(path.join(jdir, 'task-912.md'), I, 'utf8');
 
 function run() {
   try {
@@ -142,8 +200,12 @@ const check = (name, fn) => {
   }
 };
 
-const hits = (r, fixture, kind) =>
-  r.findings.filter((f) => f.file.includes(`fixture-${fixture}`) && (!kind || f.kind === kind));
+const hits = (r, fixture, kind) => {
+  // Fixtures A-G are deliverables named `...fixture-<letter>.md`; H/I are real journal names
+  // (`task-911.md`, `task-912.md`) because only that filename shape selects newest-turn scoping.
+  const needle = /^task-/.test(fixture) ? fixture : `fixture-${fixture}`;
+  return (r.findings || []).filter((f) => f.file.includes(needle) && (!kind || f.kind === kind));
+};
 
 // --- baseline -------------------------------------------------------------------------------
 const base = run();
@@ -154,6 +216,12 @@ check('D accurate claim within allowance is QUIET', () => hits(base, 'D').length
 check('E unrelated bullet + unrelated column is QUIET', () => hits(base, 'E').length === 0);
 check('F same sentence but a different quantity is QUIET', () => hits(base, 'F').length === 0);
 check('G key and claim in different bullets is QUIET', () => hits(base, 'G').length === 0);
+// GH #499. `hits` matches on filename, so these use the journal names directly.
+const jhits = (r, name, list = 'findings') => (r[list] || []).filter((f) => f.file.includes(name));
+check('H superseded journal turn is NOT a finding', () => jhits(base, 'task-911').length === 0);
+check('H- but it IS reported as suppressed history', () => jhits(base, 'task-911', 'historical').length === 1);
+check('I newest journal turn IS a finding', () => jhits(base, 'task-912').length === 1);
+check('I- and it is not filed as history', () => jhits(base, 'task-912', 'historical').length === 0);
 
 // --- mutants --------------------------------------------------------------------------------
 // Each removes exactly one narrowing and must revive exactly one negative fixture.
@@ -181,6 +249,12 @@ const mutants = [
     from: '          for (const s of sentences(p.text)) {',
     to: '          for (const s of [p.text]) {',
     revives: 'G',
+  },
+  {
+    name: 'newest-turn boundary widened to ANY turn (GH #499 regression)',
+    from: '  const tag = (f) => ({ ...f, historical: f.line - 1 < claimStart });',
+    to: '  const tag = (f) => ({ ...f, historical: false });',
+    revives: 'task-911',
   },
 ];
 
