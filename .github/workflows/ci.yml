@@ -259,6 +259,44 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-cadence-rearm.ps1
 
+  # Only the USER closes a task, and an unanswered message survives a re-snapshot (GH #501).
+  #
+  # Two defects, one root cause, and both were measured on the live board on 2026-09-04. Task #245
+  # was row 1 of `## Today` in planner.md and absent from planner-completed.md -- the user had never
+  # completed it -- but the AGENT had marked it `done` on 2026-08-31. That self-declared status was
+  # read as though the user had closed the task, so three of Shiv's messages (new requirements, a new
+  # link, a new question) sat unanswered under the turn-end stamp for over a day, and the released
+  # Today gate sent the run to Deferred row 68 instead. He noticed before the machinery did:
+  # "245 is on my today list and it doesn't seem like it's getting picked up."
+  #
+  # The compensating control the design leans on -- "a missed nudge STAYS VISIBLE as
+  # reopened_closed" -- was defeated by an `oa-state mark` 62 seconds after the messages landed,
+  # which re-snapshotted the journal and set `changed` and `reopened_closed` both false. The nudge
+  # was not missed; it was erased.
+  #
+  # Both guards run here because they cover DIFFERENT halves and neither can see the other's hole:
+  # mutcheck-reopened-closed proves the #170 rule still holds for work the user really did close
+  # (and it had never run in CI at all), while mutcheck-agent-declared-done reproduces #245 exactly
+  # -- agent `done`, Today row, three `<!-- from: me -->` messages after the turn-end stamp, and the
+  # `mark` applied AFTER the fold -- and asserts the task is offered rather than silent.
+  #
+  # Hermetic: each builds its own board, completed board, journals and state dir under TEMP, so
+  # nothing here touches the real planner folder and both run unmodified on the Linux runner.
+  agent-declared-done:
+    name: Only the user closes a task
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (a reply on work the USER closed is reported, never worked)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-reopened-closed.ps1
+      - name: Mutation check (#245 -- an agent-declared done must not swallow his messages)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-agent-declared-done.ps1
+      - name: Sibling-skill reopen fixtures still pass
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/oa-state.Tests.ps1
+
   # The catch-up doc skill and Shiv's four doc preferences (GH #441).
   #
   # The preferences used to live in three places -- SKILL.md prose, a skill folder outside the

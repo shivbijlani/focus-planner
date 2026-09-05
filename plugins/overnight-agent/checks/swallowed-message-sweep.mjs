@@ -28,11 +28,43 @@
 //
 // HOW IT DECIDES
 // --------------
-// 1. Only look at journals where the trailing region is INVISIBLE to oa-state.ps1 -- no `## `
-//    heading after the agent's last anchor and no `<!-- /overnight-agent turn-end -->` stamp.
-//    If a boundary exists the reopen machinery can already see the reply, so it is not
-//    swallowed. This is what makes the #218 near-miss a non-candidate on principle rather
-//    than by eye: its raw lowercase prose sits under a `## 2026-07-28` heading.
+// 1. Decide whether the trailing region is one this sweep is responsible for. There are two
+//    ways in, and the second one exists because the first one had a hole:
+//
+//    a. INVISIBLE. No `## ` heading after the agent's last anchor and no
+//       `<!-- /overnight-agent turn-end -->` stamp. oa-state.ps1 cannot see a boundary here, so
+//       nothing else is going to report it. This is what makes the #218 near-miss a
+//       non-candidate on principle rather than by eye: its raw lowercase prose sits under a
+//       `## 2026-07-28` heading.
+//
+//    b. ABSORBED (GH #501, added 2026-09-04). A bounded region -- stamp and headings present --
+//       whose `<!-- from: me -->` block has been BASELINED OVER: the state store's
+//       `processed_file_hash` already equals the journal's current hash, so `changed` is false
+//       and the reopen machinery reads the row as quiet.
+//
+//       This branch exists because step 1a rested on a premise that turned out to be false:
+//       "if a boundary exists the reopen machinery can already see the reply, so it is not
+//       swallowed." On 2026-09-04 this sweep scanned 244 journals and reported
+//       `no unanswered message found at the bottom of any journal` while task-245 held THREE of
+//       Shiv's messages, dated 2026-09-03, under a turn-end stamp. It has both a stamp and `##`
+//       headings, so 1a excluded it by design -- on the explicit assumption that the machinery
+//       had it covered. The machinery had dropped it: the status was an AGENT-declared `done`,
+//       and an `oa-state mark` 62 seconds after the messages landed cleared `changed` and
+//       `reopened_closed`.
+//
+//       The two mechanisms had DISJOINT ASSUMPTIONS AND A SHARED GAP -- this sweep assumed the
+//       reopen machinery handled bounded regions, and the reopen machinery discarded them on
+//       `done`. #245 fell between them for over a day on a Today row. So the premise is now
+//       CHECKED rather than assumed, against the same two files oa-state.ps1 reads.
+//
+//       It is narrowed the same way #501 narrows the main fix, and by the same authority:
+//       SKILL.md's "Completion is the USER's action in the Focus Planner app". A row the USER
+//       closed -- present on planner-completed.md, or on neither board -- is excluded. A row
+//       still sitting on planner.md is open work, whatever the skill's status says, so an
+//       unanswered message on it is reported.
+//
+//       An absorbed hit is `certain` by construction: it carries Shiv's own marker, and the
+//       hash proves a re-snapshot has already run over it. No prose heuristic is involved.
 // 2. Walk up from EOF collecting the trailing block, stopping at a blank line or at a
 //    COMPLETED structural line -- a bullet/heading/bold-lead whose text ends in sentence
 //    punctuation. That qualifier is the whole trick, and both halves were measured:
@@ -67,11 +99,15 @@
 // loses data rather than costing a look.
 //
 // exit 1 = findings.
-import { readdirSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 
 const planner = process.env.PLANNER_PATH || 'C:\\Users\\shiv\\OneDrive\\Apps\\Focus Planner';
+const stateDir =
+  process.env.OA_STATE_DIR ||
+  join(process.env.LOCALAPPDATA || join(process.env.USERPROFILE || '', 'AppData', 'Local'),
+       'overnight-agent', 'state');
 
 const PROV = /^[ \t]*<!--[ \t]*from:[ \t]*([^>\r\n]*?)[ \t]*-->/gm;
 const TURN_END = /^[ \t]*<!--[ \t]*\/overnight-agent[ \t]+turn-end[ \t]*-->[ \t]*$/m;
@@ -188,9 +224,94 @@ function markerIntroducesBlock(between) {
   return t === '' || OUTCOME_LINE.test(t);
 }
 
+// GH #501: the ABSORBED branch. A bounded trailing region still holding one of Shiv's own
+// `<!-- from: me -->` messages, on a row that is still OPEN WORK, which a re-snapshot has
+// already baselined over.
+//
+// `ctx` is what the caller knows about the task from OUTSIDE the journal, because none of it can
+// be read from the file itself:
+//   onBoard        the id has a row on planner.md            (open work)
+//   userCompleted  the id has a row on planner-completed.md  (he closed it, in the app)
+//   absorbed       the state store's processed_file_hash already equals this file's hash, so
+//                  `changed` is false and the reopen machinery reads the row as quiet
+//
+// All three conditions are required, and each one removes a different kind of noise:
+// without `absorbed` this would fire on every live conversation the moment Shiv replies (the
+// machinery is handling those, loudly); without `onBoard`/`userCompleted` it would re-report
+// every completed task he ever answered on.
+function absorbedUserMessage(content, ctx) {
+  if (!ctx || !ctx.absorbed) return null;
+  if (ctx.userCompleted || !ctx.onBoard) return null;
+
+  const sentinel = content.lastIndexOf('OVERNIGHT-AGENT do not edit');
+  let self = -1;
+  for (const m of content.matchAll(PROV)) {
+    if (m[1].trim() === 'overnight-agent') self = m.index;
+  }
+  const anchor = Math.max(self, sentinel, content.lastIndexOf('<!-- oa-state'));
+  if (anchor < 0) return null;
+
+  // The region below the agent's last anchor, and specifically below the last turn-end stamp
+  // when there is one -- that stamp is where `mark` said its turn finished, so anything under it
+  // arrived afterwards.
+  let from = anchor;
+  // `\r?$` rather than `$`: these journals are written with CRLF on Windows, and a bare `$`
+  // under the `m` flag will not match a line that ends `-->\r`. The shipped PowerShell reader
+  // ($script:TurnEndRe) spells it the same way, for the same reason.
+  for (const m of content.slice(anchor).matchAll(/^[ \t]*<!--[ \t]*\/overnight-agent[ \t]+turn-end[ \t]*-->[ \t]*\r?$/gm)) {
+    from = anchor + m.index + m[0].length;
+  }
+  const region = content.slice(from);
+  if (!region.trim()) return null;
+
+  // The FIRST of his messages that no turn of this agent's has been written below -- not the
+  // last. All three of #245's messages are unanswered, and quoting only the newest would report
+  // the smallest part of the loss: the requirement ("3 lines, 2 transferred, 1 net new") and the
+  // programme link are in the earlier two.
+  //
+  // So: find where this agent last spoke inside the region, then take everything of his after
+  // that point. An agent turn below a message is what answering looks like on disk, which is
+  // also the clearing condition -- once one is written, there is no `me` marker after it and
+  // this returns null on its own.
+  let lastAgent = -1;
+  for (const m of region.matchAll(PROV)) {
+    if (m[1].trim() === 'overnight-agent') lastAgent = m.index + m[0].length;
+  }
+  for (const m of region.matchAll(/^[ \t]*##[^\r\n]*Overnight Agent[^\r\n]*$/gm)) {
+    lastAgent = Math.max(lastAgent, m.index + m[0].length);
+  }
+  let firstMine = -1;
+  for (const m of region.matchAll(PROV)) {
+    if (m[1].trim() === 'me' && m.index >= lastAgent) { firstMine = m.index; break; }
+  }
+  if (firstMine < 0) return null;
+
+  const text = region.slice(firstMine).replace(PROV, '').split(/\r?\n/)
+    .map((l) => l.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (!text) return null;
+
+  let heading = '';
+  const before = region.slice(0, firstMine).split(/\r?\n/);
+  for (let h = before.length - 1; h >= 0; h--) {
+    if (/^[ \t]*#{1,6}\s/.test(before[h])) { heading = before[h].trim(); break; }
+  }
+
+  return {
+    text,
+    confidence: 'certain',
+    absorbed: true,
+    heading,
+    afterSignoff: false,
+    above: '(below the turn-end stamp; already baselined over by oa-state mark)',
+  };
+}
+
 // A candidate is trailing prose, inside an invisible region, that the provenance markers or
-// the house-style test say the agent did not write.
-function findSwallowed(content) {
+// the house-style test say the agent did not write -- OR one of his messages in a BOUNDED
+// region that a re-snapshot has already absorbed (#501).
+function findSwallowed(content, ctx) {
+  const absorbed = absorbedUserMessage(content, ctx);
+  if (absorbed) return absorbed;
   if (!trailingRegionInvisible(content)) return null;
   const t = trailingProse(content);
   if (!t) return null;
@@ -248,6 +369,25 @@ Shiv's own notes.
 - Did the thing.
 - Next: complete (pending your one-click send).`;
 
+// Task #245's trailing region, verbatim in shape: three separate `## <date>` entries, each with
+// its own `<!-- from: me -->` marker, carrying new requirements rather than a nudge.
+const MESSAGES_245 = `
+## 2026-09-03
+
+<!-- from: me -->
+Give me link to catch up doc
+
+## 2026-09-03
+
+<!-- from: me -->
+Amy needs 3 lines. 2 can be transferred from my account. 1 net new. They have
+https://www.xfinity.com/support/articles/comcast-broadband-opportunity-program
+
+## 2026-09-03
+
+<!-- from: me -->
+What are options on xfinity, since they can bundle phone and internet`;
+
 const FIXTURES = [
   // The authentic #426580 shape: two questions typed straight under the agent's sign-off,
   // no heading, no marker. Verbatim from the journal.
@@ -301,19 +441,84 @@ const FIXTURES = [
   ['938',
     `${TURN}\n\n<!-- from: me -->\ngo ahead\n\n### Run log\n\n**2026-08-23 (overnight):**\n- Did more of the thing.\n- Nothing bought, nothing booked.\n`,
     false, 'GUARD: a distant from:me marker must not certify the agent\'s own trailing run log'],
+
+  // ---- GH #501: the bounded-but-absorbed class -----------------------------------------
+  // task-245, reproduced: a turn-end stamp AND `## ` headings (so 1a excludes it), three
+  // `<!-- from: me -->` messages beneath, on a row still in planner.md Today, already baselined
+  // over by a `mark`. This is the case that scanned clean on 2026-09-04 while holding three of
+  // Shiv's messages, and it is the reason this file grew a second way in.
+  ['945', `${TURN}\n<!-- /overnight-agent turn-end -->\n${MESSAGES_245}`, true,
+    'the #245 shape: bounded, from:me, on the live board, absorbed by a re-mark',
+    { onBoard: true, userCompleted: false, absorbed: true }],
+
+  // GUARD: the same journal BEFORE the re-snapshot. `changed` is still true, so the reopen
+  // machinery is reporting it loudly right now and this sweep must not double-report.
+  ['946', `${TURN}\n<!-- /overnight-agent turn-end -->\n${MESSAGES_245}`, false,
+    'GUARD: not yet absorbed -- the reopen machinery still sees it',
+    { onBoard: true, userCompleted: false, absorbed: false }],
+
+  // GUARD: the #170 rule, unchanged. Identical journal, but Shiv completed the task in the app,
+  // so the row is on planner-completed.md. Reported by the closed-reply path, not by this one.
+  ['947', `${TURN}\n<!-- /overnight-agent turn-end -->\n${MESSAGES_245}`, false,
+    'GUARD: a task the USER completed is not open work',
+    { onBoard: false, userCompleted: true, absorbed: true }],
+
+  // GUARD: answered. The agent opened a turn BELOW his messages, which is what answering looks
+  // like on disk, so the finding must clear itself without anyone having to say so.
+  ['948',
+    `${TURN}\n<!-- /overnight-agent turn-end -->\n${MESSAGES_245}\n\n## 2026-09-05 Overnight Agent\n\n<!-- from: overnight-agent -->\nHere is the doc link, and the three lines are ordered.\n`,
+    false, 'GUARD: an agent turn below the messages answers them',
+    { onBoard: true, userCompleted: false, absorbed: true }],
 ];
 
 function runFixtures() {
   const failures = [];
-  for (const [id, content, expected, why] of FIXTURES) {
-    const actual = findSwallowed(content) !== null;
+  for (const [id, content, expected, why, ctx] of FIXTURES) {
+    const actual = findSwallowed(content, ctx) !== null;
     if (actual !== expected) failures.push({ id, expected, actual, why });
   }
   return failures;
 }
 
 // ---------------------------------------------------------------------------------------
+// The board and the state store, read exactly as oa-state.ps1 reads them. This is what turns
+// step 1b's premise from an assumption into a check (#501).
+// ---------------------------------------------------------------------------------------
+
+// The same row shape both boards use: `| <id> | ... |`, id in the first cell.
+function boardIds(file) {
+  const ids = new Set();
+  if (!existsSync(file)) return ids;
+  for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const m = /^\s*\|\s*(\d+)\s*\|/.exec(line);
+    if (m) ids.add(m[1]);
+  }
+  return ids;
+}
+
+// `changed` is false when the stored hash already covers the file as it stands -- i.e. a `mark`
+// or `resnapshot` has baselined over whatever is in it, including any unanswered message.
+// A MISSING state file is NOT absorbed: an untracked task is one the machinery has never
+// snapshotted, so nothing has been hidden and this branch has no business firing.
+function isAbsorbed(id, content) {
+  const p = join(stateDir, `task-${id}.json`);
+  if (!existsSync(p)) return false;
+  let st;
+  // STRIP THE BOM. `Write-State` uses `Set-Content -Encoding UTF8`, which under Windows
+  // PowerShell 5.1 emits a BOM, and `JSON.parse` rejects it outright. Without this the parse
+  // throws for EVERY task, the catch returns false, and the whole #501 branch is dead code that
+  // reports a clean sweep -- which is the exact failure mode this branch exists to fix, one
+  // level down. Measured while writing it: 244/244 journals silently took the catch.
+  try { st = JSON.parse(readFileSync(p, 'utf8').replace(/^\uFEFF/, '')); } catch { return false; }
+  if (!st || !st.processed_file_hash) return false;
+  return createHash('sha256').update(content, 'utf8').digest('hex') === st.processed_file_hash;
+}
+
+// ---------------------------------------------------------------------------------------
 const fixtureFailures = runFixtures();
+
+const onBoard = boardIds(join(planner, 'planner.md'));
+const completed = boardIds(join(planner, 'planner-completed.md'));
 
 const jdir = join(planner, 'journal');
 const hits = [];
@@ -321,11 +526,18 @@ let total = 0;
 for (const f of readdirSync(jdir)) {
   if (!/^task-\d+\.md$/.test(f)) continue;
   total += 1;
-  const hit = findSwallowed(readFileSync(join(jdir, f), 'utf8'));
-  if (hit) hits.push({ id: f.replace(/^task-|\.md$/g, ''), ...hit });
+  const id = f.replace(/^task-|\.md$/g, '');
+  const content = readFileSync(join(jdir, f), 'utf8');
+  const hit = findSwallowed(content, {
+    onBoard: onBoard.has(id),
+    userCompleted: completed.has(id),
+    absorbed: isAbsorbed(id, content),
+  });
+  if (hit) hits.push({ id, ...hit });
 }
 
 console.log(`journals scanned: ${total}`);
+console.log(`board rows: ${onBoard.size} open, ${completed.size} completed`);
 console.log(
   `fixtures: ${FIXTURES.length - fixtureFailures.length}/${FIXTURES.length} correct`,
 );
@@ -351,11 +563,13 @@ hits.sort(
 console.log(`\nFINDINGS: ${hits.length} journal(s) may be holding an unanswered message`);
 for (const h of hits) {
   const strength =
-    h.confidence === 'certain'
-      ? 'CERTAIN - carries Shiv\'s own <!-- from: me --> marker'
-      : h.afterSignoff
-        ? 'probable - directly under an agent sign-off'
-        : 'probable - trailing prose';
+    h.absorbed
+      ? "CERTAIN - his own <!-- from: me --> marker, already baselined over by oa-state mark (#501)"
+      : h.confidence === 'certain'
+        ? 'CERTAIN - carries Shiv\'s own <!-- from: me --> marker'
+        : h.afterSignoff
+          ? 'probable - directly under an agent sign-off'
+          : 'probable - trailing prose';
   console.log(`\n  task-${h.id}  [${strength}]`);
   console.log(`    under heading : ${h.heading || '(none)'}`);
   console.log(`    line above    : ${h.above || '(blank)'}`);
