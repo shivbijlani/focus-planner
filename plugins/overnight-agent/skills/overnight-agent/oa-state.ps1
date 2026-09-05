@@ -4321,9 +4321,35 @@ function Cmd-Mark {
     Set-Member $st 'poll' $null
   }
   elseif ($Poll) {
-    # (Re)arm: due immediately so the very next scan picks it up.
+    # ARMING a new poll makes it due immediately, so the very next scan picks it up. That is
+    # intentional and stays.
+    #
+    # CHANGING the cadence of an EXISTING poll must NOT, and the difference is not cosmetic. A
+    # caller lengthening a cadence is asking for the task to run LESS often, and resetting
+    # next_due to now does the exact opposite: measured 2026-09-04, moving task 468 from 2h to
+    # 6h set next_due to the current minute, strictly more aggressive than the 2h it replaced,
+    # and it took a second -PollDone to push it out. So the one-call form of "poll me less"
+    # silently meant "poll me now".
+    #
+    # At concurrency 1 that is not merely surprising. A due poll outranks the awaiting_reply
+    # park in Test-SessionHoldsCapacity, so an accidental due-now both consumes the only
+    # dispatch slot and re-qualifies the task to hold the Today gate -- a "relief" that starves
+    # the backlog it was meant to free.
+    #
+    # So a cadence change now keeps the existing schedule and re-bases it: next_due is measured
+    # from the last actual poll, under the NEW interval. Shortening a cadence still fires
+    # promptly, because last_polled + a smaller interval is genuinely in the past; that arrives
+    # from the arithmetic rather than from a reset. A poll armed but never polled has no
+    # schedule to keep, so it stays due-now.
     $mins = Parse-PollMinutes $Poll
-    Set-Member $st 'poll' (New-PollObject $Poll.Trim().ToLower() $mins '' (Get-Date))
+    $lastPolled = if ($existingPoll) { "$($existingPoll.last_polled)" } else { '' }
+    $due = if ($lastPolled) {
+      $parsed = [datetime]::MinValue
+      if ([datetime]::TryParse($lastPolled, [Globalization.CultureInfo]::InvariantCulture,
+          [Globalization.DateTimeStyles]::None, [ref]$parsed)) { $parsed.AddMinutes($mins) }
+      else { (Get-Date) }
+    } else { (Get-Date) }
+    Set-Member $st 'poll' (New-PollObject $Poll.Trim().ToLower() $mins $lastPolled $due)
   }
   elseif ($PollDone) {
     if (-not $existingPoll) { throw "task $Id has no poll to mark done (arm one with -Poll first)" }
@@ -4339,10 +4365,20 @@ function Cmd-Mark {
     Set-Member $st 'recheck' $null
   }
   elseif ($Recheck) {
-    # (Re)arm: due immediately so the very next scan picks it up.
+    # Same rule as -Poll above, for the same reason: arming is due-now, changing a cadence keeps
+    # the existing schedule and re-bases it under the new interval. This half is if anything
+    # worse to get wrong, because a recheck is armed on a task that is ALREADY blocked, so the
+    # accidental due-now lands on exactly the task least able to use the slot it takes.
     $rmins = Parse-PollMinutes $Recheck
     $kind = if ($RecheckKind) { $RecheckKind.Trim() } elseif ($existingRecheck) { "$($existingRecheck.kind)" } else { '' }
-    Set-Member $st 'recheck' (New-RecheckObject $Recheck.Trim().ToLower() $rmins $kind '' (Get-Date))
+    $lastRechecked = if ($existingRecheck) { "$($existingRecheck.last_rechecked)" } else { '' }
+    $rdue = if ($lastRechecked) {
+      $rparsed = [datetime]::MinValue
+      if ([datetime]::TryParse($lastRechecked, [Globalization.CultureInfo]::InvariantCulture,
+          [Globalization.DateTimeStyles]::None, [ref]$rparsed)) { $rparsed.AddMinutes($rmins) }
+      else { (Get-Date) }
+    } else { (Get-Date) }
+    Set-Member $st 'recheck' (New-RecheckObject $Recheck.Trim().ToLower() $rmins $kind $lastRechecked $rdue)
   }
   elseif ($RecheckDone) {
     if (-not $existingRecheck) { throw "task $Id has no recheck to mark done (arm one with -Recheck first)" }

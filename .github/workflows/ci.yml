@@ -238,6 +238,27 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-binding.ps1
 
+  # Changing a poll/recheck cadence must not make a task MORE aggressive (GH #506).
+  #
+  # Measured live 2026-09-04: moving task 468 from a 2h poll to 6h -- done deliberately to stop it
+  # holding the only dispatch slot while blocked -- set next_due to the current minute, so "poll me
+  # less" meant "poll me now". At concurrency 1 a due poll outranks the awaiting_reply park in
+  # Test-SessionHoldsCapacity, so the one-call form of the relief consumed the slot it was meant to
+  # free and re-qualified the task to hold the Today gate.
+  #
+  # It runs here rather than as a note because the hazard was first written into agent-lore.md,
+  # which is GH #454: 903 KB, 160 headings, zero readers. A hazard recorded where nothing reads it
+  # does not stop the next occurrence. Hermetic -- its own temp state dir and journals, never the
+  # real planner folder -- so it runs unmodified on the Linux runner.
+  cadence-rearm:
+    name: Cadence re-arm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (lengthening a cadence must not make it due now)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-cadence-rearm.ps1
+
   # The catch-up doc skill and Shiv's four doc preferences (GH #441).
   #
   # The preferences used to live in three places -- SKILL.md prose, a skill folder outside the
