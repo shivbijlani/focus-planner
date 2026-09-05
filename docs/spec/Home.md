@@ -1,109 +1,85 @@
-# Focus Planner — Design Thesis
+# Focus Planner
 
-Focus Planner is a **markdown-backed task planner**: the database is a handful of
-plain-text `.md` files (`planner.md`, `planner-completed.md`, `journal/task-<id>.md`,
-`user-settings.md`, `AGENTS.md`), and the React app is a *view and editor* over those
-files, not their owner. The files are the source of truth; the app, the sync engine, the
-Telegram bridge and the overnight autonomous agent are all peers that read and write the
-same markdown through the same conventions. Anyone with a text editor — human or AI agent
-— can open the folder and understand it without this app's source, because the folder
-scaffolds its own contract (`AGENTS.md`) and the app never invents a proprietary
-serialization to hide state in.
-
-## The problem this solves
-
-A task list that only an app can read is a task list you cannot inspect, diff, back up,
-sync with your own tools, or hand to an unrelated AI agent. Focus Planner rejects that
-trade: every persisted artifact is markdown or small JSON sidecars a human can open. This
-buys three things the design leans on hard:
-
-1. **Multi-writer safety.** Because the files are plain text, more than one process
-   legitimately writes them — the browser app, a folder-sync service worker replicating
-   across OneDrive/Google Drive/local devices, a Telegram bridge folding phone replies
-   back into journals, and an autonomous "overnight agent" proposing and executing plans.
-   Anything that can be opened by a human can also be opened by unrelated software, so the
-   record-level merge and provenance-marking design (see [Data-Formats](Data-Formats)) exists to
-   stop those writers from stepping on each other.
-2. **Portability without a server.** The "backend" (`server.js`) is a thin local-disk
-   convenience for one storage mode; the real persistence targets are the user's own
-   OneDrive, Google Drive, or browser-local storage, each behind the same provider
-   interface (see [Domain-storage](Domain-storage)). There is no proprietary cloud database to
-   operate or lose access to.
-3. **Agent-legibility as a first-class requirement.** Every format below documents
-   itself in-band (`AGENTS.md`, HTML-comment markers in journals) so that external
-   automation — including a different vendor's agent — can act on the same files
-   correctly. This is why `src/config/agentsDoc.js` exists as a versioned, scaffolded
-   document rather than a wiki page: the contract travels with the data.
+Focus Planner is a task planner whose database is a folder of plain markdown files, read and written by
+three independent runtimes — a browser web app, a Node.js Telegram bridge, and a PowerShell-driven
+autonomous overnight agent — with no server and no shared schema beyond the text format itself. The
+folder can live in a local File System Access handle, IndexedDB, OneDrive, or Google Drive, and can sync
+across devices without a central service. The problem this solves is not "build a to-do app"; it is
+"let a person and an unattended AI agent both durably act on the same prioritized worklist, from
+whatever device or channel is at hand, without either one corrupting what the other wrote."
 
 ## Core design principles
 
-- **Pure transformation functions over stateful classes.** Board edits
-  (`src/focusPlanOps.js`), journal parsing (`src/journalChat.js`), sync merges
-  (`packages/folder-sync/src/merge.js`), and Telegram formatting
-  (`packages/telegram-bridge/src/telegramFormat.js`) are implemented as `(input) -> output`
-  functions with no hidden state, specifically so they can be unit-tested without a
-  browser, a filesystem, or a network — and so the *same* algorithm can run from two call
-  sites (e.g. the single-source and Combined views) without divergence.
-- **Record-level merge, not whole-file last-write-wins.** The single most important
-  correctness decision in the system: two devices editing the same markdown file must not
-  let a stale replica resurrect a row the other device deleted. This is why every synced
-  file has a tombstone-bearing JSON sidecar (`<path>.sync.json`) — see
-  [Data-Formats](Data-Formats) and `packages/folder-sync/src/merge.js`.
-  The rejected alternative was whole-file diffing/3-way merge, which cannot express "this
-  row is deleted" as distinct from "this row was never seen" and was the direct cause of
-  the deleted-rows-reappear defect class this module fixes.
-- **Consent is explicit and structural where it matters.** The Overnight Agent
-  distinguishes *proposing* a plan (always allowed) from *executing* one (gated on human
-  approval recorded in the journal). This split is deliberately conservative even where it
-  is not yet fully enforced — see [Roadmap](Roadmap) for the known gap where the `from: me`
-  marker that attests consent is itself written by software the agent runs, not by an
-  unforgeable channel (issue #250).
-- **Assert the artifact, not the exit code.** The overnight-agent's "sweep" and
-  "mutcheck" checks (see [Domain-overnight-agent](Domain-overnight-agent)) and this very spec's own
-  `scripts/spec/verify.mjs` gate share one discipline: a green check must mean the actual
-  output was inspected and found correct, not merely that a script returned 0. A rule kept
-  only as prose regresses silently; a rule kept as an executable check does not.
-- **Self-healing over halting.** Corrupted or drifted state (runaway task IDs,
-  resurrected sync sidecar rows, stale AGENTS.md copies) is repaired defensively at load
-  time (`src/selfHealIds.js`, `packages/folder-sync/src/records.js` guards) rather than
-  crashing the UI, because the data is the user's real planning tool and must stay usable
-  even when a sync partner behaved unexpectedly.
+**The folder is the database; markdown is the schema.** There is no database server and no ORM. Every
+piece of state — the board, a task's journal, sync bookkeeping, agent memory — is a markdown or JSON
+file with an explicit, tested format (see [Data-Formats](Data-Formats)). This is what makes the system
+inspectable and editable by a human with a text editor, and portable across four different storage
+backends without a migration.
 
-## System shape
+**Every reader is independently tested, because none of them share a runtime.** The browser, the
+Telegram bridge, and the overnight agent's PowerShell control layer cannot import from one another —
+they run in different languages and processes. Rather than force a shared library across that boundary,
+this system accepts three separate implementations of overlapping logic (e.g. board-priority sorting,
+newest-turn-status reading) and pins them together with mutation tests instead of code sharing. See
+[Prioritisation](Prioritisation)'s "two sort keys" discussion and [Domain:
+overnight-agent](Domain-overnight-agent)'s parity mutcheck for the concrete mechanism.
 
-At the center is a React SPA (`src/App.jsx`, ~7,200 lines) rendering the two markdown
-boards and their journals. It talks to storage through one interchangeable provider
-interface (`src/storage/storage.js`) with concrete backends for the File System Access
-API, OneDrive, Google Drive and browser IndexedDB. A separate sync engine
-(`packages/folder-sync`) runs in a service worker to replicate the same files across
-devices using record-level merge. Two independent Node processes extend the same files
-outside the browser: `packages/telegram-bridge` mirrors task journals into a Telegram
-forum so the user can approve/reply from a phone, and the `plugins/overnight-agent`
-Copilot CLI plugin autonomously works tasks overnight under the plan→approve→execute
-loop. `packages/mcp-cred-vault` and `packages/install-prompt` are narrow supporting
-packages (Windows credential handling for the agent's MCP servers, and "Add to Home
-Screen" PWA affordances, respectively). See [Architecture](Architecture) for how these
-compose and [Rebuilding](Rebuilding) for the order to build them in.
+**A signal the agent authored cannot be trusted as the agent's own permission to act.** This repository
+has independently discovered the same failure three times: a consent marker the agent itself wrote being
+read back as human approval, a closing courtesy line parking the agent's own task, and a timestamp the
+agent itself stamped releasing the agent's own gate. The design principle that follows is stated
+explicitly in the code: prefer a signal the agent cannot author, and where one is unavoidable, let it
+only cancel a permission, never grant one. See [Prioritisation](Prioritisation).
 
-## Page index
+**A passing check is not evidence, only a claim.** Sweeps, guards and gates throughout the overnight
+agent are proven correct by deliberately breaking them and asserting the break is detected — the
+`mutcheck-*` family — because this repository has shipped, and measured, checks that reported the same
+reassuring value every single night regardless of the real state of the system. See
+[Reliability](Reliability) and [Domain: overnight-agent](Domain-overnight-agent).
 
-- [Architecture](Architecture) — domain composition, module graph, runtime boundaries, data flow.
-- [Data-Formats](Data-Formats) — every persisted format, with annotated real samples.
-- [Domain-app](Domain-app) — the React planner UI and its pure helper modules.
-- [Domain-config](Domain-config) — branding, AI/user settings, the AGENTS.md contract.
-- [Domain-storage](Domain-storage) — the provider abstraction and its four backends.
-- [Domain-folder-sync](Domain-folder-sync) — the record-merge sync engine and service worker.
-- [Domain-telegram-bridge](Domain-telegram-bridge) — the Telegram forum mirror.
-- [Domain-overnight-agent](Domain-overnight-agent) — the autonomous agent plugin and its check suite.
-- [Domain-task-paper](Domain-task-paper) — per-task HTML papers and their comment channel.
-- [Domain-diagnostics](Domain-diagnostics) — the shared diagnostics event bus.
-- [Domain-install-prompt](Domain-install-prompt) — PWA install UX.
-- [Domain-mcp-cred-vault](Domain-mcp-cred-vault) — the Windows secret pointer-file schema.
-- [Domain-scripts](Domain-scripts) — build/maintenance scripts, including this spec's own generator.
-- [Domain-root](Domain-root) — the Express dev server and build tooling entry points.
-- [Behaviour](Behaviour) — the system's required behaviour, derived from its tests.
-- [Prioritisation](Prioritisation) — how priority is expressed, changed by the user, and read by the agent.
-- [Reliability](Reliability) — how the autonomous agent is supervised and self-heals: out-of-band supervision, liveness-gated stuck recovery, silent auto-restart, deploy propagation, and the mutation-tested sweep suite.
-- [Rebuilding](Rebuilding) — a build-order guide starting from an empty directory.
-- [Updating-the-Spec](Updating-the-Spec) — how to change this spec and republish the wiki, and the traps in doing so.
-- [Roadmap](Roadmap) — known gaps and direction, from open issues.
+**Unattended supervision must be dispatched from outside the thing it supervises.** An agent, an app
+scheduler, or an in-process watchdog cannot reliably notice its own death. Every layer of this system's
+self-healing is deliberately dispatched from a strictly wider domain than what it watches — the OS
+schedules the daemon, the daemon watches the app, a normal run watches the daemon. See
+[Reliability](Reliability).
+
+**Provenance, not urgency, is what may widen a rule.** The single sanctioned exception to the overnight
+agent's default one-item concurrency is not "this is important" — it is "a user did this, not the
+agent." See [Prioritisation](Prioritisation)'s dispatch-precedence section.
+
+## What this system is not (yet)
+
+Several things described elsewhere in this spec are explicitly unfinished, by the repository's own open
+issues, not by omission of this document: pacing (issue #391) is currently prose guidance in `SKILL.md`,
+not an enforced mechanism; per-task Google Doc comment attribution (#422, #442) has no positive-consent
+design yet; and a number of reliability/provenance gaps remain open, catalogued in full on
+[Roadmap](Roadmap). This spec describes the system as it is built today and names what is missing rather
+than presenting either as finished.
+
+## Reading order
+
+Start with [Architecture](Architecture) for the system's shape, then [Data-Formats](Data-Formats) for
+the formats every domain reads and writes. From there:
+
+| Page | Covers |
+| --- | --- |
+| [Architecture](Architecture) | Domain composition, module graph, runtime boundaries, data-flow from user action to persisted state. |
+| [Data-Formats](Data-Formats) | Every persisted format — board, journal, sidecars, sync state, bridge state — with real annotated samples. |
+| [Domain: app](Domain-app) | The web app: board/journal transformations, sorting, moves, id lifecycle. |
+| [Domain: config](Domain-config) | Scaffolded canonical docs and round-trip-safe settings views. |
+| [Domain: diagnostics](Domain-diagnostics) | The opt-in, cross-worker event-tracing facility. |
+| [Domain: folder-sync](Domain-folder-sync) | The record-level, tombstone-aware merge engine and its Service Worker transport. |
+| [Domain: install-prompt](Domain-install-prompt) | Per-platform PWA install nudging. |
+| [Domain: mcp-cred-vault](Domain-mcp-cred-vault) | The non-secret pointer file scheme for MCP server credentials. |
+| [Domain: overnight-agent](Domain-overnight-agent) | The autonomous agent's sweep/mutcheck library and its shape. |
+| [Domain: root](Domain-root) | Build/lint config and the legacy local-dev server. |
+| [Domain: scripts](Domain-scripts) | Repository maintenance tooling and the spec pipeline's mechanism half. |
+| [Domain: storage](Domain-storage) | The multi-provider storage facade (FSA/IndexedDB/OneDrive/Google Drive). |
+| [Domain: task-paper](Domain-task-paper) | Regenerated, deterministic per-task HTML papers. |
+| [Domain: telegram-bridge](Domain-telegram-bridge) | The mobile journal mirror and reply-folding bridge. |
+| [Prioritisation](Prioritisation) | How priority is expressed, changed, and dispatched — the full sort key, the Today gate, pacing, dispatch precedence. |
+| [Behaviour](Behaviour) | The system's required behaviour as testable statements, grouped by area. |
+| [Rebuilding](Rebuilding) | A dependency-ordered build guide from an empty directory. |
+| [Reliability](Reliability) | How the unattended overnight agent stays running and heals itself. |
+| [Roadmap](Roadmap) | Known gaps and direction, grouped by priority, from open issues. |
+| [Updating-the-Spec](Updating-the-Spec) | How this specification itself is generated, verified, and published. |

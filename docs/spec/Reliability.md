@@ -1,310 +1,231 @@
-# Reliability & Autonomous-Agent Supervision
+# Reliability
 
-This page specifies **how the system keeps an unattended, autonomous agent running
-correctly on a single personal Windows machine, and how it heals itself when it does
-not.**
+The Overnight Agent is meant to run unattended, for hours, on one Windows machine, with no human
+watching. Every mechanism below exists because that machine has already failed in a specific, measured
+way, and each fix targets exactly the failure that produced it — not a generic hardening pass.
 
-The subject is the **Overnight Agent** (see [Domain-overnight-agent](Domain-overnight-agent)):
-a plugin that, on a schedule, wakes up, reads a markdown task board, makes real progress on
-tasks, and writes results back into per-task journals — all while the owner is asleep.
-"Reliability" here is not uptime of a web service. It is the much narrower, harder problem
-of a long-lived autonomous process that runs **inside a desktop app, on one laptop, with no
-operator watching**, and that can therefore fail in ways nothing is positioned to observe.
+## The core problem: every supervisor was dispatched by the thing it supervised
 
-Everything described here is treated as shipped: mechanisms that currently live in a
-GitHub issue as intended direction are specified as if implemented, because the point of
-this page is the complete blueprint, not a snapshot of progress.
+Before this layer existed, `reap-stale-mcp.ps1` ran inside an agent run; `run-sweeps.ps1` ran inside an
+agent run; `stuck-run-sweep.mjs` ran inside an agent run; the browser watchdog ran from the app's own
+scheduler; the Overnight Agent itself ran from the app's own scheduler. Measured on the target machine:
+zero OS-level scheduled tasks supervised any of it. The cost was measured directly: median healthy run
+7.7 minutes, but 32 runs occupied their 30-minute slot for over an hour, 18 of those ended only by "app
+shutdown" — 314.8 hours (13.1 days) of stalled runs, worst single stall 5,463 minutes across 182 ticks —
+and not one of the 18 was ended by anything noticing; a human restarting the app ended all 18.
 
-## The founding principles
+## Out-of-band supervision, dispatched by the OS
 
-Every strategy below is an application of one of a few rules the system learned the hard way.
+The fix is a dispatcher hierarchy where each layer's trigger genuinely lies outside the layer it
+watches:
 
-1. **Assert the artifact at the far end — never the exit code of the step that produced
-   it.** "Copilot exited 0" says nothing about whether the work is correct; "the file on
-   disk parses and contains the run's output" does. Detection always inspects the real
-   world (a database row, a file's bytes, a running PID), never a return code or a promise.
+1. **`install-oa-supervisor.ps1`** registers a real Windows Scheduled Task, because "Windows Task
+   Scheduler is a service of the operating system... it keeps firing exactly when everything this repo
+   controls has stopped." It arms two triggers (`AtLogOn` for reboot survival, plus a repeating `-Once`
+   trigger effectively unbounded), runs as `S4U` (fires whether logged on or not) when the installer can
+   elevate, and falls back to `Interactive` when it can't — an honest, narrower fallback, not a silent
+   failure. If registration itself fails ("Access is denied," measured — the agent cannot elevate
+   itself unattended), the installer writes a shim into the Windows Startup folder and starts the
+   daemon immediately rather than waiting for the next reboot.
+2. **`oa-supervisor-daemon.ps1`** is that unelevated fallback: a plain process launched by Explorer from
+   Startup at logon, not a child of the app or an MCP server, so neither an agent-run crash nor the MCP
+   reaper can touch it. It runs the actual checker (`oa-supervisor.ps1`) as a child process specifically
+   so a crash inside the checker cannot kill the loop meant to outlive everything, and writes its own
+   heartbeat so its own absence is observable — "without it the supervisor is unsupervised, which is
+   the same recursion [this layer] is about."
+3. **`supervisor-liveness-sweep.ps1`** watches the daemons themselves, dispatched by a normal agent run —
+   a deliberately different dispatch domain from the OS-triggered daemons, closing the last gap ("those
+   are two different dispatch domains watching each other, not one domain watching itself"). Its
+   verdicts are `ABSENT` / `DEAD` / `STALE` (alive but heartbeat too old) / `HEALTHY`, with a
+   deliberately loose staleness tolerance — a companion sweep once flagged a genuinely overdue watchdog
+   for 16 consecutive runs and every run ignored it, because a permanently red line teaches the reader
+   to stop reading it.
 
-2. **A rule kept as prose regresses; a rule kept as an executable check does not.** The
-   repository's operating manual (`user-settings.md`) accumulated dozens of "always
-   remember to…" warnings, and every one of them was eventually forgotten and caused a
-   regression. The fix pattern is always the same: convert the prose rule into a script
-   that *prevents* or *detects* the mistake, and a **mutation test** that proves the script
-   is load-bearing. This is why the reliability layer is a suite of small scripts
-   ("sweeps") plus `mutcheck-*` tests, not documentation.
+## Liveness-gated stuck-run detection and orphan repair
 
-A third rule governs supervision specifically and is important enough to state on its own:
+`stuck-run-sweep.mjs` uses three escalating, evidence-specific arms rather than one blunt timeout:
 
-3. **You cannot supervise a system from inside its own failure domain.** A watchdog
-   dispatched by the thing it watches dies with it. Real supervision must be dispatched by
-   something strictly outside — the operating system.
+- **Process-dead orphan** — each session directory holds a lock file named after its owning PID; if
+  that PID is not alive, the run is provably orphaned, and a still-live run (including the one running
+  this very sweep) can never be misclassified.
+- **Hung-alive** — the owning process is alive but frozen (measured: CPU pinned, no event written for
+  six minutes). Discriminated by the session's own event log going silent after its completion event
+  fired — "a finished run whose bookkeeping never landed." It deliberately does not kill the idle
+  process, only reports the leak, because killing a live process is a separate, less reversible
+  decision.
+- **Run-level timeout** — catches a run hung mid-task with neither a dead process nor completion
+  evidence. It explicitly rejects a plain max-runtime rule, because run duration routinely and
+  legitimately exceeds the nominal schedule: "age is not evidence of hanging. Silence is." An hour with
+  nothing written is a stopped run, not a slow one. It resolves the row to `failed`, never `completed`,
+  because claiming completion would be inventing an outcome.
 
-One more rule cuts across all of the above and is, for a rebuilder, the most important of
-the four, because it is the mechanism by which the other failures stay invisible:
+Safety model across all three: detect-only by default (`--repair` required to write), a grace period
+(default 20 minutes) that leaves young runs untouched, every row backed up to disk before modification
+so any repair is revertible, and an `UPDATE ... WHERE status='running'` guard so the repair can never
+clobber a status the app has since written itself.
 
-4. **A reader must be able to tell "absent" from "present but unreadable."** The failures
-   that survive are the ones that do not raise — they decode to a valid value that happens
-   to be a lie. Age-only `STUCK` collapsed "working hard" and "hung" into a single
-   observable (Strategy B); the "merged isn't running" gap is silent *in the safe-looking
-   direction*, so the blind updater reports success (Strategy D); an encoding fault corrupts
-   a script *before any code runs* (Strategy E), where no downstream logic can catch it. The
-   liveness lock exists precisely to make a distinction the database alone cannot — a
-   `running` row over a dead PID is a different fact from the same row over a live one. The
-   design test for every state a check reads is therefore: *does a failure produce an
-   invalid value, or a valid one that is wrong?* The first is caught by any check; the
-   second is caught only by deliberately asking whether the reader can distinguish missing
-   from unparsed — because, by construction, nothing downstream will ever raise it for you.
-   The instance and the class need different fixes, and only one kind closes the class:
-   teaching a parser the real format, or decoding bytes explicitly, removes *this* misread
-   but leaves the reader just as unable to say "I could not read that" the next time; the
-   durable fix is to **make unreadability a value the reader can return.** The liveness lock
-   is exactly this shape — a `running` row over a dead PID is a different *value* from one
-   over a live PID, not the same value reached two ways — whereas age-only `STUCK` had no
-   way to represent "I cannot tell," which is why it collapsed. This is a cross-cutting
-   hazard, not a supervision-only one: the prioritisation layer hits the same shape — a
-   snoozed row that decodes to "not snoozed," a skipped board row that reads as "Today is
-   finished" — which is why the two concerns are documented as siblings. See
-   [Prioritisation](Prioritisation), which owns the other half of this discipline: *the
-   observer must not be inside the thing it observes*, applied to **who wrote the signal**
-   a gate reads, where this page applies it to **who watches the watcher**.
+## Silent auto-restart as the remedy
 
-## Strategy A — Out-of-band supervision of the agent process
+`oa-supervisor.ps1` classifies machine state as `STUCK`, `SCHEDULE-DEAD`, `RESOURCE-LEAK`,
+`RESOURCE-CONTENDED`, or `HEALTHY` and maps each to an action:
 
-**Problem (#226).** Every recovery mechanism the agent had was dispatched *by an agent
-run*: the stale-process reaper ran in the agent's own start-up phase; the sweep suite ran
-inside a run; even the app's workflow scheduler is the same scheduler that would need
-restarting. So "the agent stopped running" was structurally unobservable from inside. Over
-a measured window, 18 separate stalls (≈315 hours) were each ended only by a human noticing
-and restarting the app.
+| State | Condition | Action |
+| --- | --- | --- |
+| STUCK | no flagged orphan (a live, progressing run) | none |
+| STUCK | orphan + hung-alive process | restart |
+| STUCK | orphan + dead process | repair-only |
+| SCHEDULE-DEAD | app running | restart |
+| SCHEDULE-DEAD | app down | launch |
+| RESOURCE-LEAK | app running | restart |
+| RESOURCE-LEAK | app down | none |
+| RESOURCE-CONTENDED | — | none (not attributable) |
 
-**Mechanism.** A supervisor (`oa-supervisor.ps1`) is dispatched by the **Windows Task
-Scheduler**, or, when task registration is denied without elevation, by an unelevated
-**Startup-folder daemon** (`oa-supervisor-daemon.ps1`) that Explorer launches at logon and
-that loops on a fixed interval. Either dispatcher is the operating system, not the app and
-not an agent run, so it keeps firing exactly when everything the app controls has stopped.
-`install-oa-supervisor.ps1` registers whichever path is available and is idempotent and
-reversible (`-Uninstall` removes the task, the Startup shim, and any running daemon).
+The remedy acts rather than alerts, by explicit direction: "it should act, restart [the app] — don't
+message me." An `-TestAlert` flag is retained but inert, and every decision is still logged to
+`supervisor-log.jsonl` for later inspection — fully silent, no chat notification ever. An anti-loop
+cooldown (default 20 minutes), keyed on state plus the run's own start time, prevents a repeated restart
+for the same incident; the cooldown record is written even when the relaunch itself fails, so a failing
+restart cannot become a hot loop. Restart mechanics resolve the app's executable from the live process's
+own path first (survives version bumps), falling back to a fixed install path.
 
-The supervisor opens the app's SQLite database **read-only** (against a stale-by-seconds
-copy, so a WAL checkpoint can never corrupt the original) and classifies the newest
-workflow run:
+**The resource-leak arm** (added after a measured incident: CPU pinned at 100%, a 4-core box's processor
+queue length at 21, the app's rendering subtree burning 7 CPU-hours over 14.7 hours of uptime, while the
+plain schedule classifier reported `HEALTHY` throughout) requires three independent gates
+simultaneously: a *sustained rate* (CPU-hours per wall-hour of process age, not an instantaneous spike),
+an actually-contended machine (queue length past a threshold — a healthy 4-core box reads near zero),
+and attribution restricted to the app's own process tree only ("restarting the app cannot fix somebody
+else's compiler"). Age alone is deliberately excluded as a signal, because legitimate sessions are kept
+open for hours. A sampling failure reports an explicit `RESOURCE-UNKNOWN`, never a silent `HEALTHY` — a
+probe that could not look must not produce the same bytes as one that looked and found nothing.
 
-```
-HEALTHY        a run is in progress and making progress, or the last run ended cleanly
-STUCK          a run has held the every-30-min slot far past the median run time
-SCHEDULE-DEAD  no run of any status has started within the dead-window (app closed,
-               or the app is up but its scheduler is wedged)
-```
+**Read-path safety**: the supervisor snapshots the app's SQLite database by copying the `.db` file
+together with its `-wal`/`-shm` sidecars, because a committed transaction can live in the WAL file until
+the next checkpoint — copying the `.db` alone reads state as of the last checkpoint, not as of now.
+Getting this wrong was measured to produce stale reads in 23% of replayed ticks (lag up to 97.6
+minutes) and false alarms, which matters acutely here because `SCHEDULE-DEAD` has no liveness veto: it
+restarts the app outright, so a stale read alone could kill live sessions on an otherwise healthy
+machine.
 
-**Invariants.** The supervisor never writes to classify. One incident produces at most one
-action (see Strategy C's cooldown). It never prints a secret. Its own daemon writes a
-heartbeat file, because an unsupervised supervisor is the same recursion (#226) exists to
-break — at minimum its absence must be observable.
+## Deploy propagation: "merged isn't running"
 
-## Strategy B — Liveness-gated stuck detection and orphan repair
+Three separate deploy targets exist on one machine, and each has its own classify-then-refuse safety
+model rather than a blind copy of `main`:
 
-**Problem (#296).** The first supervisor decided `STUCK` on **age alone** — any run still
-marked `running` past a threshold. But healthy runs legitimately take much longer than the
-median (a 40-minute run making steady progress is fine), so age-only detection paged the
-owner about runs that were perfectly healthy. Age cannot distinguish "working hard" from
-"hung."
+- **`deploy-installed-plugin.ps1`** moves bytes into the installed-plugin tree, delegating its
+  classification to the same drift sweep the domain page describes
+  (`installed-skill-drift-sweep.mjs`) "so the two halves cannot disagree." It classifies a path as
+  `MISSING` (deploy), `UNVERSIONED` (deploy after backup), `BRANCH-ONLY` (refused unless forced — a live
+  hand-deployed fix not yet merged), or `MAIN` (skip). A real merged pull request sat unreflected in the
+  installed tree for five days because of exactly the seam described next.
+- **`auto-deploy-plugin.ps1`** is the missing wire between detection and deployment: the deploy tool
+  above exits 0 even on a refusal, so a blocked deploy looks identical to a clean one. This script fetches
+  `origin/main` first (a local cache goes stale otherwise), escalates a persistent refusal after a
+  configurable number of cycles rather than refusing silently forever, and verifies every changed path
+  against the live tree afterward rather than trusting what was merely attempted. It keeps two separate
+  time budgets — local classification versus network fetch latency — because sharing one budget once
+  caused a slow network to be misreported as a deploy failure.
+- **`sync-oa-home.ps1`** targets the second, and more load-bearing, deploy destination: the flat
+  `%LOCALAPPDATA%\overnight-agent\` home that `user-settings.md`'s own documented commands actually
+  invoke. Measured: immediately after the plugin-deploy tool reported a clean tree, a script in this
+  second location was 300 lines behind `main` — a merged, deployed, and still-not-running fix. Its
+  classifier adds two states beyond the plugin-deploy set: `DATA-BEHIND` (a non-code file whose live
+  bytes match a historical commit — stale, safe to deploy) versus `DATA-STALE` (live bytes matching no
+  commit at all — refuse, it may be locally-mutated state). A forward-direction gap remained even after
+  this fix: a brand-new file merged and registered but never enumerated as `MISSING` is invisible to
+  classification by construction — every reported number can be individually correct while the overall
+  conclusion is wrong.
 
-**Mechanism.** Detection defers to a liveness signal computed by `stuck-run-sweep.mjs`,
-which classifies each `running` row with two arms and a race guard:
+## Byte-level encoding safety
 
-- **Grace guard.** A run younger than ~20 minutes is never touched, so a starting run is
-  never mistaken for a stuck one.
-- **Arm 1 — process-dead orphan.** Each agent session directory holds an `inuse.<pid>.lock`.
-  If that PID is gone, the owning process is provably dead and the `running` row is a stale
-  orphan. (A live run — *including the one running the sweep* — can never be a false
-  positive, because its own PID is alive.)
-- **Arm 2 — hung-alive orphan.** The PID is alive, but the session's own event log shows
-  `session.task_complete` already fired and nothing has been written for ≥15 minutes. The
-  run finished; its process leaked and never released the row.
-- **Healthy.** A live process still emitting events is left strictly alone, at any age.
+The root cause behind every encoding guard: Windows PowerShell 5.1 decodes a BOM-less file as the
+system ANSI codepage, while `pwsh` 7 decodes the identical bytes as UTF-8. `ps1-encoding-sweep.mjs`
+scans the repository's own tracked scripts for non-ASCII characters with no BOM, and distinguishes three
+severities: **load-bearing** (non-ASCII inside a comparison — `-eq`, `-match`, `-replace`, `-split`,
+`[regex]`, `Select-String` — where the comparison silently runs against corrupted text), **literal**
+(cosmetic corruption only), and **comment-only** (harmless today, but a trap for the next edit that
+moves the character into a literal). `journal-encoding-invariant.mjs` guards a stronger, behavioral
+property — that marking a task must never re-encode its journal — after a measured incident destroyed
+593 lines of one journal via an asymmetric read-ANSI/write-UTF-8 pair; it runs the installed script
+against a synthetic journal and asserts the bytes survive a round trip rather than asserting anything
+about source code shape. Its mutation companion proves the hash `oa-state.ps1` computes for a journal
+must depend only on the journal's bytes, never on which PowerShell host ran the script — swapping which
+host ran the same script turned "0 changed, 0 reopened" into "239 changed, 24 reopened" across a real
+corpus of 239 journals.
 
-Why this matters: an orphaned `running` row **silently disables its workflow for both the
-scheduler and manual triggers** — the app refuses to start a workflow it believes is
-already running. So a single stale row permanently kills that workflow until the row
-reaches a terminal status.
+A related fix for `mcp-config.json`: a BOM silently prepended by `Set-Content -Encoding UTF8` under
+Windows PowerShell 5.1 passed every PowerShell-side validation (which tolerates a BOM) while producing a
+file the Node-based MCP client could not parse at all — surfacing hours later, unattended, as every MCP
+server failing to start, including the one PHASE 0 reads instructions from. The fix requires the write
+to survive an actual Node `JSON.parse`, not a byte-signature check, because a byte check "encodes the
+assumption that the only thing that can ever go wrong is the thing that already went wrong."
 
-**Recovery.** With `--repair`, the sweep backs up the row to JSON and then sets it to its
-*true* terminal status, read from the session's own log (`task_complete` → `completed`,
-else `failed`), guarded by `... WHERE status='running'` so it is idempotent and cannot
-clobber a status the app has since written. Every repair is reversible from the backup it
-wrote. The sweep deliberately does **not** kill a leaked live process — that is the
-supervisor's more-reversible decision (Strategy C).
+## Journal write safety
 
-## Strategy C — Silent auto-restart as the remedy (PR (#313))
+`raw-append-reopen-sweep.mjs` guards a specific defect in how the agent finds the end of its own last
+turn: it searches forward for the next `## ` heading, and when there is none — the normal shape for a
+journal whose newest turn is the agent's — it treats the entire remainder of the file, including
+anything a user appends without a heading or an attribution marker, as still inside the agent's own
+turn. The consequence is a false "already answered" that silently swallows a user's message with no
+trace anywhere that it happened. Its own mutation check exists because the sweep once printed a nonzero
+exposure count and exited 0 for weeks — "the number was computed correctly and wired to nothing."
 
-**Problem.** Detecting a stall is useless if the response is only a notification the owner
-has to act on. The owner's instruction was explicit: *act, do not message.*
+## MCP process reaping
 
-**Mechanism.** The supervisor computes an **action**, purely from `(state, orphan findings,
-app-running)`, and the function is side-effect-free so a mutation test can prove each arm:
+`reap-stale-mcp.ps1` exists because 82 orphaned Node processes once consumed roughly 7GB of memory,
+leaving the machine with 3.2GB free, which killed the email MCP server mid-run with an allocation
+failure — silently dropping the ability to receive emailed instructions. A kill requires five conditions
+simultaneously: a matching process image name; a command line matching a known MCP launch signature; no
+live owning session anywhere in its ancestor chain (a direct measurement replaced an earlier, unverified
+assumption that one host process serves many successive runs — it does not, each session owns its own
+host); no superseded-cohort veto (a pooled, reused host process across successive, non-concurrent
+sessions must still only protect its *newest* cohort, not every one that ever ran through it); an age
+past a minimum floor (a secondary check, not the safety mechanism — set to roughly match the reaper's
+own position at the very start of a run, not a full extra schedule cycle of tolerance); and no overlap
+with the current tool-shell's own process tree. An additional idle-veto expiry ensures a wedged session
+that exists forever while doing nothing cannot indefinitely shield its own orphaned servers — presence
+is not liveness. A "stillborn host" class (a server whose client died before ever driving it) is
+separately detected by checking whether its startup banner is still the *last* thing it ever logged, not
+merely present in the log, reading the file with sharing permissions that tolerate the still-open
+handle rather than throwing and silently reporting a false-healthy zero.
 
-```
-STUCK + no genuine orphan (live, progressing) -> none        # never restart a working run
-STUCK + hung-alive orphan (leaked live process) -> restart   # only a restart reclaims it
-STUCK + process-dead orphan -> repair-only                   # sweep --repair already fixed it
-SCHEDULE-DEAD + app running (scheduler wedged) -> restart
-SCHEDULE-DEAD + app down -> launch
-```
+## Browser-slot health
 
-"Restart" kills the desktop app's process tree (the GUI process and its server-backend
-children, each by explicit PID) and relaunches it from its stable per-user install path;
-the row is cleared with `stuck-run-sweep.mjs --repair` first, so the schedule can resume
-even if the relaunch does not reconcile it. The action is **fully silent** — no
-notification channel is used — and every decision is appended to a local JSON-lines log.
+`check-browser-slots.ps1` is a read-only preflight — it never launches or kills a browser, because the
+automation slots are the user's own windows and may hold in-flight state. It distinguishes a "zombie"
+slot (the port still answers and existing tabs render, but the browser binary was auto-updated
+underneath the running process, so any *new* tab crashes) from a "wedged" slot (the port and its API all
+answer, but existing pages are frozen in the browser's lifecycle model — timers and animation frames
+never fire). Wedged detection specifically probes *existing* pages with a promise resolved by a timer,
+because a fresh tab is never frozen and would report every wedged slot as healthy. `browser-watchdog.ps1`
+rewires the supervisor to use this real verdict instead of a bare TCP connect check — the two were once
+measured 40 minutes apart with nothing in between, a healthy TCP-only check followed shortly by every
+slot being found stuck. The slot list itself is a reconciled table in `user-settings.md`, never hardcoded
+in any script, and is refused outright (not guessed at) if malformed, missing required columns, or
+carrying duplicate ports or profile directories.
 
-**Invariants.** A per-incident **cooldown** (keyed on state + the run it is about) means one
-incident drives at most one restart, so a persistently bad state can never become a reboot
-loop; the incident is recorded even when the relaunch itself fails, so a failing restart
-cannot hot-loop. A **run-level timeout** (#261) upstream marks a run failed and reschedules
-if it exceeds a hard cap, so a hang can never silently freeze the every-30-minutes cadence.
-A detect-only mode (no kills, no launches) exists for testing and replay.
+## The mutation-tested sweep harness
 
-## Strategy D — Making "merged" mean "running" (deploy propagation)
+Across this domain, a passing check is not treated as proof of anything: a `mutcheck-*` script
+establishes a baseline (the real subject, unmutated, classifies every fixture correctly), mutates
+exactly one guard or arm — read directly off disk and extracted by brace-matching so a nested block
+cannot truncate the extraction — and re-runs the same fixtures, requiring the mutation to flip exactly
+the fixture(s) that arm owns: not zero (the arm is decoration) and not fixtures belonging to a different
+arm (the arms are entangled). A control mutation is sometimes included specifically to prove "every
+edit breaks it" isn't itself a form of decoration. `run-sweeps.ps1` auto-discovers every `mutcheck-*`
+file, so a new one joins the standing suite automatically rather than needing to be remembered. This is
+the same harness family documented in [Domain: overnight-agent](Domain-overnight-agent) and the
+executable evidence behind the dispatch/gate guarantees in [Prioritisation](Prioritisation).
 
-**Problem.** The single most recurrent failure class in this system is **"merged isn't
-running"**: a fix is correct, reviewed, and on `main`, yet the code actually executing on
-the machine is the old copy — and the gap is silent in the safe-looking direction. It has
-recurred with many distinct shapes:
+## The `user-settings.md` reconcile loop
 
-- A merged sweep enumerated from the machine, so a *new* file that existed only in the repo
-  was invisible to the deployer (#254); a merge that *deleted* a file crashed the deploy
-  (#255); duplicate basenames made the deployer refuse a file forever (#251); a merged
-  sweep whose manifest was required by no deploy rule never reached the machine at all
-  (#299).
-- Two updaters disagreed on the meaning of "current": one compared **file content** and
-  reported success; the other compared **`plugin.json`'s version** and, seeing an unchanged
-  version, correctly did nothing — so a change fully deployed by one was completely
-  invisible to the other, and the blind one reported success.
-
-**Mechanism.** Four cooperating pieces, each asserting the artifact:
-
-- `auto-deploy-plugin.ps1` copies merged repo content into the installed plugin, and
-  escalates rather than silently refusing (#196).
-- **Version-keyed update:** `version-bump-sweep.mjs` fails the build when any plugin file
-  changed in commits *after* the last commit that moved `plugin.json`'s `version`. This is
-  what forces a version bump so the version-keyed updater actually ships the change. A
-  change without a bump is not a release.
-- `sync-oa-home.ps1` refreshes the "flat home" (`%LOCALAPPDATA%\overnight-agent\`, the copy
-  the supervisor, sweeps, and daemon actually execute) from a **derived required set** — the
-  sweep roster, plus a transitive import closure, plus every `mutcheck-*`, plus each
-  mutcheck's `$PSScriptRoot` subject, plus an explicit `$AlwaysRequired` list of scripts the
-  operating system or operative docs invoke by absolute path. It writes only files that are
-  provably **behind** the ref or **missing**, backs up what it overwrites, refuses to
-  overwrite a file whose live content is on no commit (a possible live fix), and refuses an
-  ambiguous basename rather than guessing. The supervisor and its daemon are in
-  `$AlwaysRequired` precisely because they are dispatched by the OS from the flat home and
-  are named by no roster and reached by no import edge — without that entry a merged
-  supervisor fix would land in the installed plugin and never reach the copy that runs.
-- `repo-drift-sweep.mjs` detects divergence between the flat home and the repo every run, so
-  "the enforcement suite exists on exactly one laptop with no history" is a finding, not a
-  surprise after a disk failure.
-
-## Strategy E — Encoding safety at the byte level
-
-**Problem.** Damage that lands **before any code runs** is the worst kind, because no logic
-can guard against it. Two instances: a BOM-less `.ps1` containing non-ASCII is decoded by
-Windows PowerShell 5.1 as the ANSI codepage, silently mangling the *script source* on the
-way in; and a config file written with a UTF-8 BOM makes `JSON.parse` reject it, blinding
-every check that reads it (#212).
-
-**Mechanism.** `ps1-encoding-sweep.mjs` fails when any `.ps1` carrying non-ASCII bytes lacks
-a UTF-8 BOM (the fix is free — add the 3-byte prefix; the code bytes do not change). File
-reads that must be exact use an explicit UTF-8 decoder rather than a host-dependent
-`Get-Content -Raw`, and deployers match a file's existing line endings rather than
-normalizing them. New scripts are kept pure-ASCII where practical so the hazard cannot
-apply at all.
-
-## Strategy F — Journal write safety
-
-**Problem.** The agent's output is appended to human-readable per-task journals that the
-owner also edits. Four distinct byte-level corruptions were each discovered only *after*
-they destroyed real content — including a read-modify-write that permanently baked in a
-mis-decoding and deleted hundreds of lines.
-
-**Mechanism.** `write-turn.ps1` is the only sanctioned way to write an agent turn. It
-authors the body with a file tool (never by interpolating markdown into a PowerShell
-double-quoted string), **appends only** (so it can never delete an owner's reply), backs up
-the journal first, matches existing line endings, and refuses to write on any of the known
-hazards; a `mutcheck-*` proves each guard is load-bearing on both LF and CRLF fixtures. To
-bound cost, journals are kept off the unbounded per-run read path and capped, because a
-task journal on the read path grows without limit and eventually dominates the context
-window (#291).
-
-## Strategy G — Bounding and reaping MCP processes
-
-**Problem.** Each agent session spawns Model-Context-Protocol servers that fan out to ~6
-processes per browser slot and survive the run; dozens of leaked processes consuming
-gigabytes were observed (#177), a direct contributor to the machine becoming unresponsive.
-
-**Mechanism.** `reap-stale-mcp.ps1` terminates leaked MCP processes. Reaping is by
-**ownership, not age alone**: an age-only gate cannot protect the current run and can kill a
-long legitimate one (#178), and a fixed 20-minute gate sat below two workflows' real
-runtime (#200). The reaper therefore keys on which run owns a process (via the same
-`inuse.<pid>.lock` liveness signal) so it can reclaim only genuinely orphaned servers.
-
-## Strategy H — Browser-slot health
-
-**Problem.** Automation drives signed-in browsers over CDP through a small pool of named
-"slots." A slot can be a **zombie**: its port answers `/json/version` and existing tabs
-render, but every *new* tab dies with "Target crashed" because Edge auto-updated underneath
-the running process. It looks healthy and silently fails all automation.
-
-**Mechanism.** `check-browser-slots.ps1` health-checks each slot *before* a run uses it, by
-comparing the build the slot reports over CDP against the build of the installed browser on
-disk; a mismatch means relaunch. The slot roster lives in `user-settings.md` (#180), and the
-watchdog can recover a **stuck** slot, not merely a missing one (#197), and carries its own
-plugin-update check so its self-heal does not live entirely inside the thing it repairs
-(#243).
-
-## Strategy I — The sweep harness and mutation-tested guards
-
-Every detector above is one of the "sweeps." `run-sweeps.ps1` is the only sanctioned runner:
-it sets the environment (`PLANNER_PATH`, and `BRIDGE_SRC` for sweeps that import the bridge)
-so a sweep can never silently "measure nothing" by dying on its first import while still
-exiting non-zero the way a real finding does. Because a passing test on broken code is worse
-than no test, each guard ships with a `mutcheck-*` that **mutates the guard one arm at a
-time and requires exactly that arm's fixture to start failing** — a mutation that changes
-nothing proves the arm was decoration. This is the mechanism that turns the second founding
-principle (prose regresses, checks do not) into something that itself cannot silently rot.
-
-## Strategy J — Configuration and the reconcile loop
-
-All operator-tunable values — paths, accounts, allow-lists, the browser-slot roster, and
-whether the supervisor is installed — live in `user-settings.md`, **outside** the plugin, so
-a plugin update never overwrites them. The supervisor is opt-in/opt-out through a setting,
-and the agent **reconciles installed state to the setting on every run** (#337): setting on
-and not installed → install; setting off and installed → uninstall (tearing down both the
-scheduled task and the Startup daemon); already matching → no-op. Reconciliation is a state
-change that runs inside a run, so it cannot resurrect supervision when the app is fully dead
-— that is Strategy A's job — but it keeps the two in agreement whenever the app is alive.
-
-```
-## Supervisor
-- Enabled: true            # false => the watchdog uninstalls it on the next run
-- Interval minutes: 15
-- Act on hang: restart     # or detect-only
-```
-
-## How to rebuild this layer, in order
-
-1. **Liveness primitive first.** The `inuse.<pid>.lock` per-session signal underpins the
-   sweep, the reaper, and the supervisor. Build and test it before anything consumes it.
-2. **`stuck-run-sweep.mjs`** (detect + `--repair`) with its process-dead and hung-alive arms
-   and the grace guard, plus its test on a throwaway database fixture.
-3. **`oa-supervisor.ps1`** — read-only classifier + the pure action function + restart —
-   dispatched by **`install-oa-supervisor.ps1`** (scheduled task, daemon fallback).
-4. **Deploy propagation** — `sync-oa-home.ps1`'s derived required set, `version-bump-sweep.mjs`,
-   `auto-deploy-plugin.ps1`, `repo-drift-sweep.mjs` — so fixes to the above actually run.
-5. **Byte-level guards** — `ps1-encoding-sweep.mjs`, `write-turn.ps1` — before trusting any
-   script or journal write.
-6. **Resource guards** — `reap-stale-mcp.ps1`, `check-browser-slots.ps1`.
-7. **The harness** — `run-sweeps.ps1` and a `mutcheck-*` for every guard.
-8. **The reconcile loop** and `user-settings.md` toggles last, once the pieces exist to
-   turn on and off.
-
-See also [Domain-overnight-agent](Domain-overnight-agent), [Domain-scripts](Domain-scripts),
-[Architecture](Architecture), [Rebuilding](Rebuilding), and [Roadmap](Roadmap).
+Every run resolves its real settings file through a fixed precedence: an explicit environment-variable
+override, then a project-local copy, then the recommended cloud-synced copy (in the same OneDrive folder
+as the board), then a last-resort local copy — seeding the cloud-synced location from the bundled
+template on first run, since the bundled copy in the plugin itself is explicitly disposable and
+overwritten by every plugin update. Every tunable it reconciles fails **narrow**, on purpose: a missing
+Today-gate-backstop row, an unreadable file, or a value the agent cannot parse all resolve to the
+narrowest, safest interpretation — never a value more permissive than what was actually configured — and
+the run summary states plainly when a fallback occurred rather than quietly proceeding as if the
+configured value had been read. The `## Browser slots` table follows the identical discipline: refused
+rather than guessed at when malformed, and read by every script from that one table rather than each
+script keeping its own hardcoded copy that could drift from it.

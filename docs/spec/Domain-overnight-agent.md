@@ -2,110 +2,67 @@
 
 ## Responsibility
 
-A Copilot CLI plugin (`plugins/overnight-agent/plugin.json`) that autonomously works
-Focus Planner tasks overnight under a **plan → approve → execute** loop: it proposes a
-plan inside a task's journal (always allowed), waits for the human to approve or request
-revisions, and only executes a plan that was approved. Approval is the system's safety
-gate. The skill instructions live in
-`plugins/overnight-agent/skills/overnight-agent/SKILL.md`; the 127 modules catalogued
-here are almost entirely the **verification suite** that keeps the agent's own behaviour
-honest — this is, by a wide margin, the largest and most heavily self-audited domain in
-the repository (127 of 227 total modules).
+The largest domain in the repository (159 modules under `plugins/overnight-agent/checks/`, plus a
+PowerShell-based control layer under `plugins/overnight-agent/skills/overnight-agent/` that is not
+JS/TS and so does not appear in this project's `modules[]` inventory but is the domain's operational
+core). Together they let an unattended, long-running Copilot CLI agent read the planner folder, decide
+what to work on, act, self-heal from its own failures, and prove — mechanically, not by assertion —
+that every one of its guards actually catches the defect it claims to catch. The dispatch, priority and
+pacing mechanics of the control layer are covered in full in [Prioritisation](Prioritisation); the
+supervision and self-healing mechanics are covered in full in [Reliability](Reliability). This page
+covers the domain's shape and its `checks/` library, which both of those pages draw on as executable
+evidence.
 
-## Principal modules and the check taxonomy
+## Shape of `checks/`
 
-| Category | Count | Example | Purpose |
-| --- | --- | --- | --- |
-| **sweep** | 38 | `plugins/overnight-agent/checks/dropped-ask-sweep.mjs` | Read-only detectors that scan the live journals/board for one specific defect class and report findings; the executable form of a written rule. |
-| **mutcheck** | 25 | `plugins/overnight-agent/checks/mutcheck-dropped-ask.mjs` | Proves the paired sweep actually fires: applies a targeted mutation to reintroduce the bug the sweep guards, asserts the sweep goes red, then restores the file. A sweep with no mutcheck is unverified. |
-| **lib** | 7 | `plugins/overnight-agent/checks/lib-live-ask.mjs` | Shared extractors (`liveAsk`, `agentTurnSlices`) so multiple sweeps agree on primitives like "what is this task's live ask/status," rather than each reimplementing (and potentially disagreeing about) the same journal-parsing logic. |
-| **audits / measures / probes** | ~30 | `plugins/overnight-agent/checks/board-integrity.mjs`, `plugins/overnight-agent/checks/digest-audit.mjs`, `plugins/overnight-agent/checks/rule-coverage.mjs` | One-off or recurring diagnostic tooling: structural board audits, digest-selection replay, and (explicitly distrusted, see below) coverage measurement. |
-| **task-specific investigations** | ~12 | `plugins/overnight-agent/checks/ynab-236-lookup.mjs`, `plugins/overnight-agent/checks/yt-transcript.mjs`, `plugins/overnight-agent/checks/cdp-eval.mjs` | Ad-hoc, read-only tools built with the same conventions to answer a specific task's question (a YNAB transaction lookup, a YouTube transcript recovery, raw Chrome DevTools Protocol access bypassing Playwright) — evidence the check-runner pattern is reused as general investigative tooling, not just self-audit. |
+Every one of the 159 modules falls into one of three families, distinguishable by name:
 
-`plugins/overnight-agent/checks/repo-drift-sweep.mjs` (535 lines, the domain's largest
-module) is "the check that keeps the other 37 checks alive": it verifies every file the
-live enforcement suite depends on is committed to git and identical to what is actually
-running, because the suite itself is developed against a local, uncommitted
-`%LOCALAPPDATA%\overnight-agent` copy that a crash or a laptop loss could erase entirely
-without a trace anywhere else.
+| Family | Count (approx.) | Purpose |
+| --- | --- | --- |
+| `*-sweep.mjs` | ~48 | One-shot detectors run over the live planner folder or a git worktree; each flags exactly one class of defect (a stale ask, a dropped deliverable, an orphaned journal, a collision) and exits non-zero when it finds one. |
+| `mutcheck-*.mjs` | ~40 | Mutation-tests for the sweeps above: each reverts exactly one guard inside its target sweep, re-runs that sweep against a known fixture, and asserts the sweep's verdict flips — proving the guard is load-bearing rather than decorative. |
+| `lib-*.mjs` | ~13 | Shared, dependency-light readers reused across sweeps and mutchecks (e.g. `lib-live-status.mjs`, `lib-live-ask.mjs`, `lib-issue-comments.mjs`, `lib-postmortem.mjs`) so the same journal/board parsing logic is not reimplemented per sweep. |
 
-## Design decision: consent is a plan/approve/execute split, enforced by convention today
+The remaining modules are single-purpose utilities (`cdp-eval.mjs`/`cdp-read.mjs` for Chrome DevTools
+Protocol probes into a running browser tab, `md2html.mjs`, `mcp-probe.mjs`) and cross-cutting audits
+(`board-integrity.mjs`, `doc-claim-consistency-sweep.mjs`, `installed-skill-drift-sweep.mjs`).
 
-Proposing a plan is unconditionally safe; only an *approved* plan may be executed. This is
-the one design decision everything else in this domain exists to protect. It is currently
-enforced by SKILL.md convention and audited by `self-attested-gate-sweep.mjs` and its
-siblings (`reversible-gate-sweep.mjs`, `owned-target-gate-sweep.mjs`,
-`deliverable-gate-sweep.mjs`) rather than by a structural boundary the agent cannot
-write around — see [Roadmap](Roadmap) issue #250 for the known gap (the `from: me`
-attribution marker is written by software the agent itself runs, not by an unforgeable
-channel) and its rejected "just trust the convention" alternative.
+## Representative modules
 
-## Design decision: assert the artifact, never the exit code
+| Module | Role |
+| --- | --- |
+| `plugins/overnight-agent/checks/board-integrity.mjs` | Structural board audit distinct from `board-gaps.mjs` (board→journal only): catches duplicate ids within one board, an id listed on both boards simultaneously (#280 resurrection), one id reused by two different tasks (#281), a `clock:0` sync-journal entry (the mechanism behind #280 — an epoch clock can never win a CRDT merge, so a stale row is resurrected every sync), an orphaned journal (#445), and a board row with no journal. |
+| `plugins/overnight-agent/checks/mutcheck-basename-collision.mjs` | Runs `basename-collision-sweep.mjs` as a **child process against real throwaway git repos** — not a function lifted out of it — and asserts disabling any one guard breaks exactly its own fixture and nothing else; exists because this repo has already shipped a detector that "reported 157 every night and passed anyway." |
+| `plugins/overnight-agent/checks/dead-ask-word-sweep.mjs`, `dropped-ask-sweep.mjs`, `digest-invisible.mjs` | Detect an open question the agent asked that never reached the user through any live channel. |
+| `plugins/overnight-agent/checks/lib-live-status.mjs`, `lib-live-ask.mjs` | The check-suite's own copies of the "read the newest turn, not a frozen header" rule also implemented in `packages/telegram-bridge/src/liveStatus.js` / `digest.js` — two independent runtimes, pinned together by mutation tests rather than shared code, because the two deploy targets (repo checkout vs. flattened `%LOCALAPPDATA%` install) cannot import from each other. |
+| `plugins/overnight-agent/checks/installed-skill-drift-sweep.mjs` | Detects the installed, flattened copy of the plugin diverging from the repo's own source — the deploy-propagation problem covered in [Reliability](Reliability). |
+| `plugins/overnight-agent/checks/journal-encoding-invariant.mjs` | Guards the byte-level encoding safety of journal writes (see [Reliability](Reliability)). |
+| `plugins/overnight-agent/checks/swallowed-message-sweep.mjs` | The domain's largest module by line count. Guards *incidence*, not exposure: whether one of the user's messages is sitting unanswered at the bottom of a journal right now. It exists because an earlier audit measured only how many journals *could* swallow a reply and reported that number as if it answered whether a message actually *had been* lost — which was false the moment it was written: one task held two unanswered questions appended nine hours earlier, read `done — nothing new` on every run in between. The sweep walks up from end-of-file collecting the trailing block, asks the provenance markers first (a `<!-- from: me -->` block the machinery structurally cannot see needs no heuristic at all), and only falls back to prose heuristics — distinguishing a wrapped continuation of the agent's own paragraph from a genuine new block by whether the line above it ends mid-sentence or is grammatically finished. |
 
-Every check in this domain is built to answer "did the real output change," not "did the
-script exit 0." `rule-coverage.mjs` is the canonical cautionary tale, and its own header
-carries a live warning never to trust the number it prints: its first version reported
-100% rule coverage because the enforcement-corpus scan matched a rule's own restated
-prose in a comment header, certifying every rule as enforced by matching its own
-quotation. Stripping comments only moved the number to 99%, still far too generous — "one
-distinguishing term appears somewhere in 107 files" is not evidence of enforcement. The
-durable finding was the false-green pattern itself, and it is why every sweep here is
-paired with a mutcheck that proves the check can actually fail, not merely that it can
-pass.
+## Why the mutcheck pattern exists as its own family
 
-## Behavioural requirements (representative; the check suite has no vitest-style unit
-tests of its own — see "Verification model" below)
+A sweep with no automated JS test suite (the domain has effectively none in `testFiles` — the two
+nominal vitest files, `stuck-run-sweep.test.mjs` and `workflow-health-sweep.test.mjs`, both currently
+carry empty test arrays) cannot rely on ordinary unit tests to prove it still works, because the sweeps
+run against real filesystem/git state that is awkward to fixture inside vitest, and because the actual
+failure this repo has already suffered — a check passing every night while doing nothing — is
+precisely the failure ordinary "does it run" testing cannot catch. The mutcheck family is the answer:
+each targeted sweep gets a companion module whose entire job is to prove that sweep's guards are
+load-bearing, one guard at a time, by breaking it on purpose and asserting the break is detected. This
+is the harness `run-sweeps.ps1` invokes on a schedule (see [Reliability](Reliability)) and the one
+[Prioritisation](Prioritisation) points to as "the executable statement of the intended behaviour" for
+dispatch precedence.
 
-- **`repo-drift-sweep`** must report `UNVERSIONED` for any file the live suite depends on
-  that exists in no archive, and `MODIFIED` when an archived and a live copy have
-  diverged, with direction reported — this is the mechanism that prevents a sweep written
-  tonight and never committed from silently vanishing.
-- **`lib-live-ask`** must extract a task's ask from its *newest* agent turn only — the
-  same "grep the last marker anywhere in the file" bug this library was built to fix
-  independently affected two separate sweeps (`declared-unblocked-sweep`,
-  `inprogress-stall-sweep`), each silently misreporting whichever task's newest turn used
-  a different ask dialect (`Next:`, `Your call:`) than the literal `Needs from you:`
-  string those sweeps' original, unshared implementations searched for.
-- **`dropped-ask-sweep`** must detect an ask that was present in one turn and silently
-  absent from the next, a defect shape distinct from — and previously invisible to —
-  `regressive-ask-sweep`'s three arms (amnesia / slot re-ask / stale grab), all of which
-  require the ask to still be *present* in order to fire; a dropped ask leaves no trace
-  for a contradiction-based detector to catch.
-- **`board-integrity`** must detect: the same id listed twice within one board
-  (`DUPE-OPEN`/`DUPE-COMPLETED`), an id open and completed simultaneously
-  (`BOTH-BOARDS`), one id reused by two materially different tasks (`ID-COLLISION`), a
-  sync-sidecar entry persisted with `clock: 0` (`ZERO-CLOCK`, the root mechanism behind
-  `BOTH-BOARDS`), a journal with no board row on either side (`ORPHAN-JOURNAL`), and a
-  board row with no journal file (`NO-JOURNAL`).
-- **Every sweep with a paired mutcheck must go red** when its mutcheck applies the
-  targeted mutation, and must return to green once the mutcheck restores the original
-  file — a sweep whose mutcheck cannot make it fail is documented as equivalent to having
-  no check at all.
+## Failure modes this domain guards against
 
-## Verification model
-
-This domain's checks are not exercised by the root `vitest` suite counted elsewhere in
-this specification; two are Node scripts with their own inline assertion runner invoked
-directly (`plugins/overnight-agent/checks/stuck-run-sweep.test.mjs` and
-`plugins/overnight-agent/checks/workflow-health-sweep.test.mjs`, run as
-`node <file>.test.mjs` against a throwaway SQLite fixture DB, never the live
-`~/.copilot/data.db`). The wider mutcheck family (25 files) plays the same self-verifying
-role for every other sweep: a `mutcheck-*.mjs` script is itself the test, run on demand
-rather than as part of CI.
-
-## Failure modes
-
-- A sweep whose ask/status extraction disagrees with a sibling sweep's own extraction
-  (because each reimplemented journal parsing independently) produces contradictory
-  findings on the same task — the `lib-live-ask.mjs` / `lib-live-status.mjs` shared
-  extractors exist specifically to make that class of disagreement structurally
-  impossible rather than something each sweep must remember to avoid.
-- A finding measured only against a synthetic fixture, never against the live backlog,
-  risks describing a bug that does not actually occur in practice — several sweeps'
-  documentation explicitly cites a measured live-backlog percentage (e.g. "12 of 49 active
-  non-terminal tasks (24.5%) were mis-attributed") specifically to avoid shipping a
-  detector built only on imagined failure cases.
-- See [Roadmap](Roadmap) for the currently-open gaps this domain has itself filed against
-  its own design, including the still-forgeable consent marker (issue #250, a follow-up to
-  the now-closed predecessor issue) and the residual in the Today gate's release signal
-  (issue #322, described in [Prioritisation](Prioritisation)).
+- **A check that cannot fail** — the recurring, named failure class this whole domain exists to close:
+  a detector that always reports the same reassuring value regardless of the real state of the system.
+  The mutcheck family exists specifically because a sweep passing is not evidence it works; only a
+  sweep *failing when it should* is.
+- **Two independently-deployed copies of the same logic silently drifting** — `lib-live-status.mjs`'s
+  parity mutation test against `packages/telegram-bridge/src/liveStatus.js` exists because the two
+  cannot share an import across their deploy boundary, so they are pinned together by test instead.
+- **A deployed install falling behind its source** — `installed-skill-drift-sweep.mjs` exists because
+  "the code is merged" and "the running agent has it" are different facts on a single, long-lived
+  machine with no redeploy step (see [Reliability](Reliability) for the full "merged isn't running"
+  mechanism).

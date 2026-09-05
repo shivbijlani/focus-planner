@@ -2,107 +2,69 @@
 
 ## Responsibility
 
-`app` is the React single-page application: the two boards (Today/Deferred/Priorities on
-`planner.md`, the archive on `planner-completed.md`), the per-task journal chat view, the
-Combined (multi-source) view, and the search/sort/navigation behaviour around them. It
-owns *no* transport or persistence logic itself — every mutating operation is a pure
-function that a UI event calls and then hands to [Domain-storage](Domain-storage) to
-persist.
+The web application: a single-page React app (`src/App.jsx`, 7,215 lines) that renders the board(s),
+journals, and settings editors, and orchestrates every pure transformation of board/journal content
+before handing the result to the storage layer. Almost none of the actual logic lives in `App.jsx`
+itself — it is deliberately a thin shell over dependency-free, unit-tested modules, because (per
+`src/boardTable.js`'s doc comment) nothing in the test suite imports `App.jsx` at all: doing so would
+pull in React and the whole component tree, so any logic left inside it is *by construction* untested.
+That constraint is why the domain is organized as ~35 small modules each doing one transformation.
 
 ## Principal modules
 
 | Module | Role |
 | --- | --- |
-| `src/App.jsx` | The application shell: board rendering, the Combined view, context menus, dialogs, wiring every other `app` module together. |
-| `src/focusPlanOps.js` | Pure content-transformation operations on `planner.md` (add/delete/move/rename/snooze/prioritize a task, append to the completed archive). Each op is `(content, ...args) -> newContent`, reused unchanged by both the single-source and Combined views. |
-| `src/journalChat.js` | Parses and appends to the journal chat format (see [Data-Formats](Data-Formats)). |
-| `src/taskSort.js` | Board sort order: urgent-red first, then manager-priority order, then dependency-chain depth, then the remaining priority icons. |
-| `src/moveTask.js` | Computes which tasks travel together when one is moved between storage sources, and which cross-source links would break. |
-| `src/readState/readStateService.js` | Event-driven read/unread tracking for journals, behind a swappable provider (`src/readState/localStorageReadStateProvider.js` is the only implementation today). |
-| `src/journalLoadQueue.js` | Concurrency-limited, de-duplicated, board-ordered queue for the ~2 journal reads every board row needs, so 90+ rows mounting at once don't stampede the storage provider. |
-| `src/selfHealIds.js` | Defensive repair of task IDs that were corrupted by a historical numbering bug, applied on load. |
-| `src/idTombstones.js` | Records recently deleted task IDs so a freed ID cannot be reused before a sync-resurrected journal for that ID could plausibly still arrive. |
-| `src/combinedRouting.js` / `src/combinedViewPatch.js` | Multi-source (Combined view) row-to-source routing and optimistic re-render after a write. |
-| `src/skillsSection.js` / `src/SkillsSection.jsx` | Read-only rendering of a `## Skills` board section (the app never edits it; authoring happens elsewhere). |
+| `src/focusPlanOps.js` | Every pure content-transformation on `planner.md`: add/delete/move/rename/snooze/link a task, promote to manager priority. |
+| `src/boardTable.js` / `src/boardRow.js` | The reader and the shared header-alignment rule (issue #426 — see [Data-Formats](Data-Formats)). |
+| `src/taskSort.js` | The app's own display sort (urgent-first, then manager-priority chain via `Linked ID`, then chain depth, then icon rank). |
+| `src/snooze.js` | Wake-date parsing/writing on board rows; legacy `<!-- snooze:… -->` comment fallback. |
+| `src/journalChat.js` | The shared chat-thread parser/writer for journals (also embedded verbatim by `packages/task-paper`). |
+| `src/moveTask.js` | Cross-source task moves, including dragging a manager-priority task's whole dependency subtree. |
+| `src/idTombstones.js` | Deleted-task id tombstones, so a freed id isn't reused before a delayed sync-resurrection of the old journal has passed. |
+| `src/combinedRouting.js` / `combinedViewPatch.js` | Multi-source ("Combined") board: tags each merged row with its owning source and patches optimistic UI state. |
+| `src/readState/*` | Event-driven read/unread tracking, provider-swappable (localStorage today; sync explicitly deferred, issue #79). |
+| `src/skillsSection.js` | Read-only parser for the `## Skills` board section (the planner never edits skills, only surfaces them). |
+| `src/unreachableJournals.js` | In-app detector for a live journal with no reachable board row (the inverse defect of a deleted row leaving an orphaned journal). |
+| `src/selfHealIds.js` | Temporary, self-deleting repair for task ids that escaped into a foreign numeric range. |
 
-## Public exports (selected)
+## Public surface (representative exports)
 
-- `focusPlanOps.js`: `opAddTask`, `opMoveBetweenSections`, `opDeleteTask`,
-  `opRenameTask`, `opChangePriority`, `opSnoozeTask`, `opApplySnoozeTransitions`,
-  `opAppendToCompleted`, `allocateNextId`, `buildCompletedRow`.
-- `journalChat.js`: `parseJournalChat`, `appendJournalMessage`, `formatChatDay`,
-  `formatCloseOutComment`, `AGENT_SENTINEL_RE`.
-- `taskSort.js`: `sortTasksByPriority`, `resolveManagerPriority`,
-  `getChainDepthToManagerPriority`, `parseManagerPriorities`.
-- `moveTask.js`: `computeMoveSet`, `computeBrokenLinks`, `renumberMovedRows`,
-  `retitleJournal`.
-- `readState/readStateService.js`: `track`, `isUnread`, `emitJournalOpened`, `markSeen`,
-  `completeInitialSeeding`, `setReadStateProvider`.
+`opAddTask, opDeleteTask, opChangePriority, opSetTaskSnooze, opMoveBetweenSections,
+opPromoteToManagerPriority, allocateNextId` (`focusPlanOps.js`); `parseMarkdownTable, displayHeader`
+(`boardTable.js`); `alignRowToHeaders, cellByHeader, recoverMisfiledLinkedId` (`boardRow.js`);
+`sortTasksByPriority, resolveManagerPriority, isNeededForUrgentTask` (`taskSort.js`);
+`parseJournalChat, appendJournalMessage` (`journalChat.js`); `computeMoveSet, retitleJournal`
+(`moveTask.js`); `addTombstone, getActiveTombstoneIds` (`idTombstones.js`); `findUnreachableLiveJournals`
+(`unreachableJournals.js`).
 
 ## Behavioural requirements (from tests)
 
-- **ID allocation** (`src/allocateId.test.js`) must number a new task from the content's
-  current maximum, ignoring a foreign high journal ID, and must skip any ID that already
-  has a journal on disk to avoid collision.
-- **Board sort** (`src/taskSort.test.js`) must order dependency chains
-  prerequisite-first within the same manager priority, keep manager-priority order ahead
-  of raw dependency depth, and still float 🔴-urgent items above non-urgent ones
-  regardless of priority-chain membership.
-- **Journal chat parsing** (`src/journalChat.test.js`) must extract the thread title
-  without its leading `#`, keep undated content as pinned/earlier notes, and route
-  `AUTO`-marked content into an agent-authored group distinct from the human's.
-- **Journal load state** (`src/journalLoadState.test.js`) must never offer to create a
-  journal when an existence check has failed (only after a *successful* absence check),
-  and must retain previously known existence across a retry failure rather than
-  flip-flopping the UI.
-- **Journal load queue** (`src/journalLoadQueue.test.js`) must never exceed its
-  concurrency limit and must drain queued work in ascending board-priority order.
-- **Journal deletion** must resolve the journal path at delete time — falling back to
-  asking storage directly — rather than trusting a possibly-stale, lazily-loaded row
-  value, since a delete issued before a row's journal state has resolved must not
-  silently orphan the journal file.
-- **Combined-view row routing** (`src/combinedRouting.test.js`) must tag every merged row
-  with the id of the source it actually came from, and must leave a row untagged (falling
-  back to legacy text lookup) only when no source id is available — never guess.
-- **Combined-view optimistic patch** (`src/combinedViewPatch.test.js`) must replace and
-  re-parse only the matching source's content, and must return the same array reference
-  when nothing changed, so React does not re-render needlessly.
-- **File-tree filtering** (`src/fileTreeFilter.test.js`) must keep only the curated core
-  files at each source's top level, hide every non-journal directory even if it contains
-  copies of core files, and drop stray loose `.md` files not on the allow-list.
-- **Move-between-sources** (`src/moveTask.test.js`) must pull every descendant of a
-  manager-priority task into the move set, and must not pull in tasks whose chain
-  resolves to a *different* manager priority.
-- **Read-state seeding** (`src/readState/readStateService.test.js`) must mark every
-  journal tracked before initial seeding completes as already-seen (no "wall of stars" on
-  first load), and must treat a journal that first appears after seeding completes as
-  unread until opened.
-- **Journal signature** (`src/readState/signature.test.js`) must produce a stable
-  placeholder for empty/invalid content and must change whenever new dated content is
-  appended, even on the same day.
-- **Self-healing IDs** (`src/selfHealIds.test.js`) must flag a high, gap-separated
-  cluster of IDs as outliers, but must not flag a planner that legitimately uses
-  high IDs throughout — the detector keys on the gap, not on absolute magnitude.
-- **Tombstones** (`src/idTombstones.test.js`) must ignore invalid ids so a malformed row
-  cannot poison the tombstone store, and must treat a recent tombstone as active while an
-  expired one is treated as gone.
-- **Snooze** (`src/snooze.test.js`) must set and parse a `Wake` column without altering
-  any other table cell, and must fall back to parsing a legacy trailing HTML comment for
-  rows written before the column existed.
-- **Skills section** (`src/skillsSection.test.js`) must match only the exact `Skills`
-  heading (case/whitespace-sensitive) and must be null-safe when no such section exists.
+- **Board writes are CRLF/whitespace tolerant.** `opChangeLinkedId`, `opRenameTask` and
+  `opRemoveTaskFromFocusPlanResult` must match a target row whether the file uses CRLF or LF line
+  endings, and regardless of incidental cell padding (`focusPlanOps.test.js`).
+- **Sorting is a strict, deterministic total order** even with cyclic `Linked ID` chains — urgent
+  (🔴) rows float above all non-urgent rows regardless of manager priority; within a manager-priority
+  tier, shorter dependency chains sort first; ties resolve by icon rank (`taskSort.test.js`).
+- **Snooze transitions are two-way and idempotent**: a future Wake date defers a Today row to
+  Deferred; an expired Wake date auto-returns a Deferred row to Today and clears the Wake cell; a
+  marker-less Deferred row is left untouched (`focusPlanOps.test.js`, `snooze.test.js`).
+- **Id tombstones block reuse only for a bounded TTL**, then release it, and persist/prune correctly
+  through localStorage (`idTombstones.test.js`).
+- **`findUnreachableLiveJournals` is silent** for a journal that is reachable, tombstoned, or
+  terminal, and flags only a non-terminal, untombstoned journal with no row on either board — string
+  and numeric ids must compare equal (`unreachableJournals.test.js`).
+- **Journal chat parsing is fence-aware**: a `## `-looking line or a `<!-- from: -->` marker quoted
+  inside a fenced code block must never be read as live structure (`journalChat.test.js`).
 
-## Failure modes
+## Failure modes this domain guards against
 
-- A row whose journal read is still in flight when the user issues a destructive action
-  (delete, move) risks silently orphaning or double-deleting a journal if the read result
-  is trusted instead of re-resolved at action time — mitigated by `src/journalDelete.js`
-  re-querying storage rather than using cached row state.
-- A sync replica that delivers a stale copy of `planner.md` containing a row another
-  device already deleted can resurrect that row locally unless the sidecar tombstone (see
-  [Data-Formats](Data-Formats)) is honored by the reading device — this is a
-  [Domain-folder-sync](Domain-folder-sync) concern, not an `app` one, but `app` depends on
-  it never regressing.
-- A foreign/corrupted high-range task ID arriving via sync can permanently distort the
-  board's own numbering sequence unless caught by `src/selfHealIds.js` on load; this
-  module is explicitly documented as temporary, deletable once every device has healed.
+- **Reader/writer disagreement on ragged rows** (#426) — closed by making `boardRow.js` the one
+  shared alignment rule for both sides.
+- **Orphaned journals in both directions** — a deleted row whose journal survives (#185, fixed by
+  resolving the journal path at delete time rather than trusting stale UI state, `journalDelete.js`),
+  and a surviving journal whose row vanished (#190/#228, detected by `unreachableJournals.js`).
+- **Combined-view cross-source ambiguity** (#39) — two folders can share identical row text or local
+  ids; `combinedRouting.js` tags every merged row with its real source id so a destructive op can never
+  be routed to the wrong folder.
+- **Runaway task ids** (a numbering bug that let new ids inherit a foreign counter) — `selfHealIds.js`
+  is an explicitly temporary, self-obsoleting patch, deletable once every device has loaded and healed.
