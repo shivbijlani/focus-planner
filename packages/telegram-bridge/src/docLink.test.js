@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   createBridge,
   blockingAsk,
+  retractedAsk,
   terminalStatus,
   formatDocLink,
 } from './bridge.js'
@@ -334,6 +335,132 @@ describe('#424 — the catch-up link replaces the per-turn post', () => {
     await bridge.syncUp()
     expect(h.sent).toHaveLength(3)
     expect(state.tasks['42'].docLinkNoticeMessageId).toBe(3)
+  })
+
+  // #515 — RETRACTION. A resolved ask is left alone; a retracted one is corrected in place.
+  // The two are opposite treatments of the same state transition, and the tests below assert
+  // both directions so neither can be widened into the other by accident.
+
+  it('CORRECTS the notice in place when the turn retracts an ask that was never satisfiable', async () => {
+    // Measured live on task 468: a notice asked for "one word" to authorise clearing two
+    // messages, when `delete_data` sits on the agent-gate floor and the floor overrides even a
+    // human approve. No word could have satisfied it. Leaving that standing is what rewrites
+    // history — it leaves a demand nobody can meet.
+    const h = makeHarness({ 42: journal({ needs: 'one word to clear messages 2810 and 2811' }) })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    const noticeId = state.tasks['42'].docLinkNoticeMessageId
+    expect(noticeId).toBe(2)
+    expect(state.tasks['42'].docLinkNoticeAsk).toBe('one word to clear messages 2810 and 2811')
+
+    h.store['42'] = journal({
+      needs: 'none',
+      body: 'work\n\n**Retracts:** no word could clear them; deleting is floor-blocked.',
+    })
+    await bridge.syncUp()
+
+    // Nothing was ADDED to the topic — a retraction must not grow the stack it is cleaning up.
+    expect(h.sent).toHaveLength(2)
+
+    const rewrite = h.edits.filter((e) => e.messageId === noticeId).pop()
+    // The ORIGINAL ASK IS STILL LEGIBLE. This is the property that makes editing safe at all:
+    // he can still see exactly what he was asked, so nothing is rewritten under him.
+    expect(rewrite.text).toContain('one word to clear messages 2810 and 2811')
+    // ...and it is now visibly withdrawn, with the reason.
+    expect(rewrite.text).toContain('<s>')
+    expect(rewrite.text).toContain('Withdrawn')
+    expect(rewrite.text).toContain('deleting is floor-blocked')
+
+    // The id is STILL forgotten afterwards, exactly as on the resolve path — a retraction is a
+    // one-shot correction, not a licence to keep editing the message forever.
+    expect(state.tasks['42'].docLinkNoticeMessageId).toBeUndefined()
+    expect(state.tasks['42'].docLinkNoticeAsk).toBeUndefined()
+  })
+
+  it('leaves a merely RESOLVED ask untouched — retraction must not widen into resolution', async () => {
+    // The regression guard for the deliberate behaviour this fix must not trade away. A turn
+    // that simply stops asking has NOT established that the ask was unsatisfiable, so the
+    // message stays exactly as he last read it.
+    const h = makeHarness({ 42: journal({ needs: 'the API key for the staging box' }) })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    const noticeId = state.tasks['42'].docLinkNoticeMessageId
+    const editsBefore = h.edits.filter((e) => e.messageId === noticeId).length
+
+    h.store['42'] = journal({ needs: 'none' })
+    await bridge.syncUp()
+
+    expect(h.edits.filter((e) => e.messageId === noticeId)).toHaveLength(editsBefore)
+    expect(state.tasks['42'].docLinkNoticeMessageId).toBeUndefined()
+  })
+
+  it('does not post a NEW message when a retraction has no notice left to reach', async () => {
+    // Task 468's message 2862 is exactly this case: the resolve path already forgot the id
+    // before this fix existed. The retraction cannot reach it, and must not compensate by
+    // posting a fresh message — that would add a line to say something no longer matters.
+    const h = makeHarness({ 42: journal({ needs: 'one word to clear 2810 and 2811' }) })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(2)
+    // Simulate pre-fix state: the hash survives, the id was dropped.
+    state.tasks['42'].docLinkNoticeMessageId = undefined
+
+    h.store['42'] = journal({
+      needs: 'none',
+      body: 'work\n\n**Retracts:** it could never have been satisfied.',
+    })
+    await bridge.syncUp()
+
+    expect(h.sent).toHaveLength(2)
+    expect(state.tasks['42'].docLinkNoticeHash).toBeUndefined()
+  })
+
+  it('announces a retracted-then-returning ask as a NEW message', async () => {
+    const h = makeHarness({ 42: journal({ needs: 'the staging key' }) })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(2)
+
+    h.store['42'] = journal({ needs: 'none', body: 'work\n\n**Retracts:** wrong ask.' })
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(2)
+
+    h.store['42'] = journal({ needs: 'the staging key' })
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(3)
+  })
+
+  it('never INFERS a retraction: a dismissive or absent Retracts line is not one', () => {
+    expect(retractedAsk('**Retracts:** the ask was impossible')).toBe('the ask was impossible')
+    expect(retractedAsk('Retracts: none')).toBe('')
+    expect(retractedAsk('**Needs from you:** the key')).toBe('')
+    expect(retractedAsk('')).toBe('')
+    expect(retractedAsk(null)).toBe('')
+  })
+
+  it('reads a reason that BEGINS with "no" — a retraction is prose, not an ask', () => {
+    // Regression guard for a bug that shipped a silently dead feature with every other test
+    // green. The ask filter is prefix-anchored (`/^(none|nothing|no|...)\b/`) because
+    // "Needs from you: nothing needed" must not block. Applied to a retraction it swallowed
+    // the most natural sentence there is — the live one from task 468 begins "no word could
+    // clear them". A reason is free prose; only a BARE dismissive token means "no retraction".
+    expect(retractedAsk('**Retracts:** no word could clear them; deleting is floor-blocked.')).toBe(
+      'no word could clear them; deleting is floor-blocked.',
+    )
+    expect(retractedAsk('**Retracts:** nothing he says could have satisfied it')).toBe(
+      'nothing he says could have satisfied it',
+    )
+    // ...while the bare tokens still read as absent.
+    expect(retractedAsk('Retracts: nothing')).toBe('')
+    expect(retractedAsk('Retracts: n/a')).toBe('')
   })
 
   it('replaces the link when the task is rebound to a different doc', async () => {

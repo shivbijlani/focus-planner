@@ -175,7 +175,11 @@ export function setDocLink(state, taskId, { docId, messageId } = {}) {
 // slightly different asks left three messages, which is the stack this whole
 // feature exists to remove, arriving through the one path still allowed to post.
 // A hash can prove a notice was sent; only an id can go back and change it.
-export function setDocLinkNoticeHash(state, taskId, hash, messageId) {
+// The ASK ITSELF is kept beside the hash for one reason: so a retraction can put the
+// original words back on screen. A hash cannot be read back into text, so without this a
+// retraction could only REPLACE the line -- and replacing is precisely what the id-clearing
+// below exists to prevent. Storing it is what lets the retraction annotate instead.
+export function setDocLinkNoticeHash(state, taskId, hash, messageId, ask) {
   const prev = state.tasks[taskId] || {}
   state.tasks[taskId] = {
     ...prev,
@@ -184,6 +188,7 @@ export function setDocLinkNoticeHash(state, taskId, hash, messageId) {
     // at a message that no longer represents anything, and editing it later would
     // silently rewrite a line Shiv has already read and acted on.
     docLinkNoticeMessageId: hash && Number.isInteger(messageId) ? messageId : undefined,
+    docLinkNoticeAsk: hash && ask ? String(ask) : undefined,
   }
   return state
 }

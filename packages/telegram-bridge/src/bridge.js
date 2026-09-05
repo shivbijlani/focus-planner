@@ -129,6 +129,12 @@ export function splitAsk(turn) {
 
 const DISMISSIVE_ASK_RE = /^(none|nothing|no|n\/?a|nil|nope)\b/i
 
+// A retraction's value is a REASON, not an ask — free prose that can legitimately begin with
+// "no" ("no word could clear them; deleting is floor-blocked"). Reusing the prefix-anchored
+// ask filter above silently swallowed exactly that sentence, killing the feature while every
+// other test stayed green. So only a bare dismissive token counts as "no retraction here".
+const DISMISSIVE_REASON_RE = /^(none|nothing|n\/?a|nil|nope)\.?$/i
+
 /**
  * The value of the turn's last `Needs from you:` line, or '' when the agent is not blocked.
  *
@@ -147,6 +153,35 @@ export function blockingAsk(turn) {
   }
   if (value == null) return ''
   if (!value || DISMISSIVE_ASK_RE.test(value)) return ''
+  return value
+}
+
+/**
+ * Why a previous ask could never have been satisfied, or '' when the turn makes no such claim.
+ *
+ * RESOLUTION vs RETRACTION — the whole of #515 turns on this distinction.
+ *
+ * A resolved ask was true when it was posted: Shiv may have read it and acted on it, so the
+ * notice is left exactly as it stands and its id is forgotten (see `setDocLinkNoticeHash`).
+ * That is deliberate and is NOT relaxed here.
+ *
+ * A retracted ask was never satisfiable — measured live on task 468, a notice asked for "one
+ * word" to authorise clearing two messages when `delete_data` sits on the agent-gate floor and
+ * the floor overrides even a human `approve`. No word could have worked. He cannot have acted
+ * on it, because acting on it was impossible, and that impossibility is the defect.
+ *
+ * The bridge cannot verify unsatisfiability for itself, so it never INFERS a retraction: the
+ * turn's author must state one explicitly. The safety that makes an agent-authored signal
+ * acceptable here is not trust, it is that a retraction cannot destroy anything -- see
+ * `formatDocRetraction`, which keeps the original ask on screen.
+ */
+export function retractedAsk(turn) {
+  const m = /^[ \t]*\**[ \t]*Retracts[ \t]*\**[ \t]*:?[ \t]*\**[ \t]*(.*)$/im.exec(
+    String(turn == null ? '' : turn),
+  )
+  if (!m) return ''
+  const value = m[1].replace(/\*+/g, '').trim()
+  if (!value || DISMISSIVE_REASON_RE.test(value)) return ''
   return value
 }
 
@@ -195,6 +230,27 @@ export function hashNotice(ask, terminal) {
   return hashTurn(`${terminal}\u0000${ask}`)
 }
 
+/**
+ * The retraction line: the original ask, struck through, above the reason it could not stand.
+ *
+ * The ORIGINAL WORDS ARE KEPT ON SCREEN, and that is what makes editing a notice safe here.
+ * `state.js` refuses to keep a notice id after an ask resolves because "editing it later would
+ * silently rewrite a line Shiv has already read and acted on" — and the operative words are
+ * SILENTLY REWRITE. This neither hides nor replaces: the ask he saw is still legible, with a
+ * correction attached. History is annotated, not rewritten, so the property that refusal was
+ * protecting still holds while the falsehood stops standing unqualified.
+ *
+ * That is also why an agent-authored retraction flag is not the #322 failure class in miniature.
+ * A false retraction can only add a correction beneath text that remains visible; it cannot
+ * erase an ask, and the reader can still see exactly what was asked and judge for themselves.
+ */
+export function formatDocRetraction(taskId, { ask, reason, docUrl }) {
+  return (
+    `<b>#${taskId}</b> <s>${escapeHtml(ask)}</s>\n` +
+    `⚠️ <b>Withdrawn</b> — ${escapeHtml(reason)}\n` +
+    `<a href="${escapeHtml(docUrl)}">Catch-up doc</a>`
+  )
+}
 // Greedily pack whole markdown lines into chunks whose CONVERTED HTML fits
 
 // `room`. Converting per chunk is what keeps each one tag-balanced:
@@ -740,7 +796,7 @@ export function createBridge({
   // errors, so the MESSAGE is read rather than the mere fact of failure — reading only
   // "did it throw?" would classify a healthy message as missing and repost it every run.
   async function syncDocLink({ taskId, content, turn, hash, task, docMeta, completed, active }) {
-    const out = { created: false, linked: false, notified: false, suppressed: false }
+    const out = { created: false, linked: false, notified: false, suppressed: false, retracted: false }
 
     // A finished task stays quiet here exactly as it does for turns (#186): the topic is
     // archived and the user has closed it. A user reply reopens the conversation.
@@ -937,15 +993,50 @@ export function createBridge({
           if (sent && Number.isInteger(sent.message_id)) noticeId = sent.message_id
         }
 
-        setDocLinkNoticeHash(state, taskId, noticeHash, noticeId)
+        setDocLinkNoticeHash(state, taskId, noticeHash, noticeId, ask)
         out.notified = true
         logger(
           `${noticeId === priorId && priorId != null ? 'updated' : 'posted'} short notice for task #${taskId} (${terminal || 'ask'})`,
         )
       }
     } else if (entry && entry.docLinkNoticeHash) {
-      // The ask was resolved. Forget it, so the same ask returning later is announced again
-      // rather than silently swallowed as "already said".
+      // The ask is no longer live. TWO different things can have happened, and they get
+      // opposite treatment — see `retractedAsk` for why.
+      //
+      // RESOLVED (the default): leave the message exactly as it is. He may have read it and
+      // acted on it, and rewriting it afterwards would change history under him.
+      //
+      // RETRACTED (only when the turn says so): the ask was never satisfiable, so he provably
+      // could not have acted on it. Leaving it is what rewrites history — it leaves a demand
+      // standing that nobody can meet. Correct it in place, keeping the original words visible.
+      const retraction = retractedAsk(turn)
+      const priorId =
+        Number.isInteger(entry.docLinkNoticeMessageId) ? entry.docLinkNoticeMessageId : null
+
+      if (retraction && priorId != null && entry.docLinkNoticeAsk) {
+        const text = formatDocRetraction(taskId, {
+          ask: entry.docLinkNoticeAsk,
+          reason: retraction,
+          docUrl: docMeta.docUrl,
+        })
+        // Deliberately NOT falling through to sendMessage on failure, unlike a live notice.
+        // A notice carries information that exists nowhere else, so losing it is the worse
+        // error; a retraction is the opposite — its content is already in the doc, and a fresh
+        // message would ADD to the topic to say something no longer matters. If the edit does
+        // not land, the stale line simply stands for another run.
+        if (await editNotice(taskId, priorId, text)) {
+          out.retracted = true
+          logger(`retracted the notice for task #${taskId} (${retraction})`)
+        }
+      } else if (retraction && priorId == null) {
+        // Nothing to reach. State from before this existed, or a notice whose id was already
+        // forgotten by the resolve path — message 2862 on task 468 is exactly this, and is why
+        // #515 is a fix for the class rather than a repair of that message.
+        logger(`task #${taskId} retracts an ask, but its notice id was already forgotten`)
+      }
+
+      // Forget it either way, so the same ask returning later is announced again rather than
+      // silently swallowed as "already said".
       setDocLinkNoticeHash(state, taskId, null)
     }
 
