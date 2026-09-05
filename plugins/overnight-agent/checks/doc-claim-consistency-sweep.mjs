@@ -187,6 +187,47 @@ const COST_COL = /\b(unpaid|extra|cost|leave|charge|fee)\b/i;
 // Strip markdown emphasis so `**5**` reads as 5.
 const plain = (s) => String(s).replace(/[*_`]/g, '').trim();
 
+// --- CURRENT vs SUPERSEDED claims (GH #499) --------------------------------------------------
+//
+// A task journal is APPEND-ONLY by design: write-turn.ps1 adds a turn and never rewrites an
+// earlier one, which is exactly what stops it destroying one of Shiv's replies. So a
+// contradiction sitting in a superseded turn cannot be repaired by any sanctioned operation --
+// the sweep would be demanding a change the system is built to refuse, and would report the
+// same finding forever.
+//
+// That is the failure this file's own header warns about, quoting #433: an advisory that always
+// fires is one you learn to skip, and then it is worth nothing on the day it means something
+// new. A permanently-pinned row also pins a non-zero exit code, which erodes it for anything
+// downstream.
+//
+// So for a JOURNAL, only the newest agent turn is a current claim. Everything above it is
+// history: it records what was believed then, and disagreeing with a later correction is the
+// system working rather than a defect. This is the same "newest turn is the body, everything
+// prior is Appendix" rule generate-task-papers.ps1 already applies.
+//
+// The scoping is deliberately asymmetric, and the asymmetry is the point:
+//   * CLAIMS are read only from the current turn -- they are what the document asserts NOW.
+//   * TABLES and the declared ALLOWANCE are still read from the WHOLE file, because they are
+//     the evidence a claim is measured against and they routinely sit far above it.
+// Narrowing the evidence as well would silently stop the rule firing at all, which is the
+// #346-shaped mistake already made once in this file (the first cost column bug).
+//
+// Non-journal deliverables and catch-up docs keep FULL scope: they are living surfaces
+// rewritten in place, so every claim in them is current and fixable -- and that is where both
+// real findings were.
+const JOURNAL_FILE = /^task-\d+\.md$/i;
+const TURN_HEADING = /^##\s+\u{1F319}/u;
+
+function currentClaimStart(file, lines) {
+  if (!JOURNAL_FILE.test(path.basename(file))) return 0;
+  let last = -1;
+  for (let i = 0; i < lines.length; i++) if (TURN_HEADING.test(lines[i])) last = i;
+  // No managed turn at all: treat the file as fully current rather than skipping it entirely.
+  // Silently scanning nothing would be the same "looked" / "could not look" collapse this sweep
+  // exists to prevent.
+  return last === -1 ? 0 : last;
+}
+
 function findingsForFile(file) {
   const raw = fs.readFileSync(file, 'utf8');
   const lines = raw.split(/\r?\n/);
@@ -212,13 +253,20 @@ function findingsForFile(file) {
   });
   if (cur.text.length) paras.push({ start: cur.start, text: cur.text.join('\n') });
 
+  // Everything above this line is superseded history in a journal (GH #499). Findings there are
+  // TAGGED rather than discarded, so a suppressed hit is still counted and reportable -- a
+  // silently dropped finding and a corpus with none would otherwise be the same output, which
+  // is the collapse this whole sweep exists to prevent.
+  const claimStart = currentClaimStart(file, lines);
+  const tag = (f) => ({ ...f, historical: f.line - 1 < claimStart });
+
   for (const p of paras) {
     const claim = hasAbsoluteClaim(p.text);
     if (!claim) continue;
     const spend = firstMatch(SPEND, p.text);
     if (!spend || !allowance) continue;
     if (spend.value > allowance.value) {
-      out.push({
+      out.push(tag({
         kind: 'ALLOWANCE_EXCEEDED',
         file,
         line: p.start + 1,
@@ -228,7 +276,7 @@ function findingsForFile(file) {
           `declares an allowance of ${allowance.value} ("${allowance.match.trim()}"), ` +
           `yet claims it costs nothing`,
         excerpt: p.text.split('\n')[0].slice(0, 120),
-      });
+      }));
     }
   }
 
@@ -264,7 +312,7 @@ function findingsForFile(file) {
             if (!keyRe.test(s)) continue;
             const shared = [...claimNouns(s)].some((n) => colNouns.has(n));
             if (!shared) continue;
-            out.push({
+            out.push(tag({
               kind: 'TABLE_CONTRADICTION',
               file,
               line: p.start + 1,
@@ -273,7 +321,7 @@ function findingsForFile(file) {
                 `prose makes an absolute no-cost claim about "${key}", but the table on line ` +
                 `${t.line + 1} scores that row's ${plain(t.header[costIdx])} as ${cellRaw}`,
               excerpt: s.slice(0, 120),
-            });
+            }));
           }
         }
       }
@@ -296,22 +344,30 @@ function corpus() {
 }
 
 const files = corpus();
-const findings = [];
+const all = [];
 for (const f of files) {
   try {
-    findings.push(...findingsForFile(f));
+    all.push(...findingsForFile(f));
   } catch (err) {
     console.error(`could not read ${f}: ${err.message}`);
   }
 }
 
+// Actionable now vs. frozen in append-only history (GH #499). Only the first decides the exit
+// code, because the exit code means "there is something to fix" -- and history cannot be fixed.
+const findings = all.filter((f) => !f.historical);
+const historical = all.filter((f) => f.historical);
+
 if (asJson) {
-  console.log(JSON.stringify({ scanned: files.length, findings }, null, 2));
+  console.log(JSON.stringify({ scanned: files.length, findings, historical }, null, 2));
   process.exit(findings.length ? 1 : 0);
 }
 
 console.log(`Documents contradicting their own numbers: ${findings.length}`);
-console.log(`  (scanned ${files.length} agent-authored markdown files in ${JDIR})\n`);
+console.log(
+  `  (scanned ${files.length} agent-authored markdown files in ${JDIR}` +
+    `; ${historical.length} suppressed as superseded journal history)\n`,
+);
 
 for (const f of findings) {
   console.log(`${path.basename(f.file)}:${f.line}  ${f.kind}`);
@@ -324,6 +380,18 @@ if (findings.length) {
   console.log('A claim contradicted by a number in the same document is worse than an');
   console.log('unsupported one: the evidence was present and was read past. Fix the prose or');
   console.log('the table, and do not leave the two disagreeing.');
+}
+
+// Reported, never silent. These are real contradictions that happen to sit in turns the journal
+// can no longer rewrite, so they are not findings -- but a suppressed hit nobody can even see is
+// indistinguishable from one that never existed, which is the defect this file is about.
+if (historical.length) {
+  console.log(`\nSuppressed as superseded history (${historical.length}, not actionable):`);
+  for (const f of historical) {
+    console.log(`  ${path.basename(f.file)}:${f.line}  ${f.kind} - ${f.excerpt}`);
+  }
+  console.log('  These sit in turns above the newest one. Journals are append-only by design,');
+  console.log('  so no sanctioned operation can edit them; they record what was believed then.');
 }
 
 process.exit(findings.length ? 1 : 0);
