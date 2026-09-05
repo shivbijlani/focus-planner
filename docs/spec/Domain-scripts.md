@@ -2,76 +2,66 @@
 
 ## Responsibility
 
-Small, standalone Node scripts that support development and maintenance but are not part
-of the shipped application: replaying a verified PR merge order, copying the service
-worker to a servable location, one-off data-repair tooling, a mutation-check runner, and
-this specification's own fact collector and verifier.
+Repository-maintenance tooling and the spec-wiki pipeline's mechanism half. Two families: **repair /
+guard scripts** run by hand or CI to fix or prevent a specific known defect, each one traceable to the
+issue it closes; and **`scripts/spec/*`**, the deterministic fact-collector, conflict-detector and
+verifier that make the generated design spec (this document set) checkable rather than merely fluent.
 
 ## Principal modules
 
 | Module | Role |
 | --- | --- |
-| `scripts/merge-queue.mjs` | The largest module in this domain (263 lines). Executes an empirically-verified PR merge order: GitHub's per-PR `MERGEABLE` badge is blind to PR-versus-PR collisions, so a stack that each individually reads "mergeable" can still stop dead halfway through a real merge run. The order it encodes was produced by actually merging each PR into a scratch worktree and running the full vitest suite on the result — not guessed — because the "obvious" order lands 8 of 18 PRs while the verified order lands 15 and ends green. Dry-run by default (`--execute` to actually merge); re-checks each PR's live state before touching it, runs the test suite after every merge and stops on the first failure, skips already-merged PRs (a stopped run is resumable), and leaves branches alone unless `--delete-branches` is passed. Exports `EXCLUDED`, `VERIFIED_QUEUE`, `parseTestCount`, `planQueue`, `planStep` — the pure planning functions are exported specifically so `scripts/merge-queue.test.js` can unit-test the plan without calling `gh` or mutating a real repo. |
-| `scripts/spec/collect.mjs` | Deterministic, model-free fact extraction for this spec: walks the module graph, exports, data formats, tests, workflows, and open issues into `spec-facts.json`. Deliberately dependency-free (a regex pass over source, not a real parser) — these are structural facts robust enough to enumerate without a parser dependency to maintain. |
-| `scripts/spec/verify.mjs` | The gate this very document must pass: checks every page in `docs/spec/` against `spec-facts.json` for invented file/export/issue references, omitted domains, and thin/example-free pages, and fails the build rather than publish an unverified spec. |
-| `scripts/copy-sw.mjs` | Copies the `folder-sync` source tree into `public/folder-sync/` so Vite serves the service worker (and its ES-module imports) from the app's own origin — a browser can only register a service worker from a same-origin URL, so it cannot be imported straight out of `packages/`. |
-| `scripts/fix-sidecar.mjs` | One-off repair tool: regenerates a planner sidecar from already-cleaned markdown so that removed task IDs are properly tombstoned, mirroring exactly what the app does on a local edit (`parse(md) -> records -> stampLocalChanges(records, meta) -> serializeSidecar`) — otherwise other sync replicas would resurrect the removed rows. |
-| `scripts/mutcheck-skills-section.mjs` | A mutation check for the Skills-section guards: applies one targeted mutation at a time to the guarded code, re-runs the suite, and asserts it goes red — then restores the file. A passing test proves nothing unless it also fails when the behaviour it guards is broken. |
+| `scripts/spec/collect.mjs` | Extracts `spec-facts.json` with no model involved: module graph, exports, tests, workflows, open issues — a regex pass, deliberately dependency-free. |
+| `scripts/spec/verify.mjs` | The mechanical gate this document set must pass: catches invention (a named file/export/issue that doesn't exist) and omission (an uncovered domain or key module). |
+| `scripts/spec/conflicts.mjs` | Detects pairs of open issues that demand opposite things about the same specific target, so contradictory "design authority" doesn't ship silently once both are cited. |
+| `scripts/spec/verifyParity.mjs` | Keeps the rolling spec branch's self-verification identical to what `ci.yml` actually runs, so a green status on `spec/auto` means what it says. |
+| `scripts/check-node-modules.mjs` | Turns an emptied-by-`git worktree remove` `node_modules` (issue #321) into an immediate, self-explaining `pretest` failure instead of a misleading "vitest not recognized". |
+| `scripts/merge-queue.mjs` | Replays an empirically verified PR merge order (measured by actually merging into a scratch worktree and re-running the suite) as one dry-run-by-default, test-gated command. |
+| `scripts/mutcheck-ragged-row.mjs`, `mutcheck-wake-migration.mjs`, `mutcheck-skills-section.mjs` | Mutation checks proving specific test suites are load-bearing: revert one part of a fix, assert the target suite goes red, restore. |
+| `scripts/repair-board-307.mjs` | Dry-run-by-default board repair for issue #307, refusing to write if its own post-repair verification fails. |
+| `scripts/fix-sidecar.mjs` | One-off sidecar regenerator that mirrors the app's own local-edit pipeline so removed ids are properly tombstoned rather than resurrected by another sync replica. |
+| `scripts/copy-sw.mjs` | Copies the folder-sync source tree into `public/folder-sync/` so Vite serves the service worker from the app's own origin (a requirement of Service Worker registration). |
 
-## Public exports
+## Public surface (representative exports)
 
-`scripts/merge-queue.mjs` is the one script in this domain built to be imported as well as
-run: its planning functions (`planQueue`, `planStep`, `parseTestCount`) and data
-(`VERIFIED_QUEUE`, `EXCLUDED`) are unit-tested directly. Every other module here exports
-nothing — they are invoked as standalone Node scripts (`node scripts/<name>.mjs [args]`),
-consistent with their role as tooling rather than application code.
+`checkNodeModules, classifyNodeModules, buildReport` (`check-node-modules.mjs`); `VERIFIED_QUEUE,
+EXCLUDED, planQueue, planStep, parseTestCount` (`merge-queue.mjs`); `tokenize, sameTarget, sentences,
+parseDuration, extractDirectives, extractSettings, extractLifecycle, findConflicts, buildDecisions,
+renderMarkdown, citesIssue` (`conflicts.mjs`); `CI_VERIFICATION_JOBS, SPEC_VERIFY_JOB,
+checkSpecVerifyParity, jobBlock, npmCommands, runLines` (`verifyParity.mjs`).
 
-## Behavioural requirements (from `scripts/merge-queue.test.js`, 21 tests)
+## Behavioural requirements (from tests)
 
-- `VERIFIED_QUEUE` starts with PR 150 (the fix that unblocks the suite), lands PR 149
-  before PR 154 (which is stacked on it), contains no duplicate PRs, never queues a PR that
-  is also excluded, excludes PR 152 (superseded by PR 154), and has a non-decreasing
-  expected test count as PRs land.
-- `planStep` merges an open/mergeable PR; flags a draft so it is marked ready first; skips
-  an already-merged PR (so a stopped run is resumable) and a PR closed without merging;
-  stops on a conflicting PR rather than guessing; stops when the PR cannot be found; and
-  still merges when mergeability is `UNKNOWN`, but reports that it did.
-- `planQueue` plans every step when all are healthy, halts at the first blocker (later
-  steps are unverifiable once one fails), keeps going past an already-merged PR, resumes
-  from a given PR, and carries the label through for readable output.
-- `parseTestCount` reads the passing count from vitest output, still reads it when some
-  tests failed, and returns `null` when there is no count to read.
+- **`classifyNodeModules` distinguishes "empty" from "missing" from "unreadable"**, and `buildReport`
+  fails only for the empty state (the exact #321 signature) — never for "hasn't been installed yet",
+  which is `npm ci`'s job to report.
+- **`VERIFIED_QUEUE` encodes a real, tested dependency order**: it starts with the fix that unblocks
+  the suite, lands a PR before what's stacked on it, contains no duplicates, never queues an excluded
+  PR, and its expected test count is non-decreasing across steps.
+- **`planStep`/`planQueue` never guess past uncertainty**: a conflicting PR or one that can't be found
+  halts the plan rather than continuing on assumption; an already-merged PR is skipped so a stopped run
+  resumes cleanly; an `UNKNOWN` mergeability state still merges but says so explicitly.
+- **`findConflicts` demands a shared, specific target** before calling two issues a conflict — it does
+  not flag issues that merely share a topic, does not flag the same setting given the same value, and
+  reports one finding per pair per kind rather than one per restatement; an issue that already cites
+  the other is still flagged if the requirements are genuinely opposite.
+- **`checkSpecVerifyParity` reads the workflow files themselves**, covering every npm command CI uses
+  to gate a pull request, and its own mutation check catches a verification step being silently dropped
+  from the spec job.
 
-## Design decision: mechanism/policy split for the spec generator itself
+## Failure modes this domain guards against
 
-`scripts/spec/collect.mjs` documents its own rationale directly: the "obvious" way to
-generate a spec is to hand an agent the repo and say "write the spec," which produces
-confident prose that drifts from the code immediately and cannot be checked, because
-nothing anchors what is written to what exists. The chosen design splits this into a
-MECHANISM half (`collect.mjs`, no model involved, reproducible and diffable) and a POLICY
-half (an agent writing prose from the collected facts), with `verify.mjs` as the
-mechanism that asserts the prose only references what `collect.mjs` actually found. This
-is the same discipline the [Domain-overnight-agent](Domain-overnight-agent) check suite
-applies throughout: assert the artifact at the far end, never the exit code of the step
-that produced it.
-
-## Behavioural characteristics for the rest of the domain
-
-Only `merge-queue.mjs` has a dedicated unit-test file; the remaining scripts are enforced
-procedurally instead — `verify.mjs` runs as a CI gate against the artifact `collect.mjs`
-and the spec-writing step jointly produce (see `.github/workflows/spec-wiki.yml`), and
-`fix-sidecar.mjs` / `mutcheck-skills-section.mjs` are one-off/manually-invoked tools whose
-correctness is checked by the effect they have on the repository state at the moment they
-are run (a sidecar's tombstones, or a mutation-checked test suite going red).
-
-## Failure modes
-
-- `verify.mjs`'s own design note calls out the two failure modes any generated spec can
-  have and neither is visible from reading the spec itself: **invention** (naming a file,
-  export, or issue that does not exist) and **omission** (a domain silently absent, so the
-  spec reads complete while being unusable for its stated rebuilding purpose). Both are
-  checked mechanically rather than left to reviewer attention.
-- If `scripts/copy-sw.mjs` is skipped before `dev`/`build` (it is wired as `predev`/
-  `prebuild` in `package.json` specifically so this cannot happen), the service worker
-  fails to register because it would only be reachable from a `packages/` path outside the
-  page's origin.
+- **Confusing toolchain breakage for a code regression** — the `node_modules` junction-deletion bug
+  (#321) reads as "vitest not recognized" unless caught at the exact moment of breakage, which is why
+  the check is wired as `pretest`.
+- **A spec that reads complete while being wrong** — `verify.mjs` exists because both invention and
+  omission are invisible to a reader; the prose "cannot be checked" is the same failure this repo's
+  mutation-check scripts close for ordinary source, just applied to generated documentation.
+- **A rolling spec PR that can never acquire a check** — `verifyParity.mjs` exists because a
+  token-authored `pull_request` event cannot cascade into `ci.yml`'s check-runs, and the fix (writing
+  commit statuses from a `schedule`-triggered run) only holds if the statuses actually reflect what ran;
+  hardcoding `success` or swallowing failure with `continue-on-error` would be strictly worse than the
+  empty rollup it replaces.
+- **A "mergeable" badge that is blind to PR-vs-PR collisions** — GitHub computes it per-PR against
+  `main` only, so a whole stack can each read green and still deadlock; `merge-queue.mjs` exists because
+  that order had to be discovered empirically once and must not be rediscovered by hand every time.

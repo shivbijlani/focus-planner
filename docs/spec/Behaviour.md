@@ -1,180 +1,186 @@
 # Behaviour
 
-This page is the acceptance suite: every statement below is derived from an actual test
-name in the repository's 66 test files (790 individual test cases). A rebuilt
-implementation is correct only if it satisfies every statement here. Per-module detail and
-rationale live on each domain page; this page groups requirements by functional area so
-they can be checked off independently of which file implements them.
+This page states the system's required behaviour as testable statements, grouped by functional area
+rather than by source domain. Each statement is drawn from a real test name in `testFiles` and is
+phrased as a "must," because together they are the acceptance suite a rebuilt implementation has to
+satisfy — a reimplementation that passes every statement below is behaviourally equivalent to this one,
+regardless of internal structure.
 
-## Board editing and priority (app)
+## Board integrity and editing
 
-- Adding a task must allocate its ID from the content's current maximum, skipping any ID
-  that already has a journal on disk, ignoring a foreign high journal ID that does not
-  belong to this planner (`src/allocateId.test.js`).
-- Board sort must rank 🔴-urgent items above everything else regardless of other
-  ordering; within non-urgent items, manager-priority order beats dependency-chain depth,
-  which beats the remaining priority icons; dependency chains sort prerequisite-first
-  within the same manager priority (`src/taskSort.test.js`).
-- Moving a manager-priority task between storage sources must carry every task in its
-  dependency subtree along with it, and must not carry along a task whose chain resolves
-  to a *different* manager priority (`src/moveTask.test.js`).
-- A snooze ("Wake") date must be set/cleared without touching any other cell in the row,
-  and must still parse a legacy trailing-HTML-comment encoding for rows written before the
-  column existed (`src/snooze.test.js`).
-- Deleting a task must resolve its journal path at the moment of deletion — never trust a
-  lazily-loaded, possibly-still-`null` cached value — so a delete issued before the row's
-  journal state has resolved cannot silently orphan the journal file
-  (`src/journalDelete.test.js`).
-- Deleted task IDs must be tombstoned for a window so a freed ID cannot be reused before a
-  sync-resurrected journal for that ID could plausibly still arrive, while ignoring
-  invalid ids so a bad row cannot poison the store (`src/idTombstones.test.js`).
-- A corrupted cluster of task IDs must be detected by its *gap* from the planner's normal
-  numbering, not by absolute magnitude — a planner that legitimately uses high IDs
-  throughout must not be flagged (`src/selfHealIds.test.js`).
+- Adding, deleting, moving, renaming, snoozing, changing priority, and promoting a task to manager
+  priority must all match their target row regardless of CRLF vs LF line endings or incidental cell
+  padding (`focusPlanOps.test.js`).
+- A future `Wake` date must defer a Today row to Deferred; an expired `Wake` date must auto-return a
+  Deferred row to Today and clear the cell; a marker-less Deferred row must be left untouched
+  (`focusPlanOps.test.js`, `snooze.test.js`, `boardWakeMigration.test.js`).
+- Sorting must produce a strict, deterministic total order even with cyclic `Linked ID` chains: urgent
+  rows must float above all non-urgent rows regardless of manager priority; a shorter dependency chain
+  must sort before a longer one within the same priority tier (`taskSort.test.js`).
+- A ragged or misaligned board row must still be read and written consistently by both the reader and
+  the writer (`raggedRow.test.js`, `misfiledLinkedId.test.js`).
+- An allocated task id must never collide with an id already in use on either board, and the allocator
+  must handle a numbering gap correctly (`allocateId.test.js`, `autoNumber.test.js`).
+- A deleted task's id must not be reusable until its tombstone TTL has elapsed, and the tombstone set
+  must persist and prune correctly (`idTombstones.test.js`).
+- A journal with no reachable row on either board must be flagged, but only if it is not already
+  tombstoned or terminal; string and numeric ids must compare as equal (`unreachableJournals.test.js`).
+- Board search must find a task by content match across sections (`boardSearch.test.js`).
+- Moving a task between sources or sections, including dragging a manager-priority task's whole
+  dependency subtree, must move exactly that subtree and nothing else (`moveTask.test.js`).
+- A runaway task id that escaped into a foreign numeric range must be self-healed exactly once and the
+  healing mechanism must be able to delete itself afterward (`selfHealIds.test.js`).
+- The `## Skills` board section must be parsed read-only and never edited by planner operations
+  (`skillsSection.test.js`, `SkillsSection.test.jsx`).
+- The agent gate editor UI must round-trip `agent-gate.md`'s two managed lists without disturbing
+  unrelated file content (`AgentGateEditor.test.jsx`).
 
-## Journals as chat threads (app)
+## Journal chat parsing and lifecycle
 
-- Parsing must extract the thread title without its leading `#`, keep undated content as
-  pinned "earlier notes," and route `AUTO`/`AGENT`-marked content into an agent-authored
-  group distinct from the human's (`src/journalChat.test.js`).
-- Appending a message must merge into today's existing "me" bubble when one exists,
-  insert a `from: me` marker when the trailing author was an agent, and open a fresh dated
-  block when the last dated block isn't today's.
-- A journal's existence state must never offer "create" after a failed check — only after
-  a successful absence check — and must retain previously known existence across a retry
-  failure rather than flip-flopping (`src/journalLoadState.test.js`).
-- Journal reads across ~90 board rows must be funneled through a concurrency-limited,
-  board-order queue that never exceeds its limit and never re-fetches a journal already in
-  flight (`src/journalLoadQueue.test.js`).
-- Read/unread tracking must seed every journal tracked before initial seeding as
-  already-seen (no "wall of stars" on first load), then treat a journal that first appears
-  afterward as unread until opened; its signature must be stable for empty/invalid content
-  and must change whenever new dated content is appended, even same-day
-  (`src/readState/readStateService.test.js`, `src/readState/signature.test.js`).
+- Journal chat parsing must be fence-aware: a `## `-looking line or a `<!-- from: -->` marker quoted
+  inside a fenced code block must never be read as live structure (`journalChat.test.js`).
+- Creating, refreshing, deleting, and hydrating a journal must each leave the board and the journal
+  file in a consistent, mutually reachable state (`journalCreate.test.js`, `journalCreateRefresh.test.js`,
+  `journalDelete.test.js`, `journalHydrationWiring.test.js`, `journalFocusRefresh.test.js`).
+- The journal load queue and load-state tracking must serialize concurrent loads and reflect an
+  accurate loading/loaded/error state per journal (`journalLoadQueue.test.js`, `journalLoadState.test.js`).
+- Journal attachments must be tracked and associated with the correct message (`journalAttachments.test.js`).
+- Read/unread state must be event-driven (the UI fires events; a provider, currently localStorage,
+  persists it) and a signature-based mechanism must detect whether a journal has changed since last read
+  (`readState/readStateService.test.js`, `readState/signature.test.js`).
+- Navigating to a linked task, or scrolling to a specific task in a long board, must land on the
+  correct element (`linkedNav.test.js`, `scrollToTask.test.js`).
 
-## Multi-source and Combined view (app)
+## Cross-source and multi-provider correctness
 
-- Every merged row must be tagged with the id of the source it actually came from, falling
-  back to legacy text lookup only when no source id is available
-  (`src/combinedRouting.test.js`).
-- An optimistic patch after a write must replace and re-parse only the affected source's
-  content, and must return the same array reference (no needless re-render) when nothing
-  actually changed (`src/combinedViewPatch.test.js`).
-- The file tree shown per source must keep only curated core files at the top level, hide
-  every non-journal directory even if it contains copies of core files, and drop stray
-  loose `.md` files not on the allow-list (`src/fileTreeFilter.test.js`).
+- A merged "Combined" view row must carry its true owning source id so a destructive operation is never
+  routed to the wrong source, even when two sources share identical row text or local ids
+  (`combinedRouting.test.js`, `combinedViewPatch.test.js`, `sourcePath.test.js`).
+- A file-tree comparison or filter must treat two directory listings as equal only when their actual
+  contents match, and must correctly filter by path/type (`fileTreeEqual.test.js`, `fileTreeFilter.test.js`).
 
-## Storage providers (storage)
+## Storage and sync providers
 
-- Cancellation via `AbortSignal` must propagate through both cloud providers' existence
-  checks and reads; only an explicit not-found response may be treated as absence — a
-  thrown error must remain an error, never silently reported as "file doesn't exist"
-  (`src/storage/cloud-provider.abort.test.js`).
-- The browser IndexedDB provider must read back exactly what it writes, return empty
-  string (not throw) for a missing path, build a correctly nested file tree, and scaffold
-  plan/completed files only when they do not already exist
-  (`src/storage/indexeddb-provider.test.js`).
-- OneDrive listings that touch journal ids must follow `@odata.nextLink` fully — stopping
-  at the first page risks missing a high journal id and colliding IDs
-  (`src/storage/onedrive-provider.pagination.test.js`).
-- Sync-status change detection must ignore fields like `lastRemoteUpdate` that tick on
-  every poll without representing a real status change, and the coalescer built on top of
-  it must apply the first real change immediately, collapse a rapid burst to its final
-  state, and never re-apply when a burst ends where it began
-  (`src/storage/syncStatus.test.js`, `src/storage/syncStatusCoalesce.test.js`).
-- Per-task AI-assistance settings must normalize a missing/malformed file to an empty,
-  version-1 document; a task absent from the file must read as both opt-ins off; a
-  read-modify-write of one task's setting must leave every other task's entry untouched
-  and must serialize concurrent toggles so neither is lost; and a write must refuse to
-  replace a file that parses as JSON but fails the schema, protecting a malformed sidecar
-  from being silently overwritten (`src/storage/taskSettings.test.js`).
+- Pagination must be followed to completion for `journalIds()`, `maxJournalId()`, `getFiles()`, and any
+  flat listing — stopping at the first page must never be treated as a complete result.
+- Diagnostics must never leak a secret value; only provider id, token expiry, and refresh-token presence
+  may be recorded.
+- Sync-status coalescing must apply the first status change immediately and collapse a rapid burst of
+  identical states into one final state, without re-applying a no-op burst.
+- An `AbortSignal` must be honored by every cloud read/existence check; only an explicit not-found
+  response may be treated as absence — any other error must propagate rather than be swallowed.
+- Task-settings writes must serialize concurrent toggles, coerce a malformed entry to defaults, and
+  preserve unknown per-task keys across a round trip.
 
-## Record-level sync (folder-sync)
+## Folder-sync merge core
 
-- A stale full-file replica must never resurrect a delete; an alive sidecar entry with no
-  matching record must never win as `undefined` content; a delete must beat an alive write
-  at an equal clock; the merge must be deterministic and convergent on ties; and it must
-  report no change when both sides already agree (`packages/folder-sync/src/merge.test.js`).
-- A remote record with no sidecar meta must never be frozen at a durable clock of `0` —
-  that is a within-merge sentinel only, never a stored fact — while an *explicit* clock-0
-  stamp (a deliberate "this side is weak" marker) must be preserved as-is.
-- A tombstoned row that merely reappears in a stale file (a "ghost") must not be revived;
-  it is revived only when its content's fingerprint genuinely differs from the fingerprint
-  recorded at delete time.
-- An empty parsed record set arriving alongside many still-tracked alive rows must be
-  treated as a load failure, not a full-board delete, while a genuine single-row (or
-  all-but-one) removal must still be tombstoned correctly
-  (`packages/folder-sync/src/records.test.js`).
-- Remote-deletion propagation must delete a synced file that vanished remotely, never
-  delete a file with a pending local change, ignore sidecar/record-level files, and never
-  delete a local-only file on a fresh connect (`packages/folder-sync/src/reconcile.test.js`).
-- The markdown-table codec must round-trip unchanged content byte-for-byte, drop deleted
-  rows on serialize, and insert a remotely-added row under the correct section
-  (`packages/folder-sync/src/codecs/mdTable.test.js`).
-- Diagnostic logging during a sync must summarize an unchanged collection rather than
-  logging every unchanged record, so genuine pulls/conflicts are not drowned in noise
-  (`packages/folder-sync/src/diagnosticVolume.test.js`).
+- A delete must never be resurrected by a stale full-file replica (`merge.test.js`).
+- An alive-but-recordless sidecar entry must be preserved alive (never crash as `undefined`, never be
+  silently voided into a tombstone), with its clock raised to the highest known value and an anomaly
+  logged.
+- A zero clock must be treated as an implicit "unknown" for exactly one merge, never as a durable value
+  that permanently freezes a remote record.
+- An empty record set must be refused as "everything was deleted" unless the caller explicitly opts in,
+  distinguishing a genuine full clear from a parse failure that happened to yield zero records.
+- `isMassDeletion` must flag a full wipe but never an ordinary single deletion, and must never fire when
+  there is no tracked baseline to compare against.
+- `planMirrorSync` must rehydrate a file missing from the active store rather than deleting its mirror,
+  and must never treat an empty mirror file the active store also lacks as a deletion to propagate.
+- `isValidRemotePath` must reject a source-scoped key that leaked into the sync queue and every
+  character a provider forbids in a path segment.
+- A merge must never overwrite a structured or populated `## Priorities` frame with an empty one
+  (`records.test.js`: "BLANK-PLANNER BUG", "PRIORITIES-WIPE BUG").
 
-## Telegram mirror (telegram-bridge)
+## Telegram bridge
 
-- The digest must be ordered by the active board's own Today/Deferred/urgency structure,
-  never by raw task-ID magnitude, and must sink anything not on the board to the bottom
-  (`packages/telegram-bridge/src/board.test.js`).
-- `syncUp` must post a task's latest agent turn exactly once per change, must stamp a
-  deep-link marker into the journal, must skip journals with no agent block, and must
-  honor an explicit task allow-list; baseline must mark existing tasks seen without
-  posting, and must never clobber a task with genuine posted history
-  (`packages/telegram-bridge/src/bridge.test.js`).
-- A batched reply typed in the group's General thread must be split per named task, with
-  each segment's text folded in **verbatim**, ignoring numbers that are not known task IDs
-  (`packages/telegram-bridge/src/routeReply.test.js`).
-- An ask must always be read from a task's *newest* agent turn, never a whole-file grep
-  for the last marker, and a boilerplate-salvaged ask must be marked weak so callers can
-  gate on confidence (`packages/telegram-bridge/src/digest.test.js`).
-- Deletion tombstones must be read strictly (`deleted === true`, not merely truthy) to
-  decide which forum topics to close (`packages/telegram-bridge/src/deleted.test.js`).
-- Every outbound HTTP request must carry an `AbortSignal` so it cannot hang forever, while
-  a long-poll `getUpdates` request's budget must be extended, not shortened, to match its
-  poll window (`packages/telegram-bridge/src/telegramClient.test.js`).
-- Markdown-to-Telegram-HTML conversion must never leave literal formatting characters
-  behind, must escape stray HTML-significant characters in prose, and must drop
-  constructs (horizontal rules) that Telegram's HTML subset cannot represent
-  (`packages/telegram-bridge/src/telegramFormat.test.js`).
+- A turn exceeding Telegram's 4,096-character cap must be split into balanced parts with none exceeding
+  the cap, and the ask must never be truncated away; a split turn must not be reposted on a later run.
+- A superseded turn must be deleted and replaced, never stacked — unless the user has already replied to
+  it, in which case it must never be deleted.
+- A 429 rate-limit mid-sweep must resume and post each task exactly once across the crash/retry
+  boundary, honoring the server's advised `retry_after`.
+- The digest must read the newest turn only, never a whole-file grep for the last ask marker; a
+  superseded ask restated in later prose without re-emitting the marker must not resurface.
+- Status must be read from the newest turn, never from a frozen header line: a task whose newest turn
+  says Done must drop out of the digest even if its header still says blocked, and vice versa for a
+  reopened task; a fix in this area may only add information, never override a genuinely informative
+  frozen header with nothing.
+- The digest must order by the board's own priority signals, sink a malformed id or a task absent from
+  the board, and exclude a P0 whose only "ask" is the agent's own next step.
+- A task must be archived only when a sync record explicitly marks it `deleted: true`; a board that
+  fails to parse must never be read as "everything on it was deleted."
+- A General-thread reply must route by a known task id, never by a coincidental digit sequence in the
+  prose, and an unroutable reply must be reported, never silently discarded.
+- A catch-up-doc link must replace the per-turn post and stay quiet across repeated unchanged runs,
+  updating in place rather than stacking a second notice when the ask changes.
 
-## Shared configuration and diagnostics
+## Task papers
 
-- `user-settings.md` round-trip: rewriting every row with its own unchanged value must
-  return the file byte-for-byte identical; changing one field must touch only that cell's
-  bytes; CRLF endings, unusual padding, and escaped pipes in values must all survive
-  (`src/config/userSettingsForm.test.js`).
-- `AGENTS.md` scaffolding must write when missing (including when the provider throws
-  rather than returning empty), must not rewrite an already-current copy, must refresh a
-  stale-versioned copy, and must never throw even when the write itself fails
-  (`src/config/agentsDoc.test.js`).
-- The diagnostics event bus must be a cheap no-op when disabled, must never emit console
-  traffic as a side effect of recording, must keep each context's buffer bounded as a
-  ring, and must correctly select the folder-sync worker (not the root app worker) when
-  asked for a worker dump (`packages/diagnostics/src/index.test.js`).
-- The MCP secrets pointer-file schema must accept its own committed example, reject a
-  missing version/required field/invalid env-var name/duplicate server or target, and
-  throw with every violation listed, not just the first
-  (`packages/mcp-cred-vault/src/schema.test.js`).
+- The embedded journal-chat writer script must be byte-identical to the app's own source, must refuse
+  source that would break out of its `<script>` element, and must bake in only the one task's own
+  journal filename.
+- A comment must land in the journal after the turn-end stamp so it reopens the task through the
+  agent's existing reopen detection, with no second detection mechanism.
+- Rendering must be fully deterministic: byte-identical output for identical input, with no clock, nonce,
+  or random id anywhere in the generated page.
+- The newest agent turn must become the paper's body; every superseded turn and the run log must move to
+  the appendix; a quoted turn heading or marker inside a fenced example must never fabricate a second
+  turn or a new day.
+- The renderer must escape all HTML appearing in journal prose and must refuse to make a
+  `javascript:` URL clickable while still keeping its text.
 
-## Release tooling
+## Config and settings round-trips
 
-- The verified PR merge queue must start with the fix that unblocks the suite, respect
-  known stacking order between PRs, contain no duplicates, never queue an excluded PR, and
-  show a non-decreasing expected test count as PRs land; planning one step must merge an
-  open/mergeable PR, ready a draft first, skip an already-merged or closed-without-merging
-  PR (so a stopped run is resumable), and stop rather than guess on a conflicting or
-  not-found PR; planning the whole queue must halt at the first blocker, resume from a
-  given PR, and carry a label through for readable output
-  (`scripts/merge-queue.test.js`, see [Domain-scripts](Domain-scripts)).
+- `serializeAgentGate` must round-trip the canonical document and CRLF input unchanged, preserve any
+  user-authored title/preamble/comment/section, remain stable across repeated saves, and never be
+  triggered to overwrite an existing gate file by `scaffoldAgentGate`.
+- `parseAgentGate` must tolerate `*`/`+`/`-` bullets, prose between them, CRLF input, reworded headings
+  matched by keyword, and a file carrying only one of its two sections.
+- `serializeSettingsForm(md, parseSettingsForm(md).map(r => r.value))` must return `md` unchanged for any
+  input, including CRLF and odd spacing; changing one field's value must change only that field's cell.
+- `partitionAgentSettings` must lose no rows — the union of its user-facing and advanced partitions must
+  equal the input rows — and must keep section headers attached to their rows.
+- Settings classification must default an unrecognized label to advanced, never to user-facing.
+- `scaffoldAgentsDoc` must refresh an out-of-date `AGENTS.md` but must never rewrite an up-to-date one.
 
-## Overnight Agent self-verification
+## MCP credential pointer file
 
-The Overnight Agent's `checks/` suite is not exercised by the root vitest run; its
-`mutcheck-*.mjs` scripts are themselves the tests, each proving that its paired sweep
-fails when the specific defect it guards is reintroduced (see
-[Domain-overnight-agent](Domain-overnight-agent)). A rebuild that adds a new sweep without
-a paired mutcheck has, by this domain's own standard, added an unverified rule.
+- The committed example pointer file must validate as-is.
+- A missing version, a secret entry missing a required field, an invalid environment-variable name, or
+  a duplicate server/credential-target must each be rejected.
+- Malformed JSON must throw; an invalid shape must throw with field-level detail.
+
+## Diagnostics
+
+- `diag(...)` must be a cheap no-op when diagnostics are disabled.
+- An enabled event must fan out to every registered sink using one shared, per-context-correlated event
+  schema, and must be recorded into a bounded ring buffer per context without emitting live console
+  traffic on its own.
+- A diagnostics request must select the correct worker (e.g. folder-sync, not the root app worker), must
+  keep worker diagnostics enabled while any client still wants them, must prune a client once its tab
+  closes, and must recover cleanly (re-request, re-advertise) after a worker restart.
+
+## Repository tooling and the spec pipeline
+
+- `classifyNodeModules` must distinguish empty, missing, and unreadable states, and the pretest guard
+  must fail only for the empty (post-junction-deletion) state.
+- The verified PR merge queue must contain no duplicates, must never queue an excluded PR, must respect
+  every stacking dependency, and must have a non-decreasing expected test count across its steps;
+  planning must halt at the first conflicting or unfindable PR rather than guess past it.
+- The spec-conflict detector must require a shared, specific target before calling two issues a
+  conflict, must not flag two issues that merely share a topic or restate the same setting/value, and
+  must report one finding per pair per kind.
+- The spec-verify-parity checker must read the workflow files themselves and cover every npm command CI
+  uses to gate a pull request; its own mutation check must catch a verification step being silently
+  dropped from the spec job.
+
+## Overnight Agent (mutation-tested, not vitest)
+
+The overnight-agent domain carries no meaningful vitest suite (`stuck-run-sweep.test.mjs` and
+`workflow-health-sweep.test.mjs` both currently have empty test arrays); its behavioural specification
+instead lives in the PowerShell/`.mjs` `mutcheck-*` harness described in [Domain:
+overnight-agent](Domain-overnight-agent), [Prioritisation](Prioritisation), and [Reliability](Reliability).
+A rebuilt implementation must satisfy those mutation-tested guarantees — for example, that a guard's
+removal flips exactly the fixture it owns — with the same rigor this page states for the JS-tested
+domains above, because a sweep that only ever passes is treated in this codebase as equivalent to no
+sweep at all.

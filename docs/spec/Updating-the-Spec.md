@@ -1,161 +1,126 @@
 # Updating the Spec
 
-**The wiki is a mirror. Do not edit it.** Every page here is generated from `docs/spec` on `main`
-and republished over the top; the publish step deletes every wiki page that is not present in
-`docs/spec`, so a page written by hand in the wiki UI survives exactly until the next publish. To
-change what this wiki says, change `docs/spec` on `main`.
+This page is the maintenance guide for this specification itself.
 
-This page is for whoever — human or agent — does that next.
+## The wiki is a mirror, never edit it directly
 
-## Where each thing lives
+`docs/spec/*.md` on `main` is the single source of truth. The wiki is published *from* it by the
+`publish-wiki` job (see the pipeline below), which clones `owner/repo.wiki.git`, deletes every
+existing `.md` page in it, and copies `docs/spec/*.md` over — a mirror, not a merge. Any edit made
+directly in the wiki UI is destroyed the next time the pipeline runs (every 6 hours, on schedule). If
+you need to change the spec, change `docs/spec` on `main` and let it publish; never edit a wiki page in
+place.
 
-| Concern | Lives in |
-| --- | --- |
-| The prose you are reading | `docs/spec/*.md` on `main` |
-| **Which pages exist** | the *Pages to write* table in `scripts/spec/prompt.md` |
-| The facts the prose must match | `scripts/spec/collect.mjs` output (`spec-facts.json`, gitignored) |
-| The gate that enforces the match | `scripts/spec/verify.mjs` |
-| The conflicting-requirement report | `scripts/spec/conflicts.mjs` output (`spec-decisions.json`, gitignored) |
-| Regeneration and publication | `.github/workflows/spec-wiki.yml` |
+## Adding a page requires two edits, not one
 
-## The trap: adding a page needs two edits, not one
+The page set is the table in `scripts/spec/prompt.md` (mirrored in this repository's original task
+instructions). `Home.md` is **regenerated on every run** from that same table, so a new page linked
+only from `Home.md`'s prose, without a corresponding row in the table, is silently unreachable the next
+time the pipeline runs and overwrites `Home.md`. Adding a page therefore means:
 
-`Home.md` carries the index linking every other page — and `Home.md` is itself regenerated, from
-the page list in `prompt.md`. So a new page that is only linked from `Home.md` is **silently
-dropped from the index on the next regeneration** and becomes unreachable: nothing fails, nothing
-warns, the page simply stops being linked from anywhere.
+1. Add a row to the page table (in `scripts/spec/prompt.md`, and correspondingly in whatever generates
+   the next `Home.md`).
+2. Add a link to it from `Home.md`'s index.
 
-Adding a page therefore means:
-
-1. Write `docs/spec/<Page>.md`.
-2. **Add a row for it to the *Pages to write* table in `prompt.md`**, so the generator knows it
-   exists, indexes it, and keeps it current.
-3. Add the `Home.md` link too, for the period before the next regeneration.
-
-Renaming a page is the same problem with an extra step: the old wiki page disappears on the next
-publish, and any `[Old-Name](Old-Name)` link elsewhere becomes a dead link that renders as an
-invitation to create the page.
+Skipping step 1 is the single most common way a page silently disappears — it isn't deleted, it's just
+never linked again after the next regeneration.
 
 ## The pipeline
 
-Mechanism and policy are deliberately split — everything except the prose is reproducible and
-diffable, and only the prose is generated:
+`.github/workflows/spec-wiki.yml` runs four stages, split deliberately between mechanism (no model) and
+policy (model-generated prose):
+
+1. **Collect** (`node scripts/spec/collect.mjs --out spec-facts.json`) — extracts ground-truth facts
+   with no model involved: the module graph, exports, tests, workflows, and open issues. Purely
+   mechanical and reproducible.
+2. **Generate** — a Copilot CLI run (`copilot --yolo -p "$(cat scripts/spec/prompt.md)"`) writes the
+   prose pages from those facts.
+3. **Verify** (`node scripts/spec/verify.mjs --facts spec-facts.json --dir docs/spec`) — fails the
+   build if the generated prose references anything that doesn't exist, or omits a domain.
+4. **Publish** — a rolling pull request onto a fixed `spec/auto` branch (never a direct push — the spec
+   is design authority, so a machine may draft it but a human must accept it), followed by an optional
+   wiki mirror of whatever lands on `main`.
+
+### Running the mechanical halves locally
 
 ```
-collect.mjs   (no model)   → spec-facts.json: module graph, exports, tests, workflows, open issues
-     ↓
-model          writes docs/spec/*.md from those facts, following prompt.md
-     ↓
-verify.mjs    (no model)   → fails on invention, omission, or thinness
-     ↓
-conflicts.mjs (no model)   → spec-decisions.json: open issues that demand opposite things
-     ↓
-pull request → review → main
-     ↓
-publish job    mirrors docs/spec/*.md into the wiki
-```
-
-Run the mechanical halves locally before opening a pull request:
-
-```powershell
 node scripts/spec/collect.mjs --out spec-facts.json
 node scripts/spec/verify.mjs --facts spec-facts.json --dir docs/spec
-node scripts/spec/conflicts.mjs --facts spec-facts.json --out spec-decisions.json --md spec-decisions.md
 ```
 
-## What `conflicts.mjs` reports
+Both run with no model and no network access beyond `gh` for issue collection, so they can be run
+locally before pushing a manual edit to `docs/spec`.
 
-`verify.mjs` asks "does the prose reference things that exist?". It cannot catch the case where two
-**open issues demand opposite things** — both exist, so both references are valid, and whichever the
-model read last ships as design authority.
-
-`conflicts.mjs` reads the same facts and reports requirement pairs that cannot both hold:
-
-| Rule | Fires when |
-| --- | --- |
-| `polarity` | one issue requires a behaviour, another forbids the same behaviour |
-| `value` | two issues give different values for the same setting (durations/cadences) |
-| `lifecycle` | one issue wants a thing added, another wants the same thing removed |
-
-It is **tuned for precision, not recall**, and that choice is the whole design. At four runs a day a
-detector that cries wolf is muted inside a week, and then its silence reads as a verdict. So every
-rule demands a specific shared target before it will pair two statements, a sentence that cites the
-other issue by number is treated as commentary rather than contradiction, and every finding carries
-the verbatim sentences it came from so a wrong one is visible in a single line. Measured against the
-live corpus of 70 open issues it reports **0** conflicts.
-
-It exits 0 even when it finds something: a disagreement between two issues is information for a
-human, not a broken build, and a job that goes red four times a day is one nobody reads.
-
-## What `verify.mjs` rejects
+## Every finding `verify.mjs` can emit
 
 | Finding | Meaning |
 | --- | --- |
-| `invented-path` | The prose names a `src/`, `scripts/`, `packages/` or `plugins/` file that does not exist. |
-| `unknown-issue` | A `#NNN` reference that is not an open issue. |
-| `uncovered-domain` | A domain of the codebase no page mentions. |
-| `uncovered-key-module` | A domain's largest module is named nowhere. |
-| `thin-page` | Under 250 words — too short to carry an architecture and its rationale. |
-| `no-examples` | No fenced code block anywhere in the spec. |
+| `invented-path` | A page names a file path (matching `(?:src\|scripts\|packages\|plugins)/....(?:jsx\|tsx\|mjs\|ts\|js)`) that is not in `spec-facts.json`'s modules, test files, or workflow files. Fix by removing the invented reference or regenerating the fact set if the file genuinely now exists. |
+| `unknown-issue` | A page cites `#NNN` for a number that resolves to nothing. On `Roadmap.md` specifically, this also fires for a number that resolves only to a **closed** issue or a pull request — Roadmap enumerates currently-open gaps, so citing a closed issue there as a live gap is stale, not merely a typo. |
+| `uncovered-domain` | An entry in `facts.domains` does not appear as literal text anywhere across all pages combined. Every domain must be named somewhere. |
+| `uncovered-key-module` | The single largest-by-lines module path in some domain is not named anywhere. This exists because a domain can be "covered" by one passing mention while its actual substance is absent — naming the biggest module is a cheap proxy for real coverage. |
+| `thin-page` | A page has fewer than 250 words. The floor is not a target, only the rough point below which a page cannot carry an architecture, a data format, and its rationale together. |
+| `no-examples` | No fenced code block (```) appears anywhere across all pages. A spec that never shows a concrete format or signature cannot be rebuilt from. |
 
-Two properties of that gate are worth knowing before you fight it:
+A run that produces zero findings prints a confirmation and exits 0; any finding at all fails the build.
 
-- **Issue references are checked against *open* issues**, because the collector gathers open issues
-  only. A closed issue or a pull request cited as `#NNN` therefore fails. Do not wrap it in
-  parentheses to hide it from the pattern — that evades the check rather than satisfying it, and it
-  also leaves the reader unable to tell which namespace the number is in. Name it in words:
-  *"merged pull request 232"*, *"GitHub issue 310"*.
-- **The gate is not a style critic.** It proves the prose refers to things that exist and covers
-  every domain. Whether the design rationale is *right* is what review is for.
+## Issue references are validated against *open* issues on Roadmap, more broadly elsewhere
 
-## Publishing
+`Roadmap.md` accepts only currently-open issue numbers, because it exists to enumerate the system's
+current gaps — a closed issue cited there as a live gap is simply wrong. Every other page accepts the
+broader set (open issues, closed issues, and pull requests unioned together), because elsewhere an
+issue reference is typically rationale or history ("issue #226 measured this cost"), and a closed issue
+or a merged PR is entirely legitimate evidence for that. Concretely: **name a closed issue or a pull
+request in words** ("the now-closed #226 measured...") anywhere outside Roadmap rather than relying on
+the bare `#NNN` pattern to be silently accepted — it will be, but the intent should still be readable
+without checking the issue's current state. `verify.mjs` also prints an unconditional, non-blocking
+report of every reference on a non-Roadmap page that resolves to a closed issue or a PR, specifically so
+a human reviewer can check the framing is still honest — the tool cannot infer intent from a bare
+number, only a person can.
 
-Two paths, both writing to the same place:
+## Both publish paths and the `WIKI_TOKEN` requirement
 
-- **Automated** — `.github/workflows/spec-wiki.yml`, **every 6 hours** or on manual dispatch. It
-  regenerates, verifies, flags conflicting requirements, opens or updates a pull request, and
-  publishes what is on `main`. Publication needs a `WIKI_TOKEN` secret, because Actions'
-  `GITHUB_TOKEN` cannot push to a wiki repository; without it the publish job is skipped rather than
-  failed.
+`GITHUB_TOKEN` cannot push to `owner/repo.wiki.git` — the wiki is a separate repository outside that
+token's scope. The `publish-wiki` job therefore requires a personal access token in `secrets.WIKI_TOKEN`
+with repo scope; when that secret is absent, the job logs a notice and exits 0 rather than failing, so
+the generate-and-review loop still works with zero extra setup — only the wiki mirror is skipped, and
+`docs/spec` on `main` remains the source of truth regardless. The rolling-PR path (generate → verify →
+open/update `spec/auto`) runs unconditionally on every 6-hourly schedule tick or manual dispatch; the
+wiki-publish path runs whenever the schedule fires, or on manual dispatch with `publish_wiki: true`, and
+always publishes what is already committed to `main` — never the unreviewed content of `spec/auto`.
 
-  It maintains **one rolling pull request** on the fixed `spec/auto` branch, updated in place, rather
-  than opening a new PR per run. That pairing is deliberate and load-bearing: at the old weekly
-  cadence a branch per run was harmless, but at 6h it would open 28 pull requests a week, each
-  superseding the last. Raising the frequency without the rolling branch is a regression, not a
-  tuning choice.
-- **Manual** — a wiki is a plain git repository with no pull-request gate, so anyone with a
-  `repo`-scoped token can push to it directly:
+The rolling pull request onto `spec/auto` cannot itself acquire an ordinary CI check, because it is
+authored by `github-actions[bot]` with `GITHUB_TOKEN`, and GitHub refuses to let a token-authored event
+cascade into a triggered workflow run — `ci.yml`'s `pull_request` run for that branch is created and
+then parked at `action_required` with zero duration, so no check-run ever reaches the head commit. The
+fix is a separate `verify-spec-branch` job, triggered by the same `schedule` event (which is not
+gated), that re-runs the same test/build/lint commands against the exact pushed SHA and writes the
+result to that commit via the statuses API — a channel `GITHUB_TOKEN` can reach that ordinary
+check-runs cannot. `scripts/spec/verifyParity.mjs` (run by the unit suite) holds that job's command set
+identical to `ci.yml`'s, specifically so the two cannot drift apart into a green badge that verifies
+less than it claims to.
 
-```powershell
-git clone "https://x-access-token:$(gh auth token)@github.com/<owner>/<repo>.wiki.git" wiki
-# copy docs/spec/*.md into wiki/ — excluding README.md — and delete pages no longer in the source
-git -C wiki add -A
-git -C wiki commit -m "docs(spec): publish from docs/spec @ main"
-git -C wiki push
-```
+## Traps
 
-Whichever you use, publish **from `main`**, not from a branch. Anything published that is not also
-in `docs/spec` on `main` is reverted by the next run — silently, while reporting success.
-
-## Things that will catch you out
-
-1. **`docs/spec/README.md` is not a page.** It is provenance for humans browsing the folder;
-   `verify.mjs` excludes it and the publish must too, or the wiki gains a stray `README` page.
-2. **Wiki links are relative and extensionless** — `[Architecture](Architecture)`. A broken one
-   renders as an invitation to create that page rather than as an error, so it fails silently.
-   Check links after publishing, not just before.
-3. **A new wiki must be initialised once in the web UI.** GitHub does not create the underlying
-   repository until a first page is saved, and there is no API for it — `ls-remote`, `clone` and
-   `push` all return an identical `Repository not found` until then. That failure has a second
-   cause worth ruling out: a token without `repo` scope returns the same message.
-4. **Do not restate the bar inside a page.** "A competent engineer should be able to rebuild this
-   from this page alone" is an instruction to the author, not content for a reader.
-5. **Specify the system going forward.** Compatibility shims, deprecated aliases and legacy readers
-   are not part of the contract; see #207.
-
-## Before you publish
-
-- `verify.mjs` exits 0.
-- Every page you added or renamed has a row in `prompt.md`.
-- Every `#NNN` you cited is an open issue; everything else is named in words.
-- After publishing: re-read the wiki, and follow the links.
+- **`README.md` is not a page.** It is provenance documentation for a human browsing `docs/spec` in the
+  repository, deliberately excluded from both `verify.mjs`'s page set and the wiki-publish mirror. Do
+  not add content to it expecting it to appear on the wiki, and do not delete it thinking it's one of
+  the 18 generated pages.
+- **A wiki link fails silently as "create this page."** A relative link like `[Architecture](Architecture)`
+  to a page name that doesn't exist does not error visibly in GitHub's wiki rendering — it renders as a
+  normal-looking link that, when clicked, offers to create a new empty page. This is indistinguishable
+  from a working link until someone clicks it, so a typo'd or removed page name is easy to ship
+  unnoticed.
+- **A brand-new wiki needs one-time UI initialisation.** `git clone` against
+  `owner/repo.wiki.git` 404s until the wiki has been initialised with at least one page created through
+  the GitHub UI. The publish job cannot do this itself — it will error with a clear message if the wiki
+  has never been touched, and someone must create one page by hand first.
+- **Do not restate the bar inside a page.** Sentences like "a rebuilder should be able to work from this
+  page alone" are instructions to whoever (or whatever) is writing the spec, not content a reader of the
+  finished spec needs — they carry no information about the system and are the kind of filler this
+  spec's own rules exist to prevent.
+- **Do not specify legacy/compatibility paths as required behaviour.** Where a backward-compatibility
+  shim is still live in the code (see the deliberate omissions and asides throughout this page set,
+  e.g. legacy `<!-- snooze:… -->` board comments, unsuffixed FSA handles, `fp-storage-provider`), name it
+  only as an aside tracked for removal, never as part of the forward contract a rebuilder should
+  implement — see issues #207 and #8.

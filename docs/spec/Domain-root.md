@@ -2,56 +2,59 @@
 
 ## Responsibility
 
-Top-level dev-server and build-tooling entry points that don't belong inside `src/` or
-`packages/`: the optional local Express API for filesystem-backed planner storage, and
-the Vite/ESLint configuration for the whole app.
+The three files at the repository root that configure the build/lint toolchain and one legacy local
+development helper — the smallest domain, but its build identifier and vitest-exclusion rules are
+load-bearing for the rest of the system's CI correctness.
 
 ## Principal modules
 
 | Module | Role |
 | --- | --- |
-| `server.js` | Express API exposing the active planner folder over HTTP for the desktop/local-folder workflow described in the top-level README: `GET /api/files` (directory tree), `GET`/`PUT`/`DELETE /api/file` (read/write/delete a markdown file by path), `GET /api/todos` (extract checkbox todos from a journal), `GET /api/journal-exists`, `POST /api/pick-folder`, and `GET`/`POST /api/config` (the server's own `plannerPath` setting, persisted to `planner-config.json`). |
-| `vite.config.js` | Build configuration for the React SPA. |
-| `eslint.config.js` | Lint configuration; CI's lint job (see `.github/workflows/ci.yml`) blocks merges on this. |
+| `vite.config.js` | The app's build config: defines `__APP_BUILD__` (a UTC timestamp) so Settings can show a build identifier, and excludes `plugins/**` from vitest collection. |
+| `eslint.config.js` | Flat-config ESLint setup: browser globals + React rules for `src/**`, with a separate Node-side block for the Telegram bridge service. |
+| `server.js` | A legacy Express server (port 3001) exposing `/api/files`, `/api/file`, `/api/todos`, `/api/journal-exists` against a locally-configured planner path. |
 
-## Design decision: a thin local server, not the source of truth
+## `server.js` status
 
-`server.js` resolves the active planner folder from `planner-config.json` (falling back
-to a sibling `../planner` directory) and every file route re-validates that the resolved
-absolute path still starts with that configured root before touching disk — a directory
-traversal guard, since `path` is taken directly from a query parameter. This server is
-explicitly a convenience passthrough for the local-folder storage mode; it holds no
-business logic of its own (no merge, no ID allocation, no journal parsing beyond a
-todo-extraction pass) and is not on the cross-device consistency path that
-[Domain-folder-sync](Domain-folder-sync) owns. It exists so a user who doesn't want any
-cloud provider can still point the app at a real folder on disk via a browser fetch API
-rather than the File System Access API.
+This file is **not part of the current architecture**. It predates the browser-storage-provider model
+(see [Data-Formats](Data-Formats) and [Architecture](Architecture)): the shipped app talks to FSA,
+IndexedDB, OneDrive, and Google Drive directly through `src/storage/storage.js`, and no `src/` module
+references `/api/` or port 3001 anywhere. It remains as a local-dev convenience for working against a
+plain local folder without going through a storage provider, not as a server the deployed app depends
+on. A rebuilder should treat it as optional tooling, not as a required backend.
 
-## Behavioural characteristics (no automated test suite)
+## `vite.config.js` — why `plugins/**` is excluded from vitest
 
-`server.js` has no dedicated test file. The invariants a rebuild must preserve, read
-directly from the route handlers:
+`plugins/overnight-agent/checks/` holds the overnight agent's own standalone PowerShell-adjacent check
+scripts. Some are named `*.test.mjs` by convention but are not vitest suites at all — they read
+`%LOCALAPPDATA%`, shell out to external processes, and call `process.exit()` directly. Collecting them
+into the ordinary `npm test` run would fail the whole suite on a Linux CI runner, where
+`%LOCALAPPDATA%` is undefined and the assumptions those scripts make about the host don't hold. They
+are run only by `run-sweeps.ps1`, which is the one caller that can supply the Windows environment they
+require (see [Domain: overnight-agent](Domain-overnight-agent) and [Reliability](Reliability) for the
+mutcheck harness these scripts belong to).
 
-- Every file route must resolve `req.query.path` against the configured planner root
-  with `path.join`, then reject the request with `403` if the resolved absolute path does
-  not start with that root — preventing `../../etc/passwd`-style traversal via the path
-  query parameter.
-- A read for a file that does not exist must respond `404`, not `500` — the read handler
-  deliberately treats any read failure as "not found" rather than distinguishing failure
-  causes, unlike the stricter cancellation/not-found distinction required of the browser
-  storage providers in [Domain-storage](Domain-storage).
-- `GET`/`POST /api/config` must persist the planner path across server restarts via
-  `planner-config.json`, defaulting to a sibling `../planner` directory when no config
-  file exists yet.
+## Why a build identifier exists at all
 
-## Failure modes
+`__APP_BUILD__` is a UTC timestamp computed at build time and surfaced in the Settings screen. Its
+purpose is entirely about Service Worker staleness: because the app is a PWA with an update-on-reload
+Service Worker, a user or support agent looking at a stuck/misbehaving install needs a way to confirm
+whether the running tab is actually on the latest deployed build or is serving a cached, stale worker —
+which is not otherwise observable from the UI without an explicit, deploy-time-stamped identifier.
 
-- Because this server trusts a query-string path and only guards it with a prefix check,
-  a rebuild must preserve that check exactly — a symlink or a path-join edge case that
-  defeats the `startsWith` guard would turn a local convenience server into an arbitrary
-  file read/write primitive.
-- The server's own docs make clear it is not part of the sync/consistency guarantees:
-  a rebuild must not be tempted to add merge or ID-allocation logic here, since that logic
-  already lives once, correctly, in [Domain-app](Domain-app) and
-  [Domain-folder-sync](Domain-folder-sync) — duplicating it in `server.js` would create a
-  second, divergent implementation of the same rules.
+## ESLint configuration shape
+
+Two rule blocks target two different runtimes rather than one blanket config: browser globals plus
+React Hooks/Refresh rules apply to `src/**` and `.jsx` files; a separate block (not shown above but
+present in the file) relaxes browser-specific assumptions for the Node-side Telegram bridge service,
+since it runs under Node rather than in a browser and would otherwise be flagged for using Node globals
+ESLint doesn't expect in a browser-targeted block. `no-unused-vars` is configured to ignore identifiers
+matching `^[A-Z_]`, an explicit allowance for intentionally-unused constant-style exports.
+
+## Failure modes this domain guards against
+
+- **A whole-suite CI failure from unrelated Windows-only scripts** — the `plugins/**` vitest exclusion
+  exists precisely because a handful of files that merely look like test files would otherwise crash
+  every `npm test` run on Linux CI.
+- **An unverifiable "which build is this" support conversation** — the build-id surface exists because
+  a stale Service Worker is otherwise indistinguishable from a genuinely broken new build.
