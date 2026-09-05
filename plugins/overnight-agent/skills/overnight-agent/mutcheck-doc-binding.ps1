@@ -555,6 +555,26 @@ $aa = Invoke-OaJson @('doc', '-Id', '701', '-Observe', $emptyRead)
 Check 'AA a genuine empty listing still reads as read/0' {
   "$($aa.observation)" -eq 'read' -and [int]$aa.new_comments -eq 0
 }
+# GH #531 — the wording the MCP ACTUALLY returns for a document with no comments. It does not
+# say "Found 0 comments"; it says "No comments found in document <id>", which names no count.
+# Accepting only the counted phrasing made a healthy empty document read as a dead connection
+# (measured live on task #466), which is this predicate's own defect pointing the other way.
+$emptyAlt = Join-Path $root 'dump-empty-nocomments.txt'
+[IO.File]::WriteAllText($emptyAlt, "No comments found in document DOC_AAA`n", $utf8)
+$ab = Invoke-OaJson @('doc', '-Id', '701', '-Observe', $emptyAlt)
+Check 'AB the MCP empty-document wording is a reading, not a failure' {
+  "$($ab.observation)" -eq 'read' -and [int]$ab.new_comments -eq 0
+}
+# ...and in the ENVELOPE, which is the shape the surface actually returns. The bare-text arm
+# above passed while this one still failed, because the wording sits mid-string where a
+# `^`-anchored test never matches -- the same "the fixture is tidier than the surface" trap that
+# let GH #529 survive its own guard.
+$emptyEnv = Join-Path $root 'dump-empty-envelope.json'
+[IO.File]::WriteAllText($emptyEnv, '{"content":[{"text":"No comments found in document DOC_AAA","type":"text"}],"isError":false,"structuredContent":{"result":"No comments found in document DOC_AAA"}}', $utf8)
+$ac = Invoke-OaJson @('doc', '-Id', '701', '-Observe', $emptyEnv)
+Check 'AC the empty-document wording is a reading inside the MCP envelope too' {
+  "$($ac.observation)" -eq 'read' -and [int]$ac.new_comments -eq 0
+}
 
 # --- report ---------------------------------------------------------------------------
 $pass = 0; $fail = 0

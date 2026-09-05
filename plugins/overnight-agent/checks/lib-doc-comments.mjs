@@ -161,15 +161,24 @@ export function parseCommentDump(text) {
  * the channel Shiv designated primary, where a dropped message is an instruction he believes
  * arrived.
  *
- * So zero is only trustworthy alongside POSITIVE evidence that a listing happened: the MCP's own
- * summary line, which is present even for an empty document. Bytes that name comments but parse
- * to nothing are a parse failure; bytes that say nothing at all are not a reading.
+ * So zero is only trustworthy alongside POSITIVE evidence that a listing happened. The MCP has
+ * TWO wordings for a document with nothing on it, and both must be accepted (GH #531): a document
+ * with comments answers `Found N comments in document <id>`, and one without answers `No comments
+ * found in document <id>`. Accepting only the first made an empty document read as a dead
+ * connection — this predicate's own defect, mirrored: it made "he said nothing" indistinguishable
+ * from "the read failed". That direction never self-clears, because a quiet document stays quiet.
+ *
+ * Bytes that name comments but parse to nothing are a parse failure; bytes that say nothing at
+ * all are not a reading.
  */
 export function isUnparsedDump(text, parsed) {
   if (Array.isArray(parsed) && parsed.length > 0) return false
   const src = String(text ?? '')
   if (/Comment ID:|Reply ID:/.test(src)) return true
-  if (/^\s*Found\s+\d+\s+comments?\b/im.test(src)) return false
+  // Not `^`-anchored: the MCP wraps the dump in a JSON envelope, so the live payload carries
+  // this wording mid-string where a line-anchored test never matches.
+  if (/Found\s+\d+\s+comments?\b/i.test(src)) return false
+  if (/No\s+comments\s+found\b/i.test(src)) return false
   return src.trim().length > 0
 }
 

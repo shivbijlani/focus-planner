@@ -3800,7 +3800,27 @@ function Test-ObservationReadable([string]$text) {
   # Two forms count as evidence, and BOTH must be accepted: the MCP's own summary line, which is
   # present even when the document has no comments at all; and at least one parsed comment id,
   # which covers a caller passing the structured array shape that carries no summary line.
-  if ([regex]::IsMatch($text, '(?im)^\s*Found\s+\d+\s+comments?\b')) { return $true }
+  #
+  # BOTH EMPTY WORDINGS COUNT (GH #531). The summary line is not the only thing the MCP says
+  # about a document with nothing on it -- an empty document answers `No comments found in
+  # document <id>`, which names no count and so failed every test here. Measured live on task
+  # #466: a plainly successful fetch (`isError: false`) classified as `unreadable`.
+  #
+  # That is this predicate's own defect mirrored. #468 made "the read failed" distinguishable
+  # from "he said nothing"; accepting only one of the two empty wordings made "he said nothing"
+  # indistinguishable from "the read failed" -- the same conflation pointing the other way, and
+  # this direction never self-clears, because a quiet document stays quiet.
+  #
+  # The lesson worth keeping: the evidence list must be driven by what the surface ACTUALLY
+  # emits, not by the one phrasing that happened to be in front of whoever wrote it. Both of
+  # these were observed live before being added.
+  #
+  # NOT anchored to the start of a line. The MCP wraps the dump in a JSON envelope, so the live
+  # payload carries this wording mid-string (`{"content":[{"text":"No comments found in ...`),
+  # where a `^`-anchored test never matches. Measured: the bare text passed while the envelope
+  # form -- the shape the surface actually returns -- still read as `unreadable`.
+  if ([regex]::IsMatch($text, '(?i)Found\s+\d+\s+comments?\b')) { return $true }
+  if ([regex]::IsMatch($text, '(?i)No\s+comments\s+found\b')) { return $true }
   if ([regex]::IsMatch($text, '(?im)(?:Comment|Reply)\s+ID:\s*\S')) { return $true }
   $trimmed = "$text".Trim()
   if ($trimmed -eq '[]') { return $true }   # an explicitly empty structured result IS a reading
