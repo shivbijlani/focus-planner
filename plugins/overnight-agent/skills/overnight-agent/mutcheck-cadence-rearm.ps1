@@ -30,10 +30,27 @@
 #>
 [CmdletBinding()]
 param(
-  [string]$ScriptPath = (Join-Path $PSScriptRoot 'oa-state.ps1')
+  [string]$ScriptPath
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Resolved HERE, not as a param default. Under Windows PowerShell 5.1 `$PSScriptRoot` is still
+# empty when param defaults are evaluated, so `Join-Path $PSScriptRoot ...` throws before the
+# script body ever runs -- and it throws on 5.1 ONLY, which is the host the nightly uses while CI
+# uses pwsh. That is the same Windows/Linux split this repo has already been bitten by, pointing
+# the other way.
+if (-not $ScriptPath) {
+  $here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+  $ScriptPath = Join-Path $here 'oa-state.ps1'
+}
+
+# Launch the host that actually EXISTS here. `powershell` is Windows-only, so hardcoding it makes
+# the guard die on the Linux runner with "The term 'powershell' is not recognized" -- which is how
+# this file first failed CI while passing locally. Same idiom as mutcheck-doc-binding.ps1: under
+# Core, re-launch the very executable running this script; under 5.1, `powershell`.
+$script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
+if (-not $script:PsExe) { $script:PsExe = 'pwsh' }
 
 $root = Join-Path ([IO.Path]::GetTempPath()) ("oa-cadence-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $jdir = Join-Path $root 'journal'
@@ -80,7 +97,7 @@ function Invoke-Oa {
     @('-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store)
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  $out = & powershell @all 2>&1 | Out-String -Width 4096
+  $out = & $script:PsExe @all 2>&1 | Out-String -Width 4096
   $ErrorActionPreference = $prev
   return $out
 }
