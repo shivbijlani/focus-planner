@@ -525,6 +525,37 @@ $pEmpty = Join-Path $root 'obs-empty.json'
 $w = Invoke-OaJson @('doc', '-Id', '713', '-Observe', $pEmpty)
 Check 'W an empty document still reports zero' { [int]$w.new_comments -eq 0 }
 
+# --- X/Y/Z/AA: a read that did not happen is not a document with nothing on it (GH #468) ------
+#
+# A transport error, a truncated file and a genuinely empty document all parse to ZERO comment
+# rows. Before this, all three reported `new_comments: 0` -- and the first two are a dead channel
+# on the surface Shiv designated primary, where a dropped instruction is one he believes arrived.
+# The probe beside the reader cannot close this: `mcp-probe.mjs` spawns a FRESH server, so it
+# answers "can a server start", never "is this session's connection alive".
+$deadPath = Join-Path $root 'dump-transport-dead.txt'
+[IO.File]::WriteAllText($deadPath, "google-workspace: Error: MCP request failed: Transport closed`n", $utf8)
+
+$obsBefore = (Invoke-OaJson @('doc', '-Id', '701')).observed_at
+$x = Invoke-OaJson @('doc', '-Id', '701', '-Observe', $deadPath)
+
+Check 'X a dead connection reports observation=unreadable' { "$($x.observation)" -eq 'unreadable' }
+# The load-bearing arm. `0` is a claim about the document; `null` is the absence of a claim, and
+# only one of them is true when nothing was read.
+Check 'Y an unreadable observation withholds the count rather than defaulting it' { $null -eq $x.new_comments }
+# `observed_at` is what the capacity park reads as proof the channel was checked and was silent.
+# Stamping it on a failed read would launder a dead connection into evidence of silence.
+Check 'Z an unreadable observation does not move observed_at' {
+  "$((Invoke-OaJson @('doc', '-Id', '701')).observed_at)" -eq "$obsBefore"
+}
+# Discrimination, in the direction that matters: the fix must not make every quiet document look
+# broken. A real listing of an empty document is still a READING, and still reports 0.
+$emptyRead = Join-Path $root 'dump-empty-real.txt'
+[IO.File]::WriteAllText($emptyRead, "Found 0 comments in document DOC_AAA`n", $utf8)
+$aa = Invoke-OaJson @('doc', '-Id', '701', '-Observe', $emptyRead)
+Check 'AA a genuine empty listing still reads as read/0' {
+  "$($aa.observation)" -eq 'read' -and [int]$aa.new_comments -eq 0
+}
+
 # --- report ---------------------------------------------------------------------------
 $pass = 0; $fail = 0
 foreach ($k in $results.Keys) {
