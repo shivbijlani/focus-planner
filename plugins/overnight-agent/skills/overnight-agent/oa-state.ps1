@@ -3776,6 +3776,50 @@ function Read-ObservedComments([string]$path) {
   return , $rows
 }
 
+function Test-ObservationReadable([string]$text) {
+  # GH #468 -- DID THE READ HAPPEN AT ALL?
+  #
+  # `Read-ObservedComments` answers "which comment ids are in this text". It cannot answer "was
+  # this text produced by a successful listing", and those are different questions with the same
+  # answer shape: a transport error, a truncated file and a genuinely empty document all parse to
+  # ZERO rows. `-Observe` then reports `new_comments: 0`, which is byte-identical to "he said
+  # nothing" on the channel he designated primary.
+  #
+  # Measured 2026-09-04 ~01:1x PT: the agent session's google-workspace connection was dead --
+  # `Error: MCP request failed: Transport closed`, twice, no recovery -- while `mcp-probe.mjs`
+  # exited 0 with all 36 tools present, because it spawns a FRESH server. A probe beside the
+  # reader is always a second opinion about a different connection. The only place the question
+  # can be settled is in the reader, on the text the read actually produced.
+  #
+  # So this demands POSITIVE EVIDENCE OF A SUCCESSFUL LISTING, exactly as the email row demands a
+  # positive health probe before it is allowed to report an empty inbox. Absence of evidence is
+  # `unreadable`, never `0`. That fails toward re-reading a comment -- which costs a duplicate
+  # answer -- rather than toward silence, which costs an instruction the user believes was
+  # received.
+  #
+  # Two forms count as evidence, and BOTH must be accepted: the MCP's own summary line, which is
+  # present even when the document has no comments at all; and at least one parsed comment id,
+  # which covers a caller passing the structured array shape that carries no summary line.
+  if ([regex]::IsMatch($text, '(?im)^\s*Found\s+\d+\s+comments?\b')) { return $true }
+  if ([regex]::IsMatch($text, '(?im)(?:Comment|Reply)\s+ID:\s*\S')) { return $true }
+  $trimmed = "$text".Trim()
+  if ($trimmed -eq '[]') { return $true }   # an explicitly empty structured result IS a reading
+  # The structured array shape a caller with real data passes carries NEITHER the MCP's summary
+  # line nor the dump's `Comment ID:` labels, so the textual tests above cannot see it.
+  #
+  # Matched textually rather than by parsing, deliberately. An earlier version parsed the JSON and
+  # inspected each element, which is the obvious approach and is not worth its cost here: it makes
+  # a health verdict depend on a parser's behaviour across PowerShell editions, and this predicate
+  # has to be trustworthy in exactly the conditions where things are already going wrong. A quoted
+  # `"id":` field is evidence enough -- a transport error carries no such field, and any text that
+  # does carry one came from something that enumerated comments.
+  if (($trimmed.StartsWith('[') -or $trimmed.StartsWith('{')) -and
+      [regex]::IsMatch($trimmed, '"id"\s*:\s*"[^"]')) {
+    return $true
+  }
+  return $false
+}
+
 function New-DocObject([string]$docId, [string]$docUrl, [string]$boundAt, $seen, $pending, [string]$observedAt) {
   [pscustomobject]@{
     doc_id      = $docId
@@ -3866,13 +3910,29 @@ function Cmd-Doc {
     [void](Add-DocMetaStamp $path $doc.doc_id "$($doc.doc_url)")
   }
 
+  $observationUnreadable = $false
   if ($Observe) {
     if (-not $doc) { throw "task $Id has no bound doc; bind one with -DocId first" }
-    $obs = Read-ObservedComments $Observe
-    $seen = @($doc.seen_ids)
-    $new = @()
-    foreach ($c in $obs) { if ($seen -notcontains $c.id) { $new += $c.id } }
-    $doc = New-DocObject $doc.doc_id "$($doc.doc_url)" "$($doc.bound_at)" $seen $new (Now-Iso)
+    if (-not (Test-Path $Observe)) { throw "no such observation file: $Observe" }
+    $obsText = [IO.File]::ReadAllText($Observe, (New-Object Text.UTF8Encoding($false)))
+
+    # GH #468 -- a read that did not happen must NOT be recorded as a reading.
+    #
+    # `observed_at` is what the capacity park treats as proof the channel was checked and was
+    # silent, so stamping it here on a failed read would launder a dead connection into evidence
+    # of silence -- and the park would then hold the task quiet on the strength of it. State is
+    # therefore left completely untouched: no watermark move, no fresh `observed_at`, so the next
+    # run sees an observation that is stale rather than one that is falsely current.
+    if (-not (Test-ObservationReadable $obsText)) {
+      $observationUnreadable = $true
+    }
+    else {
+      $obs = Read-ObservedComments $Observe
+      $seen = @($doc.seen_ids)
+      $new = @()
+      foreach ($c in $obs) { if ($seen -notcontains $c.id) { $new += $c.id } }
+      $doc = New-DocObject $doc.doc_id "$($doc.doc_url)" "$($doc.bound_at)" $seen $new (Now-Iso)
+    }
   }
 
   if ($Ack) {
@@ -3944,8 +4004,13 @@ function Cmd-Doc {
     # repaired the same way -- write a correct stamp. The distinction that MUST survive is
     # "heals to nothing" vs "heals to the wrong document", and it does.
     journal_stamp_mismatch_id = if ($stampId -and -not $stamped) { $stampId } else { $null }
-    new_comments   = if ($doc) { @($doc.pending_ids).Count } else { 0 }
-    new_comment_ids = if ($doc) { @($doc.pending_ids) } else { @() }
+    # GH #468 -- NULL, never 0, when the read failed. `0` is a claim about the document; `null`
+    # is the absence of a claim, and only one of them is true when the connection was dead. Any
+    # reader that treats these as the same number reproduces the defect one layer up, so the
+    # count is withheld rather than defaulted.
+    new_comments   = if ($observationUnreadable) { $null } elseif ($doc) { @($doc.pending_ids).Count } else { 0 }
+    new_comment_ids = if ($observationUnreadable) { @() } elseif ($doc) { @($doc.pending_ids) } else { @() }
+    observation    = if ($observationUnreadable) { 'unreadable' } elseif ($Observe) { 'read' } else { $null }
     seen_comments  = if ($doc) { @($doc.seen_ids).Count } else { 0 }
     observed_at    = if ($doc -and "$($doc.observed_at)") { "$($doc.observed_at)" } else { $null }
   } | ConvertTo-Json -Depth 5
