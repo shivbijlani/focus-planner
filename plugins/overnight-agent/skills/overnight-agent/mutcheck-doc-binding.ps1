@@ -555,7 +555,7 @@ $aa = Invoke-OaJson @('doc', '-Id', '701', '-Observe', $emptyRead)
 Check 'AA a genuine empty listing still reads as read/0' {
   "$($aa.observation)" -eq 'read' -and [int]$aa.new_comments -eq 0
 }
-# GH #531 — the wording the MCP ACTUALLY returns for a document with no comments. It does not
+# GH #531 -- the wording the MCP ACTUALLY returns for a document with no comments. It does not
 # say "Found 0 comments"; it says "No comments found in document <id>", which names no count.
 # Accepting only the counted phrasing made a healthy empty document read as a dead connection
 # (measured live on task #466), which is this predicate's own defect pointing the other way.
