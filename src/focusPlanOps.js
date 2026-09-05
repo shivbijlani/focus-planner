@@ -613,6 +613,11 @@ function findInsertAndMaxId(lines, section) {
   let inTargetSection = false
   let insertIndex = -1
   let maxId = 0
+  // Every task ID present in THIS content. `maxId` alone cannot prevent a
+  // collision: it is a single number, so if it is ever computed low (a stale
+  // in-memory copy, a row this scan failed to parse), `maxId + 1` can land on
+  // an ID that is sitting right there in the same content. See GH #528.
+  const usedIds = new Set()
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     if (line.startsWith('## ')) {
@@ -625,11 +630,15 @@ function findInsertAndMaxId(lines, section) {
       const cells = line.split('|').slice(1, -1).map(c => c.trim())
       if (cells.length >= 1 && cells[0] !== 'ID' && !/^[-:]+$/.test(cells[0])) {
         const numMatch = cells[0].match(/^(\d+)/)
-        if (numMatch) maxId = Math.max(maxId, parseInt(numMatch[1], 10))
+        if (numMatch) {
+          const id = parseInt(numMatch[1], 10)
+          maxId = Math.max(maxId, id)
+          usedIds.add(id)
+        }
       }
     }
   }
-  return { insertIndex, maxId }
+  return { insertIndex, maxId, usedIds }
 }
 
 /**
@@ -644,22 +653,41 @@ function findInsertAndMaxId(lines, section) {
  *
  * `existingJournalIds` may be a Set<number>; any other value (including the
  * legacy numeric `baselineMaxId`) is ignored so old callers stay correct.
+ *
+ * `contentIds` is the set of IDs actually present in the content being written
+ * (GH #528). It exists because `contentMaxId` is a single number and therefore
+ * cannot be a safety property: if it is ever computed too low — a stale
+ * in-memory copy of the board, a row shape this scan mis-parses — then
+ * `contentMaxId + 1` can name a task that is alive in the very same content.
+ * Measured live 2026-09-05: a board holding 471–474 allocated **471**, and the
+ * user-authored "Potential Turkey vacation" row was destroyed with no warning.
+ * Skipping over the content's own IDs makes the allocation correct even when
+ * `contentMaxId` is wrong, which is the only way this can be relied upon.
  */
-export function allocateNextId(contentMaxId, existingJournalIds) {
-  const ids = existingJournalIds instanceof Set ? existingJournalIds : null
+export function allocateNextId(contentMaxId, existingJournalIds, contentIds) {
+  const journal = existingJournalIds instanceof Set ? existingJournalIds : null
+  const inContent = contentIds instanceof Set ? contentIds : null
+  const taken = (n) => (journal !== null && journal.has(n)) || (inContent !== null && inContent.has(n))
   let id = (contentMaxId || 0) + 1
-  if (ids) {
-    while (ids.has(id)) id++
-  }
+  while (taken(id)) id++
   return id
 }
 
 export function opAddTask(content, { task, priority, linkedTask, section }, existingJournalIds = new Set()) {
   const lines = content.split('\n')
   if (section === 'Deferred') ensureWakeColumn(lines, 'Deferred')
-  const { insertIndex, maxId } = findInsertAndMaxId(lines, section)
+  const { insertIndex, maxId, usedIds } = findInsertAndMaxId(lines, section)
   if (insertIndex === -1) return content
-  const newId = allocateNextId(maxId, existingJournalIds)
+  const newId = allocateNextId(maxId, existingJournalIds, usedIds)
+  // Refuse to write a row whose ID is already live in this content (GH #528).
+  // The allocator above already skips them, so reaching this is a bug in the
+  // allocator rather than a condition to recover from — but it is asserted
+  // anyway, because the failure it guards is silent and destructive: a
+  // duplicate ID is later collapsed by ID self-healing, which drops one of the
+  // two rows. A thrown error loses nothing; a dropped row loses the user's work.
+  if (usedIds.has(newId)) {
+    throw new Error(`refusing to add a task with ID ${newId}: that ID is already in use on this board`)
+  }
   const today = new Date().toISOString().split('T')[0]
   const trimmedLinked = linkedTask ? linkedTask.trim() : ''
   const isUrl = /^https?:\/\//.test(trimmedLinked)
@@ -689,9 +717,12 @@ export function opAddTask(content, { task, priority, linkedTask, section }, exis
 
 export function opPromoteTodoToTask(content, todoText, parentTaskId, existingJournalIds = new Set()) {
   const lines = content.split('\n')
-  const { insertIndex, maxId } = findInsertAndMaxId(lines, 'Today')
+  const { insertIndex, maxId, usedIds } = findInsertAndMaxId(lines, 'Today')
   if (insertIndex === -1) return content
-  const newId = allocateNextId(maxId, existingJournalIds)
+  const newId = allocateNextId(maxId, existingJournalIds, usedIds)
+  if (usedIds.has(newId)) {
+    throw new Error(`refusing to promote a todo to ID ${newId}: that ID is already in use on this board`)
+  }
   const today = new Date().toISOString().split('T')[0]
   const cleanText = todoText.replace(/^TODO:\s*/i, '').trim()
   const row = `| ${newId} | 🟡 | ${cleanText} | - | ${today} | ${parentTaskId} |`
