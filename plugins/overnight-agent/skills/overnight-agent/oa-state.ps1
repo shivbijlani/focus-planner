@@ -462,6 +462,20 @@ param(
 
   [string]$Id,
   [string]$Status,
+  # WHO declared that status (#501). `agent` -- the default, and what an unset value records --
+  # is a claim the agent makes about its own work. `user` is the user's own decision, relayed.
+  #
+  # The distinction exists because a `done` the AGENT wrote used to confer the semantics of a
+  # task the USER closed: the row stopped being workable, replies to it were suppressed as
+  # "replies on closed work", and it stopped holding the Today gate. SKILL.md says the opposite
+  # -- "Completion is the USER's action in the Focus Planner app" -- so the agent is explicitly
+  # not the authority here, and this parameter is what stops it acting as one.
+  #
+  # DEFAULTING TO `agent` IS THE FAIL-SAFE DIRECTION and is deliberate: an unattributed status
+  # must never inherit the user's authority to close work. The board remains the real authority
+  # (see Test-UserClosed); this only ever ADDS a way to recognise a genuine user decision.
+  [ValidateSet('user', 'agent')]
+  [string]$StatusBy,
   # #477: overrides the author recorded by `mark`. Exists so the guard's arms can drive it from
   # a fixture; a real run leaves it unset and the identity comes from the runtime.
   [string]$TurnBy,
@@ -549,6 +563,11 @@ param(
   # (<!-- snooze:YYYY-MM-DD --> markers, from the #353 snooze feature). Sits next to the
   # journal dir by default; override to match a non-standard planner layout.
   [string]$PlannerBoard = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\planner.md",
+  # The COMPLETED board (#501). This is the record of what the USER closed, in the app, which
+  # SKILL.md names as the only authority on completion. It is read-only here and is what lets
+  # `done` mean two different things safely: a row here was closed by the user, a `done` on a row
+  # still in planner.md is the agent's own claim about its own work. Sits next to planner.md.
+  [string]$PlannerCompleted = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\planner-completed.md",
   # Structured snooze store, written by the Planner web app and read-only here (#391).
   # Preferred over the in-markdown markers above; see Get-SnoozeMap.
   [string]$SnoozeStore = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\snooze.json",
@@ -1587,6 +1606,40 @@ function Get-AgentEndIndex([string]$content) {
   return $end
 }
 
+function Test-TrailingHasHuman {
+  # Is there content below the agent's last turn that the HUMAN PROVABLY authored? (#501)
+  #
+  # THIS IS THE THIRD QUESTION, and it needs its own default -- see the two-defaults note under
+  # Get-ConsentFacts, which this now joins:
+  #
+  #   "Did the user speak?"            Test-TrailingHasUser.  Unmarked prose counts AS the human.
+  #                                    FAIL OPEN. Drives `reopened`, which is a ONE-SHOT signal:
+  #                                    it is armed by the file changing, so a false positive
+  #                                    costs a single look and then goes quiet by itself.
+  #
+  #   "Did the human authorise this?"  Test-TrailingHasConsent. FAIL CLOSED.
+  #
+  #   "Is a message of his STILL       ->  here. Requires an explicit `<!-- from: me -->`.
+  #    sitting unanswered?"                This signal is STANDING, not one-shot: it is derived
+  #                                        from the file's structure rather than from a hash, so
+  #                                        it survives a re-snapshot and keeps reporting until an
+  #                                        agent turn is written BELOW the message. A signal that
+  #                                        does not clear itself must not fire on ambiguity, or a
+  #                                        sibling skill that forgets its stamp pins the row
+  #                                        forever. So this one is strict: marked, or nothing.
+  #
+  # The strictness is what makes it cheap. Every message this is meant to protect is written by
+  # the Planner app or the Telegram bridge, both of which stamp `<!-- from: me -->`; #245's three
+  # lost messages all carry it. Unmarked prose is still caught by `reopened` on the run it lands.
+  #
+  # `$consent` is passed in by Get-JournalFacts, which has already computed it -- the verdict is
+  # a read of the SAME facts every other authorship question uses, not a second opinion derived
+  # separately. It falls back to computing them so the function is callable on its own.
+  param([string]$trailing, $consent)
+  if (-not $consent) { $consent = Get-ConsentFacts $trailing }
+  return [bool]($consent.human_segments -gt 0)
+}
+
 function Test-TrailingHasUser([string]$trailing) {
   # Is there HUMAN content below this agent's last turn? Only the human reopens a task.
   #
@@ -1873,6 +1926,7 @@ function Get-JournalFacts([string]$path) {
   if ($agentEnd -lt 0) { $agentEnd = 0 }
   $agentLeft = $content.Substring(0, [Math]::Min($agentEnd, $content.Length))
   $trailing = if ($agentEnd -lt $content.Length) { $content.Substring($agentEnd) } else { '' }
+  $consent = Get-ConsentFacts $trailing
   [pscustomobject]@{
     Id              = $id
     Path            = $path
@@ -1880,9 +1934,14 @@ function Get-JournalFacts([string]$path) {
     FullHash        = Get-Sha256 $content
     AgentLeftHash   = Get-Sha256 $agentLeft     # file as the agent last left it (no trailing user prose)
     HasTrailingUser = (Test-TrailingHasUser $trailing)
+    # #501: the STANDING half of the same question -- a message the human provably wrote that no
+    # agent turn has been written below yet. Derived from structure, so unlike `HasTrailingUser`
+    # (which only becomes `reopened` when the hash also moved) it cannot be erased by
+    # re-snapshotting the file. That erasure is what lost three of Shiv's messages on #245.
+    HasTrailingHuman = (Test-TrailingHasHuman $trailing $consent)
     HasOpenAsk      = (Test-HasOpenAsk $agentLeft)       # visibility: digest must show it
     HasBlockingAsk  = (Test-HasBlockingAsk $agentLeft)   # gate: does it stop the run proceeding?
-    Consent         = (Get-ConsentFacts $trailing)   # #227: fail-CLOSED authorship verdict
+    Consent         = $consent   # #227: fail-CLOSED authorship verdict
     Trailing        = $trailing
     Legacy          = Parse-LegacyOaState $content
   }
@@ -2240,6 +2299,26 @@ $script:UrgencyRank = @{
   ([char]::ConvertFromUtf32(0x26AA))  = 3   # white
 }
 
+function Get-CompletedBoardIds {
+  # The ids on planner-completed.md -- i.e. the tasks the USER closed, in the app (#501).
+  #
+  # Read with the same explicit UTF-8 decoder and the same row parser as the live board, so the
+  # two answers can never disagree about what a row is. A missing or unreadable completed board
+  # returns an EMPTY set, which fails toward "nobody has completed anything": no row is treated
+  # as user-closed, so replies keep reopening work. That is the fail-safe direction -- the other
+  # one loses messages, which is the entire defect this exists to close.
+  $ids = @{}
+  if ([string]::IsNullOrWhiteSpace($PlannerCompleted)) { return $ids }
+  if (-not (Test-Path -LiteralPath $PlannerCompleted)) { return $ids }
+  $lines = @()
+  try { $lines = (Read-JournalText $PlannerCompleted) -split "`r?`n" } catch { return $ids }
+  foreach ($line in $lines) {
+    $id = Get-BoardRowId $line
+    if ($id) { $ids[$id] = $true }
+  }
+  return $ids
+}
+
 function Get-UrgencyRank([string]$icon) {
   if ([string]::IsNullOrWhiteSpace($icon)) { return 4 }
   foreach ($k in $script:UrgencyRank.Keys) { if ($icon.Contains($k)) { return $script:UrgencyRank[$k] } }
@@ -2300,9 +2379,59 @@ $script:NonWorkableStatus = @('done', 'skip', 'proposed', 'blocked')
 # CLOSED is protected from being reanimated by a passing remark.
 $script:ClosedStatus = @('done', 'skip')
 
+# WHO closed it (#501). `$script:ClosedStatus` names the closed STATUSES; this names the closed
+# TASKS, and the two are not the same set -- which is the whole bug.
+#
+# THE DEFECT. Suppression was keyed to the STATUS alone, so a `done` the AGENT wrote about its
+# own work conferred the semantics of a task the USER had closed. SKILL.md is explicit that it
+# must not: "Completion is the USER's action in the Focus Planner app... leave the board row
+# untouched." The agent is not the authority on completion, yet its own claim was the thing that
+# switched the row into "protected, never worked, replies suppressed".
+#
+# Measured on the live board 2026-09-04 (#501): task #245 was row 1 of `## Today`, absent from
+# planner-completed.md, and self-declared `done` by the agent's 2026-08-31 turn. Three of Shiv's
+# messages -- carrying NEW requirements, a NEW link and a NEW question -- sat under the turn-end
+# stamp for over a day reading `reopened: false, reopened_closed: false, eligible: false`, while
+# the released Today gate sent the run to Deferred row 68.
+#
+# THE AUTHORITY, in order, and every branch is evidence the AGENT DOES NOT AUTHOR:
+#
+#   completed board   the row is on planner-completed.md. The user moved it there in the app.
+#                     This is the #170 case verbatim (task #385, cancelled, on the completed
+#                     board, its July turn re-posted) and it stays fixed.
+#   status_by: user   the user said "skip this" / "that's done" and the run recorded WHO decided.
+#                     Absent -- every state file written before this shipped -- reads as `agent`,
+#                     which is the fail-safe direction: an unattributed close cannot inherit his
+#                     authority. The board still covers the genuine cases.
+#   off the board     closed AND present on neither board. The row is not open work any more, so
+#                     there is nothing to reanimate; this keeps deleted rows protected without
+#                     needing a completed-board entry for them.
+#
+# A closed status on a row STILL IN planner.md is none of those. It is the agent's own claim
+# about its own work, and a reply to it reopens the task normally.
+function Test-UserClosed($row) {
+  if ($script:ClosedStatus -notcontains "$($row.status)".ToLowerInvariant()) { return $false }
+  if ($row.user_completed) { return $true }
+  if ("$($row.status_by)".ToLowerInvariant() -eq 'user') { return $true }
+  if (-not $row.on_board) { return $true }
+  return $false
+}
+
 function Test-ReopenedClosed($row) {
-  # A reply landed on a task the user had closed. Reported, never worked.
-  return [bool]($row.reopened -and ($script:ClosedStatus -contains "$($row.status)"))
+  # A reply landed on a task the USER had closed. Reported, never worked.
+  return [bool]($row.reopened -and (Test-UserClosed $row))
+}
+
+# An unanswered message from the human on work that is still OPEN (#501). Standing, not one-shot:
+# it is read off the file's structure, so `mark` re-snapshotting the journal cannot clear it and
+# only writing a turn BELOW the message can. That is the compensating control the design already
+# promised -- "a missed nudge STAYS VISIBLE" -- actually holding.
+#
+# It was not holding. On #245 the re-snapshot landed 62 SECONDS after the messages were folded
+# in, so `changed` and `reopened_closed` both went false and the nudge was not merely missed, it
+# was gone: every run afterwards read the row as quiet.
+function Test-UnansweredUser($row) {
+  return [bool]($row.unanswered_user -and -not (Test-UserClosed $row))
 }
 
 function Test-Workable($row) {
@@ -2321,6 +2450,14 @@ function Test-Workable($row) {
   # reanimating finished work is the actual complaint, and it is not visible at all.
   if (Test-ReopenedClosed $row) { return $false }
   if ($row.reopened) { return $true }   # a live reply is always workable (#223 rule 4)
+  # #501: a message of his that is STILL UNANSWERED, on work that is still open. Same rule as
+  # `reopened` one line above, reached by the other route -- the file's structure rather than a
+  # hash that a re-snapshot has already moved. It sits BELOW Test-ReopenedClosed for the same
+  # reason `reopened` does: a message on genuinely user-closed work is reported, never worked.
+  #
+  # Without this the row is offered only on the single run the journal changed. #245 proves that
+  # window can be 62 seconds wide and can close before any run sees it.
+  if (Test-UnansweredUser $row) { return $true }
   # A DUE timer outranks the awaiting-reply park. A poll/recheck is read-only agent work that
   # needs no reply, so parking it on "the user has not answered" would silently stop exactly the
   # recurring duty polling exists to protect -- SKILL.md's "a purely time-based job would be
@@ -2401,6 +2538,17 @@ function Get-TodayGateVerdict($row, [string]$todayHash) {
   if ($row.reopened) {
     return [pscustomobject]@{ holds = $true; reason = 'holding:reopened' }
   }
+  # #501: an unanswered message from him holds the gate for exactly the same reason a fresh
+  # reply does -- it IS a reply, one that a re-snapshot happened to hide. Placed ABOVE the
+  # exhaustion claim on purpose: "I examined everything Today holds" cannot be true of a row
+  # carrying a question nobody has answered, so the declaration must not be able to release it.
+  #
+  # This is the branch that stops the third symptom. On #245 the agent-declared `done` made the
+  # row `not_workable`, the gate opened, and the run dispatched Deferred row 68 -- work Shiv did
+  # not want touched -- while a Today row holding three of his unanswered messages sat inert.
+  if (Test-UnansweredUser $row) {
+    return [pscustomobject]@{ holds = $true; reason = 'holding:unanswered_user' }
+  }
   if ($script:GateStrict) {
     return [pscustomobject]@{ holds = $true; reason = 'holding:strict' }
   }
@@ -2476,6 +2624,7 @@ function Test-ExhaustionClaim($ex, $row, [string]$todayHash) {
 function Cmd-Scan {
   $snooze = Get-SnoozeMap
   $board = Get-BoardMap
+  $completed = Get-CompletedBoardIds
   $boardLines = @()
   if (Test-Path $PlannerBoard) { $boardLines = (Read-JournalText $PlannerBoard) -split "`r?`n" }
   $prioRank = Get-PrioritiesRank $boardLines
@@ -2485,12 +2634,21 @@ function Cmd-Scan {
     $st = Read-State $facts.Id
     $poll = $null
     $recheck = $null
+    $statusBy = 'agent'
+    $unansweredAt = $null
     if ($st) {
       $changed = ($facts.FullHash -ne $st.processed_file_hash)
       $reopened = $changed -and $facts.HasTrailingUser
       $status = "$($st.status)"
       if ($st.PSObject.Properties['poll']) { $poll = $st.poll }
       if ($st.PSObject.Properties['recheck']) { $recheck = $st.recheck }
+      # #501. ABSENT READS AS `agent`, never as the user: every state file written before this
+      # shipped has no attribution, and defaulting those to the user would hand the agent back
+      # the exact authority this change removes -- silently, and for the whole existing corpus.
+      if ($st.PSObject.Properties['status_by'] -and $st.status_by) { $statusBy = "$($st.status_by)".ToLowerInvariant() }
+      if ($st.PSObject.Properties['unanswered_user_message_at'] -and $st.unanswered_user_message_at) {
+        $unansweredAt = "$($st.unanswered_user_message_at)"
+      }
     }
     else {
       # No memory yet: a task is "reopened/active" only if the user has left prose below the
@@ -2537,6 +2695,14 @@ function Cmd-Scan {
       # priority at all, and "Today first" existed only as prose in SKILL.md.
       section       = $section
       urgency       = $urgency
+      # #501: which board this row is on, as DATA. `Test-UserClosed` reads these rather than the
+      # skill's own status, so "the user closed it" stops being something the agent can assert
+      # about itself. `on_board` is planner.md (open work); `user_completed` is
+      # planner-completed.md (his own act, in the app).
+      on_board       = [bool]$b
+      user_completed = [bool]$completed.ContainsKey($facts.Id)
+      # Who declared the current status. See the -StatusBy parameter for why absent is `agent`.
+      status_by      = $statusBy
       work_priority = $workPriority
       board_pos     = $boardPos
       # #408: the row's `Linked ID`, carried through instead of discarded. SKILL.md's "Resolve
@@ -2561,7 +2727,16 @@ function Cmd-Scan {
       # workable -- see Test-Workable -- but it is emitted so the run can SURFACE it (quoted, in
       # the wrap-up) rather than swallow it. Suppressing the work without reporting the message
       # would trade one silent failure for another.
-      reopened_closed = [bool]($reopened -and ($script:ClosedStatus -contains "$status"))
+      reopened_closed = [bool]$false   # filled in below, once the board facts are on the row
+      # #501: a message the human provably wrote that no agent turn has been written below yet.
+      # Unlike `reopened` this does NOT depend on the hash having moved, so re-snapshotting the
+      # journal cannot clear it -- which is precisely how #245's three messages disappeared.
+      # It is re-reported on EVERY run until a turn answers it.
+      unanswered_user    = [bool]$facts.HasTrailingHuman
+      # When it was first seen unanswered, so the wrap-up can say HOW LONG it has been waiting.
+      # Stamped by `mark`; null on a row whose message predates this field (the message is still
+      # reported -- an unknown age must never be reported as no message).
+      unanswered_user_at = $unansweredAt
       awaiting_reply = [bool]($facts.HasAgentBlock -and $facts.HasBlockingAsk -and -not $facts.HasTrailingUser)
       # When the agent last wrote a TURN here (`mark` stamps it; `seed` and `resnapshot`
       # deliberately do not). Since #310 this is NOT a release signal: it feeds the wedged-run
@@ -2595,6 +2770,15 @@ function Cmd-Scan {
     }
   }
 
+  # #501: `reopened_closed` is a JOIN of the journal and the board, so it cannot be computed
+  # inside the row constructor above -- the board facts are only on the row once it exists. It
+  # is filled here, from the single predicate every other reader uses, so the report and the
+  # suppression can never disagree about which tasks the user closed.
+  foreach ($r in $rows) {
+    Add-Member -InputObject $r -NotePropertyName 'reopened_closed' `
+      -NotePropertyValue ([bool](Test-ReopenedClosed $r)) -Force
+  }
+
   # ---- #223: deterministic selection order -------------------------------------------------
   # Rule 1  Today before Deferred, and a Deferred row is not eligible while any Today row is
   #         still workable.
@@ -2605,7 +2789,7 @@ function Cmd-Scan {
   # Sorting here rather than in the agent's head is the whole point of the issue: two runs over
   # an unchanged board must produce the same order, and the order must be auditable afterwards.
   $rows = $rows | Sort-Object `
-    @{ Expression = { if ($_.reopened) { 0 } else { 1 } } }, `
+    @{ Expression = { if ($_.reopened -or (Test-UnansweredUser $_)) { 0 } else { 1 } } }, `
     @{ Expression = { Get-SectionRank $_.section } }, `
     @{ Expression = { Get-PriorityRank $_.work_priority } }, `
     @{ Expression = { Get-UrgencyRank $_.urgency } }, `
@@ -2638,6 +2822,11 @@ function Cmd-Scan {
       # have been handed a closed task anyway.
       if (Test-ReopenedClosed $r) { $eligible = $false }
       elseif ($r.reopened) { $eligible = $true }                  # rule 4 beats the gate
+      # #501: an unanswered message from him beats the gate for the same reason a fresh reply
+      # does. Without this arm the row is workable (Test-Workable says so) but a Deferred-first
+      # gate could still leave it unoffered -- and "workable but never offered" is exactly the
+      # silence #245 sat in for a day.
+      elseif (Test-UnansweredUser $r) { $eligible = $true }
       elseif ($r.section -eq 'today') { $eligible = (Test-Workable $r) }
       elseif ($todayHolding -eq 0) { $eligible = (Test-Workable $r) }
     }
@@ -4207,6 +4396,14 @@ function Cmd-Resnapshot {
     if ($facts.FullHash -eq $st.processed_file_hash) { continue }
     if ($facts.HasTrailingUser) {
       # Something is below the agent's turn. Leave it visible rather than baselining over it.
+      # #501: and if it is provably HIS, stamp when we first saw it, so the age of an unanswered
+      # message survives even when the rebaseline correctly declines to touch the hash.
+      if ($facts.HasTrailingHuman -and
+          -not ($st.PSObject.Properties['unanswered_user_message_at'] -and $st.unanswered_user_message_at)) {
+        Set-Member $st 'unanswered_user_message_at' (Now-Iso)
+        $st.updated = Now-Iso
+        Write-State $st
+      }
       $skipped++
       continue
     }
@@ -4311,7 +4508,13 @@ function Cmd-Mark {
   if (-not $st) {
     $st = [pscustomobject]@{ id = $Id; status = 'unknown'; version = 0; plan_id = ''; processed_file_hash = ''; has_agent_block = $true; seeded = $false; updated = $null }
   }
-  if ($Status) { $st.status = $Status }
+  if ($Status) {
+    $st.status = $Status
+    # #501: record WHO decided. Unset means the agent is speaking about its own work, which is
+    # the safe default -- see the -StatusBy parameter. Written on every -Status so an old `user`
+    # attribution can never survive a later agent-declared change of status.
+    Set-Member $st 'status_by' $(if ($StatusBy) { $StatusBy.ToLowerInvariant() } else { 'agent' })
+  }
   if ($Version -gt 0) { $st.version = $Version }
   if ($PlanId) { $st.plan_id = $PlanId }
 
@@ -4394,6 +4597,26 @@ function Cmd-Mark {
   # Re-snapshot: the agent has now processed the journal as it currently stands.
   $st.processed_file_hash = $facts.FullHash
   $st.has_agent_block = $facts.HasAgentBlock
+  # ...and record whether that snapshot just absorbed one of HIS messages (#501).
+  #
+  # THIS IS THE LINE ABOVE'S COMPENSATING CONTROL. `processed_file_hash` is the FULL hash, so it
+  # covers any user prose sitting below the turn-end stamp: after this assignment `changed` is
+  # false, `reopened` is false, and `reopened_closed` is false, on a journal that still holds an
+  # unanswered message. Measured on #245: the messages landed at 11:32:20 and this ran at
+  # 11:33:22 -- 62 seconds later -- and the nudge the design promised would "stay visible" was
+  # gone from every run that followed.
+  #
+  # `$facts` is read AFTER Add-TurnTerminator, which is what makes this honest rather than
+  # merely noisy: a turn written BELOW his message moves the agent-end past it, so the trailing
+  # region is empty and the stamp CLEARS here. Answering is the only thing that clears it.
+  if ($facts.HasTrailingHuman) {
+    # First-seen wins: the value answers "how long has this been waiting", so re-stamping it on
+    # every mark would reset the clock on exactly the message that has waited longest.
+    if (-not ($st.PSObject.Properties['unanswered_user_message_at'] -and $st.unanswered_user_message_at)) {
+      Set-Member $st 'unanswered_user_message_at' (Now-Iso)
+    }
+  }
+  else { Set-Member $st 'unanswered_user_message_at' $null }
   $st.updated = Now-Iso
   # `last_turn_at` is DELIBERATELY not `updated`. `updated` means "this state record was
   # touched", and it is stamped by `seed` (a bootstrap over every journal on disk) and by

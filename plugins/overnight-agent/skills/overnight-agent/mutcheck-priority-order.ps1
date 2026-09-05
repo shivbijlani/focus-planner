@@ -310,8 +310,26 @@ Check 'L reply reclaims Today exclusivity' {
   $r.reopened -eq $true -and $r.holds_today_gate -eq $true -and
   ($d -notcontains $null) -and ($d -notcontains $true)
 }
-# Consume that reply, so G and F below still see the board they were written against.
-[void](Invoke-Oa @('mark', '-Id', '730', '-Status', 'in-progress'))
+# ANSWERING a reply, which since #501 is the only thing that clears one.
+#
+# This used to be `mark -Id 730` on its own, described as "consume that reply". That is exactly
+# the absorption #501 is about: a bare `mark` re-snapshots the journal, so `changed` goes false
+# and the reply looks handled while the message is still sitting there unanswered. It is what
+# erased three of Shiv's messages on task #245.
+#
+# `unanswered_user` is now read off the file's STRUCTURE rather than off the hash, so the only
+# way to clear it is the way a real run clears it: write a turn BELOW the message, then mark.
+# The arms below need the reply genuinely dealt with -- not merely hidden -- so they do that.
+function Answer-Reply {
+  param([string]$Id)
+  $p = Join-Path $jdir "task-$Id.md"
+  $turn = "`n`n## 2026-08-31 Overnight Agent`n`n<!-- from: overnight-agent -->`nPicked this up - noted and handled.`n"
+  [IO.File]::WriteAllText($p, ([IO.File]::ReadAllText($p, $utf8) + $turn), $utf8)
+  [void](Invoke-Oa @('mark', '-Id', $Id, '-Status', 'in-progress'))
+}
+
+# Answer that reply, so G and F below still see the board they were written against.
+Answer-Reply '730'
 
 # --- G: a live reply preempts board rank ----------------------------------------------
 # Mark stamps the turn-end terminator; appending below it is the user speaking.

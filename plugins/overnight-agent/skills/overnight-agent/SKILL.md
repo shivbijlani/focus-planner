@@ -217,11 +217,21 @@ it, and `scan` treats everything past that stamp as the user speaking. On the ne
   raw text at the bottom) and you haven't answered it, **on a task that is still open**. Treat it
   as fresh input: read the newest message and act (approve→execute, new ask→re-plan). This is the rule
   that stops a live reply from being silently skipped.
-- **`reopened_closed: true`** means that reply landed on a task the user had **closed**
-  (`done`/`skip`). It is **not** workable and `scan` will not offer it: write no turn, re-`mark` it
+- **`reopened_closed: true`** means that reply landed on a task **the user closed** — the row is on
+  `planner-completed.md`, or an explicit **user** `skip`/`done` was recorded, or it is on neither
+  board. It is **not** workable and `scan` will not offer it: write no turn, re-`mark` it
   with its existing status, and surface it in the wrap-up under **Replies on closed tasks** with the
   message quoted (GH issue #170, cause 3). A missed nudge on closed work is cheap and stays visible;
   silently reanimating finished work is neither.
+- **`unanswered_user: true`** means one of Shiv's `<!-- from: me -->` messages is sitting below your
+  last turn with **no turn of yours written under it**, on work that is still open. Treat it exactly
+  like `reopened` — it *is* a reply. The difference is that it is **standing, not one-shot**: it is read
+  off the file's structure rather than off a changed hash, so re-`mark`ing the journal cannot clear
+  it and only answering can. `unanswered_user_at` says when it was first seen waiting.
+  **A `done` you declared yourself does not suppress it** — see below. (GH issue #501)
+- **`status_by`** says who declared the current status: `agent` (you, about your own work) or `user`.
+  Only `user` confers closed semantics. Pass `-StatusBy user` when you are recording *his* decision;
+  leave it off when you are describing your own.
 - **`reopened: false` + `changed: false`** means you spoke last and nothing changed — leave it alone.
 - **`has_agent_block: false`** means there's no plan yet — a PHASE 2 propose candidate (subject to the
   board, below).
@@ -412,7 +422,7 @@ user has spoken after your last turn:
 
 - Treat a `reopened` task as **fresh input**: read the newest message and act — an approval →
   execute; a new ask → re-plan as a new version (per "Revise → replace").
-- ⛔ **Except on a task the user CLOSED.** A reply on a `done`/`skip` task does **not** reopen it,
+- ⛔ **Except on a task the USER closed.** A reply there does **not** reopen it,
   and `scan` will not offer it to you: the row comes back `reopened_closed: true` and
   `eligible: false`. Write **no** turn, take **no** action — just `oa-state.ps1 mark -Id <ID>` with
   its existing status so it stops re-surfacing, and **report it in the wrap-up under _Replies on
@@ -423,6 +433,22 @@ user has spoken after your last turn:
   task #385 was cancelled in July, sat on the completed board, and a July journal entry was
   re-posted into its Telegram topic — 4 of 23 recent re-posts went into completed tasks. Reopening
   stays available and costs one sentence: the user says so, or moves the row back onto the board.
+- 🚨 **"Closed" means HE closed it — never that you did.** This is the same rule as the completion
+  rule below, read from the other side: *completion is the user's action in the Focus Planner app*,
+  so **your own `done` is a claim about your work, not a closure of his task**. A row still sitting
+  on `planner.md` is open work no matter what status you last wrote, and a reply on it reopens
+  normally. `scan` decides this from the board (`on_board` / `user_completed`) plus `status_by`, not
+  from your status. (GH issue #501)
+
+  Measured 2026-09-04: task **#245** was row 1 of `## Today`, absent from `planner-completed.md`, and
+  the agent had marked it `done` on 2026-08-31. **Three** of Shiv's messages — new requirements, a new
+  link, a new question — sat unanswered beneath the turn-end stamp for over a day; a re-`mark` 62
+  seconds after they landed erased `changed` and `reopened_closed`, so the "stays visible" safety net
+  above never fired. The released Today gate then sent the run to Deferred row 68. He said, live:
+  *"245 is on my today list and it doesn't seem like it's getting picked up."*
+- ⚠️ **A `mark` does not answer a message; a turn does.** `unanswered_user` stays `true` across every
+  re-`mark` until you write a turn *below* his message. If you cannot act on it, say so **in a turn**
+  — re-`mark`ing alone will no longer make it go quiet, by design.
 - `proposed` and `blocked` are **not** closed — they are *waiting on the user*, so a reply there is
   the input they were waiting for and reopens them normally.
 - After you respond, call `oa-state.ps1 mark -Id <ID> …` so the task goes quiet again until the user
@@ -515,6 +541,8 @@ Do the phases **in this order** every time.
 >   | reason | meaning |
 >   |---|---|
 >   | `not_workable` | terminal (`done`/`skip`) or waiting on Shiv (`proposed`, `blocked`, `awaiting_reply`, snoozed) |
+>   | `holding:reopened` | he replied — the highest-value work there is, and it outranks any declaration |
+>   | `holding:unanswered_user` | one of his messages is still unanswered here (#501). "I examined everything Today holds" cannot be true of a row carrying an unanswered question, so this **beats a standing exhaustion declaration** |
 >   | `declared_exhausted` | **you declared it** — see below |
 >   | `stale_turn_backstop` | nobody has written a turn here for 6h, so the run is wedged and the backlog is released rather than frozen |
 >   | `holding:…` | it is still exclusive, and the suffix says why your declaration did not stand |
@@ -1122,12 +1150,17 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
      PHASE 1; new ask → re-plan as a new version per "Revise → replace"). **Never skip a reopened task
      that is still open** — including a `proposed` or `blocked` one, where the reply is precisely the
      answer being waited on.
-   - **`reopened_closed: true`** → the reply landed on a task the user had **closed** (`done`/`skip`).
+   - **`reopened_closed: true`** → the reply landed on a task **the user closed** (on
+     `planner-completed.md`, an explicit user `skip`/`done`, or on neither board).
      **Do not work it and do not write a turn.** Re-`mark` it with its existing status and report it in
      the wrap-up under **Replies on closed tasks**, quoting the message (GH issue #170, cause 3).
+   - **`unanswered_user: true`** → one of his messages is still sitting unanswered below your last
+     turn, on open work. Pick it up exactly like `reopened`. **Re-`mark`ing will not clear it** — only
+     a turn written under his message does (GH issue #501).
    - **`has_agent_block: false`** → no plan yet; propose if it's a board candidate.
    - **stored status `proposed`, `done`, or `skip` with `reopened: false`** → leave it alone (waiting on
-     the user or settled); don't spam a new plan.
+     the user or settled); don't spam a new plan. ⚠️ **Unless `unanswered_user: true`** — a `done` you
+     declared yourself does not close his task.
    - **stored status `revise`** → (re)propose, overwriting in place + bumping version per "Revise →
      replace".
 4. **Assess current status BEFORE planning (do this for every candidate).** A task may already be
@@ -1323,6 +1356,11 @@ Report back to the user a short summary:
   they had already closed. **Quote the message** and name the task, so the nudge is visible even
   though no turn was written. Say that a word from them (or moving the row back onto the board)
   reopens it. Omit this line entirely when there were none.
+- **Unanswered messages:** any task that came back `unanswered_user: true` and that you did **not**
+  answer with a turn this run. **Quote the message**, name the task, and say how long it has been
+  waiting (`unanswered_user_at`). Unlike the line above, this is open work you *could* have picked up,
+  so it is an **ask**, not a courtesy note. It repeats every run until a turn answers it — that is the
+  point, and it is what #245 needed and did not have. Omit this line entirely when there were none.
 - **Mirrored to Telegram:** if Telegram is enabled, how many topics were created/updated (or a one-line
   note if the mirror was skipped or failed). Omit this line entirely when Telegram is `off`.
 
