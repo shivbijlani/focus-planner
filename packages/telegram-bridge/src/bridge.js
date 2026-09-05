@@ -226,6 +226,25 @@ export function formatDocNotice(taskId, { ask, terminal, docUrl }) {
   return `<b>#${taskId}</b> ${body}\n<a href="${escapeHtml(docUrl)}">Catch-up doc</a>`
 }
 
+/**
+ * What a pre-binding turn message becomes once its topic is bound to a catch-up doc.
+ *
+ * Short by design — the whole complaint is that these were too long for Telegram in the first
+ * place. It carries the links the original message held, because those are the one thing a
+ * pointer would otherwise drop: the turn's prose is still in the journal and the doc, but a URL
+ * that only ever appeared in this message would be gone from the phone entirely.
+ */
+export function formatCollapsedTurn(taskId, { docUrl, links }) {
+  const carried =
+    Array.isArray(links) && links.length
+      ? `\n${links.map((u) => `<a href="${escapeHtml(u)}">${escapeHtml(u)}</a>`).join('\n')}`
+      : ''
+  return (
+    `<i>#${taskId} — an earlier update, now kept in the catch-up doc.</i>\n` +
+    `<a href="${escapeHtml(docUrl)}">Catch-up doc</a>${carried}`
+  )
+}
+
 export function hashNotice(ask, terminal) {
   return hashTurn(`${terminal}\u0000${ask}`)
 }
@@ -527,6 +546,7 @@ export function createBridge({
     // three messages when this feature shipped?", and it must be visible without reading logs.
     const tidied = []
     const tidyPending = []
+    const collapsed = []
     const journals = await io.listJournals()
     const completed = await loadCompletedIds()
     const active = await loadActiveIds()
@@ -557,6 +577,8 @@ export function createBridge({
         if (outcome.notified) notified.push(taskId)
         if (outcome.suppressed) suppressed.push(taskId)
         if (outcome.tidied) tidied.push({ taskId, messageIds: outcome.tidied })
+      if (outcome.collapsed && outcome.collapsed.length)
+        collapsed.push({ taskId, messageIds: outcome.collapsed })
         if (outcome.tidyPending) tidyPending.push({ taskId, messageIds: outcome.tidyPending })
         continue
       }
@@ -783,7 +805,7 @@ export function createBridge({
       await checkpoint(`task #${taskId}`)
     }
 
-    return { posted, created, suppressed, linked, notified, tidied, tidyPending }
+    return { posted, created, suppressed, linked, notified, tidied, tidyPending, collapsed }
   }
 
   // #424's worker. Everything about it is shaped by one line in the issue: "Do not just
@@ -796,7 +818,7 @@ export function createBridge({
   // errors, so the MESSAGE is read rather than the mere fact of failure — reading only
   // "did it throw?" would classify a healthy message as missing and repost it every run.
   async function syncDocLink({ taskId, content, turn, hash, task, docMeta, completed, active }) {
-    const out = { created: false, linked: false, notified: false, suppressed: false, retracted: false }
+    const out = { created: false, linked: false, notified: false, suppressed: false, retracted: false, collapsed: [] }
 
     // A finished task stays quiet here exactly as it does for turns (#186): the topic is
     // archived and the user has closed it. A user reply reopens the conversation.
@@ -918,6 +940,47 @@ export function createBridge({
             `not tidying ${stranded.length} pre-binding message(s) for task #${taskId}: a reply ` +
               `landed since they were posted (${repliesAtPost} -> ${repliesNow})`,
           )
+        } else if (config.tidyBoundTopics !== true && config.collapseBoundTurns) {
+          // COLLAPSE, the default. Each stranded turn keeps its place in the thread and becomes
+          // one line pointing at the doc. Nothing is removed, so this is not the floor's
+          // "permanent data loss" and needs no word from him -- and it is literally what he
+          // asked for: "I expected it to update or delete the last one."
+          const collapsed = []
+          for (const messageId of stranded) {
+            const text = formatCollapsedTurn(taskId, {
+              docUrl: docMeta.docUrl,
+              links: strandedLinks,
+            })
+            try {
+              await client.editMessageText({ chatId, messageId, text, parseMode: 'HTML' })
+              collapsed.push(messageId)
+            } catch (err) {
+              const msg = String((err && err.message) || '').toLowerCase()
+              // Already collapsed on an earlier run, so there is nothing to do and it is not a
+              // failure. Counted as done, or every future run would retry it forever.
+              if (msg.includes('not modified')) {
+                collapsed.push(messageId)
+                continue
+              }
+              // Older than Telegram's edit window, already gone, or lacking rights. Never fatal:
+              // the worst case is the message stays as it is, which is where it was anyway.
+              logger(`could not collapse message ${messageId} for task #${taskId} (${err.message})`)
+            }
+          }
+          if (collapsed.length) {
+            // Forgotten only once collapsed, and filtered from the ORIGINAL list so a message
+            // that failed above survives in state for the next run to retry.
+            setLastPostedMessageIds(
+              state,
+              taskId,
+              original.filter((id) => !collapsed.includes(id)),
+            )
+            out.collapsed = collapsed.slice()
+            logger(
+              `collapsed ${collapsed.length} pre-binding message(s) for task #${taskId} into ` +
+                'doc pointers',
+            )
+          }
         } else if (config.tidyBoundTopics !== true) {
           out.tidyPending = stranded.slice()
           logger(
