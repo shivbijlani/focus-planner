@@ -95,13 +95,13 @@ $journalAnswered = $journalParked + "`r`n`r`nyes go ahead, that sounds right`r`n
 
 function Add-Task {
   param($World, [string]$Id, [string]$Status = 'in-progress', [switch]$NoSession,
-    [string]$Journal = $journalParked, $Poll = $null, [switch]$NoJournal, $Doc = $null)
+    [string]$Journal = $journalParked, $Poll = $null, [switch]$NoJournal, $Doc = $null, [string]$Woken = '')
   $st = [ordered]@{ id = $Id; status = $Status; version = 1 }
   if (-not $NoSession) {
     $st.session = [ordered]@{
       session_id = "S-$Id"; kind = 'code'; project = 'p'
       workspace = "V:\wt\$Id"; workspace_type = 'worktree'
-      created_at = '2026-09-04T06:00:00-07:00'; last_woken_at = ''
+      created_at = '2026-09-04T06:00:00-07:00'; last_woken_at = $Woken
       state = 'live'; prior_session_id = ''; replaced_at = ''
     }
   }
@@ -169,6 +169,8 @@ function New-Doc([int]$Pending, $ObservedAt) {
 }
 $freshObs = (Get-Date).AddMinutes(-10).ToString('yyyy-MM-ddTHH:mm:sszzz')
 $staleObs = (Get-Date).AddHours(-30).ToString('yyyy-MM-ddTHH:mm:sszzz')
+$freshWake = (Get-Date).AddMinutes(-2).ToString('yyyy-MM-ddTHH:mm:sszzz')
+$staleWake = (Get-Date).AddHours(-6).ToString('yyyy-MM-ddTHH:mm:sszzz')
 
 # H -- THE BUG (#500). Doc-bound, channel read 10 min ago, zero new comments, pointer ask. It
 # cannot progress without a human and nothing else parks it, so it must hold NO slot.
@@ -196,13 +198,23 @@ Add-Task $worlds.L '912' -Journal $journalPointer -Doc (New-Doc 0 $freshObs) -Po
 $worlds.M = New-World 'M'
 Add-Task $worlds.M '913' -Journal $journalPointer
 
+# N -- THE BUG (#522). Identical to H in every doc respect, but its session was woken 2 minutes
+# ago: a run dispatched it and it is being worked RIGHT NOW. H and N are indistinguishable to the
+# doc terms alone, which is the whole defect -- so N must hold a slot where H does not.
+$worlds.N = New-World 'N'
+Add-Task $worlds.N '914' -Journal $journalPointer -Doc (New-Doc 0 $freshObs) -Woken $freshWake
+# O -- the same row with a wake 6 hours old. A stale wake is not evidence anyone is working, so
+# this must still park. Without O, a mutation widening the window to "ever woken" survives.
+$worlds.O = New-World 'O'
+Add-Task $worlds.O '915' -Journal $journalPointer -Doc (New-Doc 0 $freshObs) -Woken $staleWake
+
 function Measure-InFlight([string]$Script, $World) {
   $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $Script session -InFlight `
     -StateDir $World.State -JournalDir $World.Journal 2>$null
   try { return [int](($out | ConvertFrom-Json).in_flight) } catch { return -1 }
 }
 
-$expected = [ordered]@{ A = 1; B = 0; C = 1; D = 1; E = 0; F = 1; G = 0; H = 0; I = 1; J = 1; K = 1; L = 1; M = 1 }
+$expected = [ordered]@{ A = 1; B = 0; C = 1; D = 1; E = 0; F = 1; G = 0; H = 0; I = 1; J = 1; K = 1; L = 1; M = 1; N = 1; O = 0 }
 $why = [ordered]@{
   A = 'an ordinary workable task holds a slot'
   B = 'parked on a reply with no timer holds nothing (#487)'
@@ -217,6 +229,8 @@ $why = [ordered]@{
   K = 'never observed: zero is absence of a reading, not absence of comments'
   L = 'a due poll outranks the doc park, as it outranks the awaiting park'
   M = 'not doc-bound: the pointer journal alone must not park anything'
+  N = 'a session woken minutes ago is being worked NOW and holds the slot (#522)'
+  O = 'a wake 6h old is not evidence anyone is working: still parks'
 }
 
 Write-Host '== baseline (real script, unmutated) =='
@@ -245,15 +259,15 @@ $mutations = @(
     find = '    if (-not (Test-Path $jp)) { return $true }   # cannot read -> count it'
     repl = '    if (-not (Test-Path $jp)) { return $false }' }
   # --- GH #500 ---------------------------------------------------------------------------
-  @{ n = 'doc park removed (the #500 bug, restored)'; guards = 'H'
-    find = '      if ($pending -eq 0 -and $observedFresh) { return $false }'
+  @{ n = 'doc park removed (the #500 bug, restored)'; guards = 'H,O'
+    find = '      if ($pending -eq 0 -and $observedFresh -and -not $wokenRecently) { return $false }'
     repl = '      if ($false) { return $false }' }
   @{ n = 'doc park ignores the freshness of the observation'; guards = 'J,K'
-    find = '      if ($pending -eq 0 -and $observedFresh) { return $false }'
-    repl = '      if ($pending -eq 0) { return $false }' }
+    find = '      if ($pending -eq 0 -and $observedFresh -and -not $wokenRecently) { return $false }'
+    repl = '      if ($pending -eq 0 -and -not $wokenRecently) { return $false }' }
   @{ n = 'doc park ignores pending comments'; guards = 'I'
-    find = '      if ($pending -eq 0 -and $observedFresh) { return $false }'
-    repl = '      if ($observedFresh) { return $false }' }
+    find = '      if ($pending -eq 0 -and $observedFresh -and -not $wokenRecently) { return $false }'
+    repl = '      if ($observedFresh -and -not $wokenRecently) { return $false }' }
   # NOT MUTATED: the `$doc -and "$($doc.doc_id)"` binding test. Removing it moves NOTHING, because
   # an unbound task has no observed_at, so the freshness term already refuses to park it -- world M
   # proves the behaviour, and the missing mutant proves the test is redundant rather than
@@ -261,6 +275,16 @@ $mutations = @(
   # doc surface) and for the cost of reading one property, but claiming a mutation kills it would
   # be exactly the decoration-pretending-to-be-a-safeguard this harness already caught once, in
   # the comment above about the deleted "a reply outranks the park" branch.
+  # --- GH #522 ---------------------------------------------------------------------------
+  @{ n = 'doc park ignores whether a session is actively working it (the #522 bug, restored)'; guards = 'N'
+    find = '      if ($pending -eq 0 -and $observedFresh -and -not $wokenRecently) { return $false }'
+    repl = '      if ($pending -eq 0 -and $observedFresh) { return $false }' }
+  @{ n = 'any wake ever counts as active, however old'; guards = 'O'
+    find = '          $wokenRecently = ((Get-Date) - $woke).TotalMinutes -lt $script:ActiveWakeMinutes'
+    repl = '          $wokenRecently = $true' }
+  @{ n = 'a missing wake stamp reads as ACTIVE, re-opening #487 through the doc branch'; guards = 'H'
+    find = '      $wokenRecently = $false'
+    repl = '      $wokenRecently = $true' }
 )
 
 Write-Host ''

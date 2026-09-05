@@ -2396,6 +2396,14 @@ $script:ClosedStatus = @('done', 'skip')
 # never a task parked on a channel nobody read.
 $script:DocObservationFreshMinutes = 180
 
+# GH #522 -- how recently a session must have been woken to count as actively working its task.
+# Deliberately SHORTER than the observation window above: a stale doc read is still evidence the
+# channel is silent, but a stale wake is not evidence anyone is working. Kept short for a second
+# reason -- `last_woken_at` is written by the agent about itself (#514), so the longer this
+# window, the more a retroactive stamp could hold a slot. It fails safe either way: a wrongly
+# FRESH stamp makes the task COUNT, which refuses dispatch rather than over-dispatching.
+$script:ActiveWakeMinutes = 45
+
 # WHO closed it (#501). `$script:ClosedStatus` names the closed STATUSES; this names the closed
 # TASKS, and the two are not the same set -- which is the whole bug.
 #
@@ -4193,7 +4201,42 @@ function Test-SessionHoldsCapacity($st) {
           $observedFresh = ((Get-Date) - $obs).TotalMinutes -lt $script:DocObservationFreshMinutes
         }
       }
-      if ($pending -eq 0 -and $observedFresh) { return $false }
+      # GH #522 -- A TASK SOMEONE IS ACTIVELY WORKING IS IN FLIGHT, WHATEVER ITS DOC SAYS.
+      #
+      # The park above asks "can this progress on its own?" and never "is a session working it
+      # right now?" -- so a task parked waiting for comments and a task being actively worked are
+      # indistinguishable: both are doc-bound, observed recently, 0 pending. Measured live
+      # 2026-09-05 07:03 PT on this very task: `in_flight: 0, admits: 1` while its session was
+      # live, unreleased, and had been woken seconds earlier. The pacing control (#391) did not
+      # count the item the run had just dispatched, which is the over-dispatch direction
+      # `Get-LiveSessionCount` names as the dangerous one.
+      #
+      # The park now needs POSITIVE EVIDENCE OF AN ACTIVE WAKE to be BLOCKED -- the mirror of how
+      # it already needs positive evidence of a silent channel to be ALLOWED.
+      #
+      # The default here is deliberately "not recently woken", and the evidence for that choice is
+      # in this file: `Get-LiveSessionCount`'s own #487 case is a task with a live session and
+      # `last_woken_at ""` -- NEVER WOKEN -- holding the only slot and deadlocking dispatch. So an
+      # empty or unparseable stamp is not an unknown; it is the recorded signature of a session
+      # nobody has started working. Defaulting it to "active" would re-open #487 through this
+      # branch and un-park every world #500 exists to park.
+      #
+      # Note which way the #514 hazard points here. `last_woken_at` is agent-written, so a
+      # retroactive stamp could make a task look actively worked -- and that makes it COUNT,
+      # refusing dispatch. The field can therefore cost throughput but cannot cause the
+      # over-dispatch this fix exists to prevent, which is the direction that matters.
+      $wokenRecently = $false
+      $session = if ($st.PSObject.Properties['session']) { $st.session } else { $null }
+      $wokeRaw = if ($session -and $session.PSObject.Properties['last_woken_at']) { "$($session.last_woken_at)" } else { '' }
+      if ($wokeRaw) {
+        $woke = [datetime]::MinValue
+        if ([datetime]::TryParse($wokeRaw, [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::None, [ref]$woke)) {
+          $wokenRecently = ((Get-Date) - $woke).TotalMinutes -lt $script:ActiveWakeMinutes
+        }
+      }
+
+      if ($pending -eq 0 -and $observedFresh -and -not $wokenRecently) { return $false }
     }
   }
   catch { return $true }   # anything unexpected -> count it
