@@ -148,6 +148,15 @@ flags.
   un-parked by a reply (`reopened`) or a due `poll`/`recheck` timer. The "blocking" reader is
   deliberately stricter than the digest's "open ask" reader: a dismissive `**Needs from you:**
   none/nothing` does not park, and only the *newest* agent turn's ask counts.
+- **Doc-bound parking requires positive freshness, not silence alone** (#500): a doc-bound task whose
+  only input channel is external comments can otherwise hold the sole capacity slot forever — a
+  never-observed doc reports `doc_new_comments: 0`, byte-identical to "read and answered with
+  nothing", because `scan` never calls out to the document provider itself. Parking on the comment
+  count alone would let a dead channel park a task indefinitely (#346's shape wearing the costume of a
+  fix for it). The park therefore requires positive evidence the channel was read recently **and** was
+  silent — a stale or missing `observed_at` fails toward working the task, not toward parking it. Every
+  release path is preserved unchanged: a due poll/recheck, a journal reply, or a pending comment all
+  still outrank the park.
 - **Poll/recheck timers**: cadence grammar `hourly|daily|weekly|<N>h|<N>d|<N>m`. A freshly armed timer,
   or one with no `next_due`, is due immediately. `-Poll` re-checks in general; `-Recheck` targets a
   specific `blocked` task's blocker and is the only path that yields the `blocked` status a workable
