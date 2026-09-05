@@ -64,6 +64,7 @@ function makeHarness(files) {
   // (older than the 48h window, or already gone).
   const deleted = []
   const undeletable = new Set()
+  const uneditable = new Set()
   let deleteError = null
   let dropSendIds = false
 
@@ -84,6 +85,7 @@ function makeHarness(files) {
     async editMessageText({ messageId, text }) {
       edits.push({ messageId, text })
       if (editError) throw new Error(editError)
+      if (uneditable.has(messageId)) throw new Error("Bad Request: message can't be edited")
       if (!live.has(messageId)) throw new Error('Bad Request: message to edit not found')
       // Telegram's answer when the text is byte-identical to what is already there. This is
       // the healthy steady state, and it arrives as an ERROR — which is exactly why the probe
@@ -141,9 +143,13 @@ function makeHarness(files) {
     deleted,
     client,
     io,
-    config: { chatId: '-100', taskAllowlist: [] },
+    config: { chatId: '-100', taskAllowlist: [], collapseBoundTurns: true },
     deleteMessageFromTelegram: (id) => live.delete(id),
+    // Pre-existing messages a test did not send through this harness (e.g. turns posted before
+    // the topic was bound). Telegram knows them, so an edit must be able to reach them.
+    registerLive: (id) => live.add(id),
     refuseDeleteOf: (id) => undeletable.add(id),
+    refuseEditOf: (id) => uneditable.add(id),
     failEditWith: (msg) => {
       editError = msg
     },
@@ -550,7 +556,7 @@ describe('#424 — the readers', () => {
 // process never reads). So OFF reports, ON acts, and a replied-to message is never touched by
 // either.
 describe('#483 — pre-binding turns above the doc link', () => {
-  function bound(state, { ids = [1001, 1002], replyCount = 0, postedAt = 0, links = [] } = {}) {
+  function bound(state, { ids = [1001, 1002], replyCount = 0, postedAt = 0, links = [], h } = {}) {
     state.tasks['42'] = {
       topicId: 7,
       lastPostedMessageIds: ids,
@@ -558,21 +564,95 @@ describe('#483 — pre-binding turns above the doc link', () => {
       replyCount,
       ...(links.length ? { lastPostedLinks: links } : {}),
     }
+    // These were posted before the topic was bound, so Telegram knows them even though this
+    // harness never sent them. Without this an edit reports "message to edit not found".
+    if (h) for (const id of ids) h.registerLive(id)
     return state
   }
 
-  it('reports what it would remove and deletes NOTHING by default', async () => {
+  it('COLLAPSES them by default, and still deletes NOTHING', async () => {
+    // The default changed with this feature, and the reason is the whole point of it. Before,
+    // the only action available was deletion, which sits on the agent-gate floor ("Outcome can
+    // result in permanent data loss") and outranks even Shiv's explicit approval — so the
+    // action branch could never legitimately fire and the messages stayed put. Editing is not
+    // deletion: the turn's text is still in the journal this message was copied from.
     const h = makeHarness({ 42: journal() })
-    const state = bound(emptyState())
+    const state = bound(emptyState(), { h })
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     const res = await bridge.syncUp()
 
+    // Nothing was removed...
     expect(h.deleted).toEqual([])
+    // ...and nothing new was posted: the thread does not grow to clean itself up.
+    expect(h.sent.filter((m) => m.text.includes('an earlier update'))).toHaveLength(0)
+    // ...both messages now point at the doc, in place.
+    expect(h.edits.filter((e) => e.messageId === 1001).pop().text).toContain('Catch-up doc')
+    expect(h.edits.filter((e) => e.messageId === 1002).pop().text).toContain('an earlier update')
+    expect(res.collapsed).toEqual([{ taskId: '42', messageIds: [1001, 1002] }])
+    // Forgotten only once collapsed, so a later run does not edit them again.
+    expect(state.tasks['42'].lastPostedMessageIds).toBeUndefined()
+  })
+
+  it('reports and does nothing at all when collapsing is switched off', async () => {
+    // The old default, kept reachable: TELEGRAM_BRIDGE_COLLAPSE_BOUND=off.
+    const h = makeHarness({ 42: journal() })
+    const state = bound(emptyState())
+    const bridge = createBridge({
+      client: h.client,
+      config: { ...h.config, collapseBoundTurns: false },
+      state,
+      io: h.io,
+    })
+
+    const res = await bridge.syncUp()
+
+    expect(h.deleted).toEqual([])
+    expect(h.edits.filter((e) => e.messageId === 1001)).toEqual([])
     expect(res.tidyPending).toEqual([{ taskId: '42', messageIds: [1001, 1002] }])
-    expect(res.tidied).toEqual([])
     // Still remembered, because nothing else records them: forgetting here would strand them.
     expect(state.tasks['42'].lastPostedMessageIds).toEqual([1001, 1002])
+  })
+
+  it('carries the links the collapsed message held, since a pointer would drop them', async () => {
+    // The turn's prose survives in the journal and the doc, but a URL that only ever appeared
+    // in this Telegram message would be gone from his phone entirely.
+    const h = makeHarness({ 42: journal() })
+    const state = bound(emptyState(), { h, links: ['https://example.com/build/9'] })
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+
+    expect(h.edits.filter((e) => e.messageId === 1001).pop().text).toContain(
+      'https://example.com/build/9',
+    )
+  })
+
+  it('NEVER collapses a message the user has replied to', async () => {
+    // The same freeze as deletion, for the same reason: a message he answered is a
+    // conversation, not a superseded draft.
+    const h = makeHarness({ 42: journal() })
+    const state = bound(emptyState(), { h, replyCount: 1, postedAt: 0 })
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+
+    expect(h.edits.filter((e) => e.messageId === 1001)).toEqual([])
+    expect(h.deleted).toEqual([])
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([1001, 1002])
+  })
+
+  it('keeps the survivors when only some collapses succeed', async () => {
+    // A message past Telegram's edit window must not be forgotten just because its neighbour
+    // was collapsed — nothing else records it, so forgetting it strands it permanently.
+    const h = makeHarness({ 42: journal() })
+    const state = bound(emptyState(), { h })
+    h.refuseEditOf(1001)
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([1001])
   })
 
   it('removes them once told it may, and forgets them', async () => {
@@ -596,7 +676,7 @@ describe('#483 — pre-binding turns above the doc link', () => {
   it('NEVER removes a message the user has replied to, even when enabled', async () => {
     const h = makeHarness({ 42: journal() })
     // A reply landed after those ids went out: 0 at post time, 1 now.
-    const state = bound(emptyState(), { replyCount: 1, postedAt: 0 })
+    const state = bound(emptyState(), { h, replyCount: 1, postedAt: 0 })
     const bridge = createBridge({
       client: h.client,
       config: { ...h.config, tidyBoundTopics: true },

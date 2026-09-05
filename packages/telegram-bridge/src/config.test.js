@@ -3,6 +3,29 @@ import { loadConfig } from './config.js'
 
 const BASE = { PLANNER_PATH: 'C:/planner', TELEGRAM_CHAT_ID: '-100' }
 
+describe('loadConfig collapseBoundTurns', () => {
+  // The default is the feature. Deleting a pre-binding turn is on the agent-gate floor
+  // ("permanent data loss") and so could never fire; collapsing edits the message in place,
+  // which is not data loss because the text is still in the journal it was copied from.
+  it('defaults to ON when the env var is unset', async () => {
+    const cfg = await loadConfig({ env: { ...BASE } })
+    expect(cfg.collapseBoundTurns).toBe(true)
+  })
+
+  it('turns off only for explicit off/false/0/no (case-insensitive)', async () => {
+    for (const v of ['off', 'OFF', 'false', 'False', '0', 'no', ' No ']) {
+      const cfg = await loadConfig({ env: { ...BASE, TELEGRAM_BRIDGE_COLLAPSE_BOUND: v } })
+      expect(cfg.collapseBoundTurns, `value=${v}`).toBe(false)
+    }
+  })
+
+  it('is independent of the delete flag, which stays OFF by default', async () => {
+    const cfg = await loadConfig({ env: { ...BASE } })
+    expect(cfg.collapseBoundTurns).toBe(true)
+    expect(cfg.tidyBoundTopics).toBe(false)
+  })
+})
+
 describe('loadConfig archiveCompleted', () => {
   it('defaults to on when the env var is unset', async () => {
     const cfg = await loadConfig({ env: { ...BASE } })

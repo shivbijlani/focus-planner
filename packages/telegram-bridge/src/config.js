@@ -102,6 +102,22 @@ export async function loadConfig({ env = process.env, repoRoot } = {}) {
     (env.TELEGRAM_BRIDGE_TIDY_BOUND || '').trim(),
   )
 
+  // #483 follow-through — COLLAPSING is the default; DELETING still needs his word.
+  //
+  // The report-only default above exists because the only action available was deletion, and
+  // deletion of the user's own messages is on the agent-gate FLOOR ("Outcome can result in
+  // permanent data loss") which outranks even his explicit approval. So that branch could never
+  // legitimately fire, and the pre-binding turns stayed exactly where he could see them.
+  //
+  // Editing is a different act. The stranded messages are MIRRORS of journal turns -- the
+  // bridge posted them from the journal and re-reads that journal every run -- so replacing a
+  // body with a pointer moves nothing out of reach: the text is still in the file it was copied
+  // from. That is what makes this default-on where deletion is not, and it is what Shiv asked
+  // for in the first place: "I expected it to update or delete the last one."
+  const collapseBoundTurns = !/^(off|false|0|no)$/i.test(
+    (env.TELEGRAM_BRIDGE_COLLAPSE_BOUND || '').trim(),
+  )
+
   return {
     token,
     chatId,
@@ -123,6 +139,7 @@ export async function loadConfig({ env = process.env, repoRoot } = {}) {
     digestEnabled,
     digestTopic,
     tidyBoundTopics,
+    collapseBoundTurns,
   }
 }
 
