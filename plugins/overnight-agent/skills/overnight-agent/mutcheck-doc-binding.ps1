@@ -144,7 +144,7 @@ $board = Join-Path $root 'planner.md'
 $store = Join-Path $root 'snooze.json'
 $utf8 = New-Object Text.UTF8Encoding($false)
 
-foreach ($id in 701, 702, 703, 704, 705, 706, 708, 709, 711) {
+foreach ($id in 701, 702, 703, 704, 705, 706, 708, 709, 711, 712, 713) {
   [IO.File]::WriteAllText((Join-Path $jdir "task-$id.md"), $Journal.Replace('{ID}', "$id"), $utf8)
 }
 [IO.File]::WriteAllText((Join-Path $jdir 'task-707.md'), $FencedJournal.Replace('{ID}', '707'), $utf8)
@@ -156,7 +156,7 @@ $stamped710 = $Journal.Replace('{ID}', '710').Replace(
 [IO.File]::WriteAllText((Join-Path $jdir 'task-710.md'), $stamped710, $utf8)
 
 $boardText = "## Today`n`n| ID | Task |`n|---|---|`n"
-foreach ($id in 701, 702, 703, 704, 705, 706, 707, 708, 709, 710, 711) { $boardText += "| $id | synthetic |`n" }
+foreach ($id in 701, 702, 703, 704, 705, 706, 707, 708, 709, 710, 711, 712, 713) { $boardText += "| $id | synthetic |`n" }
 [IO.File]::WriteAllText($board, $boardText, $utf8)
 [IO.File]::WriteAllText($store, '{}', $utf8)
 
@@ -459,6 +459,71 @@ Check 'T- and names no mismatch (it heals to NOTHING, not to a wrong doc)' {
   $null -eq $t.journal_stamp_mismatch_id
 }
 Check 'T-- and the binding itself still resolves' { "$($t.doc_id)" -eq 'DOC_711' }
+
+# --- U/V/W: the observation reader must read the shape the MCP ACTUALLY returns (#502) --
+#
+# The reader accepted a bare dump and a JSON array, and the live surface hands back neither: the
+# Google Workspace MCP returns `{ content: [ { text } ], structuredContent: { result } }` with the
+# dump's newlines escaped as literal `\n`. That file starts with `{`, so it took the JSON branch,
+# parsed cleanly, held no top-level `id`, and yielded ZERO rows -- so `-Observe` reported
+# `new_comments: 0`, which is byte-identical to "the user said nothing".
+#
+# Measured live 2026-09-04 on task #228, whose doc is Shiv's PRIMARY reply channel (#468): 17
+# comments on the document, one posted 24 minutes earlier ("dont care, drop from this doc"), 16 in
+# the ledger, and `-Observe` on the MCP's own output said 0 new. Hand-converted to the array shape,
+# the same observation said 9.
+#
+# These arms are asserted as an EQUIVALENCE, not as a count: all three encodings of one observation
+# must produce the same verdict. A count would drift with the fixture; an equivalence cannot be
+# satisfied by a reader that is blind to one shape, which is the whole defect.
+$dumpIds = @('C_ONE', 'C_TWO', 'C_THREE')
+$bare = [IO.File]::ReadAllText((New-Dump $dumpIds), $utf8)
+
+# The same dump, wrapped exactly the way the MCP wraps it: escaped newlines, and carried twice
+# (once in content[].text, once in structuredContent.result).
+$escaped = $bare -replace "`r`n", '\n' -replace "`n", '\n'
+$envelope = [pscustomobject]@{
+  content           = @([pscustomobject]@{ type = 'text'; text = $escaped })
+  isError           = $false
+  structuredContent = [pscustomobject]@{ result = $escaped }
+} | ConvertTo-Json -Depth 6
+$pEnv = Join-Path $root 'obs-envelope.json'
+[IO.File]::WriteAllText($pEnv, $envelope, $utf8)
+
+$pArr = Join-Path $root 'obs-array.json'
+[IO.File]::WriteAllText($pArr, (($dumpIds | ForEach-Object { [pscustomobject]@{ id = $_; created = '' } }) | ConvertTo-Json), $utf8)
+
+$pBare = Join-Path $root 'obs-bare.txt'
+[IO.File]::WriteAllText($pBare, $bare, $utf8)
+
+[void](Invoke-Oa @('doc', '-Id', '712', '-DocId', 'DOC_712'))
+$uBare = Invoke-OaJson @('doc', '-Id', '712', '-Observe', $pBare)
+$uArr = Invoke-OaJson @('doc', '-Id', '712', '-Observe', $pArr)
+$uEnv = Invoke-OaJson @('doc', '-Id', '712', '-Observe', $pEnv)
+
+Check 'U bare dump sees every comment' { [int]$uBare.new_comments -eq $dumpIds.Count }
+Check 'U- json array agrees with the bare dump' { [int]$uArr.new_comments -eq [int]$uBare.new_comments }
+Check 'V MCP envelope agrees with the bare dump (#502)' {
+  [int]$uEnv.new_comments -eq [int]$uBare.new_comments
+}
+Check 'V- and the envelope names the SAME ids, not just the same count' {
+  (@($uEnv.new_comment_ids) | Sort-Object) -join ',' -eq (@($uBare.new_comment_ids) | Sort-Object) -join ','
+}
+Check 'V-- the envelope is never counted twice (it carries the dump twice)' {
+  [int]$uEnv.new_comments -eq $dumpIds.Count
+}
+# The other half, and the one that keeps this honest: a doc with genuinely nothing on it must
+# still report nothing. A reader "fixed" by reporting comments whenever it is unsure would pass
+# every arm above and make the channel useless in the opposite direction.
+$pEmpty = Join-Path $root 'obs-empty.json'
+[IO.File]::WriteAllText($pEmpty, ([pscustomobject]@{
+      content           = @([pscustomobject]@{ type = 'text'; text = 'No comments found in document DOC_712' })
+      isError           = $false
+      structuredContent = [pscustomobject]@{ result = 'No comments found in document DOC_712' }
+    } | ConvertTo-Json -Depth 6), $utf8)
+[void](Invoke-Oa @('doc', '-Id', '713', '-DocId', 'DOC_713'))
+$w = Invoke-OaJson @('doc', '-Id', '713', '-Observe', $pEmpty)
+Check 'W an empty document still reports zero' { [int]$w.new_comments -eq 0 }
 
 # --- report ---------------------------------------------------------------------------
 $pass = 0; $fail = 0
