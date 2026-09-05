@@ -256,6 +256,14 @@ const ARMS = [
       // reading, and must not be reported as broken or every quiet doc raises a false alarm.
       const empty = 'Found 0 comments in document 16F7lGso6NUAZjz2aeThKPkDvr1EVFfYrHWZre6XwaNU'
       if (m.isUnparsedDump(empty, m.parseCommentDump(empty))) return 'a genuine empty listing was reported as unreadable'
+      // GH #531 — the OTHER empty wording. A document with nothing on it does not say
+      // "Found 0 comments", it says "No comments found in document <id>". Accepting only the
+      // counted phrasing made a healthy empty document read as a dead connection; measured live
+      // on task #466. A quiet document stays quiet, so that direction never self-clears.
+      const emptyAlt = 'No comments found in document 1bx3Bpq0QZZbSY7W7CLcemDOT2h98sorOEAjP8Gt-Rlg'
+      if (m.isUnparsedDump(emptyAlt, m.parseCommentDump(emptyAlt))) {
+        return 'the MCP\'s empty-document wording was reported as unreadable'
+      }
       if (m.isUnparsedDump(LIVE_DUMP, m.parseCommentDump(LIVE_DUMP))) return 'a good dump was reported as unreadable'
       return null
     },
@@ -509,7 +517,7 @@ const MUTATIONS = [
     name: 'unparsed_dump_flags_a_genuine_empty_listing',
     breaks: 'every quiet document raises a false alarm, which is how a real alarm stops being read',
     apply: (s) => s.replace(
-      "  if (/^\\s*Found\\s+\\d+\\s+comments?\\b/im.test(src)) return false",
+      "  if (/Found\\s+\\d+\\s+comments?\\b/i.test(src)) return false",
       '  if (false) return false'),
   },
   {
@@ -518,6 +526,13 @@ const MUTATIONS = [
     apply: (s) => s.replace(
       "  return rows.filter((r) => r && r.id && !seen.has(r.id) && seen.add(r.id))",
       '  return rows'),
+  },
+  {
+    name: 'empty_document_wording_reads_as_unreadable',
+    breaks: 'GH #531 — a healthy document with no comments is classified as a dead connection',
+    apply: (s) => s.replace(
+      "  if (/No\\s+comments\\s+found\\b/i.test(src)) return false",
+      '  if (false) return false'),
   },
   {
     name: 'merge_ledgers_last_wins',
