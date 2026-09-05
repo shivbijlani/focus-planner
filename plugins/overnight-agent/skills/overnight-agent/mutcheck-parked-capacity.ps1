@@ -95,7 +95,7 @@ $journalAnswered = $journalParked + "`r`n`r`nyes go ahead, that sounds right`r`n
 
 function Add-Task {
   param($World, [string]$Id, [string]$Status = 'in-progress', [switch]$NoSession,
-    [string]$Journal = $journalParked, $Poll = $null, [switch]$NoJournal)
+    [string]$Journal = $journalParked, $Poll = $null, [switch]$NoJournal, $Doc = $null)
   $st = [ordered]@{ id = $Id; status = $Status; version = 1 }
   if (-not $NoSession) {
     $st.session = [ordered]@{
@@ -106,6 +106,7 @@ function Add-Task {
     }
   }
   if ($Poll) { $st.poll = $Poll }
+  if ($Doc) { $st.doc = $Doc }
   ($st | ConvertTo-Json -Depth 8) | Set-Content (Join-Path $World.State "task-$Id.json") -Encoding UTF8
   if (-not $NoJournal) {
     $Journal.Replace('{ID}', $Id) | Set-Content (Join-Path $World.Journal "task-$Id.md") -Encoding UTF8
@@ -136,13 +137,72 @@ $worlds.F = New-World 'F'; Add-Task $worlds.F '906' -NoJournal
 # G -- no session at all. Baseline: nothing to count, under every mutation.
 $worlds.G = New-World 'G'; Add-Task $worlds.G '907' -NoSession
 
+# --- GH #500: the DOC surface of the same defect -------------------------------------------
+# These use the #425 POINTER journal, whose ask is dismissive by construction. That is the whole
+# point: `awaiting_reply` is correctly FALSE for it (arms L1/L2/Q/R of mutcheck-awaiting-reply
+# pin that, and the Today gate depends on it), so none of the arms above can park these. If a
+# doc world ever parks because of the awaiting arm instead, the fixture has stopped testing #500.
+$journalPointer = @"
+# Task {ID}: fixture
+
+## 2026-09-04
+
+## $moon Overnight Agent
+<!-- from: overnight-agent -->
+
+**Status:** In progress - fixture.
+
+Catch-up doc: https://docs.google.com/document/d/DOC_FIXTURE/edit
+
+**Needs from you:** nothing blocking - read and comment.
+
+<!-- /overnight-agent turn-end -->
+"@
+
+function New-Doc([int]$Pending, $ObservedAt) {
+  $ids = @(); for ($i = 0; $i -lt $Pending; $i++) { $ids += "CID$i" }
+  return [ordered]@{
+    doc_id = 'DOC_FIXTURE'; doc_url = 'https://docs.google.com/document/d/DOC_FIXTURE/edit'
+    bound_at = '2026-09-04T06:00:00-07:00'; seen_ids = @('OLD1'); pending_ids = $ids
+    observed_at = $ObservedAt
+  }
+}
+$freshObs = (Get-Date).AddMinutes(-10).ToString('yyyy-MM-ddTHH:mm:sszzz')
+$staleObs = (Get-Date).AddHours(-30).ToString('yyyy-MM-ddTHH:mm:sszzz')
+
+# H -- THE BUG (#500). Doc-bound, channel read 10 min ago, zero new comments, pointer ask. It
+# cannot progress without a human and nothing else parks it, so it must hold NO slot.
+$worlds.H = New-World 'H'
+Add-Task $worlds.H '908' -Journal $journalPointer -Doc (New-Doc 0 $freshObs)
+# I -- same row, but he HAS commented. A pending comment is the doc-surface analogue of
+# `reopened`: real work is waiting, so it holds a slot.
+$worlds.I = New-World 'I'
+Add-Task $worlds.I '909' -Journal $journalPointer -Doc (New-Doc 2 $freshObs)
+# J -- THE TRAP. Doc-bound, zero pending -- but last observed 30h ago. Zero here may mean "the
+# channel is dead" rather than "he said nothing", and those are byte-identical (#346). Must NOT
+# park: fail toward working the task, never toward silence nobody confirmed.
+$worlds.J = New-World 'J'
+Add-Task $worlds.J '910' -Journal $journalPointer -Doc (New-Doc 0 $staleObs)
+# K -- never observed at all (empty observed_at), which is what a task reports before its first
+# -Observe. Same reasoning as J, reached by the other route.
+$worlds.K = New-World 'K'
+Add-Task $worlds.K '911' -Journal $journalPointer -Doc (New-Doc 0 '')
+# L -- doc-bound, silent, freshly observed AND a due poll. The timer outranks the doc park for
+# the same reason it outranks the awaiting park: read-only recurring work needs no reply.
+$worlds.L = New-World 'L'
+Add-Task $worlds.L '912' -Journal $journalPointer -Doc (New-Doc 0 $freshObs) -Poll $duePoll
+# M -- NOT doc-bound, pointer journal. Proves the doc arm keys on the binding rather than on the
+# journal shape; without this a mutation deleting the doc_id test could survive.
+$worlds.M = New-World 'M'
+Add-Task $worlds.M '913' -Journal $journalPointer
+
 function Measure-InFlight([string]$Script, $World) {
   $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $Script session -InFlight `
     -StateDir $World.State -JournalDir $World.Journal 2>$null
   try { return [int](($out | ConvertFrom-Json).in_flight) } catch { return -1 }
 }
 
-$expected = [ordered]@{ A = 1; B = 0; C = 1; D = 1; E = 0; F = 1; G = 0 }
+$expected = [ordered]@{ A = 1; B = 0; C = 1; D = 1; E = 0; F = 1; G = 0; H = 0; I = 1; J = 1; K = 1; L = 1; M = 1 }
 $why = [ordered]@{
   A = 'an ordinary workable task holds a slot'
   B = 'parked on a reply with no timer holds nothing (#487)'
@@ -151,6 +211,12 @@ $why = [ordered]@{
   E = 'a terminal task holding a live session is a leak'
   F = 'unknown COUNTS -- it must never free a slot'
   G = 'no session, nothing to count'
+  H = 'doc-bound, freshly observed, ZERO comments: cannot progress, holds nothing (#500)'
+  I = 'a pending doc comment is real waiting work and holds the slot'
+  J = 'zero comments on a STALE observation is not evidence of silence -- must not park'
+  K = 'never observed: zero is absence of a reading, not absence of comments'
+  L = 'a due poll outranks the doc park, as it outranks the awaiting park'
+  M = 'not doc-bound: the pointer journal alone must not park anything'
 }
 
 Write-Host '== baseline (real script, unmutated) =='
@@ -172,12 +238,29 @@ $mutations = @(
   @{ n = 'trailing-user term dropped from the awaiting expression'; guards = 'C'
     find = '    $awaiting = [bool]($facts.HasAgentBlock -and $facts.HasBlockingAsk -and -not $facts.HasTrailingUser)'
     repl = '    $awaiting = [bool]($facts.HasAgentBlock -and $facts.HasBlockingAsk)' }
-  @{ n = 'due-timer override removed'; guards = 'D'
+  @{ n = 'due-timer override removed'; guards = 'D,L'
     find = '    if ((Test-PollDue $poll) -or (Test-PollDue $recheck)) { return $true }'
     repl = '    if ($false) { return $true }' }
   @{ n = 'unknown journal FREES a slot instead of holding it (#462 inverted)'; guards = 'F'
     find = '    if (-not (Test-Path $jp)) { return $true }   # cannot read -> count it'
     repl = '    if (-not (Test-Path $jp)) { return $false }' }
+  # --- GH #500 ---------------------------------------------------------------------------
+  @{ n = 'doc park removed (the #500 bug, restored)'; guards = 'H'
+    find = '      if ($pending -eq 0 -and $observedFresh) { return $false }'
+    repl = '      if ($false) { return $false }' }
+  @{ n = 'doc park ignores the freshness of the observation'; guards = 'J,K'
+    find = '      if ($pending -eq 0 -and $observedFresh) { return $false }'
+    repl = '      if ($pending -eq 0) { return $false }' }
+  @{ n = 'doc park ignores pending comments'; guards = 'I'
+    find = '      if ($pending -eq 0 -and $observedFresh) { return $false }'
+    repl = '      if ($observedFresh) { return $false }' }
+  # NOT MUTATED: the `$doc -and "$($doc.doc_id)"` binding test. Removing it moves NOTHING, because
+  # an unbound task has no observed_at, so the freshness term already refuses to park it -- world M
+  # proves the behaviour, and the missing mutant proves the test is redundant rather than
+  # load-bearing. It stays in the source as an explicit statement of intent (this arm is about the
+  # doc surface) and for the cost of reading one property, but claiming a mutation kills it would
+  # be exactly the decoration-pretending-to-be-a-safeguard this harness already caught once, in
+  # the comment above about the deleted "a reply outranks the park" branch.
 )
 
 Write-Host ''
@@ -187,17 +270,23 @@ foreach ($m in $mutations) {
     Check "$($m.n): anchor present in source" $false "not found: $($m.find)"
     continue
   }
-  $mutPath = Join-Path $root ("oa-state-mut-" + $m.guards + ".ps1")
+  # `guards` may name SEVERAL worlds (comma-separated): one narrowing can be load-bearing for
+  # more than one fixture, and collapsing that to a single world would either under-assert the
+  # mutation or force two near-identical mutants. Both halves still hold -- every named world must
+  # move, and nothing unnamed may.
+  $mutPath = Join-Path $root ("oa-state-mut-" + ($m.guards -replace ',', '-') + ".ps1")
   [IO.File]::WriteAllText($mutPath, $src.Replace($m.find, $m.repl), (New-Object Text.UTF8Encoding($false)))
 
+  $want = @($m.guards -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
   $moved = @()
   foreach ($k in $worlds.Keys) {
     $got = Measure-InFlight $mutPath $worlds[$k]
     if ($got -lt 0) { Check "$($m.n): mutant runs on world $k" $false 'unparseable output'; continue }
     if ($got -ne $base[$k]) { $moved += $k }
   }
-  Check "$($m.n) -> world $($m.guards) moves (arm is load-bearing)" ($moved -contains $m.guards) "moved: $($moved -join ',')"
-  $extra = @($moved | Where-Object { $_ -ne $m.guards })
+  $missing = @($want | Where-Object { $moved -notcontains $_ })
+  Check "$($m.n) -> world $($m.guards) moves (arm is load-bearing)" ($missing.Count -eq 0) "moved: $($moved -join ',')"
+  $extra = @($moved | Where-Object { $want -notcontains $_ })
   Check "$($m.n): changes nothing else" ($extra.Count -eq 0) "also moved: $($extra -join ',')"
 }
 

@@ -2379,6 +2379,23 @@ $script:NonWorkableStatus = @('done', 'skip', 'proposed', 'blocked')
 # CLOSED is protected from being reanimated by a passing remark.
 $script:ClosedStatus = @('done', 'skip')
 
+# GH #500. How recently the catch-up doc's comments must have been read for "no new comments" to
+# count as EVIDENCE OF SILENCE rather than as absence of a reading.
+#
+# The number is chosen against the two failures on either side of it, not picked for roundness.
+# Too short and a healthy doc-bound task never parks, so the deadlock #500 records survives the
+# fix. Too long and a doc channel that died hours ago still reads as "recently observed", which
+# parks a task on a silence nobody has actually confirmed -- the exact #346 collapse this guard
+# exists to avoid.
+#
+# 180 minutes sits above the agent's own rhythm and well below a night. The run wakes every ~30
+# minutes and PHASE 0.7 observes on each wake, so a healthy task is re-observed roughly six times
+# inside the window; it takes a sustained outage, not one missed wake or a slow Google minute, to
+# fall out of it. And falling out is the SAFE direction: an unobserved task is treated as
+# workable, so the cost of being wrong here is a run that works a task it might have parked,
+# never a task parked on a channel nobody read.
+$script:DocObservationFreshMinutes = 180
+
 # WHO closed it (#501). `$script:ClosedStatus` names the closed STATUSES; this names the closed
 # TASKS, and the two are not the same set -- which is the whole bug.
 #
@@ -4136,6 +4153,48 @@ function Test-SessionHoldsCapacity($st) {
     if ((Test-PollDue $poll) -or (Test-PollDue $recheck)) { return $true }
 
     if ($awaiting) { return $false }
+
+    # GH #500 -- THE DOC SURFACE, which is the second face of this same defect.
+    #
+    # #424/#425 made a doc-bound task write a POINTER turn, and the prescribed template's ask is
+    # dismissive by construction: "**Needs from you:** nothing blocking - read and comment." The
+    # `awaiting_reply` reader deliberately treats a dismissive ask as NOT parking (arms L1/L2/Q/R
+    # of mutcheck-awaiting-reply.ps1), which is correct and load-bearing for the Today gate -- it
+    # is what stopped the agent's own courtesy offers parking 186 of 238 rows.
+    #
+    # Net effect, measured 2026-09-04 14:31 PT: `concurrency 1 | in_flight 1 | admits 0` with 12
+    # eligible rows and nothing dispatched. Task #228 was doc-bound with 0 new comments, its doc
+    # emailed out for a group discussion, waiting on two humans -- and it read as fully workable
+    # because its ask was a pointer. It held the sole slot for ~3.3h. So the task whose ONLY
+    # input channel is doc comments, and which has none, is exactly the task that cannot progress
+    # and exactly the one nothing parks.
+    #
+    # THE TRAP IN THE OBVIOUS FIX, and why this is not keyed on the comment count alone.
+    # `doc_new_comments` reflects the LAST -Observe; `scan` is offline and never calls Google. So
+    # a task that has NEVER been observed reports 0, byte-identical to "he wrote nothing".
+    # Parking on that would let a dead doc channel silently park a task forever -- #346's shape
+    # wearing the costume of a fix for it. The park therefore requires POSITIVE evidence that the
+    # channel was read recently and was genuinely silent; a missing or stale `observed_at` is NOT
+    # parkable, and fails toward working the task. catchup-doc-sweep's NEVER_READ/UNACKED arms
+    # own reporting the unhealthy channel; this must not silently absorb it.
+    #
+    # Every existing release path is preserved above and by the count itself: a due poll or
+    # recheck already returned true, a journal reply clears `awaiting` via -not HasTrailingUser,
+    # and a non-zero pending count fails the silence test below.
+    $doc = if ($st.PSObject.Properties['doc']) { $st.doc } else { $null }
+    if ($doc -and "$($doc.doc_id)") {
+      $pending = @($doc.pending_ids).Count
+      $observedFresh = $false
+      $obsRaw = "$($doc.observed_at)"
+      if ($obsRaw) {
+        $obs = [datetime]::MinValue
+        if ([datetime]::TryParse($obsRaw, [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::None, [ref]$obs)) {
+          $observedFresh = ((Get-Date) - $obs).TotalMinutes -lt $script:DocObservationFreshMinutes
+        }
+      }
+      if ($pending -eq 0 -and $observedFresh) { return $false }
+    }
   }
   catch { return $true }   # anything unexpected -> count it
 
