@@ -4681,6 +4681,27 @@ function Set-ExhaustionDeclaration {
 
 function Cmd-Mark {
   if (-not $Id) { throw 'mark requires -Id' }
+  # GH #532 -- `-SessionWoken` belongs to `session`, and `mark` must not accept it silently.
+  #
+  # `$SessionWoken` is declared in the SHARED param block, so PowerShell binds it for every
+  # subcommand, but it is read in exactly one place and that place is inside `Cmd-Session`.
+  # `mark -Id X -SessionWoken` therefore parsed, did nothing, and exited 0. Measured against a
+  # real state file: the stamp did not move and the caller was told it had.
+  #
+  # The cost is not the wasted call, it is that the failure is UNFALSIFIABLE afterwards. An empty
+  # `last_woken_at` on a live session could mean the dispatcher never stamped, or that it stamped
+  # with this call and was silently ignored -- and those two produce byte-identical state, so
+  # nothing can distinguish them after the fact. Five of the eight tasks holding live sessions
+  # were in exactly that state when this was written.
+  #
+  # Refusing is deliberately NOT the same as making `mark` stamp the field. Doing that would hand
+  # the turn author a second working lever to reset its own wake window, which is the bypass #514
+  # measured -- and G12 judges that author, so the field it reads must not be writable by the
+  # party being judged. Stamping at DISPATCH is correct; stamping as REMEDIATION is the defect.
+  # A silent no-op and a working lever are both wrong; failing loudly is the third option.
+  if ($SessionWoken) {
+    throw "-SessionWoken is not a mark flag: it is read only by ``session``. Use ``oa-state.ps1 session -Id $Id -SessionWoken``. Accepting it here would exit 0 without stamping last_woken_at, which is indistinguishable afterwards from never having called it at all (#532)."
+  }
   $path = Join-Path $JournalDir "task-$Id.md"
   if (-not (Test-Path $path)) { throw "no journal at $path" }
   # The exhaustion declaration (#310) branches out BEFORE anything below touches the journal or
