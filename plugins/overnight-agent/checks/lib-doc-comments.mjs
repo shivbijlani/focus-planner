@@ -121,8 +121,59 @@ export function unstampBody(body) {
  * Parsing a formatted dump is not the preferred input — pass structured objects when the caller
  * has them — but it is what the MCP hands back today, and a reader that cannot read the live
  * surface is a reader nobody runs.
+ *
+ * DOUBLE-ESCAPED NEWLINES (GH #529)
+ * ---------------------------------
+ * The MCP does not hand back a bare dump. It returns the dump inside a JSON envelope, and its
+ * newlines survive as the two literal characters `\` `n`. Splitting on /\r?\n/ then yields ONE
+ * line, no `Comment ID:` ever matches, and this returned an empty array — which is
+ * indistinguishable from a document the user has not commented on. Measured on the live dump for
+ * task #468: 0 parsed as-is, 18 after un-escaping.
+ *
+ * Un-escaping is applied on a BEHAVIOURAL condition — parse first, and only re-parse when the
+ * first attempt found nothing while the text plainly names comments — rather than on "the text
+ * has no real newlines". That guard would be wrong: a real dump contains BOTH escaped separators
+ * and real newlines inside comment bodies, so keying on their absence declines to un-escape
+ * exactly the input that needs it. Fails toward re-reading a comment, never toward silence.
  */
 export function parseCommentDump(text) {
+  const src = String(text ?? '')
+  let rows = parseCommentLines(src)
+  if (rows.length === 0 && /Comment ID:|Reply ID:/.test(src)) {
+    rows = parseCommentLines(src.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n'))
+  }
+  // De-duplicate by id, keeping the first occurrence. The MCP envelope carries the SAME dump
+  // TWICE -- once in `content[].text` and again in `structuredContent.result` -- so a caller that
+  // hands over the whole envelope sees every comment twice. Measured on the live task #468 dump:
+  // 18 entries for 9 real comments. Reading both copies and de-duplicating is strictly safer than
+  // picking one and being wrong about which is populated, which is how this reader went blind in
+  // the first place.
+  const seen = new Set()
+  return rows.filter((r) => r && r.id && !seen.has(r.id) && seen.add(r.id))
+}
+
+/**
+ * Did this text fail to PARSE, as opposed to describing a document with no comments?
+ *
+ * `parseCommentDump` returning `[]` answers "how many comments are in this text", and cannot
+ * answer "was this text a successful listing" — a transport error, a truncated file and a
+ * genuinely empty document all yield zero entries. Reporting that as `0` is the #346 defect on
+ * the channel Shiv designated primary, where a dropped message is an instruction he believes
+ * arrived.
+ *
+ * So zero is only trustworthy alongside POSITIVE evidence that a listing happened: the MCP's own
+ * summary line, which is present even for an empty document. Bytes that name comments but parse
+ * to nothing are a parse failure; bytes that say nothing at all are not a reading.
+ */
+export function isUnparsedDump(text, parsed) {
+  if (Array.isArray(parsed) && parsed.length > 0) return false
+  const src = String(text ?? '')
+  if (/Comment ID:|Reply ID:/.test(src)) return true
+  if (/^\s*Found\s+\d+\s+comments?\b/im.test(src)) return false
+  return src.trim().length > 0
+}
+
+function parseCommentLines(text) {
   const out = []
   const lines = String(text ?? '').split(/\r?\n/)
   let cur = null

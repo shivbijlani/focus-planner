@@ -218,6 +218,59 @@ const ARMS = [
     },
   },
   {
+    name: 'I2_escaped_dump_is_not_an_empty_document',
+    why: 'GH #529 — the MCP returns the dump inside a JSON envelope with newlines as the two literal characters \\n. Splitting on /\\r?\\n/ yields ONE line, nothing matches, and the reader returned [] — byte-identical to a document the user never commented on. Measured on the live task #468 dump: 0 parsed as-is, 9 after un-escaping.',
+    run: async (m) => {
+      // The exact shape the MCP hands back, built by ESCAPING a known-good dump rather than by
+      // typing newlines. A fixture written with real newlines passes while the live path fails,
+      // which is precisely why this survived: the I_live_dump_partitions arm above feeds a
+      // template literal and structurally cannot see the defect.
+      const escaped = JSON.stringify(LIVE_DUMP).slice(1, -1)
+      if (escaped.includes('\n')) return 'fixture is not escaped; it cannot reproduce the defect'
+      const parsed = m.parseCommentDump(escaped)
+      if (parsed.length !== 4) return `escaped dump parsed ${parsed.length} entries, expected 4`
+      const ids = parsed.map((r) => r.id)
+      if (!ids.includes('AAACAbx8RrQ') || !ids.includes('AAACGdxf9QE')) {
+        return 'escaped dump parsed the wrong ids'
+      }
+      if (m.parseCommentDump(LIVE_DUMP).length !== 4) return 'un-escaping broke the bare dump'
+      return null
+    },
+  },
+  {
+    name: 'I3_a_dump_that_failed_to_parse_is_not_zero_comments',
+    why: 'zero entries is produced by a transport error, a truncated file AND a genuinely empty document. Reporting all three as 0 is #346 on the primary channel, so a caller must be able to tell "could not read" from "nothing to read".',
+    run: async (m) => {
+      const dead = 'google-workspace: Error: MCP request failed: Transport closed'
+      if (!m.isUnparsedDump(dead, m.parseCommentDump(dead))) return 'a transport error read as an empty document'
+      // The load-bearing case, and the one that actually happened: a dump carrying BOTH the
+      // MCP's summary line AND comment ids, which still parses to nothing because the body is
+      // mangled. Without the ids test this reads its own "Found N comments" header as proof of a
+      // successful listing and reports a document with 6 comments as empty.
+      const mangled = 'Found 6 comments in document ABC:\n\nComment ID:\nAuthor:'
+      if (m.parseCommentDump(mangled).length !== 0) return 'fixture no longer parses to zero'
+      if (!m.isUnparsedDump(mangled, m.parseCommentDump(mangled))) {
+        return 'a mangled dump was trusted because it carried a summary line'
+      }
+      // Discrimination in the direction that matters: a REAL listing of an empty document is a
+      // reading, and must not be reported as broken or every quiet doc raises a false alarm.
+      const empty = 'Found 0 comments in document 16F7lGso6NUAZjz2aeThKPkDvr1EVFfYrHWZre6XwaNU'
+      if (m.isUnparsedDump(empty, m.parseCommentDump(empty))) return 'a genuine empty listing was reported as unreadable'
+      if (m.isUnparsedDump(LIVE_DUMP, m.parseCommentDump(LIVE_DUMP))) return 'a good dump was reported as unreadable'
+      return null
+    },
+  },
+  {
+    name: 'I4_the_envelope_carries_the_dump_twice',
+    why: 'the MCP envelope repeats the dump in content[].text and again in structuredContent.result, so a caller handing over the whole envelope counted every comment twice — 18 entries for 9 real comments on the live #468 dump.',
+    run: async (m) => {
+      const doubled = `${LIVE_DUMP}\n${LIVE_DUMP}`
+      const parsed = m.parseCommentDump(doubled)
+      if (parsed.length !== 4) return `doubled dump parsed ${parsed.length} entries, expected 4`
+      return null
+    },
+  },
+  {
     name: 'J_stamp_is_idempotent_and_reversible',
     why: 'a re-stamped body must not accumulate markers, and unstamp must recover the text',
     run: async (m) => {
@@ -437,6 +490,34 @@ const MUTATIONS = [
     apply: (s) => s.replace(
       'const entry = docs && docs[docId]',
       'const entry = docs && (docs[docId] || Object.values(docs)[0])'),
+  },
+  {
+    name: 'unescape_removed',
+    breaks: 'the GH #529 defect, restored: the live escaped dump reads as zero comments',
+    apply: (s) => s.replace(
+      "if (rows.length === 0 && /Comment ID:|Reply ID:/.test(src)) {",
+      'if (false) {'),
+  },
+  {
+    name: 'unparsed_dump_reads_as_empty',
+    breaks: 'a transport error is reported as a document with no comments',
+    apply: (s) => s.replace(
+      "  if (/Comment ID:|Reply ID:/.test(src)) return true",
+      '  if (false) return true'),
+  },
+  {
+    name: 'unparsed_dump_flags_a_genuine_empty_listing',
+    breaks: 'every quiet document raises a false alarm, which is how a real alarm stops being read',
+    apply: (s) => s.replace(
+      "  if (/^\\s*Found\\s+\\d+\\s+comments?\\b/im.test(src)) return false",
+      '  if (false) return false'),
+  },
+  {
+    name: 'envelope_duplicates_are_counted_twice',
+    breaks: 'handing over the whole envelope yields 18 entries for 9 real comments',
+    apply: (s) => s.replace(
+      "  return rows.filter((r) => r && r.id && !seen.has(r.id) && seen.add(r.id))",
+      '  return rows'),
   },
   {
     name: 'merge_ledgers_last_wins',
