@@ -29,6 +29,31 @@ name: Spec wiki
 # Since #470 that is ONE rolling pull request on a fixed `spec/auto` branch,
 # updated in place, rather than a new PR per run -- see the schedule note below.
 #
+# WHY THIS WORKFLOW VERIFIES ITS OWN PULL REQUEST
+# -----------------------------------------------
+# The rolling pull request is authored by `github-actions[bot]` with
+# `GITHUB_TOKEN`, and GitHub refuses to let a token-authored event cascade into
+# a workflow run. The visible form of that refusal is not "no run": `ci.yml`'s
+# `pull_request` run IS created for `spec/auto` and is then parked at
+# `conclusion: action_required` with a 0s duration, so no check-run ever reaches
+# the head commit and the PR's check rollup stays permanently empty.
+#
+# That deadlocked the spec PR against the overnight agent's merge rule, which
+# refuses to merge anything with an empty rollup -- correctly, because "nothing
+# has ever looked at this" is not "this is green". The PR regenerated every 6
+# hours forever and could be neither merged nor closed.
+#
+# So the `verify-spec-branch` job below runs the same verification `ci.yml` runs
+# against the exact commit that was just pushed, and publishes the result to that
+# commit through the statuses API. Statuses written with `GITHUB_TOKEN` DO appear
+# in a pull request's rollup -- the no-cascade rule governs triggering workflows,
+# not writing statuses. This workflow itself is `schedule`-triggered, so it is
+# not subject to the gate.
+#
+# `scripts/spec/verifyParity.mjs` (run by the unit suite) holds that job to CI's
+# command set and to deriving its status from real step outcomes, so the badge
+# cannot quietly decay into decoration.
+#
 # WIKI PUBLISHING NOTE
 # --------------------
 # `GITHUB_TOKEN` cannot push to `owner/repo.wiki.git` -- the wiki is a separate
@@ -72,6 +97,12 @@ jobs:
   generate:
     name: Generate and verify spec
     runs-on: ubuntu-latest
+    # Consumed by verify-spec-branch. `sha` is the exact commit pushed to
+    # spec/auto, carried forward explicitly so the verification and the status it
+    # publishes are about the same tree even if a later run replaces the branch.
+    outputs:
+      pushed: ${{ steps.rolling_pr.outputs.pushed }}
+      sha: ${{ steps.rolling_pr.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -117,6 +148,7 @@ jobs:
             --md spec-decisions.md
 
       - name: Open or update the rolling pull request
+        id: rolling_pr
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -148,6 +180,7 @@ jobs:
           git add -A docs/spec
           if git diff --cached --quiet -- docs/spec; then
             echo "No spec changes: the design has not drifted since the last run."
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -164,6 +197,12 @@ jobs:
           # concurrent writer whose work could be lost. The `concurrency` group at
           # the top of this file already serialises runs.
           git push --force origin "HEAD:$BRANCH"
+
+          # Recorded AFTER the push succeeds, so a failed push cannot hand a SHA
+          # to the verification job and have it vouch for a commit no branch
+          # points at.
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
           # The decisions block is regenerated into the body on every run, so the
           # PR always states the CURRENT conflicts rather than accumulating a log
@@ -211,6 +250,119 @@ jobs:
             spec-decisions.json
             spec-decisions.md
           if-no-files-found: ignore
+
+  # The job that makes the rolling spec pull request reviewable at all.
+  #
+  # It re-runs CI's verification against the exact commit just pushed to
+  # spec/auto and writes the outcome to that commit as a pair of statuses, which
+  # is the only channel that reaches the PR's rollup from a run this branch's own
+  # events cannot trigger (see the header note).
+  #
+  # It deliberately does NOT reuse ci.yml via `workflow_call`: a called workflow
+  # runs at the CALLER's ref and attaches its check-runs to the caller's SHA, so
+  # it would verify main and report nothing against spec/auto. It removes no need
+  # for the statuses API and adds coupling. The cost of duplicating the commands
+  # is drift, which scripts/spec/verifyParity.mjs turns into a red unit test.
+  verify-spec-branch:
+    name: Verify spec branch
+    needs: generate
+    # Nothing was pushed means nothing new to vouch for; the existing PR (if any)
+    # keeps the statuses from the run that last changed it.
+    if: needs.generate.outputs.pushed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Pinned to the SHA, never to `spec/auto` by name. The branch is
+          # force-pushed, so a name would let a later run's tree be verified
+          # while the status is attached to an earlier commit -- a green badge
+          # vouching for code that was never run.
+          ref: ${{ needs.generate.outputs.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Mark the commit as being verified
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.generate.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          for context in "spec-verify / test & build" "spec-verify / lint"; do
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+              -f state=pending \
+              -f context="$context" \
+              -f description="Verifying the generated spec branch" \
+              -f target_url="${RUN_URL}" >/dev/null
+          done
+
+      - run: npm ci
+
+      # Every step below carries `if: always()` so one failure does not hide the
+      # others: a lint result is still worth having when a test fails, and the
+      # published status must describe what was actually observed. The steps are
+      # NOT `continue-on-error` -- a failure here still fails this job.
+      - name: Unit tests
+        id: test
+        if: always()
+        run: npm test
+
+      - name: Production build
+        id: build
+        if: always()
+        run: npm run build
+
+      - name: Lint
+        id: lint
+        if: always()
+        run: npm run lint
+
+      - name: Publish the verification result to the spec branch commit
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.generate.outputs.sha }}
+          TEST_OUTCOME: ${{ steps.test.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          LINT_OUTCOME: ${{ steps.lint.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # Derived from the step outcomes, never asserted. Anything that is not
+          # an observed success -- failure, cancellation, or a step that never
+          # ran because the environment broke -- reports as a failure, because
+          # the one thing this status may never say is "verified" about a tree
+          # nothing verified.
+          state_for() {
+            for outcome in "$@"; do
+              if [ "$outcome" != "success" ]; then echo "failure"; return; fi
+            done
+            echo "success"
+          }
+
+          publish() {
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+              -f state="$1" -f context="$2" -f description="$3" \
+              -f target_url="${RUN_URL}" >/dev/null
+            echo "$2 -> $1"
+          }
+
+          publish \
+            "$(state_for "$TEST_OUTCOME" "$BUILD_OUTCOME")" \
+            "spec-verify / test & build" \
+            "tests: ${TEST_OUTCOME:-not run}, build: ${BUILD_OUTCOME:-not run}"
+
+          publish \
+            "$(state_for "$LINT_OUTCOME")" \
+            "spec-verify / lint" \
+            "lint: ${LINT_OUTCOME:-not run}"
 
   publish-wiki:
     name: Publish to wiki
