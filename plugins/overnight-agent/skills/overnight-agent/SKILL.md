@@ -1174,15 +1174,27 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
      powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\collect-google-tasks.ps1" -Account <addr>
      ```
 
-     It enumerates **every** list via `list_task_lists` (not just `@default`), passes `max_results` and
-     `show_completed:false`, and follows `nextPageToken` to the end. Exit `0` = the whole backlog was
-     read; exit `2` = it was not. `-Json` gives the same verdict machine-readable.
+     It reads the server's **advertised tool list first** and only ever sends names that came
+     back (GH #554 — the previous version called `list_task_lists`, a tool that does not exist,
+     and died on every single run). It enumerates every list **when the server can** — the live
+     `google-workspace` MCP exposes only `list_tasks` / `get_task` / `manage_task`, with **no
+     list-enumeration tool at all** — passes `max_results` and `show_completed:false`, and
+     follows `nextPageToken` to the end. Exit `0` = the whole backlog was read; exit `2` = it
+     was not. `-Json` gives the same verdict machine-readable.
    - ⛔ **A full page is *presumed truncated*, and a truncated read has no total.** If a page comes back
      with exactly `max_results` items and no continuation token, you cannot tell "that's all of them"
      from "there's more" — so the verdict is `truncated` and `open` is **`null`, never a number**, the
      same way `check-agent-inbox.ps1` reports `unread` as `null` and never `0`. Carry it into the wrap-up
      as an ask. **Never write a burn-down narrative off a short read** — "the backlog went 35 → 9" was
      the #524 bug, and the 35 were all still open.
+   - 🟡 **`partial` is its own verdict, and it is not a failure.** When the server exposes no way to
+     enumerate task lists, the collector still reads `@default` to the end and reports
+     `verdict: partial`, `reason: lists-tool-unavailable`, `open: null` (a grand total is not
+     claimable when other lists are invisible) and the measured count in **`defaultListOpen`**.
+     Quote `defaultListOpen` as *"N open in the default list"*, never as the backlog. If the user
+     confirms the default list **is** his backlog, pass `-DefaultListOnly` or add
+     `| Google Tasks lists | default only |` to `user-settings.md` — that makes the read genuinely
+     complete, with a real total and exit `0`, so the ask stops repeating every night.
    - **Dedupe against the planner** before proposing anything: match each Google Task against existing
      `planner.md` rows and their journals (title overlap + the `Linked ID` theme map established in #329).
      Split into *already-tracked* (fold — don't re-add) vs *genuinely new*.

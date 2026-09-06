@@ -23,6 +23,7 @@ preferences.
 | GitHub owner | `github.com/<your-github-username>` |
 | Agent email account | `<agent-inbox@example.com>` (the name of this account as it appears in the email MCP) |
 | Google account (Tasks) | `<your.name@example.com>` — the Google account whose **Tasks** the PHASE 2 collect step reads (must be consented in the Google Workspace MCP). Leave blank / omit to disable Google-Tasks collection. |
+| Google Tasks lists | *(optional)* `default only` — set this if `@default` **is** your whole Google Tasks backlog. The Google Workspace MCP exposes no way to enumerate task lists (GH #554), so without this the collector reports `partial` and refuses a total every night. With it, the same read counts as complete. Leave blank if you keep tasks in more than one list. |
 | Authorized sender addresses | `<addr1@example.com>`, `<addr2@example.com>` (only act on instruction emails **from** these) |
 | Auto-send (email) allow-list | `<addr1@example.com>`, `<addr2@example.com>` — you may **send/reply** email to these without extra approval. Emailing anyone **not** on this list still needs explicit approval. |
 
