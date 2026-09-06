@@ -1156,8 +1156,33 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
    **Google account** (→ "Google account (Tasks)") that's consented in the Google Workspace MCP, pull that
    account's open Google Tasks as *extra* candidates each run — this automates the manual reconcile from
    task #329 so todos captured in Google Tasks surface in the planner without the user re-typing them:
-   - **Read-only first:** call `list_tasks` for that account (each list, e.g. `@default`) to get the open
-     backlog. Listing is reversible, so it needs no approval.
+   - **Read-only first, and read it *completely* (GH #524).** Listing is reversible, so it needs no
+     approval — but a **bare `list_tasks`** call does not read the backlog, it reads the API's default
+     **20-item first page**, and a truncated page is byte-identical to a short backlog. Measured live
+     2026-09-06, same tool, same list, one argument apart:
+
+     | call | returned | open (`needsAction`) |
+     | --- | ---: | ---: |
+     | `list_tasks {task_list_id:"@default"}` | 20 | **9** |
+     | `list_tasks {task_list_id:"@default", max_results:100, show_completed:false}` | 35 | **35** |
+
+     Nine of thirty-five, no error and no partial-result flag — the page's other 11 slots were spent on
+     *already-completed* tasks, so a 43% shortfall in tasks became a 74% shortfall in *open* ones. Run
+     the collector instead of hand-rolling the call:
+
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\collect-google-tasks.ps1" -Account <addr>
+     ```
+
+     It enumerates **every** list via `list_task_lists` (not just `@default`), passes `max_results` and
+     `show_completed:false`, and follows `nextPageToken` to the end. Exit `0` = the whole backlog was
+     read; exit `2` = it was not. `-Json` gives the same verdict machine-readable.
+   - ⛔ **A full page is *presumed truncated*, and a truncated read has no total.** If a page comes back
+     with exactly `max_results` items and no continuation token, you cannot tell "that's all of them"
+     from "there's more" — so the verdict is `truncated` and `open` is **`null`, never a number**, the
+     same way `check-agent-inbox.ps1` reports `unread` as `null` and never `0`. Carry it into the wrap-up
+     as an ask. **Never write a burn-down narrative off a short read** — "the backlog went 35 → 9" was
+     the #524 bug, and the 35 were all still open.
    - **Dedupe against the planner** before proposing anything: match each Google Task against existing
      `planner.md` rows and their journals (title overlap + the `Linked ID` theme map established in #329).
      Split into *already-tracked* (fold — don't re-add) vs *genuinely new*.
