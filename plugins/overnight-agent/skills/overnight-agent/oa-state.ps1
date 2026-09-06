@@ -4187,6 +4187,13 @@ function Get-LiveSessionCount {
   # the two readers DISAGREE: the very signal that says "this task cannot be worked" is the one
   # that leaves its session holding the slot.
   #
+  # GH #541 CARRIED THE SAME RULE TO THE STATUS GATE, after the identical deadlock recurred a third
+  # time from a direction the workability terms above do not reach. Measured 2026-09-05 18:22 PT:
+  # Shiv paused #468, the run recorded `status: blocked, status_by: user`, and got
+  # `6 ELIGIBLE | in_flight 1 | admits 0` -- one user pause froze the entire board. See
+  # Test-SessionHoldsCapacity's status gate; the invariant is now pinned by
+  # mutcheck-parked-capacity.ps1 rather than restated per instance.
+  #
   # THIS DOES NOT RELEASE ANYTHING, and that is what makes it safe. The binding is untouched --
   # continuity across nights is exactly what it exists for (#404), and losing it is the failure
   # mode that matters. Only the CAPACITY ARITHMETIC changes: a task that cannot be worked stops
@@ -4216,10 +4223,59 @@ function Test-SessionHoldsCapacity($st) {
   $id = "$($st.id)"
   if (-not $id) { return $true }   # unidentifiable -> count it
 
-  # Terminal work holds nothing. A `done`/`skip` row with a live session is a pure leak, and
-  # counting it means finished work can starve the run indefinitely.
   $status = "$($st.status)".ToLowerInvariant()
-  if ($script:ClosedStatus -contains $status) { return $false }
+
+  # Read here, above the journal, because the status gate below needs the recheck timer and must
+  # not depend on a journal being readable: a status is known from the state file alone.
+  $poll = if ($st.PSObject.Properties['poll']) { $st.poll } else { $null }
+  $recheck = if ($st.PSObject.Properties['recheck']) { $st.recheck } else { $null }
+
+  # GH #541 -- A DUE RECHECK OUTRANKS THE STATUS GATE, and only for `blocked`.
+  #
+  # Copied from Test-Workable's own branch ("if ($row.due_recheck -and status -eq 'blocked')"),
+  # not paraphrased, because the two readers drifting apart is the bug being fixed one line
+  # below. `-Recheck` exists ONLY for "a recurring recheck of a BLOCKED task's blocker", so every
+  # task carrying one is `blocked` by construction; without this the gate would uncount the one
+  # blocked task that IS workable. That direction is the dangerous one -- it widens dispatch for a
+  # task the run may legitimately pick up, which is #522's shape.
+  #
+  # A due POLL is deliberately NOT accepted here. Test-Workable yields only the awaiting-reply
+  # park to `due_poll`, never the status gate, so a blocked task with a poll is still unworkable
+  # and must still be uncounted. The two readers agree by construction, term for term.
+  if ($status -eq 'blocked' -and (Test-PollDue $recheck)) { return $true }
+
+  # A task the board calls UNWORKABLE holds nothing, and this is deliberately the SAME list
+  # Test-Workable's own status gate reads rather than a second copy of it.
+  #
+  # It used to be `$script:ClosedStatus` (`done`/`skip`) only, which covered terminal work -- a
+  # finished row with a live session is a pure leak and could starve the run indefinitely -- but
+  # let the two WAITING statuses through. GH #541, measured 2026-09-05 18:22 PT: Shiv paused task
+  # #468 ("we need to pause this work for now"), the run recorded that as
+  # `mark -Id 468 -Status blocked -StatusBy user`, and the reward was
+  #
+  #     scan -> 249 rows, 6 ELIGIBLE   |   session -InFlight -> in_flight 1, admits 0
+  #
+  # -- six workable rows and nothing dispatchable, because the single task counted against the
+  # limit was the one provably unable to progress without a human. So a user pausing ONE task
+  # silently froze the whole board. `blocked` and `proposed` are both defined in SKILL.md as
+  # waiting-on-the-user states, and Test-Workable already agreed with that (`eligible: false`,
+  # `today_release_reason: not_workable`); only the capacity arithmetic disagreed. This is #487's
+  # defect (awaiting_reply) and #500's (the doc surface) on a third surface, which is why the fix
+  # pins the INVARIANT -- unworkable implies uncounted, unless a due timer overrides -- instead of
+  # naming the instance.
+  #
+  # NOT the same thing as adding these statuses to `$script:ClosedStatus`, which would be the
+  # tempting one-word version and is a different, worse bug. That list also confers USER-CLOSED
+  # semantics (Test-UserClosed), and SKILL.md is explicit that `proposed`/`blocked` are not
+  # closed: a reply is exactly the input they are waiting for and must reopen them normally.
+  # Widening it would make a paused task unreopenable -- #170's defect, pinned by
+  # mutcheck-reopened-closed.ps1's mutant M3. The capacity test and the closed test stay separate.
+  #
+  # RELEASES NOTHING, which is what makes it safe: the binding and the worktree are untouched, as
+  # with #487's fix. That matters here specifically, because SKILL.md forbids releasing a paused
+  # task's binding -- it is the continuity that lets it resume -- so the accounting is the only
+  # lever available.
+  if ($script:NonWorkableStatus -contains $status) { return $false }
 
   try {
     $jp = Join-Path $JournalDir ("task-$id.md")
@@ -4240,9 +4296,8 @@ function Test-SessionHoldsCapacity($st) {
 
     # A due timer outranks the park, for the reason Test-Workable gives -- poll/recheck is
     # read-only agent work that needs no reply, so parking it would silently stop the recurring
-    # duty polling exists to protect. Read exactly as the scan row reads it.
-    $poll = if ($st.PSObject.Properties['poll']) { $st.poll } else { $null }
-    $recheck = if ($st.PSObject.Properties['recheck']) { $st.recheck } else { $null }
+    # duty polling exists to protect. Read exactly as the scan row reads it. ($poll/$recheck are
+    # read above the try, so the status gate can use the same values.)
     if ((Test-PollDue $poll) -or (Test-PollDue $recheck)) { return $true }
 
     if ($awaiting) { return $false }

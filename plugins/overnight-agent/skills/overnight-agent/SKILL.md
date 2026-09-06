@@ -1006,6 +1006,14 @@ one task, one workspace, one thing being verified at a time"* — and this is th
    *because the user did something* may widen the run, and it is the one case where
    `session ... -Force` past `session_at_capacity` is correct. Your own judgement is not.
 
+   **What actually holds a slot.** Only tasks that can progress *right now*. A task waiting on the
+   user holds nothing: `blocked` and `proposed` (#541), `awaiting_reply` (#487), and a doc-bound
+   task whose comment channel was read recently and is silent (#500). Its binding and worktree are
+   untouched either way — only the arithmetic changes — so recording a pause never costs the run
+   its dispatch slot. A due `poll`, a due `recheck` on a `blocked` task, and a session woken in the
+   last 45 minutes all count as real work in flight. If `in_flight` names a task you know is
+   parked on you, that is a bug in the accounting, not a reason to `-Force`.
+
 3. **For each task, resolve its session before doing anything else** — never create one on a hunch:
 
    ```powershell
