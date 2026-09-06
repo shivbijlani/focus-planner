@@ -1,119 +1,99 @@
 # Architecture
 
-## What this system is
+Focus Planner has no server-side database and, apart from one thin static file server, no backend
+of its own. The system of record is a folder of markdown and JSON files — `planner.md`,
+`planner-completed.md`, `journal/task-<id>.md`, and a handful of config sidecars — synced across
+devices by the user's own cloud storage (OneDrive, Google Drive) or kept local (File System Access,
+IndexedDB). Everything else — the React board, the sync engine, the Telegram mirror, the overnight
+autonomous agent — is a reader or writer of that folder, never an owner of state the folder does not
+already hold. This is the central design decision the rest of the system follows from: state lives
+in files a human can open and edit by hand, not behind an API only the app understands.
 
-Focus Planner is a task board and journal system whose database is plain markdown files in a
-user-chosen folder (local disk, OneDrive, or Google Drive), a React SPA that reads and writes those
-files directly from the browser, and an unattended nightly agent (a Copilot CLI plugin) that reads the
-same files and acts on them. There is no server-side database and no accounts system; the browser's
-Storage/File-System-Access APIs (or a cloud provider's REST API) *are* the persistence layer, and a
-lightweight Node/Express process (`server.js`) exists only to serve the built SPA and a couple of local
-dev conveniences — it holds no application state.
+## The domains
 
-## The twelve domains
-
-| Domain | Responsibility | Principal module |
+| Domain | Principal modules | Responsibility |
 | --- | --- | --- |
-| `app` | The board UI, journals-as-chat, settings editors, multi-source routing | `src/App.jsx` |
-| `config` | Branding, the agent-gate and user-settings schemas, `AGENTS.md` generation | `src/config/agentGate.js` |
-| `diagnostics` | Cross-realm (tab ↔ service-worker) diagnostic event bus | `packages/diagnostics/src/index.js` |
-| `folder-sync` | Offline-first multi-device sync engine for markdown+sidecar files | `packages/folder-sync/src/merge.js` |
-| `install-prompt` | PWA "add to home screen" UX | `packages/install-prompt/src/InstallModal.jsx` |
-| `mcp-cred-vault` | Non-secret pointer manifest binding MCP servers to OS credential storage | `packages/mcp-cred-vault/src/schema.js` |
-| `overnight-agent` | The unattended nightly Copilot CLI plugin and its self-testing check suite | `plugins/overnight-agent/checks/mutcheck-doc-comments.mjs` |
-| `root` | The static file server and shared build tooling | `server.js` |
-| `scripts` | Repo hygiene, board repair one-offs, and the spec-generation pipeline itself | `scripts/spec/conflicts.mjs` |
-| `storage` | The pluggable multi-provider file-storage abstraction the whole app is built on | `src/storage/google-drive-provider.js` |
-| `task-paper` | Static-site generator turning journals into standalone HTML "papers" | `packages/task-paper/src/render.js` |
-| `telegram-bridge` | Node CLI mirroring the board/journals into a Telegram forum, and folding replies back | `packages/telegram-bridge/src/bridge.js` |
+| `app` | `src/App.jsx`, `src/focusPlanOps.js`, `src/journalChat.js`, `src/boardRow.js`, `src/taskSort.js` | The React board UI and the pure content-transformation functions that read/write `planner.md` and journals. |
+| `storage` | `src/storage/storage.js`, `src/storage/sources.js`, `src/storage/taskSettings.js` | The provider-agnostic read/write abstraction over FSA, OneDrive, Google Drive and IndexedDB, plus multi-source registry and per-task settings sidecars. |
+| `folder-sync` | `packages/folder-sync/src/engine.js`, `packages/folder-sync/src/merge.js`, `packages/folder-sync/src/records.js`, `packages/folder-sync/src/sw.js` | The record-level CRDT sync engine (a service worker) that reconciles a local replica against a cloud provider without losing concurrent edits or resurrecting deleted rows. |
+| `config` | `src/config/agentGate.js`, `src/config/agentsDoc.js`, `src/config/aiSettings.js`, `src/config/userSettingsForm.js` | Definitions and safe (non-destructive) editors for the config sidecars the overnight agent and the app both depend on. |
+| `task-paper` | `packages/task-paper/src/paper.js`, `packages/task-paper/src/render.js`, `packages/task-paper/src/generate.js` | Regenerates a chronological journal into a settled-state HTML "paper" (issue #285) with a comment channel back into the journal. |
+| `telegram-bridge` | `packages/telegram-bridge/src/bridge.js`, `packages/telegram-bridge/src/digest.js`, `packages/telegram-bridge/src/board.js` | A standalone Node CLI mirroring task journals into a Telegram forum and folding replies back in, plus a consolidated approval digest. |
+| `overnight-agent` | `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1`, `.../SKILL.md`, `.../write-turn.ps1` | A scheduled, unattended Copilot CLI plugin that scans the board, proposes and (on approval) executes plans, and self-heals its own infrastructure. See [Domain-overnight-agent](Domain-overnight-agent), [Prioritisation](Prioritisation) and [Reliability](Reliability). |
+| `mcp-cred-vault` | `packages/mcp-cred-vault/src/schema.js` | Validates the non-secret pointer file that tells a machine which credentials to pull from its OS vault. |
+| `install-prompt` | `packages/install-prompt/src/useInstallPrompt.js` | Cross-platform "add to home screen" PWA install UX. |
+| `diagnostics` | `packages/diagnostics/src/index.js` | A shared, low-overhead event/tracing sink used by the app, its service worker, and folder-sync, so a live worker's state can be dumped on demand. |
+| `scripts` | `scripts/spec/collect.mjs`, `scripts/spec/verify.mjs`, `scripts/merge-queue.mjs` | Repo-maintenance tooling: this spec's own generation pipeline, dependency-hygiene guards, and a verified PR merge order. |
+| `root` | `server.js`, `vite.config.js`, `eslint.config.js` | The dev/build toolchain and the one real backend process (see below). |
 
-Each domain has its own page (`Domain-<name>.md`) with exports, rationale, and behavioural
-requirements; this page is about how they compose.
+## Runtime processes
 
-## How the domains compose
+There are exactly three long-lived runtime surfaces, and they do not share memory:
 
-```
-                       ┌───────────────────────────────┐
-                       │   planner.md / journal/*.md    │  ← the database
-                       │   (local disk / OneDrive /     │
-                       │    Google Drive)                │
-                       └───────────────┬────────────────┘
-              read/write               │               read/write
-        ┌──────────────────────────────┼───────────────────────────────┐
-        │                              │                                │
-┌───────▼────────┐           ┌─────────▼─────────┐          ┌───────────▼───────────┐
-│  browser SPA    │           │  overnight-agent    │          │  telegram-bridge CLI   │
-│  (`app` domain,  │◄────────►│  Copilot CLI plugin │◄────────►│  (`telegram-bridge`)   │
-│  via `storage`)  │  folder- │  (`overnight-agent`)│  Telegram│                        │
-│                  │  sync    │  reads via the same  │  API     │                        │
-└──────────────────┘  engine  │  storage convention  │          └────────────────────────┘
-                               └──────────────────────┘
-```
+1. **The browser tab** — the React app (`src/App.jsx`) plus its registered service worker
+   (`packages/folder-sync/src/sw.js`). The service worker owns the dirty-file queue
+   (`packages/folder-sync/src/queue.js`) and the remote pull/push cycle; the main thread owns the
+   UI and enqueues writes. They talk only via `postMessage`/`BroadcastChannel`, never shared state,
+   because a service worker can be evicted and restarted by the browser at any time.
+2. **`server.js`** — a small Express process (`GET/PUT/DELETE /api/file`, `GET /api/files`,
+   `GET /api/todos`, `GET /api/journal-exists`, `POST /api/pick-folder`, `GET/POST /api/config`)
+   used only in the local-folder desktop workflow described in `README.md` ("start planner"): it
+   lets a locally-run Copilot CLI session read and edit the same markdown files the browser app
+   uses, without going through a browser storage provider.
+3. **The overnight agent** — a Copilot CLI plugin invoked by an OS-level scheduler roughly every 30
+   minutes (see [Reliability](Reliability) for how that scheduler itself is kept alive). It never
+   talks to `server.js` or the browser tab; it reads and writes the same files directly on disk (or
+   through the synced cloud folder), which is why every board/journal format in
+   [Data-Formats](Data-Formats) has to be something a PowerShell script and a browser IndexedDB
+   provider can both parse identically.
 
-`storage` is the seam every other domain is built against: it exposes one interface
-(`storage.read/write/list`) with five interchangeable backends (in-memory, IndexedDB, File System
-Access, OneDrive, Google Drive). `app`, `folder-sync`, `task-paper`, and (via its own filesystem
-reads, not the browser storage API) `overnight-agent` and `telegram-bridge` all operate on the same
-on-disk file shapes described in [Data-Formats](Data-Formats) — this is what lets three independent
-processes (a browser tab, a PowerShell agent, a Node CLI) collaborate on one file without a shared
-server: the file format itself is the API.
-
-`folder-sync` exists because `storage` alone is not enough once more than one **device** (not just one
-browser tab) edits the same folder: a service worker background-syncs a per-record clock/tombstone
-model (§9 of [Data-Formats](Data-Formats)) so two devices editing offline never silently drop each
-other's rows. `diagnostics` is the narrow channel that lets the SPA's tab and its own service worker
-report health to each other despite living in different JS realms.
-
-`config` is shared, not owned by any runtime: `agent-gate.md` and `user-settings.md` are read by both
-the browser (`AgentGateEditor.jsx`/`AgentSettingsEditor.jsx`) and the PowerShell agent (`oa-state.ps1`),
-so their parsers live once in `src/config/` and the agent-facing generated doc (`AGENTS.md`) is derived
-from the same source that drives the UI, rather than hand-kept in sync.
-
-`overnight-agent` and `telegram-bridge` are the two processes that act on the planner data
-**without** a human driving the browser. They are decoupled from each other: the bridge mirrors state
-outward to Telegram and folds replies back into journals; the agent reads journals (including folded
-replies) to decide what to do next. Neither imports the other; they meet only in the shared journal
-file format.
-
-`mcp-cred-vault` and `install-prompt` are narrower utilities consumed by `app` and by
-`overnight-agent`'s MCP tooling respectively; `scripts` and `root` are build/ops tooling that does not
-ship in the running product but is versioned as first-class code because — as `scripts`'s own
-`check-node-modules.mjs` and the spec pipeline itself demonstrate — undocumented tooling regresses
-exactly like undocumented product code.
-
-## Process and runtime boundaries
-
-| Runtime | What runs there | Domains |
-| --- | --- | --- |
-| Browser tab (React) | The SPA: board, journals, settings | `app`, `config`, `install-prompt`, `mcp-cred-vault` (read), `diagnostics` (client side) |
-| Browser service worker | Background sync of the folder-sync engine | `folder-sync`, `diagnostics` (worker side) |
-| Node (`server.js`) | Serves the built SPA; no application state | `root` |
-| Node CLIs (invoked ad hoc or by CI) | `task-paper` generation, `telegram-bridge` mirror/poll, repo/board maintenance scripts | `task-paper`, `telegram-bridge`, `scripts` |
-| PowerShell, scheduled on one machine | The overnight agent: scan, dispatch, act, write turns | `overnight-agent` |
-| GitHub Actions | CI (lint/test/build), deploy, spec generation/publish | `scripts` (spec pipeline), workflows described in [Updating-the-Spec](Updating-the-Spec) |
-
-The browser and the overnight agent never talk to each other directly — no socket, no shared process.
-They coordinate purely by reading and writing the same files, at different times, and by leaving marks
-in those files (`<!-- from: ... -->`, `<!-- .../turn-end -->`, board cells) that tell the other party
-what happened. This is a deliberate simplicity choice: it means the whole system keeps working if the
-browser is closed, the laptop is off, or the agent plugin is disabled, because neither side depends on
-the other being live.
+The Telegram bridge (`packages/telegram-bridge/bin/telegram-bridge.js`) is a fourth, optional
+process: a Node CLI, typically run as `watch`, that also reads/writes journals and its own
+`state.json`. It is independent of the other three and can be absent entirely without breaking the
+board or the agent — it is a mirror, not a source of truth.
 
 ## Data flow: a user action to persisted state
 
-1. A user clicks "defer" on a board row in the SPA (`app` domain).
-2. `focusPlanOps.opMoveLinesBetweenSections` computes new file content — a pure string transform, no
-   I/O.
-3. The SPA calls `storage.write('planner.md', newContent)` — routed to whichever of the five backends
-   is active for that source (`storage` domain).
-4. If the active source is folder-synced, the service worker (`folder-sync`) diffs the new content
-   against its sidecar, stamps a fresh logical clock on the changed row, and later background-syncs that
-   record to the cloud provider and to other devices' sidecars.
-5. On the machine running the overnight agent, the next scheduled run's `scan` phase (`oa-state.ps1`,
-   `overnight-agent` domain) reads the updated `planner.md`, recomputes the worklist and each row's
-   `eligible` flag (see [Prioritisation](Prioritisation)), and may act — writing a turn into
-   `journal/task-<id>.md` via `write-turn.ps1`.
-6. If Telegram mirroring is configured, `telegram-bridge` picks up the new board state and journal turn
-   on its own poll cycle and mirrors them into the task's forum topic; a reply typed there is folded
-   back into the same journal file, where it becomes ordinary chat content the SPA, the agent, and
-   `task-paper` all read identically.
+Take "the user completes a task from the board":
+
+1. **App** — `src/App.jsx` calls `opAppendToCompleted`/`opRemoveTaskFromFocusPlan` (`src/focusPlanOps.js`),
+   which are pure `content -> newContent` transforms over the in-memory string of `planner.md` and
+   `planner-completed.md`. No I/O happens inside these functions — this is what makes the exact same
+   algorithms reusable from the single-source view and the multi-source Combined view.
+2. **Storage** — the new content is handed to `src/storage/storage.js`'s `write`, which delegates to
+   whichever provider is active (`getActiveProvider()`), and (for FSA/OneDrive/GoogleDrive) enqueues
+   the changed filename in the folder-sync dirty queue.
+3. **Sync** — the service worker (`packages/folder-sync/src/sw.js`) drains the queue, parses the
+   before/after board with the declarative table codec (`packages/folder-sync/src/codecs/mdTable.js`),
+   diffs it into per-record changes, stamps a logical clock (`stampLocalChanges`), and reconciles
+   against the remote via `mergeCollections`/`reconcileRecordsFile` before pushing — never a raw
+   whole-file overwrite, so a concurrent edit on another device is merged rather than clobbered.
+4. **Remote propagation** — the cloud provider (OneDrive/Google Drive) now holds the new bytes; any
+   other device's own service worker pulls them down on its own poll cycle and runs the same merge
+   in reverse.
+5. **Downstream readers** — the Telegram bridge's next `sync-archive` pass reads `planner-completed.md`
+   (via `packages/telegram-bridge/src/completed.js`) and closes the task's forum topic; the
+   overnight agent's next `scan` reads the same boards and journal and stops treating the task as
+   `eligible`.
+
+No step in this chain assumes the others are running. A user can edit `planner.md` directly in a
+text editor, sync it manually via any file-sync tool, and every downstream reader still functions,
+because the format is the contract, not an API call.
+
+## Why this shape, and what was rejected
+
+The obvious alternative — a real backend with a database and an authenticated sync API — was
+rejected implicitly by every module's own framing: `src/storage/storage.js` is explicitly "Storage
+abstraction layer... Supports: FSA (local), OneDrive, Google Drive", never "the app's database", and
+the overnight agent's entire design (see [Prioritisation](Prioritisation)) assumes it can act as a
+second, independent writer to the *same* files a browser tab is editing, with no locking protocol
+beyond markdown's own append-only journal convention and the sync engine's per-record CRDT. A
+database-backed design would need a real API for the agent to call, real auth for a scheduled
+background process to hold, and a migration story every time the schema changed. Plain files traded
+that away for: the user can always read their own data with any editor, any device can be a second
+"client" with zero integration work (an agent, a phone, a text editor), and the format itself
+— not a server's willingness to be reachable — is the single point of truth.
+
+See [Data-Formats](Data-Formats) for every file's exact grammar and invariants, [Prioritisation](Prioritisation)
+for how the overnight agent turns the board into an ordered, gated worklist, and
+[Reliability](Reliability) for how that agent stays running unattended for weeks at a time.

@@ -1,199 +1,150 @@
-# Data Formats
+# Data formats
 
-Every persisted format in this system is plain text or JSON that a human can open directly — there is
-no binary or database format anywhere. This page is the format contract: what each file must contain,
-in what shape, and what invariant a reader/writer pair must preserve.
+The system has no database. Every durable fact lives in a plain-text or JSON file inside one
+**storage source** — a folder reachable through `src/storage/fsa-provider.js` (local File System
+Access), `src/storage/onedrive-provider.js`, `src/storage/google-drive-provider.js`, or
+`src/storage/indexeddb-provider.js` (the browser-only default). All four expose the same read/write
+contract (`src/storage/storage.js`), so every format below is provider-agnostic: it is defined by
+its bytes, not by where those bytes are stored.
+
+This page is the format contract. A rebuilder needs it to write a compatible reader/writer without
+seeing the source; [Architecture](Architecture) explains why the system is shaped this way, and
+[Prioritisation](Prioritisation) and [Reliability](Reliability) explain the runtime rules that
+consume these formats.
 
 ## 1. The active board — `planner.md`
 
-A single markdown file with `##` section headings, each containing a pipe table. Sections are found
-by heading text (`## Today`, `## Deferred`); there is no other structural marker.
+A markdown file with two ranked sections, each a pipe table. Real shape (`src/focusPlanOps.test.js`):
 
 ```markdown
 # Focus Plan
 
 ## Today
 
-| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |
-|----|---|------|---------------|-------|-----------|
-| 70 | 🟡 | Ship the thing | Sydney rollout | 2026-01-27 | |
+| ID | 🎯 | Task |
+|---|---|------|
+| 1 | 🟡 | A |
+| 2 | 🟡 | B |
 
 ## Deferred
 
 | ID | 🎯 | Task | Mngr Priority | Added | Wake | Linked ID |
-|----|---|------|---------------|-------|------|-----------|
-| 254 | ⚪ | Add dance church events to the calendar | - | 2026-06-13 | 2026-09-08 | 191 |
-
-## Priorities
-
-1. Sydney rollout
-2. Vibe Agenda
-
-## Skills
-
-| Skill | Active tasks |
-|-------|-------------|
+|---|---|---|---|---|---|---|
+| 9 | ⚪ | X | - | 2026-06-13 | | 191 |
 ```
 
-**The one invariant that matters, and the one it took a real defect to name (issue #426):** `##
-Deferred`'s header has **7** columns (it carries `Wake`); `## Today`'s has **6** (it does not). A row's
-cells must be aligned to its **own section's header**, never assumed to match a fixed column count. A
-6-cell row under a 7-column header has its `Linked ID` in the *last* cell of the row, not at index 6 of
-the header — `src/boardRow.js`'s `alignRowToHeaders`/`wakeSeamIndex` is the one place this is computed,
-shared by every reader and writer in the `app` domain (see [Domain-app](Domain-app)). Priority icons
-are one of 🔴/🟡/🔵/⚪/✅/🐸/📖 (see [Home](Home) for their meanings). The `## Priorities` numbered list
-is free text matched against each row's `Mngr Priority` cell to compute manager-priority rank (see
-[Prioritisation](Prioritisation)).
+**Invariant: the file is ragged by construction.** `## Today` and `## Deferred` do not share one
+header — Deferred carries a `Wake` column (the snooze date) that Today does not, because the file
+is hand-edited and pre-existing rows are never forced to add a column they never had (issue #426).
+Every reader and writer must therefore resolve a cell by **header name**, never by fixed index, and
+must learn each table's own header before indexing its rows. `src/boardRow.js` is the single
+implementation of that rule (`rowCells`, `alignRowToHeaders`, `wakeSeamIndex`); the writer
+(`src/focusPlanOps.js`) and the reader (`src/boardTable.js`) both import it so they cannot disagree
+about which cell is `Linked ID` and which is `Wake` — the defect class that already shipped once
+when the two were separate implementations.
 
-Legacy rows may carry a wake date as a trailing `<!-- snooze:YYYY-MM-DD -->` HTML comment instead of a
-`Wake` cell; `src/snooze.js` reads both forms, and a board rewrite must migrate every legacy comment to
-the `Wake` column rather than dropping it (pinned by `src/boardWakeMigration.test.js`, issue #307).
+Column meanings, in order: `ID` (stable numeric task id, the same id namespace the journal
+filenames use), urgency icon (🔴 urgent+important, 🟡 important not urgent, 🔵 urgent not important,
+⚪ neither, 🐸 frog/eat-first, 📖 learning), task text, `Mngr Priority` (a free-text label, e.g. a
+named manager priority like "Sydney rollout"), `Added` (date), `Wake` (Deferred only — an HTML
+comment `<!-- snooze:YYYY-MM-DD -->` embedded in the cell, parsed by `src/snooze.js`), `Linked ID`
+(a parent/child task id, optionally carrying an external ticket link as
+`191,[170](https://…)` — the compound-id grammar shared with the Telegram bridge's board reader).
+A `## Priorities` ordered list (`1. 285`, `2. 140`, …) may appear anywhere in the file; it is a
+user-maintained override of intra-section ordering, read by `src/taskSort.js` and by the overnight
+agent's `Get-PrioritiesRank`.
+
+**Invariant: row order inside a section is significant** — it is one term of the priority sort key
+(see [Prioritisation](Prioritisation)) and must be preserved exactly by every writer that is not
+deliberately reordering.
 
 ## 2. The completed board — `planner-completed.md`
 
-Rows identical in shape to the active board, but grouped under **weekly** headings rather than
-section headings, e.g.:
+Same row grammar as `planner.md`, grouped under weekly headings instead of Today/Deferred:
 
 ```markdown
-### Week of 2026-08-02
+## Week of 2026-08-25
 
 | 401 | ✅ | Draft house-sitter directions doc | - | 2026-08-02 |
 ```
 
-`packages/telegram-bridge/src/completed.js` treats only rows whose first cell parses as a numeric task
-id as data — the header row and the `|---|---|` separator are ignored by construction, not by an
-explicit skip rule.
+Parsed by `packages/telegram-bridge/src/completed.js`; only rows whose first cell parses as a
+numeric id are treated as tasks, so header and separator rows are ignored. **Invariant: a task ID
+appearing here is not, by itself, proof the corresponding live task is closed** — issue #556
+documents a live task and a stale placeholder sharing one reused id across the two boards, which
+defeats an ID-only join. A correct reader must corroborate a completed-board match against the live
+row's title or the journal's own `H1` before treating a task as closed.
 
 ## 3. Task journals — `journal/task-<id>.md`
 
-A bottom-appended **chat thread** in plain markdown, read by five independent consumers: the app
-(`src/journalChat.js`), the Telegram bridge (`packages/telegram-bridge/src/journal.js`), the task-paper
-generator, the overnight-agent skill (`oa-state.ps1`), and a human editing the file directly.
+A bottom-appended chat transcript, one file per task, rendered by `src/journalChat.js`
+(`parseJournalChat`) and shared by the app UI, the Telegram bridge (`packages/telegram-bridge/src/journal.js`),
+and the overnight agent (`oa-state.ps1`, `write-turn.ps1`). All three **must** use the same
+grammar — the repo has already shipped bugs from a second, drifted implementation of this parser
+(closed issues #320, #325).
 
 ```markdown
-# Task 352: Ship the thing
+# Task 70: New task description
 
-- First note
-- TODO: Something to do
-- DONE: Completed item
+Some undated notes at the top (the "pinned"/earlier-notes region).
 
-## 2026-08-27
-
-<!-- OVERNIGHT-AGENT do not edit this line -->
-## 🌙 Overnight Agent
-
-<!-- from: overnight-agent -->
-**Status:** in-progress · 2026-08-27
-Did the work described in the plan.
-
-**Needs from you:** approve the PR linked above.
-<!-- /overnight-agent turn-end -->
+## 2026-08-31
 
 <!-- from: me -->
-approved, go ahead
+Go ahead and ship it.
+
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+## Overnight Agent
+
+**Status:** In progress
+
+Needs from you: confirm the rollout window.
 ```
 
-Invariants a rebuild must hold:
+Grammar:
 
-- `# Task <id>: <title>` (or the first `#` heading) is the thread title; content before the first `##`
-  heading or agent marker is "earlier notes," rendered as one undated bubble.
-- `## YYYY-MM-DD` starts a new day group; consecutive same-day **user** ("me") notes merge into one
-  bubble; content is otherwise ordered top-to-bottom, oldest first — new entries are always appended
-  at the bottom.
-- `<!-- from: agent-name -->` marks the following content as an agent message (rendered left, under a
-  🤖 banner) until the next `<!-- from: ... -->` marker or `<!-- from: me -->`. `<!-- from: me -->`
-  attributes text to the human — it is the **only** channel the consent/gate readers trust as a human
-  affirmation (see [Prioritisation](Prioritisation)), and it must never be written by the agent's own
-  software describing its own output, only by the bridge folding a real reply or by the human typing
-  directly.
-- `<!-- /overnight-agent turn-end -->` is a boundary stamp, not content — `oa-state.ps1 mark` writes it
-  to record where the agent's own turn ends, so text appended below it can never be mis-absorbed into
-  that turn, and a reply typed there is unambiguously the human's.
-- `- [ ]` / `- [x]` are todo checkboxes; `TODO:`/`DONE:` line prefixes are an equivalent plain-text
-  form both the UI and `oa-state.ps1` parse.
-- Multi-line HTML comments (e.g. `<!-- doc-meta ... -->`, `<!-- tg-meta ... -->`) are machine metadata,
-  hidden from the rendered chat.
-- **Append-only by construction.** The only sanctioned writer (`write-turn.ps1`) never rewrites or
-  deletes existing bytes — see [Reliability](Reliability) for why, and for the specific corruption
-  classes (G1–G12) this format has been broken by and is now guarded against.
+| Element | Meaning |
+| --- | --- |
+| `# Task <id>: <title>` | First line; thread title. |
+| `## YYYY-MM-DD [label]` | Starts a new day group; resets the author to `me`. Consecutive same-day `me` notes merge into one bubble. |
+| `<!-- from: NAME -->` | Switches the following content's author. `me` switches back to the human; anything else (e.g. `overnight-agent`) renders as an agent bubble. |
+| A sentinel comment containing `AUTO` or `AGENT` (case-insensitive), e.g. `<!-- OVERNIGHT-AGENT ... -->` | Marks the start of an agent-managed block, matched by the shared `AGENT_SENTINEL_RE` so the parser and the agent's own writer can never disagree about where it begins. |
+| Fenced code blocks (```` ``` ```` / `~~~`) | **Quoted text, not markup.** A `## `, `<!-- from: -->` or sentinel line *inside* a fence must not be interpreted — otherwise an illustrative example in a message can fabricate a bubble, misattribute authorship, or split a turn (measured live, documented in `src/journalChat.js`). |
+| A multi-line HTML comment (e.g. `<!-- dc-meta ... -->`) | Hidden from the rendered chat; used for machine metadata that must not appear as a message. |
 
-Full schema authority for this format lives in `AGENTS.md`, scaffolded into every connected data
-folder by `src/config/agentsDoc.js` so an external agent can understand the folder without reading this
-app's source. It is generated from `agentsDoc.js`, which mirrors `src/journalChat.js` — the two must
-never drift, and the version marker in `AGENTS_DOC` is how a stale scaffolded copy is detected and
-refreshed.
+**Invariant: append-only.** The sanctioned agent writer (`write-turn.ps1`) has no code path that can
+edit or delete an existing line — this is what makes "did the user reply?" a safe question to
+answer by re-scanning the tail of the file, and it is why a comment typed into a generated
+task-paper HTML document (`packages/task-paper/src/comment.js`) is durable: it is appended to the
+journal by the same shared writer, not stored in a regeneratable artifact.
 
-## 4. The agent gate — `agent-gate.md`
+**Invariant: authorship is byte-identical across every writer.** The app, the Telegram bridge, and
+the overnight agent all emit `<!-- from: me -->` / plain agent prose using the same bytes, because a
+consent reader (the "did the user approve this?" gate) that recognizes one writer's marker but not
+another's would silently misclassify approvals — the repeated failure class named explicitly in
+`oa-state.ps1`: *the agent authoring the signal its own gate reads*.
 
-Two bullet lists under fixed headings, human-authored, read but never written by the agent:
+## 4. Deep-link marker — `<!-- tg-meta ... -->`
 
-```markdown
-# Agent gate
+A hidden HTML comment stamped into a journal by the Telegram bridge (`packages/telegram-bridge/src/deepLink.js`)
+carrying the forum topic's `chatId`/`threadId`, because Telegram assigns `message_thread_id` only at
+topic-creation time and it cannot be recomputed from the task id. Read/written by
+`parseTgMeta`/`upsertTgMetaMarker`; travels with the journal through sync so any device can compute
+the deep link.
 
-## Do not gate these (reversible)
+## 5. Bridge state — `state.json` (outside the repo, outside the synced folder)
 
-- Reading any file
-- Committing to a branch that is not `main`
+Persistent Telegram bridge state, one JSON object (`packages/telegram-bridge/src/state.js`,
+`STATE_VERSION`). Tracks task↔topic mapping, last-posted-turn hashes (so a turn already mirrored is
+never reposted), and the `getUpdates` offset (so a reply already folded is never reprocessed).
+Stored under `TELEGRAM_BRIDGE_STATE_DIR`, deliberately outside OneDrive: it is host-local
+operational state, not planner content.
 
-## Always ask (safety floor)
+## 6. Sync sidecar — `<file>.sync.json`
 
-- Merging any pull request
-- Deleting data
-```
-
-`src/config/agentGate.js`'s `parseAgentGate` matches headings by keyword (so a reworded heading still
-resolves) and accepts `*`, `+` or `-` bullets. `serializeAgentGate` splices only the two lists' bullet
-lines back in, preserving title, preamble, comments and any extra section verbatim — this file is
-never regenerated wholesale, unlike `AGENTS.md`. See [Domain-config](Domain-config) and
-[Prioritisation](Prioritisation) for why the write-side of "the agent never writes this file" is
-currently enforced only by convention (issue #326).
-
-## 5. Agent settings — `user-settings.md`
-
-A markdown file with `##` sections, each containing a `| Setting | Value |` table, plus free-form
-`## Preferences` bullets and a `## Browser slots` table. Both the app's settings UI
-(`src/config/userSettingsForm.js`) and the overnight-agent plugin (`oa-state.ps1`) read the same file;
-see the full sample and resolution order in [Prioritisation](Prioritisation) and
-[Reliability](Reliability). The load-bearing invariant, proven by an identity test
-(`src/config/userSettingsForm.test.js`): re-serializing the file with every row's own unchanged value
-must return the original bytes exactly — CRLF, odd spacing and all — because this file is hand-edited
-and any structural rewrite would be silent data loss to the user.
-
-## 6. Per-task settings sidecar — `task-settings.json`
-
-Machine-owned, planner-adjacent JSON, keyed by stable task id:
-
-```json
-{
-  "version": 1,
-  "tasks": {
-    "352": { "aiAssisted": true, "persistentSession": false }
-  }
-}
-```
-
-A task with no entry is treated as both opt-ins being off — pre-existing tasks are unaffected until a
-user explicitly opts in — and each entry is an open object so a future per-task toggle needs no format
-migration (`src/storage/taskSettings.js`).
-
-## 7. Mission-statement sidecar — `settings.json`
-
-The precedent `task-settings.json` mirrors: `src/storage/settings.js` reads/writes `{ "version": 1,
-"missionStatement": "" }`, normalizing a missing or malformed file back to that shape rather than
-throwing, since this file is optional and its absence must never block loading the board.
-
-## 8. Folder-sync record/frame model (planner-agnostic)
-
-`packages/folder-sync/src/codecs/mdTable.js` turns any `##`-sectioned markdown-table file into
-id-keyed **records** (`{ section, raw }`, keyed by the numeric/leading token of column 0) plus a
-**frame**: the original file text with each data row replaced by a `\u0000ROW:<id>\u0000` marker, so
-non-row content (headings, prose, the `## Priorities` list) survives untouched and a row added on
-another device can be reinserted under the right heading.
-
-## 9. Folder-sync sidecar — `<file>.sync.json`
-
-One JSON sidecar per synced markdown file, carrying per-record logical clocks and tombstones — the
-mechanism that makes "deleted rows reappear" impossible:
+Per-file CRDT metadata written by the folder-sync engine (`packages/folder-sync/src/merge.js`,
+`packages/folder-sync/src/records.js`) alongside `planner.md` / `planner-completed.md`:
 
 ```json
 {
@@ -201,28 +152,119 @@ mechanism that makes "deleted rows reappear" impossible:
   "updatedAt": 1787621820553,
   "entries": {
     "434": { "clock": 1787621820553, "deleted": true,  "fp": -1454295489 },
-    "462": { "clock": 1787000000000, "deleted": false, "fp":  1234567890 }
+    "462": { "clock": 1787000000000, "deleted": false, "fp": 1234567890 }
   }
 }
 ```
 
-`clock` is a logical mtime (`Date.now()` at the write/delete). `deleted: true` is a tombstone: a
-stale replica's full-file copy can never resurrect that row, because the tombstone's clock is compared,
-not the row's presence or absence. `fp` is a content fingerprint used to detect a no-op sync
-(`packages/folder-sync/src/merge.js`). The `telegram-bridge` domain's `deleted.js` reads exactly this
-file to decide which forum topics to archive — see [Domain-telegram-bridge](Domain-telegram-bridge).
+`clock` is a logical mtime (`Date.now()` at write/delete time) used for last-write-wins conflict
+resolution **per record** (a table row), not per file — the merge unit is the row, keyed by its
+leading numeric id, so a device that deletes a row writes a **tombstone** (`deleted: true`) rather
+than merely omitting the row, which is what stops a stale replica from resurrecting a row another
+device deleted. `fp` is a content fingerprint used to detect a record that changed without its
+clock being bumped (an external/legacy write). A `clock` of `0` in `meta` with no corresponding
+entry in `records` is an *implicit* sentinel ("we don't know when this was written") that must lose
+any tie during a single merge and must never be frozen into the sidecar as a real timestamp; an
+*explicit* `{clock: 0}` is a different, deliberate "this side is weak" stamp and is preserved as-is.
+The bridge's own deletion detector (`packages/telegram-bridge/src/deleted.js`) reads this same file
+to know which tasks the user tombstoned, so a deleted task's Telegram topic can be closed even
+though the task appears on neither board.
 
-## 10. MCP secrets pointer — `mcp-secrets.json`
+## 7. Config sidecars in the storage source
 
-Documented in full in [Domain-mcp-cred-vault](Domain-mcp-cred-vault): a non-secret manifest of which
-credential-vault target feeds which environment variable for which MCP server command. Never contains
-a secret value.
+| File | Constant | Purpose |
+| --- | --- | --- |
+| `AGENTS.md` | `src/config/agentsDoc.js` (`AGENTS_FILE`, `AGENTS_DOC_VERSION`) | Self-documentation scaffolded into every connected folder so any external agent can operate on it without this app's source. Version-stamped so a stale copy is refreshed on load. |
+| `agent-gate.md` | `src/config/agentGate.js` (`AGENT_GATE_FILE`) | The two lists that decide when the overnight agent may act unasked ("Do not gate these (reversible)") versus must always stop and ask ("Always ask (safety floor)"). **Human-authored by construction**: scaffolded only when absent/blank, never refreshed or version-bumped over an existing file, because the file's entire value is that the user — not the agent — wrote it (closed issue #250: an agent-written marker cannot distinguish the user's real consent from the agent's own prose). |
+| `user-settings.md` | `src/config/aiSettings.js` (`AI_SETTINGS_FILE`) | The overnight agent's resolved-fresh-every-run configuration: paths, allow-lists, Telegram identifiers, and the `## Overnight Agent behaviour` table (gate backstop, gate strict, concurrency). See [Prioritisation](Prioritisation) for the tunables' runtime meaning. |
+| `task-settings.json` | `src/storage/taskSettings.js` (`TASK_SETTINGS_FILE`) | Per-task opt-ins (AI-assisted, persistent session), keyed by stable task id; a task with no entry is treated as both opt-ins off. |
+| mission-statement sidecar | `src/missionStatement.js` | Small planner-owned text sidecar, same pattern as `src/storage/settings.js`. |
 
-## 11. Rendered task paper — `journal/paper/task-<id>.html`
+Sample `agent-gate.md` body (from the module's seeded template):
 
-A deterministic, self-contained HTML document (no external CSS/JS/fonts/network) generated from a
-journal by the `task-paper` domain: title from the journal's H1, a status badge, the open ask above the
-fold, and the current turn's sections rendered as collapsible `<details>` (first two open, rest
-collapsed) with a stable per-section anchor. It carries no generation timestamp — "last updated" is
-derived from the journal's own newest `## YYYY-MM-DD` heading, so an unchanged journal regenerates
-byte-identical output. See [Domain-task-paper](Domain-task-paper).
+```markdown
+# Agent gate
+
+<!-- planner-agent-gate v1 -- you own this file. The overnight agent reads it and never writes it. -->
+
+## Do not gate these (reversible)
+
+- Emailing myself
+- Creating and publishing a pull request in any repository, then continuing to work on it until all checks pass, is easily reversible and has no consequence; do not gate it.
+
+## Always ask (safety floor)
+
+- Send-to-many (group/channel, mass email)
+- Outcome can result in permanent data loss
+```
+
+`serializeAgentGate` never regenerates this file from the template — it splices only the bullet
+lines of the two known sections by string matching (case-insensitive, reworded-heading tolerant)
+and preserves every other byte (title, preamble, comments, extra sections) verbatim, so a hand edit
+is never silently discarded.
+
+Sample `user-settings.md` behaviour table:
+
+```markdown
+## Overnight Agent behaviour
+
+| Setting | Value |
+| --- | --- |
+| Today gate backstop | `6h` |
+| Today gate strict | `off` |
+| Overnight Agent concurrency | `1` |
+```
+
+`src/config/userSettingsForm.js` gives the UI a round-trip-safe structured view of this file: it
+changes only the value cell of a row a user edits, and leaves prose, comments, blank lines and
+unknown sections untouched — this file is the overnight agent's live source of truth, so the app
+must never regenerate it wholesale.
+
+## 8. `mcp-secrets.json` (machine-local, never in the repo or the synced folder)
+
+A non-secret pointer file (`packages/mcp-cred-vault/src/schema.js`) naming which secrets a machine
+needs — never the values, which live in the OS credential vault:
+
+```json
+{
+  "version": 1,
+  "secrets": [
+    {
+      "server": "telegram",
+      "target": "overnight-agent:telegram-bot-token",
+      "envVar": "TELEGRAM_BOT_TOKEN",
+      "command": "uvx",
+      "args": ["better-telegram-mcp"]
+    }
+  ],
+  "ids": { "telegramBotId": "0000000000", "telegramChatId": "0000000000" }
+}
+```
+
+## 9. Overnight agent scan output (in-memory / stdout JSON, not persisted)
+
+The worklist `oa-state.ps1 scan` produces per Today/Deferred row is the binding input to dispatch.
+See [Prioritisation](Prioritisation) for every field's meaning; shape:
+
+```json
+{
+  "id": "451", "status": "in-progress", "section": "today", "urgency": "🔴",
+  "work_priority": "P0", "board_pos": 3, "reopened": false,
+  "awaiting_reply": true, "eligible": true, "order": 1,
+  "holds_today_gate": true, "today_release_reason": "holding:reopened",
+  "gate_backstop_hours": 6, "gate_strict": false
+}
+```
+
+and the exhaustion-declaration object that releases the Today→Deferred gate:
+
+```json
+{
+  "today_exhausted": {
+    "at": "2026-08-31T22:40:00-07:00",
+    "examined": ["gh:197", "gh:179", "gh:139"],
+    "note": "all three blocked on review",
+    "today_hash": "<sha256 of the ## Today section text>"
+  }
+}
+```
