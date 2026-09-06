@@ -1017,9 +1017,17 @@ one task, one workspace, one thing being verified at a time"* — and this is th
 3. **For each task, resolve its session before doing anything else** — never create one on a hunch:
 
    ```powershell
-   oa-state.ps1 session -Id <ID>     # -> verdict: create | reuse | replace
+   oa-state.ps1 session -Id <ID>     # -> verdict: paused | create | reuse | replace
    ```
 
+   - **`paused`** — **the user stopped this task. Do not wake it, do not create a session for it,
+     do not send it a brief. Skip the row.** This outranks every other verdict (#540). It means he
+     said so himself and a run recorded it as `status: blocked|proposed` + `status_by: user`;
+     `paused_at` says when. Nothing is lost by skipping — the binding and worktree are untouched,
+     and the verdict becomes `reuse`/`replace` again, continuation intact, the moment he resumes.
+     **Do not pattern-match on `reuse` and proceed:** two consecutive runs did exactly that on
+     2026-09-05 and woke a task he had twice asked to pause, because `state: live`,
+     `released: false` and `last_woken_at` are each accurate and none of them is about permission.
    - **`reuse`** — the task already has a live session. **Wake that one.** Do not create a second;
      `session -SessionId <other>` over a live binding is refused (`session_bind_conflict`) precisely
      so "reuse it" is a rule rather than an intention. Stamp `-SessionWoken` once it responds.
@@ -1031,6 +1039,12 @@ one task, one workspace, one thing being verified at a time"* — and this is th
    - If a session will not wake, record that fact rather than retrying blindly:
      `oa-state.ps1 session -Id <ID> -SessionDead`. That is what turns the next verdict into
      `replace` and arms the continuation.
+   - **If the user tells a sub-session to stop, record it on the spot** —
+     `oa-state.ps1 mark -Id <ID> -Status blocked -StatusBy user`. That single write is what every
+     reader derives from: `scan` reports `session_paused` and `eligible: false`, the capacity
+     accounting stops counting it (#541), and this verdict becomes `paused`. A pause that is only
+     described in a run summary is not recorded — prose is not on any run's read path, and a
+     mitigation of exactly that shape was violated 24 minutes after it was written.
 
 4. **Choose the project and workspace for the TASK, never inherit the run session's.** This is the
    trap, and it is the default behaviour of every session API: omit the project and the new session

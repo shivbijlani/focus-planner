@@ -492,6 +492,32 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-parked-capacity.ps1
 
+  # A user's pause must be visible to the DISPATCHER (GH #540). The job above stops a paused task
+  # eating the concurrency slot; this one stops the run waking it in the first place. They are the
+  # two halves of honouring one instruction, and #541 shipping alone left the pause half-honoured.
+  #
+  # `session -Id <ID>` answered "does a live session exist?" and never "is that session allowed to
+  # work right now?", so a pause typed into a sub-session was invisible on the only path PHASE 1
+  # takes. Measured 2026-09-05: two consecutive runs (17:35, 18:05) each read `verdict: reuse,
+  # state: live, released: false` and woke a task Shiv had twice asked to pause. Every field they
+  # read was accurate -- none of them is about permission -- and on a */30 schedule it repeats
+  # until a human notices.
+  #
+  # The arms pin the DERIVATION rather than a flag: the pause is one recorded fact
+  # (`status: blocked|proposed` + `status_by: user`) and `paused` must outrank `reuse`, `create`
+  # AND `replace`, while staying reversible by his say-so (#170) and distinct from user-CLOSED.
+  #
+  # windows-latest to match the sibling capacity jobs; the harness shells out per fixture. Pure
+  # text work against synthetic state/journal dirs under TEMP via -StateDir/-JournalDir.
+  session-pause:
+    name: User pause is visible to dispatch
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (a paused task is never woken, created or replaced)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-session-pause.ps1
+
   # Pacing: how the `Overnight Agent concurrency` tunable (#391) is READ. #404's job above guards
   # its ENFORCEMENT (capacity refusal, release, the in-flight view); this one guards the parse
   # boundary, the argument-over-file precedence, and whether a fallback is visible.

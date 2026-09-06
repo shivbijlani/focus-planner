@@ -2379,6 +2379,13 @@ $script:NonWorkableStatus = @('done', 'skip', 'proposed', 'blocked')
 # CLOSED is protected from being reanimated by a passing remark.
 $script:ClosedStatus = @('done', 'skip')
 
+# GH #540. The statuses that mean "waiting on the user", as opposed to "finished". Exactly
+# `$script:NonWorkableStatus` minus `$script:ClosedStatus`, and written that way rather than as a
+# third hand-maintained list so a status added to one of those cannot silently fall out of this
+# one. `Test-UserPaused` pairs it with `status_by: user` -- the status alone is not a pause,
+# because the agent proposing a plan is also `proposed`.
+$script:PausedStatus = @($script:NonWorkableStatus | Where-Object { $script:ClosedStatus -notcontains $_ })
+
 # GH #500. How recently the catch-up doc's comments must have been read for "no new comments" to
 # count as EVIDENCE OF SILENCE rather than as absence of a reading.
 #
@@ -2445,6 +2452,67 @@ function Test-UserClosed($row) {
 function Test-ReopenedClosed($row) {
   # A reply landed on a task the USER had closed. Reported, never worked.
   return [bool]($row.reopened -and (Test-UserClosed $row))
+}
+
+# The user said NOT NOW (#540). Sibling of Test-UserClosed and deliberately a DIFFERENT set:
+# `Test-UserClosed` is "the user finished with this" (`done`/`skip`); this is "the user stopped
+# this, for now" (`blocked`/`proposed`). The distinction is load-bearing in both directions -- a
+# closed task must not be reanimated by a passing remark (#170), while a paused one must reopen
+# normally the moment he replies, because a reply is the input it is waiting for.
+#
+# WHY THIS EXISTS AS A READER AND NOT AS A NEW FIELD. The measured failure (#540) is that a pause
+# is invisible on the DISPATCH path: at 17:35 PT, 24 minutes after Shiv told task #468's
+# sub-session "we need to pause this work for now, i need to reboot", `session -Id 468` still
+# returned `verdict: reuse, state: live, released: false` and the run woke it with a fresh brief.
+# It fired twice (17:35 and 18:05) before anyone noticed.
+#
+# The tempting fix is a new `paused_by_user` flag on the session record. That would be a SECOND
+# SOURCE OF TRUTH for a fact the state store already holds -- the pause was recorded, correctly,
+# as `status: blocked, status_by: user` -- and two readers of one condition drifting apart is
+# precisely the defect this file has now recorded four times (#487, #500, #522, #541). So the
+# pause stays one recorded fact and every reader derives from it: `Test-Workable` already returns
+# false, #541 stopped it holding a capacity slot, and `Get-SessionVerdict` now refuses to say
+# `reuse`. `paused_at` is a timestamp for that same fact, not an independent assertion of it.
+#
+# POSITIVE EVIDENCE ONLY. A row that cannot be read is NOT paused, and that direction is chosen
+# rather than inherited: the opposite default would make one unreadable state file freeze
+# dispatch for every task at once, and "we have never heard of this task" is not "the user
+# stopped it". The pause must be something he actually said and the run actually recorded.
+#
+# WHY TRUSTING AN AGENT-WRITTEN FIELD IS CORRECT HERE, THOUGH IT WAS NOT IN #514. `status_by` is
+# written by the agent (`mark -StatusBy user`), which is the shape #514 and #543 both punish. The
+# difference is the direction of the failure, and it is inverted:
+#
+#   #514  `last_woken_at` wrongly SET   -> a second turn slips through   -- SILENT
+#   #540  `status_by: user` wrongly SET -> a run declines to dispatch    -- loud, costs one wake
+#         `status_by: user` wrongly ABSENT -> a paused session is woken  -- SILENT, and the bug
+#
+# So over-honouring a pause is cheap and immediately visible, while under-honouring it overrides
+# a human without saying so. Applying "#514 says do not trust agent-written fields" as a general
+# rule would reject the correct design here.
+#
+# A REPLY IS THE RESUME. `$journalFacts.HasTrailingHuman` -- a message he provably wrote below the
+# agent's newest turn -- clears the pause, for the same reason `Test-Workable` ranks `reopened`
+# and `Test-UnansweredUser` above its own status gate (#223 rule 4). Without this the two readers
+# CONTRADICT each other: his reply makes the row `eligible: true` while the verdict still says
+# `paused`, so the run is handed a task it may work and may not dispatch, and his reply can never
+# take effect. Absent or unreadable facts leave the pause standing, which is the cheap direction.
+#
+# `HasTrailingHuman` and NOT `HasTrailingUser`, deliberately -- the STRICT reader, which requires
+# an explicit `<!-- from: me -->` (see Test-TrailingHasHuman). The loose one counts unmarked prose
+# as the user and fails OPEN, which is right for a one-shot `reopened` look and wrong here: a
+# sibling skill writing an unstamped line into the journal would silently resume work he stopped,
+# which is the exact silent-override this issue exists to remove. The cost of the strict reader is
+# that unmarked trailing prose leaves the row `reopened: true` while the verdict stays `paused` --
+# the run declines to dispatch and he can resume explicitly. That is the loud, cheap direction,
+# and `scan` emits `session_paused` beside `reopened` so the combination is visible rather than
+# mysterious.
+function Test-UserPaused($row, $journalFacts) {
+  if (-not $row) { return $false }
+  if ("$($row.status_by)".ToLowerInvariant() -ne 'user') { return $false }
+  if ($script:PausedStatus -notcontains "$($row.status)".ToLowerInvariant()) { return $false }
+  if ($journalFacts -and $journalFacts.HasTrailingHuman) { return $false }
+  return $true
 }
 
 # An unanswered message from the human on work that is still OPEN (#501). Standing, not one-shot:
@@ -2787,8 +2855,13 @@ function Cmd-Scan {
       # rather than create a second one.
       session_id      = if ($sessFacts) { "$($sessFacts.session_id)" } else { $null }
       session_state   = if ($sessFacts) { "$($sessFacts.state)" } else { $null }
-      session_verdict = (Get-SessionVerdict $sessFacts)
+      session_verdict = (Get-SessionVerdict $sessFacts $st $facts)
       session_workspace = if ($sessFacts -and "$($sessFacts.workspace)") { "$($sessFacts.workspace)" } else { $null }
+      # #540: the user said NOT NOW, as a column rather than something a caller must re-derive
+      # from `status` + `status_by`. It is emitted for every row, bound or not, because a paused
+      # task with no session must not be answered with `create` either.
+      session_paused  = [bool](Test-UserPaused $st $facts)
+      paused_at       = if ($st -and $st.PSObject.Properties['paused_at'] -and $st.paused_at) { "$($st.paused_at)" } else { $null }
       # The standing exhaustion declaration for this row, verbatim (#310), so a human can audit
       # what the run claimed to have examined and against which board it claimed it.
       exhaustion     = if ($st -and $st.PSObject.Properties['today_exhausted']) { $st.today_exhausted } else { $null }
@@ -4147,10 +4220,34 @@ function Test-WorkspaceUsable([string]$path, [string]$wsType) {
   }
 }
 
-function Get-SessionVerdict($sess) {
+function Get-SessionVerdict($sess, $row, $journalFacts) {
   # The whole decision, in one place. `create` and `replace` both mean "make a new session", but
   # they are NOT the same instruction: `replace` carries a continuation the new session must be
   # told about, and collapsing them is how continuity is lost while the code still looks correct.
+  #
+  # GH #540 -- `paused` OUTRANKS EVERY OTHER VERDICT, and it is first for a reason.
+  #
+  # Measured 2026-09-05: Shiv told task #468's sub-session "we need to pause this work for now, i
+  # need to reboot" at 16:55 and again at 17:11 PT. Two consecutive runs (17:35 and 18:05) each
+  # called this function, each got `reuse`, and each woke the session with a fresh brief. Every
+  # field they read was accurate -- `state: live` is a fact about the PROCESS, `released: false`
+  # only flips when the AGENT tears the binding down, `last_woken_at` records when WE woke it --
+  # and none of them is about what the user wants. The composite still read "ready for work".
+  #
+  # That inverted the safety model this codebase uses everywhere else (#227, #272, #465): a human
+  # statement outranks agent-authored state, and the system fails closed without positive
+  # evidence. Here an explicit human instruction was simply not on the read path, and the run
+  # failed OPEN -- silently, and on a `*/30` schedule, so it repeats until someone notices.
+  #
+  # It is checked BEFORE the `-not $sess` create branch on purpose. A paused task with no live
+  # session must not be answered with `create` either: "start a brand new session for the task he
+  # just stopped" is the same defect wearing the one costume the `reuse` fix would not cover.
+  #
+  # NOTHING IS LOST BY RANKING IT ABOVE `replace`. The verdict is recomputed from state on every
+  # call, so a paused task whose session is also dead reports `paused` now and `replace` -- with
+  # its continuation intact -- the moment he unpauses. Reporting `replace` first would hand the
+  # caller a kickoff brief for work it must not start.
+  if (Test-UserPaused $row $journalFacts) { return 'paused' }
   if (-not $sess) { return 'create' }
   if ("$($sess.state)" -eq 'dead') { return 'replace' }
   # A live binding whose workspace no longer holds a checkout is `replace`, never `create` (#452).
@@ -4476,6 +4573,15 @@ function Cmd-Session {
     $st = [pscustomobject]@{ id = $Id; status = 'unknown'; version = 0; plan_id = ''; processed_file_hash = ''; has_agent_block = $false; seeded = $false; updated = $null }
   }
   $sess = Get-SessionState $st
+  # #540: the journal, read here because a REPLY IS THE RESUME and the verdict below must honour
+  # it. Read defensively and read-only: an absent or unparseable journal yields no facts, which
+  # leaves a recorded pause standing rather than clearing it on a file we could not check.
+  $pauseFacts = $null
+  try {
+    $jpath = Join-Path $JournalDir "task-$Id.md"
+    if (Test-Path $jpath) { $pauseFacts = Get-JournalFacts $jpath }
+  }
+  catch { $pauseFacts = $null }
   $dirty = $false
   $released = $false
 
@@ -4582,13 +4688,13 @@ function Cmd-Session {
     Write-State $st
   }
 
-  $verdict = Get-SessionVerdict $sess
+  $verdict = Get-SessionVerdict $sess $st $pauseFacts
   $live = Get-LiveSessionCount
   [pscustomobject]@{
     id             = $Id
     bound          = [bool]$sess
     session_id     = if ($sess) { "$($sess.session_id)" } else { $null }
-    # create | reuse | replace. The run loop acts on THIS, not on `bound`.
+    # create | reuse | replace | paused. The run loop acts on THIS, not on `bound`.
     verdict        = $verdict
     state          = if ($sess) { "$($sess.state)" } else { $null }
     kind           = if ($sess) { "$($sess.kind)" } else { $null }
@@ -4599,6 +4705,15 @@ function Cmd-Session {
     created_at     = if ($sess) { (ConvertTo-IsoText $sess.created_at) } else { $null }
     last_woken_at  = if ($sess -and $sess.last_woken_at) { (ConvertTo-IsoText $sess.last_woken_at) } else { $null }
     released       = [bool]$released
+    # #540: the pause, on the path the dispatcher ALREADY takes. `state`, `released` and
+    # `last_woken_at` are each accurate and none of them is about what the user wants, so the
+    # composite read "ready for work" for 30 minutes after he said stop. Emitted beside them so
+    # a caller cannot read this record and still miss it.
+    paused_by_user = [bool](Test-UserPaused $st $pauseFacts)
+    # WHEN he stopped it -- the answer to "is this a pause from ten minutes ago or from last
+    # Tuesday?", which is the difference between waiting and being stuck. Null on a task paused
+    # before this field shipped: an unknown age is reported as unknown, never as "not paused".
+    paused_at      = if ($st -and $st.PSObject.Properties['paused_at'] -and $st.paused_at) { (ConvertTo-IsoText $st.paused_at) } else { $null }
     # Present ONLY on a `replace` verdict, and emitted ready to paste. See Get-KickoffContinuation.
     kickoff_continuation = if ($verdict -eq 'replace') { (Get-KickoffContinuation $Id "$($sess.session_id)") } else { $null }
     # Emitted, never executed (#321): the raw `git worktree remove --force` deletes THROUGH a
@@ -4772,11 +4887,49 @@ function Cmd-Mark {
     $st = [pscustomobject]@{ id = $Id; status = 'unknown'; version = 0; plan_id = ''; processed_file_hash = ''; has_agent_block = $true; seeded = $false; updated = $null }
   }
   if ($Status) {
+    # #540 -- THE AGENT MAY NOT UN-PAUSE ITSELF.
+    #
+    # Without this the fix is decorative. The standing procedure marks a status after writing a
+    # turn, so a session that was woken by mistake -- which is the very failure #540 records --
+    # would clear the pause as a SIDE EFFECT of reporting its own work, and the next run would
+    # then see `reuse` and dispatch it legitimately. One erroneous wake would launder itself into
+    # a permanent resume, and nothing would be left on disk to show the user's instruction had
+    # ever existed. That is #543's shape (a status-only call moving a guard's clock) pointed at
+    # the guard this issue is about.
+    #
+    # Refusing rather than silently preserving, for #532/#537's reason: a `mark` that exits 0
+    # having ignored the caller is indistinguishable afterwards from one that was never made.
+    # The two sanctioned ways out are both HIM -- he replies in the journal (`HasTrailingHuman`,
+    # which `Test-UserPaused` already treats as the resume, so this never fires), or a run records
+    # his decision explicitly with `-StatusBy user`.
+    if ((Test-UserPaused $st $facts) -and "$StatusBy".ToLowerInvariant() -ne 'user') {
+      throw ("task_paused_by_user: task $Id was paused by the user" +
+        $(if ($st.PSObject.Properties['paused_at'] -and $st.paused_at) { " at $($st.paused_at)" } else { '' }) +
+        " (status $($st.status), status_by user), and the agent may not change its status out of that. " +
+        'Only he clears a pause: either he replies in the journal below the newest turn, or a run ' +
+        "records his decision with ``-StatusBy user``. Marking it as the agent would erase the " +
+        'instruction as a side effect of reporting work he asked you to stop (#540).')
+    }
+    $wasPaused = (Test-UserPaused $st $facts)
     $st.status = $Status
     # #501: record WHO decided. Unset means the agent is speaking about its own work, which is
     # the safe default -- see the -StatusBy parameter. Written on every -Status so an old `user`
     # attribution can never survive a later agent-declared change of status.
     Set-Member $st 'status_by' $(if ($StatusBy) { $StatusBy.ToLowerInvariant() } else { 'agent' })
+
+    # #540: WHEN the user stopped it. Stamped only on the TRANSITION into a paused state and
+    # cleared on the way out, so the field answers "how long has he been waiting" rather than
+    # "when did a run last touch this row".
+    #
+    # Re-marking an already-paused task deliberately PRESERVES the original stamp. Resetting it
+    # would make a pause look permanently fresh -- every 30-minute run that re-recorded the same
+    # pause would push the clock forward, so a task stuck for a week would report minutes and the
+    # one reader who could notice it is stuck would be the one guaranteed not to. That is #543's
+    # shape (`last_turn_at` moved by any status-only mark), and it is cheaper to not write it
+    # than to explain it later.
+    $nowPaused = (Test-UserPaused $st $facts)
+    if ($nowPaused -and -not $wasPaused) { Set-Member $st 'paused_at' (Now-Iso) }
+    elseif (-not $nowPaused) { Set-Member $st 'paused_at' $null }
   }
   if ($Version -gt 0) { $st.version = $Version }
   if ($PlanId) { $st.plan_id = $PlanId }
