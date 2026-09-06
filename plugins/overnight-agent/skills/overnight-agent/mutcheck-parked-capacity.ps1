@@ -31,7 +31,23 @@
     COUNTS      awaiting_reply + a trailing user reply          (#223 rule 4: a reply un-parks)
     COUNTS      awaiting_reply + a due poll                     (read-only work needs no reply)
     SKIPS       a terminal task holding a live session          (pure leak)
+    SKIPS       a `blocked` or `proposed` task                  (#541, the bug: waiting on a human)
+    COUNTS      `blocked` + a due RECHECK                       (the one blocked row that IS workable)
+    SKIPS       `blocked` + a due POLL                          (a poll never unblocks the status gate)
     COUNTS      anything unreadable or unexpected               (#462: unknown must not free a slot)
+
+  THE THIRD INSTANCE (GH #541), AND WHY THE GUARD PINS AN INVARIANT INSTEAD
+  ------------------------------------------------------------------------
+  Same defect, third surface. Measured 2026-09-05 18:22 PT: Shiv paused task #468, the run
+  recorded it as `mark -Id 468 -Status blocked -StatusBy user`, and immediately
+
+      scan -> 249 rows, 6 ELIGIBLE   |   session -InFlight -> in_flight 1, admits 0
+
+  -- one user pause froze the entire board. Three instances of one shape argue for pinning the
+  RULE rather than the instance, so the arms below assert the agreement itself: every status
+  `Test-Workable` calls unworkable must be uncounted here, unless a due timer overrides it, and
+  the timer must override in exactly the cases Test-Workable overrides it (recheck on `blocked`,
+  and nothing else). Worlds P/Q/S/T are the negative half of that; R is the positive half.
 
   Read-only: builds throwaway state/journal dirs under TEMP and drives the REAL script through
   its own -StateDir/-JournalDir parameters. Never touches the live store.
@@ -95,7 +111,8 @@ $journalAnswered = $journalParked + "`r`n`r`nyes go ahead, that sounds right`r`n
 
 function Add-Task {
   param($World, [string]$Id, [string]$Status = 'in-progress', [switch]$NoSession,
-    [string]$Journal = $journalParked, $Poll = $null, [switch]$NoJournal, $Doc = $null, [string]$Woken = '')
+    [string]$Journal = $journalParked, $Poll = $null, [switch]$NoJournal, $Doc = $null, [string]$Woken = '',
+    $Recheck = $null)
   $st = [ordered]@{ id = $Id; status = $Status; version = 1 }
   if (-not $NoSession) {
     $st.session = [ordered]@{
@@ -106,6 +123,7 @@ function Add-Task {
     }
   }
   if ($Poll) { $st.poll = $Poll }
+  if ($Recheck) { $st.recheck = $Recheck }
   if ($Doc) { $st.doc = $Doc }
   ($st | ConvertTo-Json -Depth 8) | Set-Content (Join-Path $World.State "task-$Id.json") -Encoding UTF8
   if (-not $NoJournal) {
@@ -208,13 +226,48 @@ Add-Task $worlds.N '914' -Journal $journalPointer -Doc (New-Doc 0 $freshObs) -Wo
 $worlds.O = New-World 'O'
 Add-Task $worlds.O '915' -Journal $journalPointer -Doc (New-Doc 0 $freshObs) -Woken $staleWake
 
+# --- GH #541: the STATUS surface -- a task waiting on a human -------------------------------
+# Every journal below is the PLAIN one, deliberately: with the parked journal the awaiting arm
+# (#487) excludes these too, so the status arm would read as load-bearing while masked. That is
+# the same trap world E's comment records, and mutation testing caught it there.
+$dueRecheck = [ordered]@{ cadence = '1d'; interval_minutes = 1440
+  last_checked = (Get-Date).AddDays(-2).ToString('yyyy-MM-ddTHH:mm:sszzz')
+  next_due = (Get-Date).AddHours(-2).ToString('yyyy-MM-ddTHH:mm:sszzz')
+}
+function New-PlainJournal([string]$Id) { "# Task $Id`r`n`r`n- notes`r`n" }
+
+# P -- THE BUG (#541). Shiv paused it, so the run recorded `status: blocked`. It provably cannot
+# progress without him (`Test-Workable` already says `eligible: false`), so it must hold no slot.
+# This is the fixture that kills a revert to the `ClosedStatus`-only gate.
+$worlds.P = New-World 'P'; Add-Task $worlds.P '916' -Status 'blocked' -Journal (New-PlainJournal '916')
+# Q -- the other waiting status. `proposed` is a plan awaiting his approval: same reasoning, and
+# without this arm the fix could be narrowed to the single instance and still look guarded.
+$worlds.Q = New-World 'Q'; Add-Task $worlds.Q '917' -Status 'proposed' -Journal (New-PlainJournal '917')
+# R -- blocked WITH a due recheck. `-Recheck` exists only for a blocked task's blocker, so this is
+# the one blocked row Test-Workable calls workable -- and uncounting it would widen dispatch
+# (#522's direction). The status arm must not swallow it.
+$worlds.R = New-World 'R'
+Add-Task $worlds.R '918' -Status 'blocked' -Journal (New-PlainJournal '918') -Recheck $dueRecheck
+# S -- blocked with a due POLL and no recheck. Test-Workable yields only the awaiting-reply park
+# to `due_poll`, never the status gate, so this stays unworkable and must stay uncounted. Without
+# S, widening the override to any due timer survives.
+$worlds.S = New-World 'S'
+Add-Task $worlds.S '919' -Status 'blocked' -Journal (New-PlainJournal '919') -Poll $duePoll
+# T -- `proposed` with a due recheck. The override is keyed on `blocked` for the same reason
+# Test-Workable keys it there; dropping that term would let a recheck reanimate any waiting
+# status. Nothing else in this file would notice.
+$worlds.T = New-World 'T'
+Add-Task $worlds.T '920' -Status 'proposed' -Journal (New-PlainJournal '920') -Recheck $dueRecheck
+
 function Measure-InFlight([string]$Script, $World) {
   $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $Script session -InFlight `
     -StateDir $World.State -JournalDir $World.Journal 2>$null
   try { return [int](($out | ConvertFrom-Json).in_flight) } catch { return -1 }
 }
 
-$expected = [ordered]@{ A = 1; B = 0; C = 1; D = 1; E = 0; F = 1; G = 0; H = 0; I = 1; J = 1; K = 1; L = 1; M = 1; N = 1; O = 0 }
+$expected = [ordered]@{ A = 1; B = 0; C = 1; D = 1; E = 0; F = 1; G = 0; H = 0; I = 1; J = 1; K = 1; L = 1; M = 1; N = 1; O = 0
+  P = 0; Q = 0; R = 1; S = 0; T = 0
+}
 $why = [ordered]@{
   A = 'an ordinary workable task holds a slot'
   B = 'parked on a reply with no timer holds nothing (#487)'
@@ -231,6 +284,11 @@ $why = [ordered]@{
   M = 'not doc-bound: the pointer journal alone must not park anything'
   N = 'a session woken minutes ago is being worked NOW and holds the slot (#522)'
   O = 'a wake 6h old is not evidence anyone is working: still parks'
+  P = 'a task the user PAUSED cannot progress alone and holds no slot (#541)'
+  Q = 'a plan awaiting approval is the same waiting state and holds no slot'
+  R = 'blocked + a due RECHECK is the one workable blocked row: it holds a slot'
+  S = 'a due POLL never unblocks the status gate, so this still parks'
+  T = 'the recheck override is keyed on `blocked`: a proposed row still parks'
 }
 
 Write-Host '== baseline (real script, unmutated) =='
@@ -243,9 +301,24 @@ foreach ($k in $worlds.Keys) {
 # --- mutations ---------------------------------------------------------------------------
 # Each replaces exactly one line of the predicate.
 $mutations = @(
-  @{ n = 'terminal arm removed'; guards = 'E'
-    find = '  if ($script:ClosedStatus -contains $status) { return $false }'
+  @{ n = 'status gate removed entirely'; guards = 'E,P,Q,S,T'
+    find = '  if ($script:NonWorkableStatus -contains $status) { return $false }'
     repl = '  if ($false) { return $false }' }
+  # --- GH #541 ---------------------------------------------------------------------------
+  # The revert. This is the pre-fix line, verbatim: terminal work excluded, the two waiting
+  # statuses counted. If this mutant survives, the fix is not guarded.
+  @{ n = 'status gate narrowed back to ClosedStatus (the #541 bug, restored)'; guards = 'P,Q,S,T'
+    find = '  if ($script:NonWorkableStatus -contains $status) { return $false }'
+    repl = '  if ($script:ClosedStatus -contains $status) { return $false }' }
+  @{ n = 'the blocked-recheck override removed'; guards = 'R'
+    find = '  if ($status -eq ''blocked'' -and (Test-PollDue $recheck)) { return $true }'
+    repl = '  if ($false) { return $true }' }
+  @{ n = 'the override accepts a due POLL as well, which Test-Workable does not'; guards = 'S'
+    find = '  if ($status -eq ''blocked'' -and (Test-PollDue $recheck)) { return $true }'
+    repl = '  if (($status -eq ''blocked'') -and ((Test-PollDue $recheck) -or (Test-PollDue $poll))) { return $true }' }
+  @{ n = 'the override drops its `blocked` term, so a recheck reanimates any waiting status'; guards = 'T'
+    find = '  if ($status -eq ''blocked'' -and (Test-PollDue $recheck)) { return $true }'
+    repl = '  if (Test-PollDue $recheck) { return $true }' }
   @{ n = 'awaiting_reply skip removed (the #487 bug, restored)'; guards = 'B'
     find = '    if ($awaiting) { return $false }'
     repl = '    if ($false -and $awaiting) { return $false }' }

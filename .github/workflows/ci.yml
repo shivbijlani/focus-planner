@@ -463,6 +463,35 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-per-task-session.ps1
 
+  # Capacity accounting: does a live session represent work actually IN FLIGHT? The job above
+  # guards the LIMIT (binding refusal, release, the in-flight view); this one guards the
+  # PREDICATE that decides what the limit counts, and the two are separable -- every bug below
+  # left the limit working perfectly and fed it the wrong number.
+  #
+  # `mutcheck-parked-capacity.ps1` shipped with #487 and has run in CI NOWHERE since. It was a
+  # guard against a deadlock that has now recurred three times (#487 awaiting_reply, #500 the doc
+  # surface, #541 the `blocked` status), and not one of those recurrences could have been caught
+  # by it, because nothing ran it on a pull request. That is #520's shape exactly -- a guard that
+  # cannot run reports the same thing as a guard with nothing to do -- and the same
+  # merged-and-never-executed class as the reaper-cohort and ps1-encoding guards above.
+  #
+  # What it pins is an AGREEMENT rather than a behaviour: every status `Test-Workable` calls
+  # unworkable must also be uncounted here unless a due timer overrides. The three bugs were all
+  # the two readers drifting apart, and the symptom is silent -- #541 measured `6 ELIGIBLE,
+  # admits 0`, a run that dispatches nothing and looks idle rather than broken.
+  #
+  # windows-latest because the harness shells out to `powershell` per fixture, the same as the
+  # pacing job below. Pure text work against synthetic state/journal dirs under TEMP, driven
+  # through -StateDir/-JournalDir; the live store is never read or written.
+  parked-capacity:
+    name: Parked-capacity accounting
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (a task waiting on a human holds no dispatch slot)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-parked-capacity.ps1
+
   # Pacing: how the `Overnight Agent concurrency` tunable (#391) is READ. #404's job above guards
   # its ENFORCEMENT (capacity refusal, release, the in-flight view); this one guards the parse
   # boundary, the argument-over-file precedence, and whether a fallback is visible.
