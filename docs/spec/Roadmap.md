@@ -57,7 +57,7 @@ resolve against **open** issues only, distinct from every other page.
 
 ## Unlabeled — recent findings awaiting triage
 
-The largest bucket (72 of 123 open issues) carries no `priority:` label yet — almost all are recent,
+The largest bucket (77 of 129 open issues) carries no `priority:` label yet — almost all are recent,
 narrowly-scoped defect reports from the overnight agent's own operation, filed faster than they can be
 triaged. Representative clusters:
 
