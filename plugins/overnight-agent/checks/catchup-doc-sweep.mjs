@@ -176,7 +176,16 @@ const byKind = (k) => findings.filter((f) => f.kind === k).length;
 
 console.log(`Catch-up doc channels UNREAD: ${findings.length}`);
 console.log(
-  `  (${bound} of ${considered} live non-terminal tasks are doc-bound; ` +
+  // "active board rows", not "live non-terminal tasks". The denominator is `activeIds` (parsed
+  // from planner.md) minus TERMINAL, so it counts tasks ON THE BOARD -- measured 2026-09-05:
+  // 108 live non-terminal tasks exist, but only 84 are on the board, so the old wording silently
+  // dropped 24 of them. A reader reconciling "5 of 84" against 108 finds a gap with nothing
+  // explaining it and reasonably concludes the metric is broken.
+  //
+  // 84 is the RIGHT denominator -- SKILL.md treats a task on neither board as closed, so an
+  // off-board task is not work this feature could serve. Only the label was wrong, so this is a
+  // wording fix and deliberately not a logic change.
+  `  (${bound} of ${considered} active board rows are doc-bound; ` +
     `never read ${byKind('NEVER_READ')}, spoke-without-reading ${byKind('SPOKE_WITHOUT_READING')}, ` +
     `unacked ${byKind('UNACKED')})\n`,
 );
