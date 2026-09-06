@@ -56,7 +56,7 @@ classes. See [Data-Formats](Data-Formats) and [Reliability](Reliability).
 
 ## Where things are unfinished
 
-This is a system under active development, not a finished product. [Roadmap](Roadmap) surveys all 123
+This is a system under active development, not a finished product. [Roadmap](Roadmap) surveys all 129
 open issues by priority label; the most consequential open gaps are capacity accounting in the
 overnight agent's dispatch logic, doc-binding integrity for the catch-up-doc channel, and provenance
 markers that distinguish agent-authored from human-authored state. [Prioritisation](Prioritisation)
