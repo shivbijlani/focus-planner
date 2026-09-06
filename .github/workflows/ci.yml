@@ -98,6 +98,27 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-inbox-check.ps1
 
+  # A truncated Google Tasks read must not read as a small backlog (GH #524).
+  # The Tasks API silently caps a bare list_tasks at a 20-item first page, and a
+  # short page is byte-identical to a short backlog -- so a run read 9 open tasks
+  # and reported a burn-down from 35, while all 35 were still open.
+  #
+  # This runs on ubuntu-latest like the other guards: the mutation check drives a
+  # node fixture in a temp dir that emulates the API's paging semantics, so it
+  # never touches a real Google account, the Google Workspace MCP, or the planner
+  # folder. It is pure-PowerShell + node and platform-independent by construction.
+  google-tasks-check:
+    name: Google Tasks collect guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Mutation check (a truncated read is not a short backlog)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-google-tasks.ps1
+
   # A worktree teardown must not empty the shared node_modules (GH #321).
   # `git worktree remove --force` deletes THROUGH a directory junction, so the
   # documented "junction node_modules into the worktree" trick made routine
