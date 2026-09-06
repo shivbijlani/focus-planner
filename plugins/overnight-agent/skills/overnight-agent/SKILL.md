@@ -114,7 +114,8 @@ already processed in this journal") lives in the **skill's own working dir**, wh
 - **Tool:** [`oa-state.ps1`](./oa-state.ps1) (next to this skill) reads/writes that state. Run it with
   `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\oa-state.ps1 <command>`:
   - **`scan`** → your per-run worklist as JSON, one row per task: `{ id, status, changed, reopened,
-    has_agent_block, tracked, due_poll, poll_cadence, has_open_ask, awaiting_reply, eligible }`.
+    has_agent_block, tracked, due_poll, poll_cadence, has_open_ask, awaiting_reply, ask_source,
+    ask_declared, eligible }`.
     **Run this first, every run** (see PHASE 1/2).
     It is how you find work without re-reading 90+ journals by hand.
   - **`get -Id <id>`** → that task's full state JSON.
@@ -267,11 +268,17 @@ In each task journal, your loop lives in a sentinel-delimited block appended at 
 
 **Deliverables if approved:** <what will exist when done — a draft, doc, research, code, list…>
 **Risks / assumptions:** <anything that could go wrong; what I'm assuming>
-**Needs from you:** none   <!-- or: a decision on X / a credential / a file -->
-
-**Your call:** just reply below in plain English — "approve" / "go ahead", "revise: <what to change>",
-or "skip". (No boxes to tick, nothing to edit up here.)
+**Needs from you:** approval to run this — reply in plain English: "approve" / "go ahead",
+"revise: <what to change>", or "skip". (No boxes to tick, nothing to edit up here.)
 ```
+
+**Write this block with `-Ask blocking`** — a proposed plan genuinely waits on him, and that is what
+`awaiting_reply` should say. **Do not append a bare `**Your call:** reply below in plain English`.**
+That exact sentence used to be printed here, and it is in 81 journals; before #560 the gate recovered
+`awaiting_reply` by regex from it and parked every one of those tasks, including turns that had just
+said they needed nothing. The declaration is now what the gate reads (see `-Ask`, below), but the
+sentence is still misleading to a human reader on a turn that is not actually blocked — a courtesy
+offer is `-Ask offer` and should read like one ("say the word and I'll pick it up").
 
 - The managed region = the `---` immediately followed by `<!-- OVERNIGHT-AGENT ... -->`, through the
   end of that block. Find it by the **marker**, never by a bare `---`, so you never disturb the
@@ -1528,7 +1535,8 @@ See PHASE 0.
 - **Stay in the user's space cleanly.** Never edit above the sentinel. Preserve the user's notes,
   links, and formatting. Write files as UTF-8.
 - **Write every journal turn through `write-turn.ps1`** (next to this skill), never by hand:
-  `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\write-turn.ps1 -Id <ID> -BodyFile <file.md>`.
+  `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\write-turn.ps1 -Id <ID> -BodyFile <file.md> -Ask <blocking|offer|none>`.
+  **`-Ask` is required (G13)** and is the subject of its own rule below.
   Author the turn body with a **file tool** first, then pass the file. The script validates the body
   and **refuses to write** if it finds any of the five corruption classes that have already destroyed
   real content or broken a safety gate — a value eaten by PowerShell string interpolation
@@ -1543,6 +1551,36 @@ See PHASE 0.
   It appends only, so it can never delete one of the user's replies, and it backs
   the journal up first. Add `-Validate` to lint without writing. This is a **guard, not a guideline**:
   each of these classes was documented in prose first and broken anyway.
+- **Declare what the turn asks of him: `-Ask blocking|offer|none` (#560).** This is not paperwork; it
+  is the fact that decides whether the task can be worked again, and you are the only thing that
+  knows it.
+
+  | value | means | effect |
+  | --- | --- | --- |
+  | `blocking` | the work cannot continue until he answers | parks the task (`awaiting_reply: true`) |
+  | `offer` | a courtesy option he may decline by silence | **shown** in the digest, parks nothing |
+  | `none` | nothing is being asked at all | parks nothing |
+
+  It is stamped into the turn as an invisible `<!-- oa-ask: … -->` comment beneath your provenance
+  marker; do not write that stamp yourself (G13 refuses a hand-written one, because the reader takes
+  the *last* stamp in the turn and yours would silently outrank the flag).
+
+  **Why it is required rather than defaulted.** Before this, `awaiting_reply` was recovered by regex
+  from your closing sentence — so a phrasing choice inside prose you wrote for a human decided whether
+  the task was schedulable, and *writing a turn parked the task the turn was about*. Measured
+  2026-09-06: **2 eligible rows out of 249**, with this skill's own boilerplate
+  `**Your call:** reply below in plain English` in 81 journals and read back as blocking. A default
+  would rebuild that: whichever value it took would be wrong for the other two cases, silently.
+
+  **Choose honestly, in both directions.** `blocking` on a turn that is not blocked parks work he
+  never needed to see; `offer`/`none` on a turn that genuinely needs him lets the next run stack
+  another turn on top of a live question. If you declare `blocking`, make sure the **prose** carries a
+  readable ask too (`**Needs from you:** …`, `` Reply `word` ``, `**Next:** …`, `**Your call:** …`) —
+  the stamp parks the task, but the prose is what actually reaches him.
+
+  **Turns written before this flag existed are unaffected** and still read by the old regex; `scan`
+  reports which reading it used as `ask_source: declared | inferred`, so the legacy share is visible
+  and shrinking rather than assumed gone.
 - **Once a task has a catch-up doc, a journal turn is a POINTER, not the story (#425).** This is the
   journal half of #424 and the same trigger arms it: #423's `<!-- doc-meta … -->` stamp. A task with
   **no** doc is unchanged — write turns exactly as before. For a doc-bound task, the narrative, tables

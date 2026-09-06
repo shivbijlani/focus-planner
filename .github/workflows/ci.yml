@@ -600,6 +600,36 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-pr-closing-keyword.ps1
 
+  # `awaiting_reply` -- the fact that decides whether a task is schedulable and what opens the
+  # Today->Deferred gate -- was recovered by REGEX from the agent's own narrative closing line
+  # (GH #560). The turn's author knew that boolean when it wrote the text; recovering it afterwards
+  # means a phrasing choice inside prose written for a human silently decides scheduling.
+  #
+  # It is a RATCHET, because the agent writes the text its own gate reads: writing a turn parks the
+  # task the turn is about. Measured 2026-08-31, 186 of 238 rows parked and ZERO eligible; after the
+  # dismissive-opener narrowing, measured 2026-09-06, still only 2 eligible rows out of 249 -- with
+  # SKILL.md's own boilerplate `**Your call:** reply below in plain English` present in 81 journals
+  # and read back as blocking. The documented template starved the board.
+  #
+  # This job is in CI for the reason the ps1-encoding and supervisor-liveness jobs above spell out:
+  # a guard that only runs on the nightly laptop is a guard that can rot unnoticed. It also has real
+  # teeth here -- the fixture is CRLF, and it caught a `(?m)$` anchor that would have made the
+  # declaration silently unreadable on every real (CRLF) journal while every hand-written LF test
+  # passed.
+  #
+  # The harness mutates the REAL oa-state.ps1 and write-turn.ps1 rather than a re-implementation of
+  # their logic (#463's "green where it was written, broken where it runs"), and works entirely
+  # against synthetic journal/state/board files under TEMP via -JournalDir/-StateDir/-PlannerBoard
+  # and WRITE_TURN_OA_HOME. No live store is read or written, and it runs under pwsh on Linux.
+  declared-ask:
+    name: Declared ask, not inferred
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (a declaration outranks the prose, and an undeclared turn is unchanged)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-declared-ask.ps1
+
   # A BOM-less .ps1 containing non-ASCII is decoded as Windows-1252 by the PowerShell 5.1
   # engine BEFORE the script runs, so the bytes the parser sees are not the bytes on disk.
   # Comment-only today is not safe tomorrow: the failure is silent, and the same file gaining

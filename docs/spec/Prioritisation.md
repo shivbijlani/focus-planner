@@ -98,16 +98,57 @@ stamped on every Today row so which of these applied — or that none did and th
 — can be audited after the fact without re-deriving anything.
 
 **This is the shape of a recurring failure class in this codebase: the agent authoring the signal its
-own gate reads.** A `mark -Done` releasing the gate directly, a re-`mark` silently clearing an
-unanswered message, an exhaustion declaration with no expiry or no board-change check — every version
-of this bug lets the agent close its own gate. The fix is always the same: key release on something
-external (board text, wall-clock staleness, a genuinely new declaration each run) rather than on the
-agent's own prior assertion.
+own gate reads.** Four instances are on record:
+
+1. A `mark -Done` releasing the gate directly.
+2. A re-`mark` silently clearing an unanswered message.
+3. An exhaustion declaration with no expiry or no board-change check.
+4. **`awaiting_reply` recovered by regex from the agent's own closing sentence** (§5). This one is
+   worth separating from the other three because it was **narrowed twice before it was closed**. The
+   dismissive-ask boundary (`**Needs from you:** none…` does not park) narrowed it after the ratchet
+   starved the board — 186 of 238 rows parked, 0 eligible — but the agent still authored the text the
+   gate read, so a phrasing choice inside prose still decided schedulability. Measured 2026-09-06,
+   after that narrowing: **2 eligible rows out of 249**, with the skill's own boilerplate
+   `**Your call:** reply below in plain English` present in 81 journals and read back as blocking.
+   Issue #560 closes it by making the ask **declared** (`write-turn.ps1 -Ask blocking|offer|none`).
+
+The fix is always the same: key release on something external (board text, wall-clock staleness, a
+genuinely new declaration each run) rather than on the agent's own prior assertion. Where an
+agent-authored signal is unavoidable — a run *is* the only thing that knows whether it is blocked —
+the distinction that matters is **how it is authored**. A declared `-Ask` is still written by the
+agent, but it is a deliberate, structural statement made in the same act as writing the turn, not a
+value reconstructed afterwards from narrative the agent wrote for a human reader. That is the same
+move `-Exhausted` made for the Today gate, and it is why both remain subject to the cancelling
+conditions above rather than being trusted outright.
 
 ## 5. Liveness mechanisms that keep a task from going quiet incorrectly
 
-- **`awaiting_reply` parking** — a task with an open ask and no new user text is parked, not polled;
-  it becomes live again the instant `HasTrailingUser` flips true, never on a timer.
+- **`awaiting_reply` parking** — a task with a **blocking** ask and no new user text is parked, not
+  polled; it becomes live again the instant `HasTrailingUser` flips true, never on a timer. The
+  parking expression is `HasAgentBlock AND HasBlockingAsk AND NOT HasTrailingUser`, and it is
+  duplicated in `Cmd-Scan` (the emitted row) and `Test-SessionHoldsCapacity` (the capacity reader);
+  the two are kept **textually identical** on purpose, because an emitted field that disagrees with
+  the gated field is its own failure shape (#545).
+  - **The ask is declared, not inferred (#560).** `write-turn.ps1` requires `-Ask blocking|offer|none`
+    and stamps it into the turn as `<!-- oa-ask: VALUE -->` beneath the turn's own provenance marker.
+    `HasBlockingAsk` reads that declaration first, so **`blocking` parks even when the wording opens
+    dismissively, and `offer`/`none` do not park even when the wording contains a blocking-shaped
+    clause.** Because the preference lives inside `Get-BlockingAskVerdict`, which
+    `Get-JournalFacts` calls, both readers above inherit it from one edit rather than two.
+  - **The textual reading is retained as a documented fallback**, for turns written before the flag
+    existed (~81 journals at the time of the change). In fallback the pre-#560 semantics apply
+    exactly: `**Your call:**` parks; a `**Needs from you:**` whose value opens dismissively
+    (`none`/`nothing`) does **not** park, and an explicitly optional remainder after the clause break
+    does not re-create an obligation. These are **fallback-only** semantics — a declared turn never
+    reaches them — and arms L1/L2/Q/R of `mutcheck-awaiting-reply.ps1` still pin them.
+  - **`ask_source: declared | inferred`** is emitted on every `scan` row, with the declared value
+    itself as `ask_declared`. It exists to make the fallback's share a number that can be watched
+    shrinking rather than assumed gone; every row reports one of the two values, including rows with
+    no agent turn (which read `inferred`, since nothing could have declared).
+  - The "blocking" reader remains deliberately stricter than the digest's "open ask" reader
+    (`has_open_ask`), and a declaration can only ever **add** visibility there: `blocking`/`offer`
+    short-circuit it to true, while `none` still falls through to the generous textual reading. Only
+    the *newest* agent turn is consulted, for the declaration and the text alike.
 - **Poll / recheck timers** — `due_poll` / `due_recheck` fire a row back into the worklist on a
   configured cadence, independent of section/priority rank, but are suppressed while the row is
   snoozed (snooze precedence, §2).
@@ -168,6 +209,9 @@ task (§ "For each task, resolve its session," `SKILL.md`).
 Guarded by `mutcheck-pacing-concurrency.ps1` (the concurrency ceiling and its narrow-fail parsing),
 `mutcheck-today-served.ps1` and `mutcheck-priority-order.ps1` (the sort key and gate order in §1/§4),
 `mutcheck-parked-capacity.ps1` (that a parked `awaiting_reply` task never silently holds capacity), and
-`mutcheck-awaiting-reply.ps1`/`mutcheck-cadence-rearm.ps1` (the liveness timers in §5) — these are the
+`mutcheck-awaiting-reply.ps1`/`mutcheck-cadence-rearm.ps1` (the liveness timers in §5), and
+`mutcheck-declared-ask.ps1` (that a declaration outranks the prose in both directions, that an
+undeclared turn still reads exactly as it did before, and that `has_open_ask` does not regress) —
+these are the
 executable statement of the behaviour this page describes; a change to `oa-state.ps1` that a mutation
 proof does not kill is a change this page's guarantees no longer cover.
