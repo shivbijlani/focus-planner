@@ -2,66 +2,77 @@
 
 ## Responsibility
 
-Every canonical, scaffolded document the app writes into a data folder so the folder is
-self-documenting to any external reader — human or agent — and every structured, round-trip-safe view
-the UI needs onto a config file it must never corrupt. This is the domain boundary between "the app's
-own settings" and "files the overnight agent and other tools also depend on."
+Defines the small set of planner-owned markdown/text files that live in the user's data folder next
+to `planner.md`, and the round-trip-safe parsers/serializers the web app uses to edit them without
+corrupting hand-written content. Every file here is designed to be read by both this app and the
+overnight-agent plugin (a separate, PowerShell-based consumer) — so the parsers must be forgiving and
+the serializers must be surgical.
 
 ## Principal modules
 
-| Module | Role |
-| --- | --- |
-| `src/config/branding.js` | Single source for user-visible app/file names (`APP_NAME`, `PLAN_FILE`, `COMPLETED_FILE`, `CLOUD_FOLDER_NAME`); internal storage-key prefixes (`fp-file:`, `fp-sources`) deliberately do **not** follow a rename, so existing user data keeps loading without a storage migration. |
-| `src/config/agentsDoc.js` | The canonical `AGENTS.md` scaffolded into every connected folder — the folder's own documentation for any agent pointed at it, versioned so a stale copy is refreshed. |
-| `src/config/agentGate.js` | The agent-gate file (see [Data-Formats](Data-Formats)): human-authored by construction, seeded only when absent/blank, saved by splicing only its two managed bullet lists and preserving everything else verbatim. |
-| `src/config/aiSettings.js` | `AI_SETTINGS_FILE`/`AI_SETTINGS_TEMPLATE` for `user-settings.md`, the file the overnight-agent plugin resolves at the start of every run. |
-| `src/config/userSettingsForm.js` | Round-trip-safe structured view of `user-settings.md`: parses it into ordered editable table rows and, on save, replaces only the value cell of a changed row — never regenerates the file. |
-| `src/config/agentSettingsVisibility.js` | Classifies each parsed settings row as `user` (shown by default) or `advanced` (behind a disclosure) by label, defaulting anything unrecognized to advanced. |
+| Path | Exports | Purpose |
+| --- | --- | --- |
+| `src/config/branding.js` | `APP_NAME`, `APP_DESCRIPTION`, `CLOUD_FOLDER_NAME`, `PLAN_FILE`, `COMPLETED_FILE` | Single source for user-visible names and the canonical plan/completed filenames. |
+| `src/config/agentsDoc.js` | `AGENTS_DOC`, `AGENTS_DOC_VERSION`, `AGENTS_FILE`, `scaffoldAgentsDoc` | The canonical `AGENTS.md` scaffolded into every connected data folder so any external agent understands the file conventions without reading this app's source. |
+| `src/config/agentGate.js` | `AGENT_GATE_FILE`, `AGENT_GATE_VERSION`, `AGENT_GATE_DOC`, `DEFAULT_REVERSIBLE`, `DEFAULT_ALWAYS_ASK`, `REVERSIBLE_HEADING`, `ALWAYS_ASK_HEADING`, `parseAgentGate`, `serializeAgentGate`, `scaffoldAgentGate`, `addGateLine`, `removeGateLine` | The **agent gate** (`agent-gate.md`) — the one file that decides when the overnight agent may act on its own vs. must ask first. |
+| `src/config/aiSettings.js` | `AI_SETTINGS_FILE`, `AI_SETTINGS_TEMPLATE` | The `user-settings.md` file resolved by both this app's settings UI and the overnight-agent plugin's `SKILL.md`. |
+| `src/config/userSettingsForm.js` | `parseSettingsForm`, `serializeSettingsForm`, `groupSettingsForm`, `hasSettingsForm` | Structured, round-trip-safe view of `user-settings.md`'s `Setting | Value` tables, for the settings UI. |
+| `src/config/agentSettingsVisibility.js` | `classifyAgentSetting`, `isUserFacingSetting`, `partitionAgentSettings` | Splits parsed settings rows into `user` (shown by default) vs. `advanced` (behind a disclosure). |
 
-## Public surface (representative exports)
+## The agent gate — why it is different from every other file the app writes
 
-`APP_NAME, APP_DESCRIPTION, PLAN_FILE, COMPLETED_FILE, CLOUD_FOLDER_NAME` (`branding.js`);
-`AGENTS_DOC, AGENTS_DOC_VERSION, AGENTS_FILE, scaffoldAgentsDoc` (`agentsDoc.js`); `AGENT_GATE_DOC,
-AGENT_GATE_FILE, AGENT_GATE_VERSION, DEFAULT_REVERSIBLE, DEFAULT_ALWAYS_ASK, parseAgentGate,
-serializeAgentGate, scaffoldAgentGate, addGateLine, removeGateLine` (`agentGate.js`);
-`AI_SETTINGS_FILE, AI_SETTINGS_TEMPLATE` (`aiSettings.js`); `parseSettingsForm, serializeSettingsForm,
-hasSettingsForm, groupSettingsForm` (`userSettingsForm.js`); `classifyAgentSetting,
-isUserFacingSetting, partitionAgentSettings` (`agentSettingsVisibility.js`).
+`agent-gate.md` holds two bullet lists: *"Do not gate these (reversible)"* and *"Always ask (safety
+floor)"*. It is **human-authored by construction**: the app only ever reads standing permission from
+it, so a permission recorded there needs no `<!-- from: me -->` attribution marker the way journal
+prose does. Two consequences follow directly from that design choice, both deliberate:
 
-## Behavioural requirements (from tests)
+1. `scaffoldAgentGate` seeds the file **only when it is absent or blank** — it never refreshes an
+   existing file the way `scaffoldAgentsDoc` version-bumps `AGENTS.md`, because rewriting a file whose
+   entire value is "the user wrote this" would destroy the property that makes it trustworthy.
+2. `serializeAgentGate` splices **only** the bullet lines of the two known sections and preserves
+   everything else verbatim: title, preamble, comments, and any extra section the user added. This is
+   a plain whole-file write, not a byte-offset cell edit — issue #288 (the gate's origin) explicitly
+   rules out `userSettingsForm.js`'s cell-splicing approach here, because the gate's two lists are the
+   entire content that matters, not one cell among many.
 
-- **`scaffoldAgentGate` never overwrites an existing gate file** — the user owns it; it writes only
-  when the file is missing, blank, or the provider throws on a missing read, and never throws itself
-  when the write fails.
-- **`serializeAgentGate` is a surgical splice, not a regeneration**: it round-trips the canonical doc
-  and CRLF input unchanged, preserves the user's title/preamble/comments and any section the app didn't
-  write, is stable across repeated saves (no blank-line drift), and still applies the requested edit.
-- **`parseAgentGate` tolerates real-world variation**: `*`/`+`/`-` bullets, prose between them, CRLF,
-  reworded headings matched by keyword, and a file with only one of the two sections.
-- **`scaffoldAgentsDoc` refreshes an out-of-date doc but never churns an up-to-date one** — version
-  comparison, not content diffing, decides whether to rewrite.
-- **`userSettingsForm`'s round trip is exact**: `serializeSettingsForm(md, parseSettingsForm(md).map(r
-  => r.value))` returns `md` unchanged for any input including CRLF and odd spacing; changing one
-  field's value changes only that field's cell.
-- **`partitionAgentSettings` loses no rows** — the union of its user/advanced partitions always equals
-  the input rows — and keeps section headers attached to their rows.
-- **Settings classification defaults to advanced**: an unrecognized label never leaks into the simple,
-  user-facing view; classification is case-insensitive and whitespace-trimmed.
+The alternative rejected here was treating the gate like `user-settings.md` (round-trip cell edits):
+that would make the file editable by software in the same way its permissions are meant not to be —
+see [Prioritisation](Prioritisation) for how `oa-state.ps1` enforces the read-only-by-the-agent half
+of this contract, and issue #326, which tracks that the write-side is currently unguarded.
 
-## Failure modes this domain guards against
+## `user-settings.md` — one file, two writers
 
-- **The agent mistaking its own prose for user consent** (issue #250) — because the agent gate is only
-  ever read, never written, by the agent, a standing permission recorded there needs no attribution
-  marker; on 2026-08-31 the absence of exactly this separation cost a real, explicitly-granted
-  permission, which is why `scaffoldAgentGate`'s never-overwrite rule is load-bearing rather than
-  cautious.
-- **Silent config corruption via full-file regeneration** — `userSettingsForm.js`'s byte-offset cell
-  splicing exists because issue #288 explicitly ruled out whole-file regeneration for a file real
-  paths, accounts and allow-lists live in; the same reasoning is why `agentGate.js`'s save path splices
-  bullets rather than re-templating.
-- **An unknown settings row silently becoming user-editable** — `agentSettingsVisibility.js`'s
-  conservative default (unknown ⇒ advanced) exists specifically so a new or future settings row never
-  appears in the simple view before someone has decided it belongs there.
-- **A rename breaking existing user data** — `branding.js` isolates user-facing names from the
-  internal storage-key prefixes precisely so a future rebrand is a one-file change that does not also
-  require a storage migration.
+`aiSettings.js` and `userSettingsForm.js` exist because **two different programs** edit the same file:
+this web app (through a structured settings form) and the overnight-agent plugin (by reading it
+directly at the start of every run, per its own `SKILL.md`). `userSettingsForm.js`'s guarantee, backed
+by `userSettingsForm.test.js`, is that `serializeSettingsForm(md, parseSettingsForm(md).map(r =>
+r.value))` returns `md` **unchanged** for any input (including CRLF and odd spacing) — i.e. editing one
+field's value in the UI changes only that field's table cell, and prose, comments, and unknown rows are
+never touched. `agentSettingsVisibility.js` layers a UX partition on top: most rows are paths, account
+IDs and allow-lists a user should almost never touch, so they classify as `advanced` and stay behind a
+disclosure; an unrecognized label defaults to `advanced` rather than leaking into the simple view.
+
+## Behavioural requirements (selected, from the test suites)
+
+- `parseAgentGate` accepts `*`, `+` and `-` bullets, matches reworded headings by keyword, and returns
+  empty lists for missing/blank/garbage input rather than throwing.
+- `serializeAgentGate` round-trips the canonical doc unchanged, normalises CRLF to LF, appends a
+  missing section, and preserves user title/comments/preamble and prose inside a managed section.
+- `scaffoldAgentsDoc` writes `AGENTS.md` when missing (including when the provider throws on a missing
+  file), does not overwrite an up-to-date doc, refreshes an older-version doc, and never throws when
+  the write itself fails.
+- `parseSettingsForm` surfaces every `Setting | Value` row across all tables in order, captures each
+  row's section, and ignores prose/blockquotes/`## Preferences` bullets — only tables are structured.
+- `serializeSettingsForm` changes only the edited cell (even in a second table), collapses newlines in
+  a new value so it cannot break the table, and round-trips a value containing an escaped pipe.
+- `classifyAgentSetting` is case-insensitive/whitespace-trimmed and defaults unknown labels to
+  `advanced`; `partitionAgentSettings` loses no rows (the union of its two partitions equals the input).
+
+## Failure modes
+
+- A gate parser that fails open (defaults to "allow" on malformed input) would let a corrupted file
+  license unattended irreversible actions; `parseAgentGate` instead defaults to empty lists, which the
+  agent-side reader treats as "nothing standing" rather than "everything standing."
+- A settings serializer that rewrites the whole file on save would silently drop any row, comment, or
+  section the parser does not recognize — exactly the corruption `userSettingsForm.test.js`'s identity
+  test exists to catch.

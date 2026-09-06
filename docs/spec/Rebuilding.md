@@ -1,131 +1,133 @@
 # Rebuilding
 
-This is a build-order guide for constructing this system from an empty directory, sequencing by
-dependency: each stage only assumes the stages before it exist, and each stage names its own
-verification step so a rebuilder can confirm correctness before moving on.
+A build order for reconstructing this system from an empty directory, staged so each part can be
+verified before the next depends on it. Root `package.json` scripts referenced below already exist and
+should be reused, not reinvented: `dev`, `server`, `start`, `build`, `lint`, `test`,
+`check:node-modules`, `merge-queue`, `copy:sw`.
 
-## Stage 0 — Toolchain and repo skeleton
+## Stage 0 — repository shape and tooling
 
-Set up a Vite + React project (`vite.config.js`, `eslint.config.js`) with `vitest` as the test runner.
-Wire `pretest: node scripts/check-node-modules.mjs` before `test: vitest run`, so a `node_modules`
-emptied by a worktree-teardown hazard (issue #321) fails immediately and legibly rather than as a
-confusing "command not found" later — see [Domain: scripts](Domain-scripts). Exclude any
-non-JS-runtime tooling directory (this repo's `plugins/**`) from vitest collection, since files that
-merely look like test files but require a different host environment will otherwise fail the whole
-suite. Verify: `npm test` runs (and passes trivially with zero suites) and `npm run lint` runs clean.
+Set up a plain Vite + React app (no server-side framework) with `type: module`, ESLint via
+`eslint.config.js` (see [Domain-root](Domain-root)), and Vitest for tests. Packages that are shared
+across the browser app, Node CLIs, and the overnight-agent plugin live under `packages/*`, each its own
+independently-versioned package (`@focus/diagnostics`, `@focus/folder-sync`, `@focus/mcp-cred-vault`,
+`@focus/task-paper`, `@focus/telegram-bridge`) rather than an npm workspace — this is deliberate: issue
+#321 records a `git worktree remove --force` deleting through a `node_modules` junction and emptying a
+*shared* install, which a workspace's single top-level `node_modules` would make worse, not better.
+Reuse `scripts/check-node-modules.mjs`'s pattern (wired as `pretest`) to catch a `node_modules` tree that
+disagrees with the lockfile before it causes a confusing downstream failure.
 
-## Stage 1 — The persisted formats
+**Verify:** `npm run lint && npm test` pass on an empty app shell.
 
-Before any UI exists, define and unit-test the pure parsers/writers for every format in
-[Data-Formats](Data-Formats): the board table (`boardTable.js`/`boardRow.js` — the ragged-row alignment
-invariant, issue #426), the journal chat schema (`journalChat.js` — fence-aware parsing, attribution
-markers, day grouping), and the per-task JSON/markdown sidecars (`task-settings.json`,
-`user-settings.md`, `agent-gate.md`). These modules must have **zero** framework dependencies so they
-can be tested without a browser or a server — this repo's own constraint (nothing in the test suite
-imports `App.jsx`) is why its equivalent modules live in `src/` as plain functions. Verify: run the
-format-specific test files directly (e.g. `vitest run src/raggedRow.test.js src/journalChat.test.js`)
-and confirm the CRLF/ragged-row/fence-aware requirements in [Behaviour](Behaviour) hold.
+## Stage 1 — the storage abstraction
 
-## Stage 2 — The storage abstraction
+Build `storage` first: one interface (`read`/`write`/`list`) over five interchangeable backends
+(in-memory for tests, IndexedDB, File System Access, OneDrive, Google Drive) — see
+[Domain-storage](Domain-storage). Every other domain assumes this exists; building it last would mean
+retrofitting every consumer's I/O. Include the small JSON sidecars this stage owns:
+`task-settings.json` and `settings.json` (§6–7, [Data-Formats](Data-Formats)).
 
-Build one facade (`storage.js`) over interchangeable providers, starting with the two easiest to test
-without external accounts: an in-memory/IndexedDB local provider and a File System Access API provider.
-Add cloud providers (OneDrive, Google Drive) after the facade's contract is locked, since they must
-conform to it, not shape it — see [Domain: storage](Domain-storage) for the exact surface
-(`read/write/remove/getFiles/getTodos/journalIds`) and the pagination and secret-safety requirements
-each provider must satisfy. Verify: a provider-parametrized test suite (read → write → read-back,
-pagination past one page, cancellation via `AbortSignal`) passes identically against every provider.
+**Verify:** each provider passes the same behavioural contract test suite (pagination, abort, list) —
+`src/storage/*.test.js`.
 
-## Stage 3 — The application shell
+## Stage 2 — the board format
 
-With Stage 1's pure operations and Stage 2's storage facade in place, build the React app as a thin
-consumer: `App.jsx` renders state and calls into `focusPlanOps.js`/`taskSort.js`/`moveTask.js` etc. — it
-should contain no logic that isn't already covered by a Stage-1 unit test, because a thin shell is what
-keeps the whole domain unit-testable without a DOM. Add `install-prompt` (platform detection, install
-gating) and `diagnostics` (opt-in event tracing) as independent packages once the shell exists, since
-neither is a dependency of core board/journal logic. Verify: `npm run build` produces a working bundle;
-manual or Playwright-driven exercise of add/delete/move/snooze/priority-change against a local FSA
-folder matches every statement in [Behaviour](Behaviour)'s board-integrity section.
+Build the `planner.md` reader/writer next: `src/boardRow.js` (the one ragged-table alignment rule),
+`src/boardTable.js` (parsing), `src/focusPlanOps.js` (pure content transforms), `src/snooze.js`, and
+`src/taskSort.js` — see [Domain-app](Domain-app) and [Data-Formats](Data-Formats) §1. Build the
+alignment rule (`boardRow.js`) **before** any reader or writer, and make every reader/writer import it,
+rather than each reimplementing "which cell is `Linked ID`" — issue #426 is what happens when that
+rule exists in two places.
 
-## Stage 4 — Folder-sync
+**Verify:** `src/boardWakeMigration.test.js`, `src/raggedRow.test.js`, `src/misfiledLinkedId.test.js`,
+`src/taskSort.test.js` all pass against representative ragged fixtures (short rows, over-wide rows, rows
+predating the `Wake` column).
 
-Build the pure merge core first (`merge.js`, `records.js`, the `mdTable` codec) with **no I/O** — every
-resurrection/collapse/zero-clock invariant in [Data-Formats](Data-Formats) and
-[Behaviour](Behaviour)'s folder-sync section must be provable against in-memory fixtures alone. Only
-after the merge core is fully tested should the engine/Service-Worker/provider layer
-(`engine.js`, `sw.js`, `providers/*.js`, `queue.js`) be built on top, because a defect discovered at the
-transport layer is far more expensive to isolate than one caught in the pure merge function. Verify: the
-merge-core test suite passes standalone (no browser needed); an end-to-end two-device simulation (write
-locally, sync, write remotely, sync, confirm no resurrected delete) passes against a mock provider.
+## Stage 3 — the app shell and board UI
 
-## Stage 5 — Telegram bridge
+Build `src/App.jsx` on top of Stages 1–2: board rendering by section, context-menu operations routed
+through `focusPlanOps.js`, id allocation (`allocateNextId`, unioning content and journal ids so a new
+task can never collide with a live row — issue #528) and search/filter (`boardSearch.js`).
 
-Build `journal.js` (turn/status parsing) and `board.js` (priority-aware ordering) as dependency-free
-Node modules first, since the bridge must run entirely offline-testable with injected I/O — see
-[Domain: telegram-bridge](Domain-telegram-bridge). Layer `digest.js`/`liveStatus.js` on top (newest-turn
-authority, never a whole-file grep), then `deepLink.js`/`routeReply.js` for the topic-per-task mapping
-and reply routing, then the Telegram HTTP client and `state.js` persistence last. Verify: the "read the
-newest turn, not a frozen header" tests and the 4096-char-split tests in [Behaviour](Behaviour) pass
-against synthetic journals with no live bot token required.
+**Verify:** `src/focusPlanOps.test.js`, `src/allocateId.test.js`, `src/boardSearch.test.js`.
 
-## Stage 6 — Task papers
+## Stage 4 — journals as chat
 
-Layer `packages/task-paper` on top of Stage 1's `journalChat.js` and Stage 5's `journal.js`/`digest.js`
-by importing them directly, never reimplementing turn/status/ask parsing — this is the specific lesson
-this repository already paid for once (issue #325, two readers disagreeing about consent). Build
-`markdown.js` (the deterministic renderer) and `paper.js` (the model) before `render.js` and
-`comment.js`. Verify: byte-identical rendering across repeated runs on identical input; the embedded
-writer script matches `journalChat.js` byte-for-byte.
+Build `src/journalChat.js` (the parser/renderer for the chat-thread format in
+[Data-Formats](Data-Formats) §3), then journal creation/deletion (`journalDelete.js` resolving its path
+at delete time, not from cached UI state — issue #185), the ordered/de-duplicated load queue
+(`journalLoadQueue.js`), and the read-state service (`src/readState/readStateService.js`) as a pure
+event-driven controller with no business logic in the UI.
 
-## Stage 7 — Config and cross-cutting sidecars
+**Verify:** `src/journalChat.test.js`, `src/journalDelete.test.js`, `src/readState/readStateService.test.js`.
 
-Build `agentsDoc.js`, `agentGate.js`, `userSettingsForm.js` and `aiSettings.js` once the board/journal
-formats and storage facade exist, since they scaffold and validate files that live alongside them in the
-same folder. Enforce the never-overwrite rule for `agentGate.md` and the surgical-splice (not
-regenerate) rule for `userSettingsForm.js` from the start — both are load-bearing safety properties, not
-later hardening (issue #250, issue #288). Verify: the round-trip identity test
-(`serializeSettingsForm(md, parseSettingsForm(md).map(r => r.value)) === md`) passes for arbitrary
-real-world input, including CRLF.
+## Stage 5 — config: the agent gate and user settings
 
-## Stage 8 — The Overnight Agent
+Build `src/config/agentGate.js` and `src/config/userSettingsForm.js` — the two files the browser app
+and the (not-yet-built) overnight agent both read. Enforce the round-trip identity contract for
+`user-settings.md` (re-serializing an unchanged row must return the original bytes exactly) from the
+start; it is far cheaper to build in than to retrofit once a hand-edited settings file exists in the
+wild.
 
-This is the largest and most failure-history-laden stage, and should be built last, against a system
-that already has real board/journal/sync data to exercise it. Build `oa-state.ps1`'s `scan` command
-(sort key, eligibility, the Today gate) and `mark` command (turn-writing, exhaustion declaration) first,
-verified against the exact sort key and gate-verdict order in [Prioritisation](Prioritisation). Add the
-`session` command (per-task session, concurrency accounting, the collect-wave `-Force` exception) next.
-Only after dispatch is correct should the `checks/` sweep library and its `mutcheck-*` mutation-test
-companions be built — see [Domain: overnight-agent](Domain-overnight-agent) — because the sweeps assume
-a working `scan`/`mark`/`session` substrate to check against. Build the reliability layer
-([Reliability](Reliability): OS-dispatched supervision, stuck-run detection, silent auto-restart, deploy
-propagation, encoding safety, MCP reaping, browser-slot health) last of all, since it exists to keep an
-already-working agent alive unattended, not to make the agent work in the first place. Verify: each
-`mutcheck-*.ps1`/`.mjs` file exits 0 (every mutation arm killed); `oa-state.ps1 session -InFlight`
-reports `admits` correctly at various concurrency settings; a synthetic stuck run is detected and
-repaired by `stuck-run-sweep.mjs --repair`.
+**Verify:** `src/config/agentGate.test.js`, `src/config/userSettingsForm.test.js`.
 
-## Cross-cutting: the spec pipeline
+## Stage 6 — multi-source ("Combined") support
 
-If this specification itself is being reconstructed alongside the system (rather than assumed as
-ground truth), build `scripts/spec/collect.mjs` once enough of the domains above exist to extract facts
-from, then `scripts/spec/verify.mjs` to check generated prose against those facts — see
-[Updating-the-Spec](Updating-the-Spec) for the full pipeline this repository actually runs.
+Build `combinedRouting.js` (tag every merged row with its true source id — never route a destructive op
+by text or local id, which is what issue #39 was) and `moveTask.js` (moving a manager-priority
+dependency subtree between folders) on top of Stages 2–3.
 
-## Recommended overall order
+**Verify:** `src/combinedRouting.test.js`, `src/moveTask.test.js`.
 
-`npm test` after every stage, plus `npm run lint` and `npm run build` before considering a stage done:
+## Stage 7 — folder-sync
 
-1. Toolchain skeleton
-2. Data formats (board, journal, sidecars) — pure, dependency-free
-3. Storage facade + providers
-4. App shell (UI over Stage 1+2)
-5. Folder-sync (merge core, then transport)
-6. Telegram bridge
-7. Task papers (depends on Stage 2 and Stage 6's journal/digest readers)
-8. Config/sidecar scaffolding
-9. Overnight Agent (dispatch, then sweeps, then reliability layer)
+Build the offline-first sync engine last among the browser-facing pieces, since it only matters once
+more than one device edits the same folder: the mdTable codec (record/frame split,
+[Data-Formats](Data-Formats) §8), the per-record clock/tombstone merge model (§9), then the service
+worker wiring. This is the correct order because the merge model is provable in isolation (pure
+functions over records) before any browser/background-sync machinery exists around it.
 
-A rebuilder who follows this order at every stage has, by construction, a system whose every persisted
-format, sort key, and gate verdict is provable against a fixture before the next, more complex layer is
-built on top of it — matching how this repository's own mutation-tested sweeps and pure-function merge
-core were in fact built and are still verified today.
+**Verify:** `packages/folder-sync/src/merge.test.js`, `records.test.js`, `codecs/mdTable.test.js`,
+`reconcile.test.js`.
+
+## Stage 8 — task-paper, telegram-bridge, diagnostics, mcp-cred-vault, install-prompt
+
+These five are independent of each other and can be built in any order once Stages 1–5 exist, since
+each reads the same on-disk formats rather than talking to one another directly:
+
+- **`task-paper`** (static HTML generator) needs only `journalChat.js`'s parsing conventions — see
+  [Domain-task-paper](Domain-task-paper).
+- **`telegram-bridge`** (Node CLI) needs the board and journal formats plus a Telegram bot token — see
+  [Domain-telegram-bridge](Domain-telegram-bridge) and [Data-Formats](Data-Formats) §3 for the
+  `turn-end` boundary its reply-folding logic must respect.
+- **`diagnostics`** (cross-realm event bus) is needed by `folder-sync`'s service worker and the app's
+  own tab, but can be stubbed until both sides exist.
+- **`mcp-cred-vault`** (pointer-only secrets manifest) is needed only once MCP tooling is configured.
+- **`install-prompt`** (PWA install UX) has no dependents; build it whenever the PWA manifest exists.
+
+**Verify:** each package's own test suite in isolation — `packages/task-paper/src/*.test.js`,
+`packages/telegram-bridge/src/*.test.js`, `packages/diagnostics/src/index.test.js`,
+`packages/mcp-cred-vault/src/schema.test.js`.
+
+## Stage 9 — the overnight agent
+
+Build last, because it depends on every format above being stable: `oa-state.ps1`'s `scan` (the sort
+key and gate in [Prioritisation](Prioritisation) §1–4), `session` (capacity accounting, §7),
+`write-turn.ps1` (the sole sanctioned journal writer, with its G1–G12 guards — see
+[Reliability](Reliability)), then the nightly check suite under `plugins/overnight-agent/checks/`. Build
+the mutation checks (`mutcheck-*`) alongside each guard they prove, not afterward — a guard without a
+mutation proof is unverified by this domain's own standard.
+
+**Verify:** there is no vitest suite for the PowerShell layer; verify each guard by deliberately
+reverting it and confirming its paired `mutcheck-*.ps1` goes red, per
+[Domain-overnight-agent](Domain-overnight-agent).
+
+## Stage 10 — CI and the spec pipeline
+
+Wire the four GitHub Actions workflows last: `ci.yml` (lint/test/build on every push), `deploy.yml`,
+`pr-closing-keyword.yml`, and `spec-wiki.yml` (this spec's own generation pipeline — see
+[Updating-the-Spec](Updating-the-Spec)). None of these should gate earlier stages; they exist to keep
+the finished system from silently regressing.
+
+**Verify:** `npm run lint && npm test && npm run build` all pass locally before wiring any workflow to
+require them.

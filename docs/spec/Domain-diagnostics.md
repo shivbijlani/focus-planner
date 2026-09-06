@@ -2,58 +2,54 @@
 
 ## Responsibility
 
-A single, dependency-free package (`packages/diagnostics/src/index.js`, one file) providing a shared,
-opt-in event-tracing facility that spans two runtime contexts — the main app and its dedicated Service
-Workers (folder-sync, others) — without adding console noise or backpressure when it is off, which is
-its default state.
+A single dependency-free event bus (`packages/diagnostics/src/index.js`, 441 lines) that every other
+domain can safely import without creating a cycle. It gives the app, the `folder-sync` service
+worker, and the storage layer one place to record "what just happened" — writes, sync events, merge
+decisions — without any of them needing to know who, if anyone, is listening.
 
-## Principal module
+## Principal modules
 
-`packages/diagnostics/src/index.js` — the entire domain. It exposes a producer side (`diag`, per-context
-correlation fields, sink registration) and a worker-bridging side (`advertiseDiagnosticsToWorker`,
-`findDiagnosticsWorker`, `requestWorkerDiagnostics`, `handleWorkerDiagnosticMessage`), because a Service
-Worker has no console a developer is normally looking at, so its diagnostic events must be pulled into
-the page on request rather than assumed visible.
+| Path | Exports |
+| --- | --- |
+| `packages/diagnostics/src/index.js` | `diag`, `registerDiagSink`, `unregisterDiagSink`, `enableDiagnostics`, `disableDiagnostics`, `isDiagEnabled`, `setDiagnosticsLimit`, `dumpDiagnostics`, `dumpAllDiagnostics`, `clearDiagnostics`, `printDiagnostics`, `resetDiagnosticsForTests`, `advertiseDiagnosticsToWorker`, `findDiagnosticsWorker`, `requestWorkerDiagnostics`, `requestWorkerDiagnosticClientStates`, `setWorkerDiagnosticsForClient`, `handleWorkerDiagnosticMessage`, `reconcileWorkerDiagnosticClients`, `reconcileWorkerDiagnosticsForClients` |
 
-## Public surface
+## Design
 
-`diag, registerDiagSink, unregisterDiagSink, isDiagEnabled, enableDiagnostics, disableDiagnostics,
-setDiagnosticsLimit, clearDiagnostics, dumpDiagnostics, dumpAllDiagnostics, printDiagnostics,
-resetDiagnosticsForTests` (producer/consumer API); `advertiseDiagnosticsToWorker,
-findDiagnosticsWorker, requestWorkerDiagnostics, requestWorkerDiagnosticClientStates,
-handleWorkerDiagnosticMessage, reconcileWorkerDiagnosticClients,
-reconcileWorkerDiagnosticsForClients, setWorkerDiagnosticsForClient` (worker bridge).
+`diag(context, event)` is a cheap no-op when disabled (a test in `index.test.js` pins exactly this),
+so call sites can instrument liberally without a runtime cost in production. When enabled, each
+context (e.g. `"merge"`, `"sync"`) keeps a **bounded ring buffer** of its own events rather than one
+unbounded log, so a long-running tab cannot leak memory through diagnostics. Consumers are **sinks**
+registered via `registerDiagSink` — the module fans an event out to every registered sink rather than
+picking one, so the browser console, a UI diagnostics panel, and a test spy can all observe the same
+stream independently.
 
-## Behavioural requirements (from tests)
+Because the module runs in three separate JS realms (the main-thread app, the folder-sync service
+worker, and any test harness), a large part of its surface is **cross-realm plumbing**: the main
+thread cannot read the service worker's ring buffers directly, so `advertiseDiagnosticsToWorker`,
+`findDiagnosticsWorker`, `requestWorkerDiagnostics`, and `reconcileWorkerDiagnosticClients` implement
+a request/response protocol over `postMessage`/`BroadcastChannel` so a snapshot dump on the main
+thread can pull in the worker's buffer without holding it live for every enabled client all the time.
 
-- **A cheap no-op when disabled** — calling `diag(...)` while diagnostics are off must not do
-  meaningful work, so instrumenting a hot path costs nothing in production.
-- **Fan-out to every registered sink**, using one shared event schema carrying per-context correlation
-  fields, so events from the app and a worker can be joined by a caller without bespoke per-context
-  parsing.
-- **A bounded ring buffer per context** — enabling diagnostics must not grow memory without limit; the
-  buffer for a given context discards its oldest entries once its cap is reached.
-- **No live console traffic from recording alone** — `diag(...)` records; only an explicit
-  `printDiagnostics`/`dumpDiagnostics` call emits to the console, and only for what was actually asked
-  for (`dumpAllDiagnostics` pulls a worker's buffer only when a full dump is requested).
-- **No backpressure on the message channel during a driven burst** — a rapid sequence of diagnostic
-  events between page and worker must not itself become a performance problem.
-- **Correct worker targeting**: a request must select the folder-sync worker specifically, not the
-  root app worker, when both exist.
-- **Multi-client correctness**: worker diagnostics must stay enabled while *any* client still wants
-  them, and a client must be pruned from the tracked set once its tab closes — otherwise a closed tab
-  would either silently disable diagnostics for a still-open tab, or leak state forever.
-- **State survives a worker restart**: enabled clients re-request and the worker re-advertises its
-  enabled state after it restarts, so a page doesn't have to know a restart happened.
+## Behavioural requirements (from `packages/diagnostics/src/index.test.js`)
 
-## Failure modes this domain guards against
+- Is a cheap no-op when disabled.
+- Fans out enabled events to every registered sink.
+- Keeps each context buffer bounded as a ring.
+- Records without emitting live console traffic.
+- Uses a shared event schema with per-context correlation fields.
+- Does not create console or client-message backpressure during a driven burst.
+- Pulls the worker buffer only when `dumpAll` is requested.
+- Selects the folder-sync worker instead of the root app worker.
+- Serves a worker dump through the request message port.
+- Prints only an explicitly requested snapshot.
+- Keeps worker diagnostics enabled while another client still requests them.
+- Prunes a diagnostic client after its tab closes.
+- Requests and reconciles worker diagnostic client state without leaking a stale client.
 
-- **Diagnostics costing something when off** — the explicit no-op-when-disabled contract exists so this
-  facility can be left wired into hot paths across the whole app without a performance argument against
-  doing so.
-- **A worker's problems being invisible** — the reason a bridging half exists at all: without it, a
-  Service Worker failure has no console a developer is looking at and no path to surface state to the
-  page that can display it.
-- **Cross-tab diagnostic state stepping on itself** — the per-client enable/prune tracking exists
-  because multiple tabs can share one Service Worker; a naive single global flag would let one tab's
-  close silently turn diagnostics off for every other tab still open against the same worker.
+## Failure modes
+
+- A sink that throws must not break the event source — diagnostics are advisory, and an instrumented
+  call site (a merge, a write) must succeed or fail on its own merits regardless of what diagnostics
+  does with the event.
+- A worker that never answers a diagnostics request must not hang the requester; `dumpAllDiagnostics`
+  degrades to the main-thread buffer alone rather than blocking indefinitely.

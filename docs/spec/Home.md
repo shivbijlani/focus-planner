@@ -1,85 +1,89 @@
 # Focus Planner
 
-Focus Planner is a task planner whose database is a folder of plain markdown files, read and written by
-three independent runtimes — a browser web app, a Node.js Telegram bridge, and a PowerShell-driven
-autonomous overnight agent — with no server and no shared schema beyond the text format itself. The
-folder can live in a local File System Access handle, IndexedDB, OneDrive, or Google Drive, and can sync
-across devices without a central service. The problem this solves is not "build a to-do app"; it is
-"let a person and an unattended AI agent both durably act on the same prioritized worklist, from
-whatever device or channel is at hand, without either one corrupting what the other wrote."
+Focus Planner is a task board and journal system whose database is plain markdown files, editable by
+a human in any text editor, a browser tab, or an unattended overnight agent, with no server-side
+database and no accounts system standing between any of them. The problem it solves is keeping one
+person's task list, priority ordering, and per-task working notes consistent across three things that
+would otherwise drift apart: a phone or laptop browser, a second device syncing the same folder, and a
+nightly Copilot CLI agent that reads the board and acts on it while its owner sleeps.
 
 ## Core design principles
 
-**The folder is the database; markdown is the schema.** There is no database server and no ORM. Every
-piece of state — the board, a task's journal, sync bookkeeping, agent memory — is a markdown or JSON
-file with an explicit, tested format (see [Data-Formats](Data-Formats)). This is what makes the system
-inspectable and editable by a human with a text editor, and portable across four different storage
-backends without a migration.
+**The file format is the API.** Nothing in this system talks to anything else over a socket or a
+shared process. A browser tab, a PowerShell agent, and a Node CLI collaborate on the same
+`planner.md` and `journal/task-<id>.md` files purely by reading and writing them, at different times,
+leaving marks (`<!-- from: ... -->`, a `turn-end` stamp, a board cell) that tell the next reader what
+happened. See [Architecture](Architecture).
 
-**Every reader is independently tested, because none of them share a runtime.** The browser, the
-Telegram bridge, and the overnight agent's PowerShell control layer cannot import from one another —
-they run in different languages and processes. Rather than force a shared library across that boundary,
-this system accepts three separate implementations of overlapping logic (e.g. board-priority sorting,
-newest-turn-status reading) and pins them together with mutation tests instead of code sharing. See
-[Prioritisation](Prioritisation)'s "two sort keys" discussion and [Domain:
-overnight-agent](Domain-overnight-agent)'s parity mutcheck for the concrete mechanism.
+**One alignment rule, shared by every reader and writer.** `planner.md`'s tables are ragged by
+construction — hand-edited, evolving column sets, ambiguous short rows — so the question "which cell
+is this row's `Linked ID`?" is answered in exactly one place (`src/boardRow.js`) and imported
+everywhere else. Issue #426 is what happens when two implementations of that question disagree. See
+[Data-Formats](Data-Formats) and [Domain-app](Domain-app).
 
-**A signal the agent authored cannot be trusted as the agent's own permission to act.** This repository
-has independently discovered the same failure three times: a consent marker the agent itself wrote being
-read back as human approval, a closing courtesy line parking the agent's own task, and a timestamp the
-agent itself stamped releasing the agent's own gate. The design principle that follows is stated
-explicitly in the code: prefer a signal the agent cannot author, and where one is unavoidable, let it
-only cancel a permission, never grant one. See [Prioritisation](Prioritisation).
+**Ordering is data, not judgement.** The overnight agent does not decide what to work on next by
+reasoning about the board in its head; `oa-state.ps1 scan` computes a sorted worklist with a binding
+`eligible` flag once, so two runs over an unchanged board produce the same order and that order is
+auditable afterward. See [Prioritisation](Prioritisation).
 
-**A passing check is not evidence, only a claim.** Sweeps, guards and gates throughout the overnight
-agent are proven correct by deliberately breaking them and asserting the break is detected — the
-`mutcheck-*` family — because this repository has shipped, and measured, checks that reported the same
-reassuring value every single night regardless of the real state of the system. See
-[Reliability](Reliability) and [Domain: overnight-agent](Domain-overnight-agent).
-
-**Unattended supervision must be dispatched from outside the thing it supervises.** An agent, an app
-scheduler, or an in-process watchdog cannot reliably notice its own death. Every layer of this system's
-self-healing is deliberately dispatched from a strictly wider domain than what it watches — the OS
-schedules the daemon, the daemon watches the app, a normal run watches the daemon. See
+**A gate must never be releasable by the thing it gates.** The Today→Deferred gate, exhaustion
+declarations, capacity accounting, and journal consent markers have each, at different times, been
+broken the same way: a signal the agent's own software produced was trusted to open a door only a
+human's action should open. The fix is always to key release on something external — board text,
+wall-clock staleness, a fresh declaration each run. See [Prioritisation](Prioritisation) and
 [Reliability](Reliability).
 
-**Provenance, not urgency, is what may widen a rule.** The single sanctioned exception to the overnight
-agent's default one-item concurrency is not "this is important" — it is "a user did this, not the
-agent." See [Prioritisation](Prioritisation)'s dispatch-precedence section.
+**Reliability is out-of-band, not self-supervised.** An agent that supervises itself cannot detect
+that it has stopped running. Every liveness, restart, and deploy-propagation mechanism in this system
+is dispatched by something outside the process it watches — the OS scheduler, a second unattended
+dispatcher, a nightly sweep that audits its own archive. See [Reliability](Reliability).
 
-## What this system is not (yet)
+**Write append-only where correctness matters.** Journals are never rewritten, only appended to, by
+exactly one sanctioned writer (`write-turn.ps1`) carrying explicit guards against known corruption
+classes. See [Data-Formats](Data-Formats) and [Reliability](Reliability).
 
-Several things described elsewhere in this spec are explicitly unfinished, by the repository's own open
-issues, not by omission of this document: pacing (issue #391) is currently prose guidance in `SKILL.md`,
-not an enforced mechanism; per-task Google Doc comment attribution (#422, #442) has no positive-consent
-design yet; and a number of reliability/provenance gaps remain open, catalogued in full on
-[Roadmap](Roadmap). This spec describes the system as it is built today and names what is missing rather
-than presenting either as finished.
+## Priority icons
 
-## Reading order
-
-Start with [Architecture](Architecture) for the system's shape, then [Data-Formats](Data-Formats) for
-the formats every domain reads and writes. From there:
-
-| Page | Covers |
+| Icon | Meaning |
 | --- | --- |
-| [Architecture](Architecture) | Domain composition, module graph, runtime boundaries, data-flow from user action to persisted state. |
-| [Data-Formats](Data-Formats) | Every persisted format — board, journal, sidecars, sync state, bridge state — with real annotated samples. |
-| [Domain: app](Domain-app) | The web app: board/journal transformations, sorting, moves, id lifecycle. |
-| [Domain: config](Domain-config) | Scaffolded canonical docs and round-trip-safe settings views. |
-| [Domain: diagnostics](Domain-diagnostics) | The opt-in, cross-worker event-tracing facility. |
-| [Domain: folder-sync](Domain-folder-sync) | The record-level, tombstone-aware merge engine and its Service Worker transport. |
-| [Domain: install-prompt](Domain-install-prompt) | Per-platform PWA install nudging. |
-| [Domain: mcp-cred-vault](Domain-mcp-cred-vault) | The non-secret pointer file scheme for MCP server credentials. |
-| [Domain: overnight-agent](Domain-overnight-agent) | The autonomous agent's sweep/mutcheck library and its shape. |
-| [Domain: root](Domain-root) | Build/lint config and the legacy local-dev server. |
-| [Domain: scripts](Domain-scripts) | Repository maintenance tooling and the spec pipeline's mechanism half. |
-| [Domain: storage](Domain-storage) | The multi-provider storage facade (FSA/IndexedDB/OneDrive/Google Drive). |
-| [Domain: task-paper](Domain-task-paper) | Regenerated, deterministic per-task HTML papers. |
-| [Domain: telegram-bridge](Domain-telegram-bridge) | The mobile journal mirror and reply-folding bridge. |
-| [Prioritisation](Prioritisation) | How priority is expressed, changed, and dispatched — the full sort key, the Today gate, pacing, dispatch precedence. |
+| 🔴 | Urgent & Important |
+| 🟡 | Important, Not Urgent |
+| 🔵 | Urgent, Not Important |
+| ⚪ | Not Urgent, Not Important |
+| ✅ | Done |
+| 🐸 | Frog (eat first) |
+| 📖 | Learning |
+
+## Where things are unfinished
+
+This is a system under active development, not a finished product. [Roadmap](Roadmap) surveys all 123
+open issues by priority label; the most consequential open gaps are capacity accounting in the
+overnight agent's dispatch logic, doc-binding integrity for the catch-up-doc channel, and provenance
+markers that distinguish agent-authored from human-authored state. [Prioritisation](Prioritisation)
+and [Reliability](Reliability) both call out, inline, which of the mechanisms they describe are shipped
+code versus run-loop guidance still tracked by an open issue.
+
+## Page index
+
+| Page | Contents |
+| --- | --- |
+| [Architecture](Architecture) | The domains, how they compose, process/runtime boundaries, and the data-flow from a user action to persisted state. |
+| [Data-Formats](Data-Formats) | Every persisted format — the board, journals, agent state, sync sidecars — with annotated real samples and invariants. |
+| [Domain-app](Domain-app) | The board UI, journals-as-chat, settings editors, multi-source routing. |
+| [Domain-config](Domain-config) | The agent-gate and user-settings schemas, `AGENTS.md` generation, branding. |
+| [Domain-diagnostics](Domain-diagnostics) | The cross-realm (tab ↔ service-worker) diagnostic event bus. |
+| [Domain-folder-sync](Domain-folder-sync) | The offline-first multi-device sync engine for markdown + sidecar files. |
+| [Domain-install-prompt](Domain-install-prompt) | The PWA "add to home screen" UX. |
+| [Domain-mcp-cred-vault](Domain-mcp-cred-vault) | The non-secret pointer manifest binding MCP servers to OS credential storage. |
+| [Domain-overnight-agent](Domain-overnight-agent) | The unattended nightly Copilot CLI plugin and its self-testing check suite. |
+| [Domain-root](Domain-root) | The static file server and shared build tooling. |
+| [Domain-scripts](Domain-scripts) | Repo hygiene, board-repair one-offs, and the spec-generation pipeline itself. |
+| [Domain-storage](Domain-storage) | The pluggable multi-provider file-storage abstraction the whole app is built on. |
+| [Domain-task-paper](Domain-task-paper) | The static-site generator turning journals into standalone HTML "papers". |
+| [Domain-telegram-bridge](Domain-telegram-bridge) | The Node CLI mirroring the board/journals into a Telegram forum and folding replies back. |
+| [Prioritisation](Prioritisation) | How priority is expressed, changed, gated, paced, and dispatched — the system's most load-bearing behaviour. |
 | [Behaviour](Behaviour) | The system's required behaviour as testable statements, grouped by area. |
-| [Rebuilding](Rebuilding) | A dependency-ordered build guide from an empty directory. |
-| [Reliability](Reliability) | How the unattended overnight agent stays running and heals itself. |
-| [Roadmap](Roadmap) | Known gaps and direction, grouped by priority, from open issues. |
-| [Updating-the-Spec](Updating-the-Spec) | How this specification itself is generated, verified, and published. |
+| [Rebuilding](Rebuilding) | A build-order guide, with a verification step at each stage, for starting from an empty directory. |
+| [Updating-the-Spec](Updating-the-Spec) | The maintenance guide for this spec: the pipeline, the verifier, and its traps. |
+| [Roadmap](Roadmap) | Known gaps and direction, grouped by priority label, referencing open issues. |
+| [Reliability](Reliability) | How the unattended overnight agent stays running on one machine and heals itself. |
