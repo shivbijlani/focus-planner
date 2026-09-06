@@ -1,55 +1,53 @@
 # Domain: diagnostics
 
+`diagnostics` is a single package, `packages/diagnostics/src/index.js`, providing a shared,
+low-overhead event/tracing sink used across the app's main thread, its service worker, and the
+`folder-sync` engine.
+
 ## Responsibility
 
-A single dependency-free event bus (`packages/diagnostics/src/index.js`, 441 lines) that every other
-domain can safely import without creating a cycle. It gives the app, the `folder-sync` service
-worker, and the storage layer one place to record "what just happened" — writes, sync events, merge
-decisions — without any of them needing to know who, if anyone, is listening.
+Give every part of the system — main thread, service worker, folder-sync — one place to emit
+structured diagnostic events, and one place for a developer (or the app's own Settings →
+Diagnostics panel) to pull them back out, without adding console noise or backpressure during
+normal operation.
 
-## Principal modules
+## Public exports
 
-| Path | Exports |
-| --- | --- |
-| `packages/diagnostics/src/index.js` | `diag`, `registerDiagSink`, `unregisterDiagSink`, `enableDiagnostics`, `disableDiagnostics`, `isDiagEnabled`, `setDiagnosticsLimit`, `dumpDiagnostics`, `dumpAllDiagnostics`, `clearDiagnostics`, `printDiagnostics`, `resetDiagnosticsForTests`, `advertiseDiagnosticsToWorker`, `findDiagnosticsWorker`, `requestWorkerDiagnostics`, `requestWorkerDiagnosticClientStates`, `setWorkerDiagnosticsForClient`, `handleWorkerDiagnosticMessage`, `reconcileWorkerDiagnosticClients`, `reconcileWorkerDiagnosticsForClients` |
-
-## Design
-
-`diag(context, event)` is a cheap no-op when disabled (a test in `index.test.js` pins exactly this),
-so call sites can instrument liberally without a runtime cost in production. When enabled, each
-context (e.g. `"merge"`, `"sync"`) keeps a **bounded ring buffer** of its own events rather than one
-unbounded log, so a long-running tab cannot leak memory through diagnostics. Consumers are **sinks**
-registered via `registerDiagSink` — the module fans an event out to every registered sink rather than
-picking one, so the browser console, a UI diagnostics panel, and a test spy can all observe the same
-stream independently.
-
-Because the module runs in three separate JS realms (the main-thread app, the folder-sync service
-worker, and any test harness), a large part of its surface is **cross-realm plumbing**: the main
-thread cannot read the service worker's ring buffers directly, so `advertiseDiagnosticsToWorker`,
-`findDiagnosticsWorker`, `requestWorkerDiagnostics`, and `reconcileWorkerDiagnosticClients` implement
-a request/response protocol over `postMessage`/`BroadcastChannel` so a snapshot dump on the main
-thread can pull in the worker's buffer without holding it live for every enabled client all the time.
+`advertiseDiagnosticsToWorker`, `clearDiagnostics`, `diag`, `disableDiagnostics`,
+`dumpAllDiagnostics`, `dumpDiagnostics`, `enableDiagnostics`, `findDiagnosticsWorker`,
+`handleWorkerDiagnosticMessage`, `isDiagEnabled`, `printDiagnostics`,
+`reconcileWorkerDiagnosticClients`, `reconcileWorkerDiagnosticsForClients`, `registerDiagSink`,
+`requestWorkerDiagnosticClientStates`, `requestWorkerDiagnostics`, `resetDiagnosticsForTests`,
+`setDiagnosticsLimit`, `setWorkerDiagnosticsForClient`, `unregisterDiagSink`.
 
 ## Behavioural requirements (from `packages/diagnostics/src/index.test.js`)
 
-- Is a cheap no-op when disabled.
-- Fans out enabled events to every registered sink.
-- Keeps each context buffer bounded as a ring.
-- Records without emitting live console traffic.
-- Uses a shared event schema with per-context correlation fields.
-- Does not create console or client-message backpressure during a driven burst.
-- Pulls the worker buffer only when `dumpAll` is requested.
-- Selects the folder-sync worker instead of the root app worker.
-- Serves a worker dump through the request message port.
-- Prints only an explicitly requested snapshot.
-- Keeps worker diagnostics enabled while another client still requests them.
-- Prunes a diagnostic client after its tab closes.
-- Requests and reconciles worker diagnostic client state without leaking a stale client.
+- It **is a cheap no-op when disabled** — calling `diag()` costs effectively nothing until
+  `enableDiagnostics()` is called, so instrumentation can be left in shipped code everywhere.
+- It **fans out enabled events to every registered sink** — multiple consumers (e.g. a console sink
+  and a UI panel) can subscribe independently via `registerDiagSink`.
+- It **keeps each context buffer bounded as a ring** — a long-running session cannot grow the buffer
+  unboundedly; `setDiagnosticsLimit` bounds retention per context.
+- It **records without emitting live console traffic** — diagnostics are captured silently and only
+  surfaced on demand (`printDiagnostics`/`dumpDiagnostics`), so normal operation is not noisier with
+  diagnostics on than off.
+- It **uses a shared event schema with per-context correlation fields**, so events from the main
+  thread and from the service worker can be correlated into one timeline.
+- It **does not create console or client-message backpressure during a driven burst** — a flood of
+  events (e.g. a rapid sync cycle) cannot itself slow the app down or flood postMessage.
+- Worker-side dumps are selective: it **pulls the worker buffer only when `dumpAll` is requested**,
+  **selects the folder-sync worker instead of the root app worker** when both exist, **serves a
+  worker dump through the request message port**, and **prints only an explicitly requested
+  snapshot** — nothing is pulled from a worker speculatively.
+- Multi-client coordination: it **keeps worker diagnostics enabled while another client still
+  requests them** (reference-counted, not last-writer-wins), **prunes a diagnostic client after its
+  tab closes**, and **requests and re-advertises enabled state after a worker restart** — a service
+  worker can be killed and restarted by the browser at any time, and diagnostics state must survive
+  that without a client having to notice and re-enable it.
 
-## Failure modes
+## Failure modes guarded against
 
-- A sink that throws must not break the event source — diagnostics are advisory, and an instrumented
-  call site (a merge, a write) must succeed or fail on its own merits regardless of what diagnostics
-  does with the event.
-- A worker that never answers a diagnostics request must not hang the requester; `dumpAllDiagnostics`
-  degrades to the main-thread buffer alone rather than blocking indefinitely.
+A diagnostics system that is expensive when idle would be disabled in practice (the very thing it
+exists to avoid); one that is noisy would train developers to mute it; one that forgets state across
+a service-worker restart would appear "randomly" disabled. Each behavioural requirement above exists
+to close one of those specific failure shapes.

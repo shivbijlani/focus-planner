@@ -1,69 +1,51 @@
 # Domain: mcp-cred-vault
 
+`mcp-cred-vault` (`packages/mcp-cred-vault/`) is primarily a Windows PowerShell + .NET Framework
+toolchain; its JS surface is deliberately thin — just enough to validate and unit-test the shape of
+one non-secret pointer file.
+
 ## Responsibility
 
-`packages/mcp-cred-vault` keeps MCP (Model Context Protocol) server secrets — bot tokens, API keys —
-out of the repository and out of any synced planner folder, while still letting the overnight-agent
-plugin discover which secret feeds which environment variable on a given machine. It is primarily a
-**Windows PowerShell + .NET Framework toolchain** (`bin/secret-vault.ps1`, `bin/setup.ps1`,
-`bin/build.ps1`, `src/mcp-cred-launch.cs`); the JavaScript surface exists only so the **pointer file**
-schema can be validated and unit-tested alongside the repository's other packages.
+Let a machine declare, in a file that is safe to sync or commit, which credentials it needs (which
+MCP server, which environment variable, which real command consumes it) **without ever holding a
+secret value**. The values themselves live only in the Windows Credential Manager; this package's
+job is to validate the pointer file's shape, not to touch a credential.
 
 ## Principal modules
 
-| Path | Exports | Role |
-| --- | --- | --- |
-| `packages/mcp-cred-vault/src/schema.js` | `parseMcpSecrets`, `isValidMcpSecrets`, `collectMcpSecretsErrors` | Validates the shape of the non-secret `mcp-secrets.json` pointer file. |
-| `packages/mcp-cred-vault/src/index.js` | (re-exports `schema.js`) | Package entry point. |
+| Path | Purpose |
+| --- | --- |
+| `packages/mcp-cred-vault/src/index.js` | Re-exports the schema validators; documents that the real implementation is the PowerShell/.NET toolchain in `bin/` and `src/mcp-cred-launch.cs`. |
+| `packages/mcp-cred-vault/src/schema.js` | The actual validation logic: `isValidMcpSecrets`, `parseMcpSecrets`, `collectMcpSecretsErrors`. |
 
-## The pointer-file design
+## Public exports
 
-The real secret **values** live in Windows Credential Manager, never in a file. `mcp-secrets.json`
-lives on each machine, in the web app's OneDrive working folder — **not** in the repo — and lists,
-per machine, which secrets it needs: the credential-manager target name, the environment variable it
-feeds, and which MCP server + real launch command consumes it. It never contains a secret value
-itself.
+`collectMcpSecretsErrors`, `isValidMcpSecrets`, `parseMcpSecrets` (identical set from both
+`index.js` and `schema.js`).
 
-```json
-{
-  "version": 1,
-  "secrets": [
-    {
-      "server": "telegram",
-      "target": "overnight-agent:telegram-bot-token",
-      "envVar": "TELEGRAM_BOT_TOKEN",
-      "command": "uvx",
-      "args": ["better-telegram-mcp"]
-    }
-  ],
-  "ids": {
-    "telegramBotId": "0000000000",
-    "telegramChatId": "0000000000"
-  }
-}
-```
+## The format it validates
 
-`server`/`target` pairs must be unique (two secrets cannot silently share one Credential Manager
-entry), `envVar` must be a valid environment-variable name, and every secret entry must carry all of
-`server`, `target`, `envVar` and `command`. `ids` is a free-form bag for genuinely non-secret public
-identifiers (e.g. a Telegram bot/chat id) that are safe to keep alongside the pointer file.
+See [Data-Formats](Data-Formats) §8 for the full `mcp-secrets.json` sample. In brief: `version`, a
+`secrets[]` array of `{ server, target, envVar, command, args }` — the credential's Windows
+Credential Manager target name, the environment variable it feeds, and the MCP server + real
+command that consumes it — and an `ids` object for non-secret public identifiers (e.g. a Telegram
+bot/chat id, which is not itself a secret but is useful to keep alongside the pointer). Per
+`mcp-secrets.example.json`, the file lives on each machine in the web app's OneDrive working folder,
+never in the repository and never alongside the actual secret value.
 
-## Behavioural requirements (from `packages/mcp-cred-vault/src/schema.test.js`)
+## Behavioural requirements (from `mcp-cred-vault` test coverage)
 
-- Accepts the committed example file (`mcp-secrets.example.json`) as valid.
-- Rejects a missing `version`.
-- Rejects a secret entry missing any required field.
-- Rejects an invalid environment-variable name.
-- Rejects duplicate `server`/`target` pairs.
-- Throws on malformed JSON.
-- Throws **with details** (not just a boolean) on an invalid shape, so a caller can report exactly
-  which field is wrong.
+The test suite (7 tests, `mcp-cred-vault` domain) exercises `parseMcpSecrets` and
+`collectMcpSecretsErrors` against malformed and well-formed pointer files, asserting the schema
+rejects a file that is missing required fields, is not valid JSON-shaped data, or declares a secret
+entry without every field a launcher needs to resolve it — because a malformed pointer file, unlike
+a malformed secret, fails silently: the credential manager lookup simply returns nothing, and a
+launcher with no shape validation would proceed with an undefined environment variable rather than
+failing loudly at the point where the mistake actually is.
 
 ## Failure modes
 
-- A pointer file with a duplicate `target` would make two different secrets resolve to the same
-  Credential Manager entry, silently handing one MCP server another's token; the duplicate check
-  exists specifically to fail this loudly at load time rather than at connection time.
-- Because the JS validator never touches Credential Manager, it cannot itself leak a secret — the
-  worst it can do is accept/reject the pointer file incorrectly, which is exactly what the test suite
-  pins.
+A pointer file that validates but names the wrong `envVar` or `target` is outside this package's
+reach — schema validation only proves the file is *well-shaped*, not that it is *correct* for the
+machine it lives on. Getting the values right is the PowerShell/.NET launcher's job, which this
+package's `doc` comment explicitly defers to.

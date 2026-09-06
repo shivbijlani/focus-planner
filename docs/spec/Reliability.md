@@ -1,114 +1,133 @@
 # Reliability
 
-The overnight agent runs unattended, on one machine, on a recurring schedule, with no operator
-watching it. Every mechanism on this page exists because that machine was observed to fail in a
-specific, measured way, and the fix is a script or a guard, not a process change — a rule kept as
-prose regresses, a rule kept as an executable check does not (`plugins/overnight-agent/checks/README.md`).
+The overnight agent runs unattended, on one machine, every 30 minutes, with no human watching a
+given run. Every mechanism on this page exists because that combination — autonomy, schedule,
+single point of failure — turns an ordinary bug into a silent multi-day outage. The design answer is
+uniform: detect narrowly, prefer silent auto-repair over silent failure, and prove every guard is
+load-bearing by mutating the real file it protects.
 
-## Out-of-band supervision (issue #226)
+## Out-of-band supervision
 
-Every supervisory mechanism in the system used to be dispatched by the thing it supervised:
-`reap-stale-mcp.ps1` and the sweep suite both ran from inside an agent run's own `SKILL.md` phases; the
-browser watchdog and the agent itself were both launched by the same app scheduler. Measured on the
-production machine: zero OS-level scheduled tasks supervised any of it, so "the agent stopped running"
-was unobservable from inside the agent, and across 1,222 recorded runs, 32 occupied their slot for over
-an hour, 18 of them ending only by "interrupted by app shutdown" — 13.1 cumulative days lost. The fix,
-`plugins/overnight-agent/checks/oa-supervisor.ps1`, is dispatched by Windows Task Scheduler — the OS,
-not the app — specifically so a frozen agent cannot also freeze its own supervisor. Because Task
-Scheduler registration can be denied without elevation on an unattended machine, a second, unelevated
-fallback dispatcher (`oa-supervisor-daemon.ps1`) is launched from the Windows Startup folder by Explorer
-at logon instead: its own process, not a child of `copilot.exe`, not an MCP server, so neither the MCP
-reaper nor a crashing run can take it down, and it is not dispatched by the scheduler whose freezing is
-the exact failure being guarded against.
+`plugins/overnight-agent/checks/oa-supervisor.ps1` runs as an OS-scheduled process independent of
+the agent it watches, and classifies it `HEALTHY | STUCK | DEAD | SCHEDULE-DEAD | LEAK`. `LEAK` is
+deliberately distinct from "busy": a sustained resource leak (measured live: 7.05 CPU-hours over
+14.7h uptime, queue length 21) reaches a non-`HEALTHY` state, while a machine that is merely busy
+stays `HEALTHY`, and a long-running interactive session is never restarted purely for being
+long-lived — issue #178 documents an earlier age-only heuristic killing legitimate work.
+`mutcheck-supervisor-liveness.ps1` and `mutcheck-supervisor-resource.ps1` deliberately dot-source and
+mutate the *real* shipped `oa-supervisor.ps1` rather than a reimplementation, because "a copy can
+silently diverge from the file that actually runs."
 
-## Liveness-gated stuck detection and orphan repair
+## Liveness-gated stuck-run detection and orphan repair
 
-`stuck-run-sweep.mjs` detects a run occupying its slot well past a healthy run's observed duration with
-no liveness signal, and `--repair` performs the remedy: a silent auto-restart, not a page to a human who
-is asleep. `orphan-liveness-sweep.mjs` closes the companion gap — a session-state directory or lock left
-behind by a run that died mid-flight, indistinguishable from a live one until a liveness check
-(process-alive, not merely file-present) resolves it. Both are proven by mutation replay
-(`supervisor-replay.mjs`), which re-runs each sweep against a corpus of known-good and known-bad
-historical states and requires the sweep to classify every one correctly — a sweep is only as trustworthy
-as its worst historical miss.
+`checks/stuck-run-sweep.mjs` detects workflow runs stuck at `status=running` and, given `--repair`,
+fixes them — not merely reports them. The rationale is a measured incident: the hourly "Browser
+watchdog" workflow was dead for 11 hours because a single orphaned row permanently disabled it for
+both the scheduler and manual triggers, and a companion detector (`workflow-health-sweep.mjs`) had
+correctly flagged it in 16 consecutive runs without anything acting on the flag. The liveness signal
+is a per-session `inuse.<pid>.lock` file; "lock PID is not alive" is the orphan test.
+`workflow-health-sweep.mjs` reads `workflows`/`workflow_runs` directly from
+`%USERPROFILE%\.copilot\data.db` (ordinary SQLite tables) rather than trusting an app-level tool,
+because "a whole class of automation was ruled out on an assumption nobody tested" — it also fixes a
+"wolf-crier" false positive where a workflow that never ran flagged red in every one of 17 runs.
 
 ## Silent auto-restart as the remedy
 
-The remedy for a detected stuck run is deliberately silent, not an alert: the standing instruction this
-plugin is built against is "why block on me, if you're wrong it's easily reversed" — the same reasoning
-behind `oa-supervisor-daemon.ps1` shipping unattended rather than waiting on a manual elevation step.
-A silent restart costs nothing if it was unnecessary; blocking on a human costs the whole unattended
-schedule until someone notices.
+Detection alone is proven insufficient by the stuck-run incident above (16 flagged runs, 0 acted
+on); every subsequent reliability check therefore pairs a detector with a `--repair`/auto-restart
+path rather than shipping detection alone.
 
-## Deploy propagation — "merged isn't running" (issue #196)
+## Deploy propagation — "merged isn't running"
 
-A merged PR does not mean the running copy of the plugin has it: `installed-skill-drift-sweep.mjs`
-detects the gap nightly, and `deploy-installed-plugin.ps1` closes it by hand, but the loop from
-"merged" to "running" had a human step in the middle — and the human step is the one that gets
-skipped. Measured: PR #151 merged and sat uninstalled for five days; a reliability guard for the MCP
-reaper merged to `origin/main` and was absent from the installed tree, found only by a nightly run and
-deployed by hand. `plugins/overnight-agent/checks/auto-deploy-plugin.ps1` is the missing wire: it
-closes the loop end-to-end so "merged" and "running" cannot silently diverge again. `repo-drift-sweep.mjs`
-runs the same class of check for the checks suite itself (see [Domain-overnight-agent](Domain-overnight-agent)),
-because the archive that proves the suite works is exactly as perishable as the plugin it audits.
+Two independent deploy targets exist and both have gone stale silently. `checks/auto-deploy-plugin.ps1`
+guards the `installed-plugins` target: PR #151 merged and was still not installed five days later,
+meaning the `SKILL.md` the agent obeyed nightly was missing an entire PHASE 0 section. It also fixes
+a refuse-but-exit-0 seam — a refused deploy previously exited `0`, so a blocked deploy looked
+identical to a clean one. `checks/sync-oa-home.ps1` guards the second, flat
+`%LOCALAPPDATA%\overnight-agent` target: auto-deploy reported "verified-current: True" for the first
+target while the copy the agent actually executes (the second) stayed months behind — measured as
+`reap-stale-mcp.ps1` sitting 16,360 bytes behind `main`, the missing fix for the exact "we keep
+having to reap processes and restart the device" complaint the reaper itself exists to solve.
+`checks/basename-collision-sweep.mjs` guards against the resulting worst case: `sync-oa-home` indexes
+the flat deploy directory by basename, so two repo paths sharing one basename make it unable to say
+which is current, and it refuses to update either — a guard frozen on the wrong version keeps
+passing forever rather than failing. Measured: `mutcheck-turn-ask.ps1` and `mutcheck-write-turn.ps1`
+each existed at two paths and refused on every run until fixed.
 
 ## Byte-level encoding safety
 
-`ps1-encoding-sweep.mjs` and `journal-encoding-invariant.mjs` guard against silent corruption at the
-byte level: PowerShell string interpolation and encoding conversions can drop or mangle characters in
-ways that are invisible until a journal or script is read back wrong. The repository's own
-`core.autocrlf=true` with no `.gitattributes` — git stores LF, checks out CRLF — is itself a source of
-exactly this class of false positive, which is why file-comparison sweeps (`repo-drift-sweep.mjs`)
-normalize line endings before comparing rather than hashing raw bytes.
+`oa-state.ps1`'s journal hash must depend only on a journal's bytes, never on which PowerShell host
+ran the script. Windows PowerShell 5.1 ANSI-decodes a BOM-less UTF-8 file differently from
+PowerShell 7; swapping the running script for an unpatched copy turned "0 changed / 0 reopened" into
+"239 changed / 24 reopened" across 239 journals, 362 of 366 of which contain non-ASCII characters.
+The fix, applied throughout `oa-state.ps1`, is to build lookup tables (urgency icons, etc.) from
+Unicode codepoints rather than literal emoji characters in source, which a mismatched host would
+otherwise mangle before the script even runs. `mutcheck-journal-decode.ps1` guards this.
 
 ## Journal write safety
 
-`write-turn.ps1` is the **only** sanctioned writer of an agent turn into a journal, and it exists
-because every alternative — direct file edits from inside a run, ad hoc string interpolation — has
-corrupted a journal in a specific, previously-observed way. Its guards (named G1 through G12 in the
-script) include: a double-quoted PowerShell string silently dropping a `$`-prefixed value (lost
-interpolation); a single-quoted string producing a doubled apostrophe (`don''t`); a `##` heading not
-immediately preceding the Telegram bridge's expected emoji anchor, breaking the bridge's block parsing;
-a stray provenance marker breaking downstream parsing; and pointer-turn guards (G9–G11) scoped only to
-doc-bound tasks, opt-in via a `<!-- doc-meta ... -->` stamp, so an ordinary journal is never subjected to
-doc-binding rules it never opted into. See [Data-Formats](Data-Formats) §3 for the format these guards
-protect.
+`skills/overnight-agent/write-turn.ps1` is the only sanctioned path for appending a journal turn and
+is append-only by construction — "it physically cannot eat one of Shiv's replies." Its header
+documents distinct corruption classes it guards against, each with a measured cost before the fix:
+lost string interpolation (`$150` silently expanding to nothing, `~$150-275` landing as `~\-275`;
+cost: 12 journals), doubled apostrophes (cost: 50 occurrences), a bad Telegram heading anchor (cost:
+5,405 of 10,557 characters dropped, twice in one day), a stray provenance marker (cost: 26 journals
+left with an inert fallback), and an unstamped 🌙 heading silently reading as human consent (issue
+#272). `Cmd-Extract`/`Get-BoundedSlice` similarly bound how much of a journal any reader may pull
+into context at once — one journal alone reached 272 KB (~70K tokens), and issue #262 records the
+same defect on a different file freezing the `*/30` schedule for roughly 9 hours; the read contract
+is verbatim (contiguous substrings only), bounded (a byte ceiling), and read-only.
 
 ## MCP process reaping
 
-`reap-stale-mcp.ps1` reaps stdio MCP server processes left behind by finished sessions. Every scheduled
-run starts a fresh set — roughly six node processes per run, each holding 75–150 MB — and when a
-session ends they are not always reaped, so they accumulate. Measured on the production machine: 82
-orphaned node processes held ~7 GB, free memory fell to 3.2 GB, and the email MCP died with an
-out-of-memory error during the inbox-check phase — meaning emailed instructions could be silently
-dropped. Not every MCP server is a node process: `uvx`-launched servers (Telegram, Google Workspace) run
-as `uv.exe` plus two `python.exe` children and leak on the identical per-run cadence, so the reaper
-scans by a configurable set of process names rather than one hardcoded image name, and only kills a
-process satisfying every safety-model condition (a known process name, orphaned from a finished
-session, above an age threshold) — never a live, in-use process.
+`checks/reap-stale-mcp.ps1` reaps orphaned or stillborn MCP server processes under two guards. The
+**ownership veto**: a server is reapable only if no live owning session remains anywhere in its
+ancestor chain — without the veto, a run would have killed 9 live servers (621 MB) all aged 24
+minutes, every one still in use. The **cohort rule** closes a gap the veto alone missed: 17 servers
+(1,164 MB, growing ~436 MB/run) were unreachable by every existing rule while the reaper reported
+perfect health. **Stillborn-host detection** targets a `copilot.exe --server --stdio` process that
+came up, announced readiness, and was never driven — two real fixtures (392-byte logs, PIDs resident
+8 hours) confirm the class. Guarded by `mutcheck-reaper-ownership.ps1`, `mutcheck-reaper-cohort.ps1`,
+`mutcheck-reaper-stillborn.ps1`.
 
-## Browser-slot health (issue #197)
+## Browser-slot health
 
-The hourly browser watchdog originally decided a slot was alive with a one-second raw TCP connect to its
-debug port — a signal answered by the browser *process*, not by the *renderer*, whose task queue is what
-actually wedges. "Already up, reusing" then meant the watchdog left a genuinely frozen slot untouched and
-exited 0. `plugins/overnight-agent/checks/browser-watchdog.ps1` replaces the TCP probe with a real CDP
-(Chrome DevTools Protocol) health check — evaluating actual page responsiveness, not socket acceptance —
-so a wedged renderer is now detected and restarted rather than reported healthy.
+`checks/check-browser-slots.ps1` detects two distinct dead states in the Playwright MCP CDP browser
+pool: a "zombie" slot whose process still answers CDP but has an old Edge DLL loaded, so every new
+tab crashes instantly; and a "wedged" slot (issue #197) whose page lifecycle is frozen — it passes
+every HTTP probe but never resolves an `evaluate` call. The check is read-only by default; its only
+`-Repair` action is the non-destructive `Page.setWebLifecycleState -> 'active'` call. Guarded by
+`mutcheck-browser-slots.ps1`, `mutcheck-browser-slot-probe.ps1`, `mutcheck-playwright-slots.ps1`,
+`mutcheck-browser-watchdog.ps1`.
 
-## The mutation-tested sweep harness
+## The mutation-tested sweep harness (the `mutcheck-*` pattern)
 
-Every sweep in this domain is proven, not merely written: the `mutcheck-*` convention reverts one part
-of a fix and requires some test to go red (the mutant is "killed"). The stricter form used by the newer
-mutation checks requires the arm-to-test kill matrix to be a bijection — every arm caught by exactly one
-test — because an arm caught by a second test proves less than it claims, and a test that kills two
-arms is not pinning either guard individually. See [Domain-overnight-agent](Domain-overnight-agent) and
-[Prioritisation](Prioritisation) for the specific mutation checks guarding the gate/pacing/dispatch
-mechanics.
+Roughly 48 files across `checks/` and `skills/overnight-agent/` follow one shape: build a synthetic
+fixture, run the *real* shipped script or function against it (never a reimplementation), mutate one
+behavior at a time, and assert exactly the owning arm flips — "a test suite that passes on broken
+code is worse than none." A `-Matrix` mode mechanically proves the arm↔mutant bijection.
+`mutcheck-today-served.ps1` additionally guards a meta-failure: some scripts assert their own
+literal-match targets still exist in the source, because a later reformat can silently kill a mutant
+while every arm still reports green. The pattern itself exists because of a near-catastrophic single
+point of failure: `checks/repo-drift-sweep.mjs`'s own header records that on 2026-08-26, 70 of 73
+files making up this enforcement suite existed in exactly one place — a single laptop's
+`%LOCALAPPDATA%\overnight-agent` — with no git history and no backup; a disk failure would have
+erased the entire self-healing layer. `repo-drift-sweep.mjs` now continuously re-verifies the
+archive against what actually runs, "because a rule kept as prose regresses; a rule kept as an
+executable check does not."
 
-## The `user-settings.md` reconcile loop (issue #337)
+## `user-settings.md` reconcile loop
 
-The supervisor's install/uninstall state should reconcile against a `user-settings.md` toggle rather
-than being managed by hand — the watchdog install itself becomes a setting the user flips, and a
-reconcile loop brings the running state in line with it on the next check, the same self-healing shape
-as every other mechanism on this page.
+Both the Today-gate settings (`Resolve-GateSettings`: backstop hours, strict flag) and the pacing
+setting (`Resolve-PacingSettings`: concurrency, see [Prioritisation](Prioritisation)) are re-read from
+`user-settings.md` fresh on every run with an identical contract: an explicit CLI argument outranks
+the settings-file row, which outranks a safe built-in default, and a malformed cell is *reported* as
+a distinct `*-malformed` source rather than silently substituted — "narrowing a run that the user can
+see was narrowed is recoverable; widening one nobody can see is not."
+
+## Related pages
+
+Journal-corruption guards feed directly into the Today-gate design in
+[Prioritisation](Prioritisation) §5–6; the on-disk shapes referenced here (`agent-gate.md`,
+`user-settings.md`, journal turns, `scan` rows) are specified in full in
+[Data-Formats](Data-Formats).

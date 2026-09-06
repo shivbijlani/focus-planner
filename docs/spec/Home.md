@@ -1,89 +1,68 @@
 # Focus Planner
 
-Focus Planner is a task board and journal system whose database is plain markdown files, editable by
-a human in any text editor, a browser tab, or an unattended overnight agent, with no server-side
-database and no accounts system standing between any of them. The problem it solves is keeping one
-person's task list, priority ordering, and per-task working notes consistent across three things that
-would otherwise drift apart: a phone or laptop browser, a second device syncing the same folder, and a
-nightly Copilot CLI agent that reads the board and acts on it while its owner sleeps.
+Focus Planner is a markdown-backed task planner: the database is a folder of plain markdown files
+(`planner.md`, `planner-completed.md`, one journal per task) that a human can open, read and edit in
+any text editor, and that a browser-based board, a static journal viewer, a Telegram bot, and an
+autonomous overnight agent all read and write concurrently, kept consistent by a CRDT sync layer and
+a deliberately narrow set of shared parsing rules. There is no application database — the files are
+the system of record, and every reader is required to derive the same view of them.
 
-## Core design principles
+## The problem this solves
 
-**The file format is the API.** Nothing in this system talks to anything else over a socket or a
-shared process. A browser tab, a PowerShell agent, and a Node CLI collaborate on the same
-`planner.md` and `journal/task-<id>.md` files purely by reading and writing them, at different times,
-leaving marks (`<!-- from: ... -->`, a `turn-end` stamp, a board cell) that tell the next reader what
-happened. See [Architecture](Architecture).
+A task planner that only one program can read stops being useful the moment you want a second way
+into the same data — a phone, a chat bot, an autonomous agent working overnight, a plain-text
+editor when nothing else is available. The alternative to a real backend is not "no design," it is a
+harder design problem: multiple independent readers and writers touching the same small set of
+human-readable files, occasionally offline, occasionally concurrent, with no server to arbitrate.
+Every core design decision in this system exists to make that safe:
 
-**One alignment rule, shared by every reader and writer.** `planner.md`'s tables are ragged by
-construction — hand-edited, evolving column sets, ambiguous short rows — so the question "which cell
-is this row's `Linked ID`?" is answered in exactly one place (`src/boardRow.js`) and imported
-everywhere else. Issue #426 is what happens when two implementations of that question disagree. See
-[Data-Formats](Data-Formats) and [Domain-app](Domain-app).
+- **One file format, many readers, one parser per format.** The board's `Wake`/`Linked ID` column
+  ambiguity (issue #426) and the journal chat grammar are each read and written by exactly one shared
+  implementation, never independently reimplemented per surface — see [Data-Formats](Data-Formats).
+- **CRDT merge instead of last-write-wins.** Two devices editing the same file offline must both
+  survive reconnection without silently losing a change — see [Architecture](Architecture) and
+  [Domain-folder-sync](Domain-folder-sync).
+- **Priority is data, not judgement.** What order the overnight agent works tasks in is a
+  deterministic function of the board's own content, never the agent's improvisation — see
+  [Prioritisation](Prioritisation).
+- **An unattended agent must fail narrow and loud, not silently.** A 30-minute cron job with no
+  human watching a given run needs to detect its own stuck states and repair them, or say clearly
+  that it could not — see [Reliability](Reliability).
+- **A signal the agent can write about itself must never carry the authority of a signal only the
+  user can produce.** This single principle recurs across consent, the Today-gate, and dispatch
+  precedence — see [Prioritisation](Prioritisation) §5–7.
 
-**Ordering is data, not judgement.** The overnight agent does not decide what to work on next by
-reasoning about the board in its head; `oa-state.ps1 scan` computes a sorted worklist with a binding
-`eligible` flag once, so two runs over an unchanged board produce the same order and that order is
-auditable afterward. See [Prioritisation](Prioritisation).
+## How the pieces fit together
 
-**A gate must never be releasable by the thing it gates.** The Today→Deferred gate, exhaustion
-declarations, capacity accounting, and journal consent markers have each, at different times, been
-broken the same way: a signal the agent's own software produced was trusted to open a door only a
-human's action should open. The fix is always to key release on something external — board text,
-wall-clock staleness, a fresh declaration each run. See [Prioritisation](Prioritisation) and
-[Reliability](Reliability).
+Twelve domains divide the system: a browser-facing board (`app`), the on-disk formats and their
+shared config (`config`, `storage`), a bidirectional sync engine (`folder-sync`), an autonomous
+overnight worker (`overnight-agent`), a Telegram mirror (`telegram-bridge`), a static journal
+publisher (`task-paper`), supporting services (`mcp-cred-vault`, `install-prompt`, `diagnostics`),
+the server and build entry points (`root`), and repository tooling including this spec's own
+generation pipeline (`scripts`). See [Architecture](Architecture) for how they compose at runtime and
+[Rebuilding](Rebuilding) for the order to build them in.
 
-**Reliability is out-of-band, not self-supervised.** An agent that supervises itself cannot detect
-that it has stopped running. Every liveness, restart, and deploy-propagation mechanism in this system
-is dispatched by something outside the process it watches — the OS scheduler, a second unattended
-dispatcher, a nightly sweep that audits its own archive. See [Reliability](Reliability).
-
-**Write append-only where correctness matters.** Journals are never rewritten, only appended to, by
-exactly one sanctioned writer (`write-turn.ps1`) carrying explicit guards against known corruption
-classes. See [Data-Formats](Data-Formats) and [Reliability](Reliability).
-
-## Priority icons
-
-| Icon | Meaning |
-| --- | --- |
-| 🔴 | Urgent & Important |
-| 🟡 | Important, Not Urgent |
-| 🔵 | Urgent, Not Important |
-| ⚪ | Not Urgent, Not Important |
-| ✅ | Done |
-| 🐸 | Frog (eat first) |
-| 📖 | Learning |
-
-## Where things are unfinished
-
-This is a system under active development, not a finished product. [Roadmap](Roadmap) surveys all 129
-open issues by priority label; the most consequential open gaps are capacity accounting in the
-overnight agent's dispatch logic, doc-binding integrity for the catch-up-doc channel, and provenance
-markers that distinguish agent-authored from human-authored state. [Prioritisation](Prioritisation)
-and [Reliability](Reliability) both call out, inline, which of the mechanisms they describe are shipped
-code versus run-loop guidance still tracked by an open issue.
-
-## Page index
+## Pages
 
 | Page | Contents |
 | --- | --- |
-| [Architecture](Architecture) | The domains, how they compose, process/runtime boundaries, and the data-flow from a user action to persisted state. |
-| [Data-Formats](Data-Formats) | Every persisted format — the board, journals, agent state, sync sidecars — with annotated real samples and invariants. |
-| [Domain-app](Domain-app) | The board UI, journals-as-chat, settings editors, multi-source routing. |
-| [Domain-config](Domain-config) | The agent-gate and user-settings schemas, `AGENTS.md` generation, branding. |
-| [Domain-diagnostics](Domain-diagnostics) | The cross-realm (tab ↔ service-worker) diagnostic event bus. |
-| [Domain-folder-sync](Domain-folder-sync) | The offline-first multi-device sync engine for markdown + sidecar files. |
-| [Domain-install-prompt](Domain-install-prompt) | The PWA "add to home screen" UX. |
-| [Domain-mcp-cred-vault](Domain-mcp-cred-vault) | The non-secret pointer manifest binding MCP servers to OS credential storage. |
-| [Domain-overnight-agent](Domain-overnight-agent) | The unattended nightly Copilot CLI plugin and its self-testing check suite. |
-| [Domain-root](Domain-root) | The static file server and shared build tooling. |
-| [Domain-scripts](Domain-scripts) | Repo hygiene, board-repair one-offs, and the spec-generation pipeline itself. |
-| [Domain-storage](Domain-storage) | The pluggable multi-provider file-storage abstraction the whole app is built on. |
-| [Domain-task-paper](Domain-task-paper) | The static-site generator turning journals into standalone HTML "papers". |
-| [Domain-telegram-bridge](Domain-telegram-bridge) | The Node CLI mirroring the board/journals into a Telegram forum and folding replies back. |
-| [Prioritisation](Prioritisation) | How priority is expressed, changed, gated, paced, and dispatched — the system's most load-bearing behaviour. |
-| [Behaviour](Behaviour) | The system's required behaviour as testable statements, grouped by area. |
-| [Rebuilding](Rebuilding) | A build-order guide, with a verification step at each stage, for starting from an empty directory. |
-| [Updating-the-Spec](Updating-the-Spec) | The maintenance guide for this spec: the pipeline, the verifier, and its traps. |
-| [Roadmap](Roadmap) | Known gaps and direction, grouped by priority label, referencing open issues. |
-| [Reliability](Reliability) | How the unattended overnight agent stays running on one machine and heals itself. |
+| [Architecture](Architecture) | Domains, module graph, runtime processes, data-flow from user action to persisted state. |
+| [Data-Formats](Data-Formats) | Every persisted format — board, journals, agent/bridge state — with annotated real samples and invariants. |
+| [Domain-app](Domain-app) | The board UI and its pure content-transformation core. |
+| [Domain-config](Domain-config) | Agent gate, user settings, `AGENTS.md`, and their write-safety guarantees. |
+| [Domain-diagnostics](Domain-diagnostics) | Structured, no-content-leak logging shared across storage providers. |
+| [Domain-folder-sync](Domain-folder-sync) | The CRDT merge engine and service-worker sync client. |
+| [Domain-install-prompt](Domain-install-prompt) | The install/onboarding prompt UI (and its untested-code gap). |
+| [Domain-mcp-cred-vault](Domain-mcp-cred-vault) | Schema-validated credential storage for MCP servers. |
+| [Domain-overnight-agent](Domain-overnight-agent) | The autonomous work-loop plugin: state machine, run phases, self-healing checks. |
+| [Domain-root](Domain-root) | The Express server, build entry points, and repo-wide lint config. |
+| [Domain-scripts](Domain-scripts) | Build glue, developer-safety scripts, and the spec generation pipeline. |
+| [Domain-storage](Domain-storage) | The multi-provider file storage abstraction underlying the board and sync. |
+| [Domain-task-paper](Domain-task-paper) | Static journal-to-HTML publishing. |
+| [Domain-telegram-bridge](Domain-telegram-bridge) | The Telegram mirror: digest, live status, reply routing. |
+| [Prioritisation](Prioritisation) | How priority is expressed, changed, and turned into an ordered, gated, paced worklist. |
+| [Behaviour](Behaviour) | Testable behavioural requirements, grouped by area. |
+| [Rebuilding](Rebuilding) | Build order for reconstructing the system from an empty directory. |
+| [Updating-the-Spec](Updating-the-Spec) | How this spec itself is generated, verified and published. |
+| [Roadmap](Roadmap) | Open issues grouped by priority. |
+| [Reliability](Reliability) | How the unattended overnight agent stays running and heals itself. |

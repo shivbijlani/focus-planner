@@ -1,73 +1,86 @@
 # Domain: overnight-agent
 
+`overnight-agent` (`plugins/overnight-agent/`) is a scheduled, markdown-journal-driven autonomous
+work loop implemented as a Copilot CLI plugin. It is the repository's largest domain by module count
+(159, almost entirely PowerShell) and the one the rest of the reliability and prioritisation design
+exists to support. See [Prioritisation](Prioritisation) and [Reliability](Reliability) for its two
+most load-bearing behaviours in depth; this page is the domain map.
+
 ## Responsibility
 
-`plugins/overnight-agent` is a GitHub Copilot CLI plugin: an unattended, scheduled agent that reads
-the planner board and its journals, decides what is safe to act on versus what needs a human, does the
-work, and writes back into the same journals the app renders. It is the largest domain in the repo by
-module count (159 collected `.mjs` files under `checks/`, plus a PowerShell skill layer that the fact
-collector does not parse but that carries the domain's actual state machine). See
-[Prioritisation](Prioritisation) for the full selection/gating logic and [Reliability](Reliability)
-for how the agent stays running unattended.
+Run unattended roughly every 30 minutes: scan the board and journals into an ordered, gated
+worklist; propose plans for eligible tasks and execute only user-approved ones, each in an isolated
+per-task session/workspace; mirror progress to Telegram; and — through a large mutation-tested check
+suite — continuously detect and repair its own infrastructure failures (stuck workflow runs, leaked
+MCP processes, undeployed fixes, corrupted journal writes, drifted settings), so a nightly
+automation with no human in the loop degrades **narrow and loud** rather than silently.
 
 ## Principal modules
 
-The skill itself (`plugins/overnight-agent/skills/overnight-agent/`) is PowerShell and is not part of
-the collected module graph, but is the domain's core:
-
-| File | Role |
+| Path | Purpose |
 | --- | --- |
-| `SKILL.md` | The agent's instructions: phase order (inbox → scan → dispatch → propose → mirror), pacing rules, reversibility/consent rules. |
-| `oa-state.ps1` | Skill-owned memory: per-task JSON state, `scan` (the worklist), `session` (per-task session binding + capacity), `consent`/`gate` (the agent-gate reader), `mark` (state + exhaustion declarations). |
-| `write-turn.ps1` | The **only** sanctioned way to write a turn into a journal — append-only, with guards G1–G12 against specific corruption classes (lost interpolation, doubled apostrophes, a Telegram heading anchor cut, a stray provenance marker, an over-long pointer turn, and more). |
-| `user-settings.md` | The template shipped in the plugin; the user's real, filled-in copy lives outside it (see [Data-Formats](Data-Formats)). |
-| `reap-stale-mcp.ps1` | Reaps orphaned MCP server processes left behind by finished sessions. |
+| `plugins/overnight-agent/skills/overnight-agent/SKILL.md` | The run-loop contract: PHASE 0 (inbox + gate) → catch-up-doc comments → dispatch → propose plans → task papers → Telegram mirror, plus the pacing/priority/consent doctrine. |
+| `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1` | The central state-machine CLI (~5,100 lines): `scan`, `get`, `mark`, `session`, `gate`, `consent`, `doc`, `extract`, `resnapshot` — computes eligibility, sort order, gate verdicts, and capacity. |
+| `plugins/overnight-agent/skills/overnight-agent/write-turn.ps1` | The only sanctioned way to append a journal turn; append-only by construction, and refuses on five distinct corruption classes (see [Reliability](Reliability)). |
+| `plugins/overnight-agent/skills/overnight-agent/user-settings.md` | The user-tunable config template: paths, allow-lists, Telegram identifiers, the `## Overnight Agent behaviour` table (gate backstop, gate strict, concurrency). |
+| `plugins/overnight-agent/checks/reap-stale-mcp.ps1` | Reaps orphaned/stillborn MCP server processes, gated by an ownership veto and a cohort rule. |
+| `plugins/overnight-agent/checks/stuck-run-sweep.mjs` | Detects and (`--repair`) fixes workflow runs stuck at `status=running`. |
+| `plugins/overnight-agent/checks/workflow-health-sweep.mjs` | Reads scheduled-workflow health directly from the app's SQLite store rather than assuming a scheduler tool is trustworthy. |
+| `plugins/overnight-agent/checks/oa-supervisor.ps1` | OS-level classifier (HEALTHY/STUCK/DEAD/SCHEDULE-DEAD/LEAK) driving silent auto-restart. |
+| `plugins/overnight-agent/checks/auto-deploy-plugin.ps1` | Closes the "merged is not the same as running" gap for the `installed-plugins` deploy target. |
+| `plugins/overnight-agent/checks/sync-oa-home.ps1` | Closes the same gap for the second, flat `%LOCALAPPDATA%\overnight-agent` deploy target. |
+| `plugins/overnight-agent/checks/check-browser-slots.ps1` | Health-checks the Playwright MCP CDP browser slots (zombie/wedged detection). |
+| `plugins/overnight-agent/checks/basename-collision-sweep.mjs` | Detects two repo paths sharing one deploy basename — a state where a guard can be permanently frozen on the wrong version. |
+| `plugins/overnight-agent/checks/catchup-doc-sweep.mjs` | Verifies the catch-up-doc comment channel is actually read, not merely built. |
+| `plugins/overnight-agent/checks/mutcheck-doc-comments.mjs` | Mutation-checks the doc-comment attribution reader (issue #422): an agent-authored comment saying "approve" must not read as consent, agent/human authorship partitions without inspecting writing style, reading fails open while consent fails closed, and the API's own author field is read but never trusted outright. |
+| `plugins/overnight-agent/skills/overnight-agent/mutcheck-*.ps1` (~30 files) | Mutation checks proving each named guard is load-bearing — see [Reliability](Reliability) for the pattern. |
 
-`plugins/overnight-agent/checks/` (the collected `.mjs` corpus) is a nightly-run suite of
-**detectors**, the **shared libraries** they import, and **mutation checks** that prove each
-detector's guard is load-bearing rather than decorative. Its biggest module,
-`plugins/overnight-agent/checks/mutcheck-doc-comments.mjs` (599 lines), is one such mutation check.
-Representative detectors: `board-integrity.mjs`, `stuck-run-sweep.mjs`, `orphan-liveness-sweep.mjs`,
-`ps1-encoding-sweep.mjs`, `journal-encoding-invariant.mjs`, `repo-drift-sweep.mjs`. Representative
-shared libraries: `lib-live-status.mjs`, `lib-live-ask.mjs`, `lib-issue-body.mjs`,
-`lib-gh-refs.mjs`.
+## Key exports/functions of `oa-state.ps1`
 
-## The mutation-check convention
+`Cmd-Scan` (builds the worklist), `Test-Workable`, `Get-TodayGateVerdict`, `Test-ExhaustionClaim`,
+`Set-ExhaustionDeclaration`, `Test-UserClosed`/`Test-ReopenedClosed`/`Test-UserPaused`/
+`Test-UnansweredUser`, `Get-BoardMap`/`Get-PrioritiesRank`/`Get-UrgencyRank`/`Get-PriorityRank`/
+`Get-SectionRank`, `Resolve-GateSettings`/`Resolve-PacingSettings`, `Get-LiveSessionCount`/
+`Test-SessionHoldsCapacity`, `Cmd-Session`/`Get-SessionVerdict`, `Cmd-Gate`/`Get-GateVerdict`/
+`Read-AgentGate`, `Cmd-Consent`/`Get-ConsentFacts`, `Cmd-Doc`/`Read-ObservedComments`,
+`Cmd-Extract`/`Get-BoundedSlice`, `Cmd-Mark`.
 
-A test that only ever passes proves nothing about the guard it claims to protect. This domain's
-convention (documented across the `mutcheck-*.mjs`/`.ps1` files, and asserted mechanically rather than
-by prose) is: revert exactly one part of a fix, re-run the target test/suite, and require the mutant to
-be **killed** (some test goes red). An arm that survives means the corresponding guarantee is
-untested. The stricter form used by the newer checks (e.g. `mutcheck-meta-nodrop.mjs` in the
-`folder-sync` domain, `mutcheck-priority-order.ps1` here) requires the arm→test kill matrix to be a
-**bijection**: every arm killed by exactly one test, no test killing two arms — an arm caught by a
-second test is "misaimed" (it proves less than it claims), and a test killing two arms is not pinning
-either guard individually.
+## Failure modes this domain guards against
 
-## `repo-drift-sweep.mjs` — the archive that audits itself
+- **The agent authoring the signal its own gate reads** — named verbatim in `oa-state.ps1` as a
+  recurring failure class, observed three times: an unmarked agent prose block reading back as the
+  user's consent; the `awaiting_reply` ratchet parking 186 of 238 rows on the agent's own courtesy
+  line; and a `mark` call resetting the Today-gate's release signal regardless of whether the work
+  was actually done. See [Prioritisation](Prioritisation).
+- **Silent capacity deadlock** from parked tasks holding a dispatch slot — recurred on three separate
+  surfaces (issues #487, #500, #541) before the capacity predicate and its dispatcher-visible pause
+  flag were unified.
+- **Reanimating user-closed work via a stray reply**, and the inverse over-correction of an agent
+  self-declaring "done" to gain the same protection and thereby swallowing real unread messages
+  (issue #501).
+- **Merged-but-not-deployed drift** — a fix landing in `main` while the actually-executing copy (one
+  of two separate deploy targets) stays months behind, twice (issue #196 and its recurrence).
+- **Host-dependent journal hashing** — Windows PowerShell 5.1 silently ANSI-decodes a BOM-less
+  UTF-8 file differently from PowerShell 7, so the same journal bytes can hash differently depending
+  on which host ran the script, corrupting the "did anything change?" signal every reader depends on.
+- **Silent journal corruption on write** — five distinct classes documented in `write-turn.ps1`'s own
+  header, from lost string interpolation to a stray provenance marker, guarded individually.
+- **A capability that exists but is never invoked reading identical to "nothing to do"** (issue
+  #346) — recurring across the inbox check, the Google Tasks collector, and the catch-up-doc comment
+  channel: an empty result and an unreadable/broken input must never produce the same signal.
+- **Orphaned OS processes and workflow runs with no self-healing path** — stuck workflow runs, leaked
+  MCP server processes, and a supervisor daemon that can silently stop reporting its own heartbeat.
+- **Collect-phase work jumping the priority queue** (issue #405) — the collect (inbox/Telegram/scan)
+  and execute phases must stay separated, with only a narrow, provenance-justified exception (see
+  [Prioritisation](Prioritisation) §Dispatch precedence).
 
-The `checks/` directory is a versioned mirror of files that also live, and are actively edited, on the
-machine that runs them (`%LOCALAPPDATA%\overnight-agent`). A one-time copy fixes staleness once; it
-does not keep it fixed, since the agent writes new sweeps most nights. So the mirror is itself audited
-nightly by `repo-drift-sweep.mjs`, which derives its expected file set by parsing the **live registry**
-(`run-sweeps.ps1`) and walking each sweep's imports transitively — never from a hand-maintained list,
-which would be the same class of staleness one level up. It reports `UNVERSIONED` (live but never
-committed — the arm that prevents silent loss), `MODIFIED` (archived and live copies diverged, direction
-reported because "live ahead" and "repo ahead" need opposite fixes), and `ORPHANED` (archived but no
-longer referenced — informational, not a defect).
+## Test coverage note
 
-## Behavioural requirements
-
-There are no `testFiles` entries for this domain's PowerShell skill layer (vitest does not run
-`.ps1`); its behavioural contract is instead enforced by the domain's own `mutcheck-*.ps1` harness, run
-as part of the nightly sweep suite rather than `npm test`. Two `.mjs` test files exist in the collected
-facts with zero collected test names (`stuck-run-sweep.test.mjs`, `workflow-health-sweep.test.mjs`),
-i.e. they exist but the extractor found no `describe`/`it` blocks to enumerate — their content should
-be read directly rather than inferred from this page.
-
-## Failure modes
-
-This domain is, more than any other, a running list of **failure modes already found and closed**;
-seven are surveyed in depth in [Reliability](Reliability) and [Prioritisation](Prioritisation):
-run-level stuck detection, browser-slot health, journal byte-encoding safety, MCP process leaks,
-deploy propagation lag, and the recurring "the agent authors the signal its own gate reads" class.
+Unlike the JavaScript domains, `overnight-agent`'s two JS test files
+(`plugins/overnight-agent/checks/stuck-run-sweep.test.mjs`,
+`plugins/overnight-agent/checks/workflow-health-sweep.test.mjs`) carry no named test cases in this
+spec's collected facts, and the majority of this domain's behavioural guarantees are instead
+enforced by the ~30 PowerShell `mutcheck-*.ps1` mutation-check scripts wired directly into CI (see
+[Reliability](Reliability) and [Behaviour](Behaviour)), each of which asserts a real fixture drives
+the real shipped script to a specific, mutation-provable verdict rather than asserting behavior
+through a conventional named-test harness.

@@ -1,38 +1,47 @@
 # Domain: install-prompt
 
+`install-prompt` (`packages/install-prompt/`) is a small, self-contained React package implementing
+cross-platform "install this PWA" UX: the browser-native prompt where supported, and a manual
+instructional flow (notably for iOS Safari, which exposes no install API at all).
+
 ## Responsibility
 
-A self-contained React component package (`packages/install-prompt`) implementing the "Add to Home
-Screen" install flow across desktop and mobile PWA install affordances. It has no dependency on the
-rest of the app beyond React itself, so it is independently reusable and independently testable.
+Detect the current platform/browser's install capability and present the right affordance for it —
+a real install button where `beforeinstallprompt` fires, or a modal walking the user through
+Safari's Share-sheet "Add to Home Screen" flow where it does not — plus a settings-page entry point
+and a post-install success toast.
 
 ## Principal modules
 
-| Path | Exports | Role |
-| --- | --- | --- |
-| `packages/install-prompt/src/useInstallPrompt.js` | `useInstallPrompt`, `detectPlatform` | The hook: listens for the browser's `beforeinstallprompt` event (Chromium) and detects iOS/Android/desktop so the UI can show the right instructions where no native prompt exists (Safari). |
-| `packages/install-prompt/src/InstallButton.jsx` | `InstallButton` | A single call-to-action button that triggers the native prompt or opens `InstallModal`. |
-| `packages/install-prompt/src/InstallModal.jsx` | `InstallModal` | The full instructional modal, including iOS Safari's manual "Add to Home Screen" steps (no native API exists there). |
-| `packages/install-prompt/src/InstallNudge.jsx` | `InstallNudge` | A dismissible, lower-friction nudge shown opportunistically. |
-| `packages/install-prompt/src/InstallSettingsSection.jsx` | `InstallSettingsSection` | The Settings-page entry point for installing later. |
-| `packages/install-prompt/src/InstallSuccessToast.jsx` | `InstallSuccessToast` | Confirms a successful install. |
-| `packages/install-prompt/src/ShareIcon.jsx` | `ShareIcon` | Renders the iOS Share glyph (square + up-arrow) exactly as Safari shows it, since users must find that specific icon to start the manual flow. |
+| Path | Purpose |
+| --- | --- |
+| `packages/install-prompt/src/useInstallPrompt.js` | The platform-detection hook (`detectPlatform`, `useInstallPrompt`) driving every component below. |
+| `packages/install-prompt/src/InstallButton.jsx` | A direct install trigger, shown when the native prompt is available. |
+| `packages/install-prompt/src/InstallModal.jsx` | The manual walkthrough (e.g. iOS Share-sheet instructions) for platforms with no native prompt. |
+| `packages/install-prompt/src/InstallNudge.jsx` | A dismissible, less intrusive install suggestion. |
+| `packages/install-prompt/src/InstallSettingsSection.jsx` | The settings-page entry point to (re-)trigger install guidance. |
+| `packages/install-prompt/src/InstallSuccessToast.jsx` | Confirms a successful install. |
+| `packages/install-prompt/src/ShareIcon.jsx` | The iOS Share glyph (square with an up-arrow), matching what users actually see in Safari's chrome, since the modal has to visually match the exact UI the user is being told to tap. |
 
-## Design
+## Public exports
 
-The platform-detection and prompt-capture logic is isolated in `useInstallPrompt.js` precisely so
-every visual component (`InstallButton`, `InstallModal`, `InstallNudge`, ...) can share one behavioral
-source of truth: which platform is this, is a native prompt available, has the user already
-dismissed/ installed. `ShareIcon.jsx` exists as its own module because getting an OS-chrome icon
-pixel-faithful is a distinct, narrowly-scoped concern from the modal's copy and layout.
+`InstallButton`, `InstallModal`, `InstallNudge`, `InstallSettingsSection`, `InstallSuccessToast`,
+`ShareIcon`, `detectPlatform`, `useInstallPrompt`.
+
+## Behavioural requirements
+
+This domain currently has no dedicated test suite in `testFiles` (0 files, 0 tests) — its
+correctness today rests on manual verification across real browsers, which `ShareIcon.jsx`'s own
+doc comment implicitly acknowledges: "Matches what users see at the bottom (portrait) or top
+(landscape/iPad) of Safari" is a claim about live browser chrome, not something a unit test can
+assert. A rebuilder should treat platform detection (`detectPlatform`) as the one piece worth
+covering with automated tests, since every component's correct behavior is entirely conditioned on
+its output.
 
 ## Failure modes
 
-- On a platform with no native `beforeinstallprompt` (iOS Safari), the component tree must fall back
-  to the manual instructional modal rather than silently doing nothing — `detectPlatform` exists
-  specifically to drive that branch.
-- A stale "already installed" detection would keep nudging a user who already installed the app;
-  the hook is expected to track install state across the session it is mounted in.
-
-There is no dedicated `testFiles` suite for this package in the collected facts; correctness here is
-exercised through the app's own manual QA rather than an automated behavioural spec.
+A `detectPlatform` misclassification is the single point of failure for the whole domain: every
+downstream component (`InstallButton`, `InstallModal`, `InstallNudge`) branches on its result, so a
+wrong platform read shows the wrong instructions (e.g. the native-prompt button on a platform that
+has none) rather than crashing — a silent UX defect rather than a loud one, which is exactly the
+shape of bug this domain has no automated check for.
