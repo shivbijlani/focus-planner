@@ -2,56 +2,68 @@
 
 ## Responsibility
 
-Secret handling for the overnight agent's MCP (Model Context Protocol) server connections, split
-deliberately across two toolchains by trust boundary: the actual secret storage and retrieval is a
-Windows PowerShell + .NET Framework toolchain (`bin/`, `src/mcp-cred-launch.cs`) that reads from
-Windows Credential Manager, outside this repo's JS test surface entirely; the JS surface that *is*
-tested here validates the shape of a companion **pointer file** that names which secrets exist without
-ever containing a secret value.
+`packages/mcp-cred-vault` keeps MCP (Model Context Protocol) server secrets — bot tokens, API keys —
+out of the repository and out of any synced planner folder, while still letting the overnight-agent
+plugin discover which secret feeds which environment variable on a given machine. It is primarily a
+**Windows PowerShell + .NET Framework toolchain** (`bin/secret-vault.ps1`, `bin/setup.ps1`,
+`bin/build.ps1`, `src/mcp-cred-launch.cs`); the JavaScript surface exists only so the **pointer file**
+schema can be validated and unit-tested alongside the repository's other packages.
 
 ## Principal modules
 
-| Module | Role |
-| --- | --- |
-| `packages/mcp-cred-vault/src/schema.js` | Validates `mcp-secrets.json`: the non-secret pointer file listing, per machine, which credential target feeds which environment variable into which MCP server/command. |
-| `packages/mcp-cred-vault/src/index.js` | Re-exports the schema validators as the package's public JS surface. |
+| Path | Exports | Role |
+| --- | --- | --- |
+| `packages/mcp-cred-vault/src/schema.js` | `parseMcpSecrets`, `isValidMcpSecrets`, `collectMcpSecretsErrors` | Validates the shape of the non-secret `mcp-secrets.json` pointer file. |
+| `packages/mcp-cred-vault/src/index.js` | (re-exports `schema.js`) | Package entry point. |
 
-## Public surface
+## The pointer-file design
 
-`parseMcpSecrets, isValidMcpSecrets, collectMcpSecretsErrors` (both `schema.js` and `index.js`).
+The real secret **values** live in Windows Credential Manager, never in a file. `mcp-secrets.json`
+lives on each machine, in the web app's OneDrive working folder — **not** in the repo — and lists,
+per machine, which secrets it needs: the credential-manager target name, the environment variable it
+feeds, and which MCP server + real launch command consumes it. It never contains a secret value
+itself.
 
-## The pointer-file contract
+```json
+{
+  "version": 1,
+  "secrets": [
+    {
+      "server": "telegram",
+      "target": "overnight-agent:telegram-bot-token",
+      "envVar": "TELEGRAM_BOT_TOKEN",
+      "command": "uvx",
+      "args": ["better-telegram-mcp"]
+    }
+  ],
+  "ids": {
+    "telegramBotId": "0000000000",
+    "telegramChatId": "0000000000"
+  }
+}
+```
 
-`mcp-secrets.json` lives on each machine in the web app's synced working folder (OneDrive), **not** in
-the repo and **not** in Credential Manager itself. It records, per secret entry: which credential
-target Windows Credential Manager holds it under, which environment variable it must be materialized
-into, and which MCP server and real command consume it, plus non-secret public identifiers. Actual
-secret values live exclusively in Windows Credential Manager; the pointer file's entire job is to make
-that indirection discoverable and schema-checked without ever putting a value in a synced, multi-device
-file.
+`server`/`target` pairs must be unique (two secrets cannot silently share one Credential Manager
+entry), `envVar` must be a valid environment-variable name, and every secret entry must carry all of
+`server`, `target`, `envVar` and `command`. `ids` is a free-form bag for genuinely non-secret public
+identifiers (e.g. a Telegram bot/chat id) that are safe to keep alongside the pointer file.
 
-## Behavioural requirements (from tests)
+## Behavioural requirements (from `packages/mcp-cred-vault/src/schema.test.js`)
 
-- **The committed example file (`mcp-secrets.example.json`) must validate as-is** — it is the living
-  contract sample, not aspirational documentation.
-- **A missing version is rejected.**
-- **A secret entry missing any required field is rejected** — partial entries fail closed rather than
-  degrading to a best-effort read.
-- **An invalid environment-variable name is rejected** — the file drives real process environment
-  injection, so a malformed name must be caught at validation time, not at launch time.
-- **Duplicate servers or duplicate credential targets are rejected** — two entries claiming the same
-  target or server is treated as a shape error, not resolved by "last one wins".
-- **Malformed JSON throws**, and an invalid shape throws **with details** — a caller needs to know
-  which field failed, not just that validation failed.
+- Accepts the committed example file (`mcp-secrets.example.json`) as valid.
+- Rejects a missing `version`.
+- Rejects a secret entry missing any required field.
+- Rejects an invalid environment-variable name.
+- Rejects duplicate `server`/`target` pairs.
+- Throws on malformed JSON.
+- Throws **with details** (not just a boolean) on an invalid shape, so a caller can report exactly
+  which field is wrong.
 
-## Failure modes this domain guards against
+## Failure modes
 
-- **A secret value leaking into a synced, multi-device file** — the entire pointer-file design exists
-  to keep credential values inside Windows Credential Manager (single-machine, OS-protected storage)
-  while still letting the synced planner folder carry the *metadata* needed to wire an MCP server up on
-  any machine that folder reaches.
-- **A partially-valid pointer file silently launching a broken agent process** — because a malformed
-  entry throws with details at validation time rather than surfacing as a runtime failure deep inside
-  an MCP server launch, the failure is attributable to the pointer file immediately.
-- **Two entries silently colliding on the same credential target or server** — rejected outright rather
-  than picking a winner, since either interpretation could route a real secret to the wrong command.
+- A pointer file with a duplicate `target` would make two different secrets resolve to the same
+  Credential Manager entry, silently handing one MCP server another's token; the duplicate check
+  exists specifically to fail this loudly at load time rather than at connection time.
+- Because the JS validator never touches Credential Manager, it cannot itself leak a secret — the
+  worst it can do is accept/reject the pointer file incorrectly, which is exactly what the test suite
+  pins.

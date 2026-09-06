@@ -2,63 +2,37 @@
 
 ## Responsibility
 
-`packages/install-prompt` is the PWA install-nudge UI: a per-platform "add this to your home screen"
-flow that has to work around the fact that no single install API exists across browsers — Android
-Chrome exposes a native `beforeinstallprompt` event; iOS Safari exposes nothing programmatic at all and
-must be walked through the manual Share-sheet steps; other iOS browsers (Chrome/Firefox/Edge on iOS)
-are WKWebView wrappers that cannot install a PWA no matter what UI is shown.
+A self-contained React component package (`packages/install-prompt`) implementing the "Add to Home
+Screen" install flow across desktop and mobile PWA install affordances. It has no dependency on the
+rest of the app beyond React itself, so it is independently reusable and independently testable.
 
 ## Principal modules
 
-| Module | Role |
-| --- | --- |
-| `packages/install-prompt/src/useInstallPrompt.js` | The shared hook: platform/browser detection, visit-count and dismissal tracking, and (where available) capture of the native `beforeinstallprompt` event. |
-| `packages/install-prompt/src/InstallModal.jsx` | The full instructional flow, including the iOS manual Share-sheet walkthrough. |
-| `packages/install-prompt/src/InstallNudge.jsx`, `InstallButton.jsx`, `InstallSuccessToast.jsx` | Lighter-weight entry points into the same hook: a dismissible banner, a manual trigger button, and a post-install confirmation toast. |
-| `packages/install-prompt/src/InstallSettingsSection.jsx` | Lets a user re-open the install flow from settings after dismissing the nudge. |
-| `packages/install-prompt/src/ShareIcon.jsx` | Renders the exact iOS Share glyph (square with an up-arrow) matching what Safari actually shows, so the instructions point at a recognizable icon rather than a generic one. |
+| Path | Exports | Role |
+| --- | --- | --- |
+| `packages/install-prompt/src/useInstallPrompt.js` | `useInstallPrompt`, `detectPlatform` | The hook: listens for the browser's `beforeinstallprompt` event (Chromium) and detects iOS/Android/desktop so the UI can show the right instructions where no native prompt exists (Safari). |
+| `packages/install-prompt/src/InstallButton.jsx` | `InstallButton` | A single call-to-action button that triggers the native prompt or opens `InstallModal`. |
+| `packages/install-prompt/src/InstallModal.jsx` | `InstallModal` | The full instructional modal, including iOS Safari's manual "Add to Home Screen" steps (no native API exists there). |
+| `packages/install-prompt/src/InstallNudge.jsx` | `InstallNudge` | A dismissible, lower-friction nudge shown opportunistically. |
+| `packages/install-prompt/src/InstallSettingsSection.jsx` | `InstallSettingsSection` | The Settings-page entry point for installing later. |
+| `packages/install-prompt/src/InstallSuccessToast.jsx` | `InstallSuccessToast` | Confirms a successful install. |
+| `packages/install-prompt/src/ShareIcon.jsx` | `ShareIcon` | Renders the iOS Share glyph (square + up-arrow) exactly as Safari shows it, since users must find that specific icon to start the manual flow. |
 
-## Public surface
+## Design
 
-`useInstallPrompt, detectPlatform` (`useInstallPrompt.js`); `InstallButton, InstallModal,
-InstallNudge, InstallSettingsSection, InstallSuccessToast, ShareIcon` (component exports, re-exported
-from `index.js`).
+The platform-detection and prompt-capture logic is isolated in `useInstallPrompt.js` precisely so
+every visual component (`InstallButton`, `InstallModal`, `InstallNudge`, ...) can share one behavioral
+source of truth: which platform is this, is a native prompt available, has the user already
+dismissed/ installed. `ShareIcon.jsx` exists as its own module because getting an OS-chrome icon
+pixel-faithful is a distinct, narrowly-scoped concern from the modal's copy and layout.
 
-## Detection and gating logic
+## Failure modes
 
-`detectPlatform()` classifies `os` as `ios`/`android`/`desktop` from the user-agent, further
-classifies `browser` (distinguishing genuine Safari from `CriOS`/`FxiOS`/`EdgiOS` in-app-browser
-variants on iOS), and derives `canInstall` as `!isIOS || browser === 'safari'` — the single line that
-encodes the WKWebView limitation above. `useInstallPrompt` additionally tracks: whether the app is
-already running standalone (`display-mode: standalone` or `navigator.standalone`), a visit counter
-gating the nudge to a user who has returned at least `VISIT_THRESHOLD` (3) times rather than
-interrupting a first visit, and a dismissal timestamp that suppresses re-prompting for
-`DISMISS_REMIND_MS` (30 days) after the user declines.
+- On a platform with no native `beforeinstallprompt` (iOS Safari), the component tree must fall back
+  to the manual instructional modal rather than silently doing nothing — `detectPlatform` exists
+  specifically to drive that branch.
+- A stale "already installed" detection would keep nudging a user who already installed the app;
+  the hook is expected to track install state across the session it is mounted in.
 
-## Design rationale
-
-The domain exists as a separate package, rather than inline app UI, because the platform-detection and
-gating logic (visit count, dismiss cooldown, standalone detection) is reusable independent of exactly
-which component surfaces it — the app currently offers four different entry points (button, nudge
-banner, settings section, success toast) onto the same underlying hook and state. Centralizing
-`detectPlatform`/`useInstallPrompt` means the WKWebView `canInstall` rule and the Safari-icon match are
-each defined exactly once rather than duplicated per surface, which matters because getting either one
-wrong sends a user through instructions that cannot possibly complete.
-
-## Test coverage
-
-This domain currently has no dedicated automated test file in `testFiles`; its correctness rests on
-manual verification against real device/browser combinations (the user-agent matching table above is
-itself the executable specification, since there is no test suite pinning it). A rebuilder should treat
-adding coverage for `detectPlatform`'s user-agent classification and the visit/dismissal timers as an
-open gap, not an intentional omission — the logic is exactly the kind of string-matching table that
-silently drifts as browsers change their user-agent strings.
-
-## Failure modes this domain guards against
-
-- **Prompting a user down a dead end** — the `canInstall` gate exists specifically so an iOS
-  Chrome/Firefox/Edge user is never shown install instructions that culminate in a missing menu item.
-- **Nagging a first-time visitor** — the visit-count threshold exists so the nudge is shown to someone
-  who has demonstrated repeat interest, not on the first page load.
-- **Re-nagging a user who already said no** — the 30-day dismissal cooldown, tracked independently of
-  visit count, exists so a decline is actually respected for a meaningful period.
+There is no dedicated `testFiles` suite for this package in the collected facts; correctness here is
+exercised through the app's own manual QA rather than an automated behavioural spec.

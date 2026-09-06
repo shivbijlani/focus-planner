@@ -1,263 +1,173 @@
 # Prioritisation
 
-Prioritisation is not a background sort order; it is a product surface. A user expresses intent in
-five ways on the board and one way in a journal reply, and the Overnight Agent's `scan` command
-converts all of them into a single ordered worklist with a binding `eligible` flag per row. The rest
-of this page is that conversion, in the order it actually runs.
+Prioritisation is not one mechanism; it is four things that must agree: how a human expresses
+priority on the board, how the overnight agent turns that into an ordered worklist, what gate stops
+the agent from skipping ahead to easier work, and how much of that ordered list one run is allowed to
+take on. All four are implemented once, in `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1`
+(`scan`, `session`, `mark`), enforced by the `mutcheck-*.ps1` suite alongside it, and read by
+`SKILL.md`, which names this page and its section numbers directly (`§4`, `§4.1`) as the executable
+contract behind its own instructions.
 
-## How priority is expressed
+## 1. How priority is expressed on the board
 
-| Signal | Where it lives | Read by |
-| --- | --- | --- |
-| Section | `## Today` / `## Deferred` headings | `Get-BoardMap` |
-| Urgency icon | column 2 of the row (🔴/🟡/📖/⚪…) | `Get-UrgencyRank` |
-| `Work Priority` | column 4, matched `^P[0-9]$` | `Get-BoardMap` |
-| `## Priorities` list | an ordered list of bare task ids at the foot of the board | `Get-PrioritiesRank` |
-| Row order | physical position in the file | `board_pos` |
-| Task id | column 1 | final tiebreak |
+A task's rank is a **sort key**, evaluated in this order (`Cmd-Scan` in `oa-state.ps1`):
 
-The user changes these by editing the board directly, by replying in a journal (a reply always
-preempts the whole ranking — see below), by snoozing a row (`snooze.json` or the legacy
-`<!-- snooze:YYYY-MM-DD -->` board comment), by editing `agent-gate.md` (which reversible actions the
-agent needs no permission for), or by editing `user-settings.md` (the Today-gate and pacing tunables
-covered later on this page).
+| Order | Key | Source | Meaning |
+| --- | --- | --- | --- |
+| 0 | `reopened` / unanswered-user | journal | a live human reply always sorts first — rule 4 |
+| 1 | `section` | which board heading the row is under | `## Today` before `## Deferred` |
+| 2 | `work_priority` (`Work Priority` cell) | board row | P0 > P1 > P2 > unset |
+| 3 | urgency icon | board row | 🔴 > 🟡 > 🔵 > ⚪ |
+| 4 | `priorities_rank` | position in the `## Priorities` list, matched against the row's `Mngr Priority` cell | earlier in the list ranks higher |
+| 5 | `board_pos` | row order within its section | a tie-break the user controls just by row order |
+| 6 | `id` | task id | final, always-distinct tie-break |
 
-## The full sort key, in order
+Rule 4 pre-empting everything is deliberate: a live reply is the highest-value work there is,
+regardless of section or urgency — the same reason `Test-UnansweredUser` (see §3) beats the Today gate
+itself.
 
-`oa-state.ps1`'s `scan` command (`Cmd-Scan`) sorts every row with this exact key, most significant
-first:
+## 2. How the user changes priority
 
-```powershell
-$rows = $rows | Sort-Object `
-  @{ Expression = { if ($_.reopened -or (Test-UnansweredUser $_)) { 0 } else { 1 } } }, `
-  @{ Expression = { Get-SectionRank $_.section } }, `
-  @{ Expression = { Get-PriorityRank $_.work_priority } }, `
-  @{ Expression = { Get-UrgencyRank $_.urgency } }, `
-  @{ Expression = { $_.priorities_rank } }, `
-  @{ Expression = { $_.board_pos } }, `
-  @{ Expression = { [int]$_.id } }
-```
+- **The board** — move a row between `## Today` / `## Deferred`, edit its urgency icon or `Work
+  Priority` cell, or reorder rows within a section (all via `src/focusPlanOps.js`, [Domain-app](Domain-app)).
+- **A journal reply** — typing under the agent's `turn-end` stamp reopens a task (`reopened`) and
+  jumps it to sort position 0 regardless of section.
+- **Snoozing** — `src/snooze.js` sets a `Wake` date; a snoozed row is never `eligible` (see §3) until
+  it wakes, no matter its section/priority rank — snooze outranks both the section gate and the
+  timers below it.
+- **`agent-gate.md`** — does not change *rank*, but changes what the agent is allowed to do
+  unsupervised once a row is selected (see [Domain-config](Domain-config)).
+- **`user-settings.md`** — the `## Overnight Agent behaviour` section's `Overnight Agent concurrency`
+  and Today-gate backstop/strict rows change how much of the ordered list one run takes on and how
+  conservatively the gate behaves (see §4 and §5).
 
-1. **`reopened OR unanswered_user`** (0 first) — a live reply or an unanswered message preempts
-   everything else in the ranking.
-2. **Section rank** — `today=0, deferred=1, default=2`.
-3. **Work-priority rank** — `^P([0-9])$` → that digit; unset → `9`.
-4. **Urgency rank** — red=0, yellow=1, book(📖)=2, white(⚪)=3, anything else (including blank)=4. Built
-   from Unicode codepoints deliberately, to avoid a PowerShell 5.1 ANSI mis-comparison.
-5. **`## Priorities` list position** — else `999999` (matches only `^\s*\d+\.\s+(\d+)\s*$`).
-6. **Board row physical position** (`board_pos`).
-7. **Numeric task id** — the final total-order tiebreak.
+## 3. `scan`: from the board to an ordered, gated worklist
 
-`Get-BoardMap` reads urgency and work-priority from fixed cell positions (`cells[1]`, `cells[3]`),
-regardless of header names, because Today's header is `ID|urgency|Task|Work Priority|Added|Linked ID`
-and Deferred inserts `Wake` before `Linked ID` — the first four cells line up in both. The id cell is
-parsed as **leading digits**, not "digits only," because compound cells exist (`448,[176](...)`); a
-whole-cell-integer regex silently dropped such rows from the board map entirely, emptying `today` and
-leaving the gate permanently open — guarded by `mutcheck-board-compound-id.ps1`.
-
-### Two readers, two sort keys, neither authoritative
-
-The app's own display sort, `sortTasksByPriority` in `src/taskSort.js`, is materially different:
-
-```javascript
-const priorityOrder = { '🔴': 0, '🐸': 1, '🟡': 2, '🔵': 3, '📖': 4, '⚪': 5, '✅': 6 }
-```
-
-It splits on urgent-vs-not first, then resolves manager priority via the `Linked ID` chain
-(`resolveManagerPriority`), then chain depth, then this 7-icon table — which includes 🐸/🔵/✅ that
-`Get-UrgencyRank` doesn't recognize at all (they'd rank "4/unknown" to the agent), and uses a
-dependency-chain tiebreak instead of the flat `## Priorities` list. Both are correct for their own
-purpose — one drives what a human sees on screen, the other drives what an unattended agent works
-next — but a rebuilder must not assume they agree, and must not merge them into one shared function:
-they read genuinely different signals for genuinely different consumers.
-
-## Eligibility
-
-`scan`'s exact eligibility computation:
+Every run's *only* source of truth for "what to work on next" is `oa-state.ps1 scan`'s JSON: one row
+per journal, already sorted by the key in §1, each carrying a binding `eligible` flag. Nothing above
+this tool re-derives order — "ordering is data, not judgement" (issue #223) is enforced by making the
+sort happen once, in one place, rather than trusting every caller to reproduce it.
 
 ```powershell
-$eligible = $false
-if (-not $r.snoozed) {
-  if (Test-ReopenedClosed $r) { $eligible = $false }
-  elseif ($r.reopened) { $eligible = $true }                  # a reply always beats the gate
-  elseif (Test-UnansweredUser $r) { $eligible = $true }
-  elseif ($r.section -eq 'today') { $eligible = (Test-Workable $r) }
-  elseif ($todayHolding -eq 0) { $eligible = (Test-Workable $r) }
-}
+oa-state.ps1 scan
+# -> [ { id, section, work_priority, urgency, priorities_rank, board_pos,
+#        order, eligible, holds_today_gate, today_release_reason,
+#        reopened, snoozed, session_verdict, doc_bound, ... }, ... ]
 ```
 
-`$todayHolding` is the count of Today rows whose gate verdict `holds` is true. A Deferred row is only
-ever eligible once **no** Today row is holding the gate. `Test-Workable` itself checks, in order:
-snoozed → false; a reply landed on a task the user had already closed (`Test-ReopenedClosed`) → false;
-`reopened` → true; an unanswered user message → true; `awaiting_reply` with no due poll/recheck →
-false (parked); a due recheck on a `blocked` task → true; otherwise the row is workable unless its
-status is in `{done, skip, proposed, blocked}`.
+`eligible` is computed per row, after sorting, as:
 
-## The Today→Deferred gate and what releases it
+- `false` if the row is snoozed, or if it is a reply on a task the user has already closed
+  (`reopened_closed`, issue #501 — a reply must be *surfaced*, never *worked*, once its task is done);
+- `true` if the row is `reopened` or carries an unanswered user message (rule 4 beats the gate);
+- otherwise, for a Today row, `true` iff `Test-Workable`;
+- for a Deferred row, `true` iff `Test-Workable` **and no Today row currently holds the gate**.
 
-The gate exists because two earlier designs both failed, measurably. Keying release to plain
-workability never opened for an unbounded meta-task (measured: 1/238 rows eligible, 121 Deferred rows
-frozen, three consecutive runs re-working the same task). Keying release to recency
-(`last_turn_at`) opened the instant the agent typed anything: one turn on a task sent eligibility from
-1 to 13 and dispatched a Deferred row (issue #310). The shipped design instead requires an explicit,
-falsifiable **exhaustion declaration**.
+## 4. The Today → Deferred gate, and what releases it
 
-**`Get-TodayGateVerdict`**, in order:
+The gate exists to stop a run skipping past a Today task it finds inconvenient to reach easier
+Deferred work. `Get-TodayGateVerdict` computes, per Today row, whether it **holds** (blocks Deferred)
+or releases, in this order:
 
-1. Not workable → `holds=false, reason='not_workable'`.
-2. `reopened` → `holds=true, reason='holding:reopened'`.
-3. Unanswered user message → `holds=true, reason='holding:unanswered_user'` — checked *before* the
-   exhaustion claim on purpose: "I examined everything Today holds" cannot be true of a row carrying an
-   unanswered question. This closes issue #245, where a self-declared `done` opened the gate while
-   three unanswered messages sat on the row.
-4. Strict-mode setting → `holds=true, reason='holding:strict'`.
-5. `Test-ExhaustionClaim` → `declared_exhausted` releases the gate.
-6. Staleness backstop (below) → releases the gate if it fires.
-7. Otherwise → holds, with the specific `holding:<why-not>` reason.
+1. `not_workable` (the row isn't actionable at all — releases; this row was never going to be worked
+   this run regardless of Deferred).
+2. `reopened` or an unanswered user message — **holds**, unconditionally, even over a standing
+   exhaustion declaration (see below): "I examined everything Today holds" cannot be true of a row
+   carrying a question nobody has answered.
+3. A configured **strict** mode — **holds**, unconditionally (`user-settings.md`).
+4. **`declared_exhausted`** — the agent's own recorded claim, from a prior turn this run, that it
+   examined every workable Today row and found nothing to do — releases the gate.
+5. The **staleness backstop** — if the row's last written turn is older than the configured backstop
+   hours, the gate releases as `stale_turn_backstop`, regardless of any declaration.
 
-**Declaring exhaustion** is two separate calls — writing a turn does not itself release anything:
+**The exhaustion declaration is a claim, not a latch**, and four things stop it from standing
+(`Test-ExhaustionClaim`):
 
-```powershell
-oa-state.ps1 mark -Id 463 -Status in-progress
-oa-state.ps1 mark -Id 463 -Exhausted 'gh:197,gh:179,gh:139' -ExhaustedNote 'all three blocked on review'
-```
+| Cancels because | Reported as |
+| --- | --- |
+| the declaration is older than its TTL | `exhaustion_expired` |
+| `## Today`'s text has changed since the claim was made | `exhaustion_stale_board` |
+| a turn was written to this row *after* the declaration | `exhaustion_superseded` |
+| the declaration names no examined item | `declaration_named_nothing` |
 
-`-Exhausted` must name the examined set and cannot combine with `-Status`/`-Version`/`-PlanId`/timer
-flags.
+Three of these four are invalidated by state **the agent does not author**: a human editing the board
+revokes "I examined everything Today holds" simply by editing the text the claim was about
+(`exhaustion_stale_board`); a later turn on the same row refutes it by the run's own record
+(`exhaustion_superseded`); the TTL is a clock, not a flag the agent sets. `today_release_reason` is
+stamped on every Today row so which of these applied — or that none did and the gate is still holding
+— can be audited after the fact without re-deriving anything.
 
-**The four things that cancel a declaration**, all checked inside `Test-ExhaustionClaim`:
+**This is the shape of a recurring failure class in this codebase: the agent authoring the signal its
+own gate reads.** A `mark -Done` releasing the gate directly, a re-`mark` silently clearing an
+unanswered message, an exhaustion declaration with no expiry or no board-change check — every version
+of this bug lets the agent close its own gate. The fix is always the same: key release on something
+external (board text, wall-clock staleness, a genuinely new declaration each run) rather than on the
+agent's own prior assertion.
 
-1. `holding:exhaustion_expired` — older than the TTL (default 30 minutes).
-2. `holding:exhaustion_stale_board` — the `## Today` section text changed since the declaration
-   (hash mismatch).
-3. `holding:exhaustion_superseded` — a turn was written to the row *after* the declaration.
-4. `holding:reopened` — a reply reclaims exclusivity outright, checked earlier than the claim is even
-   evaluated.
+## 5. Liveness mechanisms that keep a task from going quiet incorrectly
 
-**`today_release_reason`** is recorded on every Today row and takes one of: `not_workable`,
-`declared_exhausted`, `stale_turn_backstop`, `holding:reopened`, `holding:unanswered_user`,
-`holding:strict`, `holding:exhaustion_expired`, `holding:exhaustion_stale_board`,
-`holding:exhaustion_superseded`, `holding:declaration_named_nothing`, `holding:no_declaration`,
-`holding:declaration_disabled`, `holding:declaration_unparseable`.
+- **`awaiting_reply` parking** — a task with an open ask and no new user text is parked, not polled;
+  it becomes live again the instant `HasTrailingUser` flips true, never on a timer.
+- **Poll / recheck timers** — `due_poll` / `due_recheck` fire a row back into the worklist on a
+  configured cadence, independent of section/priority rank, but are suppressed while the row is
+  snoozed (snooze precedence, §2).
+- **The staleness backstop** (§4) — keyed to the *absence* of a fresh turn, never to recency, so there
+  is no way to reach this release by writing — the exact shape #310 was: a stamp that reset on every
+  `mark` made "stale" mean "hasn't been marked recently" instead of "hasn't been worked recently."
+- **Snooze precedence** — snooze suppresses only the eligibility verdict; the underlying timer object
+  stays armed and fires again on its own once the snooze lapses, rather than being silently disarmed.
 
-## Liveness mechanisms
+## 6. Pacing — how much of the worklist a run takes on
 
-- **`awaiting_reply` parking**: `HasAgentBlock AND HasBlockingAsk AND NOT HasTrailingUser`, computed
-  identically (kept textually synchronized) in `Cmd-Scan` and in `Test-SessionHoldsCapacity`
-  (the #487 capacity fix — a parked task must not also silently occupy a concurrency slot). A row is
-  un-parked by a reply (`reopened`) or a due `poll`/`recheck` timer. The "blocking" reader is
-  deliberately stricter than the digest's "open ask" reader: a dismissive `**Needs from you:**
-  none/nothing` does not park, and only the *newest* agent turn's ask counts.
-- **Doc-bound parking requires positive freshness, not silence alone** (#500): a doc-bound task whose
-  only input channel is external comments can otherwise hold the sole capacity slot forever — a
-  never-observed doc reports `doc_new_comments: 0`, byte-identical to "read and answered with
-  nothing", because `scan` never calls out to the document provider itself. Parking on the comment
-  count alone would let a dead channel park a task indefinitely (#346's shape wearing the costume of a
-  fix for it). The park therefore requires positive evidence the channel was read recently **and** was
-  silent — a stale or missing `observed_at` fails toward working the task, not toward parking it. Every
-  release path is preserved unchanged: a due poll/recheck, a journal reply, or a pending comment all
-  still outrank the park.
-- **Poll/recheck timers**: cadence grammar `hourly|daily|weekly|<N>h|<N>d|<N>m`. A freshly armed timer,
-  or one with no `next_due`, is due immediately. `-Poll` re-checks in general; `-Recheck` targets a
-  specific `blocked` task's blocker and is the only path that yields the `blocked` status a workable
-  verdict.
-- **The staleness backstop**: the `Today gate backstop` setting in `user-settings.md`, default 6 hours.
-  `off|none|disabled` disables it; an unparseable value is ignored rather than silently disabling a
-  safety mechanism ("a typo must not silently disable a safety backstop"); an explicit
-  `-TodayGateBackstopHours` argument outranks the file.
-- **Snooze precedence**: the flat `snooze.json` store (read-only to the agent) wins on conflict over
-  the legacy in-board `<!-- snooze:YYYY-MM-DD -->` comment marker. A snoozed row suppresses `due_poll`
-  and `due_recheck` while leaving the timer object itself armed.
+Ordering answers *what* to work on next; nothing above answers *how much*. Per `user-settings.md`
+→ `## Overnight Agent behaviour`, **`Overnight Agent concurrency` defaults to 1**, resolved by
+`Resolve-PacingSettings` and reported live by `oa-state.ps1 session -InFlight` as `admits` (how many
+more items the priority wave may start). The setting is anchored to a bare whole number and **fails
+narrow**: absent, unreadable, malformed, zero or negative all yield 1 — a dated note left in the cell
+must never parse as a larger number, which is precisely the historical bug this anchoring closes.
+**One item in flight is isolation, not concurrency**: giving a task its own session is *where* its
+work happens, not permission to run three at once — an item already dispatched still counts against
+the limit even though its work is elsewhere.
 
-## The failure class this design guards against
+A run must **estimate before starting another item**, against the wall-clock remaining before the
+next scheduled run, using the rate actually observed this run rather than an optimistic one — starting
+work that cannot finish is worse than ending early, because the worklist is data and the next run
+recomputes the same order unchanged. And **"done" means verified and published — tests green, the
+deliverable where the user will see it, the journal updated — not code written**; a working tree with
+unrun tests is not progress.
 
-The Today gate's own source comment names a pattern, verbatim: **"the agent authors the signal that
-its own gate reads."** Three instances have occurred in this repository:
+These three pacing rules are currently **run-loop guidance written in `SKILL.md`, tracked by issue
+#391, and not yet a mechanism** — nothing in `oa-state.ps1` enforces the estimate-before-starting-
+another rule or the verified-and-published definition of done; only the concurrency ceiling itself
+(`session -InFlight` / `admits`) is code.
 
-1. **Consent-marker authorship** (#227/#272) — the agent's own unmarked journal prose was read back as
-   human approval.
-2. **The `awaiting_reply` ratchet parking itself** — the agent's own closing courtesy line satisfied
-   its own "has an agent block, has an ask" test and parked its own task (measured: 186/238 rows
-   parked, 0 eligible, before the dismissive-ask boundary was fixed).
-3. **The Today gate release** (#310) — `last_turn_at`, stamped by the agent's own `mark` call, released
-   the agent's own gate the instant it wrote anything.
+## 7. Dispatch precedence: collect vs. execute, and the two dispatch waves
 
-The generalized rule this repository now follows: prefer a signal the agent cannot author (a clock, the
-board text, a reply, `agent-gate.md`); where an agent-authored signal is unavoidable, admit it only in
-the cancelling direction, never the granting one — `exhaustion_superseded` can only take the gate back
-to holding, never release it early. `agent-gate.md`'s one-way property is guarded the same way:
-`mutcheck-agent-gate.ps1` proves the file is seeded by the app (`src/config/agentGate.js`) and never
-written by `oa-state.ps1`, closing the earlier bug where the file existed but was entirely decorative.
+A run separates **collect** — read the agent's mail inbox, fold new Telegram replies into journals,
+run `scan` — from **execute**. Collect only gathers and hands work off to the worklist; it never
+performs task work itself (issues #405, #404): a run measured writing task work directly inside its
+own dispatch session, with nothing isolated and nothing recorded about where the work happened, is
+exactly the failure this separation prevents.
 
-## Pacing
+Dispatch then runs in **two waves**:
 
-The `Overnight Agent concurrency` tunable in `user-settings.md` defaults to **1**. One item in flight
-is isolation, not concurrency — giving a task its own session is a correctness property (workspace
-separation, per-task state), not a grant to run several things at once. Resolution precedence is an
-explicit `-Concurrency` argument, then the settings row, then the built-in default of 1; the settings
-cell is parsed with an anchored whole-cell match (`^\s*(\d+)\s*$`), not a leading-integer scan, because
-a prose annotation like `2026-09-02: set to 1 by Shiv` previously parsed as `2026`. An unparseable
-non-empty value is surfaced as `concurrency_source: settings-malformed` rather than silently defaulting
-to 1.
+1. **The priority wave** — items taken from the `scan` worklist in order, skipping `eligible: false`
+   rows, bounded by `admits` from `session -InFlight`.
+2. **The collect wave** — a wake that exists *because a collect-phase action just happened* (mail in
+   the inbox, a folded Telegram reply, a journal reply) is dispatched **in addition to** the priority
+   selection, past `session_at_capacity`, using `session ... -Force`.
 
-Beyond the count, `SKILL.md` states two further rules as run-loop guidance, not as an enforced
-mechanism: **estimate before starting another** — use the rate actually observed this run, not an
-optimistic one, against the time left before the next scheduled run, because starting what cannot be
-finished is worse than ending early — and **done means verified and published**, not code sitting in a
-working tree: tests green, the deliverable placed where the user will see it, the journal updated.
-Neither rule has a corresponding field in the per-task state store, and `oa-state.ps1` has no code path
-measuring elapsed rate or remaining wall-clock time; the only mechanical enforcement in this area is
-the concurrency *count*. Issue #391 tracks encoding pacing as an actual mechanism rather than prose; it
-is open, and its own text distinguishes the two halves plainly: "Priority order is already enforced as
-data... this half is correct and mechanically guarded" against "Pacing is absent... nothing caps how
-many items are in flight" — precisely the state described above.
+**This is the single sanctioned exception to the default concurrency of 1**, and its justification is
+provenance, not urgency: a human action may widen the run; the agent's own judgement may not. The
+collect wave does not compound (it is not itself subject to a further exception) and it does not raise
+the concurrency setting — `Overnight Agent concurrency` stays whatever the user configured, and the
+next run resolves it fresh. It changes **when** a task is woken, never **where** its work happens: a
+collect-woken task still gets its own dedicated session and workspace, exactly like a priority-wave
+task (§ "For each task, resolve its session," `SKILL.md`).
 
-## Dispatch precedence
-
-A run separates two steps: **collect** (the agent inbox, folded Telegram replies, `scan`) and
-**execute** (the two dispatch phases below). Collect gathers and hands off; it must not perform work
-itself — issue #405 documents a measured incident where a Telegram reply folded into a task was fully
-worked (journal read, four deliverables rewritten, a turn written) inside the collect step itself,
-before any priority comparison ever ran.
-
-Dispatch then runs in **two waves**: the **priority wave** first (the `scan` worklist in the order
-returned, skipping `eligible: false`), then the **collect wave** — any wake that arrived from the
-collect step (a folded reply, an approval) is dispatched *in addition to* the priority selection, even
-though this can push the run above its configured concurrency. This is the single sanctioned exception
-to the default concurrency of 1, and it is justified by **provenance**, not urgency: a user's own action
-(a reply) may widen the run; the agent's own judgement may not. Capacity is checked first via
-`oa-state.ps1 session -InFlight`, which reports:
-
-```powershell
-concurrency   = [int]$script:ConcurrencyLimit
-in_flight     = [int]$live
-at_capacity   = [bool]($live -ge $script:ConcurrencyLimit)
-admits        = [int][Math]::Max(0, $script:ConcurrencyLimit - $live)   # never negative
-```
-
-The priority wave may dispatch at most `admits` items. The collect wave is the one case where binding a
-session with `-Force` past `session_at_capacity` is correct — the code's own guard message states it
-plainly: `-Force is for the collect-wave exception only: a wake that exists because the USER did
-something may widen the run; the agent's own judgement may not.` Re-binding an already-live session, or
-replacing a dead one, is not charged against capacity at all, since neither actually adds an item to the
-run.
-
-Critically, the exception **does not compound or raise the setting**: it widens a single run by exactly
-the wakes the collect step actually found, it does not touch `$script:ConcurrencyLimit` or
-`concurrency_source`, and the priority wave still holds one item in flight at the default on every
-subsequent run. Nor does it license the run session itself to do the work — a trumping wake is
-dispatched to the task's own session like any other item (issue #404); the exception changes **when** a
-task is woken, never **where** its work happens. Issue #404 is the companion fix that gave every task
-its own session, workspace isolation, and a persisted session id in the first place — before it landed,
-the run session had no session field at all and did every task's work directly in itself, which is what
-made the #405 incident possible.
-
-This is grounded directly in `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1` (the `scan`,
-`Get-TodayGateVerdict`, `Test-Workable`, `Resolve-PacingSettings`, and `Cmd-Session` machinery) and
-proven, arm by arm, by the `mutcheck-*.ps1` family — `mutcheck-awaiting-reply.ps1`,
-`mutcheck-today-served.ps1`, `mutcheck-pacing-concurrency.ps1`, `mutcheck-parked-capacity.ps1`, and
-`mutcheck-agent-gate.ps1` — which is the executable statement of the intended behaviour: each mutates
-one guard, re-runs the target fixture, and requires the sweep's verdict to flip.
-
-See [Domain: overnight-agent](Domain-overnight-agent) for the module family these mutchecks belong to,
-and [Reliability](Reliability) for how the agent that reads this worklist is itself kept running.
+Guarded by `mutcheck-pacing-concurrency.ps1` (the concurrency ceiling and its narrow-fail parsing),
+`mutcheck-today-served.ps1` and `mutcheck-priority-order.ps1` (the sort key and gate order in §1/§4),
+`mutcheck-parked-capacity.ps1` (that a parked `awaiting_reply` task never silently holds capacity), and
+`mutcheck-awaiting-reply.ps1`/`mutcheck-cadence-rearm.ps1` (the liveness timers in §5) — these are the
+executable statement of the behaviour this page describes; a change to `oa-state.ps1` that a mutation
+proof does not kill is a change this page's guarantees no longer cover.
