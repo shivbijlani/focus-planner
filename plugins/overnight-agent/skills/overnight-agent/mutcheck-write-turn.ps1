@@ -282,8 +282,13 @@ function Write-Fixture([string]$path, [string]$body, [string]$nl) {
 }
 
 function Invoke-Guarded([string]$bodyPath, [string[]]$disable) {
+  # `-Ask none` on every fixture: #560 made the ask declaration REQUIRED (G13), and these
+  # fixtures are about G1-G7, not about G13. Declaring one keeps each fixture's finding set
+  # equal to the guard it was written for, instead of every one of them also reporting G13.
+  # G13 itself is proven load-bearing by mutcheck-declared-ask.ps1 (arms W_REQUIRED /
+  # W_BADVALUE / W_HANDSTAMP and mutant M7), so nothing is being waived here.
   $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $target,
-            '-BodyFile', $bodyPath, '-Validate', '-Json')
+            '-BodyFile', $bodyPath, '-Ask', 'none', '-Validate', '-Json')
   if ($disable.Count -gt 0) { $args += @('-DisableGuard', ($disable -join ',')) }
   $raw = & powershell @args 2>&1 | Out-String
   try { $o = $raw | ConvertFrom-Json } catch { throw "unparseable output for $bodyPath :`n$raw" }
@@ -403,7 +408,7 @@ function Set-G12State([datetime]$when, $woken = $null) {
 }
 function Invoke-G12([string[]]$disable, [string]$asAuthor = '') {
   $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $target,
-         '-Id', '901', '-BodyFile', $g12Body, '-JournalDir', $g12Journal, '-Validate', '-Json')
+         '-Id', '901', '-BodyFile', $g12Body, '-JournalDir', $g12Journal, '-Ask', 'none', '-Validate', '-Json')
   if ($disable.Count -gt 0) { $a += @('-DisableGuard', ($disable -join ',')) }
   if ($asAuthor) { $a += @('-Author', $asAuthor) }
   $prev = $env:WRITE_TURN_OA_HOME

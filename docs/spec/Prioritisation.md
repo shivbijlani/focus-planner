@@ -104,13 +104,44 @@ that says nothing.
 - **`awaiting_reply` parking** (`Test-Workable`): an `in-progress` task whose newest turn carries a
   blocking ask and no trailing user reply is treated as waiting on the user, exactly like a
   `proposed` task — unless a due poll/recheck timer overrides it, because read-only follow-up work
-  needs no reply.
+  needs no reply. The parking expression is
+  `HasAgentBlock AND HasBlockingAsk AND NOT HasTrailingUser`, duplicated in `Cmd-Scan` (the emitted
+  row) and `Test-SessionHoldsCapacity` (the capacity reader) and kept **textually identical** on
+  purpose: an emitted field that disagrees with the gated field is its own failure shape (#545).
+  - **The ask is declared, not inferred (#560).** `write-turn.ps1` requires
+    `-Ask blocking|offer|none` and stamps it into the turn as `<!-- oa-ask: VALUE -->` beneath the
+    turn's own provenance marker. `HasBlockingAsk` reads that declaration first, so **`blocking`
+    parks even when the wording opens dismissively, and `offer`/`none` do not park even when the
+    wording contains a blocking-shaped clause.** The preference lives inside
+    `Get-BlockingAskVerdict`, which `Get-JournalFacts` calls, so both readers above inherit it from
+    one edit rather than two.
+  - **The textual reading survives as a documented fallback**, for turns written before the flag
+    existed (~81 journals at the time of the change), where the pre-#560 semantics apply exactly:
+    `**Your call:**` parks; a `**Needs from you:**` whose value opens dismissively (`none`/
+    `nothing`) does **not** park, and an explicitly optional remainder after the clause break does
+    not re-create an obligation. These are **fallback-only** semantics — a declared turn never
+    reaches them — and arms L1/L2/Q/R of `mutcheck-awaiting-reply.ps1` still pin them.
+  - **`ask_source: declared | inferred`** is emitted on every `scan` row, with the declared value
+    itself as `ask_declared`, so the fallback's share is a number that can be watched shrinking
+    rather than assumed gone. Every row reports one of the two, including rows with no agent turn
+    (which read `inferred`, since nothing could have declared).
+  - The gate's "blocking" reading stays deliberately stricter than the digest's `has_open_ask`, and
+    a declaration can only ever **add** visibility there: `blocking`/`offer` short-circuit it to
+    true, while `none` still falls through to the generous textual reading. Only the *newest* agent
+    turn is consulted, for the declaration and the text alike.
 - **Poll/recheck timers**: `due_poll`/`due_recheck` fields, re-armed via `mark -PollDone`/
   `-RecheckDone`/`-RecheckClear`.
 - **The staleness backstop**: `stale_turn_backstop`, above.
 - **Snooze precedence**: a snoozed row is never eligible, and snooze suppresses only the *due*
   verdict — the timer itself stays armed and fires again once the snooze lapses, rather than being
   disarmed by it.
+
+**Grounding.** The parking rule is guarded by `mutcheck-awaiting-reply.ps1` (the state itself, the
+gate it opens, the dismissive-ask boundary, and that a reply or a due timer un-parks) and by
+`mutcheck-declared-ask.ps1` (that a declaration outranks the prose in *both* directions, that an
+undeclared turn still reads exactly as it did before, that `ask_source` is honest, and that
+`has_open_ask` does not regress) — both of which drive the real `oa-state.ps1` and, for the second,
+the real `write-turn.ps1`, and mutate those files rather than a re-implementation of their logic.
 
 ## 5. The recurring failure class: the agent authors the signal its own gate reads
 
@@ -121,6 +152,21 @@ failure class in the repository: the agent's own unmarked prose read back as the
 Today-gate's release signal. Every mechanism in §3 and §4 above is built to guarantee the *release*
 signal always traces back to either a genuine user action (a board edit, a reply) or a deliberate,
 constrained, work-following declaration — never an incidental agent write.
+
+**The `awaiting_reply` instance was narrowed twice before it was closed, and the difference is the
+lesson.** The dismissive-ask boundary (a `**Needs from you:** none…` does not park) was a
+*narrowing*: it stopped the worst of the starvation, but the agent still authored the text its own
+gate read, so a phrasing choice inside prose written for a human still decided schedulability.
+Measured after that narrowing, 2026-09-06: **2 eligible rows out of 249**, with the skill's own
+boilerplate `**Your call:** reply below in plain English` present in 81 journals and read back as
+blocking — the documented template writing the sentence that starved the board. #560 *closes* it by
+making the ask **declared** (`write-turn.ps1 -Ask blocking|offer|none`, §4).
+
+That closure is worth stating precisely, because a declared ask is still agent-authored. The
+distinction that matters is not *who* authors the signal but **how**: a declaration is a deliberate,
+structural statement made in the same act as writing the turn, not a value reconstructed afterwards
+from narrative. That is the same move `-Exhausted` made for the Today gate, and it is why both
+remain subject to the cancelling conditions in §3 rather than being trusted outright.
 
 ## 6. Pacing
 

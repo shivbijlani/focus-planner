@@ -264,8 +264,15 @@ $script:LastExit = 0
 function Invoke-WriteTurn {
   param([string]$Id, [string]$BodyFile, [string[]]$Extra = @(), [string]$Script)
   if (-not $Script) { $Script = $Target }
+  # `-Ask none` is passed on every invocation: #560 made the ask declaration REQUIRED (G13), and
+  # these arms are about G9-G11, not about G13. Without it every arm would also report G13 and
+  # each fixture's finding set would stop equalling the guard it was written for.
+  #
+  # NOTE for the documented `-Target <origin/main copy>` mode in the header: a pre-#560 script has
+  # no `-Ask` parameter and will reject it. Run that comparison against a pre-#560 checkout of THIS
+  # file too, or drop the flag for that one invocation.
   $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Script,
-    '-Id', $Id, '-BodyFile', $BodyFile, '-JournalDir', $jdir, '-Json') + $Extra
+    '-Id', $Id, '-BodyFile', $BodyFile, '-JournalDir', $jdir, '-Ask', 'none', '-Json') + $Extra
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   try { $out = & $PsExe @all 2>&1 | Out-String -Width 4096 }
