@@ -1,36 +1,56 @@
 # Domain: root
 
+The `root` domain is the repository's own toolchain — the pieces that are not part of the shipped
+product but make building, serving and linting it possible. It has three modules: `server.js`,
+`vite.config.js`, and `eslint.config.js`.
+
 ## Responsibility
 
-The `root` domain is the project's own tooling seam: the Express backend that the desktop/dev
-workflow talks to, and the two build-tool config files that decide how the frontend is bundled and
-linted. It has no business logic of its own — its job is to make the `app`, `storage` and
-`folder-sync` domains runnable and checkable.
+Provide (1) a minimal local backend for the desktop/Copilot-CLI workflow, (2) the Vite build/dev
+configuration for the React SPA, and (3) the lint rule set that CI's `lint` job enforces.
 
-## Principal modules
+## `server.js`
 
-| Path | Lines | Role |
-| --- | --- | --- |
-| `server.js` | 316 | Express server: filesystem-backed `/api/*` endpoints used by the legacy/manual workflow described in `README.md` (list/read/write markdown files, extract todos, check journal existence). |
-| `vite.config.js` | 25 | Vite build/dev-server configuration for the React frontend. |
-| `eslint.config.js` | 61 | Flat ESLint config — the `lint` script gate that CI's `ci.yml` lint job runs on every PR. |
+An Express app exposing a small file-oriented API over one local folder:
 
-## Behavioural requirements
+| Route | Purpose |
+| --- | --- |
+| `GET /api/files` | Directory tree of markdown files in the configured planner folder. |
+| `GET /api/file?path=X` | Read a file's contents. |
+| `PUT /api/file?path=X` | Write a file's contents. |
+| `DELETE /api/file?path=X` | Delete a file. |
+| `GET /api/todos?path=X` | Extract todo items from a journal file. |
+| `GET /api/journal-exists?taskId=X` | Check whether a task's journal file exists. |
+| `POST /api/pick-folder` | Native folder picker for choosing the planner directory. |
+| `GET /api/config` / `POST /api/config` | Read/write the server's own small config (e.g. which folder is active). |
 
-`server.js` exposes the endpoints documented in the custom instructions bundled with this
-repository: `GET /api/files`, `GET /api/file?path=X`, `PUT /api/file?path=X`, `GET
-/api/todos?path=X`, `GET /api/journal-exists?taskId=X`. These are a thin filesystem adapter over the
-same markdown files the browser-based storage providers (`storage` domain) read directly — the
-server exists for tooling that talks HTTP rather than File System Access API, IndexedDB, or a cloud
-API.
+This exists specifically so a locally-run Copilot CLI session (see the repository `README.md`'s
+"start planner" workflow) can read and edit the exact same markdown files the browser app uses,
+without going through a browser storage provider — it is a thin filesystem proxy, not an
+application backend. It holds no board or journal business logic; every transform (adding a task,
+completing it, parsing a journal) still happens in `src/` and is invoked by whatever client calls
+this API.
 
-There is no dedicated test file for `server.js` in `testFiles`; its correctness is exercised
-indirectly through manual/agent-driven use of the endpoints, not vitest.
+## `vite.config.js`
+
+Configures the Vite dev server and production build for the React 19 SPA (`@vitejs/plugin-react`).
+Notably, `npm run predev`/`prebuild` run `scripts/copy-sw.mjs` first, copying the `folder-sync`
+package's source tree into `public/folder-sync/` — a service worker can only be registered from a
+URL on the page's own origin, so the sync engine's code must be served from the app's static asset
+tree rather than imported the normal bundler way.
+
+## `eslint.config.js`
+
+The flat ESLint config (`@eslint/js`, `eslint-plugin-react-hooks`, `eslint-plugin-react-refresh`)
+that CI's `lint` job runs unmodified via `npm run lint`. The `ci.yml` job comment records that main
+is lint-clean and the job is a **blocking** gate — it was previously non-blocking because two
+pre-existing errors made it permanently red, which trained reviewers to ignore it; both were fixed
+specifically so the gate could start meaning something again.
 
 ## Failure modes
 
-- A stale `vite.config.js` or `eslint.config.js` cannot itself corrupt user data — the failure
-  surface here is build/lint breakage, not data loss.
-- `server.js` writing a file it read with the wrong path (`?path=X`) could clobber a markdown file
-  outside the intended data folder; the endpoint contract restricts writes to the configured planner
-  folder.
+None of this domain's three files hold user data or business state, so its failure modes are
+build/dev-time only: a broken `vite.config.js` breaks every build and every developer's dev server
+identically (there is no per-environment drift to chase), and `server.js` failing merely disables
+the local-folder Copilot workflow — the browser app, with any other storage provider configured,
+is unaffected.

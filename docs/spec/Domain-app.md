@@ -1,108 +1,74 @@
 # Domain: app
 
+`app` (`src/`) is the React board and its pure content-transformation core: reading and writing
+`planner.md`/`planner-completed.md` and journals, rendering the board and the journal chat thread,
+and the id/link/priority bookkeeping the board depends on. It is the repository's largest domain by
+module count (37) and by far its largest single file (`src/App.jsx`, 7,215 lines — the whole
+component tree).
+
 ## Responsibility
 
-The React frontend: the board (`## Today` / `## Deferred` sections of `planner.md`), the completed
-board, per-task journals rendered as chat threads, multi-source ("Combined") routing, and the
-settings surfaces for the agent gate and `user-settings.md`. This is the largest domain by far
-(37 modules; `src/App.jsx` alone is 7,215 lines) because it is where every other domain's data model
-becomes something a user directly edits.
+Everything a user sees and clicks: the board table, search, snoozing, moving tasks between
+sections/sources, the journal chat renderer, storage-source picking, and the agent-gate/settings
+editors. Deliberately split so the algorithmic core is pure and framework-free — `focusPlanOps.js`,
+`boardRow.js`, `journalChat.js`, `taskSort.js`, `snooze.js` and friends take/return plain strings and
+objects, with no React and no I/O — so the exact same logic runs identically from the single-source
+view and the multi-source Combined view, and can be unit-tested without mounting a component tree.
 
 ## Principal modules
 
-| Path | Exports | Role |
-| --- | --- | --- |
-| `src/App.jsx` | `default` | The root component: board rendering, context menus, journal panes, storage wiring. Imports from nearly every other domain. |
-| `src/boardRow.js` | `alignRowToHeaders`, `cellByHeader`, `rowCells`, `wakeSeamIndex`, `recoverMisfiledLinkedId`, `WAKE_COLUMN` | The board's **one** canonical row/header alignment rule (issue #426) — see below. |
-| `src/boardTable.js` | `parseMarkdownTable`, `displayHeader`, `daysSince` | The app-side board reader; aligns every row through `boardRow.js` before indexing it. |
-| `src/focusPlanOps.js` | `opAddTask`, `opMoveBetweenSections`, `opChangePriority`, `opSetTaskSnooze`, `opDeleteTask`, `allocateNextId`, `buildCompletedRow`, ... | Pure content-transformation operations on `planner.md`: `(content, ...args) -> newContent`, reused identically by both the single-source and Combined views. |
-| `src/snooze.js` | `parseSnoozeUntil`, `setSnoozeUntilOnLine`, `isSnoozeActive`, `getNextSaturdayDateString` | Reads/writes the `Wake` column and its legacy trailing-HTML-comment predecessor. |
-| `src/taskSort.js` | `sortTasksByPriority`, `resolveManagerPriority`, `getChainDepthToManagerPriority`, `isNeededForUrgentTask` | The full board sort key (see [Prioritisation](Prioritisation)). |
-| `src/journalChat.js` | `parseJournalChat`, `appendJournalMessage`, `formatChatDay`, `fencedLineMask` | Renders journal markdown as a chat thread; shared by the app, `telegram-bridge`, and `task-paper`. |
-| `src/idTombstones.js` | `addTombstone`, `getActiveTombstoneIds`, `pruneTombstones` | Deleted-task ID tombstones, closing the ID-reuse/sync-resurrection race (issues #314/#305). |
-| `src/selfHealIds.js` | `detectOutlierIds`, `selfHealOutlierIds` | Temporary defence-in-depth: renumbers task IDs that jumped into a foreign high range. |
-| `src/moveTask.js` | `computeMoveSet`, `computeBrokenLinks`, `renumberMovedRows`, `rewriteRowId` | Moving a task (and its manager-priority dependency subtree) between multi-source folders. |
-| `src/combinedRouting.js` | `tagMergedRows`, `resolveRowSourceId` | Tags every merged row with its true source id (issue #39) so a destructive op never routes to the wrong folder. |
-| `src/unreachableJournals.js` | `findUnreachableLiveJournals` | Detects a live, non-terminal journal with no board row and no tombstone (issue #190/#228). |
-| `src/journalDelete.js` | `deleteJournalForTask`, `resolveJournalPathForDelete` | Resolves the journal path **at delete time** rather than trusting lazily-loaded UI state (issue #185). |
-| `src/journalLoadQueue.js` | `createLoadQueue`, `enqueueJournalLoad`, `JOURNAL_LOAD_TIMEOUT_MS` | Ordered, concurrency-limited, de-duplicated journal read queue — avoids ~180 concurrent reads on board mount. |
-| `src/readState/readStateService.js` | `track`, `markSeen`, `isUnread`, `completeInitialSeeding`, `emitJournalOpened` | Event-driven read/unread controller; the UI contains no business logic (issue #79/#311). |
-| `src/skillsSection.js` | `parseSkillsSection`, `extractTaskRefs`, `SKILLS_SECTION_TITLE` | Read-only parser for the board's `## Skills` section (issue #188). |
-| `src/boardSearch.js` | `filterRowsAndRawLines`, `taskRowMatchesSearch` | Board search/filter. |
-| `src/linkedNav.js` | `shouldNavigateToCompleted`, `linkedNavFallbackFile` | Decides where a "linked task" chip navigates when the target row isn't currently rendered. |
-| `src/AgentGateEditor.jsx` / `src/agentGateEditor.js` | `GateList` / `handleGateKeyDown` | UI for `agent-gate.md` (component and pure logic split for the `react-refresh` lint rule). |
-| `src/AgentSettingsEditor.jsx` | `default` | UI for `user-settings.md`, built on `userSettingsForm.js` and `agentSettingsVisibility.js` (`config` domain). |
+| Path | Purpose |
+| --- | --- |
+| `src/App.jsx` | The component tree: board rendering, routing between views, wiring every operation below to storage. |
+| `src/focusPlanOps.js` | Pure `content -> newContent` operations on `planner.md`: add/move/rename/snooze/delete a task, manage manager priorities, allocate new task ids (`allocateNextId`). |
+| `src/boardRow.js` | The single row/header-alignment rule (issue #426) — resolves `Wake` vs `Linked ID` by header name on a ragged table, shared by the writer and the reader so they cannot disagree. |
+| `src/boardTable.js` | The app-side markdown table reader; the reader half of the #426 contract whose writer half is `focusPlanOps.js`. |
+| `src/journalChat.js` | Parses/renders journal markdown as a chat thread (`parseJournalChat`); dependency-free so `packages/task-paper` can embed it verbatim as an inline module script. |
+| `src/taskSort.js` | `sortTasksByPriority`, manager-priority chain resolution, the `## Priorities` list parser. |
+| `src/snooze.js` | Snooze-date parsing/formatting and the `<!-- snooze:YYYY-MM-DD -->` cell grammar. |
+| `src/boardRepair.js` | A pure, `content -> { content, changes }` repair for the #307 board-rewrite defect; the only thing that may touch `planner.md` with it is the dry-run-by-default `scripts/repair-board-307.mjs`. |
+| `src/selfHealIds.js` | Temporary defence-in-depth: renumbers stray high-outlier task ids (a legacy bug's polluted replicas) back into the planner's own contiguous range on load; deliberately isolated so it can be deleted once every device has healed. |
+| `src/idTombstones.js` | Remembers a deleted task's id for a TTL window so a resurrected stale replica of its old journal cannot hijack a freshly-reused id. |
+| `src/moveTask.js` | Computes which tasks travel together when moving across storage sources (a manager-priority task drags its whole dependency subtree), and which cross-source links would break. |
+| `src/combinedRouting.js` / `combinedViewPatch.js` | Multi-source write routing and optimistic UI patching for the Combined view. |
+| `src/readState/*` | Read/unread tracking: a swappable provider interface (`localStorageReadStateProvider.js`), a business-logic-only controller (`readStateService.js`), and a lightweight per-journal content signature (`signature.js`) so a UI component never computes or persists state itself. |
+| `src/skillsSection.js` / `SkillsSection.jsx` | Read-only parsing/rendering of the board's `## Skills` section — the planner surfaces skills but never edits them. |
+| `src/journalLoadQueue.js` | An ordered, concurrency-limited, de-duplicated async queue so 90+ board rows mounting at once do not fire ~180 concurrent journal reads against a cloud provider simultaneously. |
 
-## `boardRow.js` — the one alignment rule (issue #426)
+## Public exports (selected)
 
-`planner.md` is hand-edited, so its tables are **ragged**: `## Deferred` has a 7-column header
-(`... | Added | Wake | Linked ID |`), `## Today` has 6 (no `Wake`), and rows written before `Wake`
-existed carry only 6 fields under a 7-column header. Every reader and writer must answer the same
-question — given this row's cells and this table's header, which cell is `Linked ID` and which is
-`Wake`? Answering it in more than one place is what issue #426 actually was: the writer (`opAddTask`)
-and the reader (`parseMarkdownTable`) disagreed, so a row the writer emitted correctly was read back
-wrong. `boardRow.js` is now the **only** implementation, imported by the writer (`focusPlanOps.js`),
-the reader (`boardTable.js`), and the snooze accessors (`snooze.js`) — "the reader agrees with the
-writer" holds by construction rather than by keeping two edits in sync. `recoverMisfiledLinkedId`
-(issue #446) additionally repairs a non-date value that landed in `Wake` by moving it into an empty
-`Linked ID`, without ever touching a genuine wake date.
+`allocateNextId`, `opAddTask`, `opSnoozeTask`, `opMoveBetweenSections`, `opChangePriority`,
+`opRenameTask`, `opDeleteTask` (`focusPlanOps.js`); `parseJournalChat`, `appendJournalMessage`,
+`AGENT_SENTINEL_RE` (`journalChat.js`); `sortTasksByPriority`, `parseManagerPriorities`
+(`taskSort.js`); `rowCells`, `alignRowToHeaders`, `wakeSeamIndex`, `recoverMisfiledLinkedId`
+(`boardRow.js`); `planBoardRepair`, `verifyBoardRepair` (`boardRepair.js`); `computeMoveSet`,
+`renumberMovedRows` (`moveTask.js`).
 
-## `focusPlanOps.js` — pure ops, reused across views
+## Behavioural requirements (from the app test suite, 35 files / 389 tests)
 
-Every board mutation is `(content, ...args) -> newContent` (or a small side-effect descriptor for
-cross-file moves like completion). Purity is what lets the single-source `FocusPlanView` and the
-multi-source Combined view share one algorithm instead of two: in Combined, each operation is simply
-routed to whichever source the clicked row's `rawLine` belongs to, via `combinedRouting.js`'s
-`__sourceId` tag.
+- **Id allocation never collides, even across a foreign journal counter.** `allocateNextId` numbers
+  from the content max while ignoring a foreign high journal id, skips any id that already has a
+  journal, and skips the union of live content ids and journal ids — the fix for a bug that let new
+  ids inherit a distant journal counter (issue #528: `opAddTask` never reuses a live task id).
+- **A ragged Deferred row keeps its `Linked ID`, never mistakes `Wake` for it.** The #426 reader
+  suite asserts a 6-field row under a 7-column header binds its trailing field to `Linked ID` (not
+  `Wake`), a 7-field row is read as before, an over-wide row does not shift columns, and the RIGHT-most
+  tail of an over-wide row is kept — so `Linked ID` survives rather than a stray cell.
+- **A misfiled `Linked ID` value never becomes a fabricated snooze (#446).** `recoverMisfiledLinkedId`
+  moves a non-date value sitting in `Wake` into an empty `Linked ID`, leaves a real wake date alone,
+  never clobbers an already-populated `Linked ID`, is a no-op on a header with no `Wake` column
+  (Today), and — critically — snoozing a task afterward preserves the misfiled id rather than
+  overwriting it, and clearing the snooze round-trips the link intact.
+- **Deleted-id tombstones prevent reuse collisions.** A deleted id's tombstone blocks its reuse
+  during allocation while active, expires and is prunable, and an invalid id is ignored rather than
+  poisoning the store.
+- **Read-state is event-driven and provider-swappable.** The service computes and persists nothing
+  in the UI layer; components only hand it raw content, render a boolean, and fire an "opened" event.
 
-## `combinedRouting.js` — routing by tag, not by text (issue #39)
+## Failure modes guarded against
 
-Two folders can legitimately contain rows with identical text or the same local task id (a shared
-umbrella row, or a genuine duplicate). The pre-fix Combined view routed a destructive op by looking
-the clicked row up in a map keyed by trimmed text or local id — neither key is unique across sources, so
-the last source iterated wins the map, and a *work* task could be archived into the *personal*
-folder's completed board. The fix tags every merged row with the id of the source it actually came
-from, carried through parse → sort → filter → context menu → handler, resolving the owning source
-from that tag first and falling back to the legacy text lookup only for untagged (single-source) rows.
-
-## Behavioural requirements (selected, from the domain's test suites)
-
-- `focusPlanOps`: `opMoveLinesBetweenSections` preserves row order and silently skips lines not
-  present in the source section; `buildCompletedRow` sanitizes pipes in a free-text outcome so the row
-  cannot break the table.
-- `boardWakeMigration.test.js` (#307): a board rewrite must migrate every legacy snooze comment,
-  never drop one, never slide a trailing `Linked ID` into `Wake`, never emit a row whose cell count
-  disagrees with its section header, and must be **idempotent** — a second rewrite pass produces no
-  further drift.
-- `raggedRow.test.js` (#426): a ragged Deferred row binds its trailing field to `Linked ID`, not
-  `Wake`; an over-wide row keeps its right-most tail rather than shifting columns; the alignment rule
-  inserts a missing cell at the `Wake` seam specifically, never at the row's end.
-- `misfiledLinkedId.test.js` (#446): `recoverMisfiledLinkedId` moves a non-date `Wake` value into an
-  empty `Linked ID`, but leaves a real wake date alone even when `Linked ID` is empty, and never
-  clobbers a `Linked ID` that is already populated.
-- `taskSort.test.js`: orders dependency chains prerequisite-first within the same manager priority;
-  keeps manager priority ahead of dependency depth; still floats red-urgent items above non-red ones;
-  handles cyclic links without crashing.
-- `allocateId.test.js` / GH #528: `allocateNextId` numbers from the content max, ignoring a foreign
-  high journal id, and skips the union of content ids and journal ids so a freshly added task can never
-  collide with — and silently destroy — a live row.
-- `selfHealIds.test.js`: `detectOutlierIds` flags a high cluster separated by a large gap but returns
-  empty for a planner that legitimately uses high ids; `selfHealOutlierIds` remaps a linked-id and a
-  `## Priorities` list entry that pointed at a renumbered task.
-- `unreachableJournals.test.js` (#190/#228): a non-terminal journal with no board row and no tombstone
-  is flagged; a terminal (finished) or tombstoned journal is silently ignored.
-- `combinedRouting.test.js`: `resolveRowSourceId` prefers the row's own source tag over a colliding
-  text lookup, and falls back to the text lookup only for an untagged (single-source) row.
-- `readStateService.test.js`: journals tracked before initial seeding completes are marked already-
-  seen (no "wall of stars" on first load); a journal that first appears **after** seeding is unread;
-  opening a journal (via a fired event) marks it seen — the UI never computes or persists anything
-  itself.
-
-## Failure modes
-
-- A destructive op (delete/complete/move) that resolves its target by text or lazily-loaded state
-  rather than a stable id or tag reproduces the class of bug closed by #39/#185/#528: it can silently
-  act on the wrong row or the wrong source.
-- A board writer and a board reader that each reimplement the ragged-table alignment rule instead of
-  sharing `boardRow.js` will drift the moment one of them changes — this is exactly how #426 happened
-  the first time.
+The dominant recurring shape across this domain's tests is **a reader and a writer of the same
+ragged/ambiguous format disagreeing** — #426 (Wake/Linked ID column alignment), #446 (a misfiled
+value read as the wrong field), #528 (id allocation reading a different "max" than reality). Every
+fix responds the same way: one shared implementation (`boardRow.js`, `allocateNextId`) imported by
+both sides, rather than two independent parsers kept in sync by discipline.

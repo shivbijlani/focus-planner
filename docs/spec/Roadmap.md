@@ -1,92 +1,105 @@
 # Roadmap
 
-This page groups every open issue by its priority label. It is deliberately a survey of gaps, not a
-schedule — see [Updating-the-Spec](Updating-the-Spec) for why issue numbers here specifically must
-resolve against **open** issues only, distinct from every other page.
+131 issues are open. This page groups them by their `priority:` label (7 critical, 15 high, 16
+medium, 14 low) and, for the 79 issues carrying no priority label, by theme. All numbers below are
+open issues; closed issues and merged PRs are never cited here (see
+[Updating-the-Spec](Updating-the-Spec) §Issue references).
 
 ## Critical
 
 | # | Gap |
 | --- | --- |
-| #501 | An agent-declared `done` still confers user-closed semantics: a Today row swallowed three unanswered user messages and released the Today gate — the failure [Prioritisation](Prioritisation) §4 documents the fix for. |
-| #422 | Google Doc comments carry no author attribution — the agent's own replies come back as the user, so comments cannot yet be a consent channel. |
-| #261 | A stuck "running" overnight-agent run freezes the recurring schedule; no run-level timeout exists to fail and reschedule it — addressed in part by `stuck-run-sweep.mjs` (see [Reliability](Reliability)), but the underlying gap is still open. |
-| #197 | The browser watchdog cannot recover a **stuck** slot, only a missing one — a bare TCP accept is treated as health, not a real page. |
-| #180 | Browser slots are hardcoded rather than configurable in `user-settings.md`, with no default-3 profile scheme. |
-| #179 | ~120 tool schemas are advertised per turn, most duplicating unused browser-slot or integration tooling. |
-| #139 | The Playwright MCP's CDP attach times out when the signed-in browser is overloaded. |
+| #501 | Agent-declared "done" confers user-closed semantics — a Today row swallowed 3 user messages and released the Today gate. |
+| #422 | Google Doc comments have no author attribution: the agent's own replies come back as the human, so comments cannot be an instruction/consent channel. |
+| #261 | A stuck "running" Overnight Agent run freezes the `*/30` schedule — no run-level timeout to fail and reschedule. |
+| #197 | The browser watchdog can recover a missing slot but not a STUCK one (TCP-accept is treated as health). |
+| #180 | Browser slots: move the slot table into `user-settings.md`, default to 3, launch a closed profile on demand. |
+| #179 | ~120 tool schemas are advertised per turn, most duplicating unused browser slots or an unused integration. |
+| #139 | Playwright MCP CDP attach times out when the signed-in browser is overloaded. |
 
 ## High
 
 | # | Gap |
 | --- | --- |
-| #423 | No durable task-to-doc binding: the catch-up doc is found by title search, so a rename silently creates a duplicate and new comments go undetected — `oa-state.ps1 doc` (§ [Domain-overnight-agent](Domain-overnight-agent)) is the fix in progress. |
-| #404 | The agent works tasks inside its own run session — no per-task session, no workspace isolation, no persisted session id. This is what `session -Id <ID>` (verdict `create`/`reuse`/`replace`) now exists to close (see [Prioritisation](Prioritisation) §7). |
-| #405 | The collect phase performs work instead of handing off, and the precedence of a collect-phase wake over priority order was unwritten — this is the exact gap [Prioritisation](Prioritisation) §7 now specifies. |
-| #346 | PHASE 0's mandated inbox check silently no-ops when the email MCP fails its startup handshake — a missing tool reads identically to an empty inbox. |
-| #321 | `git worktree remove --force` deletes through a `node_modules` junction, emptying the shared install for every checkout — `scripts/check-node-modules.mjs` (see [Domain-scripts](Domain-scripts)) detects the symptom but the root cause is still open. |
-| #312 | A planner client can hold a board two revisions stale and still enter "Backing up..." — a possible upstream mechanism for the unreachable-live-journal defect (closed issue 190). |
-| #304 | The user-facing explainers advertise approval words the consent reader rejects: three of four live asks were dead on arrival. |
-| #302 | A `gate-allowed` verdict bypasses the journal, so an agent can merge over a fresh human "don't" — the guard is prose only, not enforced code. |
-| #291 | Task journals sit unbounded on the per-run read path — `task-400.md` reached 257 KB (~66K tokens) before this was noticed. |
-| #170 | The overnight agent has written turns into tasks that are already closed. |
-| #181 | A green CI check must mean all tests ran and passed; 25 of 30 open PRs showed zero CI checks yet a clean badge. |
+| #549 | `Get-Content -Raw` silently double-encodes UTF-8, corrupting catch-up docs — a third, currently unguarded corruption class. |
+| #424 | Telegram posts the catch-up doc link repeatedly instead of once — 21 of 28 turns on one task exceed the message-length limit. |
+| #423 | No durable task-to-doc binding: the catch-up doc is found by title search, so a rename creates a duplicate. |
+| #421 | Direction: one catch-up Google Doc per task, the doc as the agent's output surface and its comments as the reply channel. |
+| #404 | No per-task session/workspace isolation, no persisted session id — work happens in the shared run session. |
+| #346 | PHASE 0's mandated inbox check silently no-ops when the email MCP fails its handshake; a missing tool reads as an empty inbox. |
+| #321 | `git worktree remove --force` deletes through a `node_modules` junction, emptying the shared install for every checkout. |
+| #318 | Guards were green against a shape the app never wrote — fixtures named for a producer are not actually pinned to it. |
+| #312 | A planner client can hold a board 2 revisions stale and still enter "Backing up..." — possible mechanism behind a prior stale-sync-status defect. |
+| #304 | The consent reader rejects approval words the user-facing explainers advertise — 3 of 4 live asks were dead. |
+| #302 | A `gate-allowed` verdict bypasses the journal, so an agent can merge over a fresh human "don't" — the guard is prose only. |
+| #291 | Task journals sit on the per-run read path and grow unbounded — one reached 257 KB (~66K tokens). |
+| #243 | The browser watchdog has no plugin-update check; the plugin's own self-heal is circular. |
+| #181 | A green CI check must mean all tests ran and passed — 25 of 30 open PRs showed a clean badge with zero checks. |
+| #170 | The Overnight Agent writes turns into tasks that are already closed. |
 
 ## Medium
 
 | # | Gap |
 | --- | --- |
-| #330 | The exhaustion TTL is one parameter doing two jobs — expiring mid-run (fail-closed) and, if raised, letting one run declare exhaustion on another run's work (fail-open). |
-| #326 | `oa-state.ps1` never writing `agent-gate.md` is load-bearing for the consent channel but is stated only in a comment, asserted by no test. |
-| #322 | The Today gate's release is still agent-authored in one respect: exhaustion should be verified against the drained queue itself, not taken on the run's word. |
-| #250 | Consent still rests on a marker the agent's own software writes (a follow-up to the same class of bug as the earlier, now-closed consent-marker issue). |
-| #132 | Task ids can be reused after completion, because the completed board is not part of the allocation universe. |
-| #328 | A bare `#NNN` is ambiguous: roughly a quarter of GitHub issue numbers already collide with a live planner task id. |
-| #381 | `mutcheck-browser-slots` arm E is non-hermetic — it probes live debug ports, so the suite reads red on `main` whenever a browser happens to be open. |
-| #124 / #127 | Overnight-agent business logic should be offloaded out of `SKILL.md` prose into scripts and referenced static partials — the direction this repository has in fact been moving in. |
+| #496 | Per-task session titles lose the planner task id, so worked tasks look undiscoverable. |
+| #383 | Agent-opened browser tabs have no owner; leftover tabs accumulate and cleanup is unsafe by construction. |
+| #381 | `mutcheck-browser-slots` arm E is non-hermetic — it probes live debug ports, so the suite is red on `main` whenever a browser is open. |
+| #330 | The exhaustion TTL does two jobs at once (fail-closed expiry vs. fail-open cross-run risk) and cannot be tuned for one without the other. |
+| #328 | A bare `#NNN` is ambiguous — 24% of GitHub numbers already collide with a live planner task id. |
+| #326 | "`oa-state.ps1` never writes `agent-gate.md`" is load-bearing for consent but is asserted only in a comment. |
+| #322 | The Today gate's release is still agent-authored: verify exhaustion against the drained queue rather than the run's own word. |
+| #285 | On plugin update, tell the user what actually changed for them, not a list of bug numbers. |
+| #275 | Mobile: the link/linked-ID UI looks broken on phone (desktop is fine). |
+| #250 | Consent still rests on a marker the agent's own software writes (follow-up to a prior fix). |
+| #184 | Recurring items: self check-off plus agent-run activity visibility. |
+| #176 | Consolidate all planner + Overnight Agent development into one board task and one issue trail. |
+| #132 | Task ids can be reused after completion because the completed board is outside the allocation universe. |
+| #127 | Split `SKILL.md`'s guardrails/reference prose into referenced static partial files. |
+| #124 | Offload Overnight Agent business logic to a script; keep `SKILL.md` a thin wrapper. |
+| #123 | Journal `.md` store vs. Telegram: define the source of truth and bound completed-journal growth. |
 
 ## Low
 
 | # | Gap |
 | --- | --- |
-| #207 / #8 | Backward-compatibility artifacts (legacy multi-source shims, unsuffixed FSA handles, `migrateLegacy`) are scheduled for removal now that the system is single-user; this spec deliberately does not document them as required behaviour (see this page's own scope note in [Updating-the-Spec](Updating-the-Spec)). |
-| #85 / #77 / #71 / #61 / #56 | Five issues converge on the same feature (event-driven journal read/unread state) — now shipped as `src/readState/readStateService.js` (see [Domain-app](Domain-app)); the issues remain open as historical record of the design's iterations. |
-| #18 / #5 | Local-first storage with background cloud sync — the `folder-sync` domain — and multi-source OneDrive connection are both now shipped; kept open pending final acceptance. |
-| #104 | A final-phase post-mortem / "dream-mode memory" for the overnight agent is proposed but not built. |
-| #88 | An interactive, lesson-tracked first-run onboarding tutorial is proposed but not built. |
+| #327 | Guard-authoring conventions have no home — three "this should be a convention" notes are stranded on three separate issues. |
+| #207 | Remove backward-compatibility artifacts — single-user install, no legacy support needed. |
+| #104 | Overnight agent: final-phase post-mortem plus dream-mode memory. |
+| #88 | First-run experience: interactive, lesson-tracked onboarding tutorial. |
+| #85, #77, #71, #61, #56 | Five open issues covering the same feature — event-driven journal read/unread indicator with a localStorage provider — filed separately; see [Domain-app](Domain-app) §readState for the shipped design these describe. |
+| #21 | Rebrand: rename the Azure AD app and Google OAuth consent screen to "Planner". |
+| #18 | Local-first storage with background cloud sync via a service worker. |
+| #12 | Move tasks between sources via right-click. |
+| #8 | Remove multi-source backward-compatibility code (legacy provider, unsuffixed handle, migration path). |
+| #5 | Connect a personal OneDrive folder and prepare for a combined task view. |
 
-## Unlabeled — recent findings awaiting triage
+## Unprioritised (no `priority:` label) — grouped by theme
 
-The largest bucket (77 of 129 open issues) carries no `priority:` label yet — almost all are recent,
-narrowly-scoped defect reports from the overnight agent's own operation, filed faster than they can be
-triaged. Representative clusters:
+These 79 issues are mostly findings from the overnight agent's own sweeps (`board-integrity`,
+`repo-drift-sweep`, mutcheck suites) filed faster than they are triaged into a priority band.
 
-- **Capacity accounting** — #487 (a task parked awaiting reply holds a capacity slot forever, so
-  `admits` stays 0 and dispatch deadlocks), #500 and #522 (a doc-bound task's dismissive ask makes the
-  same bug look workable, then observing its comments swings capacity the other way), #541 (a
-  `blocked` task is excluded from neither `done` nor `skip`, so recording a human pause still costs the
-  run its dispatch slot) — all instances of the same accounting gap [Prioritisation](Prioritisation)
-  §4/§7 describes the intended fix for.
-- **Doc-binding integrity** — #494 (`journal_stamp_id` always reads null), #436 (`journal_stamped`
-  always reads false), #408 (`extract` reports "linked: none" for a row that has a `Linked ID`), #531
-  (a document with genuinely zero comments is indistinguishable from a dead connection).
-- **Provenance and authorship** — #465 (consent is replayable — an affirmative is never "spent"),
-  #453 (agentic issue comments carry no provenance marker, so editing "the one agentic comment" can
-  silently overwrite a human's), #477/#514 (G12's one-turn-per-wake guard checks *that* a turn was
-  written, not *by whom*).
-- **Deploy and process hygiene** — #412/#418/#419/#413 (auto-deploy's "merged isn't running" check
-  exceeds its own time budget or resolves against a stale working tree — see [Reliability](Reliability)),
-  #481 (`session-state` is never pruned — 4,109 directories / 2.6 GB accumulated since April), #402
-  (81 worktrees / 185 branches accumulate unpruned, leaking `git fsmonitor--daemon` processes).
-- **Board-adjacent correctness** — #343 (a task snoozed in the app can still be worked, because the
-  agent's snooze reader never reads the `Wake` column — see [Prioritisation](Prioritisation) §2 for the
-  intended precedence), #528 (adding a task could reuse a live task's id and silently destroy its row,
-  since fixed by `allocateNextId`'s union-of-ids rule, [Domain-app](Domain-app)).
-- **Meta** — #406 records the spec pipeline itself once going red (stale Roadmap refs, a domain with
-  no page) — the exact class of drift this generation pipeline exists to catch, per
-  [Updating-the-Spec](Updating-the-Spec).
+**Capacity, gate and consent correctness** (the recurring "agent authors its own signal" class —
+see [Prioritisation](Prioritisation) §5): #556, #545, #543, #541, #540, #534, #532, #531, #528,
+#527, #526, #524, #522, #520, #519, #518, #516, #515, #514, #513, #511, #506, #500, #495, #494,
+#492, #491, #487, #483, #477, #476, #473, #471, #468, #465, #442, #441, #436, #433, #428, #408,
+#405, #391, #354, #343.
 
-The intended direction for this whole bucket, stated across #124/#127/#337, is to keep shrinking what
-lives only as `SKILL.md` prose or an ungrounded assumption, replacing each with a script, a state
-field, or a mutation-checked guard — the same trajectory the `overnight-agent` domain's mutcheck suite
-already embodies for the mechanisms it has finished converting.
+**Deploy propagation and drift** ("merged isn't running", see [Reliability](Reliability)): #554,
+#551, #533, #519, #419, #418, #414, #413, #412, #402, #398, #345.
+
+**Reliability infrastructure (sessions, locks, supervisor)**: #547, #481, #480, #462, #461, #459,
+#457, #454, #453, #452, #403, #351, #337.
+
+**Board/data integrity and Telegram**: #548, #538, #505, #499, #328 (also listed under Medium),
+#302 (also listed under High).
+
+**Process and spec-pipeline meta**: #539, #499, #456, #406, #354.
+
+**Security**: #314 — real email, tenant domain and directory GUID committed in a config document.
+
+## Reading this page going forward
+
+Priority labels are applied by hand; the unprioritised bucket above is expected to shrink as issues
+are triaged, not to be treated as low-value simply for lacking a label — several (#556, #528, #514)
+describe active data-integrity defects. See [Reliability](Reliability) and
+[Prioritisation](Prioritisation) for the mechanisms these issues describe gaps in.
