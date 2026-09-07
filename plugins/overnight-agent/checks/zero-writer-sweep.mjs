@@ -275,7 +275,11 @@ const byKind = (k) => findings.filter((f) => f.kind === k).length;
 
 console.log(`Wakes that closed without their owner writing: ${findings.length}`);
 console.log(
-  `  (${woken} of ${considered} live non-terminal tasks have a woken session; ` +
+  // "active board rows", not "live non-terminal tasks" -- same correction as
+  // catchup-doc-sweep.mjs, and for the same reason: `considered` is `activeIds` (parsed from
+  // planner.md) minus TERMINAL, so off-board live tasks are not in it. Measured 2026-09-05:
+  // 108 live non-terminal, 84 on the board, so the old wording overstated the population by 24.
+  `  (${woken} of ${considered} active board rows have a woken session; ` +
     `zero-writer ${byKind('ZERO_WRITER')}, masked ${byKind('MASKED_WRITER')}, ` +
     `unserviced ${byKind('WAKE_UNSERVICED')}; grace ${GRACE_MINUTES}m)\n`,
 );
