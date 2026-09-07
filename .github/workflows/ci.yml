@@ -522,6 +522,31 @@ jobs:
           OA_SKILL_MD: ./plugins/overnight-agent/skills/overnight-agent/SKILL.md
         run: node ./plugins/overnight-agent/checks/mutcheck-phase07-ownership.mjs
 
+  # GH #570, same family as the two jobs above and the cleanest instance of it yet.
+  #
+  # `google-workspace` is how Shiv's catch-up-doc comments reach a wake. It was configured,
+  # enabled, and answering -- `mcp-probe.mjs google-workspace list` returned 36 tools -- and it
+  # was in no agent session's toolset for weeks, because it declared `"type": "local"` and the
+  # harness loads only stdio/http/sse. It was not rejected; it was skipped, and a skipped server
+  # is byte-identical to a server nobody configured. Three of his comments sat unread while every
+  # instrument on the machine reported the capability AVAILABLE. #570 was filed against this
+  # config, quotes that exact line, and concludes "config is healthy and enabled".
+  #
+  # The live file is on Shiv's machine, so the sweep is what checks reality; this job checks the
+  # detector. The arm that earns its place is M1: it widens the recognised set to include
+  # "local" -- the precise "fix" someone reaches for when the sweep first fires -- and asserts
+  # the original bug then goes unseen.
+  mcp-transport:
+    name: MCP servers declare a loadable transport
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mutation check (real #570 config caught, healthy servers not flagged)
+        run: node ./plugins/overnight-agent/checks/mutcheck-mcp-transport.mjs
+
   # The per-task session (GH #404). The overnight agent used to do task work IN THE RUN SESSION --
   # measured live on task #451: it read the journal, edited four deliverables and wrote the turn
   # without ever leaving the main session. #391 already stated the rule ("one task, one workspace,
