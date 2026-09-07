@@ -176,6 +176,13 @@ Two cautions it encodes, both already paid for:
 - **A title you could not resolve is reported, never invented.** An ID annotated with a guessed
   title is worse than a bare one, because it reads as verified.
 
+**This preference does not survive every edit path, and the naive reading of it produces a broken
+page.** `resolve-ids.ps1 -Apply` emits markdown links, and a markdown link applied through
+`find_and_replace_doc` renders **literally** — visible `[title](url)` characters in the document.
+So the obedient move, running the resolver over a correction and pasting the result, is exactly the
+one that fails. On the surgical path, name the resource in words instead; see *Editing in place*
+below. Real links belong to text authored through `populate_from_markdown`.
+
 ## Structure
 
 Use these sections, in this order. Keep the headings; drop a section only when it genuinely does
@@ -293,6 +300,27 @@ skill exists to remove.
     `--tool-tier complete` over the same stdio JSON-RPC `mcp-probe.mjs` uses, and pass the arguments
     from a **file**: an inline shell string eats `$`, backticks and apostrophes invisibly.
     Raising the configured tier to `complete` would remove the need for the workaround.
+- **Google Doc, surgical correction: `find_and_replace_doc`** — for changing a figure or a sentence
+  without re-rendering the page. Prefer it when the edit is small: a full rewrite re-runs the
+  CommonMark preset over the entire body and can regress formatting that is currently fine.
+  - ⚠️ **It inserts plain text and cannot create a hyperlink.** See the note under
+    `titled-id-links` above — a markdown link renders as literal `[title](url)` characters. Name
+    the resource in words on this path (*"the PR that gated the pointer on a written doc"*), which
+    serves the preference's purpose better than a dead link does.
+  - ⚠️ **A table row cannot be added this way.** A Doc table is real structure, and the pipes in
+    fetched markdown are a rendering artefact over it — there is no pipe-row in the document to
+    match, so the replace silently finds nothing. Edit the text **inside** an existing cell, and
+    put genuinely new material in adjacent prose.
+  - ⚠️ **Anchor on bare substrings.** `**` markers in fetched markdown are likewise artefacts of
+    real Doc formatting rather than characters in the body, so an anchor containing them never
+    matches.
+  - **Success is a count, not the absence of an error.** Parse `Replaced (\d+) occurrence` and
+    require exactly `1`. Do not test the envelope for `/error/i`: the payload contains
+    `"isError": false`, which matches, so a clean edit reports as a failure.
+  - **Correct every occurrence of a figure, not the reported ones.** A number that appears five
+    times and is fixed twice leaves the page contradicting itself, which is worse than uniformly
+    stale — a reader who finds two values cannot tell which is current. Count occurrences first,
+    then assert the residual is zero.
 - GitHub: `gh issue comment --edit-last`, or
   `gh api -X PATCH /repos/<owner>/<repo>/issues/comments/<id> -F body=@<file>`.
 - Record the comment URL when you post it, so the next pass can find it without guessing.
@@ -307,7 +335,8 @@ skill exists to remove.
 - [ ] No sentence needs a fact that is not in the document.
 - [ ] No correction narration in the body; superseded history is in the appendix or dropped.
 - [ ] **No bare `#NNN`.** Every ID is a link and carries its resource's title —
-      `resolve-ids.ps1` reports zero unresolved.
+      `resolve-ids.ps1` reports zero unresolved. On a surgical `find_and_replace_doc` edit, where
+      links cannot be created, the resource is named in words instead.
 - [ ] Every verification claim has a link.
 - [ ] Deep detail is collapsible where the target supports it; plain headings where it does not.
 - [ ] If a decision is wanted, the exact reply word is stated, with what it does.
