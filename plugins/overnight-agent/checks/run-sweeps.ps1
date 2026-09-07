@@ -187,6 +187,22 @@ $Suite = @(
   # run that could have kept it. This one is self-contained within a single turn, so it needs
   # no grace period. Found on #460, 2026-08-26.
   @{ n = 'self-promise-sweep';       bridge = $false }
+  # The only ACTION in a suite of detectors, added 2026-09-07, and deliberately so.
+  # `ensure-catchup-doc.mjs` (#580) implements Shiv's invariant verbatim -- if doc does not
+  # exist then create doc else continue -- but shipping it left it invoked by NOTHING. That is
+  # the exact defect the invariant exists to kill, one layer up: a step that nothing calls is
+  # byte-identical to a step that had nothing to do, and both report success. Prose in SKILL.md
+  # telling a wake to bind a doc is what produced 29 measured omissions in the first place
+  # (catchup-doc-sweep, #578); replacing that prose with different prose changes nothing.
+  # It belongs HERE rather than inside a task's sub-session because a check that runs inside
+  # the thing it guards cannot fire when that thing never starts -- dispatch resolves binding
+  # BEFORE the session exists. `stuck-run-sweep --repair` is the standing precedent for a
+  # suite entry that mutates, so this is not a new category.
+  # Self-limiting by construction: --limit 5 per run, and every gate (BOUND / TERMINAL /
+  # NO STATE / LIMIT) is mutation-proven load-bearing by mutcheck-ensure-catchup-doc.mjs in
+  # CI. It fails OPEN -- it creates a cheap reversible artefact rather than refusing a turn --
+  # so a bad night here costs a spare doc, never lost work.
+  @{ n = 'ensure-catchup-doc';       bridge = $false }
   @{ n = 'declared-unblocked-sweep'; bridge = $false }
   @{ n = 'blocked-readonly-sweep';   bridge = $false }
   @{ n = 'inprogress-stall-sweep';   bridge = $false }

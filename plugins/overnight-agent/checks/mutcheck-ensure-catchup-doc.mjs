@@ -22,9 +22,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+const CHECKS = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+
 const ENSURE =
   process.env.OA_ENSURE ||
-  path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), 'ensure-catchup-doc.mjs');
+  path.join(CHECKS, 'ensure-catchup-doc.mjs');
 
 if (!fs.existsSync(ENSURE)) {
   console.error(`ensure-catchup-doc.mjs not found at ${ENSURE}`);
@@ -175,6 +177,33 @@ for (const m of MUTATIONS) {
   fs.writeFileSync(mutPath, src.replace(m.find, m.repl), 'utf8');
   const r = run(mutPath);
   check(`${m.name} — ${m.why}`, m.expect(r), `created=[${r.created.join(',')}] code=${r.code}`);
+}
+
+// WIRING. Every assertion above proves the invariant DECIDES correctly; none of them prove
+// anything ever RUNS it. When this file first shipped (#580) that was literally true: the
+// binder was deployed, correct, mutation-proven, and invoked by nothing -- indistinguishable
+// from a binder that had nothing to bind, because both print no failures. That is the same
+// shape as the 29 omissions it was written to end. So the roster membership is an assertion,
+// not a convention: `run-sweeps.ps1` derives the oa-home deploy set from its $Suite literal,
+// which makes this one line simultaneously the proof that it runs and the reason it is
+// present on the machine that runs it. Delete the suite entry and this fails.
+console.log('\nWIRING');
+{
+  const runner = path.join(CHECKS, 'run-sweeps.ps1');
+  let suiteNames = null;
+  if (fs.existsSync(runner)) {
+    const rs = fs.readFileSync(runner, 'utf8');
+    const start = rs.indexOf('$Suite = @(');
+    if (start !== -1) {
+      const body = rs.slice(start, rs.indexOf('\n)', start));
+      suiteNames = [...body.matchAll(/n\s*=\s*'([^']+)'/g)].map((m) => m[1]);
+    }
+  }
+  check(
+    'ensure-catchup-doc is on the run-sweeps roster (so it is invoked, and so it deploys)',
+    Array.isArray(suiteNames) && suiteNames.includes('ensure-catchup-doc'),
+    suiteNames ? `suite = ${suiteNames.join(', ')}` : 'could not parse $Suite in run-sweeps.ps1',
+  );
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
