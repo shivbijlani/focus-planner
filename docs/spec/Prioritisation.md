@@ -268,6 +268,46 @@ The key asymmetry is deliberate: when unsure, the system usually fails toward **
 timers, stale wakes stop counting as active after 45 minutes, and a malformed concurrency setting
 falls back to 1 instead of some guessed higher value.
 
+### The ask is declared, not inferred (#560)
+
+The `awaiting_reply` row above turns on `HasBlockingAsk`, and the question of *where that value
+comes from* is the whole of #560. Originally it was recovered from the turn's prose by regex — so
+the phrasing an agent chose while writing for a human decided whether its own task stayed
+schedulable. Measured 2026-09-06, after an earlier narrowing: **2 eligible rows out of 249**, with
+the skill's own boilerplate `**Your call:** reply below in plain English` present in 81 journals
+and read back as blocking. The documented template was writing the sentence that starved the board.
+
+The ask is now stated in the same act as writing the turn. `write-turn.ps1` requires
+`-Ask blocking|offer|none` and stamps it into the turn as `<!-- oa-ask: VALUE -->` beneath the
+turn's own provenance marker. `HasBlockingAsk` reads that declaration first, so **`blocking` parks
+even when the wording opens dismissively, and `offer`/`none` do not park even when the wording
+contains a blocking-shaped clause.** The preference lives inside `Get-BlockingAskVerdict`, which
+`Get-JournalFacts` calls, so both the emitted `scan` row and the capacity reader inherit it from
+one edit rather than two.
+
+**The textual reading survives as a documented fallback** for turns written before the flag
+existed (~81 journals at the time of the change), where the pre-#560 semantics apply exactly:
+`**Your call:**` parks; a `**Needs from you:**` whose value opens dismissively (`none`/`nothing`)
+does not park; and an explicitly optional remainder after the clause break does not re-create an
+obligation. These are fallback-only — a declared turn never reaches them — and arms L1/L2/Q/R of
+`mutcheck-awaiting-reply.ps1` still pin them.
+
+`ask_source: declared | inferred` is emitted on every `scan` row, with the declared value itself as
+`ask_declared`, so the fallback's share is a number that can be watched shrinking rather than
+assumed gone. Every row reports one of the two, including rows with no agent turn (which read
+`inferred`, since nothing could have declared).
+
+A declared ask is still agent-authored, and §6 is the reason that matters. The distinction is not
+*who* authors the signal but **how**: a declaration is a deliberate, structural statement made
+while writing the turn, not a value reconstructed afterwards from narrative. That is the same move
+`-Exhausted` made for the Today gate, and it is why both remain subject to the cancelling
+conditions above rather than being trusted outright.
+
+**Grounding.** `mutcheck-declared-ask.ps1` pins that a declaration outranks the prose in *both*
+directions, that an undeclared turn still reads exactly as it did before, that `ask_source` is
+honest, and that `has_open_ask` does not regress. It drives the real `oa-state.ps1` and the real
+`write-turn.ps1`, mutating those files rather than a re-implementation of their logic.
+
 ## 6. The recurring failure class: the agent authoring the signal its own gate reads
 
 This page's design exists to avoid one recurrent bug class: the agent writes a signal and then

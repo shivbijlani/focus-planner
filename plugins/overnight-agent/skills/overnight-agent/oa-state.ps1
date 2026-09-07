@@ -1408,6 +1408,50 @@ $script:AskClauseBreakRe = '[.;:]|\u2014|\u2013|(?<=\s)-(?=\s)'
 # optionality marker and therefore still parks.
 $script:OptionalRemainderRe = '(?i)\b(optional(ly)?|if you want|if you would like|if you ?d like|if you like|when you ?re ready|when you are ready|when you get to it|when you have time|no rush|not urgent|up to you|self-serve|whenever you)\b'
 
+# --- ...AND THE REASON ALL OF THE ABOVE IS A FALLBACK RATHER THAN THE MECHANISM (GH #560) ----
+# Everything above reconstructs ONE BIT -- "is this turn blocked on the user?" -- out of a
+# sentence the agent wrote. Three layers deep by now: a generous reading for the digest, a strict
+# reading for the gate, and a dismissive-opener carve-out bolted on after the ratchet starved the
+# board. That stack is the tell. The turn's author KNEW the answer at the moment it wrote the
+# text; recovering it afterwards by regex means a phrasing choice silently decides whether a task
+# is schedulable, and the agent writes the text its own gate reads.
+#
+# Measured on the live board 2026-09-06: 2 eligible rows out of 249. The skill's OWN boilerplate
+# line -- `**Your call:** reply below in plain English`, printed verbatim in SKILL.md's agent-block
+# example -- appears in 81 journals and is read back as a blocking ask, parking every one of them.
+# So the documented template instructs the agent to write the sentence that starves the board.
+#
+# THE FIX IS TO DECLARE IT. `write-turn.ps1 -Ask blocking|offer|none` is REQUIRED (its guard G13),
+# and it stamps the declaration into the turn as a single-line HTML comment beside the turn's own
+# `<!-- from: overnight-agent -->` provenance marker. This reader prefers that declaration over
+# anything the prose says.
+#
+# WHY A STAMP IN THE JOURNAL RATHER THAN A FIELD IN THE STATE STORE, which was the other option
+# the issue offered:
+#   1. SCOPE. The declaration is a property of a TURN, not of a task. `Get-NewestAgentTurn`
+#      already scopes to the newest turn, so a stamp inherits arm O for free -- a `blocking`
+#      declared three turns ago cannot park a task forever. A per-task state field would need its
+#      own staleness rule, and getting that wrong is exactly the failure arm O exists to catch.
+#   2. SURVIVAL. State is a rebuildable cache (#423 lost it once). The journal is the source of
+#      truth, and SKILL.md says so: "if scan and a journal ever disagree, the journal prose wins".
+#   3. AUDITABILITY. A human reading the journal can see what the turn claimed about itself.
+# It is invisible in the planner app: `journalChat.js` strips complete inline HTML comments and
+# skips lines that are purely a comment, so this renders as nothing (it deliberately contains
+# neither `AUTO` nor `AGENT`, which would make `AGENT_SENTINEL_RE` treat it as a block marker).
+#
+# THE FALLBACK STAYS, and stays documented, because ~81 journals were written before this existed
+# and must keep behaving exactly as they do today. `scan` reports `ask_source: declared|inferred`
+# per row so the inferred share is measurable and can be watched shrinking, rather than being
+# assumed gone.
+#
+# `[ \t\r]*$` rather than `[ \t]*$`: with `(?m)` in .NET, `$` matches immediately before the `\n`,
+# so on a CRLF file the `\r` sits between the marker and the anchor and the match fails. These
+# journals round-trip through OneDrive and the planner web app, so CRLF is the COMMON case --
+# `write-turn.ps1` even matches the file's existing newline style deliberately. Caught by the
+# mutcheck fixture, which is CRLF; with `[ \t]*$` every arm that read a declaration failed and
+# every real journal would have silently fallen back to the prose.
+$script:AskDeclRe = '(?im)^[ \t]*<!--[ \t]*oa-ask[ \t]*:[ \t]*(blocking|offer|none)[ \t]*-->[ \t\r]*$'
+
 function Get-NewestAgentTurn([string]$agentLeft) {
   # The agent's LAST turn only. Scoping is what keeps this honest: an ask answered three turns
   # ago is not an open ask, and testing the whole block would leave a task awaiting forever.
@@ -1443,9 +1487,37 @@ function Test-AskTextIsOpen([string]$value) {
   return $true
 }
 
+function Get-DeclaredAsk([string]$agentLeft) {
+  # The turn's OWN classification of its ask, or '' when it did not declare one.
+  #
+  # Scoped to the newest turn for the reason arm O of mutcheck-awaiting-reply exists: a
+  # declaration is about the turn that made it, so an old `blocking` must not outlive the turn
+  # that said it. Read through the fence mask so a quoted example -- and the turn ANNOUNCING this
+  # feature necessarily quotes the stamp -- cannot declare anything (#320/#325, and G8's lesson
+  # that the reader, not the writer, decides what a fence means).
+  #
+  # LAST match wins within the turn, matching every other "the newest statement is the true one"
+  # rule in this file.
+  $turn = Get-NewestAgentTurn $agentLeft
+  if ([string]::IsNullOrEmpty($turn)) { return '' }
+  $scan = Get-FenceMaskedText $turn
+  $val = ''
+  foreach ($m in [regex]::Matches($scan, $script:AskDeclRe)) { $val = $m.Groups[1].Value }
+  return $val.ToLowerInvariant()
+}
+
 function Test-HasOpenAsk([string]$agentLeft) {
   # VISIBILITY reading (`has_open_ask`, consumed by the digest surface). Deliberately generous:
   # anything the user could reasonably answer counts, so the queue never hides a question.
+  #
+  # #560: a declaration can only ever ADD visibility here, never remove it. `blocking` and `offer`
+  # both mean "there is something he could answer", so they short-circuit to true; a declared
+  # `none` still falls through to the text reading rather than suppressing it. That asymmetry is
+  # the whole point -- the gate is what needed to stop guessing, and the digest's job is the
+  # opposite one, where a miss hides a question. Monotone-add is also what makes "has_open_ask
+  # must not regress" a property of the code rather than a promise in a PR body.
+  $declared = Get-DeclaredAsk $agentLeft
+  if ($declared -eq 'blocking' -or $declared -eq 'offer') { return $true }
   $turn = Get-NewestAgentTurn $agentLeft
   if ($turn.Length -eq 0) { return $false }
   if ([regex]::IsMatch($turn, $script:YourCallRe)) { return $true }
@@ -1472,6 +1544,10 @@ function Test-HasBlockingAsk([string]$agentLeft) {
   # GATE reading (`awaiting_reply`). `**Your call:**` still parks -- it is a direct hand-back
   # with no accompanying claim of self-sufficiency, and arms I/J of mutcheck-awaiting-reply
   # depend on that. Only the declared-unblocked case loosens.
+  #
+  # #560: THIS IS NOW THE FALLBACK. `Get-BlockingAskVerdict` consults the turn's own declaration
+  # first and only reaches this function when there is none. Everything below therefore describes
+  # how a PRE-DECLARATION turn is read, and must not change -- ~81 live journals depend on it.
   $turn = Get-NewestAgentTurn $agentLeft
   if ($turn.Length -eq 0) { return $false }
   if ([regex]::IsMatch($turn, $script:YourCallRe)) { return $true }
@@ -1479,6 +1555,25 @@ function Test-HasBlockingAsk([string]$agentLeft) {
     if (Test-AskTextIsBlocking $m.Groups[1].Value) { return $true }
   }
   return $false
+}
+
+function Get-BlockingAskVerdict([string]$agentLeft) {
+  # THE ONE PLACE `awaiting_reply` IS DECIDED (#560). Returns the verdict AND where it came
+  # from, together, because the provenance is the thing being measured: a fallback nobody can
+  # count is a fallback that never shrinks.
+  #
+  # Declared wins outright, in BOTH directions, and both directions are load-bearing:
+  #   `offer`/`none` -> does not park, even though the turn's prose may carry the boilerplate
+  #                     `**Your call:** reply below in plain English` that parks 81 journals today.
+  #   `blocking`     -> parks, even though the turn may open with `none`/`nothing`, which the
+  #                     dismissive-opener carve-out below would otherwise read as unblocked.
+  # A mutant that keys this back to the prose when a declaration exists is killed by
+  # mutcheck-declared-ask.ps1 arms D_OFFER and D_BLOCKING.
+  $declared = Get-DeclaredAsk $agentLeft
+  if ($declared) {
+    return [pscustomobject]@{ blocking = ($declared -eq 'blocking'); source = 'declared'; declared = $declared }
+  }
+  return [pscustomobject]@{ blocking = (Test-HasBlockingAsk $agentLeft); source = 'inferred'; declared = '' }
 }
 
 function Get-AgentEndIndex([string]$content) {
@@ -1927,6 +2022,9 @@ function Get-JournalFacts([string]$path) {
   $agentLeft = $content.Substring(0, [Math]::Min($agentEnd, $content.Length))
   $trailing = if ($agentEnd -lt $content.Length) { $content.Substring($agentEnd) } else { '' }
   $consent = Get-ConsentFacts $trailing
+  # #560: computed once, here, because the verdict and its provenance are one fact and every
+  # reader must see the same pair. Two readers deriving it separately is the #545 shape.
+  $askVerdict = Get-BlockingAskVerdict $agentLeft
   [pscustomobject]@{
     Id              = $id
     Path            = $path
@@ -1940,7 +2038,12 @@ function Get-JournalFacts([string]$path) {
     # re-snapshotting the file. That erasure is what lost three of Shiv's messages on #245.
     HasTrailingHuman = (Test-TrailingHasHuman $trailing $consent)
     HasOpenAsk      = (Test-HasOpenAsk $agentLeft)       # visibility: digest must show it
-    HasBlockingAsk  = (Test-HasBlockingAsk $agentLeft)   # gate: does it stop the run proceeding?
+    # #560: the gate reading, WITH its provenance. `HasBlockingAsk` keeps its name and meaning so
+    # every existing reader (the scan row, the capacity accounting in Test-CountsAgainstCapacity)
+    # is unchanged; `AskSource` is the new fact, and it exists so the inferred share is countable.
+    HasBlockingAsk  = [bool]$askVerdict.blocking          # gate: does it stop the run proceeding?
+    AskSource       = "$($askVerdict.source)"             # declared | inferred
+    AskDeclared     = "$($askVerdict.declared)"           # blocking | offer | none | '' (undeclared)
     Consent         = $consent   # #227: fail-CLOSED authorship verdict
     Trailing        = $trailing
     Legacy          = Parse-LegacyOaState $content
@@ -2831,6 +2934,20 @@ function Cmd-Scan {
       # reported -- an unknown age must never be reported as no message).
       unanswered_user_at = $unansweredAt
       awaiting_reply = [bool]($facts.HasAgentBlock -and $facts.HasBlockingAsk -and -not $facts.HasTrailingUser)
+      # #560: WHERE the line above got its ask from. `declared` means the turn's author stated it
+      # with `write-turn.ps1 -Ask ...`; `inferred` means it was recovered by regex from the turn's
+      # prose, which is the pre-#560 mechanism and remains the fallback for the ~81 journals
+      # written before the flag existed.
+      #
+      # Emitted on EVERY row, including rows with no agent block (which read `inferred`, because
+      # there is nothing that could have declared). That is deliberate: the point of this field is
+      # that `count(ask_source == 'inferred')` is a number someone can watch shrink, and a third
+      # value for "not applicable" would make the denominator an argument instead of a count.
+      ask_source     = "$($facts.AskSource)"
+      # The declared value itself, verbatim, so an audit can tell `offer` from `none` -- they park
+      # identically today but are different claims, and #564's `waiting_on` will need the
+      # difference. Null when undeclared, so "no declaration" is never confused with `none`.
+      ask_declared   = if ("$($facts.AskDeclared)") { "$($facts.AskDeclared)" } else { $null }
       # When the agent last wrote a TURN here (`mark` stamps it; `seed` and `resnapshot`
       # deliberately do not). Since #310 this is NOT a release signal: it feeds the wedged-run
       # backstop, where a FRESH stamp holds the gate and only a STALE one can release it.
@@ -4389,6 +4506,13 @@ function Test-SessionHoldsCapacity($st) {
     # deleting it changed no fixture -- and a guard that can be removed with everything still
     # green is decoration pretending to be a safeguard. The behaviour is pinned by the
     # trailing-reply fixture against a mutation of THIS line instead.
+    #
+    # #560 STRENGTHENED THIS RATHER THAN THREATENING IT. The declared-ask preference lives INSIDE
+    # `Get-BlockingAskVerdict`, which `Get-JournalFacts` calls, so both readers pick it up from
+    # the same field with no second edit. Had the declaration been resolved in `Cmd-Scan` instead,
+    # this reader would still be inferring from prose while the emitted row said `declared` --
+    # #545's "emitted field disagrees with gated field" shape, on the exact pair the
+    # Prioritisation spec calls out as needing to stay textually synchronized.
     $awaiting = [bool]($facts.HasAgentBlock -and $facts.HasBlockingAsk -and -not $facts.HasTrailingUser)
 
     # A due timer outranks the park, for the reason Test-Workable gives -- poll/recheck is
