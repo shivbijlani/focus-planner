@@ -526,6 +526,134 @@ describe('the collapse boundary is the reply counter, not userEngaged (#278)', (
   })
 })
 
+// #468: the collapse above is a DELETE, and Telegram refuses to delete a message
+// older than 48 hours. On any task woken less often than that -- which is most of
+// the board -- the new turn went out and the old one stayed, which is exactly the
+// stacking Shiv is looking at. An edit has no age limit.
+//
+// These use a client that carries `editMessageText`, as the real one does. The
+// suite above deliberately does not: a client with no edit capability must still
+// fall back to post-then-delete, and that is what those tests now pin.
+describe('editing a superseded turn in place rather than replacing it (#468)', () => {
+  const secondTurn = AGENT_JOURNAL.replace('do the thing', 'do the other thing')
+
+  function editingHarness(files, { fail = null } = {}) {
+    const h = makeHarness(files)
+    const edited = []
+    const client = {
+      ...h.client,
+      async editMessageText({ messageId, text }) {
+        if (fail) throw new Error(fail)
+        edited.push({ messageId, text })
+        return { message_id: messageId }
+      },
+    }
+    return { ...h, client, edited }
+  }
+
+  it('rewrites the previous unanswered turn: nothing is posted and nothing is deleted', async () => {
+    const h = editingHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(1)
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([1])
+
+    h.store['42'] = secondTurn
+    await bridge.syncUp()
+
+    expect(h.edited.map((e) => e.messageId)).toEqual([1])
+    expect(h.edited[0].text).toContain('do the other thing')
+    // The whole point: no second message, and no delete to fail on a 48h window.
+    expect(h.sent).toHaveLength(1)
+    expect(h.deleted).toEqual([])
+    // The id stays live, so the NEXT turn can edit it too.
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([1])
+  })
+
+  it('keeps editing the same message across repeated turns', async () => {
+    const thirdTurn = AGENT_JOURNAL.replace('do the thing', 'do a third thing')
+    const h = editingHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    h.store['42'] = secondTurn
+    await bridge.syncUp()
+    h.store['42'] = thirdTurn
+    await bridge.syncUp()
+
+    expect(h.edited.map((e) => e.messageId)).toEqual([1, 1])
+    expect(h.sent).toHaveLength(1)
+    expect(h.deleted).toEqual([])
+  })
+
+  it('NEVER edits a turn the user has replied to', async () => {
+    const h = editingHarness({ 42: AGENT_JOURNAL })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    setUserEngaged(state, '42', true)
+
+    h.store['42'] = secondTurn
+    await bridge.syncUp()
+
+    // That turn is answered history. Overwriting it would erase what he replied to.
+    expect(h.edited).toEqual([])
+    expect(h.sent).toHaveLength(2)
+    expect(h.deleted).toEqual([])
+  })
+
+  it('falls back to post-then-delete when the edit is refused', async () => {
+    const h = editingHarness({ 42: AGENT_JOURNAL }, { fail: "message can't be edited" })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    h.store['42'] = secondTurn
+    await bridge.syncUp()
+
+    expect(h.sent).toHaveLength(2)
+    expect(h.deleted).toEqual([1])
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([2])
+  })
+
+  it('treats "not modified" as a successful edit rather than posting a duplicate', async () => {
+    const h = editingHarness({ 42: AGENT_JOURNAL }, { fail: 'Bad Request: message is not modified' })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    h.store['42'] = secondTurn
+    await bridge.syncUp()
+
+    expect(h.sent).toHaveLength(1)
+    expect(h.deleted).toEqual([])
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([1])
+  })
+
+  it('does not edit when the replacement drops a link the old turn carried', async () => {
+    const withLink = AGENT_JOURNAL.replace(
+      'do the thing',
+      'watch https://www.youtube.com/watch?v=abc123 first',
+    )
+    const h = editingHarness({ 42: withLink })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    h.store['42'] = secondTurn
+    await bridge.syncUp()
+
+    // An edit is as destructive as a delete when the new text is lossy.
+    expect(h.edited).toEqual([])
+    expect(h.sent).toHaveLength(2)
+    expect(h.deleted).toEqual([])
+  })
+})
+
 describe('syncUp', () => {
   it('creates a topic and posts the agent turn once, then dedups', async () => {
     const h = makeHarness({ 42: AGENT_JOURNAL })

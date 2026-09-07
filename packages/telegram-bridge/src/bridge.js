@@ -715,8 +715,62 @@ export function createBridge({
       }
 
       const parts = formatForTelegramParts(taskId, title, turn)
-      const postedIds = []
-      for (const [index, text] of parts.entries()) {
+
+      // EDIT IN PLACE RATHER THAN POST-THEN-DELETE (#468). Collapse below is a
+      // delete, and a delete is refused outside Telegram's 48h window — so on any
+      // task woken less often than that, the new turn went out and the old one
+      // stayed, which is the stacking Shiv is looking at. An edit has no such
+      // window: `editMessageText` works on a message of any age. So when the same
+      // gates that permit a collapse hold AND the new turn has exactly as many
+      // parts as the one it replaces, rewrite those messages instead. Nothing is
+      // posted and nothing is deleted, so there is no window in which the topic
+      // holds neither turn.
+      //
+      // Strictly forward-only: this changes what the NEXT turn does. It never
+      // reaches back over history.
+      //
+      // A part-count mismatch falls through to post-then-delete deliberately.
+      // Editing 2 of 3 messages would leave the third holding stale prose with no
+      // id to correct it, which is worse than the stacking it avoids.
+      let editedIds = null
+      if (
+        supersedes.length &&
+        supersedes.length === parts.length &&
+        typeof client.editMessageText === 'function'
+      ) {
+        const done = []
+        for (const [index, text] of parts.entries()) {
+          const messageId = supersedes[index]
+          try {
+            await withRateLimitRetry(`editMessageText task #${taskId}`, () =>
+              client.editMessageText({ chatId, messageId, text, parseMode: 'HTML' }),
+            )
+            done.push(messageId)
+          } catch (err) {
+            if (err && err.isRateLimit) throw err
+            const msg = String((err && err.message) || '').toLowerCase()
+            // Already says exactly this: the message on screen is the message we
+            // wanted, so the edit succeeded in every sense that matters.
+            if (msg.includes('not modified')) {
+              done.push(messageId)
+              continue
+            }
+            logger(
+              `could not edit message ${messageId} for task #${taskId} ` +
+                `(${err.message}); posting the turn instead`,
+            )
+            break
+          }
+        }
+        if (done.length === parts.length) {
+          editedIds = done
+          logger(`edited ${done.length} message(s) in place for task #${taskId}`)
+        }
+      }
+
+      const postedIds = editedIds ? editedIds.slice() : []
+      const toPost = editedIds ? [] : parts
+      for (const [index, text] of toPost.entries()) {
         try {
           const sent = await withRateLimitRetry(`sendMessage task #${taskId}`, () =>
             client.sendMessage({
@@ -761,7 +815,7 @@ export function createBridge({
       // the user with nothing rather than with a duplicate. A failed delete is a
       // cosmetic regression to the old stacking behaviour; a failed post after a
       // successful delete is lost content.
-      if (supersedes.length && typeof client.deleteMessage === 'function' && postedIds.length) {
+      if (!editedIds && supersedes.length && typeof client.deleteMessage === 'function' && postedIds.length) {
         let removed = 0
         for (const messageId of supersedes) {
           try {
