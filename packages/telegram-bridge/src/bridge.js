@@ -26,6 +26,7 @@ import {
   setArchived,
   setUserEngaged,
   setDocLink,
+  setDocLinkVerified,
   setDocLinkNoticeHash,
   setOffset,
   setLastDigest,
@@ -547,9 +548,21 @@ export function createBridge({
     const tidied = []
     const tidyPending = []
     const collapsed = []
+    // #586 — the two ways a doc link can end a run without having been checked. Reported
+    // separately because they mean opposite things: `linkProbeDeferred` is the rolling schedule
+    // working (its turn comes round shortly), `linkUnverified` is verification failing to
+    // happen at all. Summing them would hide the second inside the first, which is the same
+    // class of mistake as the bug being fixed — a real failure wearing the shape of routine.
+    const linkUnverified = []
+    const linkProbeDeferred = []
     const journals = await io.listJournals()
     const completed = await loadCompletedIds()
     const active = await loadActiveIds()
+    // Chosen once, from state, before any journal is read: the selection is least-recently-
+    // verified first and that ordering is only meaningful across the WHOLE candidate set.
+    // Deciding per-task inside the loop would spend the budget on whichever tasks listJournals
+    // happened to yield first, and starve the tail forever.
+    const probeTargets = selectProbeTargets()
 
     for (const { taskId } of journals) {
       if (!isAllowed(taskId)) continue
@@ -571,11 +584,13 @@ export function createBridge({
       // happening to occur.
       const docMeta = parseDocMeta(content)
       if (docMeta) {
-        const outcome = await syncDocLink({ taskId, content, turn, hash, task, docMeta, completed, active })
+        const outcome = await syncDocLink({ taskId, content, turn, hash, task, docMeta, completed, active, probeTargets })
         if (outcome.created) created.push(taskId)
         if (outcome.linked) linked.push(taskId)
         if (outcome.notified) notified.push(taskId)
         if (outcome.suppressed) suppressed.push(taskId)
+        if (outcome.linkUnverified) linkUnverified.push(taskId)
+        if (outcome.linkProbeDeferred) linkProbeDeferred.push(taskId)
         if (outcome.tidied) tidied.push({ taskId, messageIds: outcome.tidied })
       if (outcome.collapsed && outcome.collapsed.length)
         collapsed.push({ taskId, messageIds: outcome.collapsed })
@@ -859,7 +874,18 @@ export function createBridge({
       await checkpoint(`task #${taskId}`)
     }
 
-    return { posted, created, suppressed, linked, notified, tidied, tidyPending, collapsed }
+    return {
+      posted,
+      created,
+      suppressed,
+      linked,
+      notified,
+      tidied,
+      tidyPending,
+      collapsed,
+      linkUnverified,
+      linkProbeDeferred,
+    }
   }
 
   // #424's worker. Everything about it is shaped by one line in the issue: "Do not just
@@ -871,8 +897,19 @@ export function createBridge({
   // modified` when it exists and `message to edit not found` when it does not. Both arrive as
   // errors, so the MESSAGE is read rather than the mere fact of failure — reading only
   // "did it throw?" would classify a healthy message as missing and repost it every run.
-  async function syncDocLink({ taskId, content, turn, hash, task, docMeta, completed, active }) {
-    const out = { created: false, linked: false, notified: false, suppressed: false, retracted: false, collapsed: [] }
+  async function syncDocLink({ taskId, content, turn, hash, task, docMeta, completed, active, probeTargets = null }) {
+    const out = {
+      created: false,
+      linked: false,
+      notified: false,
+      suppressed: false,
+      retracted: false,
+      collapsed: [],
+      // #586 — the two ways a link can end a run unconfirmed, kept apart on purpose. See the
+      // probe branch below.
+      linkUnverified: false,
+      linkProbeDeferred: false,
+    }
 
     // A finished task stays quiet here exactly as it does for turns (#186): the topic is
     // archived and the user has closed it. A user reply reopens the conversation.
@@ -915,7 +952,28 @@ export function createBridge({
 
     let liveId = null
     if (knownId != null) {
-      liveId = (await verifyLinkMessage(taskId, knownId, linkText)) ? knownId : null
+      // `probeTargets === null` means the budget is switched off: probe everything.
+      if (probeTargets === null || probeTargets.has(String(taskId))) {
+        const probe = await verifyLinkMessage(taskId, knownId, linkText)
+        liveId = probe.present ? knownId : null
+        if (probe.verified) {
+          // Only an actual observation refreshes the clock. Letting an assumption count as
+          // verification would push the task to the BACK of the queue on the strength of a
+          // guess -- so the links we know least about would be probed least often, which is
+          // the failure this ordering exists to prevent.
+          if (probe.present) setDocLinkVerified(state, taskId, Date.now())
+        } else {
+          out.linkUnverified = true
+        }
+      } else {
+        // Deliberately not probed this run; its turn comes round within `docLinkProbeBudget`
+        // runs. This is NOT the same state as an exhausted retry budget and is counted apart
+        // from it: one is normal scheduling, the other is verification failing to happen. The
+        // whole defect being fixed here was two different situations producing one
+        // indistinguishable output, so collapsing these two would rebuild it.
+        liveId = knownId
+        out.linkProbeDeferred = true
+      }
       if (liveId == null) {
         logger(`doc link for task #${taskId} is gone from topic ${topicId}; reposting`)
       }
@@ -934,6 +992,10 @@ export function createBridge({
       if (sent && Number.isInteger(sent.message_id)) {
         liveId = sent.message_id
         setDocLink(state, taskId, { docId: docMeta.docId, messageId: liveId })
+        // A successful send is first-hand evidence the message exists, so it starts the clock.
+        // Without this a freshly posted link sorts as never-verified and jumps the queue next
+        // run to re-confirm something we just watched Telegram accept.
+        setDocLinkVerified(state, taskId, Date.now())
         out.linked = true
         logger(`posted catch-up doc link for task #${taskId} to topic ${topicId}`)
         // Pin it when we can. Best-effort: an unpinned link is a cosmetic loss, and the bot
@@ -1179,9 +1241,18 @@ export function createBridge({
   // edit worked would silently drop the one message the user needs, which is #170's defect. So
   // anything short of a confirmed edit falls through to sending a fresh message: the worst case
   // is one duplicate line, against losing a blocking ask entirely.
+  //
+  // That trade holds for a genuine failure. It does NOT hold for a 429, and #586 is where the
+  // difference bites: a rate limit is a "wait", and treating it as an unconfirmed edit sends a
+  // second notice a few seconds later — through `withRateLimitRetry`, so the duplicate is the
+  // call that actually succeeds. The result is a stacked pair of notices in the topic, produced
+  // by the very code written to keep the topic to one message. Waiting first collapses that
+  // case: the edit lands, and no second message is ever composed.
   async function editNotice(taskId, messageId, text) {
     try {
-      await client.editMessageText({ chatId, messageId, text, parseMode: 'HTML' })
+      await withRateLimitRetry(`edit notice task #${taskId}`, () =>
+        client.editMessageText({ chatId, messageId, text, parseMode: 'HTML' }),
+      )
       return true
     } catch (err) {
       const msg = String((err && err.message) || '').toLowerCase()
@@ -1195,27 +1266,92 @@ export function createBridge({
 
   // Does `messageId` still exist in the chat? See syncDocLink's header for why this is an edit.
   //
-  // Returns true when the message is present (whether Telegram accepted the edit or reported it
-  // unmodified), false ONLY when Telegram says the message is not there. Any OTHER error is
-  // treated as "present": a network blip or a permissions problem is not evidence of deletion,
-  // and guessing "gone" would post a duplicate link every time the API had a bad minute.
+  // Returns a THREE-state answer, and the third state is the entire point of #586:
+  //
+  //   { present: true,  verified: true  }  Telegram confirmed the message is there.
+  //   { present: false, verified: true  }  Telegram confirmed it is gone -- repost.
+  //   { present: true,  verified: false }  We could not find out, and are assuming.
+  //
+  // The first two are evidence. The third is a guess, and it used to be indistinguishable from
+  // the first: both returned bare `true`. That is how #424's guarantee -- "the link's existence
+  // is VERIFIED, never assumed" -- silently stopped being in force while every log line read as
+  // benign. A caller that cannot tell an observation from an assumption cannot report the
+  // difference, so nobody could see that verification had stopped happening.
+  //
+  // Assuming present (rather than gone) on an unverified probe is still the right default: a
+  // network blip or a permissions problem is not evidence of deletion, and guessing "gone"
+  // would post a duplicate link every time the API had a bad minute. But that argument holds
+  // only while the guess is RARE. When it fires on every task on every run it is not a
+  // fallback, it is the behaviour -- so the guess is now counted and reported rather than
+  // logged per-task in a tone that reads like routine.
+  //
+  // A 429 is NOT an inconclusive result. It is "ask again later", and the bridge has known how
+  // to do that since #172 -- the probe simply never used it. Routing through the same bounded
+  // retry as the send path means a rate limit costs a pause instead of a guarantee.
   async function verifyLinkMessage(taskId, messageId, text) {
     try {
-      await client.editMessageText({ chatId, messageId, text, parseMode: 'HTML', disablePreview: false })
-      return true
+      await withRateLimitRetry(`doc link probe task #${taskId}`, () =>
+        client.editMessageText({ chatId, messageId, text, parseMode: 'HTML', disablePreview: false }),
+      )
+      return { present: true, verified: true }
     } catch (err) {
       const msg = String((err && err.message) || '').toLowerCase()
-      if (msg.includes('not modified')) return true
+      if (msg.includes('not modified')) return { present: true, verified: true }
       if (
         msg.includes('message to edit not found') ||
         msg.includes("message can't be edited") ||
         msg.includes('message_id_invalid')
       ) {
-        return false
+        return { present: false, verified: true }
+      }
+      // Only reachable once the retry budget above is genuinely exhausted, so this is a real
+      // sustained rate limit rather than the self-inflicted storm that used to land here.
+      if (err && err.isRateLimit) {
+        logger(
+          `doc link for task #${taskId} could NOT be verified: still rate limited after ` +
+            `${RATE_LIMIT_MAX_RETRIES} attempts (${err.message}); assuming it is still there`,
+        )
+        return { present: true, verified: false }
       }
       logger(`doc link probe for task #${taskId} was inconclusive (${err.message}); assuming it is still there`)
-      return true
+      return { present: true, verified: false }
     }
+  }
+
+  // WHICH links to probe this run (#586).
+  //
+  // The probe is an edit with byte-identical text: it costs a full call against a group budget
+  // the code above documents as roughly 20 messages/minute, and its expected answer is "not
+  // modified" -- it almost always confirms what state already said. Probing every bound link
+  // every run therefore spends the whole budget to learn nothing, and once 61 tasks became
+  // doc-bound the pass began rate-limiting ITSELF: every probe after the budget ran out
+  // returned "assume present", and genuine operations later in the run (closeForumTopic) were
+  // refused with a budget the probes had already drained.
+  //
+  // So verification becomes ROLLING rather than per-run: a bounded number of links are probed
+  // each run, least-recently-verified first, and every link is therefore checked within a
+  // bounded number of runs. That is weaker than "every link, every run" on paper and far
+  // stronger in fact, because "every link, every run" was verifying nothing at all.
+  //
+  // Never-verified sorts first: "no evidence yet" is a stronger claim on the budget than
+  // "evidence that is a few runs old".
+  //
+  // Candidates come from state, not from the journals, because only a task that has already
+  // been linked has anything to probe. A task with no link message yet does not appear here at
+  // all -- the budget gates VERIFYING a link, never SENDING one, so a new task still gets its
+  // link immediately no matter how spent the budget is.
+  function selectProbeTargets() {
+    const budget = Number(config.docLinkProbeBudget)
+    const candidates = Object.keys(state.tasks || {}).filter((id) =>
+      Number.isInteger(state.tasks[id] && state.tasks[id].docLinkMessageId),
+    )
+    // Non-positive or non-finite means "no limit" -- the pre-#586 behaviour, kept as a
+    // deliberate escape hatch rather than an accident.
+    if (!Number.isFinite(budget) || budget <= 0) return null
+    candidates.sort(
+      (a, b) => (state.tasks[a].docLinkVerifiedAt || 0) - (state.tasks[b].docLinkVerifiedAt || 0),
+    )
+    return new Set(candidates.slice(0, budget))
   }
 
   async function syncDown() {

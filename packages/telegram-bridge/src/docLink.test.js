@@ -60,6 +60,9 @@ function makeHarness(files) {
   // unconditionally can never exercise a successful in-place update.
   const bodies = new Map()
   let editError = null
+  let rateLimitEdits = 0
+  let rateLimitRetryAfter = 30
+  let rateLimitTarget = null
   // #483 — what the bridge actually removed, and the ids Telegram refuses to let it remove
   // (older than the 48h window, or already gone).
   const deleted = []
@@ -84,6 +87,18 @@ function makeHarness(files) {
     },
     async editMessageText({ messageId, text }) {
       edits.push({ messageId, text })
+      // #586 — a 429 exactly as telegramClient.js surfaces it, consumed one call at a time so a
+      // test can say "rate limited twice, then fine" and watch the retry actually happen.
+      if (rateLimitEdits > 0 && (rateLimitTarget === null || rateLimitTarget === messageId)) {
+        rateLimitEdits -= 1
+        const err = new Error(
+          `Telegram editMessageText failed: Too Many Requests: retry after ${rateLimitRetryAfter}`,
+        )
+        err.isRateLimit = true
+        err.errorCode = 429
+        err.retryAfter = rateLimitRetryAfter
+        throw err
+      }
       if (editError) throw new Error(editError)
       if (uneditable.has(messageId)) throw new Error("Bad Request: message can't be edited")
       if (!live.has(messageId)) throw new Error('Bad Request: message to edit not found')
@@ -152,6 +167,15 @@ function makeHarness(files) {
     refuseEditOf: (id) => uneditable.add(id),
     failEditWith: (msg) => {
       editError = msg
+    },
+    // #586 — the next `n` edits answer 429. `n = Infinity` is a sustained rate limit, which is
+    // how a test reaches the exhausted-budget path. `target` narrows it to one message id,
+    // which matters whenever a run edits more than one message: without it the probe swallows
+    // the 429 meant for the notice, and the test quietly asserts about the wrong call.
+    rateLimitNextEdits: (n, retryAfter = 30, target = null) => {
+      rateLimitEdits = n
+      rateLimitRetryAfter = retryAfter
+      rateLimitTarget = target
     },
     failDeleteWith: (msg) => {
       deleteError = msg
@@ -499,6 +523,228 @@ describe('#424 — the catch-up link replaces the per-turn post', () => {
     expect(h.sent[0].text).not.toContain('Catch-up doc')
     expect(state.tasks['42'].docLinkMessageId).toBeUndefined()
     expect(state.tasks['42'].lastPostedMessageIds).toEqual([1])
+  })
+})
+
+// #586 — THE PROBE THAT STOPPED PROBING.
+//
+// #424's guarantee is that the link's existence is VERIFIED, never assumed. The probe was an
+// `editMessageText` outside the #172 rate-limit retry, so a 429 fell into the generic catch and
+// returned "present" without waiting. Harmless while few tasks were bound; once 61 were, the
+// probes spent the whole ~20/min group budget rate-limiting themselves, every probe past the
+// limit assumed present, and genuine calls later in the run were refused a budget the probes
+// had already drained. Nothing in the output changed, because a probe that ran and found the
+// message and a probe that gave up were the same bare `true`.
+//
+// These tests are written to fail on that code. "Did not repost" is NOT the assertion — the
+// buggy version passes that perfectly. What separates the two is whether the wait was honoured
+// and whether the run can still tell the difference afterwards.
+describe('#586 — rate limits are a pause, not an answer', () => {
+  // Never actually wait, but record what was asked for: "honours retry_after" is the criterion.
+  const withFakeSleep = async (fn) => {
+    const waits = []
+    globalThis.__telegramBridgeSleep = (ms) => {
+      waits.push(ms)
+      return Promise.resolve()
+    }
+    try {
+      return await fn(waits)
+    } finally {
+      delete globalThis.__telegramBridgeSleep
+    }
+  }
+
+  it('WAITS and re-probes instead of assuming present, and records that it actually looked', async () => {
+    const h = makeHarness({ 42: journal() })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(1)
+
+    await withFakeSleep(async (waits) => {
+      h.edits.length = 0
+      h.rateLimitNextEdits(2, 30)
+      await bridge.syncUp()
+
+      // Telegram said "wait 30", so the bridge waited 30 — twice — rather than firing again
+      // immediately. The evidence on the real run showed retry_after DECREASING (34s then 28s)
+      // across the pass, which is only possible if nobody was waiting at all.
+      expect(waits).toEqual([30000, 30000])
+      // Three attempts: two refused, one answered. The old code attempted exactly once.
+      expect(h.edits).toHaveLength(3)
+    })
+
+    // ...and it did not repost. This assertion ALSO passes on the broken code, which is
+    // precisely why it cannot be the only one.
+    expect(h.sent).toHaveLength(1)
+    // The distinguishing fact: the link was OBSERVED. The old code had no way to say this,
+    // because an observation and a guess left identical traces.
+    expect(state.tasks['42'].docLinkVerifiedAt).toBeGreaterThan(0)
+  })
+
+  it('degrades to assume-present only when the retry budget is spent — and REPORTS it', async () => {
+    // The fail direction is still correct: a rate limit is not evidence of deletion, and
+    // guessing "gone" would post a duplicate link every bad minute. What changes is that the
+    // guess stops being invisible. An unverified link and a healthy one used to be the same
+    // output, so #424's promise could lapse entirely without a single line of logging changing.
+    const h = makeHarness({ 42: journal() })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    const verifiedAtLink = state.tasks['42'].docLinkVerifiedAt
+    expect(verifiedAtLink).toBeGreaterThan(0)
+
+    const up = await withFakeSleep(async () => {
+      h.rateLimitNextEdits(Infinity)
+      h.store['42'] = journal({ body: 'changed' })
+      return bridge.syncUp()
+    })
+
+    expect(h.sent).toHaveLength(1)
+    expect(state.tasks['42'].docLinkMessageId).toBe(1)
+    // Named as a defect in the run's own result, not buried in a log line.
+    expect(up.linkUnverified).toEqual(['42'])
+    // And the clock did NOT move. Letting an assumption count as verification would send the
+    // link we know least about to the back of the probe queue on the strength of a guess.
+    expect(state.tasks['42'].docLinkVerifiedAt).toBe(verifiedAtLink)
+  })
+
+  it('does not stack a SECOND notice when the edit that would replace it is rate limited', async () => {
+    // Shiv's actual complaint, reached by this path: "Every time I look at the app, I expect to
+    // see a single telegram message per task. Instead there's multiple stacked messages."
+    //
+    // A notice must fall through to a fresh send when an edit genuinely fails — losing a
+    // blocking ask is worse than one duplicate line (#170). But a 429 is not a failure, it is a
+    // wait, and treating it as one made the duplicate the call that SUCCEEDS: the retry on the
+    // send path waits out the limit the edit refused to wait out. The stack is manufactured by
+    // the code written to prevent it.
+    const h = makeHarness({ 42: journal({ needs: 'the API key for the staging box' }) })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(2) // link + notice
+    const noticeId = state.tasks['42'].docLinkNoticeMessageId
+
+    await withFakeSleep(async (waits) => {
+      h.store['42'] = journal({ needs: 'the API key for the PROD box' })
+      // Aimed at the NOTICE, not at whatever edit happens to come first. The link probe runs
+      // ahead of it in the same pass, and an untargeted 429 is swallowed there — leaving this
+      // test green while asserting nothing about the path it is named after.
+      h.rateLimitNextEdits(1, 12, noticeId)
+      await bridge.syncUp()
+      expect(waits).toEqual([12000])
+    })
+
+    // Still two messages, not three.
+    expect(h.sent).toHaveLength(2)
+    expect(state.tasks['42'].docLinkNoticeMessageId).toBe(noticeId)
+    const rewrite = h.edits.filter((e) => e.messageId === noticeId).pop()
+    expect(rewrite.text).toContain('the API key for the PROD box')
+  })
+})
+
+// #586 — VERIFICATION BECOMES ROLLING.
+//
+// Retrying alone fixes correctness and makes the run worse: 61 probes each honouring a 30s wait
+// is half an hour of a run spent confirming that nothing changed. The probe is an edit with
+// byte-identical text whose expected answer is "not modified" — it is the cheapest possible
+// call to skip and the most expensive possible call to make 61 times.
+//
+// So a bounded number are probed per run, least-recently-verified first. Every link is still
+// checked within a bounded number of runs, which is weaker than "every link every run" on paper
+// and stronger in fact, because that promise was being kept zero percent of the time.
+describe('#586 — the probe budget', () => {
+  const five = () =>
+    makeHarness({ 41: journal(), 42: journal(), 43: journal(), 44: journal(), 45: journal() })
+
+  it('probes only the budget, oldest first, and leaves the rest for later runs', async () => {
+    const h = five()
+    h.config.docLinkProbeBudget = 2
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(5)
+
+    // Hand-set the clock so the ORDER under test is the one being asserted, not whatever five
+    // sends in the same millisecond happened to produce.
+    const ages = { 41: 500, 42: 100, 43: 400, 44: 200, 45: 300 }
+    for (const [id, at] of Object.entries(ages)) state.tasks[id].docLinkVerifiedAt = at
+    const linkIds = Object.fromEntries(
+      Object.keys(ages).map((id) => [id, state.tasks[id].docLinkMessageId]),
+    )
+
+    h.edits.length = 0
+    const up = await bridge.syncUp()
+
+    // The two stalest, and nothing else.
+    const probed = h.edits.map((e) => e.messageId).sort()
+    expect(probed).toEqual([linkIds[42], linkIds[44]].sort())
+    // The other three are DEFERRED — a different state from unverified, and reported apart from
+    // it. Collapsing the two would rebuild the exact defect this issue is about: two unlike
+    // situations producing one indistinguishable output.
+    expect(up.linkProbeDeferred.sort()).toEqual(['41', '43', '45'])
+    expect(up.linkUnverified).toEqual([])
+    // Nothing was reposted for the deferred ones. A skipped probe must never read as "gone".
+    expect(h.sent).toHaveLength(5)
+  })
+
+  it('gives a NEVER-verified link the budget before any link with evidence behind it', async () => {
+    const h = five()
+    h.config.docLinkProbeBudget = 1
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    for (const id of ['41', '42', '43', '44', '45']) state.tasks[id].docLinkVerifiedAt = 900
+    delete state.tasks['44'].docLinkVerifiedAt
+    const target = state.tasks['44'].docLinkMessageId
+
+    h.edits.length = 0
+    await bridge.syncUp()
+
+    expect(h.edits.map((e) => e.messageId)).toEqual([target])
+  })
+
+  it('never lets a spent budget stop a task from GETTING its link', async () => {
+    // The budget gates verifying a link, never sending one. A newly bound task must reach the
+    // user's phone on the run it is bound, regardless of how many older links are queued —
+    // otherwise a bounded probe becomes an unbounded silence, which is the #346 shape this
+    // whole feature exists to close.
+    const h = five()
+    h.config.docLinkProbeBudget = 1
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(5)
+
+    h.store['99'] = journal()
+    await bridge.syncUp()
+
+    expect(h.sent).toHaveLength(6)
+    expect(h.sent[5].text).toContain('Catch-up doc')
+    expect(state.tasks['99'].docLinkMessageId).toBe(6)
+    // ...and a send is first-hand evidence, so it starts the clock rather than jumping the
+    // queue next run to re-confirm what Telegram was just watched accepting.
+    expect(state.tasks['99'].docLinkVerifiedAt).toBeGreaterThan(0)
+  })
+
+  it('probes EVERYTHING when the budget is switched off, which is the pre-#586 behaviour', async () => {
+    const h = five()
+    h.config.docLinkProbeBudget = 0
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    h.edits.length = 0
+    const up = await bridge.syncUp()
+
+    expect(h.edits).toHaveLength(5)
+    expect(up.linkProbeDeferred).toEqual([])
   })
 })
 

@@ -69,6 +69,19 @@ async function runOnce() {
       // "posted 0" would make success indistinguishable from the bridge not running.
       (up.linked && up.linked.length ? `, doc links ${up.linked.length}` : '') +
       (up.notified && up.notified.length ? `, notices ${up.notified.length}` : '') +
+      // #586: an UNVERIFIED link is a defect, not a status, so it is named as one and never
+      // folded into a healthy count. #424's promise is that a link's existence is verified
+      // rather than assumed; this number is how many times that promise was not kept this run,
+      // and while it was invisible the promise lapsed entirely without a single line of output
+      // changing.
+      (up.linkUnverified && up.linkUnverified.length
+        ? `, ${up.linkUnverified.length} UNVERIFIED (rate limited)`
+        : '') +
+      // Deferred is the rolling schedule working as designed, so it reads as routine — but it
+      // is still printed, because "not checked this run" must never be silent either.
+      (up.linkProbeDeferred && up.linkProbeDeferred.length
+        ? `, ${up.linkProbeDeferred.length} probe(s) deferred`
+        : '') +
       '; ' +
       `archive: closed ${archived.archived.length}, reopened ${archived.reopened.length}; ` +
       `down: folded ${down.folded.length} repl${down.folded.length === 1 ? 'y' : 'ies'}` +

@@ -118,6 +118,25 @@ export async function loadConfig({ env = process.env, repoRoot } = {}) {
     (env.TELEGRAM_BRIDGE_COLLAPSE_BOUND || '').trim(),
   )
 
+  // #586 — HOW MANY doc links to verify per run.
+  //
+  // The existence probe is an edit with byte-identical text, so it costs a full call against a
+  // group budget of roughly 20 messages a minute and its expected answer is "nothing changed".
+  // Probing every bound link every run therefore spends the entire budget confirming what state
+  // already says, and once enough tasks were doc-bound the pass began rate-limiting ITSELF:
+  // every probe past the budget fell through to "assume present", so the verification #424
+  // promises stopped happening, and genuine calls later in the same run were refused a budget
+  // the probes had already drained.
+  //
+  // The default is deliberately a minority of one minute's allowance, leaving room for the
+  // sends, notices and topic operations that carry actual news. With links checked
+  // oldest-first, every link is verified within (bound tasks / this number) runs.
+  //
+  // Non-positive or unparseable means NO limit — the pre-#586 behaviour, kept as an explicit
+  // escape hatch rather than something reachable by typo.
+  const rawProbeBudget = (env.TELEGRAM_BRIDGE_DOC_PROBE_BUDGET || '').trim()
+  const docLinkProbeBudget = rawProbeBudget === '' ? 12 : Number(rawProbeBudget)
+
   return {
     token,
     chatId,
@@ -140,6 +159,7 @@ export async function loadConfig({ env = process.env, repoRoot } = {}) {
     digestTopic,
     tidyBoundTopics,
     collapseBoundTurns,
+    docLinkProbeBudget,
   }
 }
 

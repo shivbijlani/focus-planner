@@ -547,6 +547,38 @@ jobs:
       - name: Mutation check (real #570 config caught, healthy servers not flagged)
         run: node ./plugins/overnight-agent/checks/mutcheck-mcp-transport.mjs
 
+  # GH #586. The three jobs above guard prose; this one guards a promise the code makes.
+  #
+  # #424 says a doc link's existence is "verified, never assumed". The probe that was supposed to
+  # do the verifying called Telegram directly instead of through the retry helper, so a 429 was
+  # caught, logged like a network blip, and answered `true` -- present, unverified, indistinguishable
+  # from a link someone had actually looked at. With 61 doc-bound tasks the run probed 61 times
+  # back-to-back into a ~20/min budget and rate-limited ITSELF, so the guarantee did not merely
+  # degrade under load: it was never once in force. The tell in the logs is `retry_after` FALLING
+  # across a run (34s, then 28s) -- only possible if nobody was waiting out the wait.
+  #
+  # The reason this needs a mutation check rather than a passing test is that every arm below
+  # leaves a suite that still looks reasonable. M1 and M2 restore the "assume present" answer,
+  # which is what the tests asserted before the fix. M5 collapses "deferred by the budget" into
+  # "probed and inconclusive" -- two unlike states reported as one, which is the original defect
+  # re-committed one layer up. And M3 is here because it caught a real weakness in the test: the
+  # notice-stacking case passed with `editNotice` un-routed, because the link probe ahead of it
+  # swallowed the armed 429. The test was green and asserting about the wrong call.
+  #
+  # It mutates repo source and runs the repo suite, so unlike its neighbours it needs the install.
+  doc-probe-ratelimit:
+    name: Doc-link probe verifies, it does not assume
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Mutation check (429 is a pause not an answer, budget is bounded and honest)
+        run: node ./plugins/overnight-agent/checks/mutcheck-doc-probe-ratelimit.mjs
+
   # The per-task session (GH #404). The overnight agent used to do task work IN THE RUN SESSION --
   # measured live on task #451: it read the journal, edited four deliverables and wrote the turn
   # without ever leaving the main session. #391 already stated the rule ("one task, one workspace,
