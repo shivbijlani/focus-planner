@@ -100,6 +100,16 @@ not available. This surface takes the mirror-image invariant: **always stamps.**
 
 The rules, all enforced by `lib-issue-comments.mjs` and pinned by `mutcheck-issue-comments.mjs`:
 
+0. **Write through the CLI, not by hand.** `node <checks>\issue-comment.mjs --repo <owner/repo>
+   --issue <n> --body-file <file>` does all four rules below in one call. Rules 1–4 describe what
+   it enforces; they are not a procedure to re-implement. A caller that resolves the verdict and
+   then branches itself is GH #462 — that branch was written once, guessed the verdict's shape,
+   and posted a duplicate within an hour of the contract shipping.
+   ⚠️ The library shipped on 2026-09-03 with **no way to invoke it**, so for four days the only
+   reachable path was `gh`, which cannot stamp. If a rule here is ever hard to obey, check first
+   whether the obedient path is actually callable — an unreachable correct path is not a rule, it
+   is a wish.
+
 1. **Stamp every agent-authored issue comment** with `<!-- from: overnight-agent -->` as its
    **first line** — invisible when rendered, and the same provenance string `write-turn.ps1`
    guard G7 already enforces on journal turns. Use `stampIssueComment()`; it is idempotent.
@@ -116,6 +126,17 @@ The rules, all enforced by `lib-issue-comments.mjs` and pinned by `mutcheck-issu
    overwritable — the data-loss path above, rebuilt by its own fix. The marker is the only thing
    consulted. Comments predating the marker are adopted by explicit id
    (`BACKFILL_COMMENT_IDS`), which is why no prefix matching is needed anywhere.
+
+**Repairing an unmarked comment the agent wrote: resolve first, then act.** Stamping is not
+universally safe, and neither is refusing to stamp. The verdict depends on how many marked
+comments the issue already has:
+
+| already marked | stamping the stranded comment | so |
+|---|---|---|
+| 0 | 0 → 1 marked, verdict becomes `edit` | **repair** — do it |
+| 1 | 1 → 2 marked, verdict becomes `refuse` | **permanent jam** no later run can clear — do not |
+
+Check with `--dry-run` before touching anything, and save the pre-image of any comment you edit.
 
 ### Issue BODIES need a precondition, not a marker (#456)
 
@@ -256,9 +277,17 @@ inline shell string: quoting eats `$`, `~`, backticks and apostrophes, and the c
 invisible until he reads it.
 
 - **File only** (default) — leave it as `.md` and give him the path.
-- **GitHub issue or PR comment** — `gh issue comment <n> --body-file <file>`. Then **read it back**
-  and confirm: comment count is what you expect, byte length matches, `<details>` tags balance,
-  tables survived, no mojibake.
+- **GitHub issue comment** — `node <checks>\issue-comment.mjs --repo <owner/repo> --issue <n>
+  --body-file <file>`. Then **read it back** and confirm: comment count is what you expect, byte
+  length matches, `<details>` tags balance, tables survived, no mojibake.
+  ⛔ **Not `gh issue comment`.** It cannot stamp the provenance marker, so the comment it creates
+  is indistinguishable from Shiv's forever after and the *next* pass duplicates it instead of
+  editing it — the stacked-response defect, on the issue surface. This instruction previously
+  read `gh issue comment <n> --body-file <file>`, and on 2026-09-07 three unmarked comments were
+  produced by following it (#531, #548, #586). The CLI stamps, resolves edit-vs-post, and
+  refuses ambiguity; use `--dry-run` first to see the verdict without writing.
+  ⚠️ For a **PR** comment the same reasoning applies, and the CLI takes the PR number: GitHub
+  stores PR comments in the issues namespace, so `--issue <pr-number>` is correct.
 - **Google Doc (first time only — creating a NEW doc)** — author it in the structural subset above
   so the exported markdown is what gets posted. Headings, bold, lists, tables and links convert
   cleanly; `<details>` does **not**. Import with `import_to_google_doc`, then read it back with
@@ -321,10 +350,16 @@ skill exists to remove.
     times and is fixed twice leaves the page contradicting itself, which is worse than uniformly
     stale — a reader who finds two values cannot tell which is current. Count occurrences first,
     then assert the residual is zero.
-- GitHub: `gh issue comment --edit-last`, or
-  `gh api -X PATCH /repos/<owner>/<repo>/issues/comments/<id> -F body=@<file>`.
-- Record the comment URL when you post it, so the next pass can find it without guessing.
+- GitHub: re-run `node <checks>\issue-comment.mjs --repo <owner/repo> --issue <n> --body-file
+  <file>`. It is the same command used to create the comment — it finds the marked comment and
+  PATCHes it, so there is nothing extra to remember and no id to record.
+  ⛔ **Never `gh issue comment --edit-last`.** It edits the last comment by the *authenticated
+  user*, and the agent posts through Shiv's identity — so "the last comment by shivbijlani" is
+  very often **his reply**, and this silently overwrites it. That is precisely the
+  edit-the-most-recent fallback banned in rule 3 above; it was recommended here until 2026-09-07.
 - **Never touch a comment you did not write.** If you cannot prove a comment is yours, leave it.
+  Proof means the marker on its first line and nothing else — not recency, not position, not the
+  opening line matching the agent's usual format.
 - **Read it back after every rewrite** with `get_doc_as_markdown`: confirm the old body is gone, the
   heading counts are what you authored, links are live, and there is no mojibake. A
   `populate_from_markdown` that half-applied looks like a healthy doc until he opens it.
