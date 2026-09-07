@@ -203,6 +203,39 @@ $Suite = @(
   # CI. It fails OPEN -- it creates a cheap reversible artefact rather than refusing a turn --
   # so a bad night here costs a spare doc, never lost work.
   @{ n = 'ensure-catchup-doc';       bridge = $false }
+  # THE SECOND ACTION, and the companion to the one above. Added 2026-09-07 for #598.
+  #
+  # `ensure-catchup-doc` gives a task a comment channel. Until now NOTHING read that channel
+  # except PHASE 0.7, which runs `doc -Observe` for the ONE task a run selects -- so a channel
+  # was read only in the runs that were going to work that task anyway, and the tasks whose only
+  # input IS doc comments are the parked ones, which are by construction never selected. Binding
+  # handed Shiv a mailbox and opened it once a night, on whichever task the run had already
+  # picked. He was told doc comments are the primary communication mechanism.
+  #
+  # It goes immediately after the binder so a doc created THIS run is polled THIS run, and for
+  # the same reason the binder is here at all: a step that lives inside a task's sub-session
+  # cannot fire for the tasks that never get a sub-session, which is precisely the affected set.
+  #
+  # Measured on the live store before this shipped: 81 bound tasks, 68 of them stale by the
+  # system's OWN freshness rule (oa-state.ps1 $script:DocObservationFreshMinutes = 180) -- while
+  # catchup-doc-sweep's NEVER_READ arm reported 5, because it counts channels never read ONCE
+  # rather than channels that do not work NOW.
+  #
+  # That staleness also silently disarms a shipped pacing control: the #500 capacity park
+  # requires a FRESH observation as positive evidence that a channel is quiet before it will
+  # park a task, so a stale channel is unparkable and its task reads as fully workable. That is
+  # #228 verbatim -- a doc-bound task waiting on humans held the sole slot for ~3.3h. One
+  # missing poll broke the comment channel and the pacing control together.
+  #
+  # Self-limiting like the binder: capped per run, oldest-first so nothing starves, and channels
+  # already inside the freshness window are not candidates at all -- so it does real work while
+  # the fleet is stale and nothing once it is caught up, rather than re-reading 81 docs forever
+  # and finding a rate limit (#586, #590). Fails toward RE-READING: `-Observe` refuses a dump
+  # that is not positive evidence of a listing, so a transport error stays stale and is retried
+  # instead of being recorded as "read, and empty" -- a duplicate answer costs a repeated
+  # paragraph, a false empty costs an instruction Shiv believes was received.
+  # 5 mutations, each killed, in mutcheck-observe-bound-docs.mjs.
+  @{ n = 'observe-bound-docs';       bridge = $false }
   # Added 2026-09-07 for #570. `google-workspace` -- the channel Shiv's catch-up-doc comments
   # arrive on -- was configured, enabled and callable, and loaded into NO session's toolset for
   # weeks, because it declared `"type": "local"` and the harness only loads stdio/http/sse. An
