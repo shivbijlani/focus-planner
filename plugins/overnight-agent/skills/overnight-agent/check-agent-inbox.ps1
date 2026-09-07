@@ -444,6 +444,27 @@ function Test-EmailInbox {
 
 function Test-McpTools {
   param($Cap)
+  # WHAT THIS PROVES, AND WHAT IT DOES NOT (GH #570)
+  # ------------------------------------------------
+  # It spawns the server as a CHILD PROCESS and enumerates tools/list. So it answers "can this
+  # server be started, and does it expose the tools we need?" -- a real question, and the one
+  # that catches a server missing from mcp-config.json, failing its handshake, or having renamed
+  # a tool.
+  #
+  # It does NOT answer "can an agent session call this?", and those came apart in production.
+  # Measured 2026-09-06: this probe reported google-workspace AVAILABLE with 36 tools while
+  # THREE independent sessions -- the run session, task #472's sub-session, and task #468's --
+  # had no google-workspace tool in their toolsets at all. The server was healthy and unreachable
+  # from every surface that does the work, and three of Shiv's doc comments sat unread as a
+  # result.
+  #
+  # That is the same defect `script-exit` below was created for, one level up: a probe measuring
+  # a surface the run does not use. #346's rule is the general form -- emptiness is only
+  # reportable after a positive probe OF THE SURFACE YOU WILL ACTUALLY USE.
+  #
+  # Until a session-side probe exists, the verdict says `spawnable` rather than a bare
+  # `available`, so a reader cannot mistake "the server starts" for "the agent can call it".
+  # Truth in labelling is the honest half of the fix; closing the gap is #570's own work.
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
   $server = [string]$Cap.server
   $mandatory = [bool]$Cap.mandatory
@@ -479,7 +500,7 @@ function Test-McpTools {
   }
 
   return New-Row -Id $Cap.id -Server $server -Mandatory $mandatory -Kind 'mcp-tools' `
-    -Verdict 'available' -Reason '' -Detail "$($required.Count)/$($required.Count) required tools present" -Unread $null -ElapsedMs $sw.ElapsedMilliseconds
+    -Verdict 'available' -Reason 'spawnable' -Detail "$($required.Count)/$($required.Count) required tools present in a SPAWNED server; not proof an agent session can call it (#570)" -Unread $null -ElapsedMs $sw.ElapsedMilliseconds
 }
 
 function Test-ScriptExit {
