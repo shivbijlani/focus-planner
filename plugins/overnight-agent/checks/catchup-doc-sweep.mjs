@@ -164,6 +164,14 @@ const ts = (v) => {
 const findings = [];
 const unbound = [];
 const unboundWoken = [];
+// Channels bound and observed, but not recently enough for that observation to still mean
+// anything. See the STALE_READ block below for why this is a count and not a finding list.
+const staleRead = [];
+// oa-state.ps1's $script:DocObservationFreshMinutes. Same convention as the windows above: a
+// NUMBER, not a toggle, and 0 falls back rather than silently making every channel fresh
+// forever -- which would disarm this arm in exactly the way it exists to detect.
+const FRESH_MINUTES = Number(process.env.OA_DOC_FRESH_MINUTES) || 180;
+const FRESH_MS = FRESH_MINUTES * 60 * 1000;
 let bound = 0;
 let considered = 0;
 
@@ -231,6 +239,28 @@ for (const id of activeIds) {
     continue;
   }
 
+  // STALE_READ (#598) -- READ ONCE IS NOT READ.
+  //
+  // NEVER_READ above counts channels whose `observed_at` is empty. That was the visible
+  // symptom, and it is a strictly narrower question than the one that matters: a channel read
+  // once last night and not since is exactly as unreachable as one never read, but it clears
+  // NEVER_READ forever. Measured the day this shipped: NEVER_READ said 5 while 68 of 81 bound
+  // channels were stale.
+  //
+  // 180 minutes is NOT a threshold invented here. It is oa-state.ps1's own
+  // $script:DocObservationFreshMinutes, which the #500 capacity park already treats as the
+  // point past which an observation stops being evidence that a channel is quiet. Reusing it
+  // keeps one definition of "read recently"; a second number would drift from the first and
+  // the park would disagree with the sweep about the same channel.
+  //
+  // COUNTED, NOT PUSHED AS FINDINGS, for the reason the unbound block gives right below: the
+  // point is the NUMBER and a 68-line list buries it. It is also expected to be non-zero on the
+  // run that arms it and to fall to near zero within one freshness window as
+  // observe-bound-docs drains the backlog -- so, like unboundWoken, it is a count that CAN
+  // reach zero and goes back up the moment the poller stops. That is the property a metric
+  // needs to be able to demonstrate a fix, and the property "83 unbound" lacked.
+  if (NOW - observedAt >= FRESH_MS) staleRead.push(id);
+
   // gate FRESH: an observation at, after, or within READ_WINDOW_MS before the newest turn is the
   // healthy read-then-work-then-write loop of a single run.
   if (lastTurnAt && lastTurnAt - observedAt > READ_WINDOW_MS) {
@@ -287,6 +317,21 @@ console.log(
     `never read ${byKind('NEVER_READ')}, spoke-without-reading ${byKind('SPOKE_WITHOUT_READING')}, ` +
     `unacked ${byKind('UNACKED')})\n`,
 );
+
+// #598. Reported separately from the UNREAD findings above because it is a fleet health number
+// rather than a per-task defect: a stale channel is not a task doing something wrong, it is the
+// poller not having reached it yet.
+console.log(`Catch-up doc channels STALE (>= ${FRESH_MINUTES}m since last read): ${staleRead.length} of ${bound}`);
+if (staleRead.length) {
+  const ssample = staleRead.slice(0, UNBOUND_SAMPLE);
+  console.log(`     ${ssample.map((i) => `#${i}`).join(', ')}` +
+    (staleRead.length > ssample.length ? `, +${staleRead.length - ssample.length} more` : ''));
+  console.log('     -> a channel read once and not since is as unreachable as one never read, and');
+  console.log('        the #500 capacity park will not park a task on an observation this old, so');
+  console.log('        the task reads as workable while its only input is unreachable. observe-bound-docs');
+  console.log('        drains this every run, oldest first; a number that stays high means it is not running.');
+}
+console.log('');
 
 for (const f of findings) {
   console.log(`#${f.id} [${f.status}]  ${f.kind}`);
