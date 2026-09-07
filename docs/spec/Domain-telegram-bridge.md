@@ -1,76 +1,65 @@
 # Domain: telegram-bridge
 
-`telegram-bridge` (`packages/telegram-bridge/`) is a standalone Node CLI that mirrors task journals
-into a Telegram forum (one topic per task) and folds replies back into the journals, plus a
-consolidated "what is waiting on you" approval digest.
+`telegram-bridge` is a standalone Node bridge between planner journals and a Telegram forum. It mirrors each task's newest agent turn into a task topic, folds Telegram replies back into journals, closes and reopens topics as tasks move across the board, and posts a consolidated digest of open asks. The design repeatedly chooses explicit evidence over guesswork: newest turn over whole-file grep, board order over task-id order, tombstones over absence, and persisted offsets over implicit progress. See [Architecture](Architecture), [Behaviour](Behaviour), [Domain-task-paper](Domain-task-paper), and [Domain-folder-sync](Domain-folder-sync).
 
 ## Responsibility
 
-Make the board and its open questions reachable from a phone with zero per-topic navigation:
-`sync-up` posts each task's latest agent turn into its own forum topic; `sync-down` folds Telegram
-replies back into journals (both single-topic replies and multi-task batched replies posted in
-General); `sync-archive` closes/reopens topics as tasks complete or reactivate; `digest` posts one
-message listing every open ask across all tasks, ordered by how much the user actually cares — the
-board's own Today/Deferred/urgency ordering, not task-id order.
+`packages/telegram-bridge/src/bridge.js` describes the package as two directions: `syncUp` posts each task's latest agent turn into its forum topic and `syncDown` folds Telegram replies back into journals. The package also owns `syncArchive` and the approval digest. Its rationale comments are specific about rejected alternatives. The digest refuses a whole-journal grep for the last `Needs from you:` marker because a later turn may supersede that marker without repeating it. Link mode refuses to treat silence as success: a catch-up link message is verified by probing Telegram, because a deleted link and a never-posted link would otherwise look identical.
 
-## Principal modules
+```js
+export function createBridge({ client, config, state, io, logger = () => {}, now = () => new Date(), persist = null } = {}) {
+  ...
+  async function syncUp() { ... }
+  async function syncDown() { ... }
+  async function syncArchive() { ... }
+  async function syncDigest({ force = false } = {}) { ... }
+}
+```
 
-| Path | Purpose |
-| --- | --- |
-| `packages/telegram-bridge/src/bridge.js` | Orchestrates both sync directions; all I/O injected (client + io) so the flow is unit-testable offline. |
-| `packages/telegram-bridge/src/journal.js` | Pure journal parsing shared with the app: `agentBlockStatus`, `latestAgentTurn`, `appendUserReply`, `splitAtSentinel`. |
-| `packages/telegram-bridge/src/digest.js` | Builds the consolidated approval digest; reads the ask from the **newest** agent turn only, never a whole-file grep for the last ask marker. |
-| `packages/telegram-bridge/src/board.js` | Ranks tasks for the digest by board position (Today-urgent > Today > Deferred-urgent > Deferred > unlisted), not by numeric task id. |
-| `packages/telegram-bridge/src/liveStatus.js` | Arbitrates a task's *live* status from its newest turn, because the frozen `**Status:**` header near the top of a journal is written once and never updated by the only sanctioned writer. |
-| `packages/telegram-bridge/src/routeReply.js` | Splits one batched, cross-task Telegram reply (posted in General, no `message_thread_id`) into per-task segments. |
-| `packages/telegram-bridge/src/deleted.js` | Reads the planner's sync sidecars for `deleted: true` tombstones, so a deleted task's forum topic is still archived even though the task is on no board. |
-| `packages/telegram-bridge/src/deepLink.js` | Reads/writes the `<!-- tg-meta ... -->` marker mapping a task to its forum topic. |
-| `packages/telegram-bridge/src/state.js` | Persistent bridge state: task↔topic map, last-posted-turn hashes, `getUpdates` offset. |
-| `packages/telegram-bridge/src/telegramFormat.js` | Converts journal markdown to Telegram's small HTML subset (no headings/lists/tables — they collapse to bold lines, `• ` bullets, plain text). |
+## Modules and exports
 
-## Public exports
+| Path | Exports from `spec-facts.json` | Role |
+| --- | --- | --- |
+| `packages/telegram-bridge/bin/telegram-bridge.js` | — | CLI entrypoint: `whoami`, `baseline`, `sync-up`, `sync-down`, `sync-archive`, `digest`, `once`, `watch`. |
+| `packages/telegram-bridge/scripts/sweep-ask-truncation.mjs` | — | Analysis script for Telegram truncation risk. |
+| `packages/telegram-bridge/src/board.js` | `RANK_DEFERRED`, `RANK_DEFERRED_URGENT`, `RANK_OTHER`, `RANK_TODAY`, `RANK_TODAY_URGENT`, `RANK_UNLISTED`, `boardIndex`, `boardRank`, `parseBoardOrder`, `taskIdFromCell` | Active-board parsing and ranking for digest order. |
+| `packages/telegram-bridge/src/bridge.js` | `blockingAsk`, `createBridge`, `formatCollapsedTurn`, `formatDocLink`, `formatDocNotice`, `formatDocRetraction`, `formatForTelegramParts`, `hashNotice`, `hashTurn`, `retractedAsk`, `splitAsk`, `terminalStatus` | Bridge orchestration plus link-mode and Telegram message shaping. |
+| `packages/telegram-bridge/src/completed.js` | `parseCompletedTaskIds` | Completed-board parser. |
+| `packages/telegram-bridge/src/config.js` | `assertRunnable`, `loadConfig` | Environment and path resolution. |
+| `packages/telegram-bridge/src/deepLink.js` | `buildTgMetaMarker`, `parseDocMeta`, `parseTgLink`, `parseTgMeta`, `telegramDeepLink`, `upsertTgMetaMarker` | Hidden journal markers for Telegram/deep-link and catch-up-doc bindings. |
+| `packages/telegram-bridge/src/deleted.js` | `parseDeletedTaskIds` | Reads planner sync tombstones. |
+| `packages/telegram-bridge/src/digest.js` | `buildDigest`, `extractAsk`, `extractAskEntry`, `hashDigest` | Digest construction and ask extraction. |
+| `packages/telegram-bridge/src/index.js` | `appendUserReply`, `assertRunnable`, `buildDigest`, `createBridge`, `createFsIo`, `createTelegramClient`, `emptyState`, `extractAsk`, `extractAskEntry`, `findTaskByTopic`, `hasAgentBlock`, `hashDigest`, `hashTurn`, `journalFilename`, `latestAgentTurn`, `loadConfig`, `loadState`, `parseTitle`, `saveState`, `taskIdFromFilename`, `topicName` | Public package surface. |
+| `packages/telegram-bridge/src/io.js` | `createFsIo` | Filesystem adapter over journals and boards. |
+| `packages/telegram-bridge/src/journal.js` | `AGENT_HEADER`, `FROM_AGENT`, `FROM_ME`, `SENTINEL_MARKER`, `TURN_END`, `agentBlockStatus`, `agentBlockText`, `appendUserReply`, `hasAgentBlock`, `journalFilename`, `latestAgentTurn`, `parseTitle`, `splitAtSentinel`, `taskIdFromFilename`, `topicName` | Journal parsing and reply append contract. |
+| `packages/telegram-bridge/src/liveStatus.js` | `CANONICAL`, `digestStatus`, `liveJournalStatus`, `liveStatus`, `normaliseStatus`, `statusStampDate` | Recency-aware live-status arbitration. |
+| `packages/telegram-bridge/src/routeReply.js` | `coalesceByTask`, `parseReplyRouting` | General-thread batched reply routing. |
+| `packages/telegram-bridge/src/state.js` | `STATE_VERSION`, `bumpReplyCount`, `emptyState`, `findTaskByTopic`, `getReplyCount`, `getTask`, `loadState`, `saveState`, `setArchived`, `setDigestTopic`, `setDocLink`, `setDocLinkNoticeHash`, `setLastDigest`, `setLastPosted`, `setLastPostedContext`, `setLastPostedMessageIds`, `setOffset`, `setSuppressedHash`, `setTopic`, `setUserEngaged` | Durable bridge state. |
+| `packages/telegram-bridge/src/telegramClient.js` | `createTelegramClient` | Telegram Bot API wrapper with deadlines and structured rate-limit errors. |
+| `packages/telegram-bridge/src/telegramFormat.js` | `escapeHtml`, `extractLinks`, `mdToTelegramHtml` | Deterministic markdown-to-Telegram HTML conversion. |
 
-`appendUserReply`, `assertRunnable`, `buildDigest`, `createBridge`, `createFsIo`,
-`createTelegramClient`, `emptyState`, `extractAsk`, `extractAskEntry`, `findTaskByTopic`,
-`hasAgentBlock`, `hashDigest`, `hashTurn`, `journalFilename`, `latestAgentTurn`, `loadConfig`,
-`loadState`, `parseTitle`, `saveState`, `taskIdFromFilename`, `topicName` (from `index.js`).
+## Principal mechanics
 
-## Behavioural requirements (from the telegram-bridge test suite, 15 files / 357 tests)
+`packages/telegram-bridge/src/state.js` is the package's durable memory. It stores topic bindings, last-posted hashes, reply counters, digest hashes, doc-link message ids, and the `getUpdates` offset. The commentary matters: suppressed turns are stored in `suppressedHash`, not `lastPostedHash`, because a completed-task suppression is a pause, not proof the message was sent. Reply counters are monotonic because a boolean `userEngaged` answers the wrong question for message collapse.
 
-- **The digest reads only the newest turn's ask, never a whole-journal grep** — a later turn that
-  restates a blocker in prose without re-emitting the `**Needs from you:**` marker must not let a
-  grep-based reader surface a stale, already-superseded ask (measured live: task #250's marker was
-  written 2026-07-01 and superseded 07-07). `extractAsk`/`extractAskEntry` fold continuation lines
-  into one line, prefer an explicit ask over a fallback "Next" line, drop a Next line describing the
-  agent's own work rather than something needed from the user, mark boilerplate-salvaged asks as
-  *weak* so callers can gate on confidence, and return `null` (not a guess) for a turn with no ask.
-- **Digest ordering follows the board, not task-id magnitude.** Rank order is Today-urgent >
-  Today > Deferred-urgent > Deferred > unlisted; a malformed six-digit id (e.g. `#426580`) or a
-  genuinely high-priority task filed most recently must not out-rank a real P0, because the digest's
-  hard size cap means only the first ~17 of ~99 asks survive — whatever leads is, in practice, the
-  only thing the user sees.
-- **A batched cross-task reply is split correctly.** `parseReplyRouting` routes the shape the agent
-  itself asks for ("merge 394, 386, 407; go on 348"), treats newlines as separators so bullet-list
-  replies work, folds each segment's text verbatim (never paraphrased), validates task ids against
-  journals that actually exist (so ordinary prose numbers like "1000W" or "$3,046" are never
-  mistaken for task ids), and returns an empty routing (a meaningful "no known task mentioned"
-  signal) rather than guessing.
-- **Live status is arbitrated by recency, not by a frozen header (#202).** `normaliseStatus` reads
-  human dialects ("In progress", hyphenated forms) without a naive space-stopping regex swallowing
-  `In progress` down to the bare token `in`; folds completion synonyms onto one canonical value;
-  drops a trailing em-dash clause rather than failing to parse; `statusStampDate` takes the date the
-  line actually stamps itself with, not merely the first or last date mentioned in surrounding
-  prose; and `liveStatus` prefers whichever of {block header, newest turn} is actually newer, so a
-  task the agent finished cannot get stuck in the approval queue forever because its header froze on
-  the day the sentinel block was created.
-- **A deleted task's topic is still archived.** Because `deleted: true` is an explicit, recorded
-  tombstone (never inferred from "absent from both boards", which is ambiguous with a parse failure
-  or an unsynced row), the archiver can close a topic for a task the user genuinely deleted without
-  risking closing one that merely failed to parse.
+`packages/telegram-bridge/src/journal.js` defines the journal contract the bridge reads and writes: `TURN_END` is a boundary, not visible content; `latestAgentTurn()` returns the newest `<!-- from: overnight-agent -->` entry or the managed block, whichever is later; `appendUserReply()` appends a dated `<!-- from: me -->` entry at the bottom. `packages/telegram-bridge/src/liveStatus.js` then corrects the frozen-header problem by arbitrating status by date, not by file position. `packages/telegram-bridge/src/digest.js` extracts an ask from the newest turn only, preferring explicit `Needs from you:` text over weaker fallbacks like `Next:`.
 
-## Failure modes guarded against
+On the transport side, `packages/telegram-bridge/src/telegramClient.js` wraps every Bot API call in a deadline and surfaces `retry_after` as structured data, so a `429` becomes "wait and retry" instead of "crash and duplicate the first ten tasks on the next run." `packages/telegram-bridge/src/telegramFormat.js` keeps Telegram output inside its small HTML subset, converting unsupported structures into readable plain text or `<pre>` blocks.
 
-Two recurring shapes: **stale signal read as current** (a frozen status header, a superseded ask, a
-task-id sort that promotes an old malformed row) and **an ambiguous absence read as a definite
-state** (a task missing from both boards could mean deleted, could mean a parse bug — the tombstone
-exists specifically so the bridge never has to guess which).
+## Behavioural requirements from tests
+
+The behavioural spec lives in `packages/telegram-bridge/src/bridge.test.js`, `board.test.js`, `completed.test.js`, `config.test.js`, `deepLink.test.js`, `deleted.test.js`, `digest.test.js`, `docLink.test.js`, `journal.test.js`, `liveStatus.test.js`, `pointerTurn.test.js`, `routeReply.test.js`, `state.test.js`, `telegramClient.test.js`, and `telegramFormat.test.js`.
+
+- `syncUp` creates a topic and posts once, deduplicates by content hash, stamps `<!-- tg-meta ... -->` into the journal, honours allowlists, and skips journals with no agent block.
+- Message collapse is conditional. A newer unanswered turn may replace the older one, but tests require the bridge never to delete a message the user replied to and never to lose carried links.
+- Completed-task quieting is precise: tasks only on the completed board stay silent, dual-board tasks still post, and a user reply to a closed task buys exactly one answer before silence resumes.
+- `syncArchive` closes topics for completed or explicitly deleted tasks, reopens them when a task returns to the active board, tolerates missing completed boards or sync records, and leaves per-topic failures non-fatal.
+- `syncDown` folds topic replies into journals, advances the update offset, routes General-thread batched replies by known task ids, acknowledges off-topic General replies, and keeps going when one named journal is missing.
+- `buildDigest` lists every open ask, ranks board urgency ahead of off-board or soft asks, stays within Telegram size limits, names overflow tasks instead of dropping them invisibly, and adds the privacy-mode warning only when the bot membership demands it.
+- `liveStatus` normalises human status phrases such as `In progress`, dates a status line from the date segment it asserts about itself, and lets the newer of {turn, block} win.
+- Link mode posts exactly one catch-up link in the steady state, restores it if the user deletes it, sends short exception notices for blocking asks or terminal states, updates notices in place when safe, and refuses to infer a retraction the agent did not state.
+- `createTelegramClient` must set request deadlines, extend `getUpdates` budgets for long poll timeouts, and mark rate-limit errors with structured `retryAfter` and `isRateLimit` fields.
+
+## Failure modes
+
+This domain guards against stale signal and ambiguous silence. Stale signal appears as a frozen status header, a superseded ask, an old per-turn Telegram message stacked under a newer one, or task-id ordering that buries what the user actually needs to see. Ambiguous silence appears when a deleted link message is mistaken for an unchanged steady state, when a completed-task suppression is mistaken for successful posting, or when an absent board row is mistaken for a deleted task. The implementation keeps choosing durable evidence—timestamps, tombstones, message ids, reply counters, topic ids—so the bridge can prove what happened instead of guessing.

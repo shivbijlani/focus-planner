@@ -1,51 +1,52 @@
 # Domain: mcp-cred-vault
 
-`mcp-cred-vault` (`packages/mcp-cred-vault/`) is primarily a Windows PowerShell + .NET Framework
-toolchain; its JS surface is deliberately thin — just enough to validate and unit-test the shape of
-one non-secret pointer file.
+`mcp-cred-vault` is a tiny JavaScript surface over a larger Windows credential-launch toolchain. The JS code does one thing: validate the shape of the non-secret `mcp-secrets.json` pointer file so the rest of the system can reject bad configuration loudly before any launcher tries to resolve credentials. See [Data-Formats](Data-Formats) and [Architecture](Architecture).
 
 ## Responsibility
 
-Let a machine declare, in a file that is safe to sync or commit, which credentials it needs (which
-MCP server, which environment variable, which real command consumes it) **without ever holding a
-secret value**. The values themselves live only in the Windows Credential Manager; this package's
-job is to validate the pointer file's shape, not to touch a credential.
+The leading comment in `packages/mcp-cred-vault/src/schema.js` is explicit about scope. The pointer file lives in the working folder, not in the repository and not in Credential Manager. It lists which secrets a machine needs—server key, Windows Credential Manager target, environment variable, command, and optional args—but it never carries the secret value. The value lives only in Windows Credential Manager. This package therefore validates *shape*, not secret contents and not credential retrieval.
 
-## Principal modules
+```js
+export function parseMcpSecrets(text) {
+  let obj;
+  try {
+    obj = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`mcp-secrets.json is not valid JSON: ${err.message}`);
+  }
+  const errors = collectMcpSecretsErrors(obj);
+  if (errors.length > 0) {
+    throw new Error(`mcp-secrets.json is invalid:\n- ${errors.join('\n- ')}`);
+  }
+  return obj;
+}
+```
 
-| Path | Purpose |
-| --- | --- |
-| `packages/mcp-cred-vault/src/index.js` | Re-exports the schema validators; documents that the real implementation is the PowerShell/.NET toolchain in `bin/` and `src/mcp-cred-launch.cs`. |
-| `packages/mcp-cred-vault/src/schema.js` | The actual validation logic: `isValidMcpSecrets`, `parseMcpSecrets`, `collectMcpSecretsErrors`. |
+## Modules and exports
 
-## Public exports
+| Path | Exports from `spec-facts.json` | Role |
+| --- | --- | --- |
+| `packages/mcp-cred-vault/src/index.js` | `collectMcpSecretsErrors`, `isValidMcpSecrets`, `parseMcpSecrets` | Public package surface; notes that the broader toolchain is PowerShell + .NET. |
+| `packages/mcp-cred-vault/src/schema.js` | `collectMcpSecretsErrors`, `isValidMcpSecrets`, `parseMcpSecrets` | Actual parser and validator for the pointer-file schema. |
 
-`collectMcpSecretsErrors`, `isValidMcpSecrets`, `parseMcpSecrets` (identical set from both
-`index.js` and `schema.js`).
+## Format and invariants
 
-## The format it validates
+`collectMcpSecretsErrors()` enforces three invariants that matter to rebuilders. First, the root must be an object with a positive integer `version`. Second, `secrets` must be an array of objects with non-empty `server`, `target`, `envVar`, and `command` strings; `args`, when present, must be an array of strings. Third, both `server` and `target` must be unique across the file. The validator also rejects invalid environment variable names and `target` values containing tabs or newlines.
 
-See [Data-Formats](Data-Formats) §8 for the full `mcp-secrets.json` sample. In brief: `version`, a
-`secrets[]` array of `{ server, target, envVar, command, args }` — the credential's Windows
-Credential Manager target name, the environment variable it feeds, and the MCP server + real
-command that consumes it — and an `ids` object for non-secret public identifiers (e.g. a Telegram
-bot/chat id, which is not itself a secret but is useful to keep alongside the pointer). Per
-`mcp-secrets.example.json`, the file lives on each machine in the web app's OneDrive working folder,
-never in the repository and never alongside the actual secret value.
+That division of fields reflects the package's rationale. The pointer file must be safe to sync, inspect, and validate in source control-adjacent workflows, so it keeps public identifiers and routing information only. The launcher that actually reads secrets from the OS vault sits elsewhere. `packages/mcp-cred-vault/src/index.js` says this plainly: the JS surface exists so the pointer file schema can be validated and unit-tested alongside sibling packages.
 
-## Behavioural requirements (from `mcp-cred-vault` test coverage)
+## Behavioural requirements from tests
 
-The test suite (7 tests, `mcp-cred-vault` domain) exercises `parseMcpSecrets` and
-`collectMcpSecretsErrors` against malformed and well-formed pointer files, asserting the schema
-rejects a file that is missing required fields, is not valid JSON-shaped data, or declares a secret
-entry without every field a launcher needs to resolve it — because a malformed pointer file, unlike
-a malformed secret, fails silently: the credential manager lookup simply returns nothing, and a
-launcher with no shape validation would proceed with an undefined environment variable rather than
-failing loudly at the point where the mistake actually is.
+The behavioural spec is `packages/mcp-cred-vault/src/schema.test.js`.
+
+- The committed example file must validate unchanged.
+- Missing `version` is rejected.
+- A secret entry missing any required field is rejected.
+- `envVar` must match an environment-variable identifier, not arbitrary text.
+- Duplicate `server` keys and duplicate `target` names are rejected because both would make downstream resolution ambiguous.
+- Malformed JSON throws a JSON-specific error.
+- Invalid object shape throws one aggregated error that includes human-readable detail lines.
 
 ## Failure modes
 
-A pointer file that validates but names the wrong `envVar` or `target` is outside this package's
-reach — schema validation only proves the file is *well-shaped*, not that it is *correct* for the
-machine it lives on. Getting the values right is the PowerShell/.NET launcher's job, which this
-package's `doc` comment explicitly defers to.
+The key failure mode here is a pointer file that looks harmless but silently routes credentials nowhere useful: wrong field names, duplicate targets, or an impossible env-var name. By validating shape up front, the package prevents the harder-to-debug alternative where the launcher proceeds with `undefined` inputs and the user only sees a downstream connection failure. The package does not claim more than that. It cannot prove the target exists in Credential Manager, that the command is installed, or that the selected secret is semantically correct for a server. Those remain outside this domain.

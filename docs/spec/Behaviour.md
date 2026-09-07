@@ -1,108 +1,158 @@
 # Behaviour
+This page turns the named acceptance corpus in `spec-facts.json` into implementation-facing requirements. The snapshot records **83 test files / 1,194 named tests** across the app, sync engine, Telegram bridge, task-paper renderer, diagnostics, storage, config, and repository scripts. Use it with [Architecture](Architecture), [Domain-app](Domain-app), [Domain-folder-sync](Domain-folder-sync), [Domain-storage](Domain-storage), [Domain-task-paper](Domain-task-paper), and [Domain-telegram-bridge](Domain-telegram-bridge) when rebuilding the system.
+The extraction shape is concrete. For example, `testFiles[]` contains entries like this, and the prose below simply restates them in “the system must …” form:
+```json
+{
+  "path": "src/raggedRow.test.js",
+  "tests": [
+    "#426 reader: a ragged Deferred row keeps its Linked ID",
+    "#426 snooze hazard: a misfiled value must never snooze a task",
+    "#426 acceptance: the reader agrees with the writer"
+  ],
+  "domain": "app"
+}
+```
+- `#426 reader: a ragged Deferred row keeps its Linked ID` → the system must preserve `Linked ID` on ragged Deferred rows.
+- `#426 snooze hazard: a misfiled value must never snooze a task` → the system must not turn a misfiled value into an accidental snooze.
+- `#426 acceptance: the reader agrees with the writer` → the reader and writer must agree on the row shape they support.
 
-This page is the acceptance suite: the requirements a rebuilt implementation must satisfy, grouped
-by area and derived from the repository's 1,194 named tests across 83 files. Per-domain detail and
-exact test provenance live on each `Domain-*` page; this page states the cross-cutting, testable
-behaviour a rebuild is checked against.
+## App: board, task, and journal behaviour ([Domain-app](Domain-app))
 
-## Board integrity
+These 35 suites define the planner UI and board model: task IDs, Today/Deferred board edits, link handling, journal chat parsing, file-tree refresh, unread state, and user-facing widgets.
 
-- The board reader and writer resolve `Wake` vs `Linked ID` **by header name**, never by fixed
-  column index, on both a well-formed and a ragged row; a ragged Deferred row keeps its `Linked ID`
-  and never has it misread as a `Wake` date (#426).
-- A value misfiled into `Wake` is recovered into `Linked ID` without ever fabricating a snooze, and
-  once recovered, snoozing the row afterward preserves the link rather than overwriting it (#446).
-- Task-id allocation never collides: it ignores a foreign journal's own high id, skips ids that
-  already have a journal, and skips the union of live content ids and journal ids, even when the
-  content's own "max id" bookkeeping has gone stale (#528).
-- A deleted id is tombstoned for a bounded TTL so a stale replica of its journal cannot hijack a
-  freshly reused id; an expired tombstone releases the id; an invalid id in the store is ignored
-  rather than accepted.
+| Source file | Suites present in `testFiles[]` | Required behaviour |
+| --- | --- | --- |
+| `src/AgentGateEditor.test.jsx` | `GateList rendering`, `GateList handlers`, `handleGateKeyDown` | The system must render the gate list line-by-line, show labelled remove controls and an add input, preserve empty-state behaviour, and handle Enter/add/remove interactions without losing the edited text. |
+| `src/SkillsSection.test.jsx` | `SkillsSection rendering`, `SkillsTaskRefs`, `absent when the board has no Skills section (criterion 5)` | The system must render the board Skills section only when it exists, include task references in the rendered output, and suppress the widget entirely when the board has no renderable Skills block. |
+| `src/allocateId.test.js` | `allocateNextId`, `opAddTask resists journal-driven ID inflation`, `opAddTask never reuses a live task ID (GH #528)` | The system must allocate the next task ID from the union of live rows and journal files, resist journal-driven inflation, and never reuse a live task ID. |
+| `src/autoNumber.test.js` | `auto-numbering after adding an ADO-linked task` | The system must auto-number a newly added ADO-linked task so the row lands with the correct next local task number. |
+| `src/boardSearch.test.js` | `normalizeQuery`, `boardSearchPlaceholder`, `isSearchExpanded`, `taskRowMatchesSearch`, `filterRowsAndRawLines` | The system must normalize search queries, expose the right placeholder and expanded/collapsed state, and filter rendered rows and raw source lines with the same matching rules. |
+| `src/boardWakeMigration.test.js` | `#307 — a board rewrite must migrate legacy snooze comments, never drop them`, `#307 is LIVE, not historical — every new Deferred row hit the same defect`, `#307 — an un-migratable wake date is logged as an anomaly, never dropped silently`, `#307 — recovery of the two dates the rewrite already destroyed` | The system must migrate stored wake/snooze data during board rewrites instead of dropping it, log anomalies that cannot be migrated, and recover dates that earlier rewrites already damaged. |
+| `src/combinedRouting.test.js` | `tagMergedRows`, `source tag survives the sort + search pipeline`, `resolveRowSourceId` | The system must tag merged rows with their source, carry that source identity through sort and search pipelines, and resolve the row back to its owning source when the user acts on it. |
+| `src/combinedViewPatch.test.js` | `patchPerSourceContent` | The system must patch combined-view edits back into per-source content so only the owning source file changes. |
+| `src/fileTreeEqual.test.js` | `sameFileTree` | The system must treat file trees as equal only when their meaningful structure and entries are equal. |
+| `src/fileTreeFilter.test.js` | `filterPlannerTree` | The system must filter the planner file tree down to planner-relevant files and folders while preserving the paths the UI should still expose. |
+| `src/focusPlanOps.test.js` | `buildCompletedRow`, `opMoveLinesBetweenSections`, `opChangeLinkedId`, `snooze section moves`, `opBridgeLinks`, `opSetTaskSnooze`, `opRemoveTaskFromFocusPlanResult`, `completedRowExistsForTask`, `opAppendToCompleted` | The system must build completed-task rows correctly; move rows between sections; update linked IDs, snooze state, and bridge links; remove tasks cleanly from the board; and append completed rows without duplicating existing completions. |
+| `src/idTombstones.test.js` | `id tombstones` | The system must keep tombstones for deleted IDs, respect their TTL, and ignore malformed tombstone entries instead of treating them as live reservations. |
+| `src/journalAttachments.test.js` | `journal attachment helpers` | The system must derive stable journal attachment metadata and paths so attachments stay associated with the right task journal. |
+| `src/journalChat.test.js` | `parseJournalChat`, `appendJournalMessage`, `appendJournalMessage provenance marker`, `agent sentinel detection (parse)`, `fenced code is quoted text, not markup (#320)`, `appendJournalMessage is fence-blind no more (#320 / #325)`, `formatCloseOutComment` | The system must parse journals into chat turns, append human and agent messages with explicit provenance markers, keep fenced code literal, detect agent sentinels accurately, and generate close-out comments in the expected format. |
+| `src/journalCreate.test.js` | `combined journal creation` | The system must, when the board is combined from multiple sources, create a duplicate-ID journal in the specific clicked row source rather than in an arbitrary source. |
+| `src/journalCreateRefresh.test.js` | `journal creation refreshes the sidebar tree (#371)` | The system must refresh the sidebar tree after journal creation so the new journal becomes visible immediately. |
+| `src/journalDelete.test.js` | `resolveJournalPathForDelete`, `deleteJournalForTask` | The system must resolve the correct journal path before deletion, delete even when row state is still loading, no-op cleanly when no journal exists, and surface lookup or storage failures instead of hiding them. |
+| `src/journalFocusRefresh.test.js` | `sidebar tree refreshes on focus/visibility (#371)` | The system must refresh the sidebar tree on focus and visibility changes so externally created journals appear without a full reload. |
+| `src/journalHydrationWiring.test.js` | `task-section journal wiring` | The system must pass the clicked combined-row source into journal creation and register seed candidates even when a collapsed row is not currently rendered. |
+| `src/journalLoadQueue.test.js` | `createLoadQueue` | The system must run journal loads through a bounded concurrent queue that preserves priority order, de-duplicates compatible reads, aborts stalled I/O, keeps seeding live, and handles remounts, provider changes, and failures without deadlocking. |
+| `src/journalLoadState.test.js` | `journal load state` | The system must offer journal creation only after a successful absence check, never after a failed content read, and preserve previously known journal existence across retries. |
+| `src/linkedNav.test.js` | `extractLinkedNum`, `shouldNavigateToCompleted`, `linkedNavFallbackFile` | The system must extract linked task numbers reliably, decide whether navigation should target the active or completed board, and fall back to the correct file when a preferred target is unavailable. |
+| `src/misfiledLinkedId.test.js` | `#446 recoverMisfiledLinkedId`, `#446 the reader exposes the recovered link`, `#446 snoozing must not destroy the parent id`, `#446 normalizeRowCells composes both rules` | The system must recover a linked ID that was misfiled into the Wake column, expose the recovered link to readers, preserve it across later snoozes, and normalize rows with both recovery rules applied. |
+| `src/missionStatement.test.js` | `mission statement` | The system must persist the mission statement in settings storage, trim and clear empty values, notify subscribers on change, load existing values on startup, and survive unavailable settings storage without throwing. |
+| `src/moveTask.test.js` | `computeMoveSet`, `computeBrokenLinks`, `parseLocalId / maxTaskIdInRows`, `rewriteRowId`, `renumberMovedRows`, `retitleJournal` | The system must compute the move set for cross-source task moves, detect broken links, parse and rewrite local IDs, renumber moved rows, and retitle any moved journal to match the new task identity. |
+| `src/raggedRow.test.js` | `#426 reader: a ragged Deferred row keeps its Linked ID`, `#426 alignment rule`, `#426 snooze hazard: a misfiled value must never snooze a task`, `#426 writers emit the shape their section header declares`, `#426 the single-source view must not reimplement the linked-id write`, `#426 acceptance: the reader agrees with the writer` | The system must preserve Linked ID on ragged Deferred rows, follow the section header’s declared column layout, avoid converting a misfiled value into an accidental snooze, and keep reader and writer behaviour aligned. |
+| `src/readState/readStateService.test.js` | `readStateService seeding`, `read/unread lifecycle`, `subscribe`, `provider swappability` | The system must seed read-state from hydration, keep late-arriving journals unread, re-flag changed journals, clear unread on mark-seen/open events, notify only affected subscribers, support source-qualified IDs, and allow provider swapping. |
+| `src/readState/signature.test.js` | `computeJournalSignature` | The system must compute a stable journal signature that changes when meaningful journal content changes and stays stable across irrelevant variation. |
+| `src/scrollToTask.test.js` | `scrollToAndFlashTask` | The system must scroll to a requested task row and flash it in the UI so linked navigation visibly lands on the intended task. |
+| `src/selfHealIds.test.js` | `detectOutlierIds`, `selfHealOutlierIds` | The system must detect outlier task IDs and self-heal them without disturbing unaffected rows. |
+| `src/skillsSection.test.js` | `isSkillsSection`, `findSkillsSection`, `parseSkillsTable`, `parseSkillsSection / hasRenderableSkills`, `splitTaskRefs / extractTaskRefs`, `stripCode`, `board writes preserve the Skills section byte-for-byte` | The system must recognize the Skills section, parse its table and task references, extract linked task IDs from mixed markup, decide when the section is renderable, and preserve the original Skills bytes on board writes. |
+| `src/snooze.test.js` | `snooze row markers`, `snooze date helpers` | The system must encode and decode snooze markers consistently and handle snooze-date helper logic correctly. |
+| `src/sourcePath.test.js` | `source-qualified journal identity` | The system must treat journal identity as source-qualified so duplicate local task IDs from different sources remain distinct. |
+| `src/taskSort.test.js` | `sortTasksByPriority`, `isNeededForUrgentTask` | The system must sort tasks deterministically from manager priority, urgency, and dependency chains; keep prerequisite chains in workable order; ignore irrelevant snooze markers during sort; and detect whether a task is needed for an urgent downstream task. |
+| `src/unreachableJournals.test.js` | `findUnreachableLiveJournals — #190 in-app detection` | The system must detect live journals that no longer have a reachable board row instead of silently voiding them. |
 
-## Prioritisation and sort order
+## Configuration behaviour ([Domain-config](Domain-config))
 
-- `Work Priority`, urgency icon, the `## Priorities` list, section (`Today`/`Deferred`), board row
-  order and task id compose into one deterministic sort key, applied in that precedence (see
-  [Prioritisation](Prioritisation)).
-- A row's `eligible` flag is computed once by `scan` from snooze state, reopened/unanswered-reply
-  state, section, and the Today-gate verdict — never re-derived downstream.
-- A Today row holds the gate against all Deferred rows unless declared exhausted, and an exhaustion
-  declaration is cancelled by board-text change, TTL expiry, a superseding turn, or a live/unanswered
-  reply reclaiming exclusivity — never by an unrelated `mark` call.
-- The `Overnight Agent concurrency` setting parses only a bare integer, defaults safely and visibly
-  to `1` on any malformed or missing value, and an explicit argument outranks the settings file which
-  outranks the default.
+The config suites pin the markdown documents and settings files the app and agent share.
 
-## Storage and sync
+| Source file | Suites present in `testFiles[]` | Required behaviour |
+| --- | --- | --- |
+| `src/config/agentGate.test.js` | `AGENT_GATE_DOC content`, `parseAgentGate`, `serializeAgentGate`, `serializeAgentGate preserves what the app did not write`, `addGateLine / removeGateLine`, `scaffoldAgentGate` | The system must render the AGENT_GATE_DOC scaffold correctly, parse and serialize gate documents, preserve lines the app did not author, support add/remove edits, and scaffold a new gate file with the expected shape. |
+| `src/config/agentSettingsVisibility.test.js` | `classifyAgentSetting / isUserFacingSetting`, `partitionAgentSettings` | The system must classify which agent settings are user-facing and partition settings into visible vs internal buckets consistently. |
+| `src/config/agentsDoc.test.js` | `AGENTS_DOC content`, `scaffoldAgentsDoc` | The system must generate AGENTS.md with the expected content and scaffold a fresh document in the expected format. |
+| `src/config/aiSettings.test.js` | `aiSettings` | The system must write AI settings to user-settings.md, seed the template sections the agent expects to parse, and leave placeholders intact for the user to fill. |
+| `src/config/userSettingsForm.test.js` | `parseSettingsForm`, `serializeSettingsForm — round trip identity`, `serializeSettingsForm — surgical edits`, `groupSettingsForm`, `hasSettingsForm` | The system must parse settings forms, round-trip them without drift, apply only surgical edits on serialization, group settings into the expected UI sections, and detect whether a file contains a settings form at all. |
 
-- A local edit and a remote edit to the same file merge without data loss under the storage layer's
-  CRDT rules; a delete on one side and an edit on the other resolve to a defined winner rather than
-  silently dropping either change.
-- Pagination, diagnostics logging, and sync-status reporting never leak file contents or raw
-  provider tokens into a diagnostics record.
-- A corrupted or partially-written tombstone/sidecar file is tolerated on read rather than crashing
-  the sync engine; sync status coalesces rapid successive changes into one visible state rather than
-  flickering.
+## Storage behaviour ([Domain-storage](Domain-storage))
 
-## Journals and rendering
+These suites define the browser/local storage surface that the app code expects before folder sync or remote providers enter the picture.
 
-- Journal markdown parses into a chat thread where `<!-- from: agent-name -->` attributes a block to
-  an agent, `<!-- from: me -->` reverts to the human, a bare `AUTO` marker also flags an
-  agent-authored block, and a multi-line HTML comment is hidden from the rendered thread while still
-  present in the file.
-- The same journal-chat rendering logic runs identically whether invoked from the main app or
-  embedded standalone in a generated task paper — one implementation, no divergent copy.
-- A journal turn provenance marker is required for a block to read as agent-authored; an absent or
-  malformed marker never silently reads as human consent (issue #272 in `overnight-agent`).
+| Source file | Suites present in `testFiles[]` | Required behaviour |
+| --- | --- | --- |
+| `src/storage/cloud-provider.abort.test.js` | `cloud provider cancellation` | The system must propagate cancellation through the cloud-provider interface so stalled remote work can be aborted cleanly. |
+| `src/storage/diagnostics.test.js` | `diagnostics enable flag`, `diagnostic event buffer`, `formatDiagnosticsReport` | The system must keep storage diagnostics disabled by default, record events only when enabled, cap the buffer size, and format reports without leaking token values. |
+| `src/storage/fsa.test.js` | `parseTodos`, `listFiles` | The system must parse journal todos from markdown and enumerate files from the File System Access provider for the file tree. |
+| `src/storage/indexeddb-provider.test.js` | `IndexedDbProvider` | The system must expose IndexedDB storage as always-ready browser storage, support read/write/delete/list operations, build a nested file tree, report journal existence and ID ranges, scaffold default plan files safely, and clear stored content when requested. |
+| `src/storage/onedrive-provider.pagination.test.js` | `OneDriveProvider pagination (task #371)` | The system must read every page from OneDrive pagination so folder listings do not truncate after the first page. |
+| `src/storage/settings.test.js` | `settings storage` | The system must round-trip settings storage and preserve expected defaults. |
+| `src/storage/syncStatus.test.js` | `syncStatusEqual` | The system must compare sync-status objects structurally so equivalent status payloads coalesce and unequal ones remain distinguishable. |
+| `src/storage/syncStatusCoalesce.test.js` | `sameSyncStatus`, `makeSyncStatusCoalescer` | The system must coalesce repeated sync-status updates, suppress no-op churn, and still emit meaningful state transitions in order. |
+| `src/storage/taskSettings.test.js` | `pure helpers`, `active-source read/write` | The system must normalize missing or malformed task-settings files, preserve unknown keys, pretty-print normalized JSON, merge single-task edits without touching unrelated tasks, serialize concurrent writes safely, and refuse to overwrite malformed existing content. |
 
-## Telegram bridge
+## Folder-sync behaviour ([Domain-folder-sync](Domain-folder-sync))
 
-- The digest extracts only the newest turn's blocking ask per task, never re-surfacing an
-  already-answered one; digest ordering matches the board's own priority order.
-- A reply routed back from Telegram is matched to the correct task/journal even when several
-  messages arrive batched together, and an ambiguous or unmatched reply is never silently discarded
-  without a visible signal.
-- Live-status arbitration resolves two conflicting status updates for the same task to one
-  deterministic value rather than a race (#202).
+The folder-sync tests specify the record-based merge model that keeps planner markdown convergent across devices and providers.
 
-## Overnight-agent reliability
+| Source file | Suites present in `testFiles[]` | Required behaviour |
+| --- | --- | --- |
+| `packages/folder-sync/src/codecs/mdTable.test.js` | `mdTable codec` | The system must encode and decode markdown tables without losing row structure, cell values, or recognizable planner headings. |
+| `packages/folder-sync/src/diagnosticVolume.test.js` | `sync diagnostic volume` | The system must keep sync diagnostics informative without exploding event volume during normal sync activity. |
+| `packages/folder-sync/src/merge.test.js` | `mergeCollections — per-record LWW with tombstones`, `#280 zero-clock freeze — an implicit sentinel must not become durable state`, `stamp helpers`, `reconcileExternal — external/raw file edits become record ops`, `stampLocalChanges — detect adds/edits/deletes via fingerprint`, `#371 collapse guard — an empty record set must not wipe the board`, `gcTombstones`, `sidecar (de)serialization`, `#190 — a live meta entry must never be dropped with no tombstone (the silent void)`, `findAliveWithoutRecord — the in-app inconsistency detector (#190)` | The system must merge per-record state with last-writer-wins clocks and tombstones; translate raw external edits into record operations; detect adds, edits, and deletes from fingerprints; preserve live metadata even when a parsed row is missing; avoid zero-clock freezes; and guard against structured-empty inputs wiping the board. |
+| `packages/folder-sync/src/providers/oneDrive.pagination.test.js` | `listFolderRecursive pagination` | The system must traverse paginated OneDrive folder listings recursively until the full remote tree is visible to sync. |
+| `packages/folder-sync/src/reconcile.test.js` | `isConsumerVisibleMirrorPath`, `filesToDeleteLocally`, `planPlainPush`, `isMassDeletion`, `planMirrorSync`, `shouldPullRemote`, `mtimeKeysForProvider`, `isValidRemotePath` | The system must hide sync sidecars from consumer-visible mirrors, delete only genuinely removed tracked files, avoid deleting pending local edits or local-only files, plan plain pushes and deletions conservatively on first contact, detect mass deletions, and validate provider-specific remote paths and mtime keys. |
+| `packages/folder-sync/src/records.test.js` | `reconcileRecordsFile — end-to-end record sync`, `#190 — reconcile surfaces an alive-but-recordless row instead of voiding it`, `frameHasStructure`, `preferStructuredFrame`, `framePriorityCount`, `preferPopulatedPriorityFrame` | The system must synchronize record sidecars end-to-end, preserve concurrent edits on different rows, propagate additions and deletions correctly across devices, converge on repeated no-op syncs, protect headings and priorities from blank local frames, and surface alive-without-record diagnostics instead of crashing or silently voiding content. |
 
-- A stuck workflow run is detected via a per-session lock-file liveness check and, under `--repair`,
-  is actually fixed rather than only reported.
-- An MCP server process is reaped only when no live owning session remains anywhere in its ancestor
-  chain, and only after also passing a cohort check that catches processes no single rule would
-  otherwise flag.
-- A journal write refuses outright on each of `write-turn.ps1`'s named corruption classes (lost
-  interpolation, doubled apostrophe, bad heading anchor, stray or missing provenance marker) rather
-  than writing corrupted content.
-- A journal's computed content hash depends only on its bytes, identically across PowerShell hosts
-  with different default text encodings.
-- Every `mutcheck-*` guard, when its real subject file is mutated on exactly one behavior, causes
-  exactly the owning check arm to fail — proving the guard is load-bearing rather than decorative.
+## Task-paper behaviour ([Domain-task-paper](Domain-task-paper))
 
-## Configuration and settings
+The task-paper package defines a deterministic, printable rendering of a task journal and its current ask.
 
-- `agent-gate.md` is never overwritten by the agent that reads it; a missing or malformed settings
-  cell resolves to a safe default and is reported as such, never silently substituted.
-- `AGENTS.md` is regenerated with a version stamp so a stale copy is distinguishable from a current
-  one at a glance.
-- A user-settings edit is written back as a single, surgical cell change — the rest of the file's
-  structure and content survive untouched.
+| Source file | Suites present in `testFiles[]` | Required behaviour |
+| --- | --- | --- |
+| `packages/task-paper/src/comment.test.js` | `the shared writer is embedded, not reimplemented`, `the comment lands in the journal, so nothing new has to be detected`, `rendering stays deterministic`, `the feature is additive`, `the box degrades rather than lying` | The system must embed the shared journal writer rather than reimplementing it, write comments back into the journal, keep the output deterministic, make the feature additive, and degrade visibly instead of pretending a broken comment box worked. |
+| `packages/task-paper/src/generate.test.js` | `paperFilename`, `generatePaper`, `generateAll` | The system must derive paper filenames predictably, generate a single paper from task data, and generate all papers for a collection without skipping or duplicating tasks. |
+| `packages/task-paper/src/markdown.test.js` | `escapeHtml`, `renderInline`, `renderMarkdown` | The system must escape HTML safely, render inline markdown correctly, and render full markdown blocks without depending on unsafe or networked markup. |
+| `packages/task-paper/src/paper.test.js` | `buildPaper`, `buildPaper — fenced examples are quoted text, not markup (#320/#325)`, `buildPaper — a quoted turn header does not fabricate a turn`, `buildPaper — journals with no agent turn`, `splitSections` | The system must build paper data from journal content, quote fenced examples as text rather than markup, avoid fabricating turns from quoted headers, handle journals with no agent turn, and split major sections consistently. |
+| `packages/task-paper/src/render.test.js` | `renderPaper — document shape`, `renderPaper — collapsible sections`, `renderPaper — the ask is above the fold`, `renderPaper — history is present but out of the way`, `renderPaper — the user is the instruction channel`, `renderPaper — safety and determinism`, `renderPaper — a task with no agent turn yet` | The system must render a complete standalone HTML document with no network dependencies, stable anchors, above-the-fold open asks, appendix-only history, explicit instruction-channel guidance for the user, deterministic byte output, escaped prose, journal source links, and sensible framing even before the first agent turn exists. |
 
-## Repository tooling
+## Telegram bridge behaviour ([Domain-telegram-bridge](Domain-telegram-bridge))
 
-- An empty (not merely missing) `node_modules` directory is detected and reported distinctly, before
-  a downstream command fails with a confusing "not recognized" error.
-- The verified PR merge order is checkable as a static property of the plan itself (no duplicates,
-  no excluded-and-queued conflict, non-decreasing expected test count) independent of ever touching
-  GitHub.
-- A conflict between two open issues is flagged only when they share a specific, non-trivial target
-  — two issues merely sharing a topic, or a long sentence merely containing a short one's words, are
-  never flagged.
+These 15 suites specify how planner journals and board state project into Telegram topics, digests, reply routing, and doc-link posting.
 
-## Coverage note
+| Source file | Suites present in `testFiles[]` | Required behaviour |
+| --- | --- | --- |
+| `packages/telegram-bridge/src/board.test.js` | `parseBoardOrder`, `boardRank`, `boardIndex`, `end-to-end ordering behaviour` | The system must parse board order, rank tasks consistently, compute board indices, and keep Telegram ordering aligned with the board’s own priority order. |
+| `packages/telegram-bridge/src/bridge.test.js` | `collapsing superseded turns (#205)`, `rate limits do not duplicate messages (#172)`, `the collapse boundary is the reply counter, not userEngaged (#278)`, `syncUp`, `baseline (natural, no backfill)`, `duplicate-topic prevention`, `syncDown`, `syncUp does not disturb tasks the user has already closed`, `syncUp dual-board tasks (active board wins)`, `syncArchive (mirror completed board -> closed topics)`, `syncDigest privacy warning`, `syncDigest destination`, `syncDigest agent-block fallback`, `formatForTelegram (via syncUp)`, `long turns keep their ask (#210)`, `turn-end stamp does not re-post an already-delivered turn`, `rebaseline-turn-end migration`, `syncDigest reads the live status, not the frozen block header (#202)`, `syncDigest drops tasks the user has closed on the board (#174)` | The system must collapse superseded turns, avoid duplicate posts under rate limits, respect reply counters when deciding collapse boundaries, sync board state up and replies down, keep closed tasks untouched, resolve dual-board tasks toward the active board, mirror completed-board archives into closed topics, select the right digest destination, fall back safely when agent blocks are missing, preserve long-turn asks, and avoid re-posting already delivered turn-end stamps. |
+| `packages/telegram-bridge/src/completed.test.js` | `parseCompletedTaskIds` | The system must parse completed-task IDs from the completed board reliably. |
+| `packages/telegram-bridge/src/config.test.js` | `loadConfig collapseBoundTurns`, `loadConfig archiveCompleted`, `loadConfig digestEnabled`, `loadConfig digestTopic`, `loadConfig boardPath` | The system must load bridge configuration for collapse bounds, archive-completed mode, digest enablement, digest topic, and board path with the documented defaults and overrides. |
+| `packages/telegram-bridge/src/deepLink.test.js` | `telegramDeepLink`, `parseTgMeta / parseTgLink`, `buildTgMetaMarker`, `upsertTgMetaMarker` | The system must build Telegram deep links, parse embedded metadata and links, and upsert metadata markers in journal content without corrupting surrounding text. |
+| `packages/telegram-bridge/src/deleted.test.js` | `parseDeletedTaskIds` | The system must parse deleted-task IDs so the bridge can retire Telegram topics for deleted work. |
+| `packages/telegram-bridge/src/digest.test.js` | `extractAsk`, `extractAskEntry source`, `newest-turn-wins (stale marker regression)`, `buildDigest`, `hashDigest`, `syncDigest`, `syncOnce`, `syncDigest ordering (board-aware)` | The system must extract the active ask from journal turns, keep newest-turn-wins semantics, build and hash digest content deterministically, sync digest posts, perform one-shot digest syncs, and order digest entries with board-aware priority. |
+| `packages/telegram-bridge/src/docLink.test.js` | `#424 — the catch-up link replaces the per-turn post`, `#424 — the readers`, `#483 — pre-binding turns above the doc link` | The system must prefer a single catch-up doc link over repeated long turn posts, read the link state back correctly, and tidy pre-binding turns when a task later becomes doc-bound. |
+| `packages/telegram-bridge/src/journal.test.js` | `parseTitle`, `latestAgentTurn`, `appendUserReply`, `topicName`, `filename helpers`, `hasAgentBlock`, `agentBlockText`, `the turn-end stamp is a boundary, not content`, `agentBlockStatus tolerates decoration before the status word (#174)` | The system must parse task titles and filenames, find the latest agent turn, append user replies, derive topic names, detect agent blocks, read agent-block text and status correctly, and treat a turn-end stamp as a boundary marker rather than visible message content. |
+| `packages/telegram-bridge/src/liveStatus.test.js` | `normaliseStatus — the dialect fault (#202)`, `statusStampDate — the date the line asserts about itself`, `liveStatus — the staleness fault (#202)`, `liveStatus — a user reply ends the agent turn that precedes it`, `digestStatus — the fix may only ever ADD information (#202)` | The system must normalize status phrases from multiple human-written dialects, date status lines from the correct stamped segment, choose the newest status across headers and turns, stop status parsing at a user reply boundary, and let the live reader add fresher information without discarding valid header status. |
+| `packages/telegram-bridge/src/pointerTurn.test.js` | `#425 pointer turn` | The system must emit and parse the pointer-turn form used to redirect discussion toward the bound doc or current task context. |
+| `packages/telegram-bridge/src/routeReply.test.js` | `parseReplyRouting`, `coalesceByTask` | The system must parse reply-routing markers and coalesce multiple routed replies by task before writing them back to journals. |
+| `packages/telegram-bridge/src/state.test.js` | `state reducers` | The system must apply bridge state reducers predictably so sync bookkeeping remains deterministic. |
+| `packages/telegram-bridge/src/telegramClient.test.js` | `telegram client forum-topic archiving`, `telegram client request deadline`, `rate-limit errors carry structured data (#172)` | The system must archive forum topics through the Telegram client API, enforce request deadlines, and preserve structured rate-limit metadata for callers. |
+| `packages/telegram-bridge/src/telegramFormat.test.js` | `extractLinks (#278 lossless collapse guard)`, `escapeHtml`, `mdToTelegramHtml` | The system must extract links without losing collapse boundaries, escape HTML safely, and convert markdown into Telegram-safe HTML. |
 
-`install-prompt` (0 test files) and portions of `overnight-agent` (behaviour enforced by PowerShell
-`mutcheck-*` scripts rather than a conventional test runner) are the two acknowledged gaps in this
-acceptance suite; see [Domain-install-prompt](Domain-install-prompt) and
-[Domain-overnight-agent](Domain-overnight-agent) for what a rebuild should add first.
+## Diagnostics, schema, and repository tooling ([Domain-diagnostics](Domain-diagnostics), [Domain-scripts](Domain-scripts), [Domain-mcp-cred-vault](Domain-mcp-cred-vault))
+
+These suites pin the lower-level support systems that the app and plugins rely on: diagnostics fan-out, secret-pointer schema, and repository verification scripts.
+
+| Source file | Suites present in `testFiles[]` | Required behaviour |
+| --- | --- | --- |
+| `packages/diagnostics/src/index.test.js` | `diagnostics` | The system must make diagnostics a cheap no-op when disabled; fan out enabled events to every sink; keep ring buffers bounded; avoid live console backpressure; preserve shared correlation fields; dump worker buffers only on request; and keep client enablement state coherent across tab closes and worker restarts. |
+| `packages/mcp-cred-vault/src/schema.test.js` | `mcp-secrets pointer file schema` | The system must accept only the supported secret-pointer file schema and reject malformed pointer shapes. |
+| `scripts/check-node-modules.test.js` | `classifyNodeModules`, `buildReport`, `checkNodeModules against a real directory` | The system must classify node_modules states accurately, build a user-facing report from that classification, and distinguish an empty install from a missing one against a real directory. |
+| `scripts/merge-queue.test.js` | `VERIFIED_QUEUE`, `planStep`, `planQueue`, `parseTestCount` | The system must validate the verified merge queue, parse test counts, describe each queue step, and plan queue execution order without duplicates or invalid exclusions. |
+| `scripts/spec/conflicts.test.js` | `tokenize`, `sameTarget`, `sentences`, `parseDuration`, `extractDirectives`, `extractSettings`, `extractLifecycle`, `findConflicts`, `buildDecisions`, `renderMarkdown` | The system must tokenize issue text, detect whether two issues target the same thing, parse durations and directives, extract settings and lifecycle signals, find actionable conflicts, build decisions, and render the resulting markdown report. |
+| `scripts/spec/verifyParity.test.js` | `workflow reader`, `the spec branch is verified with exactly what CI runs`, `mutation check (each way the status could decay is caught)` | The system must read workflow definitions, verify that the spec branch is checked against exactly the same commands as CI, and fail on each mutation that would let workflow/spec parity silently decay. |
+
+## Overnight-agent named-test inventory ([Domain-overnight-agent](Domain-overnight-agent))
+
+The inventory includes two overnight-agent check files, but `spec-facts.json` captured zero named `tests[]` entries for them. The file presence still matters because the acceptance corpus expects these checks to exist.
+
+| Source file | Suites present in `testFiles[]` | Required behaviour |
+| --- | --- | --- |
+| `plugins/overnight-agent/checks/stuck-run-sweep.test.mjs` | `(no named tests captured in spec-facts.json)` | The system must keep the stuck-run sweep present in the acceptance inventory; expose named cases in future spec snapshots so its required behaviour can be restated as testable prose. |
+| `plugins/overnight-agent/checks/workflow-health-sweep.test.mjs` | `(no named tests captured in spec-facts.json)` | The system must keep the workflow-health sweep present in the acceptance inventory; expose named cases in future spec snapshots so its required behaviour can be restated as testable prose. |
+
+`install-prompt` and `root` are listed in `domains`, but this snapshot contributes no `testFiles[]` rows for them. Their behaviour still belongs in the spec, but not in this test-derived acceptance page.
