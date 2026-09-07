@@ -192,8 +192,8 @@ const MUTATIONS = [
     name: 'gate UNBOUND removed',
     kind: 'unleashes',
     guards: '905',
-    find: '  if (!doc.doc_id) continue; // gate UNBOUND',
-    repl: '',
+    find: '  if (!doc.doc_id) { unbound.push(id); continue; } // gate UNBOUND',
+    repl: '  if (!doc.doc_id) { unbound.push(id); }',
   },
   {
     name: 'SPOKE_WITHOUT_READING detector disabled',
