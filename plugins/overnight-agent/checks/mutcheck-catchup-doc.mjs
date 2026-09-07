@@ -28,6 +28,10 @@
  *              read-then-write loop, which is the one shape that must stay quiet once #421
  *              is actually wired — otherwise the sweep can never reach zero, and an
  *              always-firing detector gets switched off)
+ *   counts     changing a rule in the COVERAGE block moves a reported number while no finding
+ *              moves at all (#468's rollout-vs-omission split). Coverage is deliberately not a
+ *              finding, so it needs an arm that reads the number; without one the split would
+ *              be unpinned in exactly the way that let "83 unbound" mean nothing for weeks.
  *
  * LINUX-SAFE BY CONSTRUCTION
  * --------------------------
@@ -65,6 +69,11 @@ const T1 = '2026-09-03T13:00:00-07:00'; // 1h after T0 — inside the 6h read wi
 const TFAR = '2026-09-04T02:00:00-07:00'; // 14h after T0 — outside it
 const TSAME = '2026-09-03T12:07:00-07:00'; // 7 min after T0: the real read-then-write gap
 
+// Relative to the wall clock, for the one rule that compares a stored timestamp to NOW rather
+// than to another stored timestamp (the #468 rollout-vs-omission split). A hard-coded date
+// would change class as this file ages.
+const daysAgo = (n) => new Date(Date.now() - n * 24 * 3600 * 1000).toISOString();
+
 const rows = [];
 const task = (id, state) => {
   rows.push(id);
@@ -98,9 +107,11 @@ task('903', {
 // tasks Shiv has finished — and do not manufacture a metric that says we should).
 task('904', { id: '904', status: 'done', last_turn_at: T1, doc: doc() });
 
-// E — gate UNBOUND. No doc at all. Must NOT fire: whether every task should have a doc is
-// #421's open "Scope" question, not a broken channel.
-task('905', { id: '905', status: 'in-progress', last_turn_at: T1 });
+// E — gate UNBOUND. No doc at all. Must NOT fire: an unbound task has no channel to be
+// UNREAD, so mixing it into findings would make the headline count answer two questions.
+// Dated old deliberately, so it lands in the ROLLOUT class and the omission count below is a
+// stable number rather than one that changes class as this file ages.
+task('905', { id: '905', status: 'in-progress', last_turn_at: daysAgo(60) });
 
 // F — TRUE NEGATIVE, the healthy loop. Read at T1, newest turn at T0, nothing pending.
 task('906', { id: '906', status: 'in-progress', last_turn_at: T0, doc: doc({ observed_at: T1 }) });
@@ -118,6 +129,24 @@ task('908', { id: '908', status: 'in-progress', last_turn_at: TSAME, doc: doc({ 
 // I — the window is a WINDOW, not "never fires": one hour inside it is still healthy.
 task('909', { id: '909', status: 'in-progress', last_turn_at: T1, doc: doc({ observed_at: T0 }) });
 
+// J/K — the ROLLOUT-vs-OMISSION split (#468). Both are unbound, so both must stay out of
+// findings exactly like E; the difference is only whether they are counted as "woken but never
+// bound". Dated relative to NOW rather than to the fixed T0/T1 above on purpose: every other
+// fixture here compares two stored timestamps to each other, but this one compares a stored
+// timestamp to the wall clock, so a hard-coded date would silently change class as the file
+// ages and the check would start failing for reasons that have nothing to do with the code.
+
+// J — OMISSION. Woken two days ago, wrote a turn, still has no doc.
+task('910', { id: '910', status: 'in-progress', last_turn_at: daysAgo(2) });
+
+// K — ROLLOUT. Last written to two months ago: the feature has simply not reached it. Must NOT
+// be counted, or the number is just "unbound" again under a new name and can never reach zero.
+task('911', { id: '911', status: 'in-progress', last_turn_at: daysAgo(60) });
+
+// L — ROLLOUT, never woken at all. No `last_turn_at` to compare, and an absent timestamp must
+// not be read as "recent" (`ts()` returns null, and null must fall on the quiet side).
+task('912', { id: '912', status: 'in-progress' });
+
 // The board is the universe of live tasks. Header included so the row regex has real shape.
 fs.writeFileSync(
   path.join(root, 'planner.md'),
@@ -134,7 +163,16 @@ const run = (sweepPath) => {
   });
   const fired = new Set();
   for (const m of (r.stdout || '').matchAll(/^#(\d+)\s/gm)) fired.add(m[1]);
-  return { fired, out: r.stdout || '', err: r.stderr || '', code: r.status };
+  // The omission count is an ordinary reported number, not a finding, so it is read from the
+  // coverage block rather than from `fired`. Null when the line is absent, which is itself an
+  // assertable difference from zero.
+  const wokenMatch = (r.stdout || '').match(/woken but never bound:\s*(\d+)/);
+  const woken = wokenMatch ? Number(wokenMatch[1]) : null;
+  // The ids listed under that count, so a mutation that changes WHICH tasks are counted is
+  // caught even when it happens not to change how many.
+  const wokenIdsLine = (r.stdout || '').match(/woken but never bound:[^\n]*\n\s*((?:#\d+(?:,\s*)?)+)/);
+  const wokenIds = wokenIdsLine ? [...wokenIdsLine[1].matchAll(/#(\d+)/g)].map((m) => m[1]) : [];
+  return { fired, woken, wokenIds, out: r.stdout || '', err: r.stderr || '', code: r.status };
 };
 
 let pass = 0;
@@ -165,6 +203,15 @@ check('A names its kind (NEVER_READ)', /NEVER_READ/.test(base.out));
 check('B names its kind (SPOKE_WITHOUT_READING)', /SPOKE_WITHOUT_READING/.test(base.out));
 check('C names its kind (UNACKED)', /UNACKED/.test(base.out));
 check('exit 1 with findings, so run-sweeps reads FINDINGS not OK', base.code === 1, `got ${base.code}`);
+check('J 910 quiet: unbound is reported, never a finding', !base.fired.has('910'));
+check('K 911 quiet: unbound is reported, never a finding', !base.fired.has('911'));
+check('L 912 quiet: never woken, so nothing to report as a finding', !base.fired.has('912'));
+check('omission count is reported at all', base.woken !== null, 'no "woken but never bound" line');
+check(
+  'omission counts ONLY the recently-woken unbound task (J), not the stale ones (E/K/L)',
+  base.woken === 1 && base.wokenIds.join(',') === '910',
+  `woken=${base.woken} ids=[${base.wokenIds.join(',')}]`,
+);
 
 // A clean corpus must exit 0, or the sweep is permanently red and gets ignored (#381/#398).
 console.log('\n== clean corpus (only the healthy fixtures) ==');
@@ -189,11 +236,38 @@ const MUTATIONS = [
     repl: '',
   },
   {
+    // The gate itself, not the bookkeeping around it: `if (false)` lets every unbound task
+    // fall through into the detectors, where an absent `observed_at` makes each one
+    // NEVER_READ. Four fixtures move because four fixtures are unbound — that is one class,
+    // not four gates, and naming all of them keeps the "changes nothing else" assertion exact.
     name: 'gate UNBOUND removed',
     kind: 'unleashes',
     guards: '905',
-    find: '  if (!doc.doc_id) continue; // gate UNBOUND',
-    repl: '',
+    alsoGuards: ['910', '911', '912'],
+    find: '  if (!doc.doc_id) {',
+    repl: '  if (false) {',
+  },
+  {
+    // The #468 split. Removing the window makes "woken but never bound" count every unbound
+    // task, which is the pre-#468 number wearing the new label: it can never reach zero and
+    // therefore can never show that a wake stopped skipping the step.
+    name: 'bind window removed (every unbound task counted as an omission)',
+    kind: 'counts',
+    find: '    if (wokenAt && NOW - wokenAt <= BIND_WINDOW_MS) unboundWoken.push(id);',
+    repl: '    unboundWoken.push(id);',
+    expect: (r) => r.woken === 4 && r.wokenIds.includes('911') && r.wokenIds.includes('912'),
+    describe: (r) => `woken=${r.woken} ids=[${r.wokenIds.join(',')}]`,
+  },
+  {
+    // The absent-timestamp half of the same rule. A task never woken has no `last_turn_at`,
+    // and treating a missing value as recent would count pure rollout as omission — the
+    // failure mode that made "83 unbound" useless in the first place.
+    name: 'missing last_turn_at treated as recent',
+    kind: 'counts',
+    find: '    if (wokenAt && NOW - wokenAt <= BIND_WINDOW_MS) unboundWoken.push(id);',
+    repl: '    if (!wokenAt || NOW - wokenAt <= BIND_WINDOW_MS) unboundWoken.push(id);',
+    expect: (r) => r.woken === 2 && r.wokenIds.includes('912'),
+    describe: (r) => `woken=${r.woken} ids=[${r.wokenIds.join(',')}]`,
   },
   {
     name: 'SPOKE_WITHOUT_READING detector disabled',
@@ -225,7 +299,7 @@ const MUTATIONS = [
   },
 ];
 
-const ALL = ['901', '902', '903', '904', '905', '906', '907', '908', '909'];
+const ALL = ['901', '902', '903', '904', '905', '906', '907', '908', '909', '910', '911', '912'];
 
 console.log('\n== mutations (each killed by exactly one arm) ==');
 for (const m of MUTATIONS) {
@@ -233,11 +307,22 @@ for (const m of MUTATIONS) {
     check(`${m.name}: anchor present in source`, false, `not found: ${m.find}`);
     continue;
   }
-  const mutPath = path.join(root, `mutant-${m.guards}-${m.kind}.mjs`);
+  const mutPath = path.join(root, `mutant-${m.guards ?? 'count'}-${m.kind}.mjs`);
   fs.writeFileSync(mutPath, src.replace(m.find, m.repl), 'utf8');
   const r = run(mutPath);
 
   check(`${m.name}: mutant still runs (no crash)`, r.err.trim() === '', r.err.trim().slice(0, 200));
+
+  if (m.kind === 'counts') {
+    // A reported NUMBER, not a finding: this arm is killed by the count moving, and the
+    // findings must stay exactly where they were. `unbound` is deliberately kept out of
+    // `findings`, so a mutation to the coverage block that also moved a finding would mean
+    // the two had become entangled.
+    check(`${m.name} -> the omission count changes (the rule is load-bearing)`, m.expect(r), m.describe(r));
+    const moved = ALL.filter((id) => r.fired.has(id) !== base.fired.has(id));
+    check(`${m.name}: no finding moves (coverage and findings stay separate)`, moved.length === 0, `moved: ${moved.join(',')}`);
+    continue;
+  }
 
   if (m.kind === 'unleashes') {
     check(`${m.name} -> #${m.guards} now fires (gate is load-bearing)`, r.fired.has(m.guards), [...r.fired].join(','));

@@ -1,56 +1,48 @@
 # Domain: root
 
-The `root` domain is the repository's own toolchain — the pieces that are not part of the shipped
-product but make building, serving and linting it possible. It has three modules: `server.js`,
-`vite.config.js`, and `eslint.config.js`.
+The `root` domain contains the repository-level runtime and toolchain entry points: `server.js`, `vite.config.js`, and `eslint.config.js`. Unlike [Domain-app](Domain-app) or [Domain-storage](Domain-storage), these files are not planner data-model logic. They define how developers run the app locally, how the SPA is built and tested, and how repository-wide quality gates behave.
 
 ## Responsibility
 
-Provide (1) a minimal local backend for the desktop/Copilot-CLI workflow, (2) the Vite build/dev
-configuration for the React SPA, and (3) the lint rule set that CI's `lint` job enforces.
+`server.js` is a thin Express bridge for the local-folder workflow. It reads and writes markdown files from one configured planner directory, exposes simple JSON endpoints, and persists the chosen planner path in `planner-config.json`. It deliberately does **not** hold board business rules: todo extraction is the only parsing it performs, and even that mirrors the markdown conventions used elsewhere rather than defining a separate domain model.
 
-## `server.js`
+`vite.config.js` defines the browser bundle and test collector behaviour. Its build identifier comment explains why `__APP_BUILD__` exists: users need to confirm whether a PWA is running a stale service worker, and support needs a visible build stamp. The same file also excludes `plugins/**` from Vitest because some `plugins/overnight-agent/checks/*.test.mjs` files are standalone self-tests that require `%LOCALAPPDATA%`, shell out, and call `process.exit()`; collecting them as Vitest suites would make Linux CI fail for the wrong reason.
 
-An Express app exposing a small file-oriented API over one local folder:
+`eslint.config.js` is the flat lint contract. It applies browser globals to `**/*.{js,jsx}`, switches Node globals on for `packages/telegram-bridge/**/*.js` and `packages/task-paper/**/*.js`, and intentionally disables `react-refresh/only-export-components` in those Node-only directories.
 
-| Route | Purpose |
-| --- | --- |
-| `GET /api/files` | Directory tree of markdown files in the configured planner folder. |
-| `GET /api/file?path=X` | Read a file's contents. |
-| `PUT /api/file?path=X` | Write a file's contents. |
-| `DELETE /api/file?path=X` | Delete a file. |
-| `GET /api/todos?path=X` | Extract todo items from a journal file. |
-| `GET /api/journal-exists?taskId=X` | Check whether a task's journal file exists. |
-| `POST /api/pick-folder` | Native folder picker for choosing the planner directory. |
-| `GET /api/config` / `POST /api/config` | Read/write the server's own small config (e.g. which folder is active). |
+## Principal modules and exports
 
-This exists specifically so a locally-run Copilot CLI session (see the repository `README.md`'s
-"start planner" workflow) can read and edit the exact same markdown files the browser app uses,
-without going through a browser storage provider — it is a thin filesystem proxy, not an
-application backend. It holds no board or journal business logic; every transform (adding a task,
-completing it, parsing a journal) still happens in `src/` and is invoked by whatever client calls
-this API.
+| Path | Exports from `spec-facts.json` | Role |
+| --- | --- | --- |
+| `server.js` | `(none)` | Local API server for filesystem-backed planner editing. |
+| `vite.config.js` | `default` | Vite/React build, define, and Vitest configuration. |
+| `eslint.config.js` | `default` | Flat ESLint configuration used by `npm run lint`. |
 
-## `vite.config.js`
+```js
+app.get('/api/files', async (req, res) => { ... })
+app.get('/api/file', async (req, res) => { ... })
+app.put('/api/file', async (req, res) => { ... })
+app.delete('/api/file', async (req, res) => { ... })
+app.get('/api/todos', async (req, res) => { ... })
+app.get('/api/journal-exists', async (req, res) => { ... })
+app.post('/api/pick-folder', (req, res) => { ... })
+app.get('/api/config', (req, res) => { ... })
+app.post('/api/config', async (req, res) => { ... })
+```
 
-Configures the Vite dev server and production build for the React 19 SPA (`@vitejs/plugin-react`).
-Notably, `npm run predev`/`prebuild` run `scripts/copy-sw.mjs` first, copying the `folder-sync`
-package's source tree into `public/folder-sync/` — a service worker can only be registered from a
-URL on the page's own origin, so the sync engine's code must be served from the app's static asset
-tree rather than imported the normal bundler way.
+Those route registrations in `server.js` are the whole backend surface. The implementation enforces required query/body parameters, checks that joined paths stay under the configured planner root, and returns conventional HTTP failures: `400` for missing input, `403` for access outside the planner root, `404` for missing reads, and `500` for write/config errors.
 
-## `eslint.config.js`
+## Behavioural requirements and current test gap
 
-The flat ESLint config (`@eslint/js`, `eslint-plugin-react-hooks`, `eslint-plugin-react-refresh`)
-that CI's `lint` job runs unmodified via `npm run lint`. The `ci.yml` job comment records that main
-is lint-clean and the job is a **blocking** gate — it was previously non-blocking because two
-pre-existing errors made it permanently red, which trained reviewers to ignore it; both were fixed
-specifically so the gate could start meaning something again.
+`spec-facts.json` lists **no root-level `*.test.js` files** under `testFiles[]`. That is an important fact about this domain: its contract is presently enforced by code review, package scripts, and integration use rather than dedicated root-domain unit tests. The relevant repository scripts from `spec-facts.json` are `dev`, `server`, `start`, `build`, `lint`, `test`, and the `predev`/`prebuild` `copy-sw` step.
+
+Even without direct root tests, the code makes several required behaviours explicit:
+
+- The local API serves only markdown content under the configured planner directory and skips hidden files and `node_modules` when listing.
+- `POST /api/pick-folder` shells out to `powershell.exe` and uses `System.Windows.Forms.FolderBrowserDialog`, so this endpoint is intentionally **Windows-specific**.
+- `vite.config.js` injects a build ID through `define.__APP_BUILD__` and sets `base: '/'`, which the app’s update UI and service-worker registration depend on.
+- `eslint.config.js` treats browser code and Node-side packages differently, so lint failures reflect the actual runtime environment of each subtree.
 
 ## Failure modes
 
-None of this domain's three files hold user data or business state, so its failure modes are
-build/dev-time only: a broken `vite.config.js` breaks every build and every developer's dev server
-identically (there is no per-environment drift to chase), and `server.js` failing merely disables
-the local-folder Copilot workflow — the browser app, with any other storage provider configured,
-is unaffected.
+The root domain’s failures are operational rather than data-model failures. If `server.js` is wrong, the local desktop workflow breaks: the browser cannot browse or edit the planner folder, or the Windows folder picker fails. If `vite.config.js` is wrong, service workers can be served from the wrong place, build IDs disappear, or CI starts collecting non-Vitest plugin self-tests and fails spuriously. If `eslint.config.js` is wrong, lint stops being a meaningful gate because globals or rules no longer match runtime reality. The absence of root-domain tests is itself a limitation worth preserving in the spec: rebuilders should not mistake these contracts for already-verified coverage.

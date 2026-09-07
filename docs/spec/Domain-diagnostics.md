@@ -1,53 +1,64 @@
 # Domain: diagnostics
 
-`diagnostics` is a single package, `packages/diagnostics/src/index.js`, providing a shared,
-low-overhead event/tracing sink used across the app's main thread, its service worker, and the
-`folder-sync` engine.
+`diagnostics` is a single-module package that gives the app and its service worker one structured event system. It is designed to be left in production code permanently: cheap when disabled, bounded when enabled, and explicit about how page and worker traces are correlated. `folder-sync` depends on it heavily, but the module itself stays generic. See [Architecture](Architecture), [Reliability](Reliability), and [Domain-folder-sync](Domain-folder-sync).
 
 ## Responsibility
 
-Give every part of the system — main thread, service worker, folder-sync — one place to emit
-structured diagnostic events, and one place for a developer (or the app's own Settings →
-Diagnostics panel) to pull them back out, without adding console noise or backpressure during
-normal operation.
+`packages/diagnostics/src/index.js` owns four jobs: emit structured events, retain a bounded in-memory ring buffer, coordinate enablement across page and worker contexts, and retrieve a combined snapshot on demand. The module auto-installs its default buffer sink and exposes a window global `__plannerDiag` for manual inspection. Its event schema carries both wall-clock time and per-context sequencing so logs from the page and service worker can be merged deterministically.
 
-## Public exports
+```js
+export function diag(channel, event, fields = {}) {
+  if (!state.enabled) return false
+  emit(makeEvent(channel, event, fields))
+  return true
+}
 
-`advertiseDiagnosticsToWorker`, `clearDiagnostics`, `diag`, `disableDiagnostics`,
-`dumpAllDiagnostics`, `dumpDiagnostics`, `enableDiagnostics`, `findDiagnosticsWorker`,
-`handleWorkerDiagnosticMessage`, `isDiagEnabled`, `printDiagnostics`,
-`reconcileWorkerDiagnosticClients`, `reconcileWorkerDiagnosticsForClients`, `registerDiagSink`,
-`requestWorkerDiagnosticClientStates`, `requestWorkerDiagnostics`, `resetDiagnosticsForTests`,
-`setDiagnosticsLimit`, `setWorkerDiagnosticsForClient`, `unregisterDiagSink`.
+function makeEvent(channel, event, fields = {}) {
+  const context = eventContext()
+  return {
+    schema: EVENT_SCHEMA_VERSION,
+    ts: new Date().toISOString(),
+    t: Date.now(),
+    context: context.kind,
+    contextId: context.id,
+    sequence: context.sequence,
+    channel,
+    event,
+    fields: cloneFields(fields),
+  }
+}
+```
 
-## Behavioural requirements (from `packages/diagnostics/src/index.test.js`)
+## Module and exports
 
-- It **is a cheap no-op when disabled** — calling `diag()` costs effectively nothing until
-  `enableDiagnostics()` is called, so instrumentation can be left in shipped code everywhere.
-- It **fans out enabled events to every registered sink** — multiple consumers (e.g. a console sink
-  and a UI panel) can subscribe independently via `registerDiagSink`.
-- It **keeps each context buffer bounded as a ring** — a long-running session cannot grow the buffer
-  unboundedly; `setDiagnosticsLimit` bounds retention per context.
-- It **records without emitting live console traffic** — diagnostics are captured silently and only
-  surfaced on demand (`printDiagnostics`/`dumpDiagnostics`), so normal operation is not noisier with
-  diagnostics on than off.
-- It **uses a shared event schema with per-context correlation fields**, so events from the main
-  thread and from the service worker can be correlated into one timeline.
-- It **does not create console or client-message backpressure during a driven burst** — a flood of
-  events (e.g. a rapid sync cycle) cannot itself slow the app down or flood postMessage.
-- Worker-side dumps are selective: it **pulls the worker buffer only when `dumpAll` is requested**,
-  **selects the folder-sync worker instead of the root app worker** when both exist, **serves a
-  worker dump through the request message port**, and **prints only an explicitly requested
-  snapshot** — nothing is pulled from a worker speculatively.
-- Multi-client coordination: it **keeps worker diagnostics enabled while another client still
-  requests them** (reference-counted, not last-writer-wins), **prunes a diagnostic client after its
-  tab closes**, and **requests and re-advertises enabled state after a worker restart** — a service
-  worker can be killed and restarted by the browser at any time, and diagnostics state must survive
-  that without a client having to notice and re-enable it.
+| Path | Exports from `spec-facts.json` | Role |
+| --- | --- | --- |
+| `packages/diagnostics/src/index.js` | `advertiseDiagnosticsToWorker`, `clearDiagnostics`, `diag`, `disableDiagnostics`, `dumpAllDiagnostics`, `dumpDiagnostics`, `enableDiagnostics`, `findDiagnosticsWorker`, `handleWorkerDiagnosticMessage`, `isDiagEnabled`, `printDiagnostics`, `reconcileWorkerDiagnosticClients`, `reconcileWorkerDiagnosticsForClients`, `registerDiagSink`, `requestWorkerDiagnosticClientStates`, `requestWorkerDiagnostics`, `resetDiagnosticsForTests`, `setDiagnosticsLimit`, `setWorkerDiagnosticsForClient`, `unregisterDiagSink` | Entire diagnostics surface: emission, buffering, worker coordination, dumps, and sink management. |
 
-## Failure modes guarded against
+## Principal mechanics
 
-A diagnostics system that is expensive when idle would be disabled in practice (the very thing it
-exists to avoid); one that is noisy would train developers to mute it; one that forgets state across
-a service-worker restart would appear "randomly" disabled. Each behavioural requirement above exists
-to close one of those specific failure shapes.
+Enablement is shared rather than local. `enableDiagnostics()` persists a flag in `localStorage` and broadcasts `planner-diag-enable` messages to service workers. The worker side tracks a set of requesting client ids so one page closing cannot disable diagnostics for another page that still wants them. `requestWorkerDiagnostics()` uses a `MessageChannel` and timeout to ask the active folder-sync worker for its snapshot. `findDiagnosticsWorker()` prefers the registration whose scope or script URL identifies `folder-sync/sw.js`, avoiding accidental dumps from the root app worker.
+
+The module is intentionally conservative about cost. The ring buffer limit defaults to `250`, `diag()` returns immediately when disabled, and dump requests clone event fields rather than returning live references. Console printing only happens through explicit `printDiagnostics()`. That separation matters because diagnostic floods are themselves a failure mode the package is meant to expose, not create.
+
+## Behavioural requirements from tests
+
+The behavioural spec is `packages/diagnostics/src/index.test.js`.
+
+- `diag()` is a cheap no-op when disabled.
+- Enabled events fan out to every registered sink.
+- The in-memory buffer behaves as a ring capped by `setDiagnosticsLimit()`.
+- Diagnostics record silently; they do not produce live console traffic by default.
+- Every event uses the shared schema with per-context correlation fields.
+- A driven burst does not create console or client-message backpressure.
+- Worker buffers are only pulled when `dumpAllDiagnostics()` requests them.
+- Worker selection prefers the folder-sync worker over unrelated service workers.
+- Worker dumps are served over the request message port, not by speculative polling.
+- `printDiagnostics()` prints only the explicitly requested snapshot.
+- Worker diagnostics stay enabled while any client still requests them.
+- Stale worker-client registrations are pruned after a tab closes.
+- After a worker restart, the page re-advertises the enabled state so diagnostics do not appear to disable themselves randomly.
+
+## Failure modes
+
+Without this package, the likely failure modes are all diagnostic self-sabotage: instrumentation too expensive to leave enabled, logs too noisy to read, and page/worker traces that cannot be joined after the fact. The module counters those by making the disabled path trivial, bounding retention, separating emission from printing, and persisting enablement as a negotiated state between live pages and transient workers.

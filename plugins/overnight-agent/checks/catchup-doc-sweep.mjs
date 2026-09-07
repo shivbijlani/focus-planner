@@ -65,12 +65,49 @@
 // -------------------------------------------------------------------------------
 //   TERMINAL  a done/skip task. Closed work has no live channel to read, and flagging it
 //             would rebuild #170 (writing at tasks Shiv has finished) as a metric.
-//   UNBOUND   a task with no doc. Whether every task SHOULD have one is #421's open
-//             "Scope" question ("242 tasks x 1 doc is a lot of Drive clutter for rows like
-//             'buy a bath mat'"). Answering it by flagging 200 rows would make this sweep
-//             unreadable on day one, and an always-firing detector gets switched off.
 //   FRESH     observed at or after the newest turn. That is the healthy loop; it must go
 //             quiet, or the sweep cannot distinguish fixed from broken.
+//
+// UNBOUND WAS IN THIS LIST UNTIL THE SCOPE QUESTION WAS ANSWERED
+// --------------------------------------------------------------
+// It was gated because "whether every task SHOULD have one" was #421's open Scope question,
+// and the objection was sound: flagging 200 rows makes a detector unreadable on day one, and
+// an always-firing detector gets switched off.
+//
+// Shiv has now answered it — every open task gets a catch-up doc, created on that task's next
+// wake; completed tasks are left alone. So the gate is stale by DECISION, not by defect.
+//
+// The readability objection survives the decision, so the report is capped rather than
+// per-row: a count, plus the oldest few ids to act on. The number is the signal, and it goes
+// quiet by itself as the rollout completes, which is the property an always-firing detector
+// lacks.
+//
+// THAT COUNT WAS STILL THE WRONG NUMBER, THOUGH (#468)
+// ----------------------------------------------------
+// "83 unbound" answers two questions at once and therefore answers neither. Most of it is
+// ROLLOUT -- the task has not come up yet, and its doc gets made on its next wake, exactly as
+// decided. Some of it is OMISSION -- the task WAS woken, a turn was written, every guard
+// passed, and the binding step was skipped, because creating the doc is an instruction in the
+// brief rather than a check. The two are indistinguishable in one total, and the total shrinks
+// as the rollout proceeds whether or not the omission is ever fixed, so it can never
+// demonstrate a fix.
+//
+// So the coverage block now also reports "woken but never bound": unbound tasks with a turn
+// inside the bind window. Rollout is invisible in that number; omission is the whole of it. It
+// should be zero, and any wake that skips the step puts it back above zero the same night --
+// which is the property "83 unbound" lacked and the reason this went unnoticed for weeks.
+//
+// Why this pull request stops at visibility. Enforcement -- refusing a turn on an open task
+// with no doc -- is the obvious next step and is deliberately NOT armed here: measured today,
+// it would refuse every turn on 83 of 88 board rows on the first night, which jams the board
+// over a missing artefact. That is the always-firing detector this file's own header argues
+// against, in refusal form. Visibility first, and enforcement once the number it reports is
+// small enough that arming it blocks nothing.
+//
+// Why this is worth reporting at all: without it the headline read `UNREAD: 0` and exited 0
+// while 5 of 250 tasks were bound. Every behaviour in this family is gated on a task having a
+// doc, so a board at 2% coverage is the reason no improvement is visible — and the sweep that
+// exists to notice that was reporting healthy.
 //
 // Exit 1 when there are findings (stdout, no stderr) so run-sweeps.ps1 classifies it
 // FINDINGS rather than CRASH.
@@ -125,8 +162,18 @@ const ts = (v) => {
 };
 
 const findings = [];
+const unbound = [];
+const unboundWoken = [];
 let bound = 0;
 let considered = 0;
+
+// How recently a task must have written a turn for its missing doc to count as an OMISSION
+// rather than as rollout that has not reached it yet. A number, not a toggle, for the same
+// reason READ_WINDOW_HOURS is: setting it absurdly high collapses the distinction this
+// constant exists to draw, so 0 falls back to the default rather than silently doing that.
+const BIND_WINDOW_DAYS = Number(process.env.OA_DOC_BIND_WINDOW_DAYS) || 7;
+const BIND_WINDOW_MS = BIND_WINDOW_DAYS * 24 * 3600 * 1000;
+const NOW = Date.now();
 
 for (const id of activeIds) {
   const st = readJson(path.join(STATE_DIR, `task-${id}.json`));
@@ -138,8 +185,30 @@ for (const id of activeIds) {
 
   // `?? {}` rather than `null` so that DELETING the gate below yields a finding instead of a
   // TypeError. A mutant that crashes proves the line is reachable, not that it is load-bearing.
+  // Collected, not pushed into `findings`: an unbound task has no channel to be UNREAD, so
+  // mixing the two would make the headline count answer two different questions at once.
   const doc = st.doc ?? {};
-  if (!doc.doc_id) continue; // gate UNBOUND
+  if (!doc.doc_id) {
+    unbound.push(id);
+    // WOKEN AND STILL UNBOUND -- the number this sweep exists to move.
+    //
+    // "83 unbound" conflates two different things and therefore measures neither. Most of
+    // that 83 is rollout: the task simply has not come up yet, and its doc gets created on
+    // its next wake, exactly as decided. But some of it is OMISSION: the task WAS woken,
+    // a turn was written, every guard passed, and the binding step -- which is an
+    // instruction in the brief rather than a check -- was skipped. Nothing reported it,
+    // because a wake that skipped the step is byte-identical to a wake that had nothing to
+    // do. That is the #196/#346 shape a third time, now in the rollout itself.
+    //
+    // Splitting on "has this task been written to inside the bind window" separates them.
+    // Rollout is invisible here and shrinks on its own; omission shows up as a count that
+    // should be zero, and any wake that skips the step puts it back above zero the same
+    // night. That is the property "83 unbound" lacked: it went down whether the bug was
+    // fixed or not, so it could never demonstrate a fix.
+    const wokenAt = ts(st.last_turn_at);
+    if (wokenAt && NOW - wokenAt <= BIND_WINDOW_MS) unboundWoken.push(id);
+    continue;
+  } // gate UNBOUND
 
   bound++;
 
@@ -174,9 +243,47 @@ for (const id of activeIds) {
 
 const byKind = (k) => findings.filter((f) => f.kind === k).length;
 
+// Capped on purpose. The point of this block is the NUMBER -- a board at 2% coverage is why
+// none of the doc-gated behaviour is visible -- and a 200-line list would bury it. The sample
+// exists so a run has something to act on without reading the whole board.
+const UNBOUND_SAMPLE = 8;
+console.log(`Doc coverage: ${bound} of ${considered} open tasks bound (${unbound.length} unbound)`);
+if (unbound.length) {
+  // Reported ABOVE the rollout sample, because it is the only half of that number that
+  // represents a defect. Rollout shrinks by itself; this does not.
+  console.log(
+    `  woken but never bound: ${unboundWoken.length} of those ${unbound.length} were written to in ` +
+      `the last ${BIND_WINDOW_DAYS}d`,
+  );
+  if (unboundWoken.length) {
+    const wsample = unboundWoken.slice(0, UNBOUND_SAMPLE);
+    console.log(`     ${wsample.map((i) => `#${i}`).join(', ')}` +
+      (unboundWoken.length > wsample.length ? `, +${unboundWoken.length - wsample.length} more` : ''));
+    console.log('     -> each of those wakes wrote a turn and could have created the doc. Binding is');
+    console.log('        an instruction in the brief, not a check, so skipping it looks identical to');
+    console.log('        having nothing to do. This count should be 0; it is the fix that moves it.');
+  }
+  const sample = unbound.slice(0, UNBOUND_SAMPLE);
+  console.log(`  next to bind: ${sample.map((i) => `#${i}`).join(', ')}` +
+    (unbound.length > sample.length ? `, +${unbound.length - sample.length} more` : ''));
+  console.log('  -> every behaviour in this family is gated on the task having a doc, so an');
+  console.log('     unbound task still posts a full turn per wake. Bind it on its next wake.\n');
+} else {
+  console.log('  every open task has a catch-up doc.\n');
+}
+
 console.log(`Catch-up doc channels UNREAD: ${findings.length}`);
 console.log(
-  `  (${bound} of ${considered} live non-terminal tasks are doc-bound; ` +
+  // "active board rows", not "live non-terminal tasks". The denominator is `activeIds` (parsed
+  // from planner.md) minus TERMINAL, so it counts tasks ON THE BOARD -- measured 2026-09-05:
+  // 108 live non-terminal tasks exist, but only 84 are on the board, so the old wording silently
+  // dropped 24 of them. A reader reconciling "5 of 84" against 108 finds a gap with nothing
+  // explaining it and reasonably concludes the metric is broken.
+  //
+  // 84 is the RIGHT denominator -- SKILL.md treats a task on neither board as closed, so an
+  // off-board task is not work this feature could serve. Only the label was wrong, so this is a
+  // wording fix and deliberately not a logic change.
+  `  (${bound} of ${considered} active board rows are doc-bound; ` +
     `never read ${byKind('NEVER_READ')}, spoke-without-reading ${byKind('SPOKE_WITHOUT_READING')}, ` +
     `unacked ${byKind('UNACKED')})\n`,
 );
@@ -200,4 +307,13 @@ for (const f of findings) {
   console.log('');
 }
 
+// Coverage is reported loudly but does NOT drive the exit code, and the reason is the same one
+// this file's header gives for capping the list: a detector that fires for weeks gets switched
+// off. The rollout is 83 tasks at one per wake, so keying exit to it would leave the sweep red
+// for weeks and bury the UNREAD findings underneath -- destroying the signal it exists to
+// carry. Exit stays the answer to one question: is a bound channel going unread?
+//
+// That also keeps this consistent with the collection site above, which deliberately keeps
+// `unbound` out of `findings` so the headline count answers one question rather than two.
+// Coverage is driven by binding tasks on wake, not by holding a check red until someone does.
 process.exit(findings.length ? 1 : 0);
