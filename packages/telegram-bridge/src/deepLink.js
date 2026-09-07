@@ -116,6 +116,39 @@ export function parseDocMeta(content) {
 }
 
 /**
+ * #588 — HAS THE BOUND DOC ACTUALLY BEEN WRITTEN?
+ *
+ * `ensure-catchup-doc` creates a PLACEHOLDER and binds it; the body is written by the task's
+ * first wake AFTER that binding. Binding and writing are therefore different events, and a
+ * link posted on the binding points at "this has not been written yet". Since #424 makes the
+ * link carry the whole wake, a stub link and a genuinely quiet task look identical on a phone.
+ *
+ * The signal is the doc ID'S OWN OCCURRENCE IN THE JOURNAL, outside the marker that binds it.
+ * That is not a heuristic about placeholder prose (which Google may reword at any time): the
+ * id is minted at bind time, so ANY other occurrence of it must have been written afterwards.
+ * `write-turn.ps1`'s G10 refuses a doc-bound turn that does not name the doc, so a wake that
+ * wrote a turn necessarily left one, and a doc no wake has reached cannot have one.
+ *
+ * Deriving it this way rather than recording a `written_at` on the amend is deliberate. The
+ * amend is an agent calling Google Docs tools directly -- there is no function to instrument,
+ * so "also record written_at" could only ever be an INSTRUCTION, and a rule that lives in
+ * prose is the defect class this work exists to delete. It also needs no migration: every
+ * already-bound task is classified correctly from the journal it already has.
+ *
+ * @param {string} content journal content
+ * @param {string} docId the bound document id
+ * @returns {boolean} true once a wake has referenced the doc outside its binding marker
+ */
+export function docHasBeenWritten(content, docId) {
+  const id = (docId ?? '').trim()
+  if (!content || !id) return false
+  // Strip every binding marker first. The stamp names the doc by definition, so counting it
+  // would make every bound task look written -- which is exactly the conflation being removed.
+  const withoutMarkers = content.replace(new RegExp(DOC_META_RE.source, 'gi'), '')
+  return withoutMarkers.includes(id)
+}
+
+/**
  * Render a tg-meta marker line from fields (only non-empty fields are emitted).
  * @param {{chatId?: string|number, threadId?: string|number, username?: string}} [fields]
  * @returns {string}

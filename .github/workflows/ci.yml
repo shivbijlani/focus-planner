@@ -579,6 +579,26 @@ jobs:
       - name: Mutation check (429 is a pause not an answer, budget is bounded and honest)
         run: node ./plugins/overnight-agent/checks/mutcheck-doc-probe-ratelimit.mjs
 
+  # GH #588. A catch-up doc is BOUND before it is WRITTEN: `ensure-catchup-doc` creates a
+  # placeholder and binds it, and the body arrives on the task's first wake afterwards. Posting
+  # the link off the binding pointed 4 of 5 links in one measured run at "this has not been
+  # written yet" -- and under #424 that link is the wake's entire message, so a stub link is
+  # worse than silence.
+  #
+  # Mutates repo source and runs the repo suite, so like its neighbour above it needs the install.
+  doc-link-written:
+    name: The doc link points at a written doc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Mutation check (bound is not written, and the marker is not evidence)
+        run: node ./plugins/overnight-agent/checks/mutcheck-doc-link-written.mjs
+
   # The per-task session (GH #404). The overnight agent used to do task work IN THE RUN SESSION --
   # measured live on task #451: it read the journal, edited four deliverables and wrote the turn
   # without ever leaving the main session. #391 already stated the rule ("one task, one workspace,
