@@ -1,73 +1,55 @@
 # Domain: task-paper
 
-`task-paper` (`packages/task-paper/`) generates a readable, self-contained HTML "paper" from a task
-journal — the structural fix for issue #285/#286's complaint that a chronological journal is the
-wrong shape for understanding a complicated task's *current* state.
+`task-paper` generates a self-contained HTML "paper" for each task journal. It is not another source of truth. The journal remains authoritative; the paper is a deterministic projection optimized for reading on a phone or printing. The package also embeds a comment channel that appends directly back into the journal so regeneration cannot overwrite user feedback. See [Architecture](Architecture), [Domain-telegram-bridge](Domain-telegram-bridge), and [Data-Formats](Data-Formats).
 
 ## Responsibility
 
-Transform a journal's append-only chat log into a document whose body is the settled current state
-(the newest agent turn) and whose appendix is everything that is, by construction, superseded
-chain-of-thought (earlier agent turns, the timestamped run log). Regenerate deterministically —
-byte-identical output for unchanged input — so "regenerate every run" is safe, and provide a comment
-channel that writes back into the journal itself using the exact same writer the app uses, so a
-comment can never be lost to the next regeneration.
+The package's leading comments explain the core design choice: a journal is chronological, but the rebuilder needs current state first. `packages/task-paper/src/paper.js` therefore does a structural transform, not a summarisation pass. The newest agent turn becomes the current body, superseded turns and run-log sections move to the appendix, and user messages are collected separately as instructions. `packages/task-paper/src/render.js` then renders that model as a single HTML file with no external CSS, fonts, or scripts, because papers live beside journals in synced storage and must open correctly from `file://`.
 
-## Principal modules
+```js
+export function generatePaper(journalPath, { outDir = null, fsImpl = fs, writerSource = undefined } = {}) {
+  const paper = buildPaper(content, { taskId })
+  const html = renderPaper(paper, {
+    journalHref: path.posix.join('..', filename),
+    telegramHref: telegramHrefFrom(content),
+    writerSource: writerSource === undefined ? readSharedWriter() : writerSource,
+  })
+  ...
+}
+```
 
-| Path | Purpose |
-| --- | --- |
-| `packages/task-paper/bin/task-paper.js` | CLI entry point; additive only — writes `<journal>/paper/task-<id>.html` and never touches the journal. |
-| `packages/task-paper/src/paper.js` | Builds the "paper" model from journal markdown: `buildPaper`, `splitSections`, `AGENT_TURN_HEADING_RE`. |
-| `packages/task-paper/src/render.js` | Renders the paper model into one self-contained HTML file: `renderPaper`, `slugify`. |
-| `packages/task-paper/src/markdown.js` | A small, deterministic markdown→HTML renderer written specifically because the project has no markdown dependency and the generator must run with nothing installed. |
-| `packages/task-paper/src/comment.js` | The comment channel: embeds `src/journalChat.js` verbatim as an inline `<script type="module">` so the page can append a comment using the exact shared writer, never a reimplementation. |
-| `packages/task-paper/src/generate.js` | The filesystem layer — journal in, paper out — kept separate from the pure transform so the transform is unit-testable without touching disk. |
+## Modules and exports
 
-## Public exports
+| Path | Exports from `spec-facts.json` | Role |
+| --- | --- | --- |
+| `packages/task-paper/bin/task-paper.js` | — | CLI: generate one paper or sweep a planner's `journal/` folder. |
+| `packages/task-paper/src/comment.js` | `SHARED_WRITER_PATH`, `assertEmbedsSharedWriterVerbatim`, `buildCommentScript`, `commentSectionHtml`, `journalFilename`, `readSharedWriter` | Comment-channel embed around the shared app writer. |
+| `packages/task-paper/src/generate.js` | `PAPER_DIRNAME`, `generateAll`, `generatePaper`, `paperFilename` | Filesystem boundary: journal in, HTML out. |
+| `packages/task-paper/src/index.js` | `AGENT_TURN_HEADING_RE`, `buildPaper`, `escapeHtml`, `generateAll`, `generatePaper`, `isSafeUrl`, `paperFilename`, `renderInline`, `renderMarkdown`, `renderPaper`, `slugify`, `splitSections` | Public package surface. |
+| `packages/task-paper/src/markdown.js` | `escapeHtml`, `isSafeUrl`, `renderInline`, `renderMarkdown` | Small deterministic markdown renderer. |
+| `packages/task-paper/src/paper.js` | `AGENT_TURN_HEADING_RE`, `buildPaper`, `splitSections` | Journal-to-paper model transform. |
+| `packages/task-paper/src/render.js` | `renderPaper`, `slugify` | HTML renderer for the paper model. |
 
-`PAPER_DIRNAME`, `generateAll`, `generatePaper`, `paperFilename` (`generate.js`);
-`SHARED_WRITER_PATH`, `assertEmbedsSharedWriterVerbatim`, `buildCommentScript`,
-`commentSectionHtml`, `journalFilename`, `readSharedWriter` (`comment.js`); `AGENT_TURN_HEADING_RE`,
-`buildPaper`, `splitSections` (`paper.js`); `escapeHtml`, `isSafeUrl`, `renderInline`,
-`renderMarkdown` (`markdown.js`); `renderPaper`, `slugify` (`render.js`).
+## Principal mechanics
 
-## Behavioural requirements (from the task-paper test suite, 5 files / 87 tests)
+`packages/task-paper/src/paper.js` deliberately imports shared readers instead of copying them: `parseJournalChat` from `src/journalChat.js`, `agentBlockStatus` and `parseTitle` from `packages/telegram-bridge/src/journal.js`, and `extractAskEntry` from `packages/telegram-bridge/src/digest.js`. The comment explains why: readers that drift apart have already caused approval and parsing bugs elsewhere in the repo. Agent turns are further split on `## 🌙 Overnight Agent` headers because `parseJournalChat()` groups by author and day, which is not the same thing as a semantic turn.
 
-- **The writer is embedded, never reimplemented.** The generated page's comment box reads the app's
-  real `src/journalChat.js` source and embeds it byte-for-byte; a source that would break out of
-  the `<script>` element is refused; the embed bakes in only that task's own journal filename; it
-  is an inline module so no network fetch is needed from a `file://` origin (verified against real
-  Edge behavior).
-- **A comment produces the same bytes the app produces**, and lands **after the turn-end stamp**,
-  which is precisely what makes it reopen the task on the next `oa-state.ps1 scan` — no new
-  detection logic is required because a comment is ordinary post-stamp journal text.
-- **Rendering is deterministic**: byte-identical output for identical input, no clock/nonce/random
-  id anywhere in the generated controller — a "last updated" concept, if shown, must be derived
-  from the journal's own newest dated entry, never a generation-time clock, or every regeneration
-  would rewrite the file even when nothing changed.
-- **The comment box is additive and honest about its limits**: omitted entirely for a paper with no
-  task id (nothing to target); offers a copy-to-clipboard fallback and names the file to paste into
-  when the browser cannot write files directly; refuses to write anything that is not a clean
-  append; reads the file back after writing rather than trusting the write succeeded.
-- **`buildPaper` structural transform**: takes the title from the journal's `H1`; the **newest**
-  agent turn becomes the current state; an older, superseded turn never leaks into that current
-  state and is moved to the appendix, alongside the Run log; consecutive same-day agent turns are
-  split rather than stacked into one.
-- **The markdown renderer is security-first**: raw HTML in prose is escaped, a `javascript:` URL is
-  refused as a link target (text kept, hyperlink dropped), and fenced code keeps its content
-  verbatim — including markup that would otherwise parse — because journals quote their own markup
-  constantly and a naive renderer would interpret a quoted example as real structure.
-- **`generateAll` sweeps predictably**: skips journals the agent never wrote to, honors a task-id
-  filter, ignores non-journal files, reports (rather than aborting on) an unreadable journal, and
-  processes journals in task-id order rather than filesystem/string order.
+`packages/task-paper/src/markdown.js` accepts only the subset the journals actually use: escaped HTML, safe links, code spans, fenced blocks, headings, lists, tables, blockquotes, and paragraphs. Unsupported constructs fall through as escaped text. `packages/task-paper/src/render.js` keeps the ask above the fold, opens the first two sections, collapses the appendix, and links back to the journal and Telegram when available.
 
-## Failure modes guarded against
+The comment channel in `packages/task-paper/src/comment.js` is the most consequential design choice. It reads `src/journalChat.js` verbatim and embeds it as an inline module. The generated page does not invent a new comment format or a second parser; it appends an ordinary `<!-- from: me -->` journal message. The controller refuses any write that is not a clean append and reads the file back after writing.
 
-Two failure classes recur across this domain's tests. First, **drift between readers**: `paper.js`'s
-doc comment states plainly that copying `parseJournalChat`/`agentBlockStatus`/`extractAskEntry`
-locally is exactly how the app writer and the consent gate drifted apart in the past (closed issue
-#325) — so every reader here is imported, never re-implemented. Second, **regeneration destroying
-user input**: because the whole feature exists to be safely regenerated on every run, anything a
-user adds (a comment) must live somewhere regeneration cannot reach — the journal, not the paper —
-which is the single design choice the rest of the comment channel falls out of.
+## Behavioural requirements from tests
+
+The behavioural spec comes from `packages/task-paper/src/comment.test.js`, `generate.test.js`, `markdown.test.js`, `paper.test.js`, and `render.test.js`.
+
+- `buildPaper` takes the title from the task H1, promotes the newest agent turn to current state, moves superseded turns and Run log content into the appendix, promotes `Status:` to metadata, surfaces the open ask, and returns a usable model even when there is no agent turn yet.
+- Fence-masked parsing is mandatory. Quoted `##` headings and quoted agent markers inside code examples must not fabricate sections, dates, or extra turns.
+- `renderPaper` emits a complete standalone HTML document, uses no network resources, shows the status badge and ask near the top, gives sections stable anchors, collapses appendix history by default, escapes raw HTML from the journal, and remains byte-identical for identical input.
+- `renderMarkdown` escapes HTML first, refuses unsafe schemes such as `javascript:` as live links, preserves fenced code verbatim, and renders tables, nested lists, blockquotes, and shifted headings deterministically.
+- `generatePaper` writes to a `paper/` subfolder rather than beside the journal, skips rewriting unchanged HTML, adds a Telegram topic link when a `tg-meta` stamp exists, and leaves the journal untouched.
+- `generateAll` skips journals the agent never wrote to unless told otherwise, honours task-id filters, processes journals in numeric task order, ignores non-journal files, and reports unreadable journals without aborting the sweep.
+- The comment feature is additive: when no writer source or no task id is available, the page stays readable and honest rather than pretending edits will work.
+
+## Failure modes
+
+The domain is built around two failure modes. The first is reader drift: if the paper had its own parser for authorship, title, status, or ask extraction, it would silently disagree with the app or Telegram bridge. The second is regeneration loss: a note typed into the paper would disappear on the next render if it lived in the HTML file itself. The chosen design avoids both by importing shared readers and by appending comments to the journal, not to the generated page.
