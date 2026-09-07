@@ -1,6 +1,6 @@
 # Roadmap
 
-This page records **known gaps and forward direction** from the **144 open issues** captured in `spec-facts.json`. Entries with a `priority:` label are grouped by that label first. Remaining issues are grouped by the exact non-priority labels present, and issues with no labels are grouped by recurring themes from their titles and bodies. Use this alongside [Behaviour](Behaviour), [Reliability](Reliability), [Prioritisation](Prioritisation), and the relevant `Domain-*` page.
+This page records **known gaps and forward direction** from the **152 open issues** captured in `spec-facts.json`. Entries with a `priority:` label are grouped by that label first. Remaining issues are grouped by the exact non-priority labels present, and issues with no labels are grouped by recurring themes from their titles and bodies. Use this alongside [Behaviour](Behaviour), [Reliability](Reliability), [Prioritisation](Prioritisation), and the relevant `Domain-*` page.
 
 ## Critical
 
@@ -18,10 +18,13 @@ This page records **known gaps and forward direction** from the **144 open issue
 
 ## High
 
-20 open issues carry `priority: high`. These are the explicitly triaged gaps in the snapshot.
+23 open issues carry `priority: high`. These are the explicitly triaged gaps in the snapshot.
 
 | Issue | Other labels | Title | Gap / direction from issue text |
 | --- | --- | --- | --- |
+| #589 | bug, reliability | in_flight reports 3 against a concurrency ceiling of 1, and scan emits no per-row capacity field so the membership of that 3 is unobservable | `session -InFlight` reports 3 items in flight against a ceiling of 1, and the set of sessions producing that 3 is not derivable from any read-only interface — `Prioritisation.md` treats the ceiling as normative, but nothing on the worklist names which rows count against it. |
+| #583 | bug, reliability | 6 of 12 scheduled overnight-agent run slots recorded zero turns in a 6h window (3 most recent consecutive), so 'fired and did nothing' is indistinguishable from 'never fired' | Spec-conformance forensics pass 3 measured a 6-hour window in which the scheduler fired 12 run slots and 6 of them, including the 3 most recent consecutively, recorded zero turns in the session store. |
+| #579 | bug, reliability | Prioritisation.md 6 claims a missing concurrency row reports settings-malformed; the code reports 'default', and the documented '## Overnight Agent behaviour' table does not exist in user-settings.md | Spec-conformance forensics pass 2 found the live `user-settings.md` has no `## Overnight Agent behaviour` heading and no match for `concurrenc` at all, so the concurrency, Today-gate-backstop, and Today-gate-strict settings are all silently on built-in defaults with no signal they were never configured. |
 | #565 | enhancement, reliability | No spec-conformance forensics: 50+ sweeps detect known defect shapes, nothing checks whether the system matches the spec | There are 50+ sweeps in plugins/overnight-agent/checks/, and every one of them detects a previously diagnosed defect shape. Each was written after a specific bug was found. There is nothing that asks the opposite question: |
 | #564 | bug, reliability | A satisfied timer does not park its task: make 'parked until T' the single primitive for clock, third-party and human waits | A completed timer does not park its task until the next due date. poll and recheck can only release a park; neither can create one. So between polls, a recurring task falls through to the plain… |
 | #562 | bug, reliability | Session replacement can go backwards: task related issue rebound to a session its own successor had already replaced (3 sessions in 13h) | Per-task session replacement can go backwards, rebinding a task to a session that a newer session had already replaced. The result is a cycle: two sessions can each be recorded as the other's replacement, and each… |
@@ -150,7 +153,7 @@ This page records **known gaps and forward direction** from the **144 open issue
 
 ## Unlabelled issues, grouped by theme
 
-65 open issues have no labels at all in `spec-facts.json`. Because the data offers no explicit priority for them, the groups below follow the recurring topics visible in their titles and first body paragraphs.
+70 open issues have no labels at all in `spec-facts.json`. Because the data offers no explicit priority for them, the groups below follow the recurring topics visible in their titles and first body paragraphs.
 
 ### Docs, comments, and Google Workspace channels
 
@@ -159,7 +162,9 @@ These issues describe the catch-up-doc path, doc comment observability, provenan
 | Issue | Title | Gap / direction from issue text |
 | --- | --- | --- |
 | #570 | google-workspace probes AVAILABLE but is exposed to no agent session: the doc-comment channel is unreadable from where PHASE 0.7 runs (3 of Shiv's comments sat unread) | check-agent-inbox.ps1 reports google-workspace as AVAILABLE by spawning the server as a child process. But the run — and, since related issue, every task sub-session — calls that MCP through its session toolset, which is a different… |
-| #548 | The quiet-single-link Telegram path is built but reaches 4 of 249 tasks: PHASE 0.7's create step sits inside a phase that skips unbound tasks, so ~98% still get long stacked turns with no doc link | He is right, and tonight's own run is the evidence. The feature is built and works. It reaches 5 of the 84 tasks it could apply to (6.0%). |
+| #594 | No sweep reads a catch-up doc's body, so a figure in the primary surface can go stale unflagged (measured: 5 stale coverage figures in the #468 doc, understating the rollout by 13 and overstating the remainder 2x) | `doc-claim-consistency-sweep.mjs` reads only local journal files; the catch-up docs are Google Docs and are not on that path, so no sweep has ever read one's body even though its own comment claims full scope. |
+| #593 | scan publishes doc_new_comments without the freshness of the read behind it, so a channel never observed and a channel observed-and-empty are the same `0` on the worklist | `scan` carries `doc_new_comments` but not the freshness of the read that produced it, so "observed 30 seconds ago, genuinely empty", "last observed 5 days ago, 3 comments since", and "never observed" are all byte-identical `0` on the one worklist a run reads. |
+| #588 | Telegram posts the catch-up doc link when the doc is bound, not when it is written, so 4 of 5 links in one run pointed at unwritten placeholders | `ensure-catchup-doc` binds a placeholder and the body is written only on the task's first wake afterward, but the bridge posted the link on binding — so a task bound during a run got its link pushed in that same run, before any wake could have written it. The write-based gate (`docHasBeenWritten`, refs GH 592) has since landed; this issue tracks its confirmation. |
 | #541 | A blocked task holds the only capacity slot: Test-SessionHoldsCapacity excludes done/skip but not blocked, so recording a user pause costs the run its dispatch slot (measured: 6 eligible, admits 0) | Test-SessionHoldsCapacity treats only done/skip as work that holds no capacity. blocked falls through and keeps its session counted as work in flight — so a task that is waiting on Shiv, and provably cannot progress by… |
 | #526 | Deterministic "blocked on human" flag + last-evaluated timestamp, readable by the planner UI | Today there is no way to look at the planner UI and see which tasks are waiting on me. The information exists, but only inside the agent's own local state store, in a form only the… |
 | #522 | Observing a doc-bound task's comments erases it from the capacity count: the run dispatches an item and admits stays 1, so related issue's fix opens the over-dispatch direction it warns about | session -InFlight reports in_flight: 0, admits: 1 while task related issue holds a live, just-woken, unreleased session that a session was actively working. |
@@ -234,6 +239,17 @@ These issues say “merged” is not yet a sufficient proxy for “running” or
 | Issue | Title | Gap / direction from issue text |
 | --- | --- | --- |
 | #418 | auto-deploy still exceeds its 60s budget on the live repo after related issue, so PHASE 0 ends in exit 2 every run | PR related issue (merged as b46edfd) bounded the auto-deploy's history work and added a wall-clock budget. On the live repository the classification still does not fit inside that budget, so PHASE 0's deploy step ends in… |
+| #575 | deploy-installed-plugin REFUSE is ancestry-blind: a just-merged file reads as a "live fix" that deploying "would REVERT", and the message asserts the opposite of the truth | `deploy-installed-plugin.ps1` refuses to deploy a file when the installed bytes match some git ref other than `origin/main`, printing "live fix is not on origin/main — deploying would REVERT it" — on a normal merge the installed copy is the pre-merge content and deploying would advance it, not revert it, because the classifier compares content identity against a ref set and never asks which side is newer. |
+
+### Planner app UI and data integrity
+
+These issues describe defects in the planner web app itself — the board rendering and interaction
+surface a user drives directly, as opposed to the overnight agent's own machinery.
+
+| Issue | Title | Gap / direction from issue text |
+| --- | --- | --- |
+| #587 | Row kebab and its action sheet are both named just "Task actions" - a Delete/Complete menu that never says which task it will act on | Found while dogfooding the Planner UI on plannermd.com for board task 400. Every row's kebab (`⋯`) and the action sheet it opens are labelled with the same constant string, "Task actions"; neither the button's accessible name nor the open sheet says which task it is. |
+| #577 | Tasks created in the Pacific evening are stamped with tomorrow's UTC date and render an age of `-1d` | Tasks created through plannermd.com at ~23:00 PT land in `planner.md` stamped with the following day's date because the `Added` column is written in UTC, so the board then renders their age as `-1d` until the Pacific date catches up. |
 
 ### Session, workspace, and runtime hygiene
 

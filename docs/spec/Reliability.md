@@ -309,10 +309,22 @@ Issue #197 is the shipped rationale for the stuck-slot repair rung. Issue #243 r
 warning: a watchdog that lives only inside the plugin it repairs is circular. The repo answers that
 with OS-dispatched supervisors plus CI-gated guards, not with a single in-band watchdog.
 
+A recognised-server-transport gap belongs to this same family: a server can be configured, enabled
+and answering, yet excluded from every agent session's toolset because it declares a transport the
+harness does not load — silence indistinguishable from "never configured." `google-workspace` was
+declared `"type": "local"` in `mcp-config.json` while the harness only loads `stdio`, `http`, and
+`sse` (`plugins/overnight-agent/checks/mcp-transport-sweep.mjs`, exporting the recognised set as
+`RECOGNISED`); it probed AVAILABLE the whole time because a skipped server looks identical to an
+absent one, and three of Shiv's catch-up-doc comments sat unread on it (issue #570). The sweep is
+complementary to `mcp-probe.mjs`, not redundant: the prober proves a server responds once loaded,
+the transport sweep proves the harness will ever try. `plugins/overnight-agent/checks/mutcheck-mcp-transport.mjs`
+mutates the recognised-transport list and the config reader to prove each arm is load-bearing, and
+a CI job runs the sweep on every push so a bad transport value cannot land unnoticed a second time.
+
 ## The mutation-tested sweep harness
 
 The repo carries many narrow checks because each one exists to catch one named silent-failure shape,
-not to contribute to a generic coverage number. The working tree currently contains 161 `.mjs`
+not to contribute to a generic coverage number. The working tree currently contains 166 `.mjs`
 checks under `plugins/overnight-agent/checks/`, and the mutchecks explain why that count is high.
 
 | Mutcheck | What it proves |
@@ -341,6 +353,19 @@ This is why the repository prefers many small, mutation-tested files to a handfu
 Each sweep names one operational question, each mutcheck kills the exact guards that answer it, and
 the failure mode each file exists to catch stays recorded in that file's own header instead of only
 in tribal memory.
+
+A boundary can fail the same way a guard can: not by being wrong, but by being unreachable. PHASE
+0.7 of `plugins/overnight-agent/skills/overnight-agent/SKILL.md` was headed "doc-bound tasks only"
+and told the reader to skip an unbound task — then, inside the very section that instruction skips,
+told it to create the doc when unbound. The create step could never run under the header that
+governs it, so the doc-bound set only ever grew by hand (5 of 84 live rows, measured). Issue #548
+is that contradiction; the fix is ownership, not prose: `plugins/overnight-agent/checks/ensure-catchup-doc.mjs`
+now owns `if doc does not exist then create doc else continue` on its own schedule, one level above
+the task, and PHASE 0.7 only reads comments. `plugins/overnight-agent/checks/mutcheck-phase07-ownership.mjs`
+pins the boundary with three assertions — no create instruction, no self-cancelling skip, the owner
+is named — plus an absence arm, because deleting the subject would otherwise satisfy the first two
+trivially. Coverage moved 5 → 26 of 88 board rows within seven hours of the schedule going live,
+without anyone working a list by hand.
 
 ## The `user-settings.md` reconcile loop
 
@@ -372,3 +397,16 @@ Malformed or unreadable settings narrow behaviour instead of widening it. The pa
 gaps are here too: issue #567 tracks the risk that the CWD-relative candidate can still pick the
 bundled template, and issue #337 tracks a broader reconcile loop that should install or uninstall
 the supervisor to match a user setting rather than relying on a separate manual installer.
+
+The bundled template and the live file can also drift from each other, and the reconcile loop has
+no mechanism to catch that: the template ships a `## Overnight Agent behaviour` section (and the
+concurrency row inside it), but a live `user-settings.md` created before that section existed keeps
+whatever headings it had at creation time — updates overwrite the bundled copy, they do not merge
+new sections into the external one. Issue #579 measured exactly this: a live settings file with no
+`## Overnight Agent behaviour` heading and no `concurrenc` match anywhere in 80KB, so `Overnight
+Agent concurrency`, the Today gate backstop hours, and Today gate strict were all silently on their
+built-in defaults with `concurrency_source: default` — correct behaviour (a missing row reports
+`default`, not `settings-malformed`; only a row that is present but does not parse earns that value,
+per `Resolve-PacingSettings` in `oa-state.ps1`), but invisible to the user who never added the
+section. Closing this gap needs a one-time migration or a per-run diff against the template, neither
+of which exists yet.

@@ -1,6 +1,6 @@
 # Domain: overnight-agent
 
-`overnight-agent` is the repository's largest collected domain: `spec-facts.json` records **159**
+`overnight-agent` is the repository's largest collected domain: `spec-facts.json` records **166**
 JavaScript modules in `plugins/overnight-agent/checks/`. That count is real, but it is not the
 whole runtime surface. The plugin also ships PowerShell and markdown assets that `spec-facts.json`
 does not index because `scripts/spec/collect.mjs` only walks JS/TS extensions. Direct inspection
@@ -68,13 +68,13 @@ A small slice from the real source shows the pattern:
 
 ## Collected module families in `spec-facts.json`
 
-The table below groups the **159 collected JS modules** by file family. Counts come from
+The table below groups the **166 collected JS modules** by file family. Counts come from
 `spec-facts.json`; examples are verbatim paths from that file.
 
 | Family | Count | What it covers | Representative paths |
 | --- | ---: | --- | --- |
-| `mutcheck-*` | 40 | Mutation-tested proof that a guard's individual arms matter. | `plugins/overnight-agent/checks/mutcheck-basename-collision.mjs`; `plugins/overnight-agent/checks/mutcheck-catchup-doc.mjs`; `plugins/overnight-agent/checks/mutcheck-contact-detail.mjs` |
-| `*-sweep` | 48 | Live corpus scans for current failures and regressions. | `plugins/overnight-agent/checks/armed-trigger-sweep.mjs`; `plugins/overnight-agent/checks/basename-collision-sweep.mjs`; `plugins/overnight-agent/checks/blocked-readonly-sweep.mjs` |
+| `mutcheck-*` | 45 | Mutation-tested proof that a guard's individual arms matter. | `plugins/overnight-agent/checks/mutcheck-basename-collision.mjs`; `plugins/overnight-agent/checks/mutcheck-phase07-ownership.mjs`; `plugins/overnight-agent/checks/mutcheck-mcp-transport.mjs` |
+| `*-sweep` | 49 | Live corpus scans for current failures and regressions. | `plugins/overnight-agent/checks/armed-trigger-sweep.mjs`; `plugins/overnight-agent/checks/basename-collision-sweep.mjs`; `plugins/overnight-agent/checks/mcp-transport-sweep.mjs` |
 | `lib-*` | 13 | Shared readers/classifiers used by several checks. | `plugins/overnight-agent/checks/lib-doc-comments.mjs`; `plugins/overnight-agent/checks/lib-external-artifacts.mjs`; `plugins/overnight-agent/checks/lib-external-surfaces.mjs` |
 | `verify-*` | 3 | One-shot verification scripts aimed at a named change or surface. | `plugins/overnight-agent/checks/verify-186.mjs`; `plugins/overnight-agent/checks/verify-deployed-paths.mjs`; `plugins/overnight-agent/checks/verify-settings-form.mjs` |
 | `*-scope` | 9 | Scope readers that bound a question before a sweep answers it. | `plugins/overnight-agent/checks/block-newer-scope.mjs`; `plugins/overnight-agent/checks/block-truncation-scope.mjs`; `plugins/overnight-agent/checks/multi-block-slice-scope.mjs` |
@@ -82,9 +82,9 @@ The table below groups the **159 collected JS modules** by file family. Counts c
 | `board-*` | 3 | Planner-board integrity and external-ticket measurement. | `plugins/overnight-agent/checks/board-external-ticket-measure.mjs`; `plugins/overnight-agent/checks/board-gaps.mjs`; `plugins/overnight-agent/checks/board-integrity.mjs` |
 | `ynab-*` | 4 | One-off YNAB-oriented probes/checks. | `plugins/overnight-agent/checks/ynab-234-check.mjs`; `plugins/overnight-agent/checks/ynab-236-lookup.mjs`; `plugins/overnight-agent/checks/ynab-236-wide.mjs` |
 | `yt-*` | 4 | YouTube-oriented probes/readers. | `plugins/overnight-agent/checks/yt-captions.mjs`; `plugins/overnight-agent/checks/yt-modern.mjs`; `plugins/overnight-agent/checks/yt-probe.mjs` |
-| `*-probe` | 3 | Narrow environment or repair probes. | `plugins/overnight-agent/checks/mcp-probe.mjs`; `plugins/overnight-agent/checks/probe-workspace-tiers.mjs`; `plugins/overnight-agent/checks/status-repair-probe.mjs` |
+| `*-probe` | 2 | Narrow environment or repair probes. | `plugins/overnight-agent/checks/mcp-probe.mjs`; `plugins/overnight-agent/checks/probe-workspace-tiers.mjs` |
 | `pr-closing-keyword` | 1 | CI-facing PR-body guard. | `plugins/overnight-agent/checks/pr-closing-keyword.mjs` |
-| Other one-offs | 25 | Indexers, auditors, replay tools, and narrow incident checks that do not fit one prefix. | `plugins/overnight-agent/checks/artifact-index.mjs`; `plugins/overnight-agent/checks/body-header-drift.mjs`; `plugins/overnight-agent/checks/cdp-eval.mjs` |
+| Other one-offs | 27 | Indexers, auditors, replay tools, and narrow incident checks that do not fit one prefix. | `plugins/overnight-agent/checks/artifact-index.mjs`; `plugins/overnight-agent/checks/body-header-drift.mjs`; `plugins/overnight-agent/checks/ensure-catchup-doc.mjs` |
 
 The mix matters more than any single filename. The architecture keeps nightly diagnosis modular:
 a sweep asks one operational question, a mutcheck proves the sweep can still detect it, and a lib
@@ -106,7 +106,20 @@ These files are runtime-critical even though the fact collector does not index t
 `user-settings.md`, to run `oa-state.ps1 scan` before judging tasks, and to keep task work in a
 per-task session rather than in the run session. `plugins/overnight-agent/skills/catchup-doc/SKILL.md`
 adds the reporting side: one zero-context paper, titled links for IDs, and document updates in
-place rather than comment-thread back-and-forth.
+place rather than comment-thread back-and-forth. It names the one tool that can actually rewrite a
+bound Google Doc — `manage_doc_tab` with `action: "populate_from_markdown"` — and records why the
+obvious tool cannot: `import_to_google_doc` always creates a new document (its parameter list has
+no `document_id`), so using it on a later pass would silently orphan the existing binding. Two traps
+are called out by name: `manage_doc_tab` sits at tool tier `complete` while the agent session runs
+`--tool-tier extended`, so it is invisible unless a short-lived `workspace-mcp` is spawned at the
+higher tier; and the rewrite path's markdown writer has no GFM table support, so a table that
+imported cleanly on the create path does not survive a later `populate_from_markdown` rewrite.
+PHASE 0.7 in `SKILL.md` only **reads** catch-up doc comments — creation and binding are owned one
+level up by `plugins/overnight-agent/checks/ensure-catchup-doc.mjs`, which runs on its own schedule
+and applies `if doc does not exist then create doc else continue` before any task wakes. That split
+replaced a version of PHASE 0.7 that told the reader to skip unbound tasks and then, unreachably,
+instructed it to create the doc for them — the contradiction behind issue #548, closed by moving
+ownership out of the phase entirely.
 
 `oa-state.ps1` is large, but its command surface is explicit near the top:
 

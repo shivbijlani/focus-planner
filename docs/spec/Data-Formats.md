@@ -308,6 +308,7 @@ Source-faithful sample built from `emptyState()` plus the reducers in `packages/
       "lastPostedLinks": ["https://example.com/doc"],
       "docLinkDocId": "doc-352",
       "docLinkMessageId": 444,
+      "docLinkVerifiedAt": 1732500000000,
       "docLinkNoticeHash": "notice-1",
       "docLinkNoticeMessageId": 445,
       "docLinkNoticeAsk": "Needs from you: confirm the rollout window."
@@ -323,6 +324,7 @@ Source-faithful sample built from `emptyState()` plus the reducers in `packages/
 | `lastPostedHash` and `suppressedHash` are separate fields. | A suppressed turn is paused, not considered already posted. | `setSuppressedHash()` in `packages/telegram-bridge/src/state.js` |
 | `lastPostedMessageIds` is a list of integers, not one id. | A long Telegram post may be split into several messages and must collapse as a unit. | `setLastPostedMessageIds()` in `packages/telegram-bridge/src/state.js` |
 | `replyCount` is monotonic. | Collapse decisions compare “reply count when posted” to “reply count now”. | `bumpReplyCount()`, `setLastPostedContext()` in `packages/telegram-bridge/src/state.js` |
+| `docLinkVerifiedAt` is set only from a genuine observation (a confirmed probe or a successful send), never an assumption. | An unverified probe must not look like evidence, or the least-known link would be probed least often. | `setDocLinkVerified()`, `verifyLinkMessage()` in `packages/telegram-bridge/src/bridge.js` |
 | Doc-link notice fields clear together when the ask is cleared. | A stale message id must not survive after the notice it referred to is gone. | `setDocLinkNoticeHash()` in `packages/telegram-bridge/src/state.js` |
 
 ## 5. Folder-sync sidecars — `<file>.sync.json`
