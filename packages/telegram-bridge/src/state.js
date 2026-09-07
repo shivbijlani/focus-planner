@@ -163,7 +163,33 @@ export function setDocLink(state, taskId, { docId, messageId } = {}) {
   return state
 }
 
-// The last short exception line (a blocking ask, or a terminal state change)
+// WHEN this task's link was last OBSERVED to exist (#586).
+//
+// Set only on first-hand evidence: a probe Telegram answered, or a send Telegram
+// accepted. Never on an assumption. That restriction is the whole value of the
+// field — it is what lets the bridge order the probe queue by "how long since we
+// actually knew", and an entry written on a guess would push the task we know
+// LEAST about to the back of that queue.
+//
+// It exists because verification became rolling rather than per-run. Probing
+// every bound link every run spends a group budget of roughly 20 messages a
+// minute on calls whose expected answer is "nothing changed", and once enough
+// tasks were bound the pass rate-limited itself into verifying none of them. A
+// bounded number of probes per run, oldest first, checks every link within a
+// bounded number of runs — which is a weaker promise on paper and a far stronger
+// one in fact, because the per-run promise was not being kept at all.
+//
+// Absent means never verified, and sorts FIRST: no evidence is a stronger claim
+// on a scarce budget than evidence that is a few runs old.
+export function setDocLinkVerified(state, taskId, at) {
+  const prev = state.tasks[taskId] || {}
+  state.tasks[taskId] = {
+    ...prev,
+    docLinkVerifiedAt: Number.isFinite(at) ? at : undefined,
+  }
+  return state
+}
+
 // delivered for a task in link mode. Hashed, so an unchanged ask is not re-sent
 // every run — the whole point of #424 is that the steady state is silent, and an
 // exception that repeats itself nightly is just the old behaviour wearing a
