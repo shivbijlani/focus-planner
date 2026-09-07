@@ -65,12 +65,27 @@
 // -------------------------------------------------------------------------------
 //   TERMINAL  a done/skip task. Closed work has no live channel to read, and flagging it
 //             would rebuild #170 (writing at tasks Shiv has finished) as a metric.
-//   UNBOUND   a task with no doc. Whether every task SHOULD have one is #421's open
-//             "Scope" question ("242 tasks x 1 doc is a lot of Drive clutter for rows like
-//             'buy a bath mat'"). Answering it by flagging 200 rows would make this sweep
-//             unreadable on day one, and an always-firing detector gets switched off.
 //   FRESH     observed at or after the newest turn. That is the healthy loop; it must go
 //             quiet, or the sweep cannot distinguish fixed from broken.
+//
+// UNBOUND WAS IN THIS LIST UNTIL THE SCOPE QUESTION WAS ANSWERED
+// --------------------------------------------------------------
+// It was gated because "whether every task SHOULD have one" was #421's open Scope question,
+// and the objection was sound: flagging 200 rows makes a detector unreadable on day one, and
+// an always-firing detector gets switched off.
+//
+// Shiv has now answered it — every open task gets a catch-up doc, created on that task's next
+// wake; completed tasks are left alone. So the gate is stale by DECISION, not by defect.
+//
+// The readability objection survives the decision, so the report is capped rather than
+// per-row: a count, plus the oldest few ids to act on. The number is the signal, and it goes
+// quiet by itself as the rollout completes, which is the property an always-firing detector
+// lacks.
+//
+// Why this is worth reporting at all: without it the headline read `UNREAD: 0` and exited 0
+// while 5 of 250 tasks were bound. Every behaviour in this family is gated on a task having a
+// doc, so a board at 2% coverage is the reason no improvement is visible — and the sweep that
+// exists to notice that was reporting healthy.
 //
 // Exit 1 when there are findings (stdout, no stderr) so run-sweeps.ps1 classifies it
 // FINDINGS rather than CRASH.
@@ -125,6 +140,7 @@ const ts = (v) => {
 };
 
 const findings = [];
+const unbound = [];
 let bound = 0;
 let considered = 0;
 
@@ -138,8 +154,10 @@ for (const id of activeIds) {
 
   // `?? {}` rather than `null` so that DELETING the gate below yields a finding instead of a
   // TypeError. A mutant that crashes proves the line is reachable, not that it is load-bearing.
+  // Collected, not pushed into `findings`: an unbound task has no channel to be UNREAD, so
+  // mixing the two would make the headline count answer two different questions at once.
   const doc = st.doc ?? {};
-  if (!doc.doc_id) continue; // gate UNBOUND
+  if (!doc.doc_id) { unbound.push(id); continue; } // gate UNBOUND
 
   bound++;
 
@@ -174,6 +192,21 @@ for (const id of activeIds) {
 
 const byKind = (k) => findings.filter((f) => f.kind === k).length;
 
+// Capped on purpose. The point of this block is the NUMBER -- a board at 2% coverage is why
+// none of the doc-gated behaviour is visible -- and a 200-line list would bury it. The sample
+// exists so a run has something to act on without reading the whole board.
+const UNBOUND_SAMPLE = 8;
+console.log(`Doc coverage: ${bound} of ${considered} open tasks bound (${unbound.length} unbound)`);
+if (unbound.length) {
+  const sample = unbound.slice(0, UNBOUND_SAMPLE);
+  console.log(`  next to bind: ${sample.map((i) => `#${i}`).join(', ')}` +
+    (unbound.length > sample.length ? `, +${unbound.length - sample.length} more` : ''));
+  console.log('  -> every behaviour in this family is gated on the task having a doc, so an');
+  console.log('     unbound task still posts a full turn per wake. Bind it on its next wake.\n');
+} else {
+  console.log('  every open task has a catch-up doc.\n');
+}
+
 console.log(`Catch-up doc channels UNREAD: ${findings.length}`);
 console.log(
   `  (${bound} of ${considered} live non-terminal tasks are doc-bound; ` +
@@ -200,4 +233,13 @@ for (const f of findings) {
   console.log('');
 }
 
+// Coverage is reported loudly but does NOT drive the exit code, and the reason is the same one
+// this file's header gives for capping the list: a detector that fires for weeks gets switched
+// off. The rollout is 83 tasks at one per wake, so keying exit to it would leave the sweep red
+// for weeks and bury the UNREAD findings underneath -- destroying the signal it exists to
+// carry. Exit stays the answer to one question: is a bound channel going unread?
+//
+// That also keeps this consistent with the collection site above, which deliberately keeps
+// `unbound` out of `findings` so the headline count answers one question rather than two.
+// Coverage is driven by binding tasks on wake, not by holding a check red until someone does.
 process.exit(findings.length ? 1 : 0);
