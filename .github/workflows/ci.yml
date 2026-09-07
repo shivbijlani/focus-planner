@@ -475,6 +475,27 @@ jobs:
           OA_SWEEP: ./plugins/overnight-agent/checks/catchup-doc-sweep.mjs
         run: node ./plugins/overnight-agent/checks/mutcheck-catchup-doc.mjs
 
+  # The doc-binding invariant (task #468). Shiv, rejecting a Pending bullet that proposed binding
+  # the remaining tasks one per wake: "It sounds like a one-off patch. Wouldn't it be better if
+  # the architecture was so that if a task did not produce a document then it would be made to
+  # produce the document ... if doc does not exist then create doc else continue."
+  #
+  # Runs entirely on --dry-run, so it creates no documents and needs neither the capability probe
+  # nor PowerShell -- which is what lets the invariant be proven on the Linux runner rather than
+  # only on the one machine that can actually create a doc.
+  ensure-catchup-doc:
+    name: Catch-up doc binding invariant
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mutation check (unbound tasks created, bound tasks left alone)
+        env:
+          OA_ENSURE: ./plugins/overnight-agent/checks/ensure-catchup-doc.mjs
+        run: node ./plugins/overnight-agent/checks/mutcheck-ensure-catchup-doc.mjs
+
   # The per-task session (GH #404). The overnight agent used to do task work IN THE RUN SESSION --
   # measured live on task #451: it read the journal, edited four deliverables and wrote the turn
   # without ever leaving the main session. #391 already stated the rule ("one task, one workspace,
