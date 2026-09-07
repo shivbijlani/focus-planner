@@ -86,7 +86,9 @@ function New-Journal([string]$dir, [string]$id, [string]$nl, [bool]$withSentinel
 }
 
 function Invoke-WriteTurn([string]$ScriptPath, [string]$dir, [string]$id) {
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath -Id $id -BodyFile $bodyFile -JournalDir $dir *>&1 | Out-Null
+  # `-Ask none` because #560 made the declaration required (G13); this harness is about G6, the
+  # sentinel, so declaring one keeps the refusal under test the one it was written for.
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath -Id $id -BodyFile $bodyFile -JournalDir $dir -Ask none *>&1 | Out-Null
   return $LASTEXITCODE
 }
 

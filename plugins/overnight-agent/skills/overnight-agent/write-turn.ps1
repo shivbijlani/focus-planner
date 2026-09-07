@@ -93,10 +93,33 @@
   reaches no surface at all. Same text, different blast radius. `-DisableGuard G11` is the
   hatch for a genuinely informational turn.
 
+  G13 -- DECLARE THE ASK (#560)
+  -----------------------------
+  Every guard above asks whether the text survives. G13 asks whether the turn's own
+  BLOCKING STATE survives, and today it does not: `oa-state.ps1` recovers `awaiting_reply`
+  by regex from the closing sentence, so a phrasing choice inside prose the model wrote
+  silently decides whether the task is schedulable. It is a ratchet, because the agent
+  writes the text its own gate reads.
+
+  Measured 2026-09-06: 2 eligible rows out of 249. SKILL.md's own agent-block example prints
+  `**Your call:** reply below in plain English`, that exact line is in 81 journals, and the
+  gate reads every one of them as a blocking ask. The documented template starves the board.
+
+  So `-Ask blocking|offer|none` is REQUIRED and the value is stamped into the turn as
+  `<!-- oa-ask: VALUE -->`, immediately under the turn's own provenance marker. The author
+  states the fact it already knows; nothing has to interpret English to get it back.
+
+  A REFUSAL RATHER THAN A DEFAULT, and that is the whole design. A default is a guess wearing
+  a flag's clothes: whichever value it took would be silently wrong for the other two cases,
+  and `offer` (the tempting one, since it is the common case) would quietly un-park genuinely
+  blocked tasks the moment an author forgot the flag. The refusal is cheap -- one word on a
+  command line -- and its cost lands on the author, who knows the answer, rather than on Shiv,
+  who would have to notice the board behaving oddly a week later.
+
   Usage:
-    write-turn.ps1 -Id 448 -BodyFile turn.md            # validate, back up, append
-    write-turn.ps1 -Id 448 -BodyFile turn.md -Validate  # validate only, write nothing
-    write-turn.ps1 -BodyFile turn.md -Validate          # lint any turn text
+    write-turn.ps1 -Id 448 -BodyFile turn.md -Ask offer            # validate, back up, append
+    write-turn.ps1 -Id 448 -BodyFile turn.md -Ask blocking -Validate  # validate only
+    write-turn.ps1 -BodyFile turn.md -Ask none -Validate           # lint any turn text
 
   Exit codes: 0 ok - 2 guard violation (nothing written) - 3 bad arguments.
 #>
@@ -105,6 +128,18 @@ param(
   [string]$Id,
   [Parameter(Mandatory = $true)][string]$BodyFile,
   [string]$JournalDir = 'C:\Users\shiv\OneDrive\Apps\Focus Planner\journal',
+  # #560: REQUIRED. What this turn is asking of Shiv, declared by the turn's author rather than
+  # recovered afterwards by regex from the closing sentence it happened to write.
+  #
+  #   blocking  the run cannot proceed until he answers. Parks the task (`awaiting_reply`).
+  #   offer     a courtesy option he may decline by silence. Visible in the digest, parks nothing.
+  #   none      nothing is being asked at all.
+  #
+  # Deliberately NOT a [ValidateSet]: a binding failure exits with PowerShell's own error and a
+  # different exit code, while every other refusal in this script is a guard finding with exit 2
+  # and an explanation. G13 does the validation so a missing or misspelled value is refused the
+  # same way a bad heading is.
+  [string]$Ask,
   # #477: overrides the calling session's identity. Only so the arms can drive it; a real run
   # leaves it unset and the identity comes from COPILOT_AGENT_SESSION_ID, which the harness sets.
   [string]$Author,
@@ -163,6 +198,60 @@ $script:ManagedTurnRe = '^[ \t]*##[^\r\n]*(' + [regex]::Escape($MOON) + '|Overni
 # remove. 45 covers the cadence with margin while staying far short of the next night, so a
 # genuinely new day is never blocked. A reply from him clears it immediately at any age.
 $WAKE_WINDOW_MIN = [int]($env:WRITE_TURN_WAKE_WINDOW_MIN | ForEach-Object { if ($_) { $_ } else { 45 } })
+
+# --- #560 the declared ask ---------------------------------------------------------------
+# The stamp this script writes and `oa-state.ps1`'s `$script:AskDeclRe` reads. Kept
+# character-for-character in step with that reader, for the reason `$DocMetaRe` above gives:
+# a looser pattern here stamps something the gate will ignore, a stricter one refuses a stamp
+# the gate would have honoured, and either way the two disagree silently.
+#
+# INVISIBLE BY CONSTRUCTION. `journalChat.js` strips complete inline HTML comments and skips a
+# line that is purely a comment, so this renders as nothing in the planner app. It deliberately
+# contains neither `AUTO` nor `AGENT` as a word: `AGENT_SENTINEL_RE` (/^<!--.*\b(AUTO|AGENT)\b.*-->/i)
+# would otherwise read the stamp as an agent-block marker and change how the thread renders.
+$script:AskValues = @('blocking', 'offer', 'none')
+# `[ \t\r]*$` for the reason oa-state.ps1's copy spells out: under `(?m)` .NET anchors `$` before
+# the `\n`, so a CRLF line leaves the `\r` unmatched and the pattern silently never fires. Journals
+# are commonly CRLF here.
+$script:AskDeclRe = '(?im)^[ \t]*<!--[ \t]*oa-ask[ \t]*:[ \t]*([a-z]+)[ \t]*-->[ \t\r]*$'
+# Matches the marker the reader anchors the newest turn on, so the stamp lands INSIDE that turn.
+$script:ProvenanceLineRe = '^[ \t]*<!--[ \t]*from:[ \t]*overnight-agent[ \t]*-->[ \t\r]*$'
+
+function Add-AskStamp {
+  param([string]$Body, [string]$Ask)
+  # Insert `<!-- oa-ask: VALUE -->` directly beneath the turn's own provenance marker.
+  #
+  # WHY THERE, rather than appended at the end of the body. `Get-NewestAgentTurn` anchors on the
+  # last managed heading (or provenance marker) and reads forward, so anywhere inside the turn
+  # would be found -- but the END of a turn is the one place that later grows: `mark` appends the
+  # `<!-- /overnight-agent turn-end -->` terminator there, and everything past that terminator is
+  # read as the USER speaking. Sitting under the provenance marker keeps the stamp structurally
+  # bound to the attribution it qualifies and permanently above that boundary.
+  #
+  # LAST marker, not first: a body carrying two turn headings (rare, but G12 is the only thing
+  # stopping it and it is disableable) declares for the newest one, which is the one the reader
+  # will read.
+  $nl = if ($Body -match "`r`n") { "`r`n" } else { "`n" }
+  $lines = $Body -split "`r?`n"
+  $fence = $false
+  $at = -1
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($lines[$i] -match '^[ \t]*```') { $fence = -not $fence; continue }
+    if ($fence) { continue }
+    if ($lines[$i] -match $script:ProvenanceLineRe) { $at = $i }
+  }
+  # No marker outside a fence means G7 was disabled (it refuses exactly this shape). Fall back to
+  # the end of the body rather than dropping the declaration: an unstamped turn silently reverts
+  # to the prose inference, which is the defect. `mark` appends its terminator on a NEW line
+  # after this, so the stamp still precedes the boundary.
+  if ($at -lt 0) { return ($Body.TrimEnd() + $nl + $nl + "<!-- oa-ask: $Ask -->") }
+  $out = @()
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    $out += $lines[$i]
+    if ($i -eq $at) { $out += "<!-- oa-ask: $Ask -->" }
+  }
+  return ($out -join $nl)
+}
 
 function Get-FenceMaskedText([string]$text) {
   # Blank out fenced regions, preserving line count and line endings, so a `doc-meta` shown
@@ -430,7 +519,7 @@ function Test-TurnAsk([string]$Body) {
 }
 
 function Test-TurnBody {
-  param([string]$Body, [string[]]$Disabled = @(), $Doc = $null)
+  param([string]$Body, [string[]]$Disabled = @(), $Doc = $null, [string]$Ask = '')
 
   $findings = @()
   $lines = $Body -split "`r?`n"
@@ -693,6 +782,49 @@ function Test-TurnBody {
     }
   }
 
+  # --- G13: the turn must DECLARE its ask (#560) -----------------------------------
+  # Not a property of the text at all, which is the point. Every other guard reads the
+  # body; this one reads what the AUTHOR SAID ABOUT the body, because that is the fact
+  # `oa-state.ps1` currently reconstructs by regex from the closing sentence -- and
+  # reconstructing it is what let SKILL.md's own boilerplate park 81 tasks.
+  #
+  # It is placed last so a body with real damage in it (G1/G2) reports that damage too
+  # rather than being masked by a missing flag: an author who has to fix two things wants
+  # to see both in one refusal.
+  if (& $on 'G13') {
+    $askVal = "$Ask".Trim().ToLowerInvariant()
+    if ($askVal.Length -eq 0) {
+      $findings += New-Finding 'G13' 1 '(no -Ask)' (
+        'this turn does not declare what it asks of Shiv, so `awaiting_reply` would be recovered by regex ' +
+        'from its closing sentence -- which is how the skill''s own "**Your call:** reply below in plain ' +
+        'English" boilerplate parked 81 tasks (#560). Pass -Ask blocking (the run cannot proceed until he ' +
+        'answers), -Ask offer (a courtesy option he may decline by silence), or -Ask none (nothing is asked)')
+    }
+    elseif ($script:AskValues -notcontains $askVal) {
+      $findings += New-Finding 'G13' 1 "-Ask $Ask" (
+        "unknown -Ask value '$Ask'. It must be exactly one of: " + ($script:AskValues -join ', ') +
+        '. A value this script does not recognise would be stamped into the journal and then ignored by ' +
+        'oa-state.ps1, which falls back to the prose -- silently reinstating the defect the flag removes')
+    }
+    else {
+      # A HAND-WRITTEN STAMP IN THE BODY IS REFUSED, not merged. `Get-DeclaredAsk` takes the
+      # LAST stamp in the turn, so a stray one below the emitted stamp would win and the flag
+      # on the command line would be decorative -- the writer and the reader disagreeing about
+      # which of two declarations is real. Fenced quotations are exempt: the turn that
+      # DOCUMENTS this feature necessarily shows the stamp, and the reader masks fences too.
+      for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($inFence[$i]) { continue }
+        if ($lines[$i] -match $script:AskDeclRe) {
+          $findings += New-Finding 'G13' ($i + 1) $lines[$i].Trim() (
+            'this body writes its own `oa-ask` stamp. The stamp is emitted by this script from -Ask, and ' +
+            'the reader takes the LAST one in the turn -- so a hand-written stamp can silently override the ' +
+            'declaration you passed. Remove it (or fence it, if you are quoting the format)')
+          break
+        }
+      }
+    }
+  }
+
   return $findings
 }
 
@@ -728,7 +860,7 @@ $doc = if ($journal) { Get-JournalDocMeta $journal } else { $null }
 # for `Get-Content -Raw` on a journal (HAZARD 4); it applies to the safety tool itself.
 #
 # `@(...)` forces an array on both hosts, so `.Count` is 0/1/n everywhere.
-$findings = @(Test-TurnBody -Body $body -Disabled $DisableGuard -Doc $doc)
+$findings = @(Test-TurnBody -Body $body -Disabled $DisableGuard -Doc $doc -Ask $Ask)
 
 # G12 is appended here rather than inside Test-TurnBody because it is the one guard that is a
 # property of the DESTINATION, not of the text: the same body is fine on a fresh wake and a
@@ -740,12 +872,17 @@ if ($Id -and ($DisableGuard -notcontains 'G12')) {
 }
 $findings = @($findings)
 $hasAsk = Test-TurnAsk -Body $body
+$askVal = "$Ask".Trim().ToLowerInvariant()
 
 if ($Json) {
   [pscustomobject]@{
     ok       = ($findings.Count -eq 0)
     findings = @($findings)
     hasAsk   = $hasAsk
+    # #560: what the AUTHOR declared, next to what the text happens to say. Emitting both is
+    # what makes the two auditable against each other -- `ask: none` with `hasAsk: true` is a
+    # turn whose prose asks for something its author says it does not need.
+    ask      = $askVal
     id       = $Id
     docBound = [bool]$doc
     docId    = if ($doc) { $doc.doc_id } else { '' }
@@ -766,6 +903,16 @@ if ($Json) {
     Write-Host '      Fine for an informational turn. If it is meant to ask for something,'
     Write-Host '      use one of: "**Needs from you:** ...", "Reply `word`", "**Next:** ...",'
     Write-Host '      or "**Your call:** ...". A bare "*Reply:* **`word`**" is NOT read as an ask.'
+  }
+  # #560: a `blocking` declaration that the digest cannot see the ask for. The declaration and
+  # the text are two different surfaces -- the gate reads the stamp, the Telegram digest reads
+  # the prose -- so this pair parks the task while showing Shiv nothing to answer. Advisory for
+  # A5's reason: the right fix is prose, and refusing here would push authors toward downgrading
+  # a genuinely blocking turn to `offer` to get past the tool, which is strictly worse.
+  if ($askVal -eq 'blocking' -and -not $hasAsk) {
+    Write-Host '[write-turn] NOTE - -Ask blocking, but no ask line the digest can read.' -ForegroundColor Yellow
+    Write-Host '      The stamp parks the task; the PROSE is what reaches him. Add one of:'
+    Write-Host '      "**Needs from you:** ...", "Reply `word`", "**Next:** ...", "**Your call:** ...".'
   }
   # The #425 target, as a nudge rather than a refusal. G9's ceiling is where a turn stops
   # being defensible; this is where it stops being a pointer. Keeping them apart is what
@@ -831,10 +978,10 @@ if ($existing -notmatch [regex]::Escape('<!-- OVERNIGHT-AGENT do not edit this l
   }
 }
 
-$out = $existing + $sep + $prefix + ($body.TrimEnd() -replace "`r?`n", $nl) + $nl
+$out = $existing + $sep + $prefix + ((Add-AskStamp -Body $body.TrimEnd() -Ask $askVal) -replace "`r?`n", $nl) + $nl
 
 [IO.File]::WriteAllText($journal, $out, (New-Object Text.UTF8Encoding($false)))
 if (-not $Json) {
-  Write-Host "[write-turn] appended $($body.Trim().Length) chars to task-$Id.md (backup: task-$Id.bak-$stamp.md)" -ForegroundColor Green
+  Write-Host "[write-turn] appended $($body.Trim().Length) chars to task-$Id.md (ask: $askVal, backup: task-$Id.bak-$stamp.md)" -ForegroundColor Green
 }
 exit 0
