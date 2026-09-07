@@ -82,6 +82,28 @@
 // quiet by itself as the rollout completes, which is the property an always-firing detector
 // lacks.
 //
+// THAT COUNT WAS STILL THE WRONG NUMBER, THOUGH (#468)
+// ----------------------------------------------------
+// "83 unbound" answers two questions at once and therefore answers neither. Most of it is
+// ROLLOUT -- the task has not come up yet, and its doc gets made on its next wake, exactly as
+// decided. Some of it is OMISSION -- the task WAS woken, a turn was written, every guard
+// passed, and the binding step was skipped, because creating the doc is an instruction in the
+// brief rather than a check. The two are indistinguishable in one total, and the total shrinks
+// as the rollout proceeds whether or not the omission is ever fixed, so it can never
+// demonstrate a fix.
+//
+// So the coverage block now also reports "woken but never bound": unbound tasks with a turn
+// inside the bind window. Rollout is invisible in that number; omission is the whole of it. It
+// should be zero, and any wake that skips the step puts it back above zero the same night --
+// which is the property "83 unbound" lacked and the reason this went unnoticed for weeks.
+//
+// Why this pull request stops at visibility. Enforcement -- refusing a turn on an open task
+// with no doc -- is the obvious next step and is deliberately NOT armed here: measured today,
+// it would refuse every turn on 83 of 88 board rows on the first night, which jams the board
+// over a missing artefact. That is the always-firing detector this file's own header argues
+// against, in refusal form. Visibility first, and enforcement once the number it reports is
+// small enough that arming it blocks nothing.
+//
 // Why this is worth reporting at all: without it the headline read `UNREAD: 0` and exited 0
 // while 5 of 250 tasks were bound. Every behaviour in this family is gated on a task having a
 // doc, so a board at 2% coverage is the reason no improvement is visible — and the sweep that
@@ -141,8 +163,17 @@ const ts = (v) => {
 
 const findings = [];
 const unbound = [];
+const unboundWoken = [];
 let bound = 0;
 let considered = 0;
+
+// How recently a task must have written a turn for its missing doc to count as an OMISSION
+// rather than as rollout that has not reached it yet. A number, not a toggle, for the same
+// reason READ_WINDOW_HOURS is: setting it absurdly high collapses the distinction this
+// constant exists to draw, so 0 falls back to the default rather than silently doing that.
+const BIND_WINDOW_DAYS = Number(process.env.OA_DOC_BIND_WINDOW_DAYS) || 7;
+const BIND_WINDOW_MS = BIND_WINDOW_DAYS * 24 * 3600 * 1000;
+const NOW = Date.now();
 
 for (const id of activeIds) {
   const st = readJson(path.join(STATE_DIR, `task-${id}.json`));
@@ -157,7 +188,27 @@ for (const id of activeIds) {
   // Collected, not pushed into `findings`: an unbound task has no channel to be UNREAD, so
   // mixing the two would make the headline count answer two different questions at once.
   const doc = st.doc ?? {};
-  if (!doc.doc_id) { unbound.push(id); continue; } // gate UNBOUND
+  if (!doc.doc_id) {
+    unbound.push(id);
+    // WOKEN AND STILL UNBOUND -- the number this sweep exists to move.
+    //
+    // "83 unbound" conflates two different things and therefore measures neither. Most of
+    // that 83 is rollout: the task simply has not come up yet, and its doc gets created on
+    // its next wake, exactly as decided. But some of it is OMISSION: the task WAS woken,
+    // a turn was written, every guard passed, and the binding step -- which is an
+    // instruction in the brief rather than a check -- was skipped. Nothing reported it,
+    // because a wake that skipped the step is byte-identical to a wake that had nothing to
+    // do. That is the #196/#346 shape a third time, now in the rollout itself.
+    //
+    // Splitting on "has this task been written to inside the bind window" separates them.
+    // Rollout is invisible here and shrinks on its own; omission shows up as a count that
+    // should be zero, and any wake that skips the step puts it back above zero the same
+    // night. That is the property "83 unbound" lacked: it went down whether the bug was
+    // fixed or not, so it could never demonstrate a fix.
+    const wokenAt = ts(st.last_turn_at);
+    if (wokenAt && NOW - wokenAt <= BIND_WINDOW_MS) unboundWoken.push(id);
+    continue;
+  } // gate UNBOUND
 
   bound++;
 
@@ -198,6 +249,20 @@ const byKind = (k) => findings.filter((f) => f.kind === k).length;
 const UNBOUND_SAMPLE = 8;
 console.log(`Doc coverage: ${bound} of ${considered} open tasks bound (${unbound.length} unbound)`);
 if (unbound.length) {
+  // Reported ABOVE the rollout sample, because it is the only half of that number that
+  // represents a defect. Rollout shrinks by itself; this does not.
+  console.log(
+    `  woken but never bound: ${unboundWoken.length} of those ${unbound.length} were written to in ` +
+      `the last ${BIND_WINDOW_DAYS}d`,
+  );
+  if (unboundWoken.length) {
+    const wsample = unboundWoken.slice(0, UNBOUND_SAMPLE);
+    console.log(`     ${wsample.map((i) => `#${i}`).join(', ')}` +
+      (unboundWoken.length > wsample.length ? `, +${unboundWoken.length - wsample.length} more` : ''));
+    console.log('     -> each of those wakes wrote a turn and could have created the doc. Binding is');
+    console.log('        an instruction in the brief, not a check, so skipping it looks identical to');
+    console.log('        having nothing to do. This count should be 0; it is the fix that moves it.');
+  }
   const sample = unbound.slice(0, UNBOUND_SAMPLE);
   console.log(`  next to bind: ${sample.map((i) => `#${i}`).join(', ')}` +
     (unbound.length > sample.length ? `, +${unbound.length - sample.length} more` : ''));
