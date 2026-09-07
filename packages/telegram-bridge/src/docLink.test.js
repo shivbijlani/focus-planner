@@ -24,7 +24,18 @@ import { emptyState } from './state.js'
 const DOC_ID = 'DOC_ABC123'
 const DOC_URL = `https://docs.google.com/document/d/${DOC_ID}/edit`
 
-function journal({ id = 42, needs = 'none', status = 'In-progress', doc = true, body = 'work' } = {}) {
+function journal({
+  id = 42,
+  needs = 'none',
+  status = 'In-progress',
+  doc = true,
+  body = 'work',
+  // #588 — has a wake actually WRITTEN the bound doc? A real doc-bound turn always names the
+  // doc, because `write-turn.ps1`'s G10 refuses one that does not, so "written" is the honest
+  // default for every fixture describing a task that has been worked. `written: false` is the
+  // freshly-bound placeholder: the marker exists, but nothing has referenced the doc yet.
+  written = true,
+} = {}) {
   return [
     `# Task ${id}: Demo`,
     doc ? `<!-- doc-meta docId=${DOC_ID} docUrl=${DOC_URL} -->` : '',
@@ -39,6 +50,8 @@ function journal({ id = 42, needs = 'none', status = 'In-progress', doc = true, 
     `**Status:** ${status} \u00B7 2026-09-03`,
     '',
     body,
+    '',
+    doc && written ? `Catch-up doc: ${DOC_URL}` : '',
     '',
     `**Needs from you:** ${needs}`,
     '',
@@ -999,5 +1012,87 @@ describe('#483 — pre-binding turns above the doc link', () => {
     // replacement is confirmed can leave the topic holding neither.
     expect(h.deleted).toEqual([])
     expect(state.tasks['42'].lastPostedMessageIds).toEqual([1001, 1002])
+  })
+})
+
+describe('#588 — the link points at a WRITTEN doc, not merely a bound one', () => {
+  // `ensure-catchup-doc` creates a placeholder and binds it; the body arrives on the task's
+  // first wake AFTER that. Posting off the binding meant a task bound during a run had its
+  // link pushed in that same run — measured 2026-09-07, four of five links pointed at "this
+  // has not been written yet". Under #424 that link is the wake's ENTIRE message, so a stub
+  // link is strictly worse than silence.
+
+  it('posts nothing while the doc is bound but unwritten, then exactly one link once written', async () => {
+    const h = makeHarness({ 42: journal({ written: false }) })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const first = await bridge.syncUp()
+    expect(h.sent).toHaveLength(0)
+    // No message, and no topic either: there is nothing to say yet, so the run leaves no trace
+    // in the chat at all.
+    expect(state.tasks['42']).toBeUndefined()
+    // The probe budget is not spent on a link that was never posted.
+    expect(h.edits).toHaveLength(0)
+    // Deferral is REPORTED. A withheld link and a link that was never due are the same silence
+    // from outside, and that equivalence is the defect class this whole area exists to remove.
+    expect(first.linkDeferredUnwritten).toEqual(['42'])
+
+    // The wake lands and writes the doc; the journal now names it, which G10 guarantees.
+    h.store['42'] = journal({ written: true, body: 'the wake wrote the doc' })
+    const second = await bridge.syncUp()
+
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).toContain(DOC_URL)
+    expect(second.linkDeferredUnwritten).toEqual([])
+    expect(state.tasks['42'].docLinkMessageId).toBe(1)
+
+    // #424 is unchanged by the gate: still once, not once per run.
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(1)
+  })
+
+  it('does not treat the binding marker itself as evidence the doc was written', async () => {
+    // The marker names the doc by definition. Counting it would make every bound task look
+    // written and restore the exact behaviour being removed — so this is the load-bearing
+    // half of the signal, asserted on its own rather than left implicit in the test above.
+    const content = journal({ written: false })
+    expect(content).toContain(DOC_ID)
+
+    const h = makeHarness({ 42: content })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(0)
+  })
+
+  it('withholds the short notice too, rather than pointing an ask at a placeholder', async () => {
+    // The notice carries the doc url as well. Letting it through would spend the topic's one
+    // message on a link to an empty document while claiming to be the exception that matters.
+    const h = makeHarness({ 42: journal({ written: false, needs: 'a decision from you' }) })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+    expect(h.sent).toHaveLength(0)
+  })
+
+  it('leaves a link that is already posted alone', async () => {
+    // Forward-only. The fix corrects the build that produces stub links; it does not go back
+    // and retract messages he has already seen. A task whose link predates this gate keeps it
+    // and keeps being maintained by the #586 probe.
+    const h = makeHarness({ 42: journal({ written: false }) })
+    const state = emptyState()
+    state.tasks = {
+      42: { topicId: 7, docLinkMessageId: 1001, docLinkDocId: DOC_ID },
+    }
+    h.registerLive(1001)
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const out = await bridge.syncUp()
+    expect(out.linkDeferredUnwritten).toEqual([])
+    expect(h.deleted).toEqual([])
+    expect(state.tasks['42'].docLinkMessageId).toBe(1001)
   })
 })

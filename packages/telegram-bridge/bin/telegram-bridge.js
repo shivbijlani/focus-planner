@@ -82,6 +82,13 @@ async function runOnce() {
       (up.linkProbeDeferred && up.linkProbeDeferred.length
         ? `, ${up.linkProbeDeferred.length} probe(s) deferred`
         : '') +
+      // #588: bound but not yet written. Routine on the run a task is bound, and a standing
+      // number here means a rollout has stalled — tasks bound weeks ago that no wake reached.
+      // Either way it is stated, because a link withheld silently and a link never due look
+      // the same from outside, and that equivalence is the whole defect class.
+      (up.linkDeferredUnwritten && up.linkDeferredUnwritten.length
+        ? `, ${up.linkDeferredUnwritten.length} link(s) awaiting a written doc`
+        : '') +
       '; ' +
       `archive: closed ${archived.archived.length}, reopened ${archived.reopened.length}; ` +
       `down: folded ${down.folded.length} repl${down.folded.length === 1 ? 'y' : 'ies'}` +

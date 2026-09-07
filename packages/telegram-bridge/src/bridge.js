@@ -34,7 +34,7 @@ import {
   findTaskByTopic,
 } from './state.js'
 import { extractAskEntry, buildDigest, hashDigest } from './digest.js'
-import { upsertTgMetaMarker, parseTgMeta, parseDocMeta } from './deepLink.js'
+import { upsertTgMetaMarker, parseTgMeta, parseDocMeta, docHasBeenWritten } from './deepLink.js'
 import { mdToTelegramHtml, escapeHtml, extractLinks } from './telegramFormat.js'
 import { parseCompletedTaskIds } from './completed.js'
 import { parseDeletedTaskIds } from './deleted.js'
@@ -555,6 +555,10 @@ export function createBridge({
     // class of mistake as the bug being fixed — a real failure wearing the shape of routine.
     const linkUnverified = []
     const linkProbeDeferred = []
+    // #588 — bound to a doc that no wake has written yet. Counted apart from the two probe
+    // outcomes above: those are about a link we HAVE, this is about one we deliberately have
+    // not posted. Collapsing them would hide a rollout stalling behind normal scheduling noise.
+    const linkDeferredUnwritten = []
     const journals = await io.listJournals()
     const completed = await loadCompletedIds()
     const active = await loadActiveIds()
@@ -591,6 +595,7 @@ export function createBridge({
         if (outcome.suppressed) suppressed.push(taskId)
         if (outcome.linkUnverified) linkUnverified.push(taskId)
         if (outcome.linkProbeDeferred) linkProbeDeferred.push(taskId)
+        if (outcome.linkDeferredUnwritten) linkDeferredUnwritten.push(taskId)
         if (outcome.tidied) tidied.push({ taskId, messageIds: outcome.tidied })
       if (outcome.collapsed && outcome.collapsed.length)
         collapsed.push({ taskId, messageIds: outcome.collapsed })
@@ -885,6 +890,7 @@ export function createBridge({
       collapsed,
       linkUnverified,
       linkProbeDeferred,
+      linkDeferredUnwritten,
     }
   }
 
@@ -909,6 +915,8 @@ export function createBridge({
       // probe branch below.
       linkUnverified: false,
       linkProbeDeferred: false,
+      // #588 — bound, but the doc is still the placeholder `ensure-catchup-doc` created.
+      linkDeferredUnwritten: false,
     }
 
     // A finished task stays quiet here exactly as it does for turns (#186): the topic is
@@ -920,6 +928,32 @@ export function createBridge({
       }
       out.suppressed = true
       return out
+    }
+
+    // #588 — DO NOT POINT AT A DOCUMENT NOBODY HAS WRITTEN.
+    //
+    // Binding and writing are separate events, so a task bound during a run would otherwise
+    // have its link pushed in that SAME run, before any wake had put a word in the document.
+    // Under #424 the link IS the wake's entire message, which makes a stub link worse than
+    // silence: it spends the one message the topic gets on "this has not been written yet".
+    //
+    // Scoped to the FIRST post. A link already in the topic is left exactly as it is -- the
+    // fix is forward-only, and retracting messages he has already seen would be going back to
+    // correct history rather than correcting the build that produces it.
+    //
+    // Deferral is COUNTED and logged, never merely skipped. A step that quietly does nothing
+    // is indistinguishable from a step that had nothing to do, which is the shape of the very
+    // defect being fixed here; the run summary has to be able to say it happened.
+    {
+      const bound = getTask(state, taskId)
+      const alreadyLinked = bound && Number.isInteger(bound.docLinkMessageId)
+      if (!alreadyLinked && !docHasBeenWritten(content, docMeta.docId)) {
+        out.linkDeferredUnwritten = true
+        logger(
+          `deferred catch-up doc link for task #${taskId}: doc ${docMeta.docId} is bound but not yet written`,
+        )
+        return out
+      }
     }
 
     // Adopt an existing topic from the journal marker before creating one, same as syncUp.
