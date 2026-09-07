@@ -943,18 +943,34 @@ that already exist upstream, and will redo or contradict them.
 
 If a linked journal is missing or empty, note it and proceed with what you have — don't block on it.
 
-### PHASE 0.7 — Read the catch-up doc comments (doc-bound tasks only)
+### PHASE 0.7 — Read the catch-up doc comments
 
 Shiv, #468: *"The document comments will be the primary communication mechanism. Each turn, you
 will read the comments and amend the document."* **Run this before `scan`** — like the Telegram
-`sync-down`, these are the user speaking, and `mark` snapshots each journal as you leave it. Skip a
-task with no doc binding.
+`sync-down`, these are the user speaking, and `mark` snapshots each journal as you leave it.
+
+**You do not create or bind docs here, and you do not skip a task for lacking one.** Binding is an
+invariant enforced one level up, by `ensure-catchup-doc.mjs` in the sweep suite:
+`if doc does not exist then create doc else continue`. It runs on a schedule, ahead of any wake, so
+an unbound live task is a transient state that resolves itself within a run or two — not a reason
+to pass over the task, and not something for this phase to fix by hand.
+
+That division of labour is the whole point, and it is why this phase used to reach almost nothing.
+Until #548 this section was headed *"doc-bound tasks only"*, told the reader to pass over any task
+that was not already bound, and then — three lines further down, inside the part the reader had just
+been told to skip — instructed it to **create** a doc when unbound. A run obeying the header never
+reached the line that would have ended the skip, so the doc-bound set could only ever grow by hand:
+**5 of 84 live board rows** when it was measured, and every one of the other 79 kept getting a long,
+stacked, link-less Telegram turn. A phase cannot be the thing that ends a skip it is itself skipped
+by. `mutcheck-phase07-ownership.mjs` now holds this boundary, so the contradiction cannot come back
+as prose.
 
 For each row `scan` reported `doc_bound: true`, and any task you are about to work:
 
-1. `oa-state.ps1 doc -Id <ID>` → resolve the binding. **Never search by title.** Create only when
-   `bound: false`; a stored id that **404s is an error to report**, not a cue to create a second doc
-   (#423).
+1. `oa-state.ps1 doc -Id <ID>` → resolve the binding. **Never search by title.** A stored id that
+   **404s is an error to report**, not a cue to create a second doc (#423). If a live task you are
+   about to work is genuinely unbound, let the invariant bind it rather than binding it here — two
+   owners for one act is how a binding ends up pointing at the wrong page.
 2. Fetch comments with the Google Workspace MCP's `list_document_comments` (account:
    `user-settings.md` → "Google account (Tasks)"); save the dump to a file.
 3. `oa-state.ps1 doc -Id <ID> -Observe <file>` — reports what is new, deliberately without advancing.

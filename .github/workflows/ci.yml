@@ -496,6 +496,32 @@ jobs:
           OA_ENSURE: ./plugins/overnight-agent/checks/ensure-catchup-doc.mjs
         run: node ./plugins/overnight-agent/checks/mutcheck-ensure-catchup-doc.mjs
 
+  # The other half of the same boundary (GH #548). The job above proves the invariant CREATES
+  # correctly; this one proves SKILL.md has stopped claiming that job for itself.
+  #
+  # PHASE 0.7 was headed "doc-bound tasks only", told the reader to pass over unbound tasks, and
+  # then -- inside the part it had just told the reader to skip -- instructed it to create a doc
+  # when unbound. The line that would have ended the skip was unreachable to any run that obeyed
+  # the header, so the doc-bound set only ever grew by hand: 5 of 84 live board rows, with the
+  # other 79 getting the long stacked link-less Telegram turns Shiv actually complained about.
+  #
+  # Reading a markdown file in CI looks unusual until you notice the failure mode: two
+  # contradictory sentences two paragraphs apart, each reasonable alone, and no way for anything
+  # to notice. It is the same class as the invariant above -- a step that cannot run is
+  # indistinguishable from a step with nothing to do -- so it gets the same treatment.
+  phase07-ownership:
+    name: PHASE 0.7 reads docs, it does not create them
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mutation check (no create instruction, no self-cancelling skip, owner named)
+        env:
+          OA_SKILL_MD: ./plugins/overnight-agent/skills/overnight-agent/SKILL.md
+        run: node ./plugins/overnight-agent/checks/mutcheck-phase07-ownership.mjs
+
   # The per-task session (GH #404). The overnight agent used to do task work IN THE RUN SESSION --
   # measured live on task #451: it read the journal, edited four deliverables and wrote the turn
   # without ever leaving the main session. #391 already stated the rule ("one task, one workspace,
