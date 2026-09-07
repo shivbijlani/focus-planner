@@ -203,6 +203,16 @@ $Suite = @(
   # CI. It fails OPEN -- it creates a cheap reversible artefact rather than refusing a turn --
   # so a bad night here costs a spare doc, never lost work.
   @{ n = 'ensure-catchup-doc';       bridge = $false }
+  # Added 2026-09-07 for #570. `google-workspace` -- the channel Shiv's catch-up-doc comments
+  # arrive on -- was configured, enabled and callable, and loaded into NO session's toolset for
+  # weeks, because it declared `"type": "local"` and the harness only loads stdio/http/sse. An
+  # unrecognised transport is SKIPPED, not rejected, so the server probed healthy the entire
+  # time: #570 quotes that exact line and still concludes "config is healthy and enabled".
+  # It is a sweep rather than a test because the subject is a file on Shiv's machine; a test
+  # can only assert against a fixture, and the fixture is not what breaks. Complementary to
+  # `mcp-probe.mjs` rather than redundant with it -- the prober proves a server RESPONDS, this
+  # proves the harness will ever ASK it to.
+  @{ n = 'mcp-transport-sweep';      bridge = $false }
   @{ n = 'declared-unblocked-sweep'; bridge = $false }
   @{ n = 'blocked-readonly-sweep';   bridge = $false }
   @{ n = 'inprogress-stall-sweep';   bridge = $false }
