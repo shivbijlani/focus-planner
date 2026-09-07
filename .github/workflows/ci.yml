@@ -94,6 +94,24 @@ jobs:
           node-version: '20'
       - name: Capability manifest is valid JSON
         run: node -e "JSON.parse(require('fs').readFileSync('plugins/overnight-agent/skills/overnight-agent/run-capabilities.json','utf8'))"
+      # GH #570 -- an mcp-tools probe spawns the server as a child process, so it proves the
+      # server STARTS, never that an agent session can call it. Measured 2026-09-06: it
+      # reported google-workspace AVAILABLE with 36 tools while three independent sessions had
+      # no google-workspace tool at all, and three of Shiv's doc comments sat unread.
+      #
+      # Asserted here rather than in the mutcheck because the mutcheck's scenarios are
+      # email-shaped, and bolting an mcp-tools scenario onto them to assert one string would
+      # test the harness more than the property. This fails if the disclosure is deleted.
+      - name: An mcp-tools verdict discloses that it only proves the server spawns
+        run: |
+          node -e "
+          const fs=require('fs');
+          const p='plugins/overnight-agent/skills/overnight-agent/check-agent-inbox.ps1';
+          const s=fs.readFileSync(p,'utf8');
+          if(!/-Reason 'spawnable'/.test(s)){console.error('mcp-tools available verdict no longer reports reason=spawnable (#570)');process.exit(1);}
+          if(!/SPAWNED server; not proof an agent session can call it/.test(s)){console.error('mcp-tools available detail no longer discloses the spawn-vs-session gap (#570)');process.exit(1);}
+          console.log('ok: mcp-tools verdict discloses the spawn-vs-session gap');
+          "
       - name: Mutation check (an unreadable inbox is not an empty one)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-inbox-check.ps1
