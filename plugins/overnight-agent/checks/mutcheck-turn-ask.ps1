@@ -86,13 +86,75 @@ foreach ($c in @(
   )) {
   $f = Join-Path $env:TEMP ('wt-' + [guid]::NewGuid().ToString('N') + '.md')
   [IO.File]::WriteAllText($f, $c.body, $enc)
-  $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $script -BodyFile $f -Validate -Json 2>&1 | Out-String
+  # `-Ask` is required since #560 declared it mandatory. These four cases predate that and
+  # omitted it, so every one of them exited 2 on a G13 refusal and the "exit code is
+  # unaffected" assertion had been failing on main -- a red check nobody was reading. The
+  # cases are about whether the ask TEXT parses, so declaring one keeps their intent intact.
+  $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $script -BodyFile $f -Validate -Json -Ask offer 2>&1 | Out-String
   $code = $LASTEXITCODE
   $j = $out | ConvertFrom-Json
   Check $c.n ($j.hasAsk -eq $c.want) ("hasAsk=$($j.hasAsk) want=$($c.want)")
   Check "  ...and exit code is unaffected (0)" ($code -eq 0) "exit=$code"
   Remove-Item $f -Force -ErrorAction SilentlyContinue
 }
+
+Write-Host ""
+Write-Host "-- G14: a question declared not-blocking (#618) --"
+
+# Baseline + negatives share one fixture shape, so a negative that passes because the
+# harness never reached the guard is impossible to mistake for a negative that passes
+# because the guard correctly declined to fire: the baseline on the same shape must fire.
+$g14Hdr = "## 🌙 Overnight Agent`n`n<!-- from: overnight-agent -->`n`nWork happened.`n`n"
+
+# Drawn from the rows #618 actually measured, so a future edit that "simplifies" the rule
+# has to argue with real data rather than with an invented example.
+$g14Cases = @(
+  @{ n = 'BASELINE #472: two direct questions declared `offer` is refused'
+     ask = 'offer'; want = $true
+     line = '**Needs from you:** one word each, no rush. What is corporate picnic - find a date, or RSVP? And life coaching - book a session?' },
+  @{ n = '#476: opens "none." then elaborates -- still a real offer'
+     ask = 'offer'; want = $false
+     line = '**Needs from you:** none. Two things you may want to action when convenient, neither blocks anything.' },
+  @{ n = '#370: opens "nothing blocking" -- still a real offer'
+     ask = 'offer'; want = $false
+     line = '**Needs from you:** nothing blocking - if Tue + Fri is the wrong pair, say the word.' },
+  @{ n = 'the same question declared `blocking` is allowed through'
+     ask = 'blocking'; want = $false
+     line = '**Needs from you:** which one should I use?' },
+  @{ n = 'the `Your call:` dialect is covered too'
+     ask = 'offer'; want = $true
+     line = '**Your call:** should I use A or B?' },
+  @{ n = 'a statement ask declared `offer` stays clean'
+     ask = 'offer'; want = $false
+     line = '**Needs from you:** nothing blocking, I will proceed with the default.' }
+)
+
+function Invoke-G14([string]$Target, [hashtable]$Case) {
+  $f = Join-Path $env:TEMP ('wt14-' + [guid]::NewGuid().ToString('N') + '.md')
+  [IO.File]::WriteAllText($f, ($g14Hdr + $Case.line + "`n"), $enc)
+  try {
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $Target -BodyFile $f -Validate -Json -Ask $Case.ask 2>&1 | Out-String
+    return [bool]((($out | ConvertFrom-Json).findings | Where-Object { $_.guard -eq 'G14' }) -ne $null)
+  } finally { Remove-Item $f -Force -ErrorAction SilentlyContinue }
+}
+
+foreach ($c in $g14Cases) {
+  $fired = Invoke-G14 -Target $script -Case $c
+  Check $c.n ($fired -eq $c.want) "G14 fired=$fired want=$($c.want)"
+}
+
+# M-ASK -- proves G14 is load-bearing rather than decorative. Disabling the guard must
+# make the baseline stop refusing; if the baseline passes with the guard switched off, the
+# assertion above was measuring something else and the whole arm is worthless.
+$mutBaseline = $g14Cases[0]
+$mutFired = $null
+$mf = Join-Path $env:TEMP ('wt14m-' + [guid]::NewGuid().ToString('N') + '.md')
+[IO.File]::WriteAllText($mf, ($g14Hdr + $mutBaseline.line + "`n"), $enc)
+try {
+  $mo = & powershell -NoProfile -ExecutionPolicy Bypass -File $script -BodyFile $mf -Validate -Json -Ask $mutBaseline.ask -DisableGuard G14 2>&1 | Out-String
+  $mutFired = [bool]((($mo | ConvertFrom-Json).findings | Where-Object { $_.guard -eq 'G14' }) -ne $null)
+} finally { Remove-Item $mf -Force -ErrorAction SilentlyContinue }
+Check 'M-ASK: -DisableGuard G14 removes the refusal (guard is load-bearing)' ($mutFired -eq $false) "still fired=$mutFired"
 
 Write-Host ""
 Write-Host "$pass passed, $fail failed"

@@ -583,6 +583,56 @@ function Test-TurnAsk([string]$Body) {
   return $false
 }
 
+<#
+  G14 -- A QUESTION TO SHIV, DECLARED AS NOT NEEDING HIM (#618)
+
+  #560 replaced an inferred `awaiting_reply` with a DECLARED one, and that was right. But
+  the declaration is self-assessed by the same turn that writes the question, and nothing
+  compared the two. When an author misjudges its own blocking question as an `offer`, the
+  question goes invisible to every scheduler reader at once: `awaiting_reply` stays false,
+  so #527's blocked-on-human list omits it, and if the row is also `done` no later run
+  re-raises it. Measured on the live board: 25 of 254 rows carried an open ask nobody was
+  waiting for. Task #472 asked Shiv two direct questions from the Today section, declared
+  `offer`, and no reader in the system was waiting for the answer.
+
+  WHY THIS IS NOT THE #560 REGEX COMING BACK. #560 removed inference ACROSS a corpus --
+  reading prose to decide a state nobody declared. This compares ONE turn to ITSELF: the
+  author declared a value, and the same author wrote a question two lines above it. The
+  declaration still wins; it is simply required to be consistent with its own turn.
+
+  WHY A QUESTION MARK AND NOT "IS IT A NEGATIVE FORM". The obvious rule -- fire unless the
+  ask line starts with none/nothing/no -- was tried against the four measured rows and is
+  wrong twice. #476 opens "none. Two things you may want to action...", #370 opens
+  "nothing blocking - ...", both correctly `offer`; but a genuine offer need not open with
+  a negative word at all, so the rule both over- and under-fires. A DIRECT QUESTION put to
+  the user, while declaring that the user is not needed, is the actual contradiction, and
+  it separates all four measured rows correctly.
+
+  ONE TRAP WORTH RECORDING. "no rush" appears in #472 -- the MISDECLARED row -- so any
+  attempt to treat reassuring language as an escape hatch would have made this guard miss
+  the exact case it was built for. Softening words are not evidence that a question is
+  optional; they are how a blocking question usually gets asked.
+
+  REFUSES RATHER THAN WARNS, unlike A5. A5 is advisory because an informational turn may
+  legitimately ask for nothing -- a matter of style. This is an internal contradiction
+  inside one turn, and the two failure directions are not symmetric: wrongly parking a task
+  is visible and Shiv can unpark it with one word, while a missed blocking question is
+  silent and unbounded. `-DisableGuard G14` is the hatch for an author who means it.
+#>
+function Test-AskContradiction([string]$Body) {
+  $lines = $Body -split "`r?`n"
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    $l = $lines[$i]
+    if ($l -notmatch '^\s*\*{0,2}(?:Needs from you|Your call)\b[^:]*:\*{0,2}\s*(\S.*)$') { continue }
+    $ask = $Matches[1]
+    # An ask that opens by saying nothing is needed is taken at its word, even when it goes
+    # on to elaborate -- that is how #476 and #370 legitimately read.
+    if ($ask -match '^\s*[*_`]*\s*(none|nothing|no|nil|n/a)\b') { continue }
+    if ($ask -match '\?') { return @{ Line = ($i + 1); Text = $l.Trim() } }
+  }
+  return $null
+}
+
 function Test-TurnBody {
   param([string]$Body, [string[]]$Disabled = @(), $Doc = $null, [string]$Ask = '')
 
@@ -844,6 +894,26 @@ function Test-TurnBody {
           '(duplicate it into the doc, never move it): "**Needs from you:** ...", "Reply `word`", ' +
           '"**Next:** ..." or "**Your call:** ...". Use -DisableGuard G11 for a genuinely informational turn')
       }
+    }
+  }
+
+  # --- G14: the declared ask must not contradict this turn's own question (#618) ----
+  # Deliberately OUTSIDE the doc-bound block above. The measured failures are ordinary
+  # tasks -- #472, the row that asked two questions and declared `offer`, has no catch-up
+  # doc -- so scoping this to doc-bound tasks would have left the majority of the 25
+  # affected rows unguarded while reporting green.
+  #
+  # `blocking` is already consistent with asking a question, so only the not-blocking
+  # declarations are checked.
+  if ((& $on 'G14') -and ($Ask -eq 'offer' -or $Ask -eq 'none')) {
+    $contra = Test-AskContradiction -Body $Body
+    if ($contra) {
+      $findings += New-Finding 'G14' $contra.Line $contra.Text (
+        ("this turn declares -Ask $Ask, but asks Shiv a direct question. A not-blocking " +
+         'declaration sets awaiting_reply false, so the question is dropped from the ' +
+         "blocked-on-human digest and no later run re-raises it (#618) -- it would reach " +
+         'nobody. Use -Ask blocking if you need the answer to continue; reword to a ' +
+         'statement if you do not; -DisableGuard G14 if you really mean it'))
     }
   }
 
