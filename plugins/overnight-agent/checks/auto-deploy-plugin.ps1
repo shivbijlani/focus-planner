@@ -698,7 +698,18 @@ try {
     Write-Host ''
     Write-Note "bridge checkout is PINNED outside $Repo - not touched: $checkoutPin"
   } elseif ($checkoutHead -eq $refSha) {
-    $checkoutState = 'current'
+    # On the ref, but that is not the whole question: the bridge runs FILES, not a
+    # commit id, so uncommitted edits mean it is running something other than the
+    # merged code even though HEAD matches. Name that rather than hide it - but do
+    # not escalate it. This checkout is shared with live sessions and routinely holds
+    # unrelated work in progress; exiting 2 every half hour for that would be a false
+    # alarm, and an alarm that is usually wrong is one nobody reads when it is right.
+    $dirtyRun = Invoke-Bounded -FilePath 'git' -ArgumentList @('-C',$Repo,'status','--porcelain') -BudgetMs (Get-RemainingMs)
+    if ($dirtyRun.ExitCode -eq 0 -and $dirtyRun.StdOut.Trim()) {
+      $checkoutState = 'current-dirty'
+    } else {
+      $checkoutState = 'current'
+    }
   } else {
     $countRun = Invoke-Bounded -FilePath 'git' `
       -ArgumentList @('-C',$Repo,'rev-list','--left-right','--count',"HEAD...$refSha") `

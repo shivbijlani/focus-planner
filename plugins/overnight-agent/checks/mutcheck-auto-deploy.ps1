@@ -801,20 +801,29 @@ Assert ($out -match 'NOT FOUND' -or $out -match '"oaHomeExit":\s*2') `
 # work is how real local work gets carried onto a new base without anyone asking for it,
 # and it would be reported as a clean deploy.
 Section '#622 baseline: a dirty bridge checkout is refused, not advanced'
+# The checkout must be BEHIND as well as dirty. A sandbox that is merely dirty sits on
+# the ref, takes the on-ref branch, and never reaches the refusal at all - so the arm
+# below would pass without executing its own subject. An arm that cannot reach what it
+# mutates reports zero failures, which is indistinguishable from a guard that works.
+function Set-BehindAndDirty {
+  param($Sandbox)
+  & git -C $Sandbox.Repo reset --hard --quiet HEAD~1 2>&1 | Out-Null
+  Set-Content -Path (Join-Path $Sandbox.Repo 'dirty-local-work.txt') -Value 'uncommitted' -Encoding UTF8
+}
 $sDirty = New-Sandbox
-Set-Content -Path (Join-Path $sDirty.Repo 'dirty-local-work.txt') -Value 'uncommitted' -Encoding UTF8
+Set-BehindAndDirty -Sandbox $sDirty
 $baseDirty = Invoke-SUT -Script $SUT -Sandbox $sDirty
 if (-not $baseDirty.Json) { Write-Host ("  diagnostic: " + $baseDirty.Raw) }
 Assert ($baseDirty.Json.checkout -eq 'diverged') `
-       "G16 a dirty bridge checkout reports diverged (got '$($baseDirty.Json.checkout)')"
+       "G16 a dirty bridge checkout is refused, not advanced (got '$($baseDirty.Json.checkout)')"
 Assert ($baseDirty.Json.checkoutExit -eq 2) `
-       'G16 a dirty bridge checkout is escalated, not folded into a clean report'
+       'G16 a refused bridge checkout is escalated, not folded into a clean report'
 
 Test-Mutant -Name 'M18: bridge refusal removed (a dirty checkout is advanced anyway)' `
   -Find 'if ($ahead -gt 0 -or $dirty) {' -Replace 'if ($false) {' -Check {
     param($mut)
     $s = New-Sandbox
-    Set-Content -Path (Join-Path $s.Repo 'dirty-local-work.txt') -Value 'uncommitted' -Encoding UTF8
+    Set-BehindAndDirty -Sandbox $s
     $r = Invoke-SUT -Script $mut -Sandbox $s
     Assert ($r.Json.checkout -ne 'diverged') `
            'killed: uncommitted work in the bridge checkout would be fast-forwarded over'
