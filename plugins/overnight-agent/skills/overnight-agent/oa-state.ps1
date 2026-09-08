@@ -93,6 +93,10 @@
           [-SessionDead]        Record that the session could not be woken. Flips the verdict to
                                 `replace` and arms the continuation kickoff.
           [-SessionWoken]       Record that the run reused this session (stamps last_woken_at).
+          [-ForDispatch]        Read the verdict AS A DISPATCHER: stamps last_woken_at in the same
+                                write and returns dispatch_authorised: true. A plain read returns
+                                false and stamps nothing, so dispatch authority cannot be obtained
+                                without the wake being recorded (#532).
           [-SessionRelease]     Retire the binding (task finished, workspace torn down). Prints
                                 the teardown command; never runs it.
           [-InFlight]           Omit -Id for the run-loop capacity view: the resolved
@@ -547,6 +551,12 @@ param(
   [string]$RunWorkspace,
   [switch]$SessionDead,
   [switch]$SessionWoken,
+  # #532: DECLARES that this read is about to dispatch, and stamps `last_woken_at` as part of
+  # answering. The point is not convenience -- it is that `dispatch_authorised` is false on every
+  # read that did not ask, so a run CANNOT obtain dispatch authority without the wake being
+  # recorded. Deliberately NOT inferred from the shape of the arguments: a plain `session -Id N`
+  # inspection and a dispatching read are byte-identical today, and that ambiguity is the bug.
+  [switch]$ForDispatch,
   [switch]$SessionRelease,
   # The path of a workspace that has just been REMOVED. Marks any binding pointing at it dead,
   # so the next verdict is `replace` rather than `reuse` at a workspace that is gone (#452).
@@ -4819,7 +4829,7 @@ function Cmd-Session {
     $dirty = $true
   }
 
-  if ($SessionWoken) {
+  if ($SessionWoken -or $ForDispatch) {
     if (-not $sess) { throw "session_not_bound: task $Id has no session to wake" }
     $sess = New-SessionObject -SessionIdValue "$($sess.session_id)" -Kind "$($sess.kind)" `
       -Project "$($sess.project)" -Workspace "$($sess.workspace)" -WsType "$($sess.workspace_type)" `
@@ -4842,6 +4852,22 @@ function Cmd-Session {
     session_id     = if ($sess) { "$($sess.session_id)" } else { $null }
     # create | reuse | replace | paused. The run loop acts on THIS, not on `bound`.
     verdict        = $verdict
+    # #532: the verdict alone never authorised anything -- it was a read, and whether the wake got
+    # recorded depended on a run remembering a sentence in SKILL.md PHASE 1. This field is the
+    # authority, and it is true ONLY on a read that asked for it with -ForDispatch, which stamps
+    # `last_woken_at` in the same write. A run that dispatches on a read where this is false is
+    # dispatching on an inspection, and the two guards that read the stamp -- the one-turn guard
+    # and the capacity park -- will both be reasoning about an earlier wake.
+    #
+    # NOTE WHY THIS IS NOT STAMPED ON BIND, which is the cheaper-looking place and is wrong.
+    # Binding is not waking: a run can bind a session and then fail to wake it, and a stamp
+    # written there records a wake that never happened. Every failure this field exists to fix is
+    # LOUD -- the turn guard refuses and says so, the capacity park over-offers and surfaces as
+    # contention. A stamp present when it should be absent is the #514 direction and is SILENT: a
+    # second turn reaches the page and nothing reports it. Trading a loud failure for a quiet one
+    # is not a fix. So the stamp is attached to ASKING FOR THE AUTHORITY, not to the preparation
+    # that precedes it, and a declared dispatch that then fails is recorded by -SessionDead.
+    dispatch_authorised = [bool]$ForDispatch
     state          = if ($sess) { "$($sess.state)" } else { $null }
     kind           = if ($sess) { "$($sess.kind)" } else { $null }
     project        = if ($sess -and "$($sess.project)") { "$($sess.project)" } else { $null }

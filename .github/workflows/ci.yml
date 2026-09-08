@@ -173,6 +173,21 @@ jobs:
       - name: Mutation check (the session verdict verifies its workspace)
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-workspace-verdict.ps1
+      # The write side of the same field (GH #532). `session.last_woken_at` was maintained by
+      # nothing but a sentence of prose in PHASE 1, and a run that skipped it broke two guards in
+      # opposite directions: the turn guard refused every author, and the capacity view parked a
+      # row whose session was mid-flight and offered its slot away. Neither is repairable where
+      # the field is read -- the park needs the field to be TRUE, not merely trusted. So the wake
+      # is now recorded by the act of asking for dispatch authority (`-ForDispatch`).
+      #
+      # The arm that earns this check is D_stampOnBind. Stamping on BIND is the cheap version and
+      # is worse than the bug: a run can bind and then fail to wake, and a stamp written there
+      # says a wake happened that did not. Every symptom of #532 so far is the stamp ABSENT, which
+      # is loud; a stamp present when it should be absent is silent, and what slips through is a
+      # second turn on the page.
+      - name: Mutation check (dispatch authority cannot be obtained unstamped)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-dispatch-stamp.ps1
 
   # The read-path budget guard (GH #292/#293) is what stops an every-run file growing
   # until it eats the context window -- the defect that made runs stop finishing. Its

@@ -1053,7 +1053,11 @@ one task, one workspace, one thing being verified at a time"* — and this is th
      `released: false` and `last_woken_at` are each accurate and none of them is about permission.
    - **`reuse`** — the task already has a live session. **Wake that one.** Do not create a second;
      `session -SessionId <other>` over a live binding is refused (`session_bind_conflict`) precisely
-     so "reuse it" is a rule rather than an intention. Stamp `-SessionWoken` once it responds.
+     so "reuse it" is a rule rather than an intention. **Read the verdict with `-ForDispatch`**
+     (`session -Id N -ForDispatch`) when you are about to dispatch: it stamps `last_woken_at` in the
+     same write that answers you, and only that read returns `dispatch_authorised: true`. A plain
+     `session -Id N` is an inspection — it returns `dispatch_authorised: false` and stamps nothing,
+     so a run cannot dispatch on a read that never recorded the wake (#532).
    - **`replace`** — a previous run recorded the bound session as non-wakeable. Create a fresh one
      and use the emitted **`kickoff_continuation`** *verbatim* as the opening of its kickoff: it
      names the task and the prior session id, so the replacement knows it is continuing work rather
