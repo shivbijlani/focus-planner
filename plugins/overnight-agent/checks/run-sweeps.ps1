@@ -194,6 +194,13 @@ $Suite = @(
   # never in contradiction: they were measuring different universes, and only one of them
   # was his. Reads bridge state only, so no bridge import.
   @{ n = 'unreachable-topic-sweep';  bridge = $false }
+  # Separates the two states `OPEN` legitimately spans in this repo: filed-and-unworked,
+  # and shipped-awaiting-Shiv's-review (a shipped PR does not close its issue here). The
+  # tracker renders both identically, so a triaging run reading `gh issue list` cannot
+  # tell them apart. Measured cost before this existed: three run sessions recommended
+  # already-shipped work to the #468 sub-session across 2026-09-07/08 -- twelve instances,
+  # each burning the opening of a wake on re-verification. Added 2026-09-08, GH #630.
+  @{ n = 'shipped-but-open-sweep';   bridge = $false }
   # The only ACTION in a suite of detectors, added 2026-09-07, and deliberately so.
   # `ensure-catchup-doc.mjs` (#580) implements Shiv's invariant verbatim -- if doc does not
   # exist then create doc else continue -- but shipping it left it invoked by NOTHING. That is
