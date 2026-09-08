@@ -858,6 +858,28 @@ $Suite = @(
 # 0.6s over 407 files. 15 assertions, 4 mutations, each killed by exactly its own negative
 # fixture (mutcheck-doc-claim-consistency.mjs, auto-globbed by -IncludeMutchecks).
 @{ n = 'doc-claim-consistency-sweep'; bridge = $false }
+# doc-figure-drift-sweep (added 2026-09-07, issue #594) — the catch-up doc is the primary
+# communication surface (#468), and until now NO sweep read its BODY. doc-encoding-invariant
+# checks its bytes, observe-bound-docs checks that it exists and is fresh; between them a doc
+# could be present, recent, well-encoded and WRONG. Measured live on #468's doc the night it
+# was written: "81 of 89" restated FOUR times while the live value was 89 of 89 — and the
+# stale DENOMINATOR (89) happened to equal the live NUMERATOR, so the sentence still scanned
+# as plausible to a reader and to any numerator-only check.
+# Two classes, deliberately. RESTATED needs no live value and cannot be wrong about one: a
+# figure written in four places is four chances to drift, which is the structural cause #594
+# names. STALE fires only where the surrounding prose ANCHORS the figure to a quantity we
+# hold a live value for; an unanchored `N of M` is left alone, because a check that fires on
+# ordinary prose is one you stop reading (#433). Past-tense figures are excluded by a narrow
+# marker list that deliberately EXCLUDES "up from" — that phrase sits beside three of the four
+# live restatements, so treating it as history would silence exactly the findings this exists
+# to raise. With no readable board the STALE class DISABLES itself and says so rather than
+# publishing `0 of 0` and marking every correct figure stale.
+# 10 assertions, 9 mutants killed in mutcheck-doc-figure-drift.mjs (auto-globbed above). Two
+# of those mutants were real bugs found by running it against the live document rather than a
+# fixture — a digit class that swallowed a trailing comma, and a BOM-blind state read that
+# made it publish a figure having parsed none of the 266 files (#346/#502, inside the tool
+# built for that family). Exits 1 on findings; reads 3 on #468's doc today.
+@{ n = 'doc-figure-drift-sweep'; bridge = $false }
 )
 
 if ($IncludeMutchecks) {
