@@ -98,6 +98,46 @@ export const FRESH_MINUTES = Number(process.env.OA_DOC_FRESH_MINUTES) || 180;
 // Per-run cap. Also a number, not a toggle, and 0 falls back for the same reason.
 export const DEFAULT_LIMIT = Number(process.env.OA_DOC_OBSERVE_LIMIT) || 15;
 
+// Attempts per document, INCLUDING the first. See `classifyAttempts` for why this exists: with
+// one attempt, a transport hiccup and a genuinely broken page print the identical FAIL line, so
+// a FAIL here carries no information about which one happened. Number, not a toggle, and 0/1
+// fall back to the default for the same reason FRESH_MINUTES does -- 1 would silently restore
+// the defect this is here to remove.
+export const OBSERVE_ATTEMPTS = Math.max(2, Number(process.env.OA_DOC_OBSERVE_ATTEMPTS) || 2);
+
+// Pause between attempts. A retry fired immediately re-hits the same rate-limit window or the
+// same half-open socket, so it tends to reproduce the first failure rather than test it.
+export const RETRY_DELAY_MS = Math.max(0, Number(process.env.OA_DOC_OBSERVE_RETRY_MS) || 1500);
+
+/** Blocking sleep. This pass is deliberately synchronous end to end; see the spawnSync calls. */
+function sleepSync(ms) {
+  if (!(ms > 0)) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * PURE. Given the ordered per-attempt outcomes for ONE document, say what the pass should
+ * report. Extracted from the loop so the interesting part -- the distinction between recovered
+ * and persistent -- is testable with no Google, no state store and no clock.
+ *
+ * The point of the retry is NOT that it succeeds more often. It is that it makes the two cases
+ * *distinguishable*: after this, a FAIL line means "failed twice", which is evidence, and a
+ * recovered read is reported as recovered rather than vanishing into a silent OK. Hiding the
+ * recovery would trade one conflation for another -- flakiness would become invisible instead
+ * of merely indistinguishable, and nobody would ever learn the channel is unreliable.
+ */
+export function classifyAttempts(attempts) {
+  const list = Array.isArray(attempts) ? attempts : [];
+  if (!list.length) return { outcome: 'fail', reason: 'no attempt made', attempts: 0 };
+  const last = list[list.length - 1];
+  if (last && last.ok) {
+    return list.length === 1
+      ? { outcome: 'ok', n: Number(last.n || 0), attempts: 1 }
+      : { outcome: 'recovered', n: Number(last.n || 0), attempts: list.length, firstReason: String(list[0].reason || 'unknown') };
+  }
+  return { outcome: 'fail', reason: String(last && last.reason ? last.reason : 'unknown'), attempts: list.length };
+}
+
 const TERMINAL = new Set(['done', 'skip']);
 
 /**
@@ -240,24 +280,20 @@ if (!isMain) {
 
   let ok = 0;
   let failed = 0;
+  let recovered = 0;
   const withComments = [];
-  for (const t of due) {
-    // The subject is printed BEFORE the result, on the same block, so the line cannot be read as
-    // a claim about a task other than the one actually polled.
-    const subject = `task ${t.id}  doc ${t.docId}  last read ${ageLabel(t.ageMs)}`;
-    if (DRY) {
-      console.log(`  PLAN   ${subject}`);
-      continue;
-    }
+  const flaky = [];
+
+  // ONE attempt against one document. Returns a verdict rather than printing or counting, so the
+  // retry policy lives in exactly one place and this stays the part that talks to the outside.
+  const attemptRead = (t) => {
     const args = JSON.stringify({ document_id: t.docId, user_google_email: EMAIL });
     const fetched = spawnSync(process.execPath, [PROBE, 'google-workspace', 'call', 'list_document_comments', args], {
       encoding: 'utf8',
       maxBuffer: 32 * 1024 * 1024,
     });
     if (fetched.status !== 0 || !fetched.stdout) {
-      console.log(`  FAIL   ${subject}  -- fetch exited ${fetched.status}`);
-      failed++;
-      continue;
+      return { ok: false, reason: `fetch exited ${fetched.status}` };
     }
     const dump = path.join(os.tmpdir(), `oa-doc-observe-${t.id}-${process.pid}.json`);
     try {
@@ -271,29 +307,56 @@ if (!isMain) {
       );
       if (obs.status !== 0) {
         const why = String(obs.stderr || obs.stdout || '').trim().split(/\r?\n/).pop() || `exit ${obs.status}`;
-        console.log(`  FAIL   ${subject}  -- observe: ${why}`);
-        failed++;
-      } else {
-        // Exit 0 is NOT sufficient. `-Observe` reports `observation: "unreadable"` when the dump
-        // was not positive evidence of a listing, and that is the one outcome that must never be
-        // counted as a successful read -- treating it as success is the exact conflation
-        // ("the read failed" vs "he said nothing") this whole channel exists to keep apart.
-        let verdict = null;
-        try { verdict = JSON.parse(String(obs.stdout || '')); } catch { /* fall through */ }
-        const observation = verdict && verdict.observation ? String(verdict.observation) : 'unparseable';
-        if (observation !== 'read') {
-          console.log(`  FAIL   ${subject}  -- observation: ${observation}`);
-          failed++;
-        } else {
-          const n = Number(verdict.new_comments || 0);
-          console.log(`  OK     ${subject}  -- read, ${n} new`);
-          if (n > 0) withComments.push({ id: t.id, n });
-          ok++;
-        }
+        return { ok: false, reason: `observe: ${why}` };
       }
+      // Exit 0 is NOT sufficient. `-Observe` reports `observation: "unreadable"` when the dump
+      // was not positive evidence of a listing, and that is the one outcome that must never be
+      // counted as a successful read -- treating it as success is the exact conflation
+      // ("the read failed" vs "he said nothing") this whole channel exists to keep apart.
+      let verdict = null;
+      try { verdict = JSON.parse(String(obs.stdout || '')); } catch { /* fall through */ }
+      const observation = verdict && verdict.observation ? String(verdict.observation) : 'unparseable';
+      if (observation !== 'read') return { ok: false, reason: `observation: ${observation}` };
+      return { ok: true, n: Number(verdict.new_comments || 0) };
     } finally {
       try { fs.unlinkSync(dump); } catch { /* best effort */ }
     }
+  };
+
+  for (const t of due) {
+    // The subject is printed BEFORE the result, on the same block, so the line cannot be read as
+    // a claim about a task other than the one actually polled.
+    const subject = `task ${t.id}  doc ${t.docId}  last read ${ageLabel(t.ageMs)}`;
+    if (DRY) {
+      console.log(`  PLAN   ${subject}`);
+      continue;
+    }
+    // Retrying is safe precisely BECAUSE a failed read does not advance `observed_at` -- there is
+    // no partial state to undo. A successful read does advance it, so success always stops the
+    // loop and a document is never observed twice in one pass.
+    const attempts = [];
+    for (let i = 0; i < OBSERVE_ATTEMPTS; i++) {
+      if (i > 0) sleepSync(RETRY_DELAY_MS);
+      attempts.push(attemptRead(t));
+      if (attempts[attempts.length - 1].ok) break;
+    }
+    const verdict = classifyAttempts(attempts);
+    if (verdict.outcome === 'fail') {
+      console.log(`  FAIL   ${subject}  -- ${verdict.reason} (${verdict.attempts} attempts)`);
+      failed++;
+      continue;
+    }
+    if (verdict.outcome === 'recovered') {
+      // Reported, not swallowed: an intermittent channel is a real finding, and one that only
+      // shows up here.
+      console.log(`  OK*    ${subject}  -- read, ${verdict.n} new (recovered on attempt ${verdict.attempts}; first: ${verdict.firstReason})`);
+      recovered++;
+      flaky.push({ id: t.id, reason: verdict.firstReason });
+    } else {
+      console.log(`  OK     ${subject}  -- read, ${verdict.n} new`);
+    }
+    if (verdict.n > 0) withComments.push({ id: t.id, n: verdict.n });
+    ok++;
   }
 
   console.log('');
@@ -304,7 +367,12 @@ if (!isMain) {
     for (const w of withComments) console.log(`  task ${w.id}: ${w.n} new`);
     console.log('');
   }
-  console.log(`observed ${ok}, failed ${failed}, still stale ${Math.max(0, staleTotal - ok)}`);
+  if (flaky.length) {
+    console.log(`RECOVERED after retry on ${flaky.length} task(s) -- these read clean, but the channel is intermittent:`);
+    for (const f of flaky) console.log(`  task ${f.id}: first attempt ${f.reason}`);
+    console.log('');
+  }
+  console.log(`observed ${ok} (${recovered} recovered), failed ${failed}, still stale ${Math.max(0, staleTotal - ok)}`);
   // A pass in which EVERY poll failed is a broken pass and must be loud. Partial failure is
   // normal (one doc can be unshared) and must not fail the run, or a single bad doc switches the
   // whole job off -- which is how this repo loses checks.
