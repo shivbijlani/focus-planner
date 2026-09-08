@@ -25,6 +25,7 @@
 
 import { readFileSync, readdirSync, existsSync } from 'fs'
 import { join } from 'path'
+import { checkTechnicalPageLink, readabilityFindings } from './readability.mjs'
 
 const args = process.argv.slice(2)
 const factsPath = argValue('--facts') ?? 'spec-facts.json'
@@ -80,6 +81,7 @@ const validRefs = new Set((facts.validRefNumbers ?? [...openIssues]).map(String)
 const GAPS_PAGES = new Set(['Roadmap.md'])
 const findings = []
 const closedRefsByPage = []
+const pagesByName = new Map()
 let totalWords = 0
 
 // --- 1. INVENTION: every repo-ish path the spec names must exist -------------
@@ -97,7 +99,9 @@ const PATH_RE = /(?:^|[\s`("[])((?:src|scripts|packages|plugins)\/[A-Za-z0-9_\-.
 
 for (const page of pages) {
   const text = readFileSync(join(specDir, page), 'utf8')
+  pagesByName.set(page, text)
   totalWords += text.split(/\s+/).filter(Boolean).length
+  findings.push(...readabilityFindings(page, text))
 
   const seen = new Set()
   for (const m of text.matchAll(PATH_RE)) {
@@ -134,6 +138,8 @@ for (const page of pages) {
   }
   if (closedOnPage.length) closedRefsByPage.push({ page, refs: [...new Set(closedOnPage)] })
 }
+
+findings.push(...checkTechnicalPageLink(pagesByName))
 
 // --- 2. OMISSION: every domain must be described somewhere -------------------
 const allText = pages.map((p) => readFileSync(join(specDir, p), 'utf8')).join('\n')

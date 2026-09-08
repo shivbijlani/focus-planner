@@ -24,6 +24,12 @@ The domain splits into four jobs.
 
 A representative slice from the source shows the domain's style:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 // scripts/spec/collect.mjs
 // The agent then writes prose FROM these facts, and `verify.mjs` asserts the
@@ -37,7 +43,15 @@ A representative slice from the source shows the domain's style:
 // `--execute`.
 ```
 
+
+</details>
 ## Module list
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Path | Why it exists in the source | Notable API / behaviour |
 | --- | --- | --- |
@@ -53,6 +67,8 @@ A representative slice from the source shows the domain's style:
 | `scripts/spec/conflicts.mjs` | Detects contradictory open-issue requirements that `verify.mjs` cannot catch. The comment says cadence makes the spec fresher, not truer; two open issues can still ask for opposite things. | Exports `tokenize`, `sentences`, `sameTarget`, `extractDirectives`, `extractSettings`, `parseDuration`, `extractLifecycle`, `findConflicts`, `citesIssue`, `buildDecisions`, `renderMarkdown`. |
 | `scripts/spec/verify.mjs` | Fails the build when generated spec prose invents paths or omits domains. Its header names the two target failure classes directly: **INVENTION** and **OMISSION**. | Reads `spec-facts.json` plus `docs/spec/`, checks path references, issue references, domain coverage, key-module coverage, minimum page length, and fenced examples. |
 | `scripts/spec/verifyParity.mjs` | Keeps the spec branch's verification honest. Its rationale is GitHub's no-cascade rule for token-authored PR events: the spec workflow must publish its own status, but that status must still mean the same thing as CI. | Exports `CI_VERIFICATION_JOBS`, `SPEC_VERIFY_JOB`, `jobBlock`, `runLines`, `npmCommands`, `checkSpecVerifyParity`. |
+
+</details>
 
 ## The `scripts/spec/*` pipeline
 
@@ -74,11 +90,19 @@ These four files are tightly related, but they do different jobs.
 
 The exported constants in `verifyParity.mjs` show the contract directly:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 export const CI_VERIFICATION_JOBS = ['test', 'lint']
 export const SPEC_VERIFY_JOB = 'verify-spec-branch'
 ```
 
+
+</details>
 That small surface is the point: the script checks parity by the commands CI actually runs, not by
 an informal promise that two workflows "look similar".
 
@@ -89,6 +113,12 @@ an explicit verdict. The former distinguishes `missing`, `populated`, `empty`, a
 `node_modules`, then fails **only** for the exact #321 signature: a directory that exists but has
 no entries. The latter encodes merge order as data:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 export const VERIFIED_QUEUE = [
   { pr: 150, label: 'add missing fake-indexeddb devDependency (unblocks the suite)', tests: 459 },
@@ -97,6 +127,8 @@ export const VERIFIED_QUEUE = [
 ]
 ```
 
+
+</details>
 `planStep()` stops on `CONFLICTING`, skips already-merged PRs so a run is resumable, and treats a
 missing PR as a stop rather than a guess.
 

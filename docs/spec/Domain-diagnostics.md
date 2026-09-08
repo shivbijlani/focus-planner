@@ -6,6 +6,12 @@
 
 `packages/diagnostics/src/index.js` owns four jobs: emit structured events, retain a bounded in-memory ring buffer, coordinate enablement across page and worker contexts, and retrieve a combined snapshot on demand. The module auto-installs its default buffer sink and exposes a window global `__plannerDiag` for manual inspection. Its event schema carries both wall-clock time and per-context sequencing so logs from the page and service worker can be merged deterministically.
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 export function diag(channel, event, fields = {}) {
   if (!state.enabled) return false
@@ -29,11 +35,21 @@ function makeEvent(channel, event, fields = {}) {
 }
 ```
 
+
+</details>
 ## Module and exports
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Path | Exports from `spec-facts.json` | Role |
 | --- | --- | --- |
 | `packages/diagnostics/src/index.js` | `advertiseDiagnosticsToWorker`, `clearDiagnostics`, `diag`, `disableDiagnostics`, `dumpAllDiagnostics`, `dumpDiagnostics`, `enableDiagnostics`, `findDiagnosticsWorker`, `handleWorkerDiagnosticMessage`, `isDiagEnabled`, `printDiagnostics`, `reconcileWorkerDiagnosticClients`, `reconcileWorkerDiagnosticsForClients`, `registerDiagSink`, `requestWorkerDiagnosticClientStates`, `requestWorkerDiagnostics`, `resetDiagnosticsForTests`, `setDiagnosticsLimit`, `setWorkerDiagnosticsForClient`, `unregisterDiagSink` | Entire diagnostics surface: emission, buffering, worker coordination, dumps, and sink management. |
+
+</details>
 
 ## Principal mechanics
 

@@ -6,6 +6,12 @@
 
 The package's leading comments explain the core design choice: a journal is chronological, but the rebuilder needs current state first. `packages/task-paper/src/paper.js` therefore does a structural transform, not a summarisation pass. The newest agent turn becomes the current body, superseded turns and run-log sections move to the appendix, and user messages are collected separately as instructions. `packages/task-paper/src/render.js` then renders that model as a single HTML file with no external CSS, fonts, or scripts, because papers live beside journals in synced storage and must open correctly from `file://`.
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 export function generatePaper(journalPath, { outDir = null, fsImpl = fs, writerSource = undefined } = {}) {
   const paper = buildPaper(content, { taskId })
@@ -18,7 +24,15 @@ export function generatePaper(journalPath, { outDir = null, fsImpl = fs, writerS
 }
 ```
 
+
+</details>
 ## Modules and exports
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Path | Exports from `spec-facts.json` | Role |
 | --- | --- | --- |
@@ -29,6 +43,8 @@ export function generatePaper(journalPath, { outDir = null, fsImpl = fs, writerS
 | `packages/task-paper/src/markdown.js` | `escapeHtml`, `isSafeUrl`, `renderInline`, `renderMarkdown` | Small deterministic markdown renderer. |
 | `packages/task-paper/src/paper.js` | `AGENT_TURN_HEADING_RE`, `buildPaper`, `splitSections` | Journal-to-paper model transform. |
 | `packages/task-paper/src/render.js` | `renderPaper`, `slugify` | HTML renderer for the paper model. |
+
+</details>
 
 ## Principal mechanics
 

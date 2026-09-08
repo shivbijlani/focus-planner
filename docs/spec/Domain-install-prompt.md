@@ -6,6 +6,12 @@
 
 `packages/install-prompt/src/useInstallPrompt.js` is the package's authority. It decides whether the planner already runs in standalone mode, classifies the platform and browser from `navigator.userAgent`, records visit counts and dismissals in `localStorage`, captures `beforeinstallprompt`, and exposes a single state object to all UI components. The design is pragmatic rather than abstract. On iOS, only Safari can install PWAs, so every other iOS browser gets instructions to switch browsers instead of a dead install button.
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 export function detectPlatform() {
   ...
@@ -21,7 +27,15 @@ export function useInstallPrompt() {
 }
 ```
 
+
+</details>
 ## Modules and exports
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Path | Exports from `spec-facts.json` | Role |
 | --- | --- | --- |
@@ -33,6 +47,8 @@ export function useInstallPrompt() {
 | `packages/install-prompt/src/ShareIcon.jsx` | `ShareIcon` | iOS share glyph matching Safari chrome. |
 | `packages/install-prompt/src/index.js` | `InstallButton`, `InstallModal`, `InstallNudge`, `InstallSettingsSection`, `InstallSuccessToast`, `ShareIcon`, `useInstallPrompt` | Public package surface. |
 | `packages/install-prompt/src/useInstallPrompt.js` | `detectPlatform`, `useInstallPrompt` | Stateful platform detection and prompt orchestration. |
+
+</details>
 
 ## Principal mechanics
 

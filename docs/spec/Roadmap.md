@@ -20,6 +20,12 @@ This page records **known gaps and forward direction** from the **163 open issue
 
 25 open issues carry `priority: high`. These are the explicitly triaged gaps in the snapshot.
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Issue | Other labels | Title | Gap / direction from issue text |
 | --- | --- | --- | --- |
 | #618 | bug, reliability | A declared ask is never validated against its own turn: related issue asks two questions it cannot guess, declares them an 'offer', and no reader waits (25 of 254 rows have an open ask nobody awaits) | #560 replaced the prose-regex `awaiting_reply` with a declared ask (`<!-- oa-ask: ... -->`), and declared rows rose from 6 to 11 across two runs. But nothing validates a declared ask's `-Ask` level against what the turn's own text actually asks: a turn can declare `offer` while asking a question it cannot guess the answer to, and no reader waits on it — measured at 25 of 254 rows carrying an open ask nobody is waiting for. |
@@ -47,6 +53,8 @@ This page records **known gaps and forward direction** from the **163 open issue
 | #243 | enhancement, reliability | Browser watchdog has no plugin update check - the plugin self-heal is circular (lives inside the agent it repairs) | The condition is met — the watchdog does not do a plugin update check — so this issue exists. But the premise needs one correction before anyone acts on it, because the scary reading ("we ship… |
 | #181 | bug | A green check must mean all tests ran and passed - 25 of 30 open PRs have zero CI checks yet badge CLEAN | Every one of those 25 reports mergeStateStatus: CLEAN, which in the GitHub UI and in gh pr list reads as "good to go". It does not mean the tests passed. It means nothing ever ran. CLEAN… |
 | #170 | — | Overnight Agent writes turns into tasks that are already closed | This issue is the single source of truth for the bug. The fix should land as one piece of work, not a stack. |
+
+</details>
 
 ## Medium
 
@@ -77,6 +85,12 @@ This page records **known gaps and forward direction** from the **163 open issue
 
 14 open issues carry `priority: low`. These are the explicitly triaged gaps in the snapshot.
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Issue | Other labels | Title | Gap / direction from issue text |
 | --- | --- | --- | --- |
 | #327 | documentation, reliability | Guard-authoring conventions have no home: three "this should be a convention" notes are stranded on three separate issues | Three separate issues have now each ended with "…and this should go in the guard-authoring conventions." There is no such document, so each note is stranded on its own ticket and the next guard gets written… |
@@ -93,6 +107,8 @@ This page records **known gaps and forward direction** from the **163 open issue
 | #12 | — | Move tasks between sources via right-click | Move tasks between sources via right-click |
 | #8 | tech-debt, cleanup | Remove multi-source backward-compat code (legacy fp-storage-provider, unsuffixed FSA handle, migrateLegacy) | 1. src/storage/fsa.js — legacy unsuffixed IndexedDB handle fallback Lines ~24–34 in restoreFolder(suffix). Adopts focus-planner-dir-handle → focus-planner-dir-handle:<suffix>. Becomes a no-op after one successful load (it deletes the legacy slot). Safe to remove once the production deploy has… |
 | #5 | — | Feature: Connect personal OneDrive folder and prepare for combined task view | Today, these contexts are split. Users cannot easily view personal + work tasks in one place. |
+
+</details>
 
 ## Labelled but unprioritised
 
@@ -119,6 +135,12 @@ This page records **known gaps and forward direction** from the **163 open issue
 
 ### `bug + reliability + overnight-agent`
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Issue | Title | Gap / direction from issue text |
 | --- | --- | --- |
 | #610 | observe-bound-docs: a transient failure and a broken page print the identical FAIL line | `observe-bound-docs.mjs` polls each bound catch-up doc once. All three failure paths — fetch exit, observe exit, `observation !== 'read'` — increment `failed` and move on with no retry, so a transient fetch hiccup and a genuinely broken document are reported identically. |
@@ -126,6 +148,8 @@ This page records **known gaps and forward direction** from the **163 open issue
 | #454 | agent-lore.md is write-only: 903 KB, 160 headings, zero readers - and 'grep for the heading you need' can only retrieve what a run already knows | agent-lore.md is where the Overnight Agent is instructed to record every hazard, postmortem and run learning. SKILL.md says so explicitly: |
 | #453 | Agentic issue comments carry no provenance marker, so "edit the one agentic comment in place" can overwrite a human comment | The operating contract for GitHub issue work has two rules that both depend on telling an agent comment from a human one: |
 | #428 | A merged PR auto-closes its issue via Closes #N, skipping the review step the operating contract requires | PR related issue carried Closes related issue. in its body. On merge, GitHub closed issue related issue automatically — before Shiv had read the catch-up doc. I reopened it by hand. |
+
+</details>
 
 ### `bug + overnight-agent`
 
@@ -135,10 +159,18 @@ This page records **known gaps and forward direction** from the **163 open issue
 
 ### `bug + reliability`
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Issue | Title | Gap / direction from issue text |
 | --- | --- | --- |
 | #457 | A session asserted a false negative about its own past actions after an ID rollover, and nothing could contradict it | A session asserted a confident, checkable false negative about its own past actions — "I never edited related issue" — after its surfaced session ID changed. Nothing in the system could have contradicted it. The correct… |
 | #452 | Worktree teardown doesn't release the session binding — task stays bound: reuse, live pointing at a deleted workspace | Tearing down a per-task worktree with scripts/remove-worktree.ps1 does not release the task's session binding (related issue). The result is a binding that reports bound: true, verdict: reuse, state: live while the workspace it names no longer… |
+
+</details>
 
 ### `enhancement`
 
@@ -203,6 +235,12 @@ These issues describe the catch-up-doc path, doc comment observability, provenan
 
 These issues cluster around whether the scheduler is allowed to work a task, whether a reply or approval is still valid, and whether the Today gate is released on real evidence.
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Issue | Title | Gap / direction from issue text |
 | --- | --- | --- |
 | #607 | A session that correctly does nothing is recorded as unwakeable: task related issue burned 3 sessions, and both replacements cite a could not be woken that the event log disproves (3.4s and 9s wake latency) | The per-task session liveness verdict is wrong in a specific, repeatable way: a sub-session that wakes promptly and correctly decides there is nothing to do is recorded as `-SessionDead` and replaced. The event log shows the session waking in 3.4s and 9s respectively — well within budget — so the replacement's stated reason, "could not be woken", is disproved by the very log the verdict is supposed to be reading. |
@@ -245,6 +283,8 @@ These issues cluster around whether the scheduler is allowed to work a task, whe
 | #402 | Agent accumulates 81 worktrees / 185 branches without pruning: it is the growing input behind related issue, and it leaks unreaped git fsmonitor--daemon processes | Measured on 2026-09-02 ~11:00 PT while diagnosing a live complaint that the machine was sluggish. The box (shiv-devbox, 4 logical cores, 16 GB) sat at 100% CPU with a processor queue length of 21 — roughly… |
 | #398 | installed-skill-drift-sweep.mjs costs 429s and runs twice per deploy: it asks 209 files x 287 refs (59,983 queries) when a no-drift tree needs 209 | Measured on 2026-09-02 while fixing related issue. That fix removed the per-file process spawning in sync-oa-home.ps1 (79.2 s -> 3.9 s), but the end-to-end deploy is still ~11.7 minutes, and essentially all of the remainder is… |
 | #345 | ghcp desktop app went unresponsive (blank UI) from unbounded leaked copilot.exe session hosts - add a preflight resource check before spawning new sessions/tasks | The check should look at free RAM, CPU load, and/or count of existing live session-host processes, and if a configurable safety threshold is breached: - Refuse or defer spawning the new session (fail closed, with a… |
+
+</details>
 
 ### Deploy propagation, checkout drift, and collection sweeps
 

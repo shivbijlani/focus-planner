@@ -1,6 +1,12 @@
 # Behaviour
 This page turns the named acceptance corpus in `spec-facts.json` into implementation-facing requirements. The snapshot records **83 test files / 1,220 named tests** across the app, sync engine, Telegram bridge, task-paper renderer, diagnostics, storage, config, and repository scripts. Use it with [Architecture](Architecture), [Domain-app](Domain-app), [Domain-folder-sync](Domain-folder-sync), [Domain-storage](Domain-storage), [Domain-task-paper](Domain-task-paper), and [Domain-telegram-bridge](Domain-telegram-bridge) when rebuilding the system.
 The extraction shape is concrete. For example, `testFiles[]` contains entries like this, and the prose below simply restates them in “the system must …” form:
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```json
 {
   "path": "src/raggedRow.test.js",
@@ -12,6 +18,8 @@ The extraction shape is concrete. For example, `testFiles[]` contains entries li
   "domain": "app"
 }
 ```
+
+</details>
 - `#426 reader: a ragged Deferred row keeps its Linked ID` → the system must preserve `Linked ID` on ragged Deferred rows.
 - `#426 snooze hazard: a misfiled value must never snooze a task` → the system must not turn a misfiled value into an accidental snooze.
 - `#426 acceptance: the reader agrees with the writer` → the reader and writer must agree on the row shape they support.
@@ -19,6 +27,12 @@ The extraction shape is concrete. For example, `testFiles[]` contains entries li
 ## App: board, task, and journal behaviour ([Domain-app](Domain-app))
 
 These 35 suites define the planner UI and board model: task IDs, Today/Deferred board edits, link handling, journal chat parsing, file-tree refresh, unread state, and user-facing widgets.
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Source file | Suites present in `testFiles[]` | Required behaviour |
 | --- | --- | --- |
@@ -58,9 +72,17 @@ These 35 suites define the planner UI and board model: task IDs, Today/Deferred 
 | `src/taskSort.test.js` | `sortTasksByPriority`, `isNeededForUrgentTask` | The system must sort tasks deterministically from manager priority, urgency, and dependency chains; keep prerequisite chains in workable order; ignore irrelevant snooze markers during sort; and detect whether a task is needed for an urgent downstream task. |
 | `src/unreachableJournals.test.js` | `findUnreachableLiveJournals — #190 in-app detection` | The system must detect live journals that no longer have a reachable board row instead of silently voiding them. |
 
+</details>
+
 ## Configuration behaviour ([Domain-config](Domain-config))
 
 The config suites pin the markdown documents and settings files the app and agent share.
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Source file | Suites present in `testFiles[]` | Required behaviour |
 | --- | --- | --- |
@@ -70,9 +92,17 @@ The config suites pin the markdown documents and settings files the app and agen
 | `src/config/aiSettings.test.js` | `aiSettings` | The system must write AI settings to user-settings.md, seed the template sections the agent expects to parse, and leave placeholders intact for the user to fill. |
 | `src/config/userSettingsForm.test.js` | `parseSettingsForm`, `serializeSettingsForm — round trip identity`, `serializeSettingsForm — surgical edits`, `groupSettingsForm`, `hasSettingsForm` | The system must parse settings forms, round-trip them without drift, apply only surgical edits on serialization, group settings into the expected UI sections, and detect whether a file contains a settings form at all. |
 
+</details>
+
 ## Storage behaviour ([Domain-storage](Domain-storage))
 
 These suites define the browser/local storage surface that the app code expects before folder sync or remote providers enter the picture.
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Source file | Suites present in `testFiles[]` | Required behaviour |
 | --- | --- | --- |
@@ -86,9 +116,17 @@ These suites define the browser/local storage surface that the app code expects 
 | `src/storage/syncStatusCoalesce.test.js` | `sameSyncStatus`, `makeSyncStatusCoalescer` | The system must coalesce repeated sync-status updates, suppress no-op churn, and still emit meaningful state transitions in order. |
 | `src/storage/taskSettings.test.js` | `pure helpers`, `active-source read/write` | The system must normalize missing or malformed task-settings files, preserve unknown keys, pretty-print normalized JSON, merge single-task edits without touching unrelated tasks, serialize concurrent writes safely, and refuse to overwrite malformed existing content. |
 
+</details>
+
 ## Folder-sync behaviour ([Domain-folder-sync](Domain-folder-sync))
 
 The folder-sync tests specify the record-based merge model that keeps planner markdown convergent across devices and providers.
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Source file | Suites present in `testFiles[]` | Required behaviour |
 | --- | --- | --- |
@@ -99,9 +137,17 @@ The folder-sync tests specify the record-based merge model that keeps planner ma
 | `packages/folder-sync/src/reconcile.test.js` | `isConsumerVisibleMirrorPath`, `filesToDeleteLocally`, `planPlainPush`, `isMassDeletion`, `planMirrorSync`, `shouldPullRemote`, `mtimeKeysForProvider`, `isValidRemotePath` | The system must hide sync sidecars from consumer-visible mirrors, delete only genuinely removed tracked files, avoid deleting pending local edits or local-only files, plan plain pushes and deletions conservatively on first contact, detect mass deletions, and validate provider-specific remote paths and mtime keys. |
 | `packages/folder-sync/src/records.test.js` | `reconcileRecordsFile — end-to-end record sync`, `#190 — reconcile surfaces an alive-but-recordless row instead of voiding it`, `frameHasStructure`, `preferStructuredFrame`, `framePriorityCount`, `preferPopulatedPriorityFrame` | The system must synchronize record sidecars end-to-end, preserve concurrent edits on different rows, propagate additions and deletions correctly across devices, converge on repeated no-op syncs, protect headings and priorities from blank local frames, and surface alive-without-record diagnostics instead of crashing or silently voiding content. |
 
+</details>
+
 ## Task-paper behaviour ([Domain-task-paper](Domain-task-paper))
 
 The task-paper package defines a deterministic, printable rendering of a task journal and its current ask.
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Source file | Suites present in `testFiles[]` | Required behaviour |
 | --- | --- | --- |
@@ -111,9 +157,17 @@ The task-paper package defines a deterministic, printable rendering of a task jo
 | `packages/task-paper/src/paper.test.js` | `buildPaper`, `buildPaper — fenced examples are quoted text, not markup (#320/#325)`, `buildPaper — a quoted turn header does not fabricate a turn`, `buildPaper — journals with no agent turn`, `splitSections` | The system must build paper data from journal content, quote fenced examples as text rather than markup, avoid fabricating turns from quoted headers, handle journals with no agent turn, and split major sections consistently. |
 | `packages/task-paper/src/render.test.js` | `renderPaper — document shape`, `renderPaper — collapsible sections`, `renderPaper — the ask is above the fold`, `renderPaper — history is present but out of the way`, `renderPaper — the user is the instruction channel`, `renderPaper — safety and determinism`, `renderPaper — a task with no agent turn yet` | The system must render a complete standalone HTML document with no network dependencies, stable anchors, above-the-fold open asks, appendix-only history, explicit instruction-channel guidance for the user, deterministic byte output, escaped prose, journal source links, and sensible framing even before the first agent turn exists. |
 
+</details>
+
 ## Telegram bridge behaviour ([Domain-telegram-bridge](Domain-telegram-bridge))
 
 These 15 suites specify how planner journals and board state project into Telegram topics, digests, reply routing, and doc-link posting.
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Source file | Suites present in `testFiles[]` | Required behaviour |
 | --- | --- | --- |
@@ -133,9 +187,17 @@ These 15 suites specify how planner journals and board state project into Telegr
 | `packages/telegram-bridge/src/telegramClient.test.js` | `telegram client forum-topic archiving`, `telegram client request deadline`, `rate-limit errors carry structured data (#172)` | The system must archive forum topics through the Telegram client API, enforce request deadlines, and preserve structured rate-limit metadata for callers. |
 | `packages/telegram-bridge/src/telegramFormat.test.js` | `extractLinks (#278 lossless collapse guard)`, `escapeHtml`, `mdToTelegramHtml` | The system must extract links without losing collapse boundaries, escape HTML safely, and convert markdown into Telegram-safe HTML. |
 
+</details>
+
 ## Diagnostics, schema, and repository tooling ([Domain-diagnostics](Domain-diagnostics), [Domain-scripts](Domain-scripts), [Domain-mcp-cred-vault](Domain-mcp-cred-vault))
 
 These suites pin the lower-level support systems that the app and plugins rely on: diagnostics fan-out, secret-pointer schema, and repository verification scripts.
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Source file | Suites present in `testFiles[]` | Required behaviour |
 | --- | --- | --- |
@@ -146,13 +208,23 @@ These suites pin the lower-level support systems that the app and plugins rely o
 | `scripts/spec/conflicts.test.js` | `tokenize`, `sameTarget`, `sentences`, `parseDuration`, `extractDirectives`, `extractSettings`, `extractLifecycle`, `findConflicts`, `buildDecisions`, `renderMarkdown` | The system must tokenize issue text, detect whether two issues target the same thing, parse durations and directives, extract settings and lifecycle signals, find actionable conflicts, build decisions, and render the resulting markdown report. |
 | `scripts/spec/verifyParity.test.js` | `workflow reader`, `the spec branch is verified with exactly what CI runs`, `mutation check (each way the status could decay is caught)` | The system must read workflow definitions, verify that the spec branch is checked against exactly the same commands as CI, and fail on each mutation that would let workflow/spec parity silently decay. |
 
+</details>
+
 ## Overnight-agent named-test inventory ([Domain-overnight-agent](Domain-overnight-agent))
 
 The inventory includes two overnight-agent check files, but `spec-facts.json` captured zero named `tests[]` entries for them. The file presence still matters because the acceptance corpus expects these checks to exist.
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Source file | Suites present in `testFiles[]` | Required behaviour |
 | --- | --- | --- |
 | `plugins/overnight-agent/checks/stuck-run-sweep.test.mjs` | `(no named tests captured in spec-facts.json)` | The system must keep the stuck-run sweep present in the acceptance inventory; expose named cases in future spec snapshots so its required behaviour can be restated as testable prose. |
 | `plugins/overnight-agent/checks/workflow-health-sweep.test.mjs` | `(no named tests captured in spec-facts.json)` | The system must keep the workflow-health sweep present in the acceptance inventory; expose named cases in future spec snapshots so its required behaviour can be restated as testable prose. |
+
+</details>
 
 `install-prompt` and `root` are listed in `domains`, but this snapshot contributes no `testFiles[]` rows for them. Their behaviour still belongs in the spec, but not in this test-derived acceptance page.

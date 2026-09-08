@@ -12,6 +12,12 @@ state lives in files a human can open and edit by hand, not behind an API only t
 
 ## The domains
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Domain | Principal modules | Responsibility |
 | --- | --- | --- |
 | `app` | `src/App.jsx`, `src/focusPlanOps.js`, `src/journalChat.js`, `src/boardRow.js`, `src/journalLoadQueue.js` | The React board UI, the pure content-transformation functions over `planner.md`, and journal chat-thread rendering. |
@@ -26,6 +32,8 @@ state lives in files a human can open and edit by hand, not behind an API only t
 | `diagnostics` | `packages/diagnostics/src/index.js` | A shared, low-overhead event/tracing sink used by the app, its service worker, and folder-sync, so a live worker's state can be dumped on demand. |
 | `scripts` | `scripts/spec/collect.mjs`, `scripts/spec/verify.mjs`, `scripts/merge-queue.mjs` | Repo-maintenance tooling: this spec's own generation pipeline, dependency-hygiene guards, and merge-queue automation. See [Domain-scripts](Domain-scripts). |
 | `root` | `server.js`, `vite.config.js`, `eslint.config.js` | The dev/build toolchain and the one real backend process (below). |
+
+</details>
 
 ## Runtime processes
 

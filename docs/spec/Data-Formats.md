@@ -10,6 +10,12 @@ The active board is a markdown document with `## Today`, `## Deferred`, and usua
 
 A source-faithful sample, assembled from the scaffold in `src/storage/fsa.js` plus real rows used in `src/raggedRow.test.js` and `src/boardWakeMigration.test.js`:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```markdown
 ## Today
 
@@ -33,14 +39,30 @@ A source-faithful sample, assembled from the scaffold in `src/storage/fsa.js` pl
 3. 204
 ```
 
+
+</details>
 Cross-check: `.github/copilot-instructions.md` still documents the same row shape with a different priority-header spelling:
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```markdown
 | ID | 🎯 | Task | Mngr Priority | Added | Linked ID |
 | 70 | 🟡 | New task description | Sydney rollout | 2026-01-27 | |
 ```
 
+
+</details>
 The code makes that header drift explicit rather than pretending it does not exist. `src/focusPlanOps.js` looks for the live header whose text **includes `Priority`**, and `src/boardTable.js` collapses `Mngr Priority` and `Work Priority` to the display label `Priority`. That means the stable contract is “the priority column is the column whose header names priority”, not one exact literal heading.
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Invariant | Why it exists | Enforced / relied on by |
 | --- | --- | --- |
@@ -53,6 +75,8 @@ The code makes that header drift explicit rather than pretending it does not exi
 | `## Priorities` is an ordered list, not a table. | It preserves user-owned ranking outside Today/Deferred row order. | `src/focusPlanOps.js`, `src/taskSort.js`, `packages/folder-sync/src/records.js` |
 | Row order inside a section is meaningful. | The board itself is a priority signal. | `packages/telegram-bridge/src/board.js`, `src/taskSort.js`, [Prioritisation](Prioritisation) |
 
+</details>
+
 The rationale in the comments is consistent: the board is manually edited and historically messy, so the parser/writer pair bias toward **data preservation**. That is why `src/boardRow.js` is a dedicated shared module: the repo already shipped bugs where the reader and writer each “knew” the table differently.
 
 ### Completed board — `planner-completed.md` (legacy: `focus-plan-completed.md`)
@@ -60,6 +84,12 @@ The rationale in the comments is consistent: the board is manually edited and hi
 The completed archive uses the same task-id cell grammar but groups rows under week headings.
 
 Real sample from `packages/telegram-bridge/src/completed.test.js`:
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```markdown
 ## Week of 7/27/2026
@@ -70,11 +100,21 @@ Real sample from `packages/telegram-bridge/src/completed.test.js`:
 | 387 | ✅ | Rosemary — Marketplace giveaway | - | 2026-08-02 |
 ```
 
+
+</details>
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Invariant | Why it exists | Enforced / relied on by |
 | --- | --- | --- |
 | Only rows whose first cell parses as a task id count as completed tasks. | Headers and separators live in the same markdown table syntax. | `packages/telegram-bridge/src/completed.js` |
 | The first cell may use the same compound-id grammar as the live board. | A completed task can still carry its linked external ticket. | `packages/telegram-bridge/src/completed.js`, `packages/telegram-bridge/src/board.js` |
 | Weekly headings are organizational only. | Readers scan rows across all sections. | `packages/telegram-bridge/src/completed.js` |
+
+</details>
 
 Known gap: issue #556 shows that a reused task id on both boards can make a live task look user-completed. Treat `planner-completed.md` as part of the closure signal, not the only proof.
 
@@ -83,6 +123,12 @@ Known gap: issue #556 shows that a reused task id on both boards can make a live
 Journals are append-only markdown chat threads. `src/journalChat.js` renders them in the app; `packages/telegram-bridge/src/journal.js` folds Telegram replies back in; the Overnight Agent reads the same bytes. `src/config/agentsDoc.js` is the human-readable contract that the app scaffolds into each folder.
 
 Real sample, combining the fixture in `src/journalChat.test.js` with exact markers from `src/config/agentsDoc.js` and `packages/telegram-bridge/src/journal.js`:
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```markdown
 # Task 254: Add dance church events to the calendar
@@ -113,6 +159,14 @@ A human reply carries its marker above it.
 yes, go ahead
 ```
 
+
+</details>
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Invariant | Why it exists | Enforced / relied on by |
 | --- | --- | --- |
 | The first H1 is the thread title, ideally `# Task <id>: <title>`. | Title extraction, topic naming, and journal identity all rely on it. | `src/journalChat.js`, `packages/telegram-bridge/src/journal.js` |
@@ -125,6 +179,8 @@ yes, go ahead
 | Appends happen at the bottom only. | Re-scan logic and user-visible history depend on stable earlier content. | `appendJournalMessage()` in `src/journalChat.js`; `packages/telegram-bridge/src/journal.js` |
 | Checkbox items and `TODO:` / `DONE:` prefixes are first-class task markers. | The UI and `server.js` extract todos from those exact shapes. | `server.js`, `src/config/agentsDoc.js` |
 
+</details>
+
 The design rationale is explicit in comments and tests: plain markdown always degrades to a valid bubble, but the format adds enough structure for provenance, date grouping, and machine metadata. That is why the parser strips metadata comments yet preserves markdown emphasis, lists, and tables unchanged.
 
 Known gap: issue #569 reports that one Overnight Agent reopen reader still misses user text edited **above** the sentinel. The journal format itself is stable; one consumer still under-reads it.
@@ -136,6 +192,12 @@ Known gap: issue #569 reports that one Overnight Agent reopen reader still misse
 This file is unusual because the user, not the app, is supposed to author it. The app seeds it once and then preserves all non-list text verbatim.
 
 Real seeded sample from `src/config/agentGate.js`:
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```markdown
 # Agent gate
@@ -159,6 +221,14 @@ directly — both are the same file.
 - Starting a fresh conversation with someone in chat/email
 ```
 
+
+</details>
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Invariant | Why it exists | Enforced / relied on by |
 | --- | --- | --- |
 | The file has two semantic lists: reversible allows and safety-floor asks. | The gate engine decides whether the agent may proceed. | `src/config/agentGate.js`, `oa-state.ps1` |
@@ -167,6 +237,8 @@ directly — both are the same file.
 | Saving replaces only bullet blocks inside managed sections. | Title, comments, prose, and extra sections must survive app edits. | `serializeAgentGate()` in `src/config/agentGate.js`; `src/config/agentGate.test.js` |
 | The app seeds the file only when absent or blank. | Rewriting an existing gate would destroy the trust channel it is meant to provide. | `scaffoldAgentGate()` in `src/config/agentGate.js` |
 
+</details>
+
 The comments tie the design directly to consent: this file exists because a journal marker such as `<!-- from: me -->` is still written by software, so standing permissions need a human-authored surface instead.
 
 ### `user-settings.md`
@@ -174,6 +246,12 @@ The comments tie the design directly to consent: this file exists because a jour
 This markdown file is the live configuration source the app edits and the Overnight Agent reads at run time. The bundled plugin copy is only a template.
 
 Real sample excerpt from `plugins/overnight-agent/skills/overnight-agent/user-settings.md`:
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```markdown
 ## Settings
@@ -203,6 +281,14 @@ Real sample excerpt from `plugins/overnight-agent/skills/overnight-agent/user-se
 | `edge-cdp-1` (regular) | 9225 | `edge1` | `<your main account>` | MCP Edge 1 (CDP 9225) |
 ```
 
+
+</details>
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Invariant | Why it exists | Enforced / relied on by |
 | --- | --- | --- |
 | Structured settings live in `| Setting | Value |` tables. | The app edits settings surgically by cell, not by regenerating the file. | `src/config/userSettingsForm.js`, `src/config/userSettingsForm.test.js` |
@@ -212,6 +298,8 @@ Real sample excerpt from `plugins/overnight-agent/skills/overnight-agent/user-se
 | `Overnight Agent concurrency` must be a **bare whole number**. | Anchored parsing prevents dated prose like `2026-09-02: set to 1` from becoming concurrency `2026`. | `Resolve-PacingSettings` in `oa-state.ps1` |
 | Browser-slot column order does not matter; Slot/Port/Profile are required. | Scripts resolve columns by name and must fail loudly on ambiguous slot definitions. | `user-settings.md` guidance; CI browser-slot mutation check in `.github/workflows/ci.yml` |
 
+</details>
+
 The reasoning is visible both in the markdown template and the parser comments: this file is for values that the user **does** want editable and syncable, unlike `agent-gate.md`, so the app may rewrite cells — but only cells.
 
 ### Overnight Agent per-task state — `%LOCALAPPDATA%\overnight-agent\state\task-<id>.json`
@@ -219,6 +307,12 @@ The reasoning is visible both in the markdown template and the parser comments: 
 `oa-state.ps1` stores one JSON document per task under the path named by the `Agent state store` setting. `State-Path` hardcodes the filename shape as `task-$id.json`.
 
 Source-faithful sample built from `Cmd-Seed`, `Cmd-Mark`, `New-PollObject`, `New-RecheckObject`, `New-SessionObject`, and `Set-ExhaustionDeclaration` in `oa-state.ps1`:
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```json
 {
@@ -269,6 +363,8 @@ Source-faithful sample built from `Cmd-Seed`, `Cmd-Mark`, `New-PollObject`, `New
 }
 ```
 
+
+</details>
 | Invariant | Why it exists | Enforced / relied on by |
 | --- | --- | --- |
 | Filename is exactly `task-<id>.json`. | Session, poll, and scan logic all address state by task id. | `State-Path()` in `oa-state.ps1` |
@@ -286,6 +382,12 @@ Known gap: issue #571 says `status_by` still lacks enough close provenance to pr
 The Telegram bridge keeps operational JSON in a separate state directory, outside the repo and outside OneDrive. Unlike journals and boards, this is **host-local machinery**, not planner content.
 
 Source-faithful sample built from `emptyState()` plus the reducers in `packages/telegram-bridge/src/state.js`:
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```json
 {
@@ -317,6 +419,14 @@ Source-faithful sample built from `emptyState()` plus the reducers in `packages/
 }
 ```
 
+
+</details>
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Invariant | Why it exists | Enforced / relied on by |
 | --- | --- | --- |
 | Root shape is `{ version, updateOffset, tasks }`, with optional digest fields. | `loadState()` overlays parsed JSON onto `emptyState()`. | `packages/telegram-bridge/src/state.js` |
@@ -327,11 +437,19 @@ Source-faithful sample built from `emptyState()` plus the reducers in `packages/
 | `docLinkVerifiedAt` is set only from a genuine observation (a confirmed probe or a successful send), never an assumption. | An unverified probe must not look like evidence, or the least-known link would be probed least often. | `setDocLinkVerified()`, `verifyLinkMessage()` in `packages/telegram-bridge/src/bridge.js` |
 | Doc-link notice fields clear together when the ask is cleared. | A stale message id must not survive after the notice it referred to is gone. | `setDocLinkNoticeHash()` in `packages/telegram-bridge/src/state.js` |
 
+</details>
+
 ## 5. Folder-sync sidecars — `<file>.sync.json`
 
 Folder sync does not treat `planner.md` as one opaque blob. It splits the file into record rows plus a structural `__frame__` record and writes per-record metadata to a neighboring JSON sidecar.
 
 Source-faithful sample from `packages/folder-sync/src/merge.js`, `packages/folder-sync/src/codecs/mdTable.js`, and `packages/folder-sync/src/records.test.js`:
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```json
 {
@@ -345,6 +463,14 @@ Source-faithful sample from `packages/folder-sync/src/merge.js`, `packages/folde
 }
 ```
 
+
+</details>
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Invariant | Why it exists | Enforced / relied on by |
 | --- | --- | --- |
 | Sidecar filename is `<path>.sync.json`. | Transports need a deterministic neighbor path and must skip sidecars when listing data files. | `sidecarPath()` and `isSidecarPath()` in `packages/folder-sync/src/records.js` |
@@ -355,6 +481,8 @@ Source-faithful sample from `packages/folder-sync/src/merge.js`, `packages/folde
 | An implicit clock `0` is only a merge-time sentinel, not durable truth. | Persisting an unknown-time record at clock 0 makes it lose every later merge. | `mergeCollections()` in `packages/folder-sync/src/merge.js` |
 | A structureless or empty-priorities frame must not beat a populated one just because it is newer. | Otherwise first sync or scaffolded templates can erase headings or the priorities list. | `preferStructuredFrame()` and `preferPopulatedPriorityFrame()` in `packages/folder-sync/src/records.js` |
 
+</details>
+
 The comments explain the design plainly: the unit of sync is the **row**, because that is the only way to keep deletes durable and make concurrent edits to different tasks commute.
 
 ## 6. MCP credential pointer file — `mcp-secrets.json`
@@ -362,6 +490,12 @@ The comments explain the design plainly: the unit of sync is the **row**, becaus
 This file never stores secret values. It is a non-secret pointer that tells the local launcher which credential-vault entries and public ids exist.
 
 Real committed sample from `packages/mcp-cred-vault/mcp-secrets.example.json`:
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```json
 {
@@ -382,6 +516,14 @@ Real committed sample from `packages/mcp-cred-vault/mcp-secrets.example.json`:
 }
 ```
 
+
+</details>
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Invariant | Why it exists | Enforced / relied on by |
 | --- | --- | --- |
 | Root value must be an object. | The validator rejects arrays, strings, and null immediately. | `collectMcpSecretsErrors()` in `packages/mcp-cred-vault/src/schema.js` |
@@ -390,5 +532,7 @@ Real committed sample from `packages/mcp-cred-vault/mcp-secrets.example.json`:
 | `envVar` must match shell-variable syntax; `target` cannot contain tabs/newlines. | The pointer file is later used to construct process environments and vault lookups. | `packages/mcp-cred-vault/src/schema.js` |
 | `server` and `target` values must be unique across entries. | Duplicate mappings make injection ambiguous. | `packages/mcp-cred-vault/src/schema.js` |
 | `ids`, when present, is a string map of non-secret public identifiers. | Public ids travel with the pointer file; secrets do not. | `packages/mcp-cred-vault/src/schema.js` |
+
+</details>
 
 See also [Domain-app](Domain-app), [Domain-config](Domain-config), [Domain-folder-sync](Domain-folder-sync), [Domain-telegram-bridge](Domain-telegram-bridge), [Domain-mcp-cred-vault](Domain-mcp-cred-vault), and [Domain-overnight-agent](Domain-overnight-agent).

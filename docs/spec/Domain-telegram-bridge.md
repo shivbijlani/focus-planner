@@ -6,6 +6,12 @@
 
 `packages/telegram-bridge/src/bridge.js` describes the package as two directions: `syncUp` posts each task's latest agent turn into its forum topic and `syncDown` folds Telegram replies back into journals. The package also owns `syncArchive` and the approval digest. Its rationale comments are specific about rejected alternatives. The digest refuses a whole-journal grep for the last `Needs from you:` marker because a later turn may supersede that marker without repeating it. Link mode refuses to treat silence as success: a catch-up link message is verified by probing Telegram, because a deleted link and a never-posted link would otherwise look identical.
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 export function createBridge({ client, config, state, io, logger = () => {}, now = () => new Date(), persist = null } = {}) {
   ...
@@ -16,7 +22,15 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
 }
 ```
 
+
+</details>
 ## Modules and exports
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Path | Exports from `spec-facts.json` | Role |
 | --- | --- | --- |
@@ -37,6 +51,8 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
 | `packages/telegram-bridge/src/state.js` | `STATE_VERSION`, `bumpReplyCount`, `emptyState`, `findTaskByTopic`, `getReplyCount`, `getTask`, `loadState`, `saveState`, `setArchived`, `setDigestTopic`, `setDocLink`, `setDocLinkNoticeHash`, `setDocLinkVerified`, `setLastDigest`, `setLastPosted`, `setLastPostedContext`, `setLastPostedMessageIds`, `setOffset`, `setSuppressedHash`, `setTopic`, `setUserEngaged` | Durable bridge state. |
 | `packages/telegram-bridge/src/telegramClient.js` | `createTelegramClient` | Telegram Bot API wrapper with deadlines and structured rate-limit errors. |
 | `packages/telegram-bridge/src/telegramFormat.js` | `escapeHtml`, `extractLinks`, `mdToTelegramHtml` | Deterministic markdown-to-Telegram HTML conversion. |
+
+</details>
 
 ## Principal mechanics
 

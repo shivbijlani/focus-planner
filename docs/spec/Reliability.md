@@ -9,6 +9,12 @@ loop itself lives under `plugins/overnight-agent/`.
 
 ## Reliability stack at a glance
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Layer | Primary files | What it guards against |
 | --- | --- | --- |
 | OS-dispatched supervision | `plugins/overnight-agent/checks/install-oa-supervisor.ps1`, `oa-supervisor.ps1`, `oa-supervisor-daemon.ps1`, `supervisor-liveness-sweep.ps1`, `supervisor-replay.mjs` | The agent or app scheduler stopping entirely |
@@ -20,6 +26,8 @@ loop itself lives under `plugins/overnight-agent/`.
 | Guard integrity | `mutcheck-*.mjs`, `mutcheck-*.ps1` | A detector quietly becoming decorative or measuring the wrong thing |
 | Settings reconcile loop | `plugins/overnight-agent/skills/overnight-agent/user-settings.md`, `oa-state.ps1` | User configuration drifting from the values the run actually uses |
 
+</details>
+
 ## OS-dispatched supervision
 
 The core design choice is that supervision does **not** run inside the overnight run it watches.
@@ -27,6 +35,12 @@ The core design choice is that supervision does **not** run inside the overnight
 Scheduled Task, and falls back to a Startup-folder daemon only when unattended elevation is not
 available. `plugins/overnight-agent/checks/supervisor-liveness-sweep.ps1` then watches the
 watchers themselves.
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```powershell
 # plugins/overnight-agent/checks/install-oa-supervisor.ps1
@@ -42,6 +56,8 @@ $startNow = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
               -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
 ```
 
+
+</details>
 That separation is the whole point: a frozen app scheduler cannot suppress the task that judges the
 scheduler. Where Task Scheduler cannot be registered, `oa-supervisor-daemon.ps1` is still outside
 the failure domain because Explorer launches it from Startup at logon, as its own process. The
@@ -50,6 +66,12 @@ scheduled-task route remains the stronger installation.
 
 `supervisor-liveness-sweep.ps1` closes the next gap: a supervisor that dies silently is another
 single point of failure.
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```powershell
 # plugins/overnight-agent/checks/supervisor-liveness-sweep.ps1
@@ -62,6 +84,8 @@ if ($daemonAlive) { return 'STALE' }
 return 'DEAD'
 ```
 
+
+</details>
 `supervisor-replay.mjs` supplies evidence for the thresholds. It replays the classifier across real
 run history and asks the only questions that matter: does it catch true stalls, does it warn on
 slow self-terminating runs, and does it stay quiet on ordinary healthy runs. That is why the page's
@@ -78,6 +102,12 @@ Its design is deliberately evidence-based rather than age-only. It uses three di
 | Process-dead orphan | `sessionLiveness()` reads `inuse.<pid>.lock` and probes the PID | A workflow row says `running` forever although its owning process is gone |
 | Hung-alive orphan | `readOutcome()` finds `session.task_complete`; `idleMinutes()` proves the log then went silent | The task finished, but bookkeeping never reached a terminal row |
 | Run-level timeout | requires both `age >= MAX_RUNTIME_MIN` and `idle >= STALL_MIN` | A mid-task hang with no terminal event and a still-live process, tracked by issue #261 |
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```js
 // plugins/overnight-agent/checks/stuck-run-sweep.mjs
@@ -97,6 +127,8 @@ if (idle != null && ageMin >= MAX_RUNTIME_MIN && idle >= STALL_MIN) {
 }
 ```
 
+
+</details>
 The repair path is equally conservative: `--repair` is opt-in, every touched row is backed up,
 `UPDATE ... and status='running'` makes the write idempotent, and the sweep records `completed`
 only when the session's own log says it completed. Otherwise it records `failed`, because that is a
@@ -113,6 +145,12 @@ housekeeping.
 The supervisor acts because this repository has repeated evidence that detect-only lines are skimmed.
 `oa-supervisor.ps1` does not page; it decides among `none`, `repair-only`, `restart`, and `launch`.
 The action depends on liveness, not just age.
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```powershell
 # plugins/overnight-agent/checks/oa-supervisor.ps1
@@ -133,6 +171,14 @@ switch ($State) {
 }
 ```
 
+
+</details>
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```powershell
 function Restart-App {
   foreach ($name in @('github', 'copilot')) {
@@ -145,6 +191,8 @@ function Restart-App {
 }
 ```
 
+
+</details>
 This keeps the remedy narrow. A genuinely long but still-emitting run does not restart. A
 process-dead orphan gets `repair-only`, because clearing the blocked row is enough. A hung-alive row
 or a schedule-dead app gets a silent restart, with a cooldown to prevent loops. Issue #403 adds a
@@ -162,6 +210,12 @@ answer three different questions:
 | Are the installed plugin bytes a named, recoverable version? | `installed-skill-drift-sweep.mjs` + `mutcheck-installed-skill-drift.mjs` | A live machine can run `MAIN`, `BRANCH-ONLY`, `UNVERSIONED`, or `MISSING` bytes |
 | Does the installed plugin still retain required behaviour even if its bytes match `main`? | `installed-capability-sweep.mjs` + `mutcheck-installed-capability.mjs` | Provenance can be healthy while capability is regressed |
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 // plugins/overnight-agent/checks/version-bump-sweep.mjs
 FLAGGED - plugin content changed WITHOUT a version bump
@@ -169,6 +223,14 @@ FLAGGED - plugin content changed WITHOUT a version bump
 The installed copy is keyed off plugin.json's version, so a version-based
 updater sees no work to do and these changes never reach the running agent.
 ```
+
+
+</details>
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```js
 // plugins/overnight-agent/checks/installed-skill-drift-sweep.mjs
@@ -179,6 +241,14 @@ VERDICTS
   MISSING      the file is on origin/main but is ABSENT from the installed tree
 ```
 
+
+</details>
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 // plugins/overnight-agent/checks/installed-capability-sweep.mjs
 installed-skill-drift-sweep : provenance -- can we NAME the bytes we are running?
@@ -186,6 +256,8 @@ installed-capability-sweep  : capability -- can the bytes we are running DO the 
 Provenance can be perfect while capability is broken.
 ```
 
+
+</details>
 The runbook in `plugins/overnight-agent/skills/overnight-agent/SKILL.md` extends this to both live
 deploy targets: `installed-plugins` and the flat `%LOCALAPPDATA%\overnight-agent` OA home.
 Issue #519 records why that matters: the deploy can report `verified-current True` while PHASE 3
@@ -205,6 +277,12 @@ The repository treats encoding as a byte-level reliability contract, not as pres
 read-modify-write behaviour against journals; `oa-state.ps1` centralises the only acceptable UTF-8
 journal read path.
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 // plugins/overnight-agent/checks/ps1-encoding-sweep.mjs
 PowerShell 5.1 decodes a script file with no BOM as the ANSI codepage...
@@ -212,6 +290,14 @@ A BOM-less .ps1 with non-ASCII is mangled by PowerShell 5.1 before it runs.
 
 Fix: re-save each file as UTF-8 **with** BOM.
 ```
+
+
+</details>
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```powershell
 # plugins/overnight-agent/skills/overnight-agent/oa-state.ps1
@@ -221,12 +307,22 @@ function Read-JournalText([string]$path) {
 }
 ```
 
+
+</details>
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 // plugins/overnight-agent/checks/journal-encoding-invariant.mjs
 mark() altered bytes ABOVE the turn-end marker. The pre-existing journal content must be
 preserved byte-for-byte; only the terminator may be appended.
 ```
 
+
+</details>
 `plugins/overnight-agent/skills/overnight-agent/write-turn.ps1` is the sanctioned writer. Its
 header says why: append-only means it “physically cannot eat” a newer human reply, and routing turn
 bodies through a file instead of a PowerShell string removes whole corruption classes before they
@@ -236,12 +332,20 @@ The app-side files close the companion UI races. `src/journalLoadQueue.js` seria
 de-duplicates provider reads so 90+ rows do not stampede the storage backend; one row unmounting
 cannot cancel another row's in-flight read.
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 // src/journalLoadQueue.js
 // This queue funnels those reads so they run a few at a time, in board order
 // and never fetches the same journal twice while a read is already in flight.
 ```
 
+
+</details>
 `src/journalChat.js` makes authorship deterministic on append by using one shared fence mask and a
 single `FROM_ME` stamp. That matters to [Prioritisation](Prioritisation) because the overnight
 consent gate treats an unattributed trailing note differently from a human reply.
@@ -262,12 +366,20 @@ never driven. `plugins/overnight-agent/checks/mcp-probe.mjs` then avoids a secon
 probe and payload must use the **same** MCP session, not two independent connections that can
 disagree.
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 // plugins/overnight-agent/checks/mcp-probe.mjs
 `calls` runs several tools inside ONE server session ... it is the only way a
 health probe can prove the SAME connection the payload call used.
 ```
 
+
+</details>
 `plugins/overnight-agent/skills/overnight-agent/check-mcp-fanout.ps1` keeps the leak measurable.
 It asserts both that one idle session stays within a process/memory ceiling and that no orphaned MCP
 generation survives past the grace period.
@@ -275,6 +387,12 @@ generation survives past the grace period.
 Browser health has the same design shape. The source of truth is one table in
 `plugins/overnight-agent/skills/overnight-agent/user-settings.md`, enforced in CI and consumed by
 every launcher and checker.
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```yaml
 # .github/workflows/ci.yml
@@ -285,11 +403,19 @@ browser-slots:
   name: Browser slot table
 ```
 
+
+</details>
 Issue #180 is the reason `ensure-mcp-browsers.ps1`, `launch-signed-in-browser.ps1`, and
 `check-browser-slots.ps1` refuse to guess. They all read the same table; none keep a fallback slot
 list. `ensure-mcp-browsers.ps1` launches on demand; `launch-signed-in-browser.ps1` refuses to bind a
 slot port to the wrong profile; `check-browser-slots.ps1` distinguishes a zombie slot from a wedged
 slot by doing bounded CDP work, not by TCP connect.
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```powershell
 # plugins/overnight-agent/checks/check-browser-slots.ps1
@@ -299,6 +425,8 @@ occluded tabs -- so a fresh-tab probe reports every wedged slot as healthy.
 -Repair opts in to ... Page.setWebLifecycleState -> 'active'
 ```
 
+
+</details>
 `fixture-cdp-slot.mjs`, `cdp-read.mjs`, and `cdp-eval.mjs` pin that distinction: a fresh target can
 work while pre-existing targets stay frozen. `browser-watchdog.ps1` composes the slot checker with
 `ensure-mcp-browsers.ps1` so the hourly watchdog now acts on `down` and `stuck`, not just on “port
@@ -333,10 +461,24 @@ checks under `plugins/overnight-agent/checks/`, and the mutchecks explain why th
 | `mutcheck-repo-drift.mjs` | A drift detector that only ever sees archived green is distinguishable from one that can really detect missing or modified live files |
 | `mutcheck-zero-writer.mjs` | Silent wakes are classified correctly: zero writer, masked writer, live in-flight work, and grace-window cases do not collapse into one label |
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 // plugins/overnight-agent/checks/mutcheck-doc-comments.mjs
 If a mutation does not change the answer, that guard is decoration and this file fails.
 ```
+
+
+</details>
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```js
 // plugins/overnight-agent/checks/mutcheck-repo-drift.mjs
@@ -344,11 +486,21 @@ A detector that has only ever printed "no drift" is indistinguishable from a det
 that cannot detect.
 ```
 
+
+</details>
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 // plugins/overnight-agent/checks/mutcheck-zero-writer.mjs
 A guard for silent failure that itself fails silently is worse than nothing.
 ```
 
+
+</details>
 This is why the repository prefers many small, mutation-tested files to a handful of broad tests.
 Each sweep names one operational question, each mutcheck kills the exact guards that answer it, and
 the failure mode each file exists to catch stays recorded in that file's own header instead of only
@@ -373,6 +525,12 @@ without anyone working a list by hand.
 says plugin updates overwrite it and that the real file lives outside the plugin. `oa-state.ps1`
 then rereads settings on every invocation.
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```powershell
 # plugins/overnight-agent/skills/overnight-agent/oa-state.ps1
 function Get-UserSettingsPath {
@@ -387,6 +545,8 @@ function Get-UserSettingsPath {
 }
 ```
 
+
+</details>
 There is no literal `reconcile` token in `oa-state.ps1`. The reconcile loop is behavioural: each
 run resolves the external settings path again, rereads the gate and pacing rows again, and reports
 the resolved values on scan output so configuration is auditable rather than assumed.

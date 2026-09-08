@@ -8,6 +8,12 @@ The central distinction is between **machine-managed reference docs** and **huma
 
 ## Principal modules
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Path | Role | Why it exists |
 | --- | --- | --- |
 | `src/config/agentGate.js` | Defines, parses, serializes, and scaffolds `agent-gate.md`. | Keeps standing permissions in a file the agent only reads, never rewrites. |
@@ -17,7 +23,15 @@ The central distinction is between **machine-managed reference docs** and **huma
 | `src/config/agentSettingsVisibility.js` | User-facing vs advanced partition. | Prevents risky infrastructure settings from dominating the default UI. |
 | `src/config/branding.js` | App and filename constants. | Separates user-visible naming from internal storage-key history. |
 
+</details>
+
 ## Public exports
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Path | Exports from `spec-facts.json` |
 | --- | --- |
@@ -27,6 +41,14 @@ The central distinction is between **machine-managed reference docs** and **huma
 | `src/config/userSettingsForm.js` | `groupSettingsForm`, `hasSettingsForm`, `parseSettingsForm`, `serializeSettingsForm` |
 | `src/config/agentSettingsVisibility.js` | `classifyAgentSetting`, `isUserFacingSetting`, `partitionAgentSettings` |
 | `src/config/branding.js` | `APP_DESCRIPTION`, `APP_NAME`, `CLOUD_FOLDER_NAME`, `COMPLETED_FILE`, `PLAN_FILE` |
+
+</details>
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```markdown
 ## Do not gate these (reversible)
@@ -40,6 +62,8 @@ The central distinction is between **machine-managed reference docs** and **huma
 - Starting a fresh conversation with someone in chat/email
 ```
 
+
+</details>
 That excerpt is copied from `src/config/agentGate.js`’s `AGENT_GATE_DOC`. Its rationale is explicit in the file header: approval cannot rest on machine-written `<!-- from: me -->` markers, so standing permission must live in a user-owned file that the app does not regenerate.
 
 ## Behavioural requirements from tests

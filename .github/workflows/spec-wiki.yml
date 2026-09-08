@@ -134,6 +134,9 @@ jobs:
           # --yolo suppresses interactive prompts, required for CI.
           copilot --yolo -p "$(cat scripts/spec/prompt.md)"
 
+      - name: Make technical examples opt-in
+        run: node scripts/spec/readability.mjs --dir docs/spec
+
       - name: Verify the spec against the code
         run: node scripts/spec/verify.mjs --facts spec-facts.json --dir docs/spec
 

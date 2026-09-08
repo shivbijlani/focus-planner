@@ -6,6 +6,12 @@
 
 The leading comment in `packages/mcp-cred-vault/src/schema.js` is explicit about scope. The pointer file lives in the working folder, not in the repository and not in Credential Manager. It lists which secrets a machine needs—server key, Windows Credential Manager target, environment variable, command, and optional args—but it never carries the secret value. The value lives only in Windows Credential Manager. This package therefore validates *shape*, not secret contents and not credential retrieval.
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 export function parseMcpSecrets(text) {
   let obj;
@@ -22,12 +28,22 @@ export function parseMcpSecrets(text) {
 }
 ```
 
+
+</details>
 ## Modules and exports
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Path | Exports from `spec-facts.json` | Role |
 | --- | --- | --- |
 | `packages/mcp-cred-vault/src/index.js` | `collectMcpSecretsErrors`, `isValidMcpSecrets`, `parseMcpSecrets` | Public package surface; notes that the broader toolchain is PowerShell + .NET. |
 | `packages/mcp-cred-vault/src/schema.js` | `collectMcpSecretsErrors`, `isValidMcpSecrets`, `parseMcpSecrets` | Actual parser and validator for the pointer-file schema. |
+
+</details>
 
 ## Format and invariants
 

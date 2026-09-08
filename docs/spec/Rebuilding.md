@@ -8,6 +8,12 @@ As of the current tree, the forward file names are `planner.md` and `planner-com
 
 The root `package.json` has these scripts in `spec-facts.json`:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```json
 {
   "predev": "node scripts/copy-sw.mjs",
@@ -26,6 +32,8 @@ The root `package.json` has these scripts in `spec-facts.json`:
 }
 ```
 
+
+</details>
 Runtime dependencies in `spec-facts.json` are `express`, `cors`, `idb-keyval`, `react`, and `react-dom`. The important dev dependencies are `vite`, `@vitejs/plugin-react`, `vitest`, `eslint`, `concurrently`, `fake-indexeddb`, and `sharp`.
 
 Build this first because the repo’s CI already assumes `npm ci`, `npm test`, `npm run build`, and `npm run lint` exist. `.github/workflows/ci.yml` and `.github/workflows/deploy.yml` both run `npm ci`; CI then runs `npm test`, `npm run build`, and `npm run lint`, while deploy runs `npm run build` again to produce `dist/`.
@@ -46,6 +54,12 @@ That makes the board parser/writer contract foundational. If this layer is wrong
 
 Run the focused board suite that already exists in `testFiles[]`:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```bash
 npx vitest run \
   src/focusPlanOps.test.js \
@@ -55,6 +69,8 @@ npx vitest run \
   src/taskSort.test.js
 ```
 
+
+</details>
 Those tests pin the dangerous invariants: ragged Deferred rows, wake-column migration, linked-id recovery, id allocation, completion rows, and priority ordering.
 
 ## 2. Build the journal parser and config-file editors next
@@ -71,6 +87,12 @@ These modules are intentionally dependency-light because the app, the Telegram b
 
 **Verification for this stage**
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```bash
 npx vitest run \
   src/journalChat.test.js \
@@ -80,6 +102,8 @@ npx vitest run \
   src/config/userSettingsForm.test.js
 ```
 
+
+</details>
 That validates append-only journal writes, sentinel handling, fence masking, queue concurrency, human-authored gate preservation, and surgical `user-settings.md` edits.
 
 ## 3. Build folder-sync before finalizing storage orchestration
@@ -96,6 +120,12 @@ Then add provider helpers and engine wiring. This ordering follows the internal 
 
 **Verification for this stage**
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```bash
 npx vitest run \
   packages/folder-sync/src/codecs/mdTable.test.js \
@@ -105,6 +135,8 @@ npx vitest run \
   packages/folder-sync/src/providers/oneDrive.pagination.test.js
 ```
 
+
+</details>
 These tests prove the row/frame codec, tombstone merge, record reconciliation, and cloud-provider pagination behavior that the app depends on during sync.
 
 ## 4. Build storage providers and the Express API together
@@ -122,6 +154,12 @@ The justification is practical as well as structural: `server.js` exposes `/api/
 
 **Verification for this stage**
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```bash
 npx vitest run \
   src/storage/fsa.test.js \
@@ -135,12 +173,22 @@ npx vitest run \
   src/storage/syncStatusCoalesce.test.js
 ```
 
+
+</details>
 Then do a smoke check of the backend contract itself:
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```bash
 npm run server
 ```
 
+
+</details>
 `server.js` is not covered by a dedicated root test file in `testFiles[]`, so the storage suite plus a server smoke run is the narrowest real verification available before full app integration.
 
 ## 5. Build `src/App.jsx` after board, journals, config, sync, and storage exist
@@ -150,6 +198,12 @@ npm run server
 That means React comes **after** the file grammars and the service layers. Rebuilding the UI earlier would force you to guess at contracts that the current repo has already extracted into pure modules.
 
 **Verification for this stage**
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```bash
 npx vitest run \
@@ -164,6 +218,8 @@ npx vitest run \
 npm run build
 ```
 
+
+</details>
 `npm run build` matters here because CI and deploy both rely on Vite production builds succeeding, not just isolated unit tests.
 
 ## 6. Build the Telegram bridge after the board and journal formats are stable
@@ -179,6 +235,12 @@ Its internal modules are fairly independent, but conceptually it should come aft
 
 **Verification for this stage**
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```bash
 npx vitest run \
   packages/telegram-bridge/src/board.test.js \
@@ -192,6 +254,8 @@ npx vitest run \
   packages/telegram-bridge/src/bridge.test.js
 ```
 
+
+</details>
 That is the real package-level contract: row parsing, completion detection, journal folding, digest ranking, reply routing, and end-to-end bridge behavior.
 
 ## 7. Build standalone credential tooling alongside the integrations
@@ -200,10 +264,18 @@ That is the real package-level contract: row parsing, completion detection, jour
 
 **Verification for this stage**
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```bash
 npx vitest run packages/mcp-cred-vault/src/schema.test.js
 ```
 
+
+</details>
 ## 8. Build the Overnight Agent plugin last
 
 The plugin depends on almost every format defined above:
@@ -219,12 +291,20 @@ This is why the current repo treats the plugin as a consumer of stable formats r
 
 There are two direct test files in `testFiles[]`:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```bash
 npx vitest run \
   plugins/overnight-agent/checks/stuck-run-sweep.test.mjs \
   plugins/overnight-agent/checks/workflow-health-sweep.test.mjs
 ```
 
+
+</details>
 The heavier verification lives in CI as PowerShell mutation checks, and those are part of the actual design surface. `.github/workflows/ci.yml` runs, among others:
 
 - `./plugins/overnight-agent/checks/mutcheck-browser-slots.ps1`

@@ -6,6 +6,12 @@
 
 The design rejects whole-file last-write-wins for planner boards. `packages/folder-sync/src/merge.js` says the merge unit is a *record* keyed by stable id, not the whole file, and that deletes are carried as tombstones so a stale replica cannot resurrect a row another device deleted. `packages/folder-sync/src/records.js` then turns that rule into an end-to-end reconcile: parse local and remote text through a codec, stamp local edits with logical clocks, merge per record, preserve sidecar metadata, and write the merged content plus sidecar back to whichever side changed. The service worker keeps that loop running even when the UI is backgrounded.
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 export function mergeCollections(local = {}, remote = {}, opts = {}) {
   const { now = Date.now(), normalizeZeroClock = true } = opts
@@ -19,7 +25,15 @@ export function mergeCollections(local = {}, remote = {}, opts = {}) {
 }
 ```
 
+
+</details>
 ## Modules and exports
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Path | Exports from `spec-facts.json` | Role |
 | --- | --- | --- |
@@ -40,6 +54,8 @@ export function mergeCollections(local = {}, remote = {}, opts = {}) {
 | `packages/folder-sync/src/reconcile.js` | `filesToDeleteLocally`, `isConsumerVisibleMirrorPath`, `isMassDeletion`, `isValidRemotePath`, `mtimeKeysForProvider`, `planMirrorSync`, `planPlainPush`, `shouldPullRemote` | Pure decision logic for pushes, pulls, mirror repair, and deletion propagation. |
 | `packages/folder-sync/src/records.js` | `frameHasStructure`, `framePriorityCount`, `isSidecarPath`, `preferPopulatedPriorityFrame`, `preferStructuredFrame`, `reconcileRecordsFile`, `sidecarPath` | File-level reconcile around the merge core. |
 | `packages/folder-sync/src/sw.js` | — | Background sync worker and record-codec dispatch. |
+
+</details>
 
 ## Central mechanics
 
