@@ -633,8 +633,129 @@ if (-not $NoOaHome) {
   }
 }
 
+# --- 4.6 THE THIRD DEPLOY TARGET: THE CHECKOUT THE BRIDGE RUNS FROM -------------------
+# Both targets above are COPIES - files are read out of the ref and written into a tree.
+# The bridge is not a copy. PHASE 3 executes it straight out of the working tree at
+# $Repo (user-settings.md -> "Bridge CLI"), so for that one surface "deployed" is not a
+# write at all: it is whether this checkout's HEAD is the ref.
+#
+# Nothing above moves HEAD. The deploy reads BLOBS from $Ref, so it can copy correct
+# content into both targets, report "deployed N, residual drift 0, verified-current
+# True", and still leave the working tree arbitrarily far behind - and that working tree
+# is the code the bridge runs. Both deploy checks are clean because the stale file is on
+# neither of their manifests, which is the whole of GH #622.
+#
+# Measured 2026-09-08: #621 merged as 6f8399c with 37/37 green, both targets reported
+# clean, and the bridge went on running the pre-#620 code until this checkout was
+# fast-forwarded by hand. Had that been skipped the run would have called the fix
+# shipped and verified, the acceptance measurement would have sat still, and no error
+# anywhere would have explained why.
+#
+# Advancing it is only safe when there is nothing to lose, so the two unsafe cases are
+# REPORTED rather than resolved: a dirty tree, where a fast-forward would carry
+# uncommitted work onto a new base, and a HEAD that is ahead of the ref or pinned to a
+# different checkout. The "Bridge CLI" row exists precisely so the bridge can be pinned
+# to a validated build; silently advancing a pin would reintroduce the "runs a different
+# build than the one that was validated" hazard the row was created to prevent. A
+# deliberate pin stays deliberate, and an accidental one becomes visible.
+$checkoutExit = 0
+$checkoutState = 'skipped'
+$checkoutHead = ''
+$checkoutPin = ''
+try {
+  # Where does the bridge actually live? The row may pin it outside $Repo, and a pin is
+  # the one case where being behind the ref is a decision rather than a defect.
+  $settingsCandidates = @(
+    (Join-Path $Installed 'overnight-agent\skills\overnight-agent\user-settings.md'),
+    (Join-Path $env:LOCALAPPDATA 'overnight-agent\user-settings.md'),
+    (Join-Path $Repo 'plugins\overnight-agent\skills\overnight-agent\user-settings.md')
+  )
+  $settingsFile = $settingsCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+  $bridgePath = ''
+  if ($settingsFile) {
+    $row = Select-String -Path $settingsFile -Pattern '^\|\s*Bridge CLI\s*\|' | Select-Object -First 1
+    if ($row -and $row.Line -match '`([^`]+)`') { $bridgePath = $Matches[1].Trim() }
+  }
+  # The shipped template carries a `<dev drive>` placeholder rather than a real path.
+  # An unresolved placeholder is not a pin - it means the row was never filled in - so
+  # it falls back to $Repo rather than being reported as a deliberate pin elsewhere.
+  if ($bridgePath -and $bridgePath -notmatch '[<>]') {
+    $repoFull = [System.IO.Path]::GetFullPath($Repo).TrimEnd('\')
+    if (-not $bridgePath.StartsWith($repoFull, [StringComparison]::OrdinalIgnoreCase)) {
+      $checkoutPin = $bridgePath
+    }
+  }
+
+  $headRun = Invoke-Bounded -FilePath 'git' -ArgumentList @('-C',$Repo,'rev-parse','HEAD') -BudgetMs (Get-RemainingMs)
+  if ($headRun.TimedOut) { Stop-ForBudget 'bridge checkout HEAD' }
+  if ($headRun.ExitCode -ne 0) { throw "cannot resolve HEAD in $Repo" }
+  $checkoutHead = $headRun.StdOut.Trim()
+
+  if ($checkoutPin) {
+    # Pinned elsewhere: say so and touch nothing. Reporting the divergence is still the
+    # point - a pin nobody remembers setting looks exactly like a pin nobody set.
+    $checkoutState = 'pinned'
+    Write-Host ''
+    Write-Note "bridge checkout is PINNED outside $Repo - not touched: $checkoutPin"
+  } elseif ($checkoutHead -eq $refSha) {
+    $checkoutState = 'current'
+  } else {
+    $countRun = Invoke-Bounded -FilePath 'git' `
+      -ArgumentList @('-C',$Repo,'rev-list','--left-right','--count',"HEAD...$refSha") `
+      -BudgetMs (Get-RemainingMs)
+    if ($countRun.TimedOut) { Stop-ForBudget 'bridge checkout divergence' }
+    $ahead = 0; $behind = 0
+    if ($countRun.ExitCode -eq 0 -and $countRun.StdOut -match '(\d+)\s+(\d+)') {
+      $ahead = [int]$Matches[1]; $behind = [int]$Matches[2]
+    }
+    $dirtyRun = Invoke-Bounded -FilePath 'git' -ArgumentList @('-C',$Repo,'status','--porcelain') -BudgetMs (Get-RemainingMs)
+    $dirty = ($dirtyRun.ExitCode -eq 0 -and $dirtyRun.StdOut.Trim())
+
+    if ($ahead -gt 0 -or $dirty) {
+      # Never resolve this automatically. Both cases mean the working tree holds
+      # something the ref does not, and a fast-forward would either fail or quietly
+      # rebase real work onto a new base.
+      $checkoutState = 'diverged'
+      $checkoutExit = 2
+      Write-Host ''
+      Write-Note ("bridge checkout NOT advanced - {0} ahead, {1} behind, dirty {2}" -f $ahead, $behind, [bool]$dirty)
+    } elseif ($behind -gt 0) {
+      if ($WhatIf) {
+        $checkoutState = 'behind'
+        Write-Host ''
+        Write-Note "WHAT-IF - bridge checkout is $behind behind $Ref; would fast-forward."
+      } else {
+        $ffRun = Invoke-Bounded -FilePath 'git' -ArgumentList @('-C',$Repo,'merge','--ff-only',$refSha) -BudgetMs (Get-RemainingMs)
+        if ($ffRun.TimedOut) { Stop-ForBudget 'bridge checkout fast-forward' }
+        if ($ffRun.ExitCode -eq 0) {
+          # Verify the far end rather than trusting the exit code - the same rule the
+          # other two targets follow, and the reason this gap was findable at all.
+          $afterRun = Invoke-Bounded -FilePath 'git' -ArgumentList @('-C',$Repo,'rev-parse','HEAD') -BudgetMs (Get-RemainingMs)
+          $checkoutHead = if ($afterRun.ExitCode -eq 0) { $afterRun.StdOut.Trim() } else { $checkoutHead }
+          if ($checkoutHead -eq $refSha) {
+            $checkoutState = 'advanced'
+            Write-Host ''
+            Write-Note "bridge checkout fast-forwarded $behind commit(s) to $($refSha.Substring(0,12))"
+          } else {
+            $checkoutState = 'unverified'; $checkoutExit = 2
+          }
+        } else {
+          $checkoutState = 'ff-failed'; $checkoutExit = 2
+          Write-Host ''
+          Write-Note "bridge checkout fast-forward FAILED - it is still $behind behind $Ref."
+        }
+      }
+    }
+  }
+} catch {
+  # Consistent with the OA-home step: a failure here degrades to "not synced" and is
+  # reported, never thrown, because it must not abort a run that has already deployed.
+  $checkoutState = 'error'; $checkoutExit = 2
+  Write-Host "  | bridge checkout check failed: $_"
+}
+
 # --- 5. REPORT -----------------------------------------------------------------------
-$needsAttention = ($escalate.Count -gt 0) -or (-not $verified) -or ($oaHomeExit -ne 0)
+$needsAttention = ($escalate.Count -gt 0) -or (-not $verified) -or ($oaHomeExit -ne 0) -or ($checkoutExit -ne 0)
 
 if ($Json) {
   [pscustomobject]@{
@@ -649,12 +770,22 @@ if ($Json) {
     residual        = @($residual | ForEach-Object { "$($_.Verdict) $($_.Rel)" })
     verifiedCurrent = $verified
     oaHomeExit      = $oaHomeExit
+    checkout        = $checkoutState
+    checkoutHead    = $checkoutHead
+    checkoutPin     = $checkoutPin
+    checkoutExit    = $checkoutExit
     whatIf          = [bool]$WhatIf
   } | ConvertTo-Json -Depth 5 -Compress
 } else {
   Write-Host ''
   Write-Note ("deployed {0}, removed {1}, refused {2}, residual drift {3}, verified-current {4}" -f `
               $written.Count, $removed.Count, $refused.Count, $residual.Count, $verified)
+  # The bridge checkout is stated unconditionally, including when it is clean. A surface
+  # reported only on failure is one a reader cannot confirm was looked at, which is the
+  # ambiguity #622 was filed about.
+  $headShort = if ($checkoutHead) { $checkoutHead.Substring(0, [Math]::Min(12, $checkoutHead.Length)) } else { '?' }
+  Write-Note ("bridge checkout {0} ({1}){2}" -f $checkoutState, $headShort,
+              $(if ($checkoutPin) { " pinned -> $checkoutPin" } else { '' }))
 
   if ($escalate.Count -gt 0) {
     Write-Host ''
@@ -670,6 +801,15 @@ if ($Json) {
     Write-Host '  DRIFT SURVIVED THE DEPLOY - a file on the ref is still absent from the'
     Write-Host '  installed tree. This is the "merged but dead" case; investigate before'
     Write-Host '  trusting the running agent.'
+  }
+  if ($checkoutExit -ne 0) {
+    Write-Host ''
+    Write-Host '  THE BRIDGE CHECKOUT IS NOT ON THE REF - PHASE 3 runs the telegram bridge'
+    Write-Host '  directly out of that working tree, so a merged bridge fix is NOT running'
+    Write-Host '  no matter what the two copied targets above report. Resolve it by hand:'
+    Write-Host '  commit or stash the local work, then fast-forward. Note the stale-bridge'
+    Write-Host '  hazard on the "Bridge CLI" row - an old sync-down can advance the Telegram'
+    Write-Host '  offset past a reply and it is never redelivered.'
   }
   if ($oaHomeExit -ne 0) {
     Write-Host ''
