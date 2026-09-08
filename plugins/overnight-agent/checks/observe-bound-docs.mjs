@@ -138,6 +138,34 @@ export function classifyAttempts(attempts) {
   return { outcome: 'fail', reason: String(last && last.reason ? last.reason : 'unknown'), attempts: list.length };
 }
 
+/**
+ * PURE. Say whether a failed `mcp-probe` invocation failed because the TRANSPORT never came up,
+ * or because the call itself was refused -- and phrase it so the two cannot be read as the same
+ * event. (GH #612.)
+ *
+ * This matters because the previous wording, `fetch exited 1`, was printed next to a document id
+ * and therefore read as a statement about the DOCUMENT. Measured 2026-09-07: task #228's page was
+ * healthy, and the probe was dying at 90s *inside module import* (`fastmcp` -> `griffe`) before any
+ * Google call was made. The pass reported the page. That is the same misattribution as #531 ("zero
+ * comments reads as unreadable") and #610 ("one transient reads as broken"), one layer further down
+ * the stack: a failure in the reader, named after the thing being read.
+ *
+ * A timeout with no stdout is the cold-start signature specifically -- the server was still starting
+ * when its budget ran out -- so it is worth naming, because the remedy (warm the transport once per
+ * pass) is different from the remedy for a call that was actually answered and refused.
+ */
+export function classifyFetchFailure({ status, stdout, stderr } = {}) {
+  const err = String(stderr || '');
+  const timedOut = /timeout after (\d+)\s*ms/i.exec(err);
+  if (timedOut && !String(stdout || '')) {
+    return { kind: 'transport', reason: `transport: probe timed out after ${timedOut[1]}ms (server cold?)` };
+  }
+  if (!String(stdout || '')) {
+    return { kind: 'transport', reason: `transport: probe exited ${status} with no output` };
+  }
+  return { kind: 'document', reason: `fetch exited ${status}` };
+}
+
 const TERMINAL = new Set(['done', 'skip']);
 
 /**
@@ -283,6 +311,31 @@ if (!isMain) {
   let recovered = 0;
   const withComments = [];
   const flaky = [];
+  let transportFailed = 0;
+
+  // Warm the transport ONCE, before any document is polled. (GH #612.)
+  //
+  // The per-document budget has to be sized for a Google round trip, not for a Python process
+  // importing `fastmcp` and `griffe` from a cold cache -- measured 2026-09-07, the cold import
+  // alone exceeded 90s and the pass then blamed the document. Paying that start-up here, once,
+  // means every subsequent per-document timeout is a statement about the document.
+  //
+  // Deliberately NOT fatal. If the warm-up fails the pass still runs: its job is to move the
+  // cost, not to add a new gate, and a warm-up that could veto the pass would be a second way
+  // for a healthy board to go unread.
+  if (!DRY && due.length) {
+    const warmed = spawnSync(process.execPath, [PROBE, 'google-workspace', 'list'], {
+      encoding: 'utf8',
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    if (warmed.status === 0 && warmed.stdout) {
+      console.log('  warm   transport ready');
+    } else {
+      const why = classifyFetchFailure({ status: warmed.status, stdout: warmed.stdout, stderr: warmed.stderr });
+      console.log(`  warm   transport did NOT come up -- ${why.reason} (polling anyway)`);
+    }
+    console.log('');
+  }
 
   // ONE attempt against one document. Returns a verdict rather than printing or counting, so the
   // retry policy lives in exactly one place and this stays the part that talks to the outside.
@@ -293,7 +346,8 @@ if (!isMain) {
       maxBuffer: 32 * 1024 * 1024,
     });
     if (fetched.status !== 0 || !fetched.stdout) {
-      return { ok: false, reason: `fetch exited ${fetched.status}` };
+      const why = classifyFetchFailure({ status: fetched.status, stdout: fetched.stdout, stderr: fetched.stderr });
+      return { ok: false, reason: why.reason, kind: why.kind };
     }
     const dump = path.join(os.tmpdir(), `oa-doc-observe-${t.id}-${process.pid}.json`);
     try {
@@ -344,6 +398,8 @@ if (!isMain) {
     if (verdict.outcome === 'fail') {
       console.log(`  FAIL   ${subject}  -- ${verdict.reason} (${verdict.attempts} attempts)`);
       failed++;
+      // A transport failure is not evidence about the page, so it is counted apart from one.
+      if (attempts[attempts.length - 1] && attempts[attempts.length - 1].kind === 'transport') transportFailed++;
       continue;
     }
     if (verdict.outcome === 'recovered') {
@@ -372,7 +428,14 @@ if (!isMain) {
     for (const f of flaky) console.log(`  task ${f.id}: first attempt ${f.reason}`);
     console.log('');
   }
-  console.log(`observed ${ok} (${recovered} recovered), failed ${failed}, still stale ${Math.max(0, staleTotal - ok)}`);
+  if (transportFailed) {
+    console.log(
+      `TRANSPORT failure on ${transportFailed} of ${failed} failed poll(s) -- the probe never returned, so these say ` +
+        'NOTHING about the document. Do not read them as unreadable pages.',
+    );
+    console.log('');
+  }
+  console.log(`observed ${ok} (${recovered} recovered), failed ${failed} (${transportFailed} transport), still stale ${Math.max(0, staleTotal - ok)}`);
   // A pass in which EVERY poll failed is a broken pass and must be loud. Partial failure is
   // normal (one doc can be unshared) and must not fail the run, or a single bad doc switches the
   // whole job off -- which is how this repo loses checks.

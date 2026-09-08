@@ -196,10 +196,48 @@ async function suite(modPath) {
   const { OBSERVE_ATTEMPTS } = await import(`${pathToFileURL(modPath).href}?t=${Date.now()}`);
   check('C6 attempts floor at 2 so the defect cannot be re-enabled by env', OBSERVE_ATTEMPTS >= 2, `got ${OBSERVE_ATTEMPTS}`);
 
+  // ---- classifyFetchFailure: transport vs. document (GH #612) ------------------------------
+  // The bug being guarded: a probe that never came up was reported next to a document id as
+  // `fetch exited 1`, which reads as a statement about the DOCUMENT. Measured on task #228 --
+  // the page was healthy and the probe was dying at 90s inside module import.
+  const { classifyFetchFailure } = await import(`${pathToFileURL(modPath).href}?t=${Date.now()}`);
+
+  // C7 -- A COLD-START TIMEOUT IS NAMED AS TRANSPORT, NOT AS A DOCUMENT FAILURE. This is the
+  // exact live signature: non-zero exit, no stdout, "timeout after 90000ms" on stderr.
+  const f1 = classifyFetchFailure({ status: 1, stdout: '', stderr: 'PROBE FAILED: timeout after 90000ms; stderr: ...' });
+  check(
+    'C7 a probe timeout with no output is classified as transport',
+    f1.kind === 'transport' && /timed out after 90000ms/.test(f1.reason),
+    `got ${JSON.stringify(f1)}`,
+  );
+
+  // C8 -- THE WORDING MUST NOT NAME THE DOCUMENT. A transport reason that still says "fetch
+  // exited" rebuilds the misattribution while passing a kind check, so assert the text too.
+  check('C8 a transport reason does not read as a document failure', !/^fetch exited/.test(f1.reason), `got ${f1.reason}`);
+
+  // C9 -- AN ANSWERED-BUT-REFUSED CALL IS STILL A DOCUMENT FAILURE. If everything became
+  // "transport", the distinction would be decorative and a genuinely bad page would be excused.
+  const f2 = classifyFetchFailure({ status: 1, stdout: '{"error":"not found"}', stderr: '' });
+  check('C9 a call that returned output is NOT transport', f2.kind === 'document', `got ${JSON.stringify(f2)}`);
+
   return failures;
 }
 
 const MUTATIONS = [
+  {
+    id: 'M0d',
+    what: 'every fetch failure is called a transport failure',
+    why: 'the distinction becomes decorative: a genuinely broken document is excused as "the probe never came up", which is the #612 misattribution running in the opposite direction and is worse, because it suppresses a real finding rather than adding a false one. Killed by C9.',
+    find: "  if (!String(stdout || '')) {",
+    replace: '  if (true) {',
+  },
+  {
+    id: 'M0e',
+    what: 'a cold-start timeout keeps the old document-flavoured wording',
+    why: 'the whole defect: the line still reads `fetch exited 1` beside a document id, so a reader attributes a dead transport to a healthy page -- exactly what happened to task #228. Killed by C7/C8.',
+    find: "    return { kind: 'transport', reason: `transport: probe timed out after ${timedOut[1]}ms (server cold?)` };",
+    replace: "    return { kind: 'document', reason: `fetch exited ${status}` };",
+  },
   {
     id: 'M0a',
     what: 'the verdict follows ANY successful attempt rather than the LAST one',
