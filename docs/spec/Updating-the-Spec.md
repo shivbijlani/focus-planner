@@ -21,17 +21,27 @@ first, then let the next run (or a manual one) create the page and re-index `Hom
 Defined in `.github/workflows/spec-wiki.yml`, on a `schedule: cron '0 */6 * * *'` trigger (every 6
 hours) or `workflow_dispatch`:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```
 scripts/spec/collect.mjs   (no model)  -> spec-facts.json: module graph, exports, tests,
                                           workflows, open issues -- ground truth
 copilot (model)                        -> docs/spec/*.md, one page at a time from
                                           scripts/spec/prompt.md, using spec-facts.json
+scripts/spec/readability.mjs (no model) -> wraps exposed examples in collapsible,
+                                          coloured technical-detail callouts
 scripts/spec/verify.mjs    (no model)  -> fails the build if the prose references
                                           anything that does not exist, or omits a domain
 scripts/spec/conflicts.mjs (no model)  -> reports open issues that demand opposite things
                                           (spec-decisions.md), which verify.mjs cannot catch
 ```
 
+
+</details>
 The split exists because handing a model the repo and asking for a spec produces prose that drifts
 from the code immediately and is uncheckable by reading it — the failure mode is the prose's
 *relationship* to the code, which a reader never has in front of them. `collect.mjs` and `verify.mjs`
@@ -40,12 +50,20 @@ than merely plausible.
 
 ### Running the mechanical halves locally
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```
 node scripts/spec/collect.mjs --out spec-facts.json      # regenerate ground truth
 node scripts/spec/verify.mjs --facts spec-facts.json --dir docs/spec
 node scripts/spec/conflicts.mjs --facts spec-facts.json --out spec-decisions.json --md spec-decisions.md
 ```
 
+
+</details>
 `scripts/spec/verifyParity.mjs` is a unit test (run by `npm test`) that holds the workflow's
 CI-verification job to the same command set CI itself runs, so the two cannot silently diverge.
 
@@ -59,6 +77,11 @@ CI-verification job to the same command set CI itself runs, so the two cannot si
 | `uncovered-key-module` | The single largest module in some domain is never named anywhere. A domain can pass the coverage check above by a passing mention while its substance is absent, so this is a second, stricter check pinned to a real file. |
 | `thin-page` | A page is under 250 words — the floor below which it cannot carry an architecture, a data format, and its rationale. |
 | `no-examples` (page `(all)`) | No fenced code block appears anywhere in the page set. A spec that never shows a concrete artifact cannot be rebuilt from — prose cannot substitute for a real signature or file format. |
+| `exposed-technical-detail` | A fenced example appears in the main reading flow instead of a collapsible `<details>` block. |
+| `unlabelled-technical-detail` | A collapsible technical block has no `<summary>` describing what it contains. |
+| `uncoloured-technical-detail` | A collapsible technical block lacks a GitHub alert immediately before it, so optional depth is not visually distinct. Alerts cannot be nested inside `<details>` because GitHub renders nested alert markers as literal text. |
+| `technical-doc-code` | `Technical-Architecture.md` contains a fenced block other than a Mermaid diagram. The deep-dive may contain architecture and principles, never implementation code. |
+| `missing-technical-doc` / `unlinked-technical-doc` | The architecture deep-dive is absent or cannot be reached from `Home.md`. |
 
 `invented-path` and `unknown-issue` findings are fatal (nonzero exit); `uncovered-domain` and
 `uncovered-key-module` are fatal too — all are reported together, grouped by kind, with the first 25

@@ -32,6 +32,12 @@ The `app` domain is the planner’s React front end plus the pure text-transform
 | `src/AgentGateEditor.jsx` | `GateList`, `default` |
 | `src/AgentSettingsEditor.jsx` | `default` |
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 export const FROM_ME = '<!-- from: me -->'
 
@@ -45,6 +51,8 @@ export function appendJournalMessage(content, text, today = localISODate()) {
 }
 ```
 
+
+</details>
 The snippet above from `src/journalChat.js` is the journal-writing contract: new user text is appended at the bottom, grouped under a `## YYYY-MM-DD` day heading, and stamped with `<!-- from: me -->` when attribution would otherwise be ambiguous.
 
 ## Behavioural requirements from tests

@@ -28,6 +28,12 @@ The central distinction is between **machine-managed reference docs** and **huma
 | `src/config/agentSettingsVisibility.js` | `classifyAgentSetting`, `isUserFacingSetting`, `partitionAgentSettings` |
 | `src/config/branding.js` | `APP_DESCRIPTION`, `APP_NAME`, `CLOUD_FOLDER_NAME`, `COMPLETED_FILE`, `PLAN_FILE` |
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```markdown
 ## Do not gate these (reversible)
 
@@ -40,6 +46,8 @@ The central distinction is between **machine-managed reference docs** and **huma
 - Starting a fresh conversation with someone in chat/email
 ```
 
+
+</details>
 That excerpt is copied from `src/config/agentGate.js`’s `AGENT_GATE_DOC`. Its rationale is explicit in the file header: approval cannot rest on machine-written `<!-- from: me -->` markers, so standing permission must live in a user-owned file that the app does not regenerate.
 
 ## Behavioural requirements from tests

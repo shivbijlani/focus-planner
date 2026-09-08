@@ -30,8 +30,12 @@ open yourself). You may open any file in the repo to go deeper — prefer doing 
 1. **Never invent.** Do not name a file, export, module or issue number that is not in the facts.
    A build step checks this and fails on any invented reference.
 2. **Cover every domain** in `domains`, and name each domain's principal modules by path.
-3. **Show, don't assert.** Include real signatures, real data-format samples, and fenced code
-   blocks. A rebuilder cannot infer a file format from adjectives.
+3. **Keep the main reading path non-technical.** State product behavior and rationale in plain
+   language first. Put signatures, data-format samples, module paths, and other implementation
+   detail inside `<details>` blocks with a descriptive `<summary>`. Every such block must begin
+   with a GitHub alert (`> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`, or `> [!WARNING]`) immediately
+   before each block, so optional depth is visually distinct in both the repository and its wiki
+   mirror. GitHub does not style an alert nested inside `<details>`; keep them adjacent, not nested.
 4. **Explain the why.** For each significant design decision, state the alternative that was
    rejected and the reason. Where a `doc` comment or an issue gives that reasoning, use it —
    it is primary evidence and it is what makes this a thesis rather than an inventory.
@@ -56,6 +60,7 @@ to the spec therefore means adding a row here, not only a link in `Home.md`.
 | --- | --- |
 | `Home.md` | The thesis: what this system is, the problem it solves, its core design principles, and an index linking every other page. |
 | `Architecture.md` | The domains, how they compose, the module graph in prose, process/runtime boundaries, and the data-flow from user action to persisted state. |
+| `Technical-Architecture.md` | Optional architectural depth linked from the main pages: architectural ideas, Mermaid diagrams, and design principles only. **No implementation code, signatures, or code samples.** |
 | `Data-Formats.md` | Every persisted format — the planner board, task journals, agent state, bridge state — with **annotated real samples** and the invariants each must satisfy. This is the page a rebuilder needs most and can least infer. |
 | `Domain-<name>.md` | One page per entry in `domains`. Its responsibility, principal modules, public exports, behavioural requirements derived from its tests, and its failure modes. |
 | `Prioritisation.md` | Prioritisation as a product behaviour: how priority is expressed on the board (section, urgency icon, `Work Priority`, the `## Priorities` list, row order, id — the full sort key, in order), how the user changes it (the board, a journal reply, snoozing, `agent-gate.md`, `user-settings.md`), and how the Overnight Agent's `scan` turns it into an ordered worklist with a binding `eligible` flag. Must cover the Today→Deferred gate and **what releases it** — the exhaustion declaration, the four things that cancel it, and `today_release_reason` — the liveness mechanisms (`awaiting_reply` parking, poll/recheck timers, the staleness backstop, snooze precedence), and the recurring failure class this design guards against: *the agent authoring the signal its own gate reads*. On `awaiting_reply` specifically, must state that the ask is **declared, not inferred** (issue #560): `write-turn.ps1` requires `-Ask blocking|offer|none` and stamps it into the turn, `HasBlockingAsk` prefers that declaration over any reading of the prose, the regex reading survives only as a documented **fallback** for turns written before the flag (in which fallback the dismissive-`none`/`nothing` boundary still applies, pinned by arms L1/L2/Q/R of `mutcheck-awaiting-reply.ps1`), and `scan` emits `ask_source: declared|inferred` plus `ask_declared` so the fallback's share is measurable. Must note the parking expression is duplicated in `Cmd-Scan` and `Test-SessionHoldsCapacity` and kept textually identical, so both readers move together (the #545 emitted-vs-gated failure shape), and that `has_open_ask` is unchanged in the non-regressing direction — a declaration only ever adds visibility. In the failure-class section, must distinguish the earlier **narrowing** (the dismissive-ask boundary, which left the agent still authoring the text its gate read) from the **closure** (a declared ask), and state the general rule it illustrates: an agent-authored signal is acceptable when it is authored *deliberately and structurally*, as `-Exhausted` and `-Ask` are, rather than recovered from narrative written for a human reader. Must also cover **pacing** — how much of the ordered worklist a run takes on: the `Overnight Agent concurrency` tunable in `user-settings.md` (default 1; one item in flight is isolation, not concurrency), the estimate-before-starting-another rule against the next scheduled run, and that "done" means verified and published rather than code written — noting that pacing is run-loop guidance in `SKILL.md` tracked by issue #391, not yet a mechanism. Must also cover **dispatch precedence**: that a run separates *collect* (agent inbox, folded Telegram replies, `scan`) from *execute*, that collect hands off rather than performing work, and that dispatch runs in two waves — the priority wave first, then the collect wave — where a collect-phase wake **trumps** by being dispatched in addition to the priority selection. State that this is the single sanctioned exception to the default concurrency of 1, justified by provenance (a user action may widen the run; the agent's own judgement may not), that it does not compound or raise the setting, and that it changes *when* a task is woken rather than *where* its work happens (issues #405 and #404). Ground it in `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1` and the `mutcheck-*.ps1` checks, which are the executable statement of the intended behaviour. |
@@ -71,6 +76,11 @@ to the spec therefore means adding a row here, not only a link in `Home.md`.
 - Prefer tables for enumerable facts and prose for reasoning.
 - Use present tense and active voice.
 - Link between pages with relative wiki links, e.g. `[Architecture](Architecture)`.
+- Write every page so a non-technical reader can follow its main flow without opening a
+  `<details>` block. Link deeper architectural discussion to
+  `[Technical Architecture](Technical-Architecture)` instead of expanding the main page.
+- Technical detail uses this shape: a GitHub alert naming the kind of detail, followed immediately
+  by `<details>` with a descriptive `<summary>` and the concrete example.
 - Do not include a changelog, a generation timestamp, or any note that this was machine-written —
   the commit history already carries that, and it is noise in a spec.
 - **Do not restate the bar inside the page.** "This page assumes no prior context", "a competent

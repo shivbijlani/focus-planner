@@ -56,6 +56,12 @@ Three families carry most of the domain.
 
 A small slice from the real source shows the pattern:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 // plugins/overnight-agent/checks/mutcheck-repo-drift.mjs
 // ... build synthetic fixtures, run the REAL sweep as a child process ...
@@ -66,6 +72,8 @@ A small slice from the real source shows the pattern:
 // actually depends on present in git, and identical to what is running?
 ```
 
+
+</details>
 ## Collected module families in `spec-facts.json`
 
 The table below groups the **174 collected JS modules** by file family. Counts come from
@@ -123,6 +131,12 @@ ownership out of the phase entirely.
 
 `oa-state.ps1` is large, but its command surface is explicit near the top:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```powershell
 seed   [-Force]
 scan
@@ -136,6 +150,8 @@ doc    -Id <id> ...
 resnapshot
 ```
 
+
+</details>
 Its function map matches those commands. `Get-UserSettingsPath`, `Resolve-GateSettings`, and
 `Resolve-PacingSettings` read tunables; `Get-NewestAgentTurn`, `Get-AgentEndIndex`,
 `Test-TrailingHasUser`, and `Get-ConsentFacts` parse journals; `Get-BoardMap`,
@@ -164,6 +180,12 @@ authoritative check is not a regex; it asks GitHub what **it** parsed via
 `closingIssuesReferences`, then treats the local grammar as an offline floor. `.github/workflows/pr-closing-keyword.yml`
 wires that into PR events that can change without a new commit (`edited`, `labeled`, `unlabeled`):
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```yaml
 - name: This PR body must not carry a closing reference
   env:
@@ -174,5 +196,7 @@ wires that into PR events that can change without a new commit (`edited`, `label
   run: node ./plugins/overnight-agent/checks/pr-closing-keyword.mjs --from-env
 ```
 
+
+</details>
 That placement is representative. The overnight-agent domain is not just an unattended planner
 skill; it is also the repository's largest body of executable skepticism about that skill.

@@ -32,6 +32,12 @@ The `storage` domain gives the rest of the planner one filesystem-like API while
 | `src/storage/diagnostics.js` | `clearDiagnosticEvents`, `formatDiagnosticsReport`, `gatherDiagnostics`, `getDiagnosticEvents`, `isDiagnosticsEnabled`, `recordDiagnosticEvent`, `setDiagnosticsEnabled` |
 | `src/storage/taskSettings.js` | `DEFAULT_TASK_SETTINGS`, `TASK_SETTINGS_FILE`, `__testing`, `getTaskSettings`, `moveTaskSettingsEntries`, `normalizeTaskSettingsFile`, `parseTaskSettingsFile`, `readTaskSettings`, `readTaskSettingsFromSource`, `serializeTaskSettingsFile`, `setTaskSetting`, `setTaskSettingInSource`, `withTaskSetting`, `withTaskSettingsMutationLock`, `writeTaskSettings`, `writeTaskSettingsToSource` |
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 export const TARGET_STATUS = {
   DISCONNECTED: 'disconnected',
@@ -43,6 +49,8 @@ export const TARGET_STATUS = {
 }
 ```
 
+
+</details>
 Those values from `src/storage/storage.js` are the vocabulary the UI consumes; the folder-sync service worker emits lower-level provider states, and the façade maps them into this app-level contract.
 
 ## Behavioural requirements from tests

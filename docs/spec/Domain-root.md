@@ -18,6 +18,12 @@ The `root` domain contains the repository-level runtime and toolchain entry poin
 | `vite.config.js` | `default` | Vite/React build, define, and Vitest configuration. |
 | `eslint.config.js` | `default` | Flat ESLint configuration used by `npm run lint`. |
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 app.get('/api/files', async (req, res) => { ... })
 app.get('/api/file', async (req, res) => { ... })
@@ -30,6 +36,8 @@ app.get('/api/config', (req, res) => { ... })
 app.post('/api/config', async (req, res) => { ... })
 ```
 
+
+</details>
 Those route registrations in `server.js` are the whole backend surface. The implementation enforces required query/body parameters, checks that joined paths stay under the configured planner root, and returns conventional HTTP failures: `400` for missing input, `403` for access outside the planner root, `404` for missing reads, and `500` for write/config errors.
 
 ## Behavioural requirements and current test gap

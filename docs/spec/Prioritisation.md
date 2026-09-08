@@ -29,6 +29,12 @@ between sections, inserts new numbered `## Priorities` entries, and keeps row or
 
 For example, section moves preserve user-visible ordering rather than re-sorting on write:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 /**
  * The moved rows are appended to the destination section in the supplied
@@ -42,6 +48,8 @@ const orderedRemoved = rawLines
 lines.splice(toSectionInsertIndex, 0, ...orderedRemoved)
 ```
 
+
+</details>
 Likewise, the forward design is a single canonical `## Priorities` section. `src/App.jsx`
 migrates legacy headings into that one heading, and `src/focusPlanOps.js` normalizes writes back to
 `## Priorities`. That matters because the overnight agent's reader matches only `^##\s*Priorities\b`.
@@ -50,6 +58,12 @@ Legacy compatibility exists to get old files onto the canonical path, not as a c
 ### The exact sort key as implemented
 
 `oa-state.ps1 scan` is the executable priority order. The comparator is literal code:
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```powershell
 $rows = $rows | Sort-Object `
@@ -62,6 +76,8 @@ $rows = $rows | Sort-Object `
   @{ Expression = { [int]$_.id } }
 ```
 
+
+</details>
 That yields the following order.
 
 | Precedence | Durable source | Scan field / function | Exact behaviour |
@@ -76,6 +92,12 @@ That yields the following order.
 
 The urgency map is intentionally explicit:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```powershell
 $script:UrgencyRank = @{
   ([char]::ConvertFromUtf32(0x1F534)) = 0
@@ -85,6 +107,8 @@ $script:UrgencyRank = @{
 }
 ```
 
+
+</details>
 Two consequences are easy to miss:
 
 - The overnight agent does **not** currently give distinct ranks to 🔵, 🐸, or ✅. In `scan`, they
@@ -116,6 +140,12 @@ others change whether the selected row is allowed to run.
 
 The board UI exposes the urgency edit through one shared choice list:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```js
 const PRIORITY_CHOICES = [
   { icon: '🔴', label: 'Urgent & Important' },
@@ -127,7 +157,15 @@ const PRIORITY_CHOICES = [
 ]
 ```
 
+
+</details>
 A journal reply becomes durable task priority by being appended with human provenance:
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```js
 if (lastDate !== today) addition = `\n\n## ${today}\n\n${FROM_ME}\n${text}`
@@ -135,6 +173,8 @@ else if (attributed) addition = `\n${text}`
 else addition = `\n\n${FROM_ME}\n${text}`
 ```
 
+
+</details>
 That `<!-- from: me -->` marker matters. The overnight agent treats a trailing human message as
 higher-value work than any ordinary board rank, and it also uses the marker to distinguish a real
 human reply from unattributed or agent-written text.
@@ -151,10 +191,18 @@ The two file-based controls deliberately affect different layers:
 
 The shipped template states the concurrency rationale plainly:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```md
 | Overnight Agent concurrency | `1` — how many items the agent may have **in flight** at once. At `1` it works one thing at a time; giving a task its own session is *isolation*, not permission to run several at once. |
 ```
 
+
+</details>
 ## 3. `scan` turns the board into a binding worklist
 
 `oa-state.ps1 scan` joins five kinds of fact onto each task row: board placement, journal state,
@@ -164,6 +212,12 @@ session facts, and provenance facts already computed.
 
 The important point is that `eligible` is **binding**. The downstream run loop is not supposed to
 re-argue with it. The executable rule is:
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 ```powershell
 if (-not $r.snoozed) {
@@ -175,6 +229,8 @@ if (-not $r.snoozed) {
 }
 ```
 
+
+</details>
 So the board order alone is never enough. `scan` can rank a Deferred row highly and still mark it
 ineligible because Today is still holding the gate. Conversely, a reply can force a row eligible
 regardless of where it sits on the board. `mutcheck-priority-order.ps1`,
@@ -196,6 +252,12 @@ into one word erased important meaning.
 
 The release signal is an explicit declaration, not a side effect of writing a turn:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```powershell
 $examined = @(($Exhausted -split '[,;\r\n\t ]+') | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 })
 if ($examined.Count -eq 0) {
@@ -210,6 +272,8 @@ Set-Member $st 'today_exhausted' ([pscustomobject]@{
   })
 ```
 
+
+</details>
 `Set-ExhaustionDeclaration` also refuses to combine `-Exhausted` with `-Status`, `-Version`,
 `-PlanId`, `-Poll*`, or `-Recheck*` in the same call, and it requires a recent `last_turn_at`.
 That means: write the turn first, then declare exhaustion separately, and only for work this run
@@ -361,6 +425,12 @@ Pacing and ordering are related but different. Ordering answers *which row is ne
 resolves it itself, not by trusting the caller to remember a flag. The capacity view is emitted by
 `session -InFlight`:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```powershell
 return ([pscustomobject]@{
     concurrency = [int]$script:ConcurrencyLimit
@@ -371,6 +441,8 @@ return ([pscustomobject]@{
   } | ConvertTo-Json -Depth 4)
 ```
 
+
+</details>
 `mutcheck-pacing-concurrency.ps1` proves the resolver's sharp edges: the setting must be a **bare
 whole number**, an explicit `-Concurrency` argument outranks the file, malformed prose reports
 `concurrency_source: settings-malformed`, and every failure narrows to `1` rather than widening the
@@ -415,12 +487,20 @@ collection:
 
 The sanctioned exception is encoded in the session-capacity refusal text itself:
 
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```powershell
 throw ("session_at_capacity: ... -Force is for the collect-wave exception only " +
   '(Prioritisation.md 4.1): a wake that exists because the USER did something may widen ' +
   "the run; the agent's own judgement may not.")
 ```
 
+
+</details>
 That exception does **not** raise the configured setting, compound it, or move work back into the
 run session. It changes **when** a task is woken, not **where** its work happens. The rationale is
 provenance: a mail reply, a Telegram reply, or a journal reply is explicit user action, so it may

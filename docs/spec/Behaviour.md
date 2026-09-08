@@ -1,6 +1,12 @@
 # Behaviour
 This page turns the named acceptance corpus in `spec-facts.json` into implementation-facing requirements. The snapshot records **83 test files / 1,220 named tests** across the app, sync engine, Telegram bridge, task-paper renderer, diagnostics, storage, config, and repository scripts. Use it with [Architecture](Architecture), [Domain-app](Domain-app), [Domain-folder-sync](Domain-folder-sync), [Domain-storage](Domain-storage), [Domain-task-paper](Domain-task-paper), and [Domain-telegram-bridge](Domain-telegram-bridge) when rebuilding the system.
 The extraction shape is concrete. For example, `testFiles[]` contains entries like this, and the prose below simply restates them in “the system must …” form:
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 ```json
 {
   "path": "src/raggedRow.test.js",
@@ -12,6 +18,8 @@ The extraction shape is concrete. For example, `testFiles[]` contains entries li
   "domain": "app"
 }
 ```
+
+</details>
 - `#426 reader: a ragged Deferred row keeps its Linked ID` → the system must preserve `Linked ID` on ragged Deferred rows.
 - `#426 snooze hazard: a misfiled value must never snooze a task` → the system must not turn a misfiled value into an accidental snooze.
 - `#426 acceptance: the reader agrees with the writer` → the reader and writer must agree on the row shape they support.
