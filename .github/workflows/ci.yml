@@ -1028,3 +1028,37 @@ jobs:
         env:
           OA_SWEEP: ./plugins/overnight-agent/checks/session-state-prune-sweep.mjs
         run: node ./plugins/overnight-agent/checks/mutcheck-session-prune.mjs
+
+  # A shipped PR does not close its issue here, so `OPEN` spans "filed and unworked" AND
+  # "shipped, awaiting his review" -- and `gh issue list` renders both identically. #631
+  # measured the split: 98 of 169 open issues were already shipped.
+  #
+  # Measuring it changed nothing. The census runs after the fact, into a suite log, while
+  # the moment that matters is a run deciding what to hand a sub-session. Measured across
+  # 2026-09-07/08: twelve recommendations of already-shipped work, every one refusable from
+  # information the repo already had. The correction went into agent-lore.md, which #454
+  # records as write-only with zero readers, and the next run repeated it. #635 turns the
+  # census into a gate (write-turn.ps1 G15) so the rule is enforced rather than written down.
+  #
+  # `mutcheck-shipped-but-open.mjs` is registered HERE for the first time. It shipped with
+  # #631 and has been running nowhere since -- the same "merged and never once executed"
+  # class this workflow has now recorded three separate times. A guard nothing runs is the
+  # defect wearing the guard's clothes, which is precisely what #635 is about.
+  #
+  # node is required as well as pwsh: the guard shells out to the classifier, and the
+  # PowerShell arms drive the REAL write-turn.ps1 rather than a re-implementation of it.
+  shipped-pick:
+    name: Already-shipped work cannot be recommended
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check (the census classifies what it claims to read)
+        run: node ./plugins/overnight-agent/checks/mutcheck-shipped-but-open.mjs
+      - name: Mutation check (the preflight's exit-code contract, incl. 2 != 0)
+        run: node ./plugins/overnight-agent/checks/mutcheck-issue-shipped.mjs
+      - name: Mutation check (G15 refuses proposals, never reports, and fails open loudly)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-shipped-pick.ps1

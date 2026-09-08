@@ -186,6 +186,20 @@ $DocMetaRe = '<!--\s*doc-meta\s+docId=(?<id>[A-Za-z0-9_\-]+)(?:\s+docUrl=(?<url>
 # before it bites rather than after).
 $OA_HOME = if ($env:WRITE_TURN_OA_HOME) { $env:WRITE_TURN_OA_HOME } else { Join-Path $env:LOCALAPPDATA 'overnight-agent' }
 
+# --- #635 the already-shipped pick -------------------------------------------------------
+# Where the shipped/unworked classifier lives. Resolved relative to THIS script, not to the
+# cwd, because the two homes differ and only one of them is a checkout: in production this
+# script runs from the INSTALLED plugin (`~/.copilot/installed-plugins/focus-planner/...`)
+# with cwd set to the planner data folder. `issue-shipped.mjs` does its own repo resolution
+# from there; this only has to find the file.
+$script:IssueResolver = if ($env:WRITE_TURN_ISSUE_RESOLVER) { $env:WRITE_TURN_ISSUE_RESOLVER }
+                        else { [IO.Path]::Combine($PSScriptRoot, '..', '..', 'checks', 'issue-shipped.mjs') }
+
+# Set by G15 when it could not classify. Printed as an advisory rather than swallowed,
+# because the defect class this whole guard belongs to is a check that cannot see reporting
+# the same shape as a check that looked and found nothing (#520, #632).
+$script:G15Note = $null
+
 # --- #473 one-turn-per-wake ------------------------------------------------------------
 # A managed agent turn heading. Deliberately the SAME shape oa-state.ps1's ManagedHeadingRe
 # matches and the Telegram bridge anchors on, so all three agree on what a turn is; a looser
@@ -633,6 +647,105 @@ function Test-AskContradiction([string]$Body) {
   return $null
 }
 
+<#
+  G15 -- DO NOT PROPOSE WORK THAT IS ALREADY SHIPPED (#635)
+
+  #630 established the fact and #631 measured it: a shipped PR does not close its issue
+  here, so `OPEN` spans "filed and unworked" and "shipped, awaiting his review", and
+  `gh issue list` renders both identically. 98 of 169 open issues were already shipped.
+
+  Measuring it changed nothing, and the sweep's own header says why in the sentence it
+  wrote about agent-lore.md: A RULE NOTHING ENFORCES IS PROSE. The census runs after the
+  fact, into a suite log; the moment that matters is a run deciding what to hand a
+  sub-session, and at that moment nothing consulted it. Measured across 2026-09-07/08:
+  twelve recommendations of already-shipped work to the #468 sub-session (#620 and #588
+  twice each, plus #515, #594, #598), every one of them refusable from information the
+  repo already had. The correction was written into agent-lore.md, which #454 records as
+  write-only with zero readers, and the next run repeated it.
+
+  WHY THIS GUARD, IN THIS FILE. A recommendation becomes real when it is written down
+  where the next wake will read it -- the `**Next:**` line of a journal turn, which the
+  digest lifts out and the following run picks up. write-turn.ps1 is the mandatory writer
+  for that line and already refuses turns whose CONTENT is wrong (G10, G11, G14). It is
+  the one choke point a run cannot route around by not reading a note.
+
+  WHAT IT INSPECTS, AND WHAT IT DELIBERATELY DOES NOT. Only forward-looking lines: an
+  ask/plan line (`**Next:**`, `Next up:`, `Next steps:`) or an intent verb aimed at an
+  issue (`pick up #N`, `working on #N`, `recommend #N`, ...). A turn REPORTING shipped
+  work necessarily cites shipped issues -- "Shipped as PR #631, fixes #630" is correct
+  and must pass. Restricting the scan to proposals is what separates the two, and it is
+  the narrowest rule that still covers all twelve measured instances, which were all
+  `**Next:**` lines.
+
+  PR NUMBERS ARE EXCLUDED. "**Next:** land PR #640" names a pull request, not an issue,
+  and every shipped PR number is by construction cited in the source it merged.
+
+  FAILS OPEN, LOUDLY. If node or the classifier is missing, or origin/main is not
+  resolvable, this cannot classify -- and refusing every turn in that state would wedge
+  journalling entirely, which is a far worse outcome than the one being prevented. So it
+  prints an advisory instead of a refusal. The advisory is the point: a silent skip here
+  would be the same "green because blind" failure that #632 caught in the sweep.
+
+  Escape hatch is `-DisableGuard G15`, for the case where he has explicitly asked for a
+  second look at something already shipped.
+#>
+function Get-ProposedIssues {
+  param([string[]]$Lines, [bool[]]$InFence)
+
+  # Intent verbs, aimed at an issue. Kept tight on purpose: a loose list ("see #N",
+  # "per #N", "re #N") would sweep in every citation in ordinary prose and the guard
+  # would be switched off within a week.
+  $verbs = 'pick(?:ing)?\s+up|start(?:ing)?(?:\s+on)?|work(?:ing)?(?:\s+on)?|recommend(?:ing)?|tackle|tackling|take\s+on|move\s+on\s+to|queue(?:ing)?'
+  $nextRe = '^\s*[*_]{0,2}next(?:\s+up|\s+steps?|\s+step)?[*_]{0,2}\s*:'
+  $verbRe = "\b(?:$verbs)\s+(?:gh\s*)?#\d+"
+
+  $found = @()
+  for ($i = 0; $i -lt $Lines.Count; $i++) {
+    if ($InFence[$i]) { continue }
+    $l = $Lines[$i]
+    if (($l -notmatch $nextRe) -and ($l -notmatch $verbRe)) { continue }
+
+    $prNums = @()
+    foreach ($m in [regex]::Matches($l, '(?i)\b(?:pr|pull\s+request)\s*#(\d+)')) { $prNums += $m.Groups[1].Value }
+
+    foreach ($m in [regex]::Matches($l, '#(\d+)')) {
+      $num = $m.Groups[1].Value
+      if ($prNums -contains $num) { continue }
+      $found += [pscustomobject]@{ n = [int]$num; line = ($i + 1); text = $l.Trim() }
+    }
+  }
+  return @($found)
+}
+
+# Ask `issue-shipped.mjs` about a handful of numbers. Returns ok=$false for EVERY
+# not-measured outcome, with a reason, so the caller can advise rather than pass silently.
+function Get-ShippedVerdict {
+  param([int[]]$Numbers)
+
+  if (-not (Test-Path -LiteralPath $script:IssueResolver)) {
+    return @{ ok = $false; reason = "classifier not found at $($script:IssueResolver)" }
+  }
+
+  $out = $null
+  $code = $null
+  try {
+    $argv = @($script:IssueResolver, '--json') + (@($Numbers) | ForEach-Object { "$_" })
+    $out = & node @argv 2>&1
+    $code = $LASTEXITCODE
+  } catch {
+    return @{ ok = $false; reason = "could not run node ($($_.Exception.Message))" }
+  }
+  if ($code -eq 3) { return @{ ok = $false; reason = 'the classifier rejected its arguments' } }
+
+  $text = (@($out) | Out-String).Trim()
+  if (-not $text) { return @{ ok = $false; reason = 'the classifier printed nothing' } }
+  try { $v = $text | ConvertFrom-Json } catch {
+    return @{ ok = $false; reason = 'the classifier output was not JSON: ' + $text.Substring(0, [Math]::Min(120, $text.Length)) }
+  }
+  if (-not $v.ok) { return @{ ok = $false; reason = "$($v.reason)" } }
+  return @{ ok = $true; shipped = @(@($v.results) | Where-Object { $_.shipped }) }
+}
+
 function Test-TurnBody {
   param([string]$Body, [string[]]$Disabled = @(), $Doc = $null, [string]$Ask = '')
 
@@ -917,6 +1030,41 @@ function Test-TurnBody {
     }
   }
 
+  # --- G15: a proposal must not name work that is already shipped (#635) -----------
+  # Placed after G14 and before G13 for G13's stated reason: G13 goes last so a body with
+  # real damage reports that damage too. This one is a property of the WORLD (what is on
+  # origin/main) rather than of the text, so it is the most expensive guard here -- and it
+  # costs nothing on the common turn, because a turn that proposes no issue never asks.
+  if (& $on 'G15') {
+    # `@(...)` at the CALL SITE, not just inside the function. PowerShell unrolls an array
+    # on return, so an empty result arrives as $null and `$null.Count` is empty rather than
+    # 0 -- the guard then reads "no proposals" and passes silently. This is the same
+    # host-dependent `.Count` trap this script's entry point already documents, and it cost
+    # a live green run here before it was caught.
+    $proposed = @(Get-ProposedIssues -Lines $lines -InFence $inFence)
+    if ($proposed.Count -gt 0) {
+      $nums = @($proposed | ForEach-Object { $_.n } | Sort-Object -Unique)
+      $verdict = Get-ShippedVerdict -Numbers $nums
+      if (-not $verdict.ok) {
+        $script:G15Note = $verdict.reason
+      }
+      else {
+        foreach ($s in @($verdict.shipped)) {
+          $hit = @($proposed | Where-Object { $_.n -eq $s.n })[0]
+          $cited = if ($s.impl) { (@($s.impl) | Select-Object -First 2) -join ', ' } else { 'implementation source' }
+          $findings += New-Finding 'G15' $hit.line $hit.text (
+            ("this turn proposes work on #$($s.n), but #$($s.n)'s fix is already cited in shipped source on " +
+             "origin/main ($cited). A shipped PR does not close its issue here, so OPEN spans " +
+             'unworked AND shipped-awaiting-his-review, and the tracker shows them identically (#630) -- ' +
+             'twelve such picks were made in two days (#635). Verify with ' +
+             'git grep "#' + $s.n + '" origin/main -- packages plugins, then propose something unworked. ' +
+             'Use -DisableGuard G15 if he has asked for a second look at it')
+          )
+        }
+      }
+    }
+  }
+
   # --- G13: the turn must DECLARE its ask (#560) -----------------------------------
   # Not a property of the text at all, which is the point. Every other guard reads the
   # body; this one reads what the AUTHOR SAID ABOUT the body, because that is the fact
@@ -1021,6 +1169,9 @@ if ($Json) {
     id       = $Id
     docBound = [bool]$doc
     docId    = if ($doc) { $doc.doc_id } else { '' }
+    # #635: empty when G15 classified normally; a reason string when it could not. A
+    # machine consumer must be able to tell "no shipped pick" from "never looked".
+    g15Note  = if ($script:G15Note) { "$($script:G15Note)" } else { '' }
     length   = $body.Trim().Length
   } | ConvertTo-Json -Depth 5
 } else {
@@ -1048,6 +1199,15 @@ if ($Json) {
     Write-Host '[write-turn] NOTE - -Ask blocking, but no ask line the digest can read.' -ForegroundColor Yellow
     Write-Host '      The stamp parks the task; the PROSE is what reaches him. Add one of:'
     Write-Host '      "**Needs from you:** ...", "Reply `word`", "**Next:** ...", "**Your call:** ...".'
+  }
+  # #635: G15 could not classify. Printed even on refusal, and never silently: the guard
+  # exists because a blind check reporting nothing is indistinguishable from a check that
+  # cleared the work, which is the failure #632 found in the sweep this one consults.
+  if ($script:G15Note) {
+    Write-Host '[write-turn] NOTE - could not check the proposed issue(s) against shipped source.' -ForegroundColor Yellow
+    Write-Host ("      {0}" -f $script:G15Note)
+    Write-Host '      G15 did not run, so this turn may be proposing work that already shipped.'
+    Write-Host '      Verify by hand: git grep "#<N>" origin/main -- packages plugins'
   }
   # The #425 target, as a nudge rather than a refusal. G9's ceiling is where a turn stops
   # being defensible; this is where it stops being a pointer. Keeping them apart is what

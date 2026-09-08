@@ -1172,6 +1172,38 @@ scope, half-finish, or drop it. (This phase was requested in task #282.)
    > `pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path <worktree>`. Never delete or reinstall
    > the main checkout's `node_modules` to fix a local problem; other sessions are using it.
 
+### Before you recommend a GitHub issue — check it is not already shipped (GH #635)
+
+**A shipped PR does not close its issue in this repo.** He closes it after reading the catch-up
+doc. So `OPEN` spans two states that `gh issue list` renders identically:
+
+```
+filed-and-unworked          <- pick this up
+shipped-awaiting-his-review <- do NOT pick this up
+```
+
+Measured 2026-09-08: **98 of 169 open issues were already shipped.** Across two days, twelve
+recommendations of already-shipped work were made to the #468 sub-session — each one burning the
+opening of a wake on re-verification. Every one was refusable from information the repo already had.
+
+So before naming an issue as work — in a plan, in a dispatch brief, or in a `**Next:**` line — ask:
+
+```powershell
+node <repo>\plugins\overnight-agent\checks\issue-shipped.mjs 588 620
+```
+
+`0` = safe to pick up · `1` = **already shipped, choose something else** · `2` = could not classify
+(**not** a pass — verify by hand) · `3` = bad arguments.
+
+This is enforced, not advisory: `write-turn.ps1` **G15** refuses a turn whose forward-looking line
+proposes an already-shipped issue. A turn that *reports* shipped work ("Shipped as PR #631, fixes
+#630") is correct and passes untouched — only proposals are inspected. If he has explicitly asked
+for a second look at something already shipped, pass `-DisableGuard G15`.
+
+Do **not** rely on `git log --grep "#N"`: a commit subject names the PR, not the issue (#588's fix
+landed under "(#592)"), so the log returns 0 where `git grep` returns 14. It is assertively wrong
+rather than merely incomplete, which makes it the more dangerous of the two.
+
 ### PHASE 2 — Propose plans (for tasks without a current one)
 
 1. Choose candidate tasks **in the order `scan` returned them** (see "Work the rows in the order
