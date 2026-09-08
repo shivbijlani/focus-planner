@@ -251,21 +251,31 @@ $m2 = Invoke-WriteTurn $m2src $bodyPropose $repoCited
 Assert ($m2.code -eq 0) 'M2' 'guard made unreachable -> the refusal vanishes (it is load-bearing)' (Detail $m2)
 
 # --------------------------------------------------------------------------- M3 unrolling
-# The bug this guard actually shipped with, pinned. `Get-ProposedIssues` returns an array;
-# PowerShell unrolls it on return, so a single result arrives as a scalar PSCustomObject
-# whose `.Count` is EMPTY under Windows PowerShell 5.1 rather than 1 -- `-gt 0` is then
-# false and the guard passes every turn SILENTLY. It cost a live green run here before it
-# was caught, and it is the same host-dependent `.Count` trap write-turn.ps1's own entry
-# point already documents for `$findings`.
+# The bug this guard actually shipped with, pinned -- and it is HOST-DEPENDENT, which is
+# the more valuable half of what this arm records.
 #
-# Removing the `@()` must therefore bring the DEFECT back, not keep the catch: this arm
-# pairs against B1, which refuses the identical body with the `@()` in place. A mutant that
-# still refused would mean the `@()` was decorative.
+# `Get-ProposedIssues` returns an array and PowerShell unrolls it on return, so a single
+# result arrives as a scalar PSCustomObject. Under Windows PowerShell 5.1 that scalar has
+# NO `.Count`: it evaluates to $null, `-gt 0` is false, and the guard passes every turn
+# SILENTLY. pwsh 7 added `.Count` to every object, so the identical mutant still refuses
+# there. Same file, same fixture, one host apart -- which means a CI runner on pwsh cannot
+# see this class of defect at all, and the skill invokes `powershell` (5.1) everywhere.
+#
+# write-turn.ps1's own entry point documents exactly this split for `$findings`, where it
+# caused a body with one guard violation to print "clean" and be WRITTEN.
+#
+# So the expectation is per-host rather than absolute, and the arm stays meaningful on
+# both: on 5.1 the defect must come back, on 7 the host masks it and we say so.
 $m3src = New-Mutant 'M3' $WriteTurnPath `
   '$proposed = @(Get-ProposedIssues -Lines $lines -InFence $inFence)' `
   '$proposed = Get-ProposedIssues -Lines $lines -InFence $inFence'
 $m3 = Invoke-WriteTurn $m3src $bodyPropose $repoCited
-Assert ($m3.code -eq 0) 'M3' 'stripping the @() reintroduces the silent pass (so the @() is load-bearing, and B1 pairs)' (Detail $m3)
+if ($PSVersionTable.PSEdition -eq 'Core') {
+  Assert ($m3.code -eq 2) 'M3' 'pwsh 7 gives a scalar a .Count, so it masks the unroll bug -- recorded, not relied on' (Detail $m3)
+}
+else {
+  Assert ($m3.code -eq 0) 'M3' 'on 5.1 (the host the skill uses) stripping the @() reintroduces the silent pass' (Detail $m3)
+}
 
 Write-Host ''
 if ($script:fail -gt 0) {
