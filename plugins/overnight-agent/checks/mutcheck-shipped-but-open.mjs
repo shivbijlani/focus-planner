@@ -47,12 +47,12 @@ function makeRepo(files) {
   return dir
 }
 
-function run(dir, issues) {
+function run(dir, issues, extraEnv = {}) {
   const r = spawnSync('node', [SWEEP], {
     cwd: dir,
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
-    env: { ...process.env, SHIPPED_SWEEP_ISSUES_JSON: JSON.stringify(issues) }
+    env: { ...process.env, SHIPPED_SWEEP_ISSUES_JSON: JSON.stringify(issues), ...extraEnv }
   })
   return { code: r.status, out: ((r.stdout || '') + (r.stderr || '')).trim() }
 }
@@ -138,15 +138,59 @@ const ISSUES = [{ number: 111, title: 'a fix that shipped' }]
 }
 
 // ------------------------------------------------------------------ NO REPO
-// Absent inputs must exit OK while SAYING nothing was measured. A silent zero
-// here would be indistinguishable from a clean tracker, which is this sweep's
-// own subject.
+// Absent inputs must be reported as a FINDING, not as a pass. The original
+// version of this arm asserted exit 0, and that was wrong in the way that
+// mattered: the suite reads a zero as health, so the sweep ran registered for
+// ten minutes measuring nothing and reporting ok (GH #632). "Says nothing was
+// measured" on stdout is not a signal if the exit code contradicts it.
+//
+// SHIPPED_SWEEP_REPO is forced at a non-checkout because this file LIVES in the
+// real repo, so the fallback would otherwise resolve it and the arm would
+// silently measure the wrong subject -- a vacuous arm, which is the trap this
+// suite exists to avoid.
 {
   const dir = mkdtempSync(join(tmpdir(), 'mut-sbo-bare-'))
-  const r = run(dir, ISSUES)
-  const ok = r.code === 0 && /nothing to measure/.test(r.out) && /this is not a pass/.test(r.out)
-  say(ok, 'NOREPO', 'outside a checkout it exits OK and says it measured nothing')
+  const r = run(dir, ISSUES, { SHIPPED_SWEEP_REPO: dir })
+  const ok = r.code !== 0 && /nothing to measure/.test(r.out) && /this is not a pass/.test(r.out)
+  say(ok, 'NOREPO', 'no checkout -> reported as a finding, not a silent pass')
   rmSync(dir, { recursive: true, force: true })
+}
+
+// -------------------------------------------------------- CWD INDEPENDENCE
+// The #632 regression, pinned. The suite runs sweeps from the planner data
+// folder, which is not a checkout. Before the fix the sweep read process.cwd()
+// and gave up there, so the registered sweep and the hand-run sweep -- same
+// binary, same commit, one cwd apart -- disagreed completely.
+//
+// Paired, so it cannot pass vacuously: the same fixture must classify from
+// INSIDE the repo and from a directory that is not a repo at all.
+{
+  const dir = makeRepo({ [IMPL]: '// fixes GH #111\nexport const x = 1\n' })
+  const outside = mkdtempSync(join(tmpdir(), 'mut-sbo-outside-'))
+  const inside = run(dir, ISSUES)
+  const elsewhere = run(outside, ISSUES, { SHIPPED_SWEEP_REPO: dir })
+
+  say(/SHIPPED[^:]*: 1/.test(inside.out), 'BASELINE', 'from inside the checkout it classifies (pairs with the next arm)')
+  say(
+    /SHIPPED[^:]*: 1/.test(elsewhere.out) && elsewhere.code === inside.code,
+    'CWD',
+    'run from a non-checkout it still classifies -- cwd is not the subject (#632)'
+  )
+
+  // The second #632 instance, and the more dangerous one. `git grep <rev> --
+  // packages plugins` resolves pathspecs relative to cwd, so resolving to any
+  // directory inside the work tree rather than its ROOT finds nothing and
+  // reports "no open issue is already shipped" with exit 0. That is not a
+  // failure a reader can see: it is the healthy answer, arrived at wrongly.
+  const sub = join(dir, 'packages', 'telegram-bridge', 'src')
+  const fromSub = run(sub, ISSUES)
+  say(
+    /SHIPPED[^:]*: 1/.test(fromSub.out),
+    'SUBDIR',
+    'from a subdirectory it resolves the repo ROOT, not a confident empty answer'
+  )
+  rmSync(dir, { recursive: true, force: true })
+  rmSync(outside, { recursive: true, force: true })
 }
 
 // ------------------------------------------------------------- EMPTY TRACKER
