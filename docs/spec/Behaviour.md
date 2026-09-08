@@ -1,5 +1,5 @@
 # Behaviour
-This page turns the named acceptance corpus in `spec-facts.json` into implementation-facing requirements. The snapshot records **83 test files / 1,211 named tests** across the app, sync engine, Telegram bridge, task-paper renderer, diagnostics, storage, config, and repository scripts. Use it with [Architecture](Architecture), [Domain-app](Domain-app), [Domain-folder-sync](Domain-folder-sync), [Domain-storage](Domain-storage), [Domain-task-paper](Domain-task-paper), and [Domain-telegram-bridge](Domain-telegram-bridge) when rebuilding the system.
+This page turns the named acceptance corpus in `spec-facts.json` into implementation-facing requirements. The snapshot records **83 test files / 1,220 named tests** across the app, sync engine, Telegram bridge, task-paper renderer, diagnostics, storage, config, and repository scripts. Use it with [Architecture](Architecture), [Domain-app](Domain-app), [Domain-folder-sync](Domain-folder-sync), [Domain-storage](Domain-storage), [Domain-task-paper](Domain-task-paper), and [Domain-telegram-bridge](Domain-telegram-bridge) when rebuilding the system.
 The extraction shape is concrete. For example, `testFiles[]` contains entries like this, and the prose below simply restates them in “the system must …” form:
 ```json
 {

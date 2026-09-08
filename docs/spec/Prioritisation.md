@@ -303,6 +303,23 @@ while writing the turn, not a value reconstructed afterwards from narrative. Tha
 `-Exhausted` made for the Today gate, and it is why both remain subject to the cancelling
 conditions above rather than being trusted outright.
 
+**The parking expression is duplicated on purpose.** `Cmd-Scan` (which emits `awaiting_reply` on
+the worklist row) and `Test-SessionHoldsCapacity` (which gates whether that row's session counts
+against the concurrency ceiling) each compute `$facts.HasAgentBlock -and $facts.HasBlockingAsk -and
+-not $facts.HasTrailingUser` independently, and the source keeps the two copies **textually
+identical** rather than factoring them into one shared function. The declared-ask preference
+itself lives once, inside `Get-BlockingAskVerdict` (called by `Get-JournalFacts`, which both
+readers call), so a `#560` declaration reaches both readers from one edit. But had that resolution
+happened inside `Cmd-Scan` instead, the emitted row would say `declared` while
+`Test-SessionHoldsCapacity` kept inferring from prose — **#545's "emitted field disagrees with
+gated field" shape**, on the exact reader pair the design calls out as needing to stay
+synchronized. Textual duplication, checked by review and by `mutcheck-awaiting-reply.ps1` rather
+than hidden behind an abstraction, is the guard against the two readers drifting apart again.
+
+`has_open_ask` is unchanged in the non-regressing direction by all of this: a declaration only ever
+adds visibility onto a row that already had an open ask under the old inference; it never manufactures
+an ask that was not there, and `mutcheck-declared-ask.ps1` pins that direction explicitly.
+
 **Grounding.** `mutcheck-declared-ask.ps1` pins that a declaration outranks the prose in *both*
 directions, that an undeclared turn still reads exactly as it did before, that `ask_source` is
 honest, and that `has_open_ask` does not regress. It drives the real `oa-state.ps1` and the real

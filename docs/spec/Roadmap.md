@@ -1,6 +1,6 @@
 # Roadmap
 
-This page records **known gaps and forward direction** from the **152 open issues** captured in `spec-facts.json`. Entries with a `priority:` label are grouped by that label first. Remaining issues are grouped by the exact non-priority labels present, and issues with no labels are grouped by recurring themes from their titles and bodies. Use this alongside [Behaviour](Behaviour), [Reliability](Reliability), [Prioritisation](Prioritisation), and the relevant `Domain-*` page.
+This page records **known gaps and forward direction** from the **163 open issues** captured in `spec-facts.json`. Entries with a `priority:` label are grouped by that label first. Remaining issues are grouped by the exact non-priority labels present, and issues with no labels are grouped by recurring themes from their titles and bodies. Use this alongside [Behaviour](Behaviour), [Reliability](Reliability), [Prioritisation](Prioritisation), and the relevant `Domain-*` page.
 
 ## Critical
 
@@ -18,10 +18,12 @@ This page records **known gaps and forward direction** from the **152 open issue
 
 ## High
 
-23 open issues carry `priority: high`. These are the explicitly triaged gaps in the snapshot.
+25 open issues carry `priority: high`. These are the explicitly triaged gaps in the snapshot.
 
 | Issue | Other labels | Title | Gap / direction from issue text |
 | --- | --- | --- | --- |
+| #618 | bug, reliability | A declared ask is never validated against its own turn: related issue asks two questions it cannot guess, declares them an 'offer', and no reader waits (25 of 254 rows have an open ask nobody awaits) | #560 replaced the prose-regex `awaiting_reply` with a declared ask (`<!-- oa-ask: ... -->`), and declared rows rose from 6 to 11 across two runs. But nothing validates a declared ask's `-Ask` level against what the turn's own text actually asks: a turn can declare `offer` while asking a question it cannot guess the answer to, and no reader waits on it — measured at 25 of 254 rows carrying an open ask nobody is waiting for. |
+| #605 | bug, reliability | A due poll never fires on a Deferred row: Test-Workable grants the timer override, then the Today gate discards it (measured: related issue due_poll=true, eligible=false) | Measured live on the board by the spec-conformance forensics pass (#565): `Test-Workable` grants the due-poll timer override on a Deferred row, but the Today gate discards that grant before dispatch — so a due poll never actually fires on a Deferred row, despite `docs/spec/Prioritisation.md`'s parking table stating that it should. |
 | #589 | bug, reliability | in_flight reports 3 against a concurrency ceiling of 1, and scan emits no per-row capacity field so the membership of that 3 is unobservable | `session -InFlight` reports 3 items in flight against a ceiling of 1, and the set of sessions producing that 3 is not derivable from any read-only interface — `Prioritisation.md` treats the ceiling as normative, but nothing on the worklist names which rows count against it. |
 | #583 | bug, reliability | 6 of 12 scheduled overnight-agent run slots recorded zero turns in a 6h window (3 most recent consecutive), so 'fired and did nothing' is indistinguishable from 'never fired' | Spec-conformance forensics pass 3 measured a 6-hour window in which the scheduler fired 12 run slots and 6 of them, including the 3 most recent consecutively, recorded zero turns in the session store. |
 | #579 | bug, reliability | Prioritisation.md 6 claims a missing concurrency row reports settings-malformed; the code reports 'default', and the documented '## Overnight Agent behaviour' table does not exist in user-settings.md | Spec-conformance forensics pass 2 found the live `user-settings.md` has no `## Overnight Agent behaviour` heading and no match for `concurrenc` at all, so the concurrency, Today-gate-backstop, and Today-gate-strict settings are all silently on built-in defaults with no signal they were never configured. |
@@ -94,7 +96,7 @@ This page records **known gaps and forward direction** from the **152 open issue
 
 ## Labelled but unprioritised
 
-20 open issues have labels, but none of those labels is a `priority:` band. The tables below keep the grouping faithful to the data instead of inventing a priority order.
+22 open issues have labels, but none of those labels is a `priority:` band. The tables below keep the grouping faithful to the data instead of inventing a priority order.
 
 ### `reliability`
 
@@ -102,7 +104,6 @@ This page records **known gaps and forward direction** from the **152 open issue
 | --- | --- | --- |
 | #533 | auto-deploy: a budget expiry in the LAST phase leaves the two deploy targets on different refs, and the exit-before-report path never says so | auto-deploy-plugin.ps1 deploys two targets in sequence — the installed plugin tree, then the OA home under %LOCALAPPDATA%\overnight-agent. Both draw from one cumulative wall-clock budget. When that budget expires during the second target's sync, the first target… |
 | #532 | A poll-driven wake never advances last_woken_at, so write-turn G12 refuses EVERY author and the wake records nothing (measured on related issue) | A poll-driven wake never advances session.last_woken_at, and write-turn.ps1 G12 keys "is there already a turn for THIS wake?" off that stamp. So on any task with a bound session and an armed poll, the stale stamp… |
-| #531 | oa-state doc -Observe: a document with genuinely zero comments reads as unreadable, so an empty doc and a dead connection are indistinguishable (measured on related issue) | oa-state.ps1 doc -Id <ID> -Observe <file> classifies a healthy document that genuinely has zero comments as unreadable. The evidence predicate added by related issue accepts the MCP's Found N comments... summary line but not the wording… |
 | #436 | oa-state doc: journal_stamped is always false on a resolve, so a durable binding and an at-risk one look identical | oa-state.ps1 doc -Id <ID> reports journal_stamped: false for every resolve-only call, whether or not the journal actually carries its stamp. |
 | #351 | In-flight work is invisible to other sessions: a finished fix sat unshipped, and two sessions then duplicated it | The fix for related issue was already written before this run started. A previous session had done the work, committed it, and pushed it to shivbijlani-fix-supervisor-wal-stale-read — and then never opened a pull request. It had… |
 
@@ -110,6 +111,7 @@ This page records **known gaps and forward direction** from the **152 open issue
 
 | Issue | Title | Gap / direction from issue text |
 | --- | --- | --- |
+| #602 | mutcheck-journal-encoding fails 2/3 on main: the journal encoding guard validates the call shape, not the encoding argument, so an ANSI decode inside Read-JournalText survives | `checks/mutcheck-journal-encoding.mjs` fails on `origin/main` at 2/3 mutants killed, exit 1, with arm M2 SURVIVED — the guard confirms `Add-TurnTerminator` reads with `Get-Content -Raw`, but not that the encoding argument passed is the correct one, so an ANSI decode inside `Read-JournalText` survives undetected. |
 | #557 | write-turn.ps1 prints a bare backup filename, so the rollback artifact looks missing when you need it | write-turn.ps1 announces its backup as a bare filename with no directory: |
 | #528 | Adding a task can reuse a live task's ID and silently destroy that task's row | Adding a task through the UI can be assigned an ID that is already in use by a live task, and the existing task's row is then destroyed — silently, with no warning, no dialog, and… |
 | #502 | Doc comments read as empty: -Observe returns 0 for the MCP's own output shape | oa-state.ps1 doc -Id <ID> -Observe <file> returns zero comments when handed the exact output the Google Workspace MCP produces. -Observe then reports new_comments: 0 -- which is byte-identical to "the user said nothing." |
@@ -119,10 +121,17 @@ This page records **known gaps and forward direction** from the **152 open issue
 
 | Issue | Title | Gap / direction from issue text |
 | --- | --- | --- |
+| #610 | observe-bound-docs: a transient failure and a broken page print the identical FAIL line | `observe-bound-docs.mjs` polls each bound catch-up doc once. All three failure paths — fetch exit, observe exit, `observation !== 'read'` — increment `failed` and move on with no retry, so a transient fetch hiccup and a genuinely broken document are reported identically. |
 | #461 | ps1-encoding-sweep resolves its root to the main checkout, so running it from a worktree scans a different tree and reports clean | plugins/overnight-agent/checks/ps1-encoding-sweep.mjs resolves the tree it scans from a hardcoded path to the main checkout, not from the tree it was invoked in: |
 | #454 | agent-lore.md is write-only: 903 KB, 160 headings, zero readers - and 'grep for the heading you need' can only retrieve what a run already knows | agent-lore.md is where the Overnight Agent is instructed to record every hazard, postmortem and run learning. SKILL.md says so explicitly: |
 | #453 | Agentic issue comments carry no provenance marker, so "edit the one agentic comment in place" can overwrite a human comment | The operating contract for GitHub issue work has two rules that both depend on telling an agent comment from a human one: |
 | #428 | A merged PR auto-closes its issue via Closes #N, skipping the review step the operating contract requires | PR related issue carried Closes related issue. in its body. On merge, GitHub closed issue related issue automatically — before Shiv had read the catch-up doc. I reopened it by hand. |
+
+### `bug + overnight-agent`
+
+| Issue | Title | Gap / direction from issue text |
+| --- | --- | --- |
+| #612 | A cold google-workspace MCP server reports a healthy doc as unreadable (and #610's 1500ms retry cannot cross it) | A cold `google-workspace` MCP server exceeds the probe timeout, so a healthy document reports as unreadable, and the #610 retry window is too short to cross a cold start. |
 
 ### `bug + reliability`
 
@@ -153,7 +162,7 @@ This page records **known gaps and forward direction** from the **152 open issue
 
 ## Unlabelled issues, grouped by theme
 
-70 open issues have no labels at all in `spec-facts.json`. Because the data offers no explicit priority for them, the groups below follow the recurring topics visible in their titles and first body paragraphs.
+77 open issues have no labels at all in `spec-facts.json`. Because the data offers no explicit priority for them, the groups below follow the recurring topics visible in their titles and first body paragraphs.
 
 ### Docs, comments, and Google Workspace channels
 
@@ -161,6 +170,9 @@ These issues describe the catch-up-doc path, doc comment observability, provenan
 
 | Issue | Title | Gap / direction from issue text |
 | --- | --- | --- |
+| #620 | A doc-bound topic settles on TWO messages, not one: the #424 notice exception now fires in 59 of 76 bound topics | #424 carved a one-line notice out as a deliberate exception for the two things a doc link genuinely cannot carry — the agent is blocked on the user, or the task reached a terminal state — on the premise that this is rare. Measured across live bridge state: of 76 doc-bound topics, 59 end on two permanent messages (the link plus a separate notice) and only 17 end on the single-message ideal, so the "rare exception" is in fact the common case. |
+| #609 | observe-bound-docs declares FAIL with no retry, so a transient fetch and a broken document print the identical line (measured: 14 OK / 1 FAIL, and the FAIL was transient) | `observe-bound-docs.mjs` declares FAIL on the first unsuccessful attempt across its one fetch and one observe `spawnSync` call, with no retry — so a transient fetch hiccup and a genuinely broken document print the identical FAIL line. Measured at 14 OK / 1 FAIL, and the one FAIL was confirmed transient on a second manual attempt. |
+| #598 | Binding a task creates a doc channel nobody polls: PHASE 0.7 reads per-selection, so a parked task's comments reach nothing (UNREAD 0 -> 5 in 90 min, measured) | `doc -Observe` is called from PHASE 0.7, a per-task step that runs only for the task a run is working. A run works one task, so a task's doc channel is read only when that task happens to be selected — a task that is bound but not selected can accumulate unread comments indefinitely; measured going from 0 to 5 unread in a 90-minute window while parked. |
 | #570 | google-workspace probes AVAILABLE but is exposed to no agent session: the doc-comment channel is unreadable from where PHASE 0.7 runs (3 of Shiv's comments sat unread) | check-agent-inbox.ps1 reports google-workspace as AVAILABLE by spawning the server as a child process. But the run — and, since related issue, every task sub-session — calls that MCP through its session toolset, which is a different… |
 | #594 | No sweep reads a catch-up doc's body, so a figure in the primary surface can go stale unflagged (measured: 5 stale coverage figures in the #468 doc, understating the rollout by 13 and overstating the remainder 2x) | `doc-claim-consistency-sweep.mjs` reads only local journal files; the catch-up docs are Google Docs and are not on that path, so no sweep has ever read one's body even though its own comment claims full scope. |
 | #593 | scan publishes doc_new_comments without the freshness of the read behind it, so a channel never observed and a channel observed-and-empty are the same `0` on the worklist | `scan` carries `doc_new_comments` but not the freshness of the read that produced it, so "observed 30 seconds ago, genuinely empty", "last observed 5 days ago, 3 comments since", and "never observed" are all byte-identical `0` on the one worklist a run reads. |
@@ -193,6 +205,8 @@ These issues cluster around whether the scheduler is allowed to work a task, whe
 
 | Issue | Title | Gap / direction from issue text |
 | --- | --- | --- |
+| #607 | A session that correctly does nothing is recorded as unwakeable: task related issue burned 3 sessions, and both replacements cite a could not be woken that the event log disproves (3.4s and 9s wake latency) | The per-task session liveness verdict is wrong in a specific, repeatable way: a sub-session that wakes promptly and correctly decides there is nothing to do is recorded as `-SessionDead` and replaced. The event log shows the session waking in 3.4s and 9s respectively — well within budget — so the replacement's stated reason, "could not be woken", is disproved by the very log the verdict is supposed to be reading. |
+| #600 | A forgotten `mark` makes the turn boundary EOF, so a raw reply below it is never seen (measured: reopened=false, trailing empty) | A wake that writes a turn but skips `oa-state.ps1 mark` leaves the journal with a provenance marker and no `<!-- /overnight-agent turn-end -->` terminator. In that state `Get-AgentEndIndex` treats end-of-file as the boundary, so a user's raw reply appended below the missing terminator sits after the implicit end and is never read as a reopen — measured as `reopened=false` with the reply present but reported as trailing-empty content. |
 | #569 | A user message above the sentinel is invisible to reopened: scan and extract disagree on the same file, and the related issue Today row sat not_workable with a same-day request in it | scan's reopen reader only looks below the stamp. But the Focus Planner app does not always append the user's message there — when he edits the task's own notes, his message lands above the sentinel, in… |
 | #568 | check-agent-inbox.ps1: 42s probe budget too short for MCP cold start, producing false NOT CHECKED | check-agent-inbox.ps1 uses a 45s-per-call budget (42s observed in the probe). On this machine that is too short for MCP cold start, so a perfectly healthy inbox is reported as NOT CHECKED — the exact "fail closed… |
 | #567 | oa-state.ps1: CWD-relative settings candidate lets the bundled template override real user-settings.md | Get-UserSettingsPath in oa-state.ps1 includes a CWD-relative candidate. Because SKILL.md's own documented invocation style is <skill>\oa-state.ps1, any run that cds into the skill directory first resolves settings to the bundled template — the very file the function's… |
@@ -257,6 +271,8 @@ These issues focus on leaked sessions, polluted workspaces, stale locks, backup 
 
 | Issue | Title | Gap / direction from issue text |
 | --- | --- | --- |
+| #617 | Deploy backups are never pruned: 898 directories in 13 days (~69/day) under %LOCALAPPDATA%\overnight-agent\backups | `auto-deploy-plugin.ps1` and `sync-oa-home.ps1` write a timestamped backup directory under `%LOCALAPPDATA%\overnight-agent\backups\` every time they deploy a file, and nothing ever prunes them — measured at 898 directories accumulated in 13 days, roughly 69 per day. |
+| #613 | PHASE 3 dies with an unwrapped "One or more errors occurred." when the box is at its commit limit: the token fetch Add-Type fails, is retryable, and the message names nothing | PHASE 3 (the Telegram mirror) failed with an error that names nothing actionable — `One or more errors occurred. MIRROR_EXIT=1` — while the machine was at its virtual-memory commit limit. The underlying cause is a token-fetch `Add-Type` call that throws a generic aggregate exception under memory pressure; the failure is retryable, but the message gives an operator nothing to act on. |
 | #481 | session-state is never pruned: 4,109 directories / 2.6 GB since April, and 488 stale locks sit in the path two liveness sweeps read | Measured 2026-09-04 ~06:33 PT from the overnight run, while verifying that the new zero-writer-sweep (related issue, shipped tonight as related issue) reads the right session id. It does -- but the directory it reads has never… |
 | #462 | Both new write-guards ship with caller-facing traps that fail toward the outcome they prevent: undefaulted writeFile, and a verdict object that duck-types into a duplicate post | Both safety contracts shipped tonight — lib-issue-body.mjs (issue related issue / PR related issue) and lib-issue-comments.mjs (issue related issue / PR related issue) — are correct, and both have caller-facing shapes that fail toward the exact… |
 | #456 | gh issue edit --body is an unguarded overwrite, and issue bodies carry no authorship - so "was my work overwritten?" cannot be answered either way | Editing an issue body with gh issue edit --body / --body-file is an unconditional whole-document overwrite. There is no base revision, no precondition, and no conflict detection. |
