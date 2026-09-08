@@ -50,6 +50,11 @@ $MOON = [char]::ConvertFromUtf32(0x1F319)
 $root = Join-Path ([IO.Path]::GetTempPath()) ("oa-pick-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $root -Force | Out-Null
 
+# write-turn.ps1's backup/state home, forced somewhere disposable. Nothing here reads or
+# writes the real OA home, and on Linux there is no $env:LOCALAPPDATA for it to fall back to.
+$script:OaHome = Join-Path $root 'oa-home'
+New-Item -ItemType Directory -Path $script:OaHome -Force | Out-Null
+
 $script:pass = 0
 $script:fail = 0
 function Assert([bool]$ok, [string]$name, [string]$why, [string]$detail = '') {
@@ -117,8 +122,17 @@ function Invoke-WriteTurn {
   param([string]$Subject, [string]$BodyFile, [string]$Repo, [string[]]$Extra = @())
   $prevRepo = $env:SHIPPED_SWEEP_REPO
   $prevRes = $env:WRITE_TURN_ISSUE_RESOLVER
+  $prevHome = $env:WRITE_TURN_OA_HOME
   $env:SHIPPED_SWEEP_REPO = $Repo
   $env:WRITE_TURN_ISSUE_RESOLVER = (Resolve-Path $ResolverPath).Path
+  # REQUIRED ON LINUX, not merely tidy. write-turn.ps1 computes
+  # `Join-Path $env:LOCALAPPDATA 'overnight-agent'` at load time, and $env:LOCALAPPDATA
+  # does not exist off Windows -- so every invocation died with "Cannot bind argument to
+  # parameter 'Path' because it is null" before reaching a single guard. The first CI run
+  # of this file failed all 15 arms that way, and reported it as "G15 is not doing what it
+  # claims", which was a true statement about a harness fault. mutcheck-declared-ask.ps1
+  # sets the same variable for the same reason.
+  $env:WRITE_TURN_OA_HOME = $script:OaHome
   try {
     $out = (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File $Subject `
         -BodyFile $BodyFile -Ask none -Validate @Extra 2>&1 | Out-String)
@@ -127,6 +141,7 @@ function Invoke-WriteTurn {
   finally {
     $env:SHIPPED_SWEEP_REPO = $prevRepo
     $env:WRITE_TURN_ISSUE_RESOLVER = $prevRes
+    $env:WRITE_TURN_OA_HOME = $prevHome
   }
 }
 
