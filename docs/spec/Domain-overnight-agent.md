@@ -79,6 +79,12 @@ A small slice from the real source shows the pattern:
 The table below groups the **174 collected JS modules** by file family. Counts come from
 `spec-facts.json`; examples are verbatim paths from that file.
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Family | Count | What it covers | Representative paths |
 | --- | ---: | --- | --- |
 | `mutcheck-*` | 49 | Mutation-tested proof that a guard's individual arms matter. | `plugins/overnight-agent/checks/mutcheck-basename-collision.mjs`; `plugins/overnight-agent/checks/mutcheck-phase07-ownership.mjs`; `plugins/overnight-agent/checks/mutcheck-mcp-transport.mjs` |
@@ -94,6 +100,8 @@ The table below groups the **174 collected JS modules** by file family. Counts c
 | `pr-closing-keyword` | 1 | CI-facing PR-body guard. | `plugins/overnight-agent/checks/pr-closing-keyword.mjs` |
 | Other one-offs | 30 | Indexers, auditors, replay tools, and narrow incident checks that do not fit one prefix. | `plugins/overnight-agent/checks/artifact-index.mjs`; `plugins/overnight-agent/checks/body-header-drift.mjs`; `plugins/overnight-agent/checks/ensure-catchup-doc.mjs` |
 
+</details>
+
 The mix matters more than any single filename. The architecture keeps nightly diagnosis modular:
 a sweep asks one operational question, a mutcheck proves the sweep can still detect it, and a lib
 keeps sibling readers from drifting apart.
@@ -102,6 +110,12 @@ keeps sibling readers from drifting apart.
 
 These files are runtime-critical even though the fact collector does not index them.
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Path | Role |
 | --- | --- |
 | `plugins/overnight-agent/skills/overnight-agent/SKILL.md` | Main operating contract. The phase headings in the file are literal: `PHASE 0`, `PHASE 0.7`, `PHASE 1`, `PHASE 1.5`, `PHASE 2`, `PHASE 2.5`, `PHASE 3`. |
@@ -109,6 +123,8 @@ These files are runtime-critical even though the fact collector does not index t
 | `plugins/overnight-agent/skills/overnight-agent/user-settings.md` | Shareable template for the external settings file; the skill warns that updates overwrite the bundled template. |
 | `plugins/overnight-agent/skills/catchup-doc/SKILL.md` | The companion write-up skill the overnight agent points at when a task uses a catch-up document. |
 | `plugins/overnight-agent/skills/catchup-doc/resolve-ids.ps1` | ID-to-title link resolver used by the catch-up-doc workflow. |
+
+</details>
 
 `SKILL.md` is operational, not aspirational. It tells the agent to resolve an **external**
 `user-settings.md`, to run `oa-state.ps1 scan` before judging tasks, and to keep task work in a

@@ -9,6 +9,12 @@ loop itself lives under `plugins/overnight-agent/`.
 
 ## Reliability stack at a glance
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Layer | Primary files | What it guards against |
 | --- | --- | --- |
 | OS-dispatched supervision | `plugins/overnight-agent/checks/install-oa-supervisor.ps1`, `oa-supervisor.ps1`, `oa-supervisor-daemon.ps1`, `supervisor-liveness-sweep.ps1`, `supervisor-replay.mjs` | The agent or app scheduler stopping entirely |
@@ -19,6 +25,8 @@ loop itself lives under `plugins/overnight-agent/`.
 | MCP and browser health | `reap-stale-mcp.ps1`, `mcp-probe.mjs`, `check-mcp-fanout.ps1`, `check-browser-slots.ps1`, `browser-watchdog.ps1`, `ensure-mcp-browsers.ps1`, `launch-signed-in-browser.ps1` | Orphaned MCP servers, dead/stuck browser slots, wrong-profile launches |
 | Guard integrity | `mutcheck-*.mjs`, `mutcheck-*.ps1` | A detector quietly becoming decorative or measuring the wrong thing |
 | Settings reconcile loop | `plugins/overnight-agent/skills/overnight-agent/user-settings.md`, `oa-state.ps1` | User configuration drifting from the values the run actually uses |
+
+</details>
 
 ## OS-dispatched supervision
 

@@ -26,6 +26,12 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
 </details>
 ## Modules and exports
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Path | Exports from `spec-facts.json` | Role |
 | --- | --- | --- |
 | `packages/telegram-bridge/bin/telegram-bridge.js` | — | CLI entrypoint: `whoami`, `baseline`, `sync-up`, `sync-down`, `sync-archive`, `digest`, `once`, `watch`. |
@@ -45,6 +51,8 @@ export function createBridge({ client, config, state, io, logger = () => {}, now
 | `packages/telegram-bridge/src/state.js` | `STATE_VERSION`, `bumpReplyCount`, `emptyState`, `findTaskByTopic`, `getReplyCount`, `getTask`, `loadState`, `saveState`, `setArchived`, `setDigestTopic`, `setDocLink`, `setDocLinkNoticeHash`, `setDocLinkVerified`, `setLastDigest`, `setLastPosted`, `setLastPostedContext`, `setLastPostedMessageIds`, `setOffset`, `setSuppressedHash`, `setTopic`, `setUserEngaged` | Durable bridge state. |
 | `packages/telegram-bridge/src/telegramClient.js` | `createTelegramClient` | Telegram Bot API wrapper with deadlines and structured rate-limit errors. |
 | `packages/telegram-bridge/src/telegramFormat.js` | `escapeHtml`, `extractLinks`, `mdToTelegramHtml` | Deterministic markdown-to-Telegram HTML conversion. |
+
+</details>
 
 ## Principal mechanics
 

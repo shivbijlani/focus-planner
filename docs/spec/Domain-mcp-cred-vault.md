@@ -32,10 +32,18 @@ export function parseMcpSecrets(text) {
 </details>
 ## Modules and exports
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Path | Exports from `spec-facts.json` | Role |
 | --- | --- | --- |
 | `packages/mcp-cred-vault/src/index.js` | `collectMcpSecretsErrors`, `isValidMcpSecrets`, `parseMcpSecrets` | Public package surface; notes that the broader toolchain is PowerShell + .NET. |
 | `packages/mcp-cred-vault/src/schema.js` | `collectMcpSecretsErrors`, `isValidMcpSecrets`, `parseMcpSecrets` | Actual parser and validator for the pointer-file schema. |
+
+</details>
 
 ## Format and invariants
 

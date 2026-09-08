@@ -127,6 +127,12 @@ and the corrected release behaviour once Today is exhausted.
 The user changes priority through several different surfaces. Some rewrite the board order itself;
 others change whether the selected row is allowed to run.
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Surface | Durable write | Code path | Priority effect |
 | --- | --- | --- | --- |
 | Priority orb / kebab menu | Row urgency icon | `src/App.jsx` `PriorityDropdown`, `handleChangePriority` | Changes the urgency term of the sort key. |
@@ -137,6 +143,8 @@ others change whether the selected row is allowed to run.
 | Journal reply | Appended `<!-- from: me -->` block | `appendJournalMessage` in `src/journalChat.js` | Raises the row above ordinary rank via `reopened` / `unanswered_user`. |
 | Agent gate | `agent-gate.md` lists | `src/config/agentGate.js`, `src/AgentGateEditor.jsx`, `oa-state.ps1 gate/consent` | Does not change board order; it changes whether the agent may proceed automatically on a selected row. |
 | Agent settings | `user-settings.md` values | `src/AgentSettingsEditor.jsx`, `oa-state.ps1` settings resolvers | Does not change board order; it changes gating, backstop, and capacity behaviour. |
+
+</details>
 
 The board UI exposes the urgency edit through one shared choice list:
 

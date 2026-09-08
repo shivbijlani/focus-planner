@@ -8,6 +8,12 @@ The `storage` domain gives the rest of the planner one filesystem-like API while
 
 ## Principal modules
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Path | Role | Why it exists |
 | --- | --- | --- |
 | `src/storage/storage.js` | Active-provider façade plus sync integration. | Keeps UI code provider-agnostic and preserves one source of truth for reads/writes. |
@@ -19,7 +25,15 @@ The `storage` domain gives the rest of the planner one filesystem-like API while
 | `src/storage/diagnostics.js` | Storage/sync diagnostics snapshot. | Produces a safe report for debugging missing journals, quota, and stale sync. |
 | `src/storage/taskSettings.js` | Per-task JSON sidecar. | Stores planner-owned AI toggles separately from human journal prose. |
 
+</details>
+
 ## Public exports
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Path | Exports from `spec-facts.json` |
 | --- | --- |
@@ -31,6 +45,8 @@ The `storage` domain gives the rest of the planner one filesystem-like API while
 | `src/storage/google-drive-provider.js` | `GoogleDriveProvider` |
 | `src/storage/diagnostics.js` | `clearDiagnosticEvents`, `formatDiagnosticsReport`, `gatherDiagnostics`, `getDiagnosticEvents`, `isDiagnosticsEnabled`, `recordDiagnosticEvent`, `setDiagnosticsEnabled` |
 | `src/storage/taskSettings.js` | `DEFAULT_TASK_SETTINGS`, `TASK_SETTINGS_FILE`, `__testing`, `getTaskSettings`, `moveTaskSettingsEntries`, `normalizeTaskSettingsFile`, `parseTaskSettingsFile`, `readTaskSettings`, `readTaskSettingsFromSource`, `serializeTaskSettingsFile`, `setTaskSetting`, `setTaskSettingInSource`, `withTaskSetting`, `withTaskSettingsMutationLock`, `writeTaskSettings`, `writeTaskSettingsToSource` |
+
+</details>
 
 > [!NOTE]
 > **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.

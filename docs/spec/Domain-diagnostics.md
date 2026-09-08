@@ -39,9 +39,17 @@ function makeEvent(channel, event, fields = {}) {
 </details>
 ## Module and exports
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Path | Exports from `spec-facts.json` | Role |
 | --- | --- | --- |
 | `packages/diagnostics/src/index.js` | `advertiseDiagnosticsToWorker`, `clearDiagnostics`, `diag`, `disableDiagnostics`, `dumpAllDiagnostics`, `dumpDiagnostics`, `enableDiagnostics`, `findDiagnosticsWorker`, `handleWorkerDiagnosticMessage`, `isDiagEnabled`, `printDiagnostics`, `reconcileWorkerDiagnosticClients`, `reconcileWorkerDiagnosticsForClients`, `registerDiagSink`, `requestWorkerDiagnosticClientStates`, `requestWorkerDiagnostics`, `resetDiagnosticsForTests`, `setDiagnosticsLimit`, `setWorkerDiagnosticsForClient`, `unregisterDiagSink` | Entire diagnostics surface: emission, buffering, worker coordination, dumps, and sink management. |
+
+</details>
 
 ## Principal mechanics
 

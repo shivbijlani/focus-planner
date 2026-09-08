@@ -28,6 +28,12 @@ export function generatePaper(journalPath, { outDir = null, fsImpl = fs, writerS
 </details>
 ## Modules and exports
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Path | Exports from `spec-facts.json` | Role |
 | --- | --- | --- |
 | `packages/task-paper/bin/task-paper.js` | — | CLI: generate one paper or sweep a planner's `journal/` folder. |
@@ -37,6 +43,8 @@ export function generatePaper(journalPath, { outDir = null, fsImpl = fs, writerS
 | `packages/task-paper/src/markdown.js` | `escapeHtml`, `isSafeUrl`, `renderInline`, `renderMarkdown` | Small deterministic markdown renderer. |
 | `packages/task-paper/src/paper.js` | `AGENT_TURN_HEADING_RE`, `buildPaper`, `splitSections` | Journal-to-paper model transform. |
 | `packages/task-paper/src/render.js` | `renderPaper`, `slugify` | HTML renderer for the paper model. |
+
+</details>
 
 ## Principal mechanics
 

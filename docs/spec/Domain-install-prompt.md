@@ -31,6 +31,12 @@ export function useInstallPrompt() {
 </details>
 ## Modules and exports
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Path | Exports from `spec-facts.json` | Role |
 | --- | --- | --- |
 | `packages/install-prompt/src/InstallButton.jsx` | `InstallButton` | Direct trigger for the native prompt or modal. |
@@ -41,6 +47,8 @@ export function useInstallPrompt() {
 | `packages/install-prompt/src/ShareIcon.jsx` | `ShareIcon` | iOS share glyph matching Safari chrome. |
 | `packages/install-prompt/src/index.js` | `InstallButton`, `InstallModal`, `InstallNudge`, `InstallSettingsSection`, `InstallSuccessToast`, `ShareIcon`, `useInstallPrompt` | Public package surface. |
 | `packages/install-prompt/src/useInstallPrompt.js` | `detectPlatform`, `useInstallPrompt` | Stateful platform detection and prompt orchestration. |
+
+</details>
 
 ## Principal mechanics
 

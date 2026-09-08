@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url'
 const DETAILS_OPEN = '<details>'
 const DETAILS_CLOSE = '</details>'
 const TECHNICAL_PAGE = 'Technical-Architecture.md'
-const ALERT_RE = /^> \[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/m
 const GENERATED_WRAPPER_RE =
   /<details>\r?\n<summary><strong>(Technical detail:[^<]+)<\/strong><\/summary>\r?\n\r?\n> \[!NOTE\]\r?\n> Optional implementation detail\. The surrounding section states the product behavior\.\r?\n\r?\n([\s\S]*?)\r?\n\r?\n<\/details>/g
 
@@ -27,20 +26,54 @@ function regions(text, open, close) {
 
 function fencedBlocks(text) {
   const blocks = []
-  const pattern = /^```([^\r\n`]*)\r?\n[\s\S]*?^```\s*$/gm
-  for (const match of text.matchAll(pattern)) {
+  const opening = /^ {0,3}(`{3,}|~{3,})([^\r\n]*)\r?\n/gm
+  let match
+  while ((match = opening.exec(text)) !== null) {
+    const marker = match[1][0]
+    const closing = new RegExp(`^ {0,3}\\${marker}{${match[1].length},}\\s*$`, 'gm')
+    closing.lastIndex = match.index + match[0].length
+    const end = closing.exec(text)
+    if (!end) continue
     blocks.push({
       start: match.index,
-      end: match.index + match[0].length,
-      language: match[1].trim().toLowerCase(),
-      text: match[0],
+      end: end.index + end[0].length,
+      language: match[2].trim().split(/\s+/)[0].toLowerCase(),
+      text: text.slice(match.index, end.index + end[0].length),
     })
+    opening.lastIndex = end.index + end[0].length
   }
   return blocks
 }
 
+function technicalTables(text) {
+  const lines = [...text.matchAll(/.*(?:\r?\n|$)/g)]
+  const tables = []
+  for (let index = 0; index < lines.length - 1; index++) {
+    const header = lines[index][0]
+    const separator = lines[index + 1][0]
+    if (!header.includes('|') || !/^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/.test(separator)) {
+      continue
+    }
+    let endIndex = index + 2
+    while (endIndex < lines.length && lines[endIndex][0].includes('|')) endIndex++
+    const start = lines[index].index
+    const end = lines[endIndex - 1].index + lines[endIndex - 1][0].replace(/\r?\n$/, '').length
+    const table = text.slice(start, end)
+    if (/(?:src|scripts|packages|plugins)\/[A-Za-z0-9_.\-/]+/.test(table)) {
+      tables.push({ start, end, text: table })
+    }
+    index = endIndex - 1
+  }
+  return tables
+}
+
 function inside(index, spans) {
   return spans.some(([start, end]) => index > start && index < end)
+}
+
+function hasAdjacentAlert(text, detailsStart) {
+  const before = text.slice(0, detailsStart)
+  return /(?:^|\r?\n)> \[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\r?\n(?:>[^\r\n]*(?:\r?\n|$))+\r?\n$/.test(before)
 }
 
 export function formatTechnicalDetails(text, page = '') {
@@ -61,12 +94,15 @@ export function formatTechnicalDetails(text, page = '') {
     ].join('\n'),
   )
   const detailSpans = regions(formatted, DETAILS_OPEN, DETAILS_CLOSE)
-  const exposed = fencedBlocks(formatted).filter((block) => !inside(block.start, detailSpans))
+  const exposed = [
+    ...fencedBlocks(formatted).filter((block) => !inside(block.start, detailSpans)),
+    ...technicalTables(formatted).filter((table) => !inside(table.start, detailSpans)),
+  ].sort((a, b) => b.start - a.start)
 
-  for (const block of exposed.reverse()) {
+  for (const block of exposed) {
     const replacement = [
       '> [!NOTE]',
-      '> **Technical detail: concrete example.** Optional implementation detail; the surrounding section states the product behavior.',
+      '> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.',
       '',
       DETAILS_OPEN,
       '<summary><strong>Show technical detail</strong></summary>',
@@ -112,13 +148,24 @@ export function readabilityFindings(page, text) {
         detail: 'each <details> block needs a summary',
       })
     }
-    const leadIn = text.slice(Math.max(0, start - 500), start)
-    if (!ALERT_RE.test(leadIn)) {
+    if (!hasAdjacentAlert(text, start)) {
       findings.push({
         kind: 'uncoloured-technical-detail',
         page,
         detail: 'each <details> block needs a GitHub alert callout immediately before it',
       })
+    }
+  }
+
+  if (page !== TECHNICAL_PAGE) {
+    for (const table of technicalTables(text)) {
+      if (!inside(table.start, detailSpans)) {
+        findings.push({
+          kind: 'exposed-technical-detail',
+          page,
+          detail: 'module-path tables must be inside a collapsible <details> block',
+        })
+      }
     }
   }
 

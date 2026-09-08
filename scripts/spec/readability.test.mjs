@@ -19,6 +19,26 @@ describe('spec readability formatting', () => {
     expect(readabilityFindings('Behaviour.md', formatted)).toEqual([])
   })
 
+  it('wraps tilde and longer-backtick fences rather than letting valid Markdown bypass the gate', () => {
+    for (const fence of ['~~~~json\n{\"status\":\"ready\"}\n~~~~', '````json\n{\"status\":\"ready\"}\n````']) {
+      const formatted = formatTechnicalDetails(fence, 'Behaviour.md')
+      expect(formatted).toContain('<details>')
+      expect(readabilityFindings('Behaviour.md', formatted)).toEqual([])
+    }
+  })
+
+  it('wraps exposed module-path tables', () => {
+    const table = [
+      '| Module | Responsibility |',
+      '| --- | --- |',
+      '| `src/App.jsx` | Board shell |',
+    ].join('\n')
+    const formatted = formatTechnicalDetails(table, 'Domain-app.md')
+    expect(formatted).toContain('<details>')
+    expect(formatted).toContain(table)
+    expect(readabilityFindings('Domain-app.md', formatted)).toEqual([])
+  })
+
   it('does not fire on plain prose', () => {
     const prose = 'People can plan their day without understanding how files are parsed.'
     expect(formatTechnicalDetails(prose, 'Home.md')).toBe(prose)
@@ -40,6 +60,30 @@ describe('spec readability formatting', () => {
     expect(formatTechnicalDetails(formatted, 'Data-Formats.md')).toBe(formatted)
     expect(readabilityFindings('Data-Formats.md', formatted)).toEqual([])
   })
+
+  it('does not let a second detail block borrow the first block’s alert', () => {
+    const malformed = [
+      '> [!NOTE]',
+      '> **Technical detail: first.** Optional depth.',
+      '',
+      '<details>',
+      '<summary>First</summary>',
+      '',
+      code,
+      '',
+      '</details>',
+      '',
+      '<details>',
+      '<summary>Second</summary>',
+      '',
+      code,
+      '',
+      '</details>',
+    ].join('\n')
+    expect(readabilityFindings('Data-Formats.md', malformed)).toContainEqual(
+      expect.objectContaining({ kind: 'uncoloured-technical-detail' }),
+    )
+  })
 })
 
 describe('technical architecture document', () => {
@@ -47,6 +91,9 @@ describe('technical architecture document', () => {
     const diagram = ['```mermaid', 'flowchart LR', '  Human --> Planner', '```'].join('\n')
     expect(readabilityFindings('Technical-Architecture.md', diagram)).toEqual([])
     expect(readabilityFindings('Technical-Architecture.md', code)).toContainEqual(
+      expect.objectContaining({ kind: 'technical-doc-code' }),
+    )
+    expect(readabilityFindings('Technical-Architecture.md', '~~~json\n{}\n~~~')).toContainEqual(
       expect.objectContaining({ kind: 'technical-doc-code' }),
     )
   })

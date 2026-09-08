@@ -8,6 +8,12 @@ The `app` domain is the planner’s React front end plus the pure text-transform
 
 ## Principal modules
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Path | Role | Why it exists |
 | --- | --- | --- |
 | `src/App.jsx` | Main UI composition root. | Centralises view wiring for board, journals, combined routing, sync, diagnostics, settings, and mobile affordances. |
@@ -19,7 +25,15 @@ The `app` domain is the planner’s React front end plus the pure text-transform
 | `src/AgentGateEditor.jsx` | Editor for `agent-gate.md`. | Preserves the human-owned file shape while exposing two editable lists. |
 | `src/AgentSettingsEditor.jsx` | Editor for `user-settings.md`. | Offers structured and raw editing for agent settings. |
 
+</details>
+
 ## Public exports
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
 
 | Path | Exports from `spec-facts.json` |
 | --- | --- |
@@ -31,6 +45,8 @@ The `app` domain is the planner’s React front end plus the pure text-transform
 | `src/readState/readStateService.js` | `__resetForTests`, `completeInitialSeeding`, `emitJournalOpened`, `getReadStateProvider`, `isUnread`, `markSeen`, `migrateSeenState`, `registerInitialSeedCandidates`, `resolveInitialSeedCandidate`, `setReadStateProvider`, `subscribe`, `track` |
 | `src/AgentGateEditor.jsx` | `GateList`, `default` |
 | `src/AgentSettingsEditor.jsx` | `default` |
+
+</details>
 
 > [!NOTE]
 > **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.

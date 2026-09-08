@@ -29,6 +29,12 @@ export function mergeCollections(local = {}, remote = {}, opts = {}) {
 </details>
 ## Modules and exports
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Path | Exports from `spec-facts.json` | Role |
 | --- | --- | --- |
 | `packages/folder-sync/src/adapters/browserStorage.js` | `browserStorageAdapter` | Browser local-storage style adapter; default local store for consumers. |
@@ -48,6 +54,8 @@ export function mergeCollections(local = {}, remote = {}, opts = {}) {
 | `packages/folder-sync/src/reconcile.js` | `filesToDeleteLocally`, `isConsumerVisibleMirrorPath`, `isMassDeletion`, `isValidRemotePath`, `mtimeKeysForProvider`, `planMirrorSync`, `planPlainPush`, `shouldPullRemote` | Pure decision logic for pushes, pulls, mirror repair, and deletion propagation. |
 | `packages/folder-sync/src/records.js` | `frameHasStructure`, `framePriorityCount`, `isSidecarPath`, `preferPopulatedPriorityFrame`, `preferStructuredFrame`, `reconcileRecordsFile`, `sidecarPath` | File-level reconcile around the merge core. |
 | `packages/folder-sync/src/sw.js` | — | Background sync worker and record-codec dispatch. |
+
+</details>
 
 ## Central mechanics
 

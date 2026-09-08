@@ -47,6 +47,12 @@ A representative slice from the source shows the domain's style:
 </details>
 ## Module list
 
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
 | Path | Why it exists in the source | Notable API / behaviour |
 | --- | --- | --- |
 | `scripts/check-node-modules.mjs` | Prevents the #321 failure from being blamed on a code change. The header explains that an **empty** `node_modules` still exists, so ordinary existence checks say "fine" while later commands fail confusingly. | Exports `classifyNodeModules`, `buildReport`, `checkNodeModules`. Wired as a pretest-style guard. |
@@ -61,6 +67,8 @@ A representative slice from the source shows the domain's style:
 | `scripts/spec/conflicts.mjs` | Detects contradictory open-issue requirements that `verify.mjs` cannot catch. The comment says cadence makes the spec fresher, not truer; two open issues can still ask for opposite things. | Exports `tokenize`, `sentences`, `sameTarget`, `extractDirectives`, `extractSettings`, `parseDuration`, `extractLifecycle`, `findConflicts`, `citesIssue`, `buildDecisions`, `renderMarkdown`. |
 | `scripts/spec/verify.mjs` | Fails the build when generated spec prose invents paths or omits domains. Its header names the two target failure classes directly: **INVENTION** and **OMISSION**. | Reads `spec-facts.json` plus `docs/spec/`, checks path references, issue references, domain coverage, key-module coverage, minimum page length, and fenced examples. |
 | `scripts/spec/verifyParity.mjs` | Keeps the spec branch's verification honest. Its rationale is GitHub's no-cascade rule for token-authored PR events: the spec workflow must publish its own status, but that status must still mean the same thing as CI. | Exports `CI_VERIFICATION_JOBS`, `SPEC_VERIFY_JOB`, `jobBlock`, `runLines`, `npmCommands`, `checkSpecVerifyParity`. |
+
+</details>
 
 ## The `scripts/spec/*` pipeline
 
