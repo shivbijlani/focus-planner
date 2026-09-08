@@ -107,13 +107,10 @@ const ARMS = [
   },
   {
     id: 'M3',
-    what: 'the notice edit calls Telegram directly again',
-    why: 'the stacking path. A 429 is read as a failed edit, so a second notice is composed and sent -- and the send waits out the limit the edit refused to, making the duplicate the message that lands.',
-    find:
-      "      await withRateLimitRetry(`edit notice task #${taskId}`, () =>\n" +
-      "        client.editMessageText({ chatId, messageId, text, parseMode: 'HTML' }),\n" +
-      '      )',
-    replace: "      await client.editMessageText({ chatId, messageId, text, parseMode: 'HTML' })",
+    what: 'the ask stops riding in the pointer, going back to a message of its own',
+    why: 'the two-permanent-messages steady state -- 59 of 76 bound topics, measured. This arm replaced the pre-#620 one, which mutated the notice edit`s retry wrapper: that path no longer carries the ask (the pointer probe does, and M1 guards its wrapper), so the old arm could no longer fail for its stated reason. Reverting it silently would have been the exact defect this file exists to catch, so the arm is retargeted at the property that took its place rather than dropped.',
+    find: '    formatPointerNotice(notice) +',
+    replace: "    '' +",
   },
   {
     id: 'M4',
