@@ -790,6 +790,45 @@ $out = & powershell @a 2>&1 | Out-String
 Assert ($out -match 'NOT FOUND' -or $out -match '"oaHomeExit":\s*2') `
        'G8b an unresolvable sub-tool is reported, never silently skipped'
 
+# --- #622: the checkout the bridge RUNS from is a third deploy target -----------------
+# PHASE 3 executes the telegram bridge directly out of the repo working tree, which the
+# deploy never moves - it copies blobs read out of the ref into two OTHER trees. So both
+# copied targets can report verified-current while the bridge runs arbitrarily old code,
+# and the failure is not merely silent, it is success-shaped.
+#
+# The arm worth having is not "the check is missing". It is the DANGEROUS direction: a
+# check that advances a tree it was supposed to refuse. Fast-forwarding over uncommitted
+# work is how real local work gets carried onto a new base without anyone asking for it,
+# and it would be reported as a clean deploy.
+Section '#622 baseline: a dirty bridge checkout is refused, not advanced'
+# The checkout must be BEHIND as well as dirty. A sandbox that is merely dirty sits on
+# the ref, takes the on-ref branch, and never reaches the refusal at all - so the arm
+# below would pass without executing its own subject. An arm that cannot reach what it
+# mutates reports zero failures, which is indistinguishable from a guard that works.
+function Set-BehindAndDirty {
+  param($Sandbox)
+  & git -C $Sandbox.Repo reset --hard --quiet HEAD~1 2>&1 | Out-Null
+  Set-Content -Path (Join-Path $Sandbox.Repo 'dirty-local-work.txt') -Value 'uncommitted' -Encoding UTF8
+}
+$sDirty = New-Sandbox
+Set-BehindAndDirty -Sandbox $sDirty
+$baseDirty = Invoke-SUT -Script $SUT -Sandbox $sDirty
+if (-not $baseDirty.Json) { Write-Host ("  diagnostic: " + $baseDirty.Raw) }
+Assert ($baseDirty.Json.checkout -eq 'diverged') `
+       "G-BRIDGE a dirty bridge checkout is refused, not advanced (got '$($baseDirty.Json.checkout)')"
+Assert ($baseDirty.Json.checkoutExit -eq 2) `
+       'G-BRIDGE a refused bridge checkout is escalated, not folded into a clean report'
+
+Test-Mutant -Name 'M-BRIDGE: bridge refusal removed (a dirty checkout is advanced anyway)' `
+  -Find 'if ($ahead -gt 0 -or $dirty) {' -Replace 'if ($false) {' -Check {
+    param($mut)
+    $s = New-Sandbox
+    Set-BehindAndDirty -Sandbox $s
+    $r = Invoke-SUT -Script $mut -Sandbox $s
+    Assert ($r.Json.checkout -ne 'diverged') `
+           'killed: uncommitted work in the bridge checkout would be fast-forwarded over'
+  }
+
 Section 'RESULT'
 if (-not $KeepSandbox) { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
 else { Write-Host "  sandbox kept at $root" }
