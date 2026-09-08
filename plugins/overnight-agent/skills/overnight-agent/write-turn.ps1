@@ -403,6 +403,62 @@ function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$Window
   if ($null -eq $written) { return $null }
 
   $ageMin = ((Get-Date) - $written).TotalMinutes
+
+  # --- #532 A STALE STAMP IS AN UNKNOWN BOUNDARY, NOT AN AUTHORITATIVE ONE ----------------
+  # The block above trusts `last_woken_at` completely whenever it is present. That is only
+  # sound while something keeps it current, and nothing in this process does: the stamp is
+  # written by `oa-state.ps1 session -SessionWoken`, and the only thing that CALLS it is a
+  # sentence of prose in SKILL.md PHASE 1 ("Stamp `-SessionWoken` once it responds"). A guard
+  # is code; the fact this guard reads is an instruction someone has to remember. When the
+  # dispatcher skips it, the stamp keeps pointing at a PREVIOUS wake, every later turn is
+  # newer than it, and the comparison below refuses forever.
+  #
+  # MEASURED, on this task, by the run that could not record itself. Task #468, 2026-09-07:
+  #
+  #   last_woken_at   19:43 PT      <- stamped when the 19:43 run dispatched the sub-session
+  #   turn written    20:00 PT      <- that wake's turn, correctly the only one
+  #   re-dispatched   21:55 PT      <- a NEW wake, by a NEW run. Nothing stamped.
+  #   write-turn      22:00 PT      -> "a turn for THIS wake already exists by you (129 min)"
+  #
+  # The turn it named was two hours and one run old. #532 measured the same shape at 761
+  # minutes on a poll-driven wake, so this is not specific to polls: it is every wake after
+  # the first that reuses a live binding.
+  #
+  # WHY THIS IS THE HALF WORTH FIXING IN CODE. The refusal is correct in form and wrong in
+  # fact, and it fails CLOSED to a state #532 argues is strictly worse than the stacking G12
+  # exists to prevent: the run session is refused (rightly, #473), the owner is refused too
+  # (wrongly), and the wake records NOTHING. Zero authors is not a safer version of one
+  # author. The only escape is `-DisableGuard G12`, so the routine workaround for a stale
+  # stamp is to switch off the stacked-turn guard entirely -- which is #473 coming back in
+  # through the hatch, on a path that looks like compliance.
+  #
+  # THE RULE. A stamp older than the wake window is not describing the current wake, so it
+  # cannot identify it. That is EPISTEMICALLY THE SAME POSITION as a task with no stamp at
+  # all, which this function already handles and already documents ("the boundary is unknown,
+  # and something is better than nothing"). The defect is that absence was treated as unknown
+  # while presence-but-ancient was treated as authoritative -- the one case where the field is
+  # actively misleading was the one case given the most trust.
+  #
+  # Deliberately the SAME horizon as the fallback window, not a second tunable: they are one
+  # concept ("how recently must this have happened to still describe now"), and `oa-state.ps1`
+  # reaches 45 minutes independently for the same judgement (`$script:ActiveWakeMinutes` --
+  # "a stale wake is not evidence anyone is working"). Two knobs would drift apart.
+  #
+  # NOT FIXED BY STAMPING FROM HERE, and that is not an oversight. `oa-state.ps1 Cmd-Mark`
+  # refuses `-SessionWoken` precisely so the turn author cannot reset its own wake window
+  # (#514) -- G12 judges this author, so this author must not be able to write the field it
+  # is judged by. Stamping at dispatch is correct; stamping as remediation is the defect. So
+  # the read side is hardened instead, which needs no trust in the party being judged.
+  $staleWake = $false
+  $wakeAgeMin = 0
+  if ($null -ne $wokenAt) {
+    $wakeAgeMin = ((Get-Date) - $wokenAt).TotalMinutes
+    if ($wakeAgeMin -ge $WindowMin) {
+      $staleWake = $true
+      $wokenAt = $null
+    }
+  }
+
   if ($null -ne $wokenAt) {
     # Backup stamps are minute-resolution, so compare on whole minutes or a turn written in
     # the same minute the session woke reads as older than the wake and slips through.
@@ -413,7 +469,16 @@ function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$Window
   }
   else {
     if ($ageMin -ge $WindowMin) { return $null }
-    $why = 'a turn was written {0:N0} min ago and this task has no wake stamp to compare against' -f $ageMin
+    # Two different unknowns, said differently. A reader who sees "no wake stamp" goes looking
+    # for a task that was never bound; a reader who sees "stale" goes looking for a dispatcher
+    # that did not stamp. Collapsing them into one message sends every reader to the wrong
+    # place half the time.
+    $why = if ($staleWake) {
+      'a turn was written {0:N0} min ago and this task''s wake stamp is {1:N0} min old, too stale to identify the current wake (#532)' -f $ageMin, $wakeAgeMin
+    }
+    else {
+      'a turn was written {0:N0} min ago and this task has no wake stamp to compare against' -f $ageMin
+    }
   }
 
   # --- WHOSE turn was it? (#477) ---------------------------------------------------------

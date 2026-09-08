@@ -482,6 +482,33 @@ $g12Arms = @(
      why  = 'the backup is recency evidence, not wake evidence; the boundary still decides'
      setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12State $now.AddMinutes(-12) $now.AddMinutes(-2); Set-G12Backup $now.AddMinutes(-12) } }
 
+  # --- #532 A STALE STAMP IS AN UNKNOWN BOUNDARY, NOT AN AUTHORITATIVE ONE ---------------
+  # Nothing in the writing process keeps `last_woken_at` current: it is stamped by a prose
+  # instruction in SKILL.md that the dispatcher has to remember. When it is skipped, the
+  # stamp keeps naming a PREVIOUS wake, every later turn is newer than it, and the boundary
+  # comparison above refuses every author forever - the run session rightly (#473) and the
+  # owner wrongly. Zero permitted authors is not a safer version of one.
+  #
+  # Measured on task #468, 2026-09-07: stamp 19:43, turn 20:00, re-dispatched by a new run at
+  # 21:55, refused at 22:00 naming a turn that was two hours and one run old.
+  #
+  # THESE TWO ARE THE DISCRIMINATION, and the second is the one that matters. Both have an
+  # equally ancient stamp; they differ only in how recently a turn was written. If the fix
+  # were "ignore a stale stamp", both would pass and the guard would be off on every task
+  # whose dispatcher forgets to stamp - trading a false refusal for a silent stacking hole.
+  # Falling back to the recency window keeps the second refused.
+  @{ name = 'STALE stamp + OLD turn: the #532 repro'; fires = $false
+     why  = 'THE #532 DEFECT: a stamp from a previous wake cannot identify this one, and refusing here records nothing at all'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12State $now.AddMinutes(-120) $now.AddMinutes(-137) } }
+
+  @{ name = 'STALE stamp + RECENT turn still refused'; fires = $true
+     why  = 'the fallback is a window, not an amnesty - a stale stamp must not switch the guard off'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12State $now.AddMinutes(-5) $now.AddMinutes(-137) } }
+
+  @{ name = 'FRESH stamp is still authoritative'; fires = $true
+     why  = 'staleness must be judged by the window, not applied to every stamp'
+     setup = { Set-G12Journal ''; Clear-G12Recency; Set-G12State $now $now.AddMinutes(-44) } }
+
   # --- WHOSE turn (#477) ---------------------------------------------------------------
   # G12 shipped green against 19 body fixtures and 7 arms and still had this hole, because
   # every one of those arms asked "is there a turn for this wake?" and none asked "whose?".
