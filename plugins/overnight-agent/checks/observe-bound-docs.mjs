@@ -132,6 +132,36 @@ export function selectStale(rows, { limit = DEFAULT_LIMIT, freshMinutes = FRESH_
 export const ageLabel = (ms) =>
   ms === Infinity ? 'never' : `${Math.round(ms / 60000)}m`;
 
+/**
+ * PURE (the filesystem arrives as the `exists` probe, so this is testable with no disk).
+ *
+ * Resolve `oa-state.ps1`, which lives at a DIFFERENT relative offset in each of the two deploy
+ * targets this file is copied into:
+ *
+ *   plugin tree  <plugin>/overnight-agent/checks/  -> ../skills/overnight-agent/oa-state.ps1
+ *   OA home      %LOCALAPPDATA%/overnight-agent/   -> ./oa-state.ps1        (flat: no subdirs)
+ *
+ * The plugin-relative path was hard-coded, so in OA home it resolved to
+ * `%LOCALAPPDATA%\skills\overnight-agent\oa-state.ps1` -- a directory that does not exist. That
+ * is the copy `run-sweeps.ps1` actually invokes, so EVERY observation this file has ever
+ * attempted failed, and the failure was per-task: 20 tasks produced 20 identical "the argument
+ * ... does not exist" lines and a `failed 20` total, which reads like 20 Google failures rather
+ * than one missing file. Hence the two changes here: probe both layouts, and when neither is
+ * found say so ONCE and exit, rather than rediscovering it per task.
+ *
+ * Returns the resolved path, or null when nothing is found. An explicit `OA_STATE_PS1` wins even
+ * if it does not exist -- an override that silently falls back to a different binary than the one
+ * named is worse than one that fails loudly.
+ */
+export function resolveOaState({ here, env = {}, exists = () => false } = {}) {
+  if (env.OA_STATE_PS1) return env.OA_STATE_PS1;
+  const candidates = [
+    path.join(here, 'oa-state.ps1'),                                    // OA home (flat)
+    path.join(here, '..', 'skills', 'overnight-agent', 'oa-state.ps1'), // plugin tree
+  ];
+  return candidates.find((c) => exists(c)) || null;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Everything below is effects. Nothing above imports it.
 // ---------------------------------------------------------------------------------------------
@@ -160,9 +190,14 @@ if (!isMain) {
 
   const HERE = path.dirname(fileURLToPath(import.meta.url));
   const PROBE = path.join(HERE, 'mcp-probe.mjs');
-  const OA_STATE =
-    process.env.OA_STATE_PS1 ||
-    path.join(HERE, '..', 'skills', 'overnight-agent', 'oa-state.ps1');
+  const OA_STATE = resolveOaState({ here: HERE, env: process.env, exists: (p) => fs.existsSync(p) });
+  if (!OA_STATE) {
+    console.error(
+      'oa-state.ps1 not found next to this script, nor at ../skills/overnight-agent/. ' +
+        'Set OA_STATE_PS1 to its full path.'
+    );
+    process.exit(2);
+  }
   const EMAIL = process.env.OA_GOOGLE_EMAIL || 'shiv@bijlanis.com';
 
   const readJson = (file) => {

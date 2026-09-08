@@ -99,6 +99,55 @@ async function suite(modPath) {
   const allFresh = rows().map((r) => ({ ...r, observedAt: new Date(NOW - 5 * MIN).toISOString() }));
   check('A7 all-fresh fleet polls nothing', selectStale(allFresh, { now: NOW, limit: 99 }).length === 0);
 
+  // ---- resolveOaState: the two-deploy-target path bug -------------------------------------
+  // This file is copied into BOTH the plugin tree (checks/, with oa-state.ps1 two levels away at
+  // ../skills/overnight-agent/) and the FLAT OA home (%LOCALAPPDATA%\overnight-agent\, with
+  // oa-state.ps1 right beside it). run-sweeps.ps1 invokes the OA home copy, so a resolver that
+  // only knows the plugin layout fails 100% of the time in the copy that actually runs -- which
+  // is what happened: every observation this file ever attempted died on a path that does not
+  // exist, and the per-task error made it read like 20 Google failures.
+  const { resolveOaState } = await import(`${pathToFileURL(modPath).href}?t=${Date.now()}`);
+  const sep = join('a', 'b').includes('\\') ? '\\' : '/';
+  const homeHere = join('C:', 'la', 'overnight-agent');
+  const pluginHere = join('C:', 'plug', 'overnight-agent', 'checks');
+  const homeState = join(homeHere, 'oa-state.ps1');
+  const pluginState = join(pluginHere, '..', 'skills', 'overnight-agent', 'oa-state.ps1');
+
+  // B1 -- THE FLAT OA HOME LAYOUT RESOLVES. The regression itself. Without this arm the copy
+  // that run-sweeps actually executes is the one nothing covers.
+  check(
+    'B1 OA home (flat) resolves to the co-located oa-state.ps1',
+    resolveOaState({ here: homeHere, env: {}, exists: (p) => p === homeState }) === homeState,
+    `got ${resolveOaState({ here: homeHere, env: {}, exists: (p) => p === homeState })}`
+  );
+
+  // B2 -- THE PLUGIN LAYOUT STILL RESOLVES. The fix must not trade one target for the other;
+  // that would just move the 100% failure to the other copy.
+  check(
+    'B2 plugin tree still resolves via ../skills/overnight-agent',
+    resolveOaState({ here: pluginHere, env: {}, exists: (p) => p === pluginState }) === pluginState,
+    `got ${resolveOaState({ here: pluginHere, env: {}, exists: (p) => p === pluginState })}`
+  );
+
+  // B3 -- NOTHING FOUND RETURNS null, so the caller can say so ONCE and exit. Returning a
+  // plausible-but-absent path is what produced 20 identical per-task failures that read as a
+  // Google outage rather than as one missing file.
+  check(
+    'B3 unresolvable returns null',
+    resolveOaState({ here: homeHere, env: {}, exists: () => false }) === null,
+    'expected null so the caller can fail loudly once'
+  );
+
+  // B4 -- AN EXPLICIT OVERRIDE WINS, even when absent. An override that silently falls back to a
+  // different file than the one named is worse than one that fails loudly.
+  check(
+    'B4 OA_STATE_PS1 overrides even when it does not exist',
+    resolveOaState({ here: homeHere, env: { OA_STATE_PS1: 'X:\\pin\\oa-state.ps1' }, exists: () => true }) ===
+      'X:\\pin\\oa-state.ps1',
+    'the override must not be second-guessed by the probe'
+  );
+  void sep;
+
   return failures;
 }
 
@@ -137,6 +186,27 @@ const MUTATIONS = [
     what: "an `unreadable` observation is accepted as a successful read",
     why: 'the exact conflation this channel exists to prevent: a transport failure would stamp observed_at, clear the staleness, and report the channel read and empty -- so an instruction Shiv believes was received is dropped, and the task looks healthy. #531 was this same conflation pointing the other way.',
     find: "        if (observation !== 'read') {",
+  },
+  {
+    id: 'M6',
+    what: 'the resolver drops the flat OA-home candidate and knows only the plugin layout',
+    why: 'THE REGRESSION, exactly: run-sweeps.ps1 invokes the OA home copy, where ../skills/overnight-agent does not exist, so every observation dies on a missing file and the stale count never falls. It is success-shaped because the failure is per-task and looks like a Google outage. Killed by B1.',
+    find: "    path.join(here, 'oa-state.ps1'),                                    // OA home (flat)\n",
+    replace: '',
+  },
+  {
+    id: 'M7',
+    what: 'the resolver drops the plugin-tree candidate, keeping only the flat one',
+    why: 'the same 100% failure moved to the other deploy target. A fix that trades one copy for the other is not a fix, and only an arm per layout catches it. Killed by B2.',
+    find: "    path.join(here, '..', 'skills', 'overnight-agent', 'oa-state.ps1'), // plugin tree\n",
+    replace: '',
+  },
+  {
+    id: 'M8',
+    what: 'an unresolvable lookup returns a plausible path instead of null',
+    why: 'the caller then spawns a non-existent script once per task, producing N identical errors that read as a transport failure rather than as one missing file -- which is precisely why this bug survived every run it broke. Killed by B3.',
+    find: "  return candidates.find((c) => exists(c)) || null;",
+    replace: "  return candidates.find((c) => exists(c)) || candidates[candidates.length - 1];",
   },
 ];
 
