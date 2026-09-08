@@ -68,13 +68,13 @@ A small slice from the real source shows the pattern:
 
 ## Collected module families in `spec-facts.json`
 
-The table below groups the **166 collected JS modules** by file family. Counts come from
+The table below groups the **174 collected JS modules** by file family. Counts come from
 `spec-facts.json`; examples are verbatim paths from that file.
 
 | Family | Count | What it covers | Representative paths |
 | --- | ---: | --- | --- |
-| `mutcheck-*` | 45 | Mutation-tested proof that a guard's individual arms matter. | `plugins/overnight-agent/checks/mutcheck-basename-collision.mjs`; `plugins/overnight-agent/checks/mutcheck-phase07-ownership.mjs`; `plugins/overnight-agent/checks/mutcheck-mcp-transport.mjs` |
-| `*-sweep` | 49 | Live corpus scans for current failures and regressions. | `plugins/overnight-agent/checks/armed-trigger-sweep.mjs`; `plugins/overnight-agent/checks/basename-collision-sweep.mjs`; `plugins/overnight-agent/checks/mcp-transport-sweep.mjs` |
+| `mutcheck-*` | 49 | Mutation-tested proof that a guard's individual arms matter. | `plugins/overnight-agent/checks/mutcheck-basename-collision.mjs`; `plugins/overnight-agent/checks/mutcheck-phase07-ownership.mjs`; `plugins/overnight-agent/checks/mutcheck-mcp-transport.mjs` |
+| `*-sweep` | 50 | Live corpus scans for current failures and regressions. | `plugins/overnight-agent/checks/armed-trigger-sweep.mjs`; `plugins/overnight-agent/checks/basename-collision-sweep.mjs`; `plugins/overnight-agent/checks/mcp-transport-sweep.mjs` |
 | `lib-*` | 13 | Shared readers/classifiers used by several checks. | `plugins/overnight-agent/checks/lib-doc-comments.mjs`; `plugins/overnight-agent/checks/lib-external-artifacts.mjs`; `plugins/overnight-agent/checks/lib-external-surfaces.mjs` |
 | `verify-*` | 3 | One-shot verification scripts aimed at a named change or surface. | `plugins/overnight-agent/checks/verify-186.mjs`; `plugins/overnight-agent/checks/verify-deployed-paths.mjs`; `plugins/overnight-agent/checks/verify-settings-form.mjs` |
 | `*-scope` | 9 | Scope readers that bound a question before a sweep answers it. | `plugins/overnight-agent/checks/block-newer-scope.mjs`; `plugins/overnight-agent/checks/block-truncation-scope.mjs`; `plugins/overnight-agent/checks/multi-block-slice-scope.mjs` |
@@ -84,7 +84,7 @@ The table below groups the **166 collected JS modules** by file family. Counts c
 | `yt-*` | 4 | YouTube-oriented probes/readers. | `plugins/overnight-agent/checks/yt-captions.mjs`; `plugins/overnight-agent/checks/yt-modern.mjs`; `plugins/overnight-agent/checks/yt-probe.mjs` |
 | `*-probe` | 2 | Narrow environment or repair probes. | `plugins/overnight-agent/checks/mcp-probe.mjs`; `plugins/overnight-agent/checks/probe-workspace-tiers.mjs` |
 | `pr-closing-keyword` | 1 | CI-facing PR-body guard. | `plugins/overnight-agent/checks/pr-closing-keyword.mjs` |
-| Other one-offs | 27 | Indexers, auditors, replay tools, and narrow incident checks that do not fit one prefix. | `plugins/overnight-agent/checks/artifact-index.mjs`; `plugins/overnight-agent/checks/body-header-drift.mjs`; `plugins/overnight-agent/checks/ensure-catchup-doc.mjs` |
+| Other one-offs | 30 | Indexers, auditors, replay tools, and narrow incident checks that do not fit one prefix. | `plugins/overnight-agent/checks/artifact-index.mjs`; `plugins/overnight-agent/checks/body-header-drift.mjs`; `plugins/overnight-agent/checks/ensure-catchup-doc.mjs` |
 
 The mix matters more than any single filename. The architecture keeps nightly diagnosis modular:
 a sweep asks one operational question, a mutcheck proves the sweep can still detect it, and a lib
