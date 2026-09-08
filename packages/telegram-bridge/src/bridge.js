@@ -20,6 +20,8 @@ import {
   setLastPosted,
   setLastPostedMessageIds,
   setLastPostedContext,
+  setPreBindCollapseVerdict,
+  getPreBindCollapseVerdict,
   bumpReplyCount,
   getReplyCount,
   setSuppressedHash,
@@ -597,8 +599,8 @@ export function createBridge({
         if (outcome.linkProbeDeferred) linkProbeDeferred.push(taskId)
         if (outcome.linkDeferredUnwritten) linkDeferredUnwritten.push(taskId)
         if (outcome.tidied) tidied.push({ taskId, messageIds: outcome.tidied })
-      if (outcome.collapsed && outcome.collapsed.length)
-        collapsed.push({ taskId, messageIds: outcome.collapsed })
+        if (outcome.collapsed && outcome.collapsed.length)
+          collapsed.push({ taskId, messageIds: outcome.collapsed })
         if (outcome.tidyPending) tidyPending.push({ taskId, messageIds: outcome.tidyPending })
         continue
       }
@@ -1075,11 +1077,38 @@ export function createBridge({
         // to is not a superseded draft, it is a conversation. `lastPostedReplyCount` is the
         // count as it stood when those ids went out, so this asks whether a reply landed SINCE
         // -- not whether one has ever landed at all.
-        const repliesNow = getReplyCount(state, taskId)
-        const repliesAtPost = Number.isInteger(bound.lastPostedReplyCount)
-          ? bound.lastPostedReplyCount
-          : 0
-        const spokeSince = repliesNow !== repliesAtPost || !!bound.userEngaged
+        //
+        // But that comparison is only meaningful while SOMETHING still maintains both halves,
+        // and nothing here does: `setLastPostedContext` is the sole writer of
+        // `lastPostedReplyCount` and it lives on the turn path, which link mode `continue`s
+        // past. For a doc-bound task the captured half is pinned at the last pre-binding turn
+        // while `repliesNow` keeps climbing -- and it climbs BECAUSE the link and the notice are
+        // there to be replied to. Recomputed every run, the verdict flips to "spoke since" on
+        // the first reply after binding and can never flip back, since the only thing that
+        // clears it is a turn post #424 exists to prevent. The collapse was moved off the turn
+        // path; its precondition was not.
+        //
+        // So decide once, when link mode takes ownership of these ids, and keep the answer.
+        // `undefined` is "not yet asked" and is distinct from `false`.
+        const recordedVerdict = getPreBindCollapseVerdict(state, taskId)
+        let spokeSince
+        if (typeof recordedVerdict === 'boolean') {
+          spokeSince = recordedVerdict
+        } else {
+          const repliesNow = getReplyCount(state, taskId)
+          const repliesAtPost = Number.isInteger(bound.lastPostedReplyCount)
+            ? bound.lastPostedReplyCount
+            : 0
+          spokeSince = repliesNow !== repliesAtPost || !!bound.userEngaged
+          setPreBindCollapseVerdict(state, taskId, spokeSince)
+          if (spokeSince) {
+            logger(
+              `task #${taskId}: pre-binding message(s) frozen for good -- a reply landed since ` +
+                `they went out (${repliesAtPost} -> ${repliesNow}). Recorded, so later replies ` +
+                'to the link or the notice do not re-decide it.',
+            )
+          }
+        }
         const strandedLinks = Array.isArray(bound.lastPostedLinks) ? bound.lastPostedLinks : []
         const carried = strandedLinks.length
           ? `, carrying ${strandedLinks.length} link(s) the doc link does not: ${strandedLinks.join(', ')}`
@@ -1088,7 +1117,7 @@ export function createBridge({
         if (spokeSince) {
           logger(
             `not tidying ${stranded.length} pre-binding message(s) for task #${taskId}: a reply ` +
-              `landed since they were posted (${repliesAtPost} -> ${repliesNow})`,
+              'landed since they were posted',
           )
         } else if (config.tidyBoundTopics !== true && config.collapseBoundTurns) {
           // COLLAPSE, the default. Each stranded turn keeps its place in the thread and becomes

@@ -136,6 +136,47 @@ export function setLastPostedContext(state, taskId, { replyCount, links } = {}) 
   return state
 }
 
+// The pre-binding collapse verdict (#483 follow-up): may link mode rewrite the
+// turns that were already sitting in the topic when the task became doc-bound?
+//
+// WHY THIS IS RECORDED RATHER THAN RECOMPUTED.
+// The freeze above is `lastPostedReplyCount !== replyCount`, and the ONLY writer
+// of `lastPostedReplyCount` is `setLastPostedContext`, which is on the
+// turn-posting path. Link mode returns before it. So for a doc-bound task the
+// captured half is pinned at the last pre-binding turn while `replyCount` keeps
+// climbing — and it climbs precisely because the link and the notice are there
+// to be replied to. The verdict therefore flips to "spoke since" on the first
+// reply after binding and can never flip back, because the one thing that clears
+// it is a turn post that #424 exists to stop.
+//
+// That is the bug this whole block fixes, one level down: the collapse was moved
+// off the turn path and its precondition was left behind on it. Recomputing a
+// live question against a boundary nobody maintains does not preserve the safety
+// property, it just freezes the answer at "no".
+//
+// So the question is asked once, at the moment link mode takes ownership of
+// those ids, and the answer is kept. Before binding, "did a reply land since
+// these went out?" is a live question ABOUT THESE MESSAGES. After binding it is
+// a question about the link, which is not what the freeze protects.
+//
+// A task already bound when this shipped has no recorded verdict and no way to
+// reconstruct one — `replyCount` records no message ids, so whether those replies
+// landed before or after the link went out is not recoverable. Such a task takes
+// the conservative branch and stays frozen: never rewrite a message the user may
+// have answered.
+export function setPreBindCollapseVerdict(state, taskId, spokeSince) {
+  const prev = state.tasks[taskId] || {}
+  state.tasks[taskId] = { ...prev, preBindSpokeSince: !!spokeSince }
+  return state
+}
+
+// `undefined` means "not yet decided" and is deliberately distinct from `false`:
+// the caller must be able to tell an unasked question from one answered "no".
+export function getPreBindCollapseVerdict(state, taskId) {
+  const task = state.tasks[taskId]
+  return task && typeof task.preBindSpokeSince === 'boolean' ? task.preBindSpokeSince : undefined
+}
+
 // The catch-up link message for a task (#424): which doc it points at, and the
 // Telegram message id it was posted as.
 //

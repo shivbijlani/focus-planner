@@ -1015,6 +1015,103 @@ describe('#483 — pre-binding turns above the doc link', () => {
   })
 })
 
+describe('#483 follow-up — the freeze is decided once, not re-derived forever', () => {
+  // The freeze reads `lastPostedReplyCount !== replyCount`, and the ONLY writer of
+  // `lastPostedReplyCount` is `setLastPostedContext` on the turn-posting path. Link mode
+  // `continue`s before reaching it. So once a task is doc-bound the captured half never moves
+  // again while `replyCount` keeps climbing -- and it climbs because the link and the notice
+  // are there to be replied to. Recomputed every run, the answer flips to "frozen" on the
+  // first reply after binding and can never flip back, since the only thing that clears it is
+  // a turn post #424 exists to prevent.
+  //
+  // Measured live on 2026-09-07, task #228: bound (docLinkMessageId 2865), replyCount 4 vs
+  // lastPostedReplyCount 2, two pre-binding messages that could never collapse.
+  function bound(state, { ids = [1001, 1002], replyCount = 0, postedAt = 0, verdict, h } = {}) {
+    state.tasks['42'] = {
+      topicId: 7,
+      lastPostedMessageIds: ids,
+      lastPostedReplyCount: postedAt,
+      replyCount,
+      ...(typeof verdict === 'boolean' ? { preBindSpokeSince: verdict } : {}),
+    }
+    if (h) for (const id of ids) h.registerLive(id)
+    return state
+  }
+
+  it('records the verdict on the first link-mode pass', async () => {
+    const h = makeHarness({ 42: journal() })
+    const state = bound(emptyState(), { h })
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+
+    // Not merely absent-and-therefore-falsy: the field must be a real `false`, because
+    // `undefined` is the "not yet asked" state and takes the recompute branch.
+    expect(state.tasks['42'].preBindSpokeSince).toBe(false)
+  })
+
+  it('does NOT re-freeze when a reply lands after binding — the defect', async () => {
+    // The regression this exists for. A reply to the doc link or the notice moves `replyCount`
+    // far away from the pinned `lastPostedReplyCount`, so the recomputed predicate says
+    // "frozen" — yet the messages under judgement were already ruled safe at binding. Under
+    // the old code this test collapses nothing.
+    const h = makeHarness({ 42: journal() })
+    const state = bound(emptyState(), { h, replyCount: 5, postedAt: 0, verdict: false })
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    const res = await bridge.syncUp()
+
+    expect(res.collapsed).toEqual([{ taskId: '42', messageIds: [1001, 1002] }])
+    expect(h.deleted).toEqual([])
+    expect(state.tasks['42'].lastPostedMessageIds).toBeUndefined()
+  })
+
+  it('keeps a recorded freeze frozen even when the counters later agree', async () => {
+    // The safety direction, and it must be just as sticky. If a reply DID land before binding,
+    // no later arithmetic may unfreeze those messages — including counters that happen to
+    // line up again.
+    const h = makeHarness({ 42: journal() })
+    const state = bound(emptyState(), { h, replyCount: 0, postedAt: 0, verdict: true })
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+
+    expect(h.edits.filter((e) => e.messageId === 1001)).toEqual([])
+    expect(h.deleted).toEqual([])
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([1001, 1002])
+  })
+
+  it('freezes a task that was ALREADY bound when this shipped, and says so once', async () => {
+    // #228's shape: no recorded verdict, and the counters disagree. `replyCount` records no
+    // message ids, so whether those replies landed before or after the link went out is not
+    // recoverable — take the conservative branch and never rewrite a message he may have
+    // answered. Shiv's instruction was "fix the build so you don't make more stacking", not
+    // "go back and fix prior mistakes".
+    const h = makeHarness({ 42: journal() })
+    const state = bound(emptyState(), { h, replyCount: 4, postedAt: 2 })
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+
+    expect(state.tasks['42'].preBindSpokeSince).toBe(true)
+    expect(h.edits.filter((e) => e.messageId === 1001)).toEqual([])
+    expect(state.tasks['42'].lastPostedMessageIds).toEqual([1001, 1002])
+  })
+
+  it('still honours a reply that landed before binding, when nothing is recorded yet', async () => {
+    // Do not regress the original guard: the recompute branch is still the one that decides,
+    // and it must decide the same way it always did.
+    const h = makeHarness({ 42: journal() })
+    const state = bound(emptyState(), { h, replyCount: 1, postedAt: 0 })
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+
+    await bridge.syncUp()
+
+    expect(state.tasks['42'].preBindSpokeSince).toBe(true)
+    expect(h.edits.filter((e) => e.messageId === 1001)).toEqual([])
+  })
+})
+
 describe('#588 — the link points at a WRITTEN doc, not merely a bound one', () => {
   // `ensure-catchup-doc` creates a placeholder and binds it; the body arrives on the task's
   // first wake AFTER that. Posting off the binding meant a task bound during a run had its
