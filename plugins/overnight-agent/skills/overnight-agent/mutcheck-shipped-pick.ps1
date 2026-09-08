@@ -52,9 +52,23 @@ New-Item -ItemType Directory -Path $root -Force | Out-Null
 
 $script:pass = 0
 $script:fail = 0
-function Assert([bool]$ok, [string]$name, [string]$why) {
+function Assert([bool]$ok, [string]$name, [string]$why, [string]$detail = '') {
   if ($ok) { Write-Host "  PASS  $name  -- $why"; $script:pass++ }
-  else { Write-Host "  FAIL  $name  -- $why" -ForegroundColor Red; $script:fail++ }
+  else {
+    Write-Host "  FAIL  $name  -- $why" -ForegroundColor Red
+    # The captured invocation, printed ONLY on failure. Without this the harness reports
+    # "15 arms disagreed" and nothing about why, which is useless on a CI runner you cannot
+    # attach to -- and this file failed exactly that way on its first Linux run.
+    if ($detail) { Write-Host ("        got: " + $detail) -ForegroundColor DarkGray }
+    $script:fail++
+  }
+}
+
+# One line describing what a write-turn invocation actually did.
+function Detail($r) {
+  $o = ("$($r.out)" -replace '\s+', ' ').Trim()
+  if ($o.Length -gt 400) { $o = $o.Substring(0, 400) + '...' }
+  return "exit=$($r.code) :: $o"
 }
 
 function New-Mutant {
@@ -143,15 +157,15 @@ $repoCited = New-FixtureRepo $CITED
 # "**Next:** work #588 next wake" is literally how the twelve bad picks travelled.
 $bodyPropose = New-Body 'propose' (Turn '**Next:** work #111 next wake.')
 $b1 = Invoke-WriteTurn $WriteTurnPath $bodyPropose $repoCited
-Assert ($b1.code -eq 2 -and $b1.out -match 'G15') 'B1' 'a turn proposing an already-shipped issue is REFUSED'
-Assert ($b1.out -match '#111') 'B1b' 'and the refusal names the issue, not just "a problem"'
+Assert ($b1.code -eq 2 -and $b1.out -match 'G15') 'B1' 'a turn proposing an already-shipped issue is REFUSED' (Detail $b1)
+Assert ($b1.out -match '#111') 'B1b' 'and the refusal names the issue, not just "a problem"' (Detail $b1)
 
 # ------------------------------------------------------------- N1 the paired negative
 # THE SAME BODY against a repo where nothing cites #111. If this fails, B1 was passing
 # for a reason other than the citation.
 $repoUncited = New-FixtureRepo $UNCITED
 $n1 = Invoke-WriteTurn $WriteTurnPath $bodyPropose $repoUncited
-Assert ($n1.code -eq 0 -and $n1.out -notmatch 'G15 line') 'N1' 'the identical turn clears when the issue is uncited (B1 pairs)'
+Assert ($n1.code -eq 0 -and $n1.out -notmatch 'G15 line') 'N1' 'the identical turn clears when the issue is uncited (B1 pairs)' (Detail $n1)
 
 Write-Host ''
 Write-Host 'NARROWNESS -- it must refuse PROPOSALS, never REPORTS'
@@ -160,17 +174,17 @@ Write-Host 'NARROWNESS -- it must refuse PROPOSALS, never REPORTS'
 # The turn that ANNOUNCES shipped work necessarily cites shipped issues. Refusing it would
 # make the guard unusable, and it would be refusing the correct behaviour it wants.
 $n2 = Invoke-WriteTurn $WriteTurnPath (New-Body 'report' (Turn '**Status:** shipped the fix for #111, merged. **Next:** amend the doc.')) $repoCited
-Assert ($n2.code -eq 0) 'N2' 'a turn REPORTING shipped #111 is not refused (only proposals are)'
+Assert ($n2.code -eq 0) 'N2' 'a turn REPORTING shipped #111 is not refused (only proposals are)' (Detail $n2)
 
 # ------------------------------------------------------------------------------- N3 PR
 # "land PR #111" names a pull request. Every merged PR number is by construction cited in
 # the source it merged, so failing to exclude these would refuse almost every real turn.
 $n3 = Invoke-WriteTurn $WriteTurnPath (New-Body 'pr' (Turn '**Next:** land PR #111 once CI is green.')) $repoCited
-Assert ($n3.code -eq 0) 'N3' 'a PR number on a Next line is not read as an issue pick'
+Assert ($n3.code -eq 0) 'N3' 'a PR number on a Next line is not read as an issue pick' (Detail $n3)
 
 # Paired with N3 so the exclusion cannot be silently swallowing everything.
 $n3b = Invoke-WriteTurn $WriteTurnPath (New-Body 'prpair' (Turn '**Next:** pick up #111 after that.')) $repoCited
-Assert ($n3b.code -eq 2 -and $n3b.out -match 'G15') 'N3b' 'but a bare issue pick on the same shape still refuses (N3 pairs)'
+Assert ($n3b.code -eq 2 -and $n3b.out -match 'G15') 'N3b' 'but a bare issue pick on the same shape still refuses (N3 pairs)' (Detail $n3b)
 
 # ---------------------------------------------------------------------------- N4 fence
 # A fenced block is a verbatim quotation -- including the quotation in THIS file's own
@@ -183,13 +197,13 @@ $fenced = Turn (@'
 ```
 '@)
 $n4 = Invoke-WriteTurn $WriteTurnPath (New-Body 'fenced' $fenced) $repoCited
-Assert ($n4.code -eq 0) 'N4' 'the same proposal inside a fenced quotation is inert'
+Assert ($n4.code -eq 0) 'N4' 'the same proposal inside a fenced quotation is inert' (Detail $n4)
 
 # ------------------------------------------------------------------------- N5 dialects
 # The verb list is deliberately tight, but it must cover the forms actually used.
 foreach ($d in @('**Next:** picking up #111.', '**Next up:** #111', 'I am working on #111 next.')) {
   $r = Invoke-WriteTurn $WriteTurnPath (New-Body ('dia' + [Math]::Abs($d.GetHashCode())) (Turn $d)) $repoCited
-  Assert ($r.code -eq 2) 'N5' "refuses the proposal dialect: $d"
+  Assert ($r.code -eq 2) 'N5' "refuses the proposal dialect: $d" (Detail $r)
 }
 
 Write-Host ''
@@ -203,8 +217,8 @@ Write-Host 'BLINDNESS -- a guard that cannot see must not look like one that cle
 $notRepo = Join-Path $root 'not-a-repo'
 New-Item -ItemType Directory -Path $notRepo -Force | Out-Null
 $n6 = Invoke-WriteTurn $WriteTurnPath $bodyPropose $notRepo
-Assert ($n6.code -eq 0) 'N6' 'unmeasurable -> fails OPEN, so journalling is never wedged'
-Assert ($n6.out -match 'could not check the proposed issue') 'N6b' 'but it says so out loud, rather than passing silently'
+Assert ($n6.code -eq 0) 'N6' 'unmeasurable -> fails OPEN, so journalling is never wedged' (Detail $n6)
+Assert ($n6.out -match 'could not check the proposed issue') 'N6b' 'but it says so out loud, rather than passing silently' (Detail $n6)
 
 Write-Host ''
 Write-Host 'MUTANTS -- disable the guard, and the refusal must disappear'
@@ -212,14 +226,14 @@ Write-Host 'MUTANTS -- disable the guard, and the refusal must disappear'
 # ------------------------------------------------------------------------------ M1 switch
 # The documented escape hatch. Proves the B1 finding was G15's and nothing else's.
 $m1 = Invoke-WriteTurn $WriteTurnPath $bodyPropose $repoCited @('-DisableGuard', 'G15')
-Assert ($m1.code -eq 0) 'M1' '-DisableGuard G15 clears the refusal (so B1 was G15, not another guard)'
+Assert ($m1.code -eq 0) 'M1' '-DisableGuard G15 clears the refusal (so B1 was G15, not another guard)' (Detail $m1)
 
 # ------------------------------------------------------------------------------- M2 dead
 # The guard body made unreachable. If B1 still refused here, something else was producing
 # the finding and G15 itself would be decorative -- the exact vacuity this file guards.
 $m2src = New-Mutant 'M2' $WriteTurnPath "  if (& `$on 'G15') {" '  if ($false) {'
 $m2 = Invoke-WriteTurn $m2src $bodyPropose $repoCited
-Assert ($m2.code -eq 0) 'M2' 'guard made unreachable -> the refusal vanishes (it is load-bearing)'
+Assert ($m2.code -eq 0) 'M2' 'guard made unreachable -> the refusal vanishes (it is load-bearing)' (Detail $m2)
 
 # --------------------------------------------------------------------------- M3 unrolling
 # The bug this guard actually shipped with, pinned. `Get-ProposedIssues` returns an array;
@@ -236,7 +250,7 @@ $m3src = New-Mutant 'M3' $WriteTurnPath `
   '$proposed = @(Get-ProposedIssues -Lines $lines -InFence $inFence)' `
   '$proposed = Get-ProposedIssues -Lines $lines -InFence $inFence'
 $m3 = Invoke-WriteTurn $m3src $bodyPropose $repoCited
-Assert ($m3.code -eq 0) 'M3' 'stripping the @() reintroduces the silent pass (so the @() is load-bearing, and B1 pairs)'
+Assert ($m3.code -eq 0) 'M3' 'stripping the @() reintroduces the silent pass (so the @() is load-bearing, and B1 pairs)' (Detail $m3)
 
 Write-Host ''
 if ($script:fail -gt 0) {
