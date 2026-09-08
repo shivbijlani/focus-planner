@@ -148,10 +148,79 @@ async function suite(modPath) {
   );
   void sep;
 
+  // ---- classifyAttempts: recovered vs. persistent ------------------------------------------
+  // Before the retry existed, ONE attempt decided everything, so a transport hiccup and a
+  // genuinely broken page printed the identical FAIL line. That made a FAIL here worthless as
+  // evidence -- and it fired for real on 2026-09-07, when task #475 was reported FAIL and read
+  // clean on the very next poll. These arms pin the two properties that make FAIL mean
+  // something: success only counts if the LAST attempt succeeded, and a recovery must be
+  // reported as a recovery rather than laundered into a clean OK.
+  const { classifyAttempts } = await import(`${pathToFileURL(modPath).href}?t=${Date.now()}`);
+
+  // C1 -- FIRST-TRY SUCCESS IS A PLAIN OK. The common path must not acquire a "recovered" label,
+  // or the flaky-channel report becomes noise and stops being read.
+  const c1 = classifyAttempts([{ ok: true, n: 2 }]);
+  check('C1 first-attempt success is plain ok', c1.outcome === 'ok' && c1.n === 2 && c1.attempts === 1, `got ${JSON.stringify(c1)}`);
+
+  // C2 -- SUCCESS AFTER FAILURE IS `recovered`, AND CARRIES THE FIRST REASON. This is the whole
+  // point of the change: the read succeeded, so the channel is fine, but the fact that it needed
+  // a second attempt is a real finding and is visible nowhere else.
+  const c2 = classifyAttempts([{ ok: false, reason: 'fetch exited 1' }, { ok: true, n: 0 }]);
+  check(
+    'C2 success after failure is reported as recovered, with the first reason',
+    c2.outcome === 'recovered' && c2.attempts === 2 && c2.firstReason === 'fetch exited 1' && c2.n === 0,
+    `got ${JSON.stringify(c2)}`
+  );
+
+  // C3 -- FAILING TWICE IS A FAIL, AND SAYS SO. After this, a FAIL line is evidence of a
+  // persistent problem, which is what makes it worth acting on.
+  const c3 = classifyAttempts([{ ok: false, reason: 'observation: unreadable' }, { ok: false, reason: 'observation: unreadable' }]);
+  check(
+    'C3 two failures is a fail reporting the LAST reason and the attempt count',
+    c3.outcome === 'fail' && c3.reason === 'observation: unreadable' && c3.attempts === 2,
+    `got ${JSON.stringify(c3)}`
+  );
+
+  // C4 -- A LATER FAILURE IS NOT RESCUED BY AN EARLIER SUCCESS. Guards the obvious wrong
+  // implementation (`attempts.some(a => a.ok)`), which would report a broken channel as read.
+  const c4 = classifyAttempts([{ ok: true, n: 3 }, { ok: false, reason: 'fetch exited 1' }]);
+  check('C4 verdict follows the LAST attempt, not any attempt', c4.outcome === 'fail', `got ${JSON.stringify(c4)}`);
+
+  // C5 -- NO ATTEMPTS IS A FAIL, NOT A SILENT OK. A zero-attempt document must never be counted
+  // as read; that would advance nothing and report everything.
+  const c5 = classifyAttempts([]);
+  check('C5 empty attempt list is a fail', c5.outcome === 'fail' && c5.attempts === 0, `got ${JSON.stringify(c5)}`);
+
+  // C6 -- THE RETRY CANNOT BE DISABLED BACK TO ONE ATTEMPT. `OBSERVE_ATTEMPTS` floors at 2, so
+  // an env value of 1 (or 0, or junk) cannot silently restore the defect this change removes.
+  const { OBSERVE_ATTEMPTS } = await import(`${pathToFileURL(modPath).href}?t=${Date.now()}`);
+  check('C6 attempts floor at 2 so the defect cannot be re-enabled by env', OBSERVE_ATTEMPTS >= 2, `got ${OBSERVE_ATTEMPTS}`);
+
   return failures;
 }
 
 const MUTATIONS = [
+  {
+    id: 'M0a',
+    what: 'the verdict follows ANY successful attempt rather than the LAST one',
+    why: 'a document whose retry FAILED would be reported as read, so a persistently broken channel prints OK and the pass reports a number that parses as healthy. This is the single most attractive wrong implementation of a retry. Killed by C4.',
+    find: '  const last = list[list.length - 1];',
+    replace: '  const last = list.find((a) => a && a.ok) || list[list.length - 1];',
+  },
+  {
+    id: 'M0b',
+    what: 'a recovered read is reported as a plain OK, hiding that it needed a retry',
+    why: 'THE DEFECT TRADED FOR A QUIETER ONE: the retry would still work, but an intermittent channel would become invisible instead of merely indistinguishable, so nobody ever learns the channel is unreliable. Killed by C2.',
+    find: "    return list.length === 1\n      ? { outcome: 'ok', n: Number(last.n || 0), attempts: 1 }",
+    replace: "    return true\n      ? { outcome: 'ok', n: Number(last.n || 0), attempts: 1 }",
+  },
+  {
+    id: 'M0c',
+    what: 'OBSERVE_ATTEMPTS loses its floor, so the env can set it back to 1',
+    why: 'restores the original defect by configuration rather than by code -- a transient and a persistent failure print the identical FAIL line again, and the regression is invisible in the diff. Killed by C6.',
+    find: 'export const OBSERVE_ATTEMPTS = Math.max(2, Number(process.env.OA_DOC_OBSERVE_ATTEMPTS) || 2);',
+    replace: 'export const OBSERVE_ATTEMPTS = Number(process.env.OA_DOC_OBSERVE_ATTEMPTS) || 1;',
+  },
   {
     id: 'M1',
     what: 'the freshness filter is removed, so every bound channel is polled every pass',
@@ -185,7 +254,7 @@ const MUTATIONS = [
     kind: 'absence',
     what: "an `unreadable` observation is accepted as a successful read",
     why: 'the exact conflation this channel exists to prevent: a transport failure would stamp observed_at, clear the staleness, and report the channel read and empty -- so an instruction Shiv believes was received is dropped, and the task looks healthy. #531 was this same conflation pointing the other way.',
-    find: "        if (observation !== 'read') {",
+    find: "      if (observation !== 'read') return { ok: false, reason: `observation: ${observation}` };",
   },
   {
     id: 'M6',
