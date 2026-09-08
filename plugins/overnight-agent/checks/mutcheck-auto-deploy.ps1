@@ -1,4 +1,4 @@
-﻿<#
+<#
   mutcheck-auto-deploy.ps1 — prove auto-deploy-plugin.ps1's guards are load-bearing.
 
   A guard that is only asserted by a passing test is not proven: the test may pass for
@@ -815,11 +815,11 @@ Set-BehindAndDirty -Sandbox $sDirty
 $baseDirty = Invoke-SUT -Script $SUT -Sandbox $sDirty
 if (-not $baseDirty.Json) { Write-Host ("  diagnostic: " + $baseDirty.Raw) }
 Assert ($baseDirty.Json.checkout -eq 'diverged') `
-       "G16 a dirty bridge checkout is refused, not advanced (got '$($baseDirty.Json.checkout)')"
+       "G-BRIDGE a dirty bridge checkout is refused, not advanced (got '$($baseDirty.Json.checkout)')"
 Assert ($baseDirty.Json.checkoutExit -eq 2) `
-       'G16 a refused bridge checkout is escalated, not folded into a clean report'
+       'G-BRIDGE a refused bridge checkout is escalated, not folded into a clean report'
 
-Test-Mutant -Name 'M18: bridge refusal removed (a dirty checkout is advanced anyway)' `
+Test-Mutant -Name 'M-BRIDGE: bridge refusal removed (a dirty checkout is advanced anyway)' `
   -Find 'if ($ahead -gt 0 -or $dirty) {' -Replace 'if ($false) {' -Check {
     param($mut)
     $s = New-Sandbox
