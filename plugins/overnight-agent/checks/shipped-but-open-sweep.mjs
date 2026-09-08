@@ -45,10 +45,18 @@
 // authority is the defect it is guarding against.
 
 import { spawnSync } from 'node:child_process'
-import path from 'node:path'
-import { existsSync } from 'node:fs'
+import { citationsFor, classifyPath, resolveRepo } from './issue-shipped.mjs'
 
-const REPO_PATHS = ['packages', 'plugins']
+// WHY THE CLASSIFIER IS IMPORTED RATHER THAN DEFINED HERE (GH #635)
+//
+// This sweep is a CENSUS: it answers "how many open issues are already
+// shipped" after the fact, into a suite log. `issue-shipped.mjs` is the same
+// question asked of ONE issue, BEFORE a run commits to it, which is where the
+// cost actually lands. Two copies of "what counts as shipped" would be two
+// opinions that drift -- the writer/reader disagreement this codebase keeps
+// recording -- and the drift would be invisible precisely because both sides
+// would keep reporting confidently. So the gate owns the definition and the
+// census consumes it.
 
 // Where the git questions get asked. Resolved once, in main().
 let CWD
@@ -56,64 +64,6 @@ let CWD
 function git(args, opts = {}) {
   const r = spawnSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, cwd: CWD, ...opts })
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
-}
-
-// Returns the repository ROOT for a path inside a checkout, or null.
-//
-// Returning "some directory inside the work tree" is not good enough, and the
-// difference is not cosmetic (GH #632, second instance). `git grep <rev> --
-// packages plugins` resolves its pathspecs RELATIVE TO CWD, so run from
-// plugins/overnight-agent/checks the pathspecs match nothing, every issue comes
-// back uncited, and the sweep prints "no open issue is already shipped" -- a
-// confident, exit-0, wrong clean pass. `rev-parse --is-inside-work-tree` is true
-// in that directory, so the obvious check passes while the answer is garbage.
-function repoRoot(p) {
-  if (!p || !existsSync(p)) return null
-  const r = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', cwd: p })
-  if (r.status !== 0) return null
-  const top = (r.stdout || '').trim()
-  return top || null
-}
-
-/**
- * WHY THIS EXISTS AND IS NOT `process.cwd()` (measured 2026-09-08, GH #632)
- * ------------------------------------------------------------------------
- * This sweep shipped registered in run-sweeps.ps1 and, in that home, measured
- * NOTHING. The suite runs with cwd set to the planner data folder, which is not
- * a checkout, so the first thing this file did was print "nothing to measure"
- * and exit 0. Same binary, same commit, one `cwd` apart:
- *
- *   via run-sweeps.ps1        -> ok, exit 0, "nothing to measure"
- *   in V:\repos\focus-planner -> 169 open / 98 SHIPPED / 71 unworked
- *
- * A guard that cannot see, reporting ok, is byte-identical to a guard that
- * looked and found nothing -- which is the exact defect class this sweep was
- * written to attack (#520), arriving in the sweep itself, ten minutes after it
- * merged. The `resolveRepo()` shape is borrowed from version-bump-sweep.mjs,
- * which learned the same lesson about the same suite.
- *
- * Order matters. cwd is tried FIRST so an ad-hoc run in some other checkout
- * measures that checkout, and so the mutation check's hermetic fixture repos
- * are still the subject rather than this machine's real one.
- */
-function resolveRepo() {
-  const forced = process.env.SHIPPED_SWEEP_REPO
-  if (forced) return repoRoot(forced)
-  const here = repoRoot(process.cwd())
-  if (here) return here
-  let dir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))
-  for (let i = 0; i < 6; i++) {
-    const top = repoRoot(dir)
-    if (top) return top
-    const up = path.dirname(dir)
-    if (up === dir) break
-    dir = up
-  }
-  for (const c of ['V:\\repos\\focus-planner', '/v/repos/focus-planner']) {
-    const top = repoRoot(c)
-    if (top) return top
-  }
-  return null
 }
 
 // A "could not measure" outcome is reported as a finding, not as a pass. Exiting
@@ -140,16 +90,8 @@ function gh(args) {
 }
 
 // A test fixture or a doc mentioning an issue is not the issue being fixed.
-// Weight implementation hits above everything else, and say which kind was
-// found, so a reader can disagree with the classification rather than having
-// to trust it.
-function classifyPath(p) {
-  const f = p.replace(/^origin\/main:/, '')
-  if (/\.test\.(m?js|ts)$/.test(f)) return 'test'
-  if (/\/mutcheck-/.test(f)) return 'mutcheck'
-  if (/\/(README|AGENTS|SKILL)\.md$/i.test(f) || f.endsWith('.md')) return 'doc'
-  return 'impl'
-}
+// `classifyPath` is imported from issue-shipped.mjs -- see the note at the top
+// of this file for why it is not defined twice.
 
 function main() {
   CWD = resolveRepo()
@@ -195,10 +137,9 @@ function main() {
 
   for (const issue of issues) {
     const n = issue.number
-    // Word-boundary on #N. A bare number collides: `git grep 515` matches
-    // "$515-520", a price range in an unrelated fixture.
-    const g = git(['grep', '-l', '-E', `#${n}([^0-9]|$)`, 'origin/main', '--', ...REPO_PATHS])
-    const files = g.code === 0 && g.out ? g.out.split('\n').filter(Boolean) : []
+    // Word-boundary on #N lives in `citationsFor` -- a bare number collides:
+    // `git grep 515` matches "$515-520", a price range in an unrelated fixture.
+    const files = citationsFor(CWD, n)
     const kinds = new Set(files.map(classifyPath))
 
     if (kinds.has('impl')) {
