@@ -6,7 +6,7 @@ import {
   terminalStatus,
   formatDocLink,
 } from './bridge.js'
-import { emptyState } from './state.js'
+import { emptyState, bumpReplyCount } from './state.js'
 
 // #424 — once a task has a catch-up doc, its topic holds ONE message: the link.
 //
@@ -199,6 +199,15 @@ function makeHarness(files) {
   }
 }
 
+// #620 — the ask now rides in the pointer, so most assertions are about the pointer's CURRENT
+// text rather than about a second message. The probe re-sends the pointer every run, so the
+// last edit aimed at it is its live text; before any edit, that is what was originally sent.
+function latestPointer(h, state) {
+  const id = state.tasks['42'].docLinkMessageId
+  const lastEdit = h.edits.filter((e) => e.messageId === id).pop()
+  return lastEdit ? lastEdit.text : h.sent[0].text
+}
+
 describe('#424 — the catch-up link replaces the per-turn post', () => {
   it('posts the link once and then stays quiet across three runs', async () => {
     const h = makeHarness({ 42: journal() })
@@ -261,23 +270,26 @@ describe('#424 — the catch-up link replaces the per-turn post', () => {
     expect(state.tasks['42'].docLinkMessageId).toBe(1)
   })
 
-  it('sends a short line for a blocking ask, once', async () => {
+  it('carries a blocking ask in the POINTER, adding no second message', async () => {
+    // #620. The ask used to arrive as its own permanent message. That exception was justified
+    // as rare; a census of the live board found it standing in 59 of 76 bound topics — 78%. An
+    // exception that holds in 78% of cases is the rule, and the rule was "one message per task".
     const h = makeHarness({ 42: journal({ needs: 'the API key for the staging box' }) })
     const state = emptyState()
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     await bridge.syncUp()
-    // The link, plus one short notice.
-    expect(h.sent).toHaveLength(2)
-    const notice = h.sent[1].text
-    expect(notice).toContain('the API key for the staging box')
-    expect(notice.length).toBeLessThan(400)
+    // ONE message. This is the whole point of the issue.
+    expect(h.sent).toHaveLength(1)
+    const pointer = h.sent[0].text
+    expect(pointer).toContain('the API key for the staging box')
+    expect(pointer).toContain('Catch-up doc')
 
     // The same unresolved ask on the next run must not be repeated: an exception that fires
     // nightly is the behaviour this issue removes.
     h.store['42'] = journal({ needs: 'the API key for the staging box', body: 'still waiting' })
     await bridge.syncUp()
-    expect(h.sent).toHaveLength(2)
+    expect(h.sent).toHaveLength(1)
   })
 
   it('says NOTHING for a dismissive ask, however it is phrased', async () => {
@@ -292,28 +304,30 @@ describe('#424 — the catch-up link replaces the per-turn post', () => {
     }
   })
 
-  it('announces a terminal state, and re-announces a returning ask', async () => {
+  it('announces a terminal state, and re-announces a returning ask — all in the one message', async () => {
     const h = makeHarness({ 42: journal({ status: 'Done', needs: 'none' }) })
     const state = emptyState()
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     await bridge.syncUp()
-    expect(h.sent).toHaveLength(2)
-    expect(h.sent[1].text).toContain('Done')
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).toContain('Done')
 
-    // The ask is resolved, so the remembered notice is cleared...
+    // The terminal state passes...
     h.store['42'] = journal({ status: 'In-progress', needs: 'none' })
     await bridge.syncUp()
-    expect(h.sent).toHaveLength(2)
+    expect(h.sent).toHaveLength(1)
+    expect(latestPointer(h, state)).not.toContain('Done')
 
-    // ...and the SAME ask returning later is announced again rather than swallowed as
-    // "already said". A hash that was never cleared would lose the second occurrence.
+    // ...and the SAME state returning later is shown again rather than swallowed as "already
+    // said". A hash that was never cleared would lose the second occurrence.
     h.store['42'] = journal({ status: 'Done', needs: 'none' })
     await bridge.syncUp()
-    expect(h.sent).toHaveLength(3)
+    expect(h.sent).toHaveLength(1)
+    expect(latestPointer(h, state)).toContain('Done')
   })
 
-  it('UPDATES the notice in place when the ask changes, instead of stacking a second one', async () => {
+  it('UPDATES the pointer in place when the ask changes, instead of stacking a second one', async () => {
     // Shiv, on the catch-up doc: "Task 468 telegram has recent message postings. I expected it
     // to update or delete the last one." Hashing alone made "say it once" true per ASK and false
     // per TOPIC — three runs with three slightly different asks left three messages, rebuilding
@@ -323,68 +337,79 @@ describe('#424 — the catch-up link replaces the per-turn post', () => {
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     await bridge.syncUp()
-    expect(h.sent).toHaveLength(2) // link + first notice
-    const noticeId = state.tasks['42'].docLinkNoticeMessageId
-    expect(noticeId).toBe(2)
+    expect(h.sent).toHaveLength(1)
+    const linkId = state.tasks['42'].docLinkMessageId
 
     h.store['42'] = journal({ needs: 'the API key for the PROD box' })
     await bridge.syncUp()
 
     // Nothing new was sent...
-    expect(h.sent).toHaveLength(2)
-    // ...the existing notice now carries the new ask...
-    const rewrite = h.edits.filter((e) => e.messageId === noticeId).pop()
+    expect(h.sent).toHaveLength(1)
+    // ...and the one message now carries the new ask.
+    const rewrite = h.edits.filter((e) => e.messageId === linkId).pop()
     expect(rewrite.text).toContain('the API key for the PROD box')
-    // ...and the id is retained, so the run after this one can update it again rather than
-    // starting a fresh stack from a forgotten pointer.
-    expect(state.tasks['42'].docLinkNoticeMessageId).toBe(noticeId)
+    expect(rewrite.text).not.toContain('staging box')
+    // The id is retained, so the run after this can update it again rather than starting a
+    // fresh stack from a forgotten pointer.
+    expect(state.tasks['42'].docLinkMessageId).toBe(linkId)
   })
 
-  it('posts a fresh notice when the one it meant to update is gone', async () => {
-    // The opposite fail direction from the link probe, on purpose: a notice carries information
-    // that exists nowhere else in the topic, so an unconfirmed edit must never be taken as
-    // delivered. One duplicate line is cheaper than silently losing a blocking ask.
+  it('restores the ask with the pointer when the carrier is gone', async () => {
+    // The ask carries information that exists nowhere else in the topic, so losing the pointer
+    // must not silently lose the ask with it. The link probe already restores a deleted
+    // pointer; #620 makes that path responsible for the ask too.
     const h = makeHarness({ 42: journal({ needs: 'the API key for the staging box' }) })
     const state = emptyState()
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     await bridge.syncUp()
-    const noticeId = state.tasks['42'].docLinkNoticeMessageId
-    h.deleteMessageFromTelegram(noticeId)
+    h.deleteMessageFromTelegram(state.tasks['42'].docLinkMessageId)
 
     h.store['42'] = journal({ needs: 'the API key for the PROD box' })
     await bridge.syncUp()
 
-    expect(h.sent).toHaveLength(3)
-    expect(h.sent[2].text).toContain('the API key for the PROD box')
-    expect(state.tasks['42'].docLinkNoticeMessageId).toBe(3)
+    // Exactly one replacement, carrying the live ask — not a bare link with the ask dropped.
+    expect(h.sent).toHaveLength(2)
+    expect(h.sent[1].text).toContain('the API key for the PROD box')
+    expect(h.sent[1].text).toContain('Catch-up doc')
   })
 
-  it('forgets the notice id when the ask is resolved, so a returning ask is a NEW message', async () => {
-    // He has already read and acted on the old line. Editing it later would rewrite history
-    // under him — which is why the id is cleared with the hash rather than kept for reuse.
-    const h = makeHarness({ 42: journal({ status: 'Done', needs: 'none' }) })
+  it('leaves a STRUCK-THROUGH trace when the ask resolves, rather than erasing it', async () => {
+    // #620's one deliberate behaviour change, and the objection that had to be answered before
+    // the ask could move into a permanent message. The old separate notice was never rewritten
+    // on resolve — "he may have read it and acted on it, and rewriting it afterwards would
+    // change history under him". Once the ask lives in an always-current pointer, resolving it
+    // MUST rewrite that pointer, and the naive version makes an unread ask vanish silently
+    // between two glances — the mirror of #515.
+    //
+    // The answer is to keep the words and strike them: visibly resolved, never silently absent.
+    // History is annotated, not rewritten, which is the argument the retraction path already
+    // makes.
+    const h = makeHarness({ 42: journal({ needs: 'the API key for the staging box' }) })
     const state = emptyState()
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     await bridge.syncUp()
-    expect(state.tasks['42'].docLinkNoticeMessageId).toBe(2)
+    expect(h.sent).toHaveLength(1)
 
-    h.store['42'] = journal({ status: 'In-progress', needs: 'none' })
+    h.store['42'] = journal({ needs: 'none' })
     await bridge.syncUp()
-    expect(state.tasks['42'].docLinkNoticeMessageId).toBeUndefined()
 
-    h.store['42'] = journal({ status: 'Done', needs: 'none' })
-    await bridge.syncUp()
-    expect(h.sent).toHaveLength(3)
-    expect(state.tasks['42'].docLinkNoticeMessageId).toBe(3)
+    expect(h.sent).toHaveLength(1)
+    const after = latestPointer(h, state)
+    // The words he was asked are STILL THERE...
+    expect(after).toContain('the API key for the staging box')
+    // ...visibly struck and marked resolved.
+    expect(after).toContain('<s>')
+    expect(after).toContain('resolved')
+    expect(after).not.toContain('Waiting on you')
   })
 
   // #515 — RETRACTION. A resolved ask is left alone; a retracted one is corrected in place.
   // The two are opposite treatments of the same state transition, and the tests below assert
   // both directions so neither can be widened into the other by accident.
 
-  it('CORRECTS the notice in place when the turn retracts an ask that was never satisfiable', async () => {
+  it('CORRECTS the pointer in place when the turn retracts an ask that was never satisfiable', async () => {
     // Measured live on task 468: a notice asked for "one word" to authorise clearing two
     // messages, when `delete_data` sits on the agent-gate floor and the floor overrides even a
     // human approve. No word could have satisfied it. Leaving that standing is what rewrites
@@ -394,9 +419,8 @@ describe('#424 — the catch-up link replaces the per-turn post', () => {
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     await bridge.syncUp()
-    const noticeId = state.tasks['42'].docLinkNoticeMessageId
-    expect(noticeId).toBe(2)
-    expect(state.tasks['42'].docLinkNoticeAsk).toBe('one word to clear messages 2810 and 2811')
+    expect(h.sent).toHaveLength(1)
+    expect(state.tasks['42'].docLinkAsk).toBe('one word to clear messages 2810 and 2811')
 
     h.store['42'] = journal({
       needs: 'none',
@@ -405,43 +429,42 @@ describe('#424 — the catch-up link replaces the per-turn post', () => {
     await bridge.syncUp()
 
     // Nothing was ADDED to the topic — a retraction must not grow the stack it is cleaning up.
-    expect(h.sent).toHaveLength(2)
+    expect(h.sent).toHaveLength(1)
 
-    const rewrite = h.edits.filter((e) => e.messageId === noticeId).pop()
+    const rewrite = latestPointer(h, state)
     // The ORIGINAL ASK IS STILL LEGIBLE. This is the property that makes editing safe at all:
     // he can still see exactly what he was asked, so nothing is rewritten under him.
-    expect(rewrite.text).toContain('one word to clear messages 2810 and 2811')
+    expect(rewrite).toContain('one word to clear messages 2810 and 2811')
     // ...and it is now visibly withdrawn, with the reason.
-    expect(rewrite.text).toContain('<s>')
-    expect(rewrite.text).toContain('Withdrawn')
-    expect(rewrite.text).toContain('deleting is floor-blocked')
+    expect(rewrite).toContain('<s>')
+    expect(rewrite).toContain('Withdrawn')
+    expect(rewrite).toContain('deleting is floor-blocked')
 
-    // The id is STILL forgotten afterwards, exactly as on the resolve path — a retraction is a
-    // one-shot correction, not a licence to keep editing the message forever.
-    expect(state.tasks['42'].docLinkNoticeMessageId).toBeUndefined()
-    expect(state.tasks['42'].docLinkNoticeAsk).toBeUndefined()
+    // The ask itself is forgotten afterwards, exactly as on the resolve path — a retraction is
+    // a one-shot correction, not a licence to keep rewriting the reason forever.
+    expect(state.tasks['42'].docLinkAsk).toBeUndefined()
   })
 
-  it('leaves a merely RESOLVED ask untouched — retraction must not widen into resolution', async () => {
-    // The regression guard for the deliberate behaviour this fix must not trade away. A turn
-    // that simply stops asking has NOT established that the ask was unsatisfiable, so the
-    // message stays exactly as he last read it.
+  it('leaves a merely RESOLVED ask struck, not withdrawn — retraction must not widen into resolution', async () => {
+    // The regression guard for the distinction this fix must not trade away. A turn that simply
+    // stops asking has NOT established that the ask was unsatisfiable, so it reads as resolved.
+    // Only an explicit retraction may say the ask could never have been met.
     const h = makeHarness({ 42: journal({ needs: 'the API key for the staging box' }) })
     const state = emptyState()
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     await bridge.syncUp()
-    const noticeId = state.tasks['42'].docLinkNoticeMessageId
-    const editsBefore = h.edits.filter((e) => e.messageId === noticeId).length
 
     h.store['42'] = journal({ needs: 'none' })
     await bridge.syncUp()
 
-    expect(h.edits.filter((e) => e.messageId === noticeId)).toHaveLength(editsBefore)
-    expect(state.tasks['42'].docLinkNoticeMessageId).toBeUndefined()
+    const after = latestPointer(h, state)
+    expect(after).toContain('resolved')
+    expect(after).not.toContain('Withdrawn')
+    expect(state.tasks['42'].docLinkAsk).toBeUndefined()
   })
 
-  it('does not post a NEW message when a retraction has no notice left to reach', async () => {
+  it('does not post a NEW message when a retraction arrives', async () => {
     // Task 468's message 2862 is exactly this case: the resolve path already forgot the id
     // before this fix existed. The retraction cannot reach it, and must not compensate by
     // posting a fresh message — that would add a line to say something no longer matters.
@@ -450,9 +473,7 @@ describe('#424 — the catch-up link replaces the per-turn post', () => {
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     await bridge.syncUp()
-    expect(h.sent).toHaveLength(2)
-    // Simulate pre-fix state: the hash survives, the id was dropped.
-    state.tasks['42'].docLinkNoticeMessageId = undefined
+    expect(h.sent).toHaveLength(1)
 
     h.store['42'] = journal({
       needs: 'none',
@@ -460,25 +481,29 @@ describe('#424 — the catch-up link replaces the per-turn post', () => {
     })
     await bridge.syncUp()
 
-    expect(h.sent).toHaveLength(2)
-    expect(state.tasks['42'].docLinkNoticeHash).toBeUndefined()
+    expect(h.sent).toHaveLength(1)
   })
 
-  it('announces a retracted-then-returning ask as a NEW message', async () => {
+  it('shows a retracted-then-returning ask in the same message', async () => {
     const h = makeHarness({ 42: journal({ needs: 'the staging key' }) })
     const state = emptyState()
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     await bridge.syncUp()
-    expect(h.sent).toHaveLength(2)
+    expect(h.sent).toHaveLength(1)
 
     h.store['42'] = journal({ needs: 'none', body: 'work\n\n**Retracts:** wrong ask.' })
     await bridge.syncUp()
-    expect(h.sent).toHaveLength(2)
+    expect(h.sent).toHaveLength(1)
 
     h.store['42'] = journal({ needs: 'the staging key' })
     await bridge.syncUp()
-    expect(h.sent).toHaveLength(3)
+    // Still one message, and it is asking again rather than showing the stale withdrawal.
+    expect(h.sent).toHaveLength(1)
+    const after = latestPointer(h, state)
+    expect(after).toContain('Waiting on you')
+    expect(after).toContain('the staging key')
+    expect(after).not.toContain('Withdrawn')
   })
 
   it('never INFERS a retraction: a dismissive or absent Retracts line is not one', () => {
@@ -552,6 +577,97 @@ describe('#424 — the catch-up link replaces the per-turn post', () => {
 // These tests are written to fail on that code. "Did not repost" is NOT the assertion — the
 // buggy version passes that perfectly. What separates the two is whether the wait was honoured
 // and whether the run can still tell the difference afterwards.
+// #620 — RETIRING THE MESSAGES THE OLD DESIGN LEFT BEHIND.
+//
+// The fix above stops NEW topics reaching two messages. It does nothing for the 59 that are
+// already there, and those are the ones Shiv is actually looking at. Retirement is the second
+// half, and it is the half that can do damage: it deletes.
+describe('#620 — retiring the legacy notice message', () => {
+  // A topic as the old design left it: a pointer, plus a separate notice message the bridge
+  // still remembers.
+  async function withLegacyNotice(overrides = {}) {
+    const h = makeHarness({ 42: journal(overrides) })
+    const state = emptyState()
+    const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
+    await bridge.syncUp()
+    const legacyId = 99
+    h.registerLive(legacyId)
+    state.tasks['42'].docLinkNoticeMessageId = legacyId
+    return { h, state, bridge, legacyId }
+  }
+
+  it('does NOT delete on first sight — it records the reply count and decides next run', async () => {
+    // The dangerous case is a notice he has already answered. Old state never recorded the
+    // reply count at post time, so on first sight "has he replied to this?" is not merely
+    // unknown, it is unreconstructable — and the wrong guess deletes his conversation. So the
+    // first sight measures and the second decides. Two cheap runs beat one irreversible guess.
+    const { h, state, bridge, legacyId } = await withLegacyNotice()
+
+    await bridge.syncUp()
+    expect(h.deleted).not.toContain(legacyId)
+    expect(state.tasks['42'].docLinkNoticeReplyCount).toBe(0)
+    expect(state.tasks['42'].docLinkNoticeMessageId).toBe(legacyId)
+
+    // Second run, nothing landed in between: now it may go.
+    await bridge.syncUp()
+    expect(h.deleted).toContain(legacyId)
+  })
+
+  it('NEVER removes a notice a reply landed against between the two sightings', async () => {
+    // The freeze that #483 established, kept for the same reason: a message he answered is his
+    // side of a conversation, not a superseded draft, however redundant its text has become.
+    const { h, state, bridge, legacyId } = await withLegacyNotice()
+
+    await bridge.syncUp()
+    expect(state.tasks['42'].docLinkNoticeReplyCount).toBe(0)
+
+    bumpReplyCount(state, '42')
+    await bridge.syncUp()
+
+    expect(h.deleted).not.toContain(legacyId)
+    // And the id is KEPT, not forgotten. Forgetting it would make the next run believe there
+    // was never a notice, leaving the topic at two messages forever with nothing recording why.
+    expect(state.tasks['42'].docLinkNoticeMessageId).toBe(legacyId)
+  })
+
+  it('collapses the notice in place when Telegram refuses the delete', async () => {
+    // A bot may only delete its own messages for 48h unless it is an admin, so refusal is the
+    // expected case on exactly the old topics this is meant to clean up — not an edge case.
+    // An edit needs no such permission and removes nothing, so the topic still converges on one
+    // message that means anything.
+    const { h, state, bridge, legacyId } = await withLegacyNotice()
+    h.refuseDeleteOf(legacyId)
+
+    await bridge.syncUp()
+    await bridge.syncUp()
+
+    expect(h.deleted).not.toContain(legacyId)
+    const collapsed = h.edits.filter((e) => e.messageId === legacyId).pop()
+    expect(collapsed).toBeTruthy()
+    expect(collapsed.text).toContain(DOC_URL)
+    expect(state.tasks['42'].docLinkNoticeHash).toBeUndefined()
+  })
+
+  it('converges a legacy two-message topic on ONE message, which is the whole point', async () => {
+    // The acceptance criterion stated as Shiv states it, rather than as a mechanism: after the
+    // bridge has run twice over an old topic, one message is left standing and it is the
+    // pointer — carrying the ask that used to need its own message.
+    const { h, state, bridge, legacyId } = await withLegacyNotice({
+      needs: 'the API key for the staging box',
+    })
+
+    await bridge.syncUp()
+    await bridge.syncUp()
+
+    // Nothing new was ever sent to reach this state.
+    expect(h.sent).toHaveLength(1)
+    expect(h.deleted).toContain(legacyId)
+    const pointer = latestPointer(h, state)
+    expect(pointer).toContain('the API key for the staging box')
+    expect(pointer).toContain(DOC_URL)
+  })
+})
+
 describe('#586 — rate limits are a pause, not an answer', () => {
   // Never actually wait, but record what was asked for: "honours retry_after" is the criterion.
   const withFakeSleep = async (fn) => {
@@ -624,11 +740,11 @@ describe('#586 — rate limits are a pause, not an answer', () => {
     expect(state.tasks['42'].docLinkVerifiedAt).toBe(verifiedAtLink)
   })
 
-  it('does not stack a SECOND notice when the edit that would replace it is rate limited', async () => {
+  it('does not stack a SECOND message when the edit carrying the ask is rate limited', async () => {
     // Shiv's actual complaint, reached by this path: "Every time I look at the app, I expect to
     // see a single telegram message per task. Instead there's multiple stacked messages."
     //
-    // A notice must fall through to a fresh send when an edit genuinely fails — losing a
+    // The ask must fall through to a fresh send when an edit genuinely fails — losing a
     // blocking ask is worse than one duplicate line (#170). But a 429 is not a failure, it is a
     // wait, and treating it as one made the duplicate the call that SUCCEEDS: the retry on the
     // send path waits out the limit the edit refused to wait out. The stack is manufactured by
@@ -638,23 +754,20 @@ describe('#586 — rate limits are a pause, not an answer', () => {
     const bridge = createBridge({ client: h.client, config: h.config, state, io: h.io })
 
     await bridge.syncUp()
-    expect(h.sent).toHaveLength(2) // link + notice
-    const noticeId = state.tasks['42'].docLinkNoticeMessageId
+    expect(h.sent).toHaveLength(1)
+    const linkId = state.tasks['42'].docLinkMessageId
 
     await withFakeSleep(async (waits) => {
       h.store['42'] = journal({ needs: 'the API key for the PROD box' })
-      // Aimed at the NOTICE, not at whatever edit happens to come first. The link probe runs
-      // ahead of it in the same pass, and an untargeted 429 is swallowed there — leaving this
-      // test green while asserting nothing about the path it is named after.
-      h.rateLimitNextEdits(1, 12, noticeId)
+      h.rateLimitNextEdits(1, 12, linkId)
       await bridge.syncUp()
       expect(waits).toEqual([12000])
     })
 
-    // Still two messages, not three.
-    expect(h.sent).toHaveLength(2)
-    expect(state.tasks['42'].docLinkNoticeMessageId).toBe(noticeId)
-    const rewrite = h.edits.filter((e) => e.messageId === noticeId).pop()
+    // Still one message, not two.
+    expect(h.sent).toHaveLength(1)
+    expect(state.tasks['42'].docLinkMessageId).toBe(linkId)
+    const rewrite = h.edits.filter((e) => e.messageId === linkId).pop()
     expect(rewrite.text).toContain('the API key for the PROD box')
   })
 })

@@ -30,6 +30,8 @@ import {
   setDocLink,
   setDocLinkVerified,
   setDocLinkNoticeHash,
+  setDocLinkAsk,
+  setDocLinkNoticeReplyCount,
   setOffset,
   setLastDigest,
   setDigestTopic,
@@ -204,18 +206,67 @@ export function terminalStatus(turn) {
 /**
  * The one message a task's topic holds in the steady state.
  *
- * Deliberately DETERMINISTIC for a given task/title/doc: the existence probe re-sends this
- * exact text, and Telegram's `message is not modified` reply is what proves the message is
- * still there. A timestamp or any other varying token would turn every probe into a real edit
- * and destroy the signal.
+ * Deliberately DETERMINISTIC for a given task/title/doc AND a given notice state: the existence
+ * probe re-sends this exact text, and Telegram's `message is not modified` reply is what proves
+ * the message is still there. A timestamp or any other FREELY varying token would turn every
+ * probe into a real edit and destroy that.
+ *
+ * #620 — the notice now rides here rather than in a message of its own, and that is a
+ * deliberate narrowing of the rule above rather than a break with it. The text still cannot
+ * vary freely; it varies only when the ask itself changes, which is exactly when the topic is
+ * supposed to say something new. A probe on an unchanged ask is still byte-identical and still
+ * answers `not modified`, so the cheap case stays cheap. What it costs is that a changed ask
+ * makes one real edit — and that is strictly less than what it replaces, which was a whole
+ * second message posted beneath this one and left there permanently.
+ *
+ * `notice` is deliberately not optional-with-a-default-of-silence at the call site: `syncDocLink`
+ * always passes it, so "no ask" is a stated fact rather than an argument someone forgot.
  */
-export function formatDocLink(taskId, title, docUrl) {
+export function formatDocLink(taskId, title, docUrl, notice = {}) {
   const heading = title ? `#${taskId} — ${escapeHtml(title)}` : `#${taskId}`
   return (
     `📄 <b>${heading}</b>\n` +
-    `<a href="${escapeHtml(docUrl)}">Catch-up doc</a> — the current state of this task, kept up to date.\n\n` +
-    `<i>Comment on the doc to reply. I read new comments each run.</i>`
+    `<a href="${escapeHtml(docUrl)}">Catch-up doc</a> — the current state of this task, kept up to date.\n` +
+    formatPointerNotice(notice) +
+    `\n<i>Comment on the doc to reply. I read new comments each run.</i>`
   )
+}
+
+/**
+ * The part of the pointer that changes: what the link genuinely cannot carry.
+ *
+ * Four states, and the third is the one that earns this design its keep.
+ *
+ * A LIVE ask, or a terminal status, reads as it always did.
+ *
+ * A RESOLVED ask does NOT vanish. It is struck through and marked resolved, and it stays that
+ * way until another ask replaces it. This is the property #515 protects, restated for a message
+ * that is always current: the old design refused to touch a resolved notice because "editing it
+ * later would silently rewrite a line Shiv has already read and acted on", and the operative
+ * word is SILENTLY. Folding the ask into a permanent message means resolution must rewrite it,
+ * so the rewrite has to be one that cannot hide anything — the words he was asked are still on
+ * screen, with their outcome attached. An ask he never got to read cannot disappear between two
+ * glances at the topic, which is the failure that would otherwise be introduced in exchange for
+ * the tidier topic, and it would be a silent one.
+ *
+ * A RETRACTED ask is the same shape with a reason, and keeps the wording `formatDocRetraction`
+ * established for it.
+ */
+export function formatPointerNotice({ ask, terminal, resolved, retracted } = {}) {
+  const lines = []
+  if (terminal === 'done') lines.push('\n✅ <b>Done.</b>')
+  else if (terminal === 'blocked') lines.push('\n⛔ <b>Blocked.</b>')
+  else if (terminal === 'abandoned') lines.push('\n🚫 <b>Abandoned.</b>')
+
+  if (ask) {
+    lines.push(`\n🙋 <b>Waiting on you:</b> ${escapeHtml(ask)}`)
+  } else if (resolved && retracted) {
+    lines.push(`\n<s>${escapeHtml(resolved)}</s>\n⚠️ <b>Withdrawn</b> — ${escapeHtml(retracted)}`)
+  } else if (resolved) {
+    lines.push(`\n<s>${escapeHtml(resolved)}</s> <i>— resolved.</i>`)
+  }
+
+  return lines.length ? `${lines.join('')}\n` : ''
 }
 
 /** The short exception line. One line, never a turn. */
@@ -976,7 +1027,28 @@ export function createBridge({
     const withMeta = upsertTgMetaMarker(content, { chatId, threadId: topicId })
     if (withMeta !== content) await io.writeJournal(taskId, withMeta)
 
-    const linkText = formatDocLink(taskId, title, docMeta.docUrl)
+    // #620 — the notice rides in the pointer, so it has to be known BEFORE the pointer text is
+    // built. Resolved asks are read back out of state here rather than recomputed, because the
+    // whole point is that the words survive their own resolution.
+    const priorEntry = getTask(state, taskId)
+    const liveAsk = blockingAsk(turn)
+    const liveTerminal = terminalStatus(turn)
+    const retraction = retractedAsk(turn)
+    const carriedAsk = priorEntry && priorEntry.docLinkAsk ? String(priorEntry.docLinkAsk) : null
+    const carriedResolved =
+      priorEntry && priorEntry.docLinkResolvedAsk ? String(priorEntry.docLinkResolvedAsk) : null
+    // An ask that is no longer live becomes the trace. A NEW ask replaces the trace outright:
+    // one outstanding thing at a time is the whole point of a single message, and a stack of
+    // struck-through history inside the pointer would rebuild the complaint inside one bubble.
+    const resolvedAsk = liveAsk ? null : carriedAsk || carriedResolved
+    const noticeState = {
+      ask: liveAsk,
+      terminal: liveTerminal,
+      resolved: resolvedAsk,
+      retracted: resolvedAsk && retraction ? retraction : null,
+    }
+
+    const linkText = formatDocLink(taskId, title, docMeta.docUrl, noticeState)
     const entry = getTask(state, taskId)
     // A rebinding invalidates the old message: it points at a document that is no longer this
     // task's. Treat it as absent rather than editing it in place, so the stale link cannot
@@ -1199,88 +1271,97 @@ export function createBridge({
       }
     }
 
-    // THE EXCEPTIONS. One short line, and only for the two things a link genuinely cannot
-    // carry: the agent is blocked on the user, or the task reached a terminal state. Hashed, so
-    // an unchanged ask is said once rather than nightly — an exception that repeats every run is
-    // the behaviour this issue removes, wearing a smaller hat.
+    // #620 — RETIRING THE SEPARATE NOTICE.
     //
-    // A CHANGED ask REPLACES the notice already in the topic rather than stacking a second one
-    // under it. The hash alone made "say it once" true per ask and false per topic: successive
-    // runs with slightly different asks each appended a message, so the topic re-grew the stack
-    // through the only path still allowed to post. Shiv, on the catch-up doc: "Task 468 telegram
-    // has recent message postings. I expected it to update or delete the last one."
-    const ask = blockingAsk(turn)
-    const terminal = terminalStatus(turn)
-    if (ask || terminal) {
-      const noticeHash = hashNotice(ask, terminal)
-      if (!entry || entry.docLinkNoticeHash !== noticeHash) {
-        const noticeText = formatDocNotice(taskId, { ask, terminal, docUrl: docMeta.docUrl })
-        const priorId =
-          entry && Number.isInteger(entry.docLinkNoticeMessageId) ? entry.docLinkNoticeMessageId : null
+    // The exception that used to live here was sound and became the problem. #424 allowed one
+    // short extra message for the two things a link genuinely cannot carry — the agent is
+    // blocked on the user, or the task ended — on the understanding that this was rare. It is
+    // not rare: measured across the live bridge state, 59 of 76 bound topics were sitting at
+    // two permanent messages, because a doc-bound turn almost always declares an ask and the
+    // turn guard requires it to. An exception holding in 78% of cases is the rule, and the rule
+    // it had quietly replaced is the one that was asked for: "Every time I look at the app, I
+    // expect to see a single telegram message per task."
+    //
+    // Nothing here was misbehaving, which is why no test of any part could see it. The ask now
+    // rides in the pointer above, so this block no longer posts anything at all; what remains is
+    // retiring the messages the old design already left in the topic.
+    const legacyNoticeId =
+      entry && Number.isInteger(entry.docLinkNoticeMessageId) ? entry.docLinkNoticeMessageId : null
 
-        let noticeId = null
-        if (priorId != null) {
-          noticeId = (await editNotice(taskId, priorId, noticeText)) ? priorId : null
-        }
+    if (legacyNoticeId != null) {
+      // Its content is not being destroyed — it is on screen in the pointer, either as the live
+      // ask or as the struck-through trace of a resolved one, and it is in the doc and the
+      // journal besides. So removing it loses nothing, which is what separates this from the
+      // deletion #483 deliberately refused to do without his word: there, the message was the
+      // only record of what it said.
+      //
+      // The reply freeze still applies, and for the original reason. A message he has answered
+      // is not a superseded draft, it is his side of a conversation, and the agent does not get
+      // to remove that however redundant its text has become.
+      const repliesNow = getReplyCount(state, taskId)
+      const repliesAtNotice = Number.isInteger(entry.docLinkNoticeReplyCount)
+        ? entry.docLinkNoticeReplyCount
+        : null
 
-        if (noticeId == null) {
-          const sent = await withRateLimitRetry(`sendMessage (doc notice) task #${taskId}`, () =>
-            client.sendMessage({
-              chatId,
-              text: noticeText,
-              messageThreadId: topicId,
-              parseMode: 'HTML',
-            }),
-          )
-          if (sent && Number.isInteger(sent.message_id)) noticeId = sent.message_id
-        }
-
-        setDocLinkNoticeHash(state, taskId, noticeHash, noticeId, ask)
-        out.notified = true
+      if (repliesAtNotice == null) {
+        // FIRST SIGHTING. Deliberately does not remove anything this run. The old state never
+        // recorded the reply count at the moment the notice was posted, so whether he has
+        // already answered it is not reconstructable — and guessing wrong here deletes a
+        // message he replied to, which is the one outcome this must never produce. Record the
+        // count and decide next run, when the question has become answerable.
+        setDocLinkNoticeReplyCount(state, taskId, repliesNow)
         logger(
-          `${noticeId === priorId && priorId != null ? 'updated' : 'posted'} short notice for task #${taskId} (${terminal || 'ask'})`,
+          `task #${taskId}: found a legacy notice message; recording the reply count (` +
+            `${repliesNow}) and retiring it next run if nothing lands in between`,
         )
-      }
-    } else if (entry && entry.docLinkNoticeHash) {
-      // The ask is no longer live. TWO different things can have happened, and they get
-      // opposite treatment — see `retractedAsk` for why.
-      //
-      // RESOLVED (the default): leave the message exactly as it is. He may have read it and
-      // acted on it, and rewriting it afterwards would change history under him.
-      //
-      // RETRACTED (only when the turn says so): the ask was never satisfiable, so he provably
-      // could not have acted on it. Leaving it is what rewrites history — it leaves a demand
-      // standing that nobody can meet. Correct it in place, keeping the original words visible.
-      const retraction = retractedAsk(turn)
-      const priorId =
-        Number.isInteger(entry.docLinkNoticeMessageId) ? entry.docLinkNoticeMessageId : null
-
-      if (retraction && priorId != null && entry.docLinkNoticeAsk) {
-        const text = formatDocRetraction(taskId, {
-          ask: entry.docLinkNoticeAsk,
-          reason: retraction,
-          docUrl: docMeta.docUrl,
-        })
-        // Deliberately NOT falling through to sendMessage on failure, unlike a live notice.
-        // A notice carries information that exists nowhere else, so losing it is the worse
-        // error; a retraction is the opposite — its content is already in the doc, and a fresh
-        // message would ADD to the topic to say something no longer matters. If the edit does
-        // not land, the stale line simply stands for another run.
-        if (await editNotice(taskId, priorId, text)) {
-          out.retracted = true
-          logger(`retracted the notice for task #${taskId} (${retraction})`)
+      } else if (repliesNow !== repliesAtNotice) {
+        logger(
+          `task #${taskId}: leaving the old notice message in place — a reply landed since it ` +
+            `was seen (${repliesAtNotice} -> ${repliesNow}), so it is part of the conversation ` +
+            'rather than a duplicate',
+        )
+        // Deliberately NOT forgetting the id. Forgetting it would make the next run believe
+        // there was never a notice, and the topic would keep two messages forever with nothing
+        // recording why. Kept, so the reason stays inspectable.
+      } else if (typeof client.deleteMessage === 'function') {
+        let removed = false
+        try {
+          await withRateLimitRetry(`deleteMessage (retire notice) task #${taskId}`, () =>
+            client.deleteMessage({ chatId, messageId: legacyNoticeId }),
+          )
+          removed = true
+        } catch (err) {
+          // Telegram only lets a bot delete its own messages for 48h unless it is an admin, so
+          // a failure here is expected on older topics rather than exceptional. Fall back to
+          // collapsing it in place: the topic still converges on one message that MEANS
+          // anything, and the stale demand stops standing unqualified. That is the same
+          // fallback direction #483 chose, for the same reason — an edit needs no permission
+          // because it removes nothing.
+          logger(`could not delete the old notice for task #${taskId} (${err.message}); collapsing`)
+          removed = await editNotice(
+            taskId,
+            legacyNoticeId,
+            formatCollapsedTurn(taskId, { docUrl: docMeta.docUrl, links: [] }),
+          )
         }
-      } else if (retraction && priorId == null) {
-        // Nothing to reach. State from before this existed, or a notice whose id was already
-        // forgotten by the resolve path — message 2862 on task 468 is exactly this, and is why
-        // #515 is a fix for the class rather than a repair of that message.
-        logger(`task #${taskId} retracts an ask, but its notice id was already forgotten`)
-      }
 
-      // Forget it either way, so the same ask returning later is announced again rather than
-      // silently swallowed as "already said".
-      setDocLinkNoticeHash(state, taskId, null)
+        if (removed) {
+          out.noticeRetired = true
+          setDocLinkNoticeHash(state, taskId, null)
+          logger(`retired the separate notice for task #${taskId}; the pointer carries it now`)
+        }
+      }
     }
+
+    // Record what the pointer is currently saying, so the next run can tell a resolved ask from
+    // one that was never made. This is the state that makes the trace possible: without it,
+    // resolution would have nothing to strike through and the ask would simply vanish.
+    setDocLinkAsk(state, taskId, {
+      ask: liveAsk,
+      resolved: noticeState.resolved,
+      retracted: noticeState.retracted,
+    })
+    if (liveAsk || liveTerminal || noticeState.resolved) out.notified = true
 
     // Record the turn as accounted for. If the doc binding is ever removed, the task falls back
     // to turn posting WITHOUT dumping the backlog it was quiet for -- which is the conservative

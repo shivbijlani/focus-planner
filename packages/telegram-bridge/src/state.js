@@ -260,8 +260,44 @@ export function setDocLinkNoticeHash(state, taskId, hash, messageId, ask) {
   return state
 }
 
-export function setOffset(state, offset) {
-  state.updateOffset = offset
+// #620 — what the POINTER is currently saying, as opposed to what a separate notice
+// message once said.
+//
+// `docLinkAsk` is the live ask now shown inside the pointer. `docLinkResolvedAsk` is the
+// previous one, kept deliberately AFTER it stops being live, and that survival is the whole
+// reason this exists. `setDocLinkNoticeHash` above clears an ask on resolution because editing
+// a separate message afterwards "would silently rewrite a line Shiv has already read". Once the
+// ask lives in a permanent, always-current message that refusal is not available: resolution
+// MUST rewrite it. So the property is preserved by a different route — the words are retained
+// and struck through rather than dropped, so a resolved ask is visibly resolved instead of
+// silently absent. Forgetting it here is what would make an unread ask vanish.
+export function setDocLinkAsk(state, taskId, { ask, resolved, retracted } = {}) {
+  const prev = state.tasks[taskId] || {}
+  state.tasks[taskId] = {
+    ...prev,
+    docLinkAsk: ask ? String(ask) : undefined,
+    docLinkResolvedAsk: !ask && resolved ? String(resolved) : undefined,
+    docLinkRetractedReason: !ask && resolved && retracted ? String(retracted) : undefined,
+  }
+  return state
+}
+
+// The reply count as it stood the FIRST time a run saw a legacy notice message it intends to
+// retire. Two sightings are required before removal, and that is not caution for its own sake:
+// nothing in the old state recorded how many replies existed when the notice was posted, so
+// "has he answered this?" cannot be reconstructed from history. It can only be measured going
+// forward. Storing the count at first sight turns an unanswerable question about the past into
+// an answerable one about the interval between two runs.
+export function setDocLinkNoticeReplyCount(state, taskId, count) {
+  const prev = state.tasks[taskId] || {}
+  state.tasks[taskId] = {
+    ...prev,
+    docLinkNoticeReplyCount: Number.isInteger(count) ? count : undefined,
+  }
+  return state
+}
+
+export function setOffset(state, offset) {  state.updateOffset = offset
   return state
 }
 
