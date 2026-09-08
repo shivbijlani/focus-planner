@@ -45,18 +45,96 @@
 // authority is the defect it is guarding against.
 
 import { spawnSync } from 'node:child_process'
+import path from 'node:path'
+import { existsSync } from 'node:fs'
 
 const REPO_PATHS = ['packages', 'plugins']
 
+// Where the git questions get asked. Resolved once, in main().
+let CWD
+
 function git(args, opts = {}) {
-  const r = spawnSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...opts })
+  const r = spawnSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, cwd: CWD, ...opts })
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
 }
 
+// Returns the repository ROOT for a path inside a checkout, or null.
+//
+// Returning "some directory inside the work tree" is not good enough, and the
+// difference is not cosmetic (GH #632, second instance). `git grep <rev> --
+// packages plugins` resolves its pathspecs RELATIVE TO CWD, so run from
+// plugins/overnight-agent/checks the pathspecs match nothing, every issue comes
+// back uncited, and the sweep prints "no open issue is already shipped" -- a
+// confident, exit-0, wrong clean pass. `rev-parse --is-inside-work-tree` is true
+// in that directory, so the obvious check passes while the answer is garbage.
+function repoRoot(p) {
+  if (!p || !existsSync(p)) return null
+  const r = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', cwd: p })
+  if (r.status !== 0) return null
+  const top = (r.stdout || '').trim()
+  return top || null
+}
+
+/**
+ * WHY THIS EXISTS AND IS NOT `process.cwd()` (measured 2026-09-08, GH #632)
+ * ------------------------------------------------------------------------
+ * This sweep shipped registered in run-sweeps.ps1 and, in that home, measured
+ * NOTHING. The suite runs with cwd set to the planner data folder, which is not
+ * a checkout, so the first thing this file did was print "nothing to measure"
+ * and exit 0. Same binary, same commit, one `cwd` apart:
+ *
+ *   via run-sweeps.ps1        -> ok, exit 0, "nothing to measure"
+ *   in V:\repos\focus-planner -> 169 open / 98 SHIPPED / 71 unworked
+ *
+ * A guard that cannot see, reporting ok, is byte-identical to a guard that
+ * looked and found nothing -- which is the exact defect class this sweep was
+ * written to attack (#520), arriving in the sweep itself, ten minutes after it
+ * merged. The `resolveRepo()` shape is borrowed from version-bump-sweep.mjs,
+ * which learned the same lesson about the same suite.
+ *
+ * Order matters. cwd is tried FIRST so an ad-hoc run in some other checkout
+ * measures that checkout, and so the mutation check's hermetic fixture repos
+ * are still the subject rather than this machine's real one.
+ */
+function resolveRepo() {
+  const forced = process.env.SHIPPED_SWEEP_REPO
+  if (forced) return repoRoot(forced)
+  const here = repoRoot(process.cwd())
+  if (here) return here
+  let dir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))
+  for (let i = 0; i < 6; i++) {
+    const top = repoRoot(dir)
+    if (top) return top
+    const up = path.dirname(dir)
+    if (up === dir) break
+    dir = up
+  }
+  for (const c of ['V:\\repos\\focus-planner', '/v/repos/focus-planner']) {
+    const top = repoRoot(c)
+    if (top) return top
+  }
+  return null
+}
+
+// A "could not measure" outcome is reported as a finding, not as a pass. Exiting
+// 0 here is what made this sweep invisible in the suite: the runner's convention
+// is that a non-zero exit WITH stdout is FINDINGS, and silence plus 0 is health.
+// Saying "this is not a pass" on stdout does not help when nothing reads stdout.
+function notMeasured(lines) {
+  for (const l of lines) console.log(l)
+  console.log('(this is not a pass: no classification was performed)')
+  process.exit(1)
+}
+
+// gh infers the repository from cwd exactly as git does, so it needs the same
+// treatment. Fixing only the git half left the sweep still cwd-bound, just
+// failing one line later -- which is why the fix is verified from the suite's
+// actual cwd rather than from a checkout (GH #632).
 function gh(args) {
   const r = spawnSync(process.platform === 'win32' ? 'gh.exe' : 'gh', args, {
     encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024
+    maxBuffer: 64 * 1024 * 1024,
+    cwd: CWD
   })
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() }
 }
@@ -74,19 +152,18 @@ function classifyPath(p) {
 }
 
 function main() {
-  const inRepo = git(['rev-parse', '--is-inside-work-tree'])
-  if (inRepo.code !== 0) {
-    console.log('not a git checkout -- nothing to measure')
-    console.log('(this is not a pass: no classification was performed)')
-    process.exit(0)
+  CWD = resolveRepo()
+  if (!CWD) {
+    notMeasured([
+      'no focus-planner checkout resolved -- nothing to measure',
+      '(cwd is not a checkout, and no fallback matched; set SHIPPED_SWEEP_REPO)'
+    ])
   }
 
   git(['fetch', 'origin', '--quiet'])
   const ref = git(['rev-parse', '--verify', '--quiet', 'origin/main'])
   if (ref.code !== 0 || !ref.out) {
-    console.log('origin/main not resolvable -- nothing to measure')
-    console.log('(this is not a pass: no classification was performed)')
-    process.exit(0)
+    notMeasured(['origin/main not resolvable -- nothing to measure'])
   }
 
   // Test seam. The mutation check supplies the issue list directly so the
@@ -95,19 +172,17 @@ function main() {
   const injected = process.env.SHIPPED_SWEEP_ISSUES_JSON
   const list = injected ? { code: 0, out: injected, err: '' } : gh(['issue', 'list', '--state', 'open', '--limit', '200', '--json', 'number,title'])
   if (list.code !== 0) {
-    console.log('could not list open issues -- nothing to measure')
-    console.log(`(gh said: ${(list.err || 'no detail').slice(0, 160)})`)
-    console.log('(this is not a pass: no classification was performed)')
-    process.exit(0)
+    notMeasured([
+      'could not list open issues -- nothing to measure',
+      `(gh said: ${(list.err || 'no detail').slice(0, 160)})`
+    ])
   }
 
   let issues
   try {
     issues = JSON.parse(list.out)
   } catch {
-    console.log('could not parse the issue list -- nothing to measure')
-    console.log('(this is not a pass: no classification was performed)')
-    process.exit(0)
+    notMeasured(['could not parse the issue list -- nothing to measure'])
   }
 
   if (!Array.isArray(issues) || issues.length === 0) {
