@@ -187,6 +187,13 @@ $Suite = @(
   # run that could have kept it. This one is self-contained within a single turn, so it needs
   # no grace period. Found on #460, 2026-08-26.
   @{ n = 'self-promise-sweep';       bridge = $false }
+  # The only sweep that measures the OUTCOME Shiv looks at rather than the code that
+  # produces it (added 2026-09-08, GH #628). Every other entry here reads journals, board
+  # rows, doc bodies or source. None reads how many Telegram messages are at rest in a
+  # topic -- which is why "all sweeps green" and his "I still see stacked messages" were
+  # never in contradiction: they were measuring different universes, and only one of them
+  # was his. Reads bridge state only, so no bridge import.
+  @{ n = 'unreachable-topic-sweep';  bridge = $false }
   # The only ACTION in a suite of detectors, added 2026-09-07, and deliberately so.
   # `ensure-catchup-doc.mjs` (#580) implements Shiv's invariant verbatim -- if doc does not
   # exist then create doc else continue -- but shipping it left it invoked by NOTHING. That is
