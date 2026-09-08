@@ -4584,8 +4584,30 @@ function Test-SessionHoldsCapacity($st) {
       #
       # Note which way the #514 hazard points here. `last_woken_at` is agent-written, so a
       # retroactive stamp could make a task look actively worked -- and that makes it COUNT,
-      # refusing dispatch. The field can therefore cost throughput but cannot cause the
-      # over-dispatch this fix exists to prevent, which is the direction that matters.
+      # refusing dispatch. A stamp that is wrongly SET can therefore cost throughput but cannot
+      # cause the over-dispatch this fix exists to prevent.
+      #
+      # THAT IS ONLY HALF THE FIELD'S FAILURE MODES, AND THE OTHER HALF IS NOT SAFE (GH #532).
+      # The sentence above analyses the stamp being wrongly ADVANCED. The stamp is maintained by
+      # a line of prose in SKILL.md PHASE 1 ("stamp -SessionWoken once it responds"), so its far
+      # more common failure is not being advanced AT ALL on a wake that reuses a live binding --
+      # and a stamp left stale reads here as "not recently woken", parks the row, and frees a
+      # slot that is genuinely occupied. That is the over-dispatch direction, reached through the
+      # same field this comment called safe. Measured 2026-09-07 on #468: dispatched 21:55 and
+      # actively shipping, `last_woken_at` still 19:43, and `session -InFlight` did not count it
+      # from 21:55 until the stamp was written by hand at 22:59.
+      #
+      # DO NOT "FIX" THAT HERE BY TREATING A STALE STAMP AS ACTIVE. World O of
+      # mutcheck-parked-capacity pins the opposite as deliberate -- a 6-hour-old wake is not
+      # evidence anyone is working -- and #487, a live session with an EMPTY stamp holding the
+      # only slot, is the deadlock that argument exists to prevent. The park's reasoning is
+      # correct given its input; the input was false.
+      #
+      # This is also exactly where the analogous G12 repair does NOT transfer. write-turn could
+      # demote a stale stamp to "unknown boundary" because it only had to stop TRUSTING the
+      # field. The park needs the field to be TRUE: "nobody is working this" is a claim about the
+      # world, not about confidence. So no reader-side fix exists here, and the repair has to be
+      # on the write side -- the stamp has to stop being maintained by prose.
       $wokenRecently = $false
       $session = if ($st.PSObject.Properties['session']) { $st.session } else { $null }
       $wokeRaw = if ($session -and $session.PSObject.Properties['last_woken_at']) { "$($session.last_woken_at)" } else { '' }
