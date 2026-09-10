@@ -19,6 +19,7 @@ import { tagMergedRows, resolveRowSourceId } from './combinedRouting.js'
 // delete this import + selfHealIds.js + its call site once all devices healed.
 import { selfHealOutlierIds } from './selfHealIds.js'
 import { recordDeletedId, getActiveTombstoneIds } from './idTombstones.js'
+import { collectAllocationUniverse } from './allocationUniverse.js'
 import { scrollToAndFlashTask } from './scrollToTask.js'
 import { filterRowsAndRawLines, normalizeQuery, boardSearchPlaceholder } from './boardSearch.js'
 import { parseMarkdownTable, displayHeader } from './boardTable.js'
@@ -4434,6 +4435,51 @@ function withDeletedIdTombstones(ids) {
   ])
 }
 
+/**
+ * Every ID that is already spoken for in `sourceId` (GH #528, GH #132).
+ *
+ * The three write paths that mint a task ID (`handleAdd`, `handlePromoteTodo`,
+ * `onAddAndPrioritize`) all allocate through this one function, so the universe
+ * cannot drift apart between them. It is read at write time, immediately before
+ * the op runs, because that is the latest moment a replica can learn that
+ * another device already took a number.
+ *
+ * The union is deliberately wider than the active board:
+ *  - **journals + deleted-id tombstones** — the pre-existing skip set.
+ *  - **the completed board** — the #132 gap. Completing a task takes its row
+ *    off `planner.md`, which is exactly why `maxId` alone hands the ID out
+ *    again.
+ *  - **both boards' sync shadows, tombstones included** — the #528 gap. When
+ *    another replica creates a task, its shadow entry is what tells this device
+ *    the number is gone, long before the row itself merges in.
+ *
+ * Every read is individually optional. A folder with no completed board or no
+ * shadow yet still yields a usable, smaller universe: a wider universe can only
+ * push an allocation up to a free number, never down onto a used one, so a
+ * failed read degrades to the old behaviour rather than to a wrong answer.
+ *
+ * @param {string} sourceId
+ * @param {Iterable<number|string>} [extraIds] caller-side reservations
+ * @returns {Promise<Set<number>>}
+ */
+async function buildAllocationUniverse(sourceId, extraIds = []) {
+  const journalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(sourceId))
+  const readOptional = async (path) => {
+    try { return (await storage.readFromSource(sourceId, path)) || '' } catch { return '' }
+  }
+  const [completedBoard, planShadow, completedShadow] = await Promise.all([
+    readOptional(COMPLETED_FILE),
+    readOptional(`${PLAN_FILE}.sync.json`),
+    readOptional(`${COMPLETED_FILE}.sync.json`),
+  ])
+  return collectAllocationUniverse({
+    boards: [completedBoard],
+    shadows: [planShadow, completedShadow],
+    journalIds,
+    extraIds,
+  })
+}
+
 // Get max task ID from journal filenames
 async function getJournalIds() {
   try {
@@ -5936,16 +5982,14 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     // Promote into the same source as the parent task.
     const sid = sourceForTask(parentTaskId) || sources[0]?.id
     if (!sid) return
-    const journalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(sid))
-    for (const id of Object.keys(taskSettingsBySource[sid] || {})) journalIds.add(Number(id))
-    await applyOp(sid, c => ops.opPromoteTodoToTask(c, todoText, parentTaskId, journalIds))
+    const reservedIds = await buildAllocationUniverse(sid, Object.keys(taskSettingsBySource[sid] || {}))
+    await applyOp(sid, c => ops.opPromoteTodoToTask(c, todoText, parentTaskId, reservedIds))
   }
 
   const handleAdd = async ({ task, priority, linkedTask, section, sourceId }) => {
     if (!sourceId) return
-    const journalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(sourceId))
-    for (const id of Object.keys(taskSettingsBySource[sourceId] || {})) journalIds.add(Number(id))
-    await applyOp(sourceId, c => ops.opAddTask(c, { task, priority, linkedTask, section }, journalIds))
+    const reservedIds = await buildAllocationUniverse(sourceId, Object.keys(taskSettingsBySource[sourceId] || {}))
+    await applyOp(sourceId, c => ops.opAddTask(c, { task, priority, linkedTask, section }, reservedIds))
   }
 
   const handleCreateJournal = async (taskId, taskName, sourceId) => {
@@ -6278,9 +6322,8 @@ function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
     onUpdate: (newLines) =>
       applyOp(sourceId, c => ops.opUpdateManagerPriorities(c, newLines)),
     onAddAndPrioritize: async (taskName, prioritySectionTitle) => {
-      const journalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(sourceId))
-      for (const id of Object.keys(taskSettingsBySource[sourceId] || {})) journalIds.add(Number(id))
-      await applyOp(sourceId, c => ops.opAddAndPrioritize(c, taskName, prioritySectionTitle, journalIds))
+      const reservedIds = await buildAllocationUniverse(sourceId, Object.keys(taskSettingsBySource[sourceId] || {}))
+      await applyOp(sourceId, c => ops.opAddAndPrioritize(c, taskName, prioritySectionTitle, reservedIds))
     },
     onPromoteToManagerPriority: (taskId) =>
       applyOp(sourceId, c => ops.opPromoteToManagerPriority(c, taskId)),
