@@ -1,6 +1,6 @@
 # Domain: overnight-agent
 
-`overnight-agent` is the repository's largest collected domain: `spec-facts.json` records **166**
+`overnight-agent` is the repository's largest collected domain: `spec-facts.json` records **180**
 JavaScript modules in `plugins/overnight-agent/checks/`. That count is real, but it is not the
 whole runtime surface. The plugin also ships PowerShell and markdown assets that `spec-facts.json`
 does not index because `scripts/spec/collect.mjs` only walks JS/TS extensions. Direct inspection
@@ -53,6 +53,16 @@ Three families carry most of the domain.
   relevant turn rather than the last regex match anywhere; `plugins/overnight-agent/checks/lib-telegram-delivery.mjs`
   imports the shipped Telegram formatter instead of hand-modeling truncation; `plugins/overnight-agent/checks/lib-postmortem.mjs`
   extracts conservative recurrence signals for postmortem review.
+- **`issue-shipped.mjs`** is a fourth kind of check, run *before* work is recommended rather than
+  after: it classifies whether an open issue's number already appears in shipped implementation
+  source on `origin/main` (exit 0 unworked, 1 shipped, 2 could-not-classify, 3 bad arguments — the
+  contract `plugins/overnight-agent/checks/mutcheck-issue-shipped.mjs` pins). It exists because
+  `plugins/overnight-agent/checks/shipped-but-open-sweep.mjs` (#630) only *measured* the same fact
+  after the fact, into a suite log, while the moment that matters is a run session deciding what to
+  hand a sub-session — `issue-shipped.mjs` is imported by the sweep so census and gate share one
+  classification (#635), and it is invoked as a preflight by `write-turn.ps1`'s G15 check on every
+  journal turn. The classifier reads citations, not behaviour, so it can misread a historical
+  mention of an issue number in a comment as a fix (#639) — a known, stated limit, not a silent one.
 
 A small slice from the real source shows the pattern:
 

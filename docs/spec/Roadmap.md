@@ -1,6 +1,6 @@
 # Roadmap
 
-This page records **known gaps and forward direction** from the **163 open issues** captured in `spec-facts.json`. Entries with a `priority:` label are grouped by that label first. Remaining issues are grouped by the exact non-priority labels present, and issues with no labels are grouped by recurring themes from their titles and bodies. Use this alongside [Behaviour](Behaviour), [Reliability](Reliability), [Prioritisation](Prioritisation), and the relevant `Domain-*` page.
+This page records **known gaps and forward direction** from the **178 open issues** captured in `spec-facts.json`. Entries with a `priority:` label are grouped by that label first. Remaining issues are grouped by the exact non-priority labels present, and issues with no labels are grouped by recurring themes from their titles and bodies. Use this alongside [Behaviour](Behaviour), [Reliability](Reliability), [Prioritisation](Prioritisation), and the relevant `Domain-*` page.
 
 ## Critical
 
@@ -18,7 +18,7 @@ This page records **known gaps and forward direction** from the **163 open issue
 
 ## High
 
-25 open issues carry `priority: high`. These are the explicitly triaged gaps in the snapshot.
+28 open issues carry `priority: high`. These are the explicitly triaged gaps in the snapshot.
 
 > [!NOTE]
 > **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
@@ -28,6 +28,9 @@ This page records **known gaps and forward direction** from the **163 open issue
 
 | Issue | Other labels | Title | Gap / direction from issue text |
 | --- | --- | --- | --- |
+| #643 | bug, reliability | Supervisor restarts all GHCP sessions to clean up one finished run, interrupting unrelated active work | The out-of-band supervisor recovers a stuck-but-finished workflow record by restarting the whole app, which also kills sessions that are mid-tool-call and progressing normally. |
+| #638 | bug, reliability | A 5h49m host-sleep outage silenced every scheduled unit and left zero record: the supervisor heartbeat stores only lastCheckUtc | The host slept 5h49m; ~11 overnight-agent slots, ~23 heartbeats and a forensics pass were all silently skipped, and on resume the supervisor wrote a fresh timestamp that reads as a healthy daemon 20 seconds later. |
+| #627 | bug, reliability | `eligible` binds selection but not work: admits stayed 0 for a 6h window while 3 journals gained turns, 2 on rows scan marks ineligible | Spec-conformance forensics pass 7 measured `admits` staying at 0 across a 6-hour window while turns were still written to journals, 2 of them on rows `scan` itself reports as `eligible: false`. |
 | #618 | bug, reliability | A declared ask is never validated against its own turn: related issue asks two questions it cannot guess, declares them an 'offer', and no reader waits (25 of 254 rows have an open ask nobody awaits) | #560 replaced the prose-regex `awaiting_reply` with a declared ask (`<!-- oa-ask: ... -->`), and declared rows rose from 6 to 11 across two runs. But nothing validates a declared ask's `-Ask` level against what the turn's own text actually asks: a turn can declare `offer` while asking a question it cannot guess the answer to, and no reader waits on it — measured at 25 of 254 rows carrying an open ask nobody is waiting for. |
 | #605 | bug, reliability | A due poll never fires on a Deferred row: Test-Workable grants the timer override, then the Today gate discards it (measured: related issue due_poll=true, eligible=false) | Measured live on the board by the spec-conformance forensics pass (#565): `Test-Workable` grants the due-poll timer override on a Deferred row, but the Today gate discards that grant before dispatch — so a due poll never actually fires on a Deferred row, despite `docs/spec/Prioritisation.md`'s parking table stating that it should. |
 | #589 | bug, reliability | in_flight reports 3 against a concurrency ceiling of 1, and scan emits no per-row capacity field so the membership of that 3 is unobservable | `session -InFlight` reports 3 items in flight against a ceiling of 1, and the set of sessions producing that 3 is not derivable from any read-only interface — `Prioritisation.md` treats the ceiling as normative, but nothing on the worklist names which rows count against it. |
@@ -83,7 +86,7 @@ This page records **known gaps and forward direction** from the **163 open issue
 
 ## Low
 
-14 open issues carry `priority: low`. These are the explicitly triaged gaps in the snapshot.
+16 open issues carry `priority: low`. These are the explicitly triaged gaps in the snapshot.
 
 > [!NOTE]
 > **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
@@ -93,6 +96,8 @@ This page records **known gaps and forward direction** from the **163 open issue
 
 | Issue | Other labels | Title | Gap / direction from issue text |
 | --- | --- | --- | --- |
+| #646 | enhancement, priority: low | Journal UX: a user-triggered compression button that rewrites a long journal into one pinned part and one current response | Journals only grow; a task worked over weeks accumulates a thread nobody re-reads from the top. Shiv asked for a button that lets the agent rewrite a long journal down to one pinned summary plus the current response. |
+| #645 | enhancement, priority: low | Journal UX: a button to insert a todo, so adding one does not require typing `- [ ]` by hand | The reading side of journal todos (checkbox rendering, `/api/todos` extraction) is done; the writing side is not — today a todo can only be added by knowing the markdown convention and typing it by hand. |
 | #327 | documentation, reliability | Guard-authoring conventions have no home: three "this should be a convention" notes are stranded on three separate issues | Three separate issues have now each ended with "…and this should go in the guard-authoring conventions." There is no such document, so each note is stranded on its own ticket and the next guard gets written… |
 | #207 | — | Remove backward-compatibility artifacts - single-user install, no legacy support needed | There is exactly one install of this app (Shiv's). Any code that exists solely to keep an older on-disk shape working is dead weight: it can be deleted, and the one environment migrated forward by hand… |
 | #104 | enhancement | Overnight agent: final-phase post-mortem + dream-mode memory | Add a final-phase post-mortem + "dream mode" memory to the overnight agent so it compounds learning across runs (from Focus Planner task related issue, split out to keep the app-UI close-out task clean; kin to related… |
@@ -127,6 +132,9 @@ This page records **known gaps and forward direction** from the **163 open issue
 
 | Issue | Title | Gap / direction from issue text |
 | --- | --- | --- |
+| #628 | The collapse fixes cannot reach 208 of 229 bound topics: a message whose id was never recorded is unreachable forever | Every fix Shiv has been waiting on for the "single Telegram message per task" behaviour was already shipped and deployed when he wrote it hadn't improved — the fixes only apply to topics whose bound message id was recorded going forward, and no sweep measures the outcome Shiv actually looks at. |
+| #626 | A stated finding and its own contradiction have equal standing in prose: the correct answer was transmitted and lost twice in one wake | Six instances, two sub-shapes, fired in a single wake: a declaration without a checker is byte-identical to its own contradiction at the point of use, the same family #520 already generalises and #618 hit for declared asks. |
+| #625 | find_and_replace_doc escapes a real newline into a literal `\n`, reports `Replaced 1`, and the damage only matches back out with a real newline | A real newline written through the tool arrives in the document as the two literal characters `\` and `n`; a paragraph break cannot be inserted through this path at all, and the obvious repair (searching for the literal `\n` it left behind) silently matches nothing. |
 | #602 | mutcheck-journal-encoding fails 2/3 on main: the journal encoding guard validates the call shape, not the encoding argument, so an ANSI decode inside Read-JournalText survives | `checks/mutcheck-journal-encoding.mjs` fails on `origin/main` at 2/3 mutants killed, exit 1, with arm M2 SURVIVED — the guard confirms `Add-TurnTerminator` reads with `Get-Content -Raw`, but not that the encoding argument passed is the correct one, so an ANSI decode inside `Read-JournalText` survives undetected. |
 | #557 | write-turn.ps1 prints a bare backup filename, so the rollback artifact looks missing when you need it | write-turn.ps1 announces its backup as a bare filename with no directory: |
 | #528 | Adding a task can reuse a live task's ID and silently destroy that task's row | Adding a task through the UI can be assigned an ID that is already in use by a live task, and the existing task's row is then destroyed — silently, with no warning, no dialog, and… |
@@ -286,6 +294,25 @@ These issues cluster around whether the scheduler is allowed to work a task, whe
 
 </details>
 
+### Triage vs. already-shipped work
+
+`gh issue list --state open` cannot distinguish "filed and unworked" from "shipped, awaiting his review": a shipped PR does not close its issue in this repo (Shiv closes it himself after reading the catch-up doc), so both states render identically as `OPEN`. #630 measured the cost of that ambiguity at the point of consumption — three run sessions recommended already-shipped work twelve times across 2026-09-07/08 — and #635 (implemented by `issue-shipped.mjs` and write-turn.ps1's G15 gate) moved the check from an after-the-fact census into the triage decision itself, so a run refuses to recommend an issue whose fix already cites it in shipped source. Both #630 and #635 stay open under this repo's own rule even though their fixes have shipped: closing them is Shiv's decision, not the commit's, which is the exact phenomenon the issues describe. #632 remains a live gap: the census sweep (`shipped-but-open-sweep.mjs`) is registered to run from the planner data folder, which is not a git checkout, so in its scheduled home it classifies nothing every time and still reports `ok, findings 0` — a silent-pass shape the suite has hit before (#520).
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
+| Issue | Title | Gap / direction from issue text |
+| --- | --- | --- |
+| #630 | `OPEN` spans shipped-awaiting-review and filed-and-unworked, and the tracker renders them identically | `gh issue list --state open` renders "pick this up" and "do not pick this up" identically. Twelve already-shipped recommendations were made before the classification (`issue-shipped.mjs`) existed. |
+| #632 | shipped-but-open-sweep is inert in the suite that runs it | The sweep wrapper's `cwd` is the planner data folder, not a git checkout, so the census classifies 0 of 169 issues in its scheduled home and still reports `ok, findings 0`. |
+| #635 | Triage consults the shipped check before recommending work, not after | The census (#630) ran after the fact into a suite log; nothing consulted it at the moment a run decides what to hand a sub-session. Fixed by making `issue-shipped.mjs` a preflight check that write-turn.ps1's G15 enforces on every journal turn. |
+| #639 | issue-shipped.mjs reports historical mentions as shipped work, failing in the dangerous direction | The classifier cannot tell "this code fixes #N" from "this code mentions #N as a historical note" in comments, and both are common here — measured live triaging task #468, where #442 and #433 were both misread as SHIPPED. |
+
+</details>
+
 ### Deploy propagation, checkout drift, and collection sweeps
 
 These issues say “merged” is not yet a sufficient proxy for “running” or “measured correctly” because deploy, checkout, and sweep machinery can drift apart.
@@ -294,6 +321,7 @@ These issues say “merged” is not yet a sufficient proxy for “running” or
 | --- | --- | --- |
 | #418 | auto-deploy still exceeds its 60s budget on the live repo after related issue, so PHASE 0 ends in exit 2 every run | PR related issue (merged as b46edfd) bounded the auto-deploy's history work and added a wall-clock budget. On the live repository the classification still does not fit inside that budget, so PHASE 0's deploy step ends in… |
 | #575 | deploy-installed-plugin REFUSE is ancestry-blind: a just-merged file reads as a "live fix" that deploying "would REVERT", and the message asserts the opposite of the truth | `deploy-installed-plugin.ps1` refuses to deploy a file when the installed bytes match some git ref other than `origin/main`, printing "live fix is not on origin/main — deploying would REVERT it" — on a normal merge the installed copy is the pre-merge content and deploying would advance it, not revert it, because the classifier compares content identity against a ref set and never asks which side is newer. |
+| #622 | The telegram-bridge checkout is on no deploy manifest: merged bridge code can stay inert while both deploy checks report clean | `auto-deploy-plugin.ps1` syncs the plugin tree and the OA home, but the telegram-bridge package is invoked from the main checkout by PHASE 3 — neither deploy target covers it, so a merged bridge fix can sit unshipped with both deploy checks reporting clean. |
 
 ### Planner app UI and data integrity
 
@@ -302,6 +330,8 @@ surface a user drives directly, as opposed to the overnight agent's own machiner
 
 | Issue | Title | Gap / direction from issue text |
 | --- | --- | --- |
+| #641 | Journal entries written by an agent through the UI composer are stamped `<!-- from: me -->`, so agent prose is indistinguishable from Shiv's own words | An agent driving plannermd.com writes journal entries through the same "Message yourself…" composer a human uses, and the app stamps every entry from that composer as `<!-- from: me -->` — which means the human — so agent-authored prose in the consent channel is indistinguishable from Shiv's own. |
+| #640 | Task actions sheet renders below the fold on a narrow viewport: Create Journal sits 226px off-screen and is the only way to start a new task's journal | Opening the row kebab (⋯) → Task actions action sheet on a task low in the Deferred list renders the sheet below the fold on a narrow/mobile-width viewport; the sheet is a fixed overlay, so scrolling the board behind it never brings the buttons into view. |
 | #587 | Row kebab and its action sheet are both named just "Task actions" - a Delete/Complete menu that never says which task it will act on | Found while dogfooding the Planner UI on plannermd.com for board task 400. Every row's kebab (`⋯`) and the action sheet it opens are labelled with the same constant string, "Task actions"; neither the button's accessible name nor the open sheet says which task it is. |
 | #577 | Tasks created in the Pacific evening are stamped with tomorrow's UTC date and render an age of `-1d` | Tasks created through plannermd.com at ~23:00 PT land in `planner.md` stamped with the following day's date because the `Added` column is written in UTC, so the board then renders their age as `-1d` until the Pacific date catches up. |
 
