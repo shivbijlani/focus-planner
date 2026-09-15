@@ -32,8 +32,8 @@ loop itself lives under `plugins/overnight-agent/`.
 
 The core design choice is that supervision does **not** run inside the overnight run it watches.
 `plugins/overnight-agent/checks/install-oa-supervisor.ps1` installs the preferred Windows
-Scheduled Task, and falls back to a Startup-folder daemon only when unattended elevation is not
-available. `plugins/overnight-agent/checks/supervisor-liveness-sweep.ps1` then watches the
+Scheduled Task running the **resident daemon**, and falls back to a Startup-folder launch of
+the same daemon when task registration fails. `plugins/overnight-agent/checks/supervisor-liveness-sweep.ps1` then watches the
 watchers themselves.
 
 > [!NOTE]
@@ -48,12 +48,11 @@ Windows Task Scheduler is a service of the operating system. It is not the app, 
 is not the app's scheduler, and it is not an agent run - so it keeps firing exactly
 when everything this repo controls has stopped.
 
-# Two triggers on purpose:
-#   * at logon, so a reboot cannot silently leave supervision off;
-#   * a repeating trigger with an effectively unbounded duration.
+# Triggers launch a resident loop; repetition is a relaunch safety net, NOT polling.
 $atLogon = New-ScheduledTaskTrigger -AtLogOn
 $startNow = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
               -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
+# Unlimited execution time; IgnoreNew; restart failed daemons after one minute.
 ```
 
 
@@ -61,8 +60,25 @@ $startNow = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
 That separation is the whole point: a frozen app scheduler cannot suppress the task that judges the
 scheduler. Where Task Scheduler cannot be registered, `oa-supervisor-daemon.ps1` is still outside
 the failure domain because Explorer launches it from Startup at logon, as its own process. The
-trade-off is explicit in the file: the daemon does **not** auto-restart if it dies, so the
-scheduled-task route remains the stronger installation.
+trade-off is explicit: the **Startup fallback** cannot auto-restart a dead daemon; the scheduled
+task can. Both paths propagate `-NoAct`. The task has no execution time limit, ignores overlapping
+launches, and retries failures after one minute (up to 999 retries, plus its repeating trigger).
+It uses the interactive user's logon session, including elevated installation: a noninteractive
+S4U task cannot safely identify or relaunch that user's desktop GUI. Tick exit 1 means a performed
+action and is accepted as success, not mistaken for a dispatcher failure.
+Child failures, missing tick JSON and invalid `nextCheckUtc` do not terminate the Startup loop:
+both modes record an explicit error and retry with bounded exponential backoff. The heartbeat
+records the failure and next attempt; `supervisor-daemon-errors.jsonl` retains error records.
+An exclusive file handle owns the daemon singleton; stale PID-file contents never authorize a
+kill. Reinstallation requests cooperative shutdown, and refuses an uncooperative legacy daemon
+rather than killing it or running alongside it. Uninstall removes registrations and requests
+shutdown; legacy processes require separately verified manual migration.
+
+Each tick returns an absolute UTC `nextCheckUtc`, the earliest applicable poll, A, B, quiet-period
+maturity, or retry boundary. The daemon rechecks UTC during short sleeps and after machine resume,
+instead of sleeping a fixed 15 minutes across B. A separate exclusive tick lock serializes direct
+and daemon checks. OS scheduling, machine suspension and supervisor downtime remain real limits:
+a missed deadline is handled at the next available tick, not retroactively at B.
 
 `supervisor-liveness-sweep.ps1` closes the next gap: a supervisor that dies silently is another
 single point of failure.
@@ -140,64 +156,101 @@ only non-terminal, untombstoned orphans so it does not cry wolf about deliberate
 failure it guards is “live work is invisible on every surface at once”, not generic journal
 housekeeping.
 
-## Silent auto-restart is the remedy
+## Preventive restart window: quiet opportunities and a hard deadline
 
-The supervisor acts because this repository has repeated evidence that detect-only lines are skimmed.
-`oa-supervisor.ps1` does not page; it decides among `none`, `repair-only`, `restart`, and `launch`.
-The action depends on liveness, not just age.
+[Issue #648](https://github.com/shivbijlani/focus-planner/issues/648) adds maintenance before a
+long-running desktop app degrades. The out-of-process supervisor finds opportunities using
+existing app database and session-log evidence; it needs no agent completion handshake and does
+not depend on the app scheduler to notice maintenance is due. **It never disables workflows,
+changes schedule configuration, or creates a pause that needs a later re-enable step.**
 
-> [!NOTE]
-> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+Two elapsed-time thresholds govern the current app instance's cycle: **A** opens the quiet
+opportunity window and **B** is the hard deadline. These are uptime durations, not times of day.
+The cycle is anchored to the current app instance's start / verified successful restart.
 
-<details>
-<summary><strong>Show technical detail</strong></summary>
+| Elapsed time / outcome | Behavior |
+| --- | --- |
+| Before A | No preventive restart. Fault recovery remains separate but still needs verified quiet before B. |
+| A <= elapsed < B | Restart only after all activity evidence establishes a sustained quiet opportunity and an immediate recheck remains quiet. Busy or unknown evidence defers action. |
+| At or after B | Activity no longer vetoes restart. Record intentional deadline interruption and known affected work; process-identity checks still apply. |
+| Restart verified | Anchor the next cycle to the new app instance. |
+| Restart / relaunch fails | Keep the old maintenance deadline; record failure and retry with bounded backoff, not a fabricated successful cycle. |
 
-```powershell
-# plugins/overnight-agent/checks/oa-supervisor.ps1
-switch ($State) {
-  'STUCK' {
-    if ($FlaggedOrphans -le 0) { return 'none' }
-    if ($HasHungAlive)         { return 'restart' }
-    return 'repair-only'
-  }
-  'SCHEDULE-DEAD' {
-    if ($AppRunning) { return 'restart' }
-    return 'launch'
-  }
-  'RESOURCE-LEAK' {
-    if ($AppRunning) { return 'restart' }
-    return 'none'
-  }
-}
-```
+### Settings and defaults
 
+`oa-supervisor.ps1` loads `oa-supervisor-lifecycle.ps1` and `supervisor-activity.mjs`.
+The shipped `supervisor-defaults.json` supplies defaults; optional
+`%LOCALAPPDATA%\overnight-agent\supervisor-config.json` values override them. Deployment updates
+the defaults but **never overwrites the user's override file**.
 
-</details>
-> [!NOTE]
-> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+| Setting | Default |
+| --- | --- |
+| `preventiveStartHours` (A) | 12 hours |
+| `preventiveDeadlineHours` (B) | 24 hours |
+| `pollSeconds` | 60 seconds |
+| `quietSeconds` | 30 seconds |
+| `evidenceMaxAgeSeconds` | 300 seconds |
+| `retryInitialSeconds` / `retryMaxSeconds` | 60 / 900 seconds |
+| `readinessTimeoutSeconds` | 30 seconds |
+| `appExe` | Empty resolves to exactly `%LOCALAPPDATA%\Programs\GitHub Copilot\github.exe` |
 
-<details>
-<summary><strong>Show technical detail</strong></summary>
+The 12/24-hour defaults are implementation assumptions: a half-day minimum before preventive
+maintenance, followed by a 12-hour opportunity window and a one-day hard cap. The user selected
+the A/B policy, not these numeric values; overrides can adjust them without editing code.
 
-```powershell
-function Restart-App {
-  foreach ($name in @('github', 'copilot')) {
-    foreach ($proc in (Get-Process -Name $name -ErrorAction SilentlyContinue)) {
-      try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop } catch { }
-    }
-  }
-  Start-Sleep -Seconds 3
-  if ($exe) { try { Start-Process -FilePath $exe | Out-Null; $launched = $true } catch { } }
-}
-```
+Validation requires `0 <= A < B`, positive poll/quiet/freshness durations,
+`quietSeconds <= evidenceMaxAgeSeconds`, and positive, ordered retry bounds. Invalid
+configuration fails closed instead of silently weakening the activity gate. A is minimum spacing
+for **preventive** restarts only; there is no separate global cooldown Y postponing the deadline.
+The retained `RestartCooldownMinutes` parameter defaults to 20 minutes and applies only to fault
+recovery since the cycle start. It is not global Y; B always takes precedence.
 
+### Quiet evidence, identity, and honest recovery
 
-</details>
-This keeps the remedy narrow. A genuinely long but still-emitting run does not restart. A
-process-dead orphan gets `repair-only`, because clearing the blocked row is enough. A hung-alive row
-or a schedule-dead app gets a silent restart, with a cooldown to prevent loops. Issue #403 adds a
-second trigger: the supervisor now also restarts when the app stays *responsive enough to schedule*
-while consuming the machine pathologically.
+Quiet means no executing turns or outstanding tools across automated, manually started,
+parent and child sessions. Open conversations and resident host processes are not themselves
+work. One agent finishing does not establish global idleness; a silent long-running tool is
+still active. Missing, stale, unreadable or contradictory evidence is **unknown**, not quiet.
+The activity reader requires a current live-owner `session.start` / `session.resume`, terminal
+`assistant.turn_end`, and no outstanding tools. Database `is_running=1` vetoes quiet. A snapshot
+whose `measuredUtc` exceeds `evidenceMaxAgeSeconds` yields unknown. There is no last-event TTL:
+a full re-read of the current incarnation's log plus fresh database/process observations can
+establish quiet even when the terminal idle event is old. Contradictory database/event evidence
+is unknown. An asynchronous tool result that leaves work running or in the background is also
+unknown: invocation completion does not prove the underlying work has finished.
+Unlocked open conversations are ignored unless the database says they are executing; an
+unmatched live owned CLI also yields unknown.
+
+Before B, no destructive restart is allowed until all evidence is quiet, including fault-triggered
+recovery. Without an app-side admission hold, work can begin between the final activity check and
+termination: an early restart is a **best-effort quiet opportunity**, never a guarantee of zero
+interruption. B intentionally permits interruption; it does not excuse accidental interruptions
+caused by a stale run row ([issue #643](https://github.com/shivbijlani/focus-planner/issues/643)).
+
+The deadline overrides activity, **not ownership**. Recovery targets the intended executable and
+verified app-instance identity, with only proven owned resources eligible for termination.
+Neither a matching process name nor a PID read from a stale file grants permission to kill.
+Manual app restarts reconcile cycle identity; supervisor restarts and unsuccessful recovery
+attempts do not reset B. Retries are bounded to avoid a tight failure loop.
+
+Launching a process is not proof of recovery. New-instance readiness and scheduling/work
+resumption are recorded separately: readiness checks the new app, whereas resumption is observed
+through existing logs and database records. If resumption is not yet observed, report that
+uncertainty rather than claiming success or toggling workflows to manufacture it.
+
+Windows CI runs fake-clock/process fixtures for lifecycle boundaries and both Windows PowerShell
+5.1 and `pwsh`, alongside activity-evidence and isolated dispatcher/deployment fixtures.
+Those fixtures prove source behavior and fake-home file hashes, **not installed-live equivalence
+or an actual unattended restart on the user's machine**.
+
+## Existing fault-triggered recovery
+
+The older classifier still identifies stuck workflow rows, a dead schedule, and pathological
+resource consumption. Process-dead orphans can receive `repair-only`; a hung-alive run,
+schedule-dead app or resource leak can request recovery. Such a request is now gated by the
+same lifecycle executor: verified quiet before B, intentional deadline handling at B, exact
+identity checks and bounded failure retries. The portable resource-detector and mutation checks
+remain in CI; they do not replace the Windows lifecycle tests.
 
 ## Deploy propagation: “merged” is not “running”
 
@@ -260,6 +313,11 @@ Provenance can be perfect while capability is broken.
 </details>
 The runbook in `plugins/overnight-agent/skills/overnight-agent/SKILL.md` extends this to both live
 deploy targets: `installed-plugins` and the flat `%LOCALAPPDATA%\overnight-agent` OA home.
+The supervisor installer and `sync-oa-home.ps1` both include the supervisor, resident daemon,
+lifecycle helper, activity reader, shipped defaults and existing stuck-run repair dependency.
+The flat-home synchronizer also follows relative JavaScript imports. User overrides and runtime
+state are not deployment artifacts. `install-oa-supervisor.ps1 -DeployOnly -OaHome <fixture>`
+permits isolated file-closure verification without registering tasks or starting a daemon.
 Issue #519 records why that matters: the deploy can report `verified-current True` while PHASE 3
 still executes from a stale checkout. Issue #533 records the next split-brain risk: a budget expiry
 can leave the two deploy targets on different refs. Issue #485 adds a measurement warning: a sweep
