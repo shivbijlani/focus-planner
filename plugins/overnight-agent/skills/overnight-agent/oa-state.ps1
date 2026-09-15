@@ -93,15 +93,13 @@
           [-SessionDead]        Record that the session could not be woken. Flips the verdict to
                                 `replace` and arms the continuation kickoff.
           [-SessionWoken]       Record that the run reused this session (stamps last_woken_at).
-          [-ForDispatch]        Reserve an eligible idle session atomically. Internal to the
-                                oa_dispatch tool; -DispatchStart fences the reservation and stamps
-                                the wake immediately before the tool sends the message.
+          [-CheckDispatch]      Check eligibility and pauses without recording a wake.
+          [-ForDispatch]        Check again and stamp the wake before oa_dispatch sends its
+                                start/continue instruction. Being busy does not prevent a nudge.
           [-SessionRelease]     Retire the binding (task finished, workspace torn down). Prints
                                 the teardown command; never runs it.
-          [-InFlight]           Omit -Id for the run-loop capacity view: the resolved
-                                concurrency and reasoned, deduplicated execution membership.
-          [-ActivitySnapshot p] Fresh app activity supplied by oa_capacity / oa_scan / oa_dispatch.
-                                Without it, activity is unknown and dispatch fails closed.
+          [-RunLimit]           Omit -Id to read the configured start/nudge limit per run.
+          [-InFlight]           Legacy alias for -RunLimit. Reports no in-flight count.
           [-Concurrency <n>]    Override the `Overnight Agent concurrency` setting for one call.
   resnapshot                    One-time migration after a change to how journals are decoded
                                 or hashed: re-baseline processed_file_hash for tasks with
@@ -172,17 +170,16 @@
                             reintroduced by the delegation step itself. Inheritance is the
                             default everywhere, so it has to be refused explicitly.
 
-  CONCURRENCY (#391 / #589). Readiness is not execution. Timers, task statuses, document comments
-  and retained bindings never prove a worker is occupied. The plugin's oa_capacity / oa_scan
-  tools query current app activity; oa_dispatch reserves under the same state-store lock and
-  invokes the actual app message tool. Capacity is deduplicated by resolved execution identity.
-  The settings precedence remains -Concurrency > user-settings.md > 1.
+  PER-RUN PACING (#391 / #589; user clarification 2026-09-14). The historical setting
+  `Overnight Agent concurrency` limits automatic START/CONTINUE REQUESTS PER RUN, not workers.
+  Coordinator runs do not overlap on one machine. A later run may nudge an already-busy task
+  or start a different task while previous task sessions continue.
 
-  Pending delivery is recorded only across the admission/transport gap. A reservation expires
-  before it can be sent; a started send does NOT expire into free capacity. It needs a receipt
-  that the target processed that dispatch, or a definite pre-send cancellation. After two
-  minutes an unresolved send is an explicit reconciliation error, not a fictional busy worker
-  or permission to retry. No session or user pause is released to repair accounting.
+  oa_dispatch keeps the request counter in the coordinator session's own files, never in
+  task state. Every scheduled run has a new coordinator session and starts at zero. A reload
+  of that same session retains its counter. Failed/uncertain attempts consume this run's
+  budget only; no cross-run reservation, activity snapshot or delivery receipt is needed.
+  The settings precedence remains -Concurrency > user-settings.md > 1.
 
   CLEANUP is emitted, never performed. `-SessionRelease` prints the teardown command
   (`scripts/remove-worktree.ps1`), because the raw `git worktree remove --force` deletes THROUGH a
@@ -555,17 +552,11 @@ param(
   [string]$RunWorkspace,
   [switch]$SessionDead,
   [switch]$SessionWoken,
-  # The native dispatch tool owns this two-phase protocol. Preparation alone never authorises
-  # a send; a fenced start records the wake (#532) and cannot be repeated or used after expiry.
+  # The native dispatch tool checks first, records its per-run attempt, then stamps the wake
+  # before sending (#532). Neither flag measures whether another task is running.
+  [switch]$CheckDispatch,
   [switch]$ForDispatch,
-  [string]$ActivitySnapshot,
-  [string]$DispatchOwner,
-  [string]$DispatchToken,
-  [string]$WakeKey,
-  [switch]$DispatchStart,
-  [switch]$DispatchAccepted,
-  [switch]$DispatchCancel,
-  [switch]$ReconcileDispatches,
+  [switch]$RunLimit,
   [switch]$SessionRelease,
   # The path of a workspace that has just been REMOVED. Marks any binding pointing at it dead,
   # so the next verdict is `replace` rather than `reuse` at a workspace that is gone (#452).
@@ -744,7 +735,7 @@ function Resolve-GateSettings {
 # The failure direction is deliberate and is the only one that is safe for a pacing control. An
 # absent, unreadable or malformed value yields 1 EXACTLY -- never "unlimited", never the last
 # value seen. A typo can therefore narrow a run; it can never widen one. A value below 1 is
-# clamped to 1, because "hold zero items in flight" is not a pacing setting, it is a stopped run.
+# clamped to 1; disable the workflow separately rather than treating zero as a positive quota.
 #
 # THAT LAST GUARANTEE USED TO BE FALSE, and the way it failed is worth stating because it reads
 # as harmless. The parse was a LEADING-integer match, so that `2 tasks` would work -- but this
@@ -2057,8 +2048,8 @@ function Get-JournalFacts([string]$path) {
     # re-snapshotting the file. That erasure is what lost three of Shiv's messages on #245.
     HasTrailingHuman = (Test-TrailingHasHuman $trailing $consent)
     HasOpenAsk      = (Test-HasOpenAsk $agentLeft)       # visibility: digest must show it
-    # #560: the eligibility reading, WITH its provenance. Capacity independently observes
-    # execution (#589); an ask declaration is not evidence that a worker is occupied.
+    # #560: eligibility WITH its provenance. The per-run counter separately counts requested
+    # starts/continues, never task status or an ask declaration (#589).
     HasBlockingAsk  = [bool]$askVerdict.blocking          # gate: does it stop the run proceeding?
     AskSource       = "$($askVerdict.source)"             # declared | inferred
     AskDeclared     = "$($askVerdict.declared)"           # blocking | offer | none | '' (undeclared)
@@ -2519,11 +2510,6 @@ $script:ClosedStatus = @('done', 'skip')
 # because the agent proposing a plan is also `proposed`.
 $script:PausedStatus = @($script:NonWorkableStatus | Where-Object { $script:ClosedStatus -notcontains $_ })
 
-# Activity expires as evidence, not into free capacity. Delivery reservations have a separate,
-# fenced lease; accepted work never becomes idle merely because either clock elapsed (#589).
-$script:ActivitySnapshotSeconds = 30
-$script:DispatchLeaseSeconds = 120
-
 # WHO closed it (#501). `$script:ClosedStatus` names the closed STATUSES; this names the closed
 # TASKS, and the two are not the same set -- which is the whole bug.
 #
@@ -2889,7 +2875,6 @@ function Get-ScanRows {
     $sessFacts = Get-SessionState $st
     [pscustomobject]@{
       id            = $facts.Id
-      wake_key      = (Get-DispatchWakeKey $st $facts)
       status        = $status
       changed       = $changed
       reopened      = $reopened
@@ -3078,33 +3063,6 @@ function Get-ScanRows {
     }
   }
 
-  $capacity = Get-CapacityView
-  # Include state-only holders as explicitly ineligible audit rows. Otherwise the total could
-  # not be reconciled when a retained binding outlives its journal.
-  foreach ($member in $capacity.members) {
-    foreach ($taskId in $member.task_ids) {
-      if (@($rows | Where-Object { "$($_.id)" -eq $taskId }).Count -eq 0) {
-        $order++
-        $rows = @($rows) + [pscustomobject]@{
-          id = $taskId; status = 'unknown'; order = $order; eligible = $false
-          capacity_only = $true; on_board = $false; section = 'other'
-          session_id = $member.session_id; session_verdict = 'inspect'
-        }
-      }
-    }
-  }
-  foreach ($row in $rows) {
-    $members = @($capacity.members | Where-Object { $_.task_ids -contains "$($row.id)" })
-    $holders = @($members | Where-Object { $_.holds_capacity })
-    $units = @($holders | Where-Object { $_.task_ids[0] -eq "$($row.id)" }).Count
-    Set-Member $row 'holds_capacity' ([bool]($holders.Count -gt 0))
-    Set-Member $row 'capacity_units' ([int]$units)
-    Set-Member $row 'capacity_reason' $(if ($members.Count) { ($members | ForEach-Object { $_.reason } | Select-Object -Unique) -join ',' } else { 'unbound' })
-    Set-Member $row 'capacity_session_ids' @($members | ForEach-Object { $_.session_id })
-    Set-Member $row 'capacity_unknown' ([bool]($capacity.activity_error -or @($members | Where-Object { $_.uncertain }).Count))
-    Set-Member $row 'capacity_error' $capacity.activity_error
-    Set-Member $row 'capacity_snapshot_at' $capacity.observed_at
-  }
   return $rows
 }
 
@@ -4170,10 +4128,8 @@ function Cmd-Doc {
 
     # GH #468 -- a read that did not happen must NOT be recorded as a reading.
     #
-    # `observed_at` is what the capacity park treats as proof the channel was checked and was
-    # silent, so stamping it here on a failed read would launder a dead connection into evidence
-    # of silence -- and the park would then hold the task quiet on the strength of it. State is
-    # therefore left completely untouched: no watermark move, no fresh `observed_at`, so the next
+    # Stamping `observed_at` on a failed read would launder a dead connection into evidence
+    # of silence. State is left completely untouched: no watermark move or fresh stamp, so the next
     # run sees an observation that is stale rather than one that is falsely current.
     if (-not (Test-ObservationReadable $obsText)) {
       $observationUnreadable = $true
@@ -4417,289 +4373,29 @@ function Get-SessionVerdict($sess, $row, $journalFacts) {
   return 'reuse'
 }
 
-
-
-
-
-function Get-DispatchWakeKey($st, $facts) {
-  # Transport timestamps are deliberately excluded. The same worklist input has one wake,
-  # even if a racing coordinator refreshes after the first worker already finished.
-  $inputState = [ordered]@{
-    journal = "$($facts.FullHash)"; status = "$($st.status)"; status_by = "$($st.status_by)"
-    version = "$($st.version)"; plan_id = "$($st.plan_id)"
-    poll = ConvertTo-IsoText $st.poll.next_due
-    recheck = ConvertTo-IsoText $st.recheck.next_due
-    comments = @($st.doc.pending_ids | Sort-Object -Unique)
-  }
-  $sha = [Security.Cryptography.SHA256]::Create()
-  try {
-    $bytes = [Text.Encoding]::UTF8.GetBytes(($inputState | ConvertTo-Json -Depth 4 -Compress))
-    return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
-  }
-  finally { $sha.Dispose() }
-}
-
-function Get-CapacityGeneration {
-  $path = Join-Path $StateDir 'capacity-generation.json'
-  if (-not (Test-Path -LiteralPath $path)) { return 'initial' }
-  $value = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
-  if ("$($value.generation)" -notmatch '^[a-f0-9]{32}$') { throw 'capacity_generation_invalid: cannot fence an unreadable admission generation' }
-  return "$($value.generation)"
-}
-
-function Advance-CapacityGeneration {
-  Ensure-StateDir
-  # A fencing nonce, not an occupied-worker counter. Advance BEFORE removing evidence so
-  # an observer that still says idle cannot outlive the receipt that protected that slot.
-  Write-JsonAtomic (Join-Path $StateDir 'capacity-generation.json') @{
-    generation = [guid]::NewGuid().ToString('N')
-  }
-}
-
-function Read-ActivityEvidence {
-  $byBinding = @{}; $receipts = @{}; $observed = $null; $warnings = @()
-  $problem = 'activity_snapshot_required: use oa_capacity, oa_scan or oa_dispatch to query the app'
-  if ($ActivitySnapshot) {
-    try {
-      $data = Get-Content -LiteralPath $ActivitySnapshot -Raw -Encoding UTF8 | ConvertFrom-Json
-      if ($data.schema_version -ne 1 -or $data.source -ne 'copilot-app') { throw 'unsupported activity snapshot' }
-      $generation = if ($data.generation) { "$($data.generation)" } else { 'initial' }
-      if ($generation -ne $script:CapacityReadGeneration) { throw 'session_snapshot_changed: refresh activity after admission or reconciliation' }
-      $observed = [datetimeoffset]::Parse((ConvertTo-IsoText $data.observed_at))
-      $age = ([datetimeoffset]::UtcNow - $observed).TotalSeconds
-      if ($age -lt 0 -or $age -gt $script:ActivitySnapshotSeconds) { throw 'activity snapshot is stale or future-dated' }
-      if (-not $data.PSObject.Properties['sessions']) { throw 'activity snapshot has no sessions array' }
-      foreach ($item in @($data.sessions)) {
-        if (-not "$($item.binding_id)" -or -not "$($item.session_id)" -or
-            @('busy', 'idle', 'waiting', 'unknown') -notcontains "$($item.status)") { throw 'invalid session activity' }
-        if ($byBinding.ContainsKey("$($item.binding_id)")) { throw 'duplicate binding in activity snapshot' }
-        $byBinding["$($item.binding_id)"] = $item
-      }
-      foreach ($receipt in @($data.receipts)) {
-        if ($receipt -and "$($receipt.dispatch_id)") { $receipts["$($receipt.dispatch_id)"] = $receipt }
-      }
-      if ($data.warnings) { $warnings = @($data.warnings) }
-      $problem = if ($data.error) { "app_activity_unavailable: $($data.error)" } else { $null }
-    }
-    catch {
-      $problem = "activity_snapshot_invalid: $($_.Exception.Message)"
-      $byBinding = @{}; $receipts = @{}
-    }
-  }
-  [pscustomobject]@{ sessions = $byBinding; receipts = $receipts; observed_at = $observed; error = $problem; warnings = $warnings }
-}
-
-function Read-DispatchRecords {
-  if (-not (Test-Path -LiteralPath $StateDir)) { return }
-  foreach ($file in (Get-ChildItem -LiteralPath $StateDir -Filter 'dispatch-*.json' -File)) {
-    try {
-      $record = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
-      if ("$($record.dispatch_id)" -notmatch '^[a-f0-9]{32}$' -or
-          $file.BaseName -ne "dispatch-$($record.dispatch_id)" -or
-          -not "$($record.execution_id)" -or -not "$($record.task_id)" -or
-          @('reserved', 'sending', 'accepted', 'cancelled', 'observed') -notcontains "$($record.state)") {
-        throw 'invalid dispatch record'
-      }
-      [void][datetimeoffset]::Parse((ConvertTo-IsoText $record.deadline))
-      if ($record.state -eq 'observed') { [void][datetimeoffset]::Parse((ConvertTo-IsoText $record.retain_until)) }
-      $record
-    }
-    catch {
-      [pscustomobject]@{
-        dispatch_id = $file.BaseName; task_id = $file.BaseName; execution_id = $file.BaseName
-        state = 'invalid'; error = "dispatch_record_unreadable: $($file.Name): $($_.Exception.Message)"
-      }
-    }
-  }
-}
-
-function New-CapacityMember([string]$sessionId, $activity) {
-  $status = if ($activity) { "$($activity.status)" } else { 'unknown' }
-  $unknown = $status -eq 'unknown'
+function Get-RunLimit {
   [pscustomobject]@{
-    session_id = $sessionId; task_ids = @(); binding_ids = @()
-    activity_status = $status
-    holds_capacity = [bool]($status -eq 'busy' -or $unknown)
-    uncertain = [bool]$unknown
-    reason = if ($unknown) { 'activity_unknown' } else { "app_$status" }
-    detail = if ($activity) { "$($activity.detail)" } else { 'No current app observation for this binding.' }
-    dispatch_ids = @(); reconcile_by = $null
-    recovery = if ($unknown) { 'Refresh oa_capacity; inspect the named session with get_session if still unknown. Do not release its binding or assume it is idle.' } else { $null }
+    scope = 'per_run'
+    dispatch_limit = [int]$script:ConcurrencyLimit
+    limit_source = "$script:ConcurrencySource"
+    # Retained for settings-reader compatibility, not a simultaneous-worker promise.
+    concurrency = [int]$script:ConcurrencyLimit
+    concurrency_source = "$script:ConcurrencySource"
+    note = 'Limit counts start/continue attempts per coordinator run. Use oa_run_budget for the current run counter; saved sessions and running tasks do not consume a new run budget.'
   }
 }
 
-function Get-CapacityView {
-  # Task status, due timers and wake age deliberately do not occur in this predicate (#589).
-  # Actual activity is authoritative even for an off-board, paused or Deferred task.
-  $evidence = Read-ActivityEvidence
-  $groups = [ordered]@{}
-  if (Test-Path -LiteralPath $StateDir) {
-    foreach ($file in (Get-ChildItem -LiteralPath $StateDir -Filter 'task-*.json' -File | Sort-Object Name)) {
-      $taskId = $file.BaseName.Substring(5)
-      try {
-        $state = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
-        if (-not $state.session) { continue }
-        $bindingId = "$($state.session.session_id)"
-        if (-not $bindingId) { throw 'binding has no session id' }
-        $activity = $evidence.sessions[$bindingId]
-        $key = if ($activity) { "$($activity.session_id)" } else { $bindingId }
-        if (-not $groups.Contains($key)) { $groups[$key] = New-CapacityMember $key $activity }
-        $member = $groups[$key]
-        if ($member.activity_status -ne $(if ($activity) { "$($activity.status)" } else { 'unknown' })) {
-          $member.holds_capacity = $true; $member.uncertain = $true
-          $member.reason = 'conflicting_activity'; $member.activity_status = 'unknown'
-        }
-        $member.task_ids = @($member.task_ids + $taskId | Select-Object -Unique)
-        $member.binding_ids = @($member.binding_ids + $bindingId | Select-Object -Unique)
-      }
-      catch {
-        $key = "state:$taskId"
-        $groups[$key] = New-CapacityMember $key $null
-        $groups[$key].task_ids = @($taskId)
-        $groups[$key].reason = 'state_unreadable'
-        $groups[$key].detail = "$($file.Name): $($_.Exception.Message)"
-      }
-    }
-  }
-
-  $resolved = @(); $pending = 0
-  foreach ($record in @(Read-DispatchRecords)) {
-    $receipt = $evidence.receipts["$($record.dispatch_id)"]
-    $expired = $record.state -ne 'invalid' -and
-      [datetimeoffset]::UtcNow -ge [datetimeoffset]::Parse((ConvertTo-IsoText $record.deadline))
-    # Expiry fences a reservation that never started. Once sending, time is not cancellation.
-    $finished = @('cancelled', 'observed') -contains "$($record.state)" -or ($record.state -eq 'reserved' -and $expired)
-    $activity = $evidence.sessions["$($record.execution_id)"]
-    if (-not $evidence.error -and $receipt -and
-        ($receipt.status -eq 'completed' -or ($receipt.status -eq 'started' -and
-          $activity -and @('busy', 'waiting') -contains "$($activity.status)"))) { $finished = $true }
-    if ($finished) { $resolved += "$($record.dispatch_id)"; continue }
-
-    $pending++
-    $key = "$($record.execution_id)"
-    if (-not $groups.Contains($key)) { $groups[$key] = New-CapacityMember $key $evidence.sessions[$key] }
-    $member = $groups[$key]
-    $member.task_ids = @($member.task_ids + "$($record.task_id)" | Select-Object -Unique)
-    $member.dispatch_ids += "$($record.dispatch_id)"
-    $member.reconcile_by = if ($record.deadline) { ConvertTo-IsoText $record.deadline } else { $null }
-    $member.holds_capacity = $true
-    if ($expired -or $record.state -eq 'invalid') {
-      $member.uncertain = $true; $member.reason = 'dispatch_reconciliation_required'
-      $member.detail = if ($record.error) { "$($record.error)" } else { 'Delivery deadline passed without proof this dispatch was processed.' }
-      $member.recovery = "Inspect dispatch $($record.dispatch_id) in the target session and sender tool history; refresh oa_capacity after receipt recovery. Do not resend, expire a started send, or clear bindings."
-    }
-    else {
-      $member.reason = 'pending_dispatch'
-      $member.detail = "Dispatch $($record.dispatch_id) is $($record.state); idle app status alone does not cancel an accepted wake. $($receipt.detail)"
-    }
-  }
-  $members = @($groups.Values)
-  foreach ($member in $members) { $member.task_ids = @($member.task_ids | Sort-Object) }
-  $held = @($members | Where-Object { $_.holds_capacity }).Count
-  $unknown = @($members | Where-Object { $_.uncertain }).Count
-  $blocked = [bool]($evidence.error -or $unknown -gt 0)
-  [pscustomobject]@{
-    concurrency = [int]$script:ConcurrencyLimit; concurrency_source = "$script:ConcurrencySource"
-    in_flight = [int]$held
-    actual_busy = [int](@($members | Where-Object { $_.activity_status -eq 'busy' }).Count)
-    pending_dispatches = [int]$pending; unknown_count = [int]$unknown
-    at_capacity = [bool]($blocked -or $held -ge $script:ConcurrencyLimit)
-    admits = if ($blocked) { 0 } else { [int][Math]::Max(0, $script:ConcurrencyLimit - $held) }
-    requires_attention = $blocked; activity_error = $evidence.error
-    activity_warnings = @($evidence.warnings)
-    observed_at = if ($evidence.observed_at) { $evidence.observed_at.ToString('o') } else { $null }
-    members = $members; resolved_dispatches = @($resolved)
-  }
-}
-
-function Dispatch-Path([string]$token) {
-  if ($token -notmatch '^[a-f0-9]{32}$') { throw 'session_dispatch_token_invalid' }
-  Join-Path $StateDir "dispatch-$token.json"
-}
-
-function Reconcile-DispatchRecords($capacity) {
-  foreach ($token in $capacity.resolved_dispatches) {
-    $path = Dispatch-Path $token
-    $record = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($record.state -eq 'observed' -and
-        [datetimeoffset]::UtcNow -lt [datetimeoffset]::Parse((ConvertTo-IsoText $record.retain_until))) { continue }
-    Advance-CapacityGeneration
-    if (@('sending', 'accepted') -contains "$($record.state)") {
-      # A short-lived non-capacity receipt makes a racing post-send acknowledgment idempotent.
-      # It is not a busy ledger and is garbage-collected after 15 minutes.
-      $record.state = 'observed'
-      Set-Member $record 'retain_until' ([datetimeoffset]::UtcNow.AddMinutes(15).ToString('o'))
-      Write-JsonAtomic $path $record
-    }
-    else { Remove-Item -LiteralPath $path -Force }
-  }
-}
-
-function Get-DispatchTarget($st, $sess, $facts) {
+function Assert-TaskDispatch($st, $sess, $facts) {
   if ((Get-SessionVerdict $sess $st $facts) -ne 'reuse') {
-    throw 'session_not_dispatchable: resolve the session verdict first; paused tasks cannot be woken'
+    throw 'session_not_dispatchable: resolve the saved session first; paused tasks cannot be woken'
   }
   $row = @(Get-ScanRows | Where-Object { "$($_.id)" -eq "$($st.id)" }) | Select-Object -First 1
-  if (-not $row -or -not $row.eligible) { throw 'session_not_eligible: follow the current Today-first worklist' }
-  if ($WakeKey -and $WakeKey -ne "$($row.wake_key)") {
-    throw 'session_worklist_changed: inspect the new task input before sending the old brief'
+  if (-not $row -or -not $row.eligible -or $row.session_paused) {
+    throw 'session_not_eligible: follow the current Today-first worklist and user pauses'
   }
   if ($Force -and -not ($row.unanswered_user -or $row.doc_new_comments -gt 0)) {
-    throw 'session_collect_evidence_required: fold the human reply into its journal or observe the human doc comment first'
+    throw 'session_collect_evidence_required: fold the human reply or observe the human doc comment first'
   }
-  $evidence = Read-ActivityEvidence
-  if ($evidence.error) { throw "session_activity_unavailable: $($evidence.error)" }
-  $activity = $evidence.sessions["$($sess.session_id)"]
-  if (-not $activity -or $activity.status -eq 'unknown') { throw 'session_activity_unknown: refresh the app observation; do not guess' }
-  if ($activity.status -ne 'idle') { throw "session_already_active: $($activity.session_id) is $($activity.status)" }
-  Set-Member $activity 'wake_key' "$($row.wake_key)"
-  return $activity
-}
-
-function Set-DispatchPhase($st, $sess, $facts) {
-  $path = Dispatch-Path $DispatchToken
-  if (-not (Test-Path -LiteralPath $path)) { throw 'session_dispatch_token_missing' }
-  $record = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
-  if ("$($record.task_id)" -ne $Id -or -not $DispatchOwner -or "$($record.owner_session_id)" -ne $DispatchOwner) {
-    throw 'session_dispatch_owner_mismatch'
-  }
-  if ($DispatchStart) {
-    if ($record.state -ne 'reserved') { throw 'session_dispatch_token_spent' }
-    if ([bool]$record.collect_wave -ne [bool]$Force) { throw 'session_dispatch_wave_mismatch' }
-    if ([datetimeoffset]::UtcNow -ge [datetimeoffset]::Parse((ConvertTo-IsoText $record.deadline))) {
-      throw 'session_dispatch_token_expired'
-    }
-    $activity = Get-DispatchTarget $st $sess $facts
-    if ("$($activity.session_id)" -ne "$($record.execution_id)") { throw 'session_dispatch_identity_changed' }
-    if ("$($activity.wake_key)" -ne "$($record.wake_key)") { throw 'session_worklist_changed: the reserved task input changed before send' }
-    $capacity = Get-CapacityView
-    if ($capacity.requires_attention) { throw 'session_activity_unknown: admission cannot proceed while membership is uncertain' }
-    if (-not $Force -and $capacity.in_flight -gt $script:ConcurrencyLimit) { throw 'session_at_capacity: capacity changed before send' }
-    Set-Member $record 'previous_wake' $sess.last_woken_at
-    Set-Member $record 'wake_at' ([datetimeoffset]::UtcNow.ToString('o'))
-    $record.state = 'sending'
-  }
-  elseif ($DispatchAccepted) {
-    if (@('sending', 'accepted', 'observed') -notcontains "$($record.state)") { throw 'session_dispatch_token_spent' }
-    if ($record.state -eq 'sending') { $record.state = 'accepted' }
-    Set-Member $record 'acknowledged_at' ([datetimeoffset]::UtcNow.ToString('o'))
-  }
-  elseif ($DispatchCancel) {
-    if (@('reserved', 'sending') -notcontains "$($record.state)") { throw 'session_dispatch_not_cancellable' }
-    # Only the wrapper's definite BEFORE-send failure / native denial may cancel. A timeout
-    # or a lost response is ambiguous and must leave the sending record for reconciliation.
-    $record.state = 'cancelled'
-    if ($sess -and $record.wake_at -and
-        (ConvertTo-IsoText $sess.last_woken_at) -eq (ConvertTo-IsoText $record.wake_at)) {
-      Set-Member $sess 'last_woken_at' (ConvertTo-IsoText $record.previous_wake)
-      Set-Member $st 'session' $sess
-      $st.updated = Now-Iso
-      Write-State $st
-    }
-  }
-  Advance-CapacityGeneration
-  Write-JsonAtomic $path $record
-  return $record
 }
 
 function Get-KickoffContinuation([string]$taskId, [string]$priorId) {
@@ -4712,6 +4408,10 @@ function Get-KickoffContinuation([string]$taskId, [string]$priorId) {
 }
 
 function Cmd-Session {
+  if (($CheckDispatch -or $ForDispatch) -and (-not $Id -or
+      ($CheckDispatch -and $ForDispatch) -or $SessionId -or $SessionDead -or $SessionRelease -or $SessionWoken -or $WorkspaceGone)) {
+    throw 'session_dispatch_flags_conflict: use -Id with exactly one dispatch-check flag'
+  }
   # ---- workspace teardown: `session -WorkspaceGone <path>`, no -Id -----------------------
   #
   # The other half of #452, and it is NOT the half `Get-SessionVerdict` can cover. Measured
@@ -4770,10 +4470,10 @@ function Cmd-Session {
       } | ConvertTo-Json -Depth 4)
   }
 
-  # ---- capacity view: `session -InFlight`, no -Id ----------------------------------------
+  # No task/session enumeration: this is a per-run request limit, not an occupancy estimate.
   if (-not $Id) {
-    if (-not $InFlight) { throw 'session requires -Id (or -InFlight for the capacity view, or -WorkspaceGone for teardown)' }
-    return (Get-CapacityView | ConvertTo-Json -Depth 8)
+    if (-not ($RunLimit -or $InFlight)) { throw 'session requires -Id (or -RunLimit, or -WorkspaceGone for teardown)' }
+    return (Get-RunLimit | ConvertTo-Json -Depth 4)
   }
 
   $st = Read-State $Id
@@ -4793,63 +4493,9 @@ function Cmd-Session {
   $dirty = $false
   $released = $false
 
-  $dispatchFlags = @($ForDispatch, $DispatchStart, $DispatchAccepted, $DispatchCancel) | Where-Object { $_ }
-  if (@($dispatchFlags).Count -gt 1 -or (@($dispatchFlags).Count -and
-      ($SessionId -or $SessionDead -or $SessionRelease -or $SessionWoken))) {
-    throw 'session_dispatch_flags_conflict'
-  }
-  if ($DispatchAccepted -or $DispatchCancel) {
-    return (Set-DispatchPhase $st $sess $pauseFacts | ConvertTo-Json -Depth 8)
-  }
-  if ($ForDispatch) {
-    if (-not $DispatchOwner) { throw 'session_dispatch_owner_required: use oa_dispatch, not a bare dispatching read' }
-    $activity = Get-DispatchTarget $st $sess $pauseFacts
-    $capacity = Get-CapacityView
-    if ($capacity.requires_attention) { throw 'session_activity_unknown: inspect the capacity members before dispatching' }
-    $target = @($capacity.members | Where-Object { $_.session_id -eq $activity.session_id }) | Select-Object -First 1
-    if ($target -and @($target.dispatch_ids).Count) { throw 'session_dispatch_pending: this execution already has an unresolved wake' }
-    $key = "$($activity.wake_key)"
-    $delivered = @(Read-DispatchRecords | Where-Object {
-        "$($_.task_id)" -eq $Id -and "$($_.wake_key)" -eq $key -and (
-          ($_.state -eq 'observed' -and [datetimeoffset]::UtcNow -lt [datetimeoffset]::Parse((ConvertTo-IsoText $_.retain_until))) -or
-          (@('sending', 'accepted') -contains "$($_.state)" -and $capacity.resolved_dispatches -contains "$($_.dispatch_id)")
-        )
-      }) | Select-Object -First 1
-    if ($delivered) {
-      Reconcile-DispatchRecords $capacity
-      return ([pscustomobject]@{
-        id = $Id; session_id = $delivered.execution_id; dispatch_id = $delivered.dispatch_id
-        accepted = $true; dispatch_already_delivered = $true; dispatch_authorised = $false
-      } | ConvertTo-Json -Depth 4)
-    }
-    if (-not $Force -and $capacity.admits -le 0) { throw 'session_at_capacity: no scheduled admission available' }
-    if (-not $activity.log_cursor -or $activity.log_cursor.error) {
-      throw 'session_dispatch_receipt_unavailable: target event history must be readable before sending'
-    }
-    Ensure-StateDir
-    Reconcile-DispatchRecords $capacity
-    $token = [guid]::NewGuid().ToString('N')
-    $record = [pscustomobject]@{
-      dispatch_id = $token; task_id = $Id; binding_id = "$($sess.session_id)"
-      execution_id = "$($activity.session_id)"; owner_session_id = $DispatchOwner
-      wake_key = $key
-      state = 'reserved'; created_at = [datetimeoffset]::UtcNow.ToString('o')
-      deadline = [datetimeoffset]::UtcNow.AddSeconds($script:DispatchLeaseSeconds).ToString('o')
-      log_cursor = $activity.log_cursor; collect_wave = [bool]$Force
-    }
-    Advance-CapacityGeneration
-    Write-JsonAtomic (Dispatch-Path $token) $record
-    return ([pscustomobject]@{
-      id = $Id; session_id = $record.execution_id; dispatch_id = $token
-      dispatch_reserved = $true; dispatch_authorised = $false; deadline = $record.deadline
-    } | ConvertTo-Json -Depth 4)
-  }
-  if ($DispatchStart) {
-    $record = Set-DispatchPhase $st $sess $pauseFacts
-  }
+  if ($CheckDispatch -or $ForDispatch) { Assert-TaskDispatch $st $sess $pauseFacts }
 
   if ($SessionRelease) {
-    Advance-CapacityGeneration
     $sess = $null
     Set-Member $st 'session' $null
     $st.updated = Now-Iso
@@ -4922,16 +4568,15 @@ function Cmd-Session {
       -Workspace $workspace -WsType $wsType -CreatedAt $created `
       -LastWokenAt $(if ($sess -and "$($sess.session_id)" -eq $SessionId) { $sess.last_woken_at } else { '' }) `
       -SessionState 'live' -PriorSessionId $prior -ReplacedAt $replacedAt
-    Advance-CapacityGeneration
     $dirty = $true
   }
 
-  if ($SessionWoken -or $DispatchStart) {
+  if ($SessionWoken -or $ForDispatch) {
     if (-not $sess) { throw "session_not_bound: task $Id has no session to wake" }
     if (Test-UserPaused $st $pauseFacts) { throw 'session_user_paused: cannot stamp a wake for a paused task' }
     $sess = New-SessionObject -SessionIdValue "$($sess.session_id)" -Kind "$($sess.kind)" `
       -Project "$($sess.project)" -Workspace "$($sess.workspace)" -WsType "$($sess.workspace_type)" `
-      -CreatedAt $sess.created_at -LastWokenAt $(if ($DispatchStart) { $record.wake_at } else { Now-Iso }) -SessionState 'live' `
+      -CreatedAt $sess.created_at -LastWokenAt (Now-Iso) -SessionState 'live' `
       -PriorSessionId "$($sess.prior_session_id)" -ReplacedAt $sess.replaced_at
     $dirty = $true
   }
@@ -4943,17 +4588,14 @@ function Cmd-Session {
   }
 
   $verdict = Get-SessionVerdict $sess $st $pauseFacts
-  $capacity = Get-CapacityView
   [pscustomobject]@{
     id             = $Id
     bound          = [bool]$sess
     session_id     = if ($sess) { "$($sess.session_id)" } else { $null }
     # create | reuse | replace | paused. The run loop acts on THIS, not on `bound`.
     verdict        = $verdict
-    # Only the wrapper's single-use, fenced start authorises its immediately following send.
-    # Inspection, binding and an expiring preparation never stamp or authorise a wake.
-    dispatch_authorised = [bool]$DispatchStart
-    dispatch_id    = if ($DispatchStart) { $record.dispatch_id } else { $null }
+    dispatch_authorised = [bool]$ForDispatch
+    dispatch_eligible = [bool]($CheckDispatch -or $ForDispatch)
     state          = if ($sess) { "$($sess.state)" } else { $null }
     kind           = if ($sess) { "$($sess.kind)" } else { $null }
     project        = if ($sess -and "$($sess.project)") { "$($sess.project)" } else { $null }
@@ -4982,12 +4624,9 @@ function Cmd-Session {
     else { $null }
     concurrency    = [int]$script:ConcurrencyLimit
     concurrency_source = "$script:ConcurrencySource"
-    in_flight      = $capacity.in_flight
-    at_capacity    = $capacity.at_capacity
-    admits         = $capacity.admits
-    requires_attention = $capacity.requires_attention
-    activity_error = $capacity.activity_error
-    members        = $capacity.members
+    budget_scope   = 'per_run'
+    dispatch_limit = [int]$script:ConcurrencyLimit
+    limit_source   = "$script:ConcurrencySource"
   } | ConvertTo-Json -Depth 8
 }
 
@@ -5337,9 +4976,12 @@ function Cmd-Mark {
   $st | ConvertTo-Json -Depth 6
 }
 
-# One OS-owned lock protects the read/check/write, not just the final write. It releases on
-# process death; there is no lock-file TTL that could unlock a slow but live coordinator.
-# All state writers participate so a concurrent mark/doc observation cannot erase a binding.
+# Task agents can still update state during a coordinator run. Serialize state read/modify/write
+# so their marks and doc observations cannot erase a binding. This is file integrity, not a
+# lock or reservation against starting work in another run.
+if (($CheckDispatch -or $ForDispatch -or $RunLimit) -and $Command -ne 'session') {
+  throw 'session_flag_command: dispatch checks and run-limit reads belong to the session command'
+}
 $lockPath = [IO.Path]::GetFullPath($StateDir).TrimEnd([char[]]'\/')
 if ($env:OS -eq 'Windows_NT') { $lockPath = $lockPath.ToLowerInvariant() }
 $sha = [Security.Cryptography.SHA256]::Create()
@@ -5351,17 +4993,8 @@ try {
   try { $locked = $mutex.WaitOne(10000) }
   catch [Threading.AbandonedMutexException] { $locked = $true }
   if (-not $locked) { throw 'state_lock_timeout: another state operation is still running; retry rather than bypassing admission' }
-  # Fixed for this critical section. Our own writes may advance the nonce; other writers
-  # cannot enter until we leave, so the snapshot remains valid for our own resulting view.
-  $script:CapacityReadGeneration = Get-CapacityGeneration
   Resolve-GateSettings
   Resolve-PacingSettings
-  if ($ReconcileDispatches) {
-    if ($Command -ne 'scan' -and -not ($Command -eq 'session' -and $InFlight -and -not $Id)) {
-      throw 'dispatch_reconcile_command: use oa_capacity or oa_scan'
-    }
-    Reconcile-DispatchRecords (Get-CapacityView)
-  }
   switch ($Command) {
     'seed' { Cmd-Seed }
     'scan' { Cmd-Scan }

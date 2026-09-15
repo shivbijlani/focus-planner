@@ -467,28 +467,22 @@ user has spoken after your last turn:
 
 Do the phases **in this order** every time.
 
-> **Pacing — how MUCH a run takes on (#391).** Everything else in this section decides *what* to
-> work on next; none of it decides *how much*, and an ordered worklist says nothing about that. A
-> run is bounded twice over — by the context it may spend, and by the wall-clock before the next
-> `*/30` run. #404 gives you the capacity view; these are the three rules that govern using it.
+> **Pacing — starts and nudges PER RUN (#391 / #589).** The historical setting
+> `Overnight Agent concurrency` now means the number of automatic start/continue requests a
+> coordinator run may make. **Coordinator runs do not overlap on the same machine. Task sessions
+> MAY overlap across runs, and repeated nudges to a saved task session are acceptable.**
 >
-> 1. **One item in flight, by default.** The limit is the user's
->    (`user-settings.md` → `## Overnight Agent behaviour`), and it is **1** unless he says
->    otherwise. Read it from **`oa_capacity`**, never assume it. ⚠️ **Giving an item its own
->    session is ISOLATION, not concurrency** — it is *where* that item's work happens, not
->    permission to have three of them running. An item already dispatched and still working
->    **counts against the limit**; you do not get a free second item because the first one is
->    elsewhere.
-> 2. **Estimate before starting another.** Use the rate you actually observed **this run**, not an
->    optimistic one, against the time left before the next scheduled run. **Starting what you
->    cannot finish is worse than ending early.** An unfinished item costs a half-written branch, a
->    half-true report, and a reader who has to work out which half is which. Ending early costs
->    nothing: the worklist is data, and the next run recomputes the same order unchanged.
-> 3. **Done means verified and published, not code written.** Tests green, the deliverable written
->    where the user will see it, the journal updated. Code sitting in a working tree is not
->    progress, and counting it as progress is how a run reports more than it delivered.
+> 1. **One automatic request per run by default.** Read `oa_run_budget`; its counter starts at
+>    zero in each new coordinator session. A task started at 10:00 does not consume the 10:30
+>    allowance, even if it is still working. The 10:30 run may nudge it again or start another task.
+> 2. **Use `oa_dispatch` for each request.** It counts the attempt before sending and serializes
+>    this run's calls. A failed or uncertain attempt still uses this run's allowance; it creates
+>    no reservation in the next run. Reading the budget or reloading tools never resets it.
+> 3. **Coordinator completion is not task completion.** The run may finish after dispatching
+>    while task agents keep working. Report them as started/continuing, not finished. A task is
+>    only done when its result is verified, published where needed, and its journal updated.
 >
-> **Read `concurrency_source`, and say what it says.** `settings-malformed` means he wrote a value
+> **Read `limit_source`, and say what it says.** `settings-malformed` means he wrote a value
 > and it did **not** parse — so the run is at 1 *by accident*, not by his choice. Quote the row in
 > the wrap-up; silence there is indistinguishable from agreement. The setting always fails
 > **narrow** (absent, unreadable, malformed, zero and negative all yield 1), so a broken value can
@@ -503,14 +497,15 @@ Do the phases **in this order** every time.
 > compound, it does not raise the setting, and it changes *when* a task is woken, never *where* its
 > work happens.
 >
-> Guarded by `mutcheck-pacing-concurrency.ps1`. Published spec: `docs/spec/Prioritisation.md` §4.
+> The scheduled workflow already creates a new coordinator session per run. Use a new run
+> session for a manual rerun too; do not delete or reset the current run's counter.
+> Guarded by `oa-dispatch.test.mjs` and `mutcheck-pacing-concurrency.ps1`.
 
 > **Telegram mirror runs last.** PHASE 3 mirrors the journals to Telegram *after* PHASE 1/2 have written
 > your turns, so a task's thread reflects the work you just did. It's gated on `user-settings.md → Telegram`.
 
 > **Scan first (applies to PHASE 1 *and* PHASE 2):** before judging any task, run
-> **`oa_scan`** once and use its JSON as your worklist. It invokes the same `oa-state.ps1 scan`
-> with fresh app activity and reconciles delivery receipts. Each row tells you what changed and
+> **`oa-state.ps1 scan`** once and use its JSON as your worklist. Each row tells you what changed and
 > what's `reopened` (the user spoke after your last turn — active again) or
 > `snoozed` (skip it). A reply on a task the user **closed** comes back `reopened_closed` and
 > `eligible: false` — report it, never work it (see "Reopened after close"). Don't
@@ -1007,13 +1002,9 @@ dropped); it is quiet on a healthy loop. **Report a non-zero count in the wrap-u
 ### PHASE 1 — Dispatch approved plans to each task's own session
 
 ⛔ **The run session does not do task work.** It collects, orders, dispatches and reports. The work
-of a task happens in a **session dedicated to that task**, in **that task's own workspace**. This is
-not a style preference — measured live on 2026-09-02 against task #451, the run read the journal,
-edited four deliverable files and wrote the turn entirely inside the main overnight-agent session:
-nothing was isolated, nothing recorded where the work happened, and the next run cold-started the
-same task. #391 already states the rule — *"per-item sub-sessions are isolation, not concurrency:
-one task, one workspace, one thing being verified at a time"* — and this is the mechanism under it
-(#404).
+of a task happens in a **session dedicated to that task**, in **that task's own workspace** (#404).
+This preserves its history across runs. Isolation does not require previous task sessions to
+finish before the next coordinator run can start more work.
 
 1. From the `scan` worklist — **taken in the order it returned, skipping `eligible: false` rows** —
    collect tasks whose stored `status` is `approved` (also continue any
@@ -1023,44 +1014,22 @@ one task, one workspace, one thing being verified at a time"* — and this is th
    **Also pick up any row with `due_poll: true`** — a time-triggered recurring check that's now due
    (see "Polling"). Run its check, then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone`.
 
-2. **Use `oa_capacity` before the wave and `oa_dispatch` for EVERY task wake.** These plugin tools
-   query **`get_sessions_status`**, resolve missing/alias IDs with **`get_session`**, and use the
-   same capacity reader as `scan`. `admits` is advisory; `oa_dispatch` rechecks under an OS-owned
-   state-store lock, so two coordinators cannot spend the same slot or wake one execution twice.
+2. **Use `oa_run_budget` before the wave and `oa_dispatch` for EVERY task wake.** The budget
+   reports `limit`, `attempted_this_run`, `remaining_this_run`, and the counted task requests.
+   This is a counter of start/continue attempts, **not** busy tasks or saved conversations.
    **Do not use raw `send_session_message`, a kickoff on `create_session`, or hand-written
    `-ForDispatch` / `-SessionWoken` calls for task dispatch.** If these plugin tools are missing,
-   report the missing capability and stop dispatch; do not fall back to the old path.
+   report the missing capability and stop dispatch rather than bypassing the counter.
 
-   **Readiness is not occupied execution.** An overdue poll/recheck, a retained conversation, a
-   task status, or a wake timestamp never reserves a worker. A fresh app `busy` reading does,
-   including for Deferred/off-board tasks or work started directly by the user. Idle retained
-   sessions occupy nothing, even when due. An app-owned human-input/plan gate is waiting, not
-   executing, and cannot be woken again. Bindings and user pauses remain intact.
+   **Do not wait for earlier task sessions to become idle.** A busy session may receive another
+   continue instruction, and a different task may start while it works. Normal requests stop when
+   `remaining_this_run` reaches zero. There is no cross-run activity, pending-delivery or receipt
+   gate. An unsuccessful attempt is reported as unconfirmed, not as successful work.
 
-   **Read the membership, not just the scalar.** Capacity returns every execution's task IDs,
-   activity, inclusion/exclusion reason and pending dispatch IDs. Aliases and duplicate task
-   bindings count once; `scan.capacity_units` sums to `in_flight`, including explicitly
-   ineligible state-only audit rows. `actual_busy` is observed activity; `in_flight` also includes
-   conservatively charged pending/unknown members and is NOT proof of simultaneous execution.
-
-   **Unknown is visible and fails closed.** Activity is fresh for 30 seconds and fenced by the
-   admission generation: retiring a receipt invalidates older snapshots. Refresh the tools
-   rather than assuming a missing/stale/unknown session is idle. Admission has a two-minute
-   preparation lease; an expired token can never send. Once sending starts, a lost response or
-   accepted-but-not-running wake stays reserved until the target's matching interaction is
-   observed. At two minutes without that evidence, `dispatch_reconciliation_required` names the
-   token, target and recovery action. Report it in the wrap-up and inspect target/sender history;
-   never blindly resend, clear bindings, or expire a possibly accepted message. Each subsequent
-   `oa_capacity` / `oa_scan` retries reconciliation; known-started/finished receipts stop occupying
-   capacity immediately. A non-capacity receipt remains for 15 minutes to absorb late acknowledgments.
-   `accepted` with a receipt warning is still an accepted send, never a reason to send again.
-
-   The **collect wave** remains the only admission-cap exception: pass `collect_wave: true` to
+   The **collect wave** remains the explicit per-run budget exception: pass `collect_wave: true` to
    `oa_dispatch` for a human-triggered reply. Fold inbox/Telegram replies into the journal first,
-   or observe the human's doc comment, so the exception has machine-readable provenance. It
-   never bypasses eligibility, an explicit pause, an active target, a duplicate wake or unknown
-   activity. Direct human-started overlap can exceed the cap; scheduled admissions cannot use
-   that overlap as permission to start more.
+   or observe the human's doc comment. It never bypasses eligibility or an explicit pause.
+   `collect_attempted_this_run` reports those extra requests separately.
 
 3. **For each task, resolve its session before doing anything else** — never create one on a hunch:
 
@@ -1078,8 +1047,8 @@ one task, one workspace, one thing being verified at a time"* — and this is th
      `released: false` and `last_woken_at` are each accurate and none of them is about permission.
    - **`reuse`** — the task already has a retained session. **Wake that one with `oa_dispatch`.** Do not create a second;
      `session -SessionId <other>` over a live binding is refused (`session_bind_conflict`) precisely
-     so "reuse it" is a rule rather than an intention. The wrapper reserves, fences the start,
-     records `last_woken_at`, then calls the native app message tool with a unique delivery marker.
+     so "reuse it" is a rule rather than an intention. The wrapper counts this run's request,
+     records `last_woken_at`, then sends the brief through the native app message tool.
      A plain `session -Id N` is still an inspection: no authority and no stamp (#532).
    - **`replace`** — a previous run recorded the bound session as non-wakeable. Create a fresh one
      **idle, without a kickoff**, and use the emitted **`kickoff_continuation`** *verbatim* as the opening of its `oa_dispatch` brief: it
@@ -1092,10 +1061,8 @@ one task, one workspace, one thing being verified at a time"* — and this is th
      `replace` and arms the continuation.
    - **If the user tells a sub-session to stop, record it on the spot** —
      `oa-state.ps1 mark -Id <ID> -Status blocked -StatusBy user`. That single write is what every
-     reader derives from: `scan` reports `session_paused` and `eligible: false`, the capacity
-     accounting observes its actual app activity, and this verdict becomes `paused`. An already
-     executing session still counts until it stops; recording a pause cannot hide active work.
-     A pause that is only
+     reader derives from: `scan` reports `session_paused` and `eligible: false`, and this verdict
+     becomes `paused`. A pause that is only
      described in a run summary is not recorded — prose is not on any run's read path, and a
      mitigation of exactly that shape was violated 24 minutes after it was written.
 
@@ -1123,13 +1090,11 @@ one task, one workspace, one thing being verified at a time"* — and this is th
    task's own journal), the `kickoff_continuation` line when the verdict was `replace`, and — when
    it gets a worktree — the standing worktree clause in PHASE 1.5 §5, **unedited**.
 
-   Invoke `oa_dispatch({ task_id: "<ID>", wake_key: "<the row's wake_key>", message: "<the complete approved brief>" })`.
-   The wrapper calls the native app tool itself; **do not send a second message after it returns**.
-   `accepted: true` means accepted, not completed. On an ambiguous transport error, inspect
-   `oa_capacity` and the named receipt instead of retrying the send.
-   Keep the worklist's `wake_key`: receipt retirement cannot make a racing copy of that same
-   wake new work. If the task's input changed, re-read it and plan the new brief rather than
-   retrying the old one with a newly invented key.
+   Invoke `oa_dispatch({ task_id: "<ID>", message: "<the complete approved brief>" })`.
+   It sends the instruction itself; do not add an uncounted raw follow-up.
+   `accepted: true` means the instruction was accepted, not that the task finished.
+   Failed/uncertain attempts consume this run's quota only. The next run has a fresh allowance
+   and may try the task again; do not mark its saved session dead merely because a reply was lost.
 
 6. **The session does the work AND writes the turn; the run session does not.** (GH #473)
 

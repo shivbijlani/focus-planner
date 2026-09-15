@@ -68,58 +68,41 @@ Ask Copilot to "run the overnight agent", "propose plans for my tasks", or
 (inbox check → execute approved plans → propose new plans behind the approval
 gate).
 
-### Task capacity and dispatch
+### Start/continue requests per run
 
-Use **`oa_scan` → `oa_capacity` → `oa_dispatch`** in the Copilot app. The extension is declared
-in `plugin.json`; it invokes the app's native `get_sessions_status`, `get_session` and
-`send_session_message` tools through the SDK. It needs those app tools, Node 22+ and Windows
-PowerShell 5.1 (or `pwsh` elsewhere). Missing capabilities stop dispatch explicitly; a standalone
-CLI without app activity cannot safely substitute task-state guesses.
+The setting historically named **`Overnight Agent concurrency`** means **automatic start/nudge
+attempts per overnight run**, not tasks running simultaneously. At `1`, the 10:00 run may start
+task 468; the 10:30 run may nudge 468 again or start another eligible task while 468 continues.
+Repeated nudges and overlapping task sessions are intentional. Coordinator runs are assumed
+not to overlap on the same machine.
 
-Bindings preserve conversations; due timers select work. Neither occupies a worker. Capacity
-counts app-busy **planner-bound executions** plus pending/uncertain deliveries, deduplicated when
-several task bindings resolve to the same session. Other, unbound app sessions are outside this
-planner admission scope. `actual_busy` distinguishes observed work from conservative charges.
-New sessions must be created **idle, without a kickoff**, then bound and sent their brief through
-`oa_dispatch`. Do not follow its success with a second raw message.
+Use **`oa-state.ps1 scan`**, **`oa_run_budget`**, then **`oa_dispatch`** in the Copilot app.
+The extension invokes the native `send_session_message` tool; it does not query app activity or
+inspect task event logs. It needs Node 22+, Windows PowerShell 5.1 (or `pwsh` elsewhere), and the
+app's native message tool. Missing tools stop dispatch rather than bypassing the budget.
 
-The wrapper queries fresh activity, atomically reserves a slot, fences the start, stamps the
-wake, and performs the actual native send. OS-owned locking covers all state read/check/write
-operations; a crash releases the lock. A preparation expires after two minutes and can no
-longer send. A durable generation nonce fences snapshots when admission or receipt retirement
-changes the evidence; stale observers must refresh even inside the 30-second freshness window.
-Pass the task's `wake_key` from `oa_scan` to `oa_dispatch`. This identifies the worklist input,
-not the transport: a fast-completing first wake cannot make a racing duplicate new work.
-Changed task input requires a new brief, not an automatic retry of the old one.
-A started send **never becomes free just because its deadline elapsed**: the
-target must show that the unique dispatch interaction started or finished. A lost acceptance
-response is therefore safe to inspect, but not safe to resend.
+`oa_dispatch` checks task eligibility and pauses, records the attempt in this run's counter,
+checks again while stamping the wake, and sends the instruction. Requests within one run are
+serialized. Failed/unconfirmed attempts consume this run's allowance only and are reported
+explicitly; the next run has a fresh allowance. There are no cross-run reservations, generations,
+delivery receipts, activity snapshots or deduplication keys.
 
-At that deadline, absent receipt evidence becomes **`dispatch_reconciliation_required`**, with
-the token, target and recovery instruction in capacity output. Every `oa_capacity` / `oa_scan`
-retries the read and retires resolved delivery records. A non-capacity acknowledgment receipt
-remains for at most 15 minutes so reconciliation racing the sender's response cannot turn a
-successful send into a failed one. After retention, acknowledgment trouble is still reported as
-**accepted with a receipt warning**, never as permission to send again. Missing/stale app status, unreadable or
-replaced logs, and logs exceeding the 16 MiB receipt-read budget stay visible and fail closed.
-If evidence cannot be recovered, a human must resolve the uncertain app delivery; this plugin
-does not cancel an app message, release a binding, reset a pause or restart a session to guess
-its way out. This is an explicit blocked outcome, not an assertion that work is running.
-If the app truncates its bulk status response, each bound identity is queried through
-`get_session` instead and `activity_warnings` discloses that path; a failed individual lookup
-still counts as unknown.
+Each scheduled run already gets its own coordinator session. Its small `files/oa-run-budget.json`
+records the counted task IDs and whether each request was a priority or human collect request.
+This survives a tool reload in the same run; the next session starts at zero. Budget reads are
+read-only. Use a fresh coordinator session for a manual rerun too, rather than resetting a
+running session's counter.
 
-The configured limit bounds **scheduled admissions**, not all human activity. Direct human
-wakes of bound tasks and explicit human collect-wave exceptions can create overlap; those
-executions still occupy capacity for subsequent scheduled work. All coordinators must use the
-new wrapper; mixed-version/raw callers are not protected by its atomic admission protocol.
+Saved task conversations and Today-first eligibility remain unchanged. Create new/replacement
+sessions **idle, without a kickoff**, bind them, then send their first instruction through
+`oa_dispatch`. Explicit human collect requests remain a separately reported budget exception;
+they never override pauses or eligibility. Task-state writes remain locked and atomic because
+task agents can still update state while a coordinator runs.
 
-`oa-state.ps1 session -InFlight -ActivitySnapshot <file>` remains the offline replay interface.
-For a strictly read-only live audit, use `oa_capacity({ reconcile: false })`; it reports the
-same evidence-based answer without retiring or garbage-collecting receipt files.
-Without a fresh snapshot it reports unknown activity and zero admissions, not the former
-readiness-based answer. `scan` emits per-task reasons and `capacity_units`; their sum matches
-the deduplicated total, including explicitly ineligible state-only audit rows.
+`oa-state.ps1 session -RunLimit` reads configuration only. The legacy `-InFlight` flag is an
+alias for that read: it no longer emits a misleading running-worker count. `oa_run_budget`
+reports `attempted_this_run`, `collect_attempted_this_run`, `remaining_this_run` and the counted
+requests. No installed task state or old experimental receipt files are migrated or deleted.
 
 ### Is this issue already shipped?
 

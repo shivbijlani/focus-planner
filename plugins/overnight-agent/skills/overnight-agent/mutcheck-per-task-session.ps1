@@ -138,26 +138,10 @@ New-Item -ItemType Directory -Path $runWs -Force | Out-Null
 
 function Invoke-Oa {
   param([string[]]$OaArgs, [string]$Settings = $noSettings)
-  # Binding fixtures are idle conversations, not executing workers (#589). Real admission,
-  # collect exceptions and simultaneous dispatch are guarded by oa-dispatch.test.mjs.
-  $snapshot = Join-Path $root 'activity.json'
-  $activities = @(Get-ChildItem -LiteralPath $sdir -Filter 'task-*.json' -File | ForEach-Object {
-      $state = Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json
-      if ($state.session.session_id) {
-        @{ binding_id = "$($state.session.session_id)"; session_id = "$($state.session.session_id)"; status = 'idle' }
-      }
-    })
-  @{
-    schema_version = 1; source = 'copilot-app'; observed_at = [datetimeoffset]::UtcNow.ToString('o')
-    generation = if (Test-Path (Join-Path $sdir 'capacity-generation.json')) {
-      (Get-Content (Join-Path $sdir 'capacity-generation.json') -Raw | ConvertFrom-Json).generation
-    } else { 'initial' }
-    sessions = $activities; receipts = @()
-  } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $snapshot -Encoding utf8
   $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $OaArgs +
   @('-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store,
     '-PlannerCompleted', (Join-Path $root 'absent-completed.md'),
-    '-UserSettings', $Settings, '-RunWorkspace', $runWs, '-ActivitySnapshot', $snapshot)
+    '-UserSettings', $Settings, '-RunWorkspace', $runWs)
   # Must not throw: -ExpectPreFix runs this against a build that REJECTS the new parameters, and a
   # hard failure there has to surface as a failed arm rather than a crashed harness -- otherwise
   # "pre-fix fails" is indistinguishable from "the harness is broken".
@@ -375,21 +359,23 @@ Check 'M malformed value -> concurrency 1, not unlimited' { $m.concurrency -eq 1
 $n = Invoke-OaJson -OaArgs @('session', '-InFlight') -Settings $twoSettings
 Check 'N the settings row is actually read' { $n.concurrency -eq 2 }
 
-Check 'N- retained idle bindings are not in-flight work' { $l.in_flight -eq 0 -and $l.admits -eq 1 }
+Check 'N- retained bindings are not a global in-flight count' {
+  $l.scope -eq 'per_run' -and $l.dispatch_limit -eq 1 -and -not $l.PSObject.Properties['in_flight']
+}
 
 # --- O/P/U: binding is preparation, not admission (#589) -------------------------------
 # Enforcement moved to the actual dispatch boundary. Its cross-process/accepted-pending tests
 # run in CI alongside this suite; retaining a bind-time cap would restore the idle-task deadlock.
 foreach ($id in $ids) { [void](Invoke-Oa @('session', '-Id', "$id", '-SessionRelease')) }
 $zero = Invoke-OaJson @('session', '-InFlight')
-Check 'S release frees capacity' { $zero.in_flight -eq 0 -and $zero.at_capacity -eq $false }
+Check 'S releasing bindings leaves the configured per-run limit unchanged' { $zero.dispatch_limit -eq 1 }
 
 [void](New-Bind -Id '805' -SessionId 'SESS_805')
 $o = Invoke-Oa @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'folder')
 Check 'O a second idle conversation can be bound without starting work' { $script:LastOaExit -eq 0 -and $o -match 'SESS_806' }
-Check 'O- two idle bindings leave the sole execution slot available' {
+Check 'O- two bindings do not spend or change the per-run limit' {
   $capacity = Invoke-OaJson @('session', '-InFlight')
-  $capacity.in_flight -eq 0 -and $capacity.admits -eq 1
+  $capacity.scope -eq 'per_run' -and $capacity.dispatch_limit -eq 1 -and -not $capacity.PSObject.Properties['at_capacity']
 }
 
 $p = Invoke-OaJson @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'folder', '-Force')

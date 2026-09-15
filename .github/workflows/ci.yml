@@ -641,19 +641,18 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-per-task-session.ps1
 
-  # Keep the parked/timer/doc/status matrix, but distinguish idle readiness from actual busy
-  # execution (#589). Mutation restores the due-before-start bug, unknown-freeing and double counts.
+  # Retained tasks and old receipt files must not become a cross-run gate (#589).
   parked-capacity:
-    name: Parked-capacity accounting
+    name: Per-run limit independence
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Mutation check (a task waiting on a human holds no dispatch slot)
+      - name: Saved task state does not change the per-run limit
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-parked-capacity.ps1
 
   execution-admission:
-    name: Execution admission (${{ matrix.os }})
+    name: Per-run dispatch (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -665,14 +664,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Native-wrapper protocol and cross-process admission
+      - name: Request counter, permitted overlap, and pause safeguards
         run: node --test plugins/overnight-agent/checks/oa-dispatch.test.mjs
       - name: Plugin extension syntax
         run: node --check plugins/overnight-agent/extensions/task-dispatch/extension.mjs
 
-  # A user's pause must be visible to the DISPATCHER (GH #540). The job above stops a paused task
-  # eating the concurrency slot; this one stops the run waking it in the first place. They are the
-  # two halves of honouring one instruction, and #541 shipping alone left the pause half-honoured.
+  # A user's pause must still stop dispatch (GH #540), even though task overlap and repeated
+  # nudges are now permitted. A per-run allowance is not permission to ignore a pause.
   #
   # `session -Id <ID>` answered "does a live session exist?" and never "is that session allowed to
   # work right now?", so a pause typed into a sub-session was invisible on the only path PHASE 1
@@ -696,8 +694,8 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-session-pause.ps1
 
-  # Pacing: how the `Overnight Agent concurrency` tunable (#391) is READ. #404's job above guards
-  # its ENFORCEMENT (capacity refusal, release, the in-flight view); this one guards the parse
+  # Pacing: how the historical `Overnight Agent concurrency` tunable (#391) is READ. The per-run
+  # dispatch job guards enforcement; this one guards the parse
   # boundary, the argument-over-file precedence, and whether a fallback is visible.
   #
   # It runs in CI because the failure it was written for has no tell. The parse was a leading-
