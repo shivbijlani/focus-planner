@@ -51,7 +51,7 @@ a value here takes effect on the next run with nothing else to change.
 | --- | --- |
 | Today gate backstop | `6h` — if **nothing** has been written to a Today task for this long, the agent stops waiting on it and works the backlog. Guards against a run that jams. Accepts `6`, `6h`, or `off` to disable. |
 | Today gate strict | `off` — set to `on` to make a workable Today task block the backlog **always**, with no release at all. The one-switch rollback if the agent starts leaving Today too readily. |
-| Overnight Agent concurrency | `1` — how many items the agent may have **in flight** at once. At `1` it works one thing at a time; giving a task its own session is *isolation*, not permission to run several at once. Raising it does not make a run faster, it makes each result harder to check. **A bare whole number and nothing else** — put any explanation outside the cell, because a value like `2026-09-02: set to 1` does not parse and the agent falls back to `1`. |
+| Overnight Agent concurrency | `1` — the **scheduled admission cap** for planner-bound executions. Busy app sessions and pending deliveries occupy slots; idle saved conversations and overdue timers do not. Direct human wakes and explicit human collect-wave exceptions can exceed the cap, but still count before more scheduled work starts. Giving a task its own session is isolation, not permission to run more work. **A bare whole number and nothing else** — put any explanation outside the cell, because a value like `2026-09-02: set to 1` does not parse and the agent falls back to `1`. |
 
 **Raising the backstop makes the agent wait longer before giving up on a stuck Today task; lowering
 it makes it give up sooner.** Writing to the task *resets* the timer, so the agent can only ever

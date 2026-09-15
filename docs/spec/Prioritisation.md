@@ -206,7 +206,7 @@ The shipped template states the concurrency rationale plainly:
 <summary><strong>Show technical detail</strong></summary>
 
 ```md
-| Overnight Agent concurrency | `1` — how many items the agent may have **in flight** at once. At `1` it works one thing at a time; giving a task its own session is *isolation*, not permission to run several at once. |
+| Overnight Agent concurrency | `1` — scheduled admission cap for planner-bound executions, not a limit on retained conversations or direct human activity. |
 ```
 
 
@@ -331,13 +331,13 @@ make sure those parked rows do not freeze the whole system.
 | Due poll / due recheck override | `Test-Workable` yields the park to `due_poll` / `due_recheck` | A recurring timer must not stop firing just because the user stopped replying. |
 | Snooze precedence | `scan` suppresses due timers when `snoozed`, but leaves the timers armed | “Not until DATE” outranks both board rank and timers, without silently disarming the timer forever. |
 | Staleness backstop | `stale_turn_backstop` based on `Today gate backstop` | A wedged Today row eventually releases Deferred instead of freezing the backlog. |
-| Doc-observation freshness | `DocObservationFreshMinutes = 180` | A doc-bound task parks on comment silence only when silence was actually observed recently; stale or unread channels fail toward work, not invisible parking. This is the fix direction of **#500**. |
-| Active-wake freshness | `ActiveWakeMinutes = 45` | A doc-bound task that somebody is actively working still counts as in flight, even if comments are quiet. This closes the over-dispatch side guarded by **#522**. |
-| Capacity uncounts parked work | `Test-SessionHoldsCapacity` returns false for unworkable waiting tasks | A task waiting on a human reply or user pause does not consume the only dispatch slot. That closes **#487** and **#541** on the session-capacity surface. |
+| App activity | `Get-CapacityView` consumes a fresh app snapshot | An idle retained session occupies nothing; an actually busy one counts even if its journal is quiet, its wake is old, or its task is Deferred/off-board. This separates selection from occupancy (**#589**). |
+| Pending delivery | Atomic reservation plus a single-use fenced start | An accepted wake that has not started cannot look free merely because the app still reports idle. |
+| Unknown activity | Named uncertain members and zero admissions | Missing/stale status never means idle. Refreshing real evidence recovers automatically; a delivery unresolved after two minutes requires explicit inspection. |
 
 The key asymmetry is deliberate: when unsure, the system usually fails toward **holding** or
 **refusing extra dispatch**, not toward silently widening work. That is why snooze suppresses
-timers, stale wakes stop counting as active after 45 minutes, and a malformed concurrency setting
+timers, stale app observations refuse admission rather than free workers, and a malformed concurrency setting
 falls back to 1 instead of some guessed higher value.
 
 ### The ask is declared, not inferred (#560)
@@ -354,8 +354,8 @@ The ask is now stated in the same act as writing the turn. `write-turn.ps1` requ
 turn's own provenance marker. `HasBlockingAsk` reads that declaration first, so **`blocking` parks
 even when the wording opens dismissively, and `offer`/`none` do not park even when the wording
 contains a blocking-shaped clause.** The preference lives inside `Get-BlockingAskVerdict`, which
-`Get-JournalFacts` calls, so both the emitted `scan` row and the capacity reader inherit it from
-one edit rather than two.
+`Get-JournalFacts` calls, so the emitted `scan` row and the dispatch eligibility check inherit it
+from one edit. Capacity deliberately does not infer activity from asks.
 
 **The textual reading survives as a documented fallback** for turns written before the flag
 existed (~81 journals at the time of the change), where the pre-#560 semantics apply exactly:
@@ -375,18 +375,11 @@ while writing the turn, not a value reconstructed afterwards from narrative. Tha
 `-Exhausted` made for the Today gate, and it is why both remain subject to the cancelling
 conditions above rather than being trusted outright.
 
-**The parking expression is duplicated on purpose.** `Cmd-Scan` (which emits `awaiting_reply` on
-the worklist row) and `Test-SessionHoldsCapacity` (which gates whether that row's session counts
-against the concurrency ceiling) each compute `$facts.HasAgentBlock -and $facts.HasBlockingAsk -and
--not $facts.HasTrailingUser` independently, and the source keeps the two copies **textually
-identical** rather than factoring them into one shared function. The declared-ask preference
-itself lives once, inside `Get-BlockingAskVerdict` (called by `Get-JournalFacts`, which both
-readers call), so a `#560` declaration reaches both readers from one edit. But had that resolution
-happened inside `Cmd-Scan` instead, the emitted row would say `declared` while
-`Test-SessionHoldsCapacity` kept inferring from prose — **#545's "emitted field disagrees with
-gated field" shape**, on the exact reader pair the design calls out as needing to stay
-synchronized. Textual duplication, checked by review and by `mutcheck-awaiting-reply.ps1` rather
-than hidden behind an abstraction, is the guard against the two readers drifting apart again.
+**One worklist owns eligibility.** `Get-ScanRows` emits the declared/inferred ask and computes
+eligibility; dispatch consumes that same row under the state-store lock. The former duplicated
+parking predicate in capacity is removed. Whether a task is ready to work and whether its
+session is executing are different questions: making a timer due must not reserve the worker
+needed to run that timer.
 
 `has_open_ask` is unchanged in the non-regressing direction by all of this: a declaration only ever
 adds visibility onto a row that already had an open ask under the old inference; it never manufactures
@@ -415,7 +408,7 @@ The guard pattern is consistent across all of them:
 - **replies are read from human provenance or structural position**, not from the agent's own
   summary of what happened,
 - **Today release comes from a separate declaration plus human-controlled invalidations**,
-- **capacity trusts user-originated pauses more than agent-originated claims of completion**, and
+- **dispatch honours user-originated pauses while capacity observes actual app activity**, and
 - **dispatch exceptions are justified by provenance**: a user action may widen the run; the
   agent's own judgement may not.
 
@@ -430,27 +423,59 @@ Pacing and ordering are related but different. Ordering answers *which row is ne
 ### Enforced mechanism: the concurrency ceiling
 
 `user-settings.md` exposes `Overnight Agent concurrency`, defaulting to `1`. `oa-state.ps1`
-resolves it itself, not by trusting the caller to remember a flag. The capacity view is emitted by
-`session -InFlight`:
+resolves it itself, not by trusting the caller to remember a flag. The plugin's **`oa_capacity`**
+and **`oa_scan`** query `get_sessions_status`, resolving aliases/missing entries with `get_session`.
+They pass a snapshot to the same `Get-CapacityView` reader used by
+`session -InFlight -ActivitySnapshot <file>`. A bare offline read reports unknown activity,
+never a readiness-based estimate.
 
-> [!NOTE]
-> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+| Capacity field | Meaning |
+| --- | --- |
+| `members` | Every bound execution, its task IDs, activity, inclusion/exclusion reason and pending delivery IDs. Duplicate bindings/aliases count once. |
+| `in_flight` | Conservatively occupied units: app-busy executions plus pending or uncertain members. Not independent proof that this many sessions are executing. |
+| `actual_busy` | Distinct bound executions the app currently reports busy, including direct human-started work. |
+| `admits` | Remaining scheduled admissions, clamped to zero; any unknown member or unavailable snapshot also forces zero. |
+| `requires_attention` | Activity or delivery could not be safely reconciled; members name the recovery action. |
+| `scan.capacity_units` | One unit per occupied execution, attributed to its first task ID. Sum across rows matches `in_flight`; state-only rows are explicitly ineligible. |
 
-<details>
-<summary><strong>Show technical detail</strong></summary>
+The limit is an **admission cap for planner-bound work**, not a machine-wide worker limit.
+Unbound app sessions are outside its scope. Human-started work and collect exceptions may make
+occupancy exceed the setting without implying a scheduled-admission violation.
 
-```powershell
-return ([pscustomobject]@{
-    concurrency = [int]$script:ConcurrencyLimit
-    concurrency_source = "$script:ConcurrencySource"
-    in_flight   = [int]$live
-    at_capacity = [bool]($live -ge $script:ConcurrencyLimit)
-    admits      = [int][Math]::Max(0, $script:ConcurrencyLimit - $live)
-  } | ConvertTo-Json -Depth 4)
-```
+**The normal run sends through `oa_dispatch`, not a raw app message call.** It checks the
+current worklist, reserves under an OS-owned state-store lock, fences a single-use start, records
+the wake and invokes `send_session_message` itself. New/replacement conversations are created
+idle, without a kickoff, then bound and dispatched. Two coordinators cannot both spend one
+slot; binding twice to one execution does not create two workers. All state writers share the
+lock and write JSON atomically, so concurrent marks/observations cannot erase the admission's
+binding. A process crash releases the lock without a stale-lock timeout.
+Admission and receipt retirement advance a durable generation nonce. Observations from an older
+generation must be refreshed under the lock; otherwise removing a receipt could let an earlier
+idle snapshot spend its now-busy worker a second time, even inside the 30-second freshness window.
+The worklist also emits `wake_key`, a hash of the journal and task inputs, excluding dispatch
+timestamps. The dispatcher carries that key unchanged through refreshes. A retained receipt
+deduplicates the same worklist wake even after a fast completion; changed input refuses the old
+brief rather than silently treating it as a fresh plan.
 
+**The transport gap has bounded reconciliation, not a permanent busy flag.** App snapshots
+expire after 30 seconds into uncertainty. An unsent reservation expires after two minutes, and
+its token can no longer start. Once a send starts, expiry does not cancel it. The unique dispatch
+marker must appear in a target `user.message` and its matching interaction must actually start.
+Observed busy/waiting execution then owns the activity decision; a completed matching turn plus
+a later app-idle reading proves the finished case, including when the send's acceptance response
+was lost. Resolved delivery records immediately stop occupying capacity. A non-capacity receipt
+is retained for 15 minutes for idempotent acknowledgment, then garbage-collected. A successful
+native send with a late bookkeeping error returns **accepted with a receipt warning**, not a
+failed send that invites a retry.
 
-</details>
+After two minutes without a receipt, the named outcome is
+**`dispatch_reconciliation_required`**: zero further admissions, the target/token and an explicit
+instruction to inspect target/sender history rather than resend. Every subsequent read retries.
+Missing/replaced logs, unsupported remote histories or a receipt exceeding the 16 MiB read budget
+remain an explicit blocked outcome; if evidence cannot be recovered, human resolution of the
+app delivery is necessary. This code never resets pauses, deletes conversations, cancels an app
+message or restarts a session to manufacture proof. Mixed-version/raw dispatchers must be retired
+from the scheduling path before relying on the wrapper's admission guarantees.
 `mutcheck-pacing-concurrency.ps1` proves the resolver's sharp edges: the setting must be a **bare
 whole number**, an explicit `-Concurrency` argument outranks the file, malformed prose reports
 `concurrency_source: settings-malformed`, and every failure narrows to `1` rather than widening the
@@ -493,22 +518,10 @@ collection:
 3. Dispatch happens in **two waves**: the **priority wave** first, then the **collect wave**.
 4. A collect-phase wake is dispatched **in addition to** the priority selection, not instead of it.
 
-The sanctioned exception is encoded in the session-capacity refusal text itself:
-
-> [!NOTE]
-> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
-
-<details>
-<summary><strong>Show technical detail</strong></summary>
-
-```powershell
-throw ("session_at_capacity: ... -Force is for the collect-wave exception only " +
-  '(Prioritisation.md 4.1): a wake that exists because the USER did something may widen ' +
-  "the run; the agent's own judgement may not.")
-```
-
-
-</details>
+The sanctioned exception is `oa_dispatch`'s explicit **`collect_wave: true`**. The same locked
+admission check requires a recorded human journal reply or new doc comment. Inbox/Telegram
+replies must be folded first. The exception bypasses only the numeric cap, never a pause,
+ineligibility, an active target, a pending duplicate or unknown activity.
 That exception does **not** raise the configured setting, compound it, or move work back into the
 run session. It changes **when** a task is woken, not **where** its work happens. The rationale is
 provenance: a mail reply, a Telegram reply, or a journal reply is explicit user action, so it may
@@ -518,6 +531,9 @@ The executable statement of intended behaviour for this page is therefore spread
 important set of files:
 
 - `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1`
+- `plugins/overnight-agent/checks/oa-dispatch.mjs`
+- `plugins/overnight-agent/checks/oa-dispatch.test.mjs`
+- `plugins/overnight-agent/skills/overnight-agent/mutcheck-parked-capacity.ps1`
 - `plugins/overnight-agent/skills/overnight-agent/mutcheck-priority-order.ps1`
 - `plugins/overnight-agent/skills/overnight-agent/mutcheck-today-served.ps1`
 - `plugins/overnight-agent/skills/overnight-agent/mutcheck-awaiting-reply.ps1`

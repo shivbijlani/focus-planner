@@ -474,7 +474,7 @@ Do the phases **in this order** every time.
 >
 > 1. **One item in flight, by default.** The limit is the user's
 >    (`user-settings.md` → `## Overnight Agent behaviour`), and it is **1** unless he says
->    otherwise. Read it from `session -InFlight`, never assume it. ⚠️ **Giving an item its own
+>    otherwise. Read it from **`oa_capacity`**, never assume it. ⚠️ **Giving an item its own
 >    session is ISOLATION, not concurrency** — it is *where* that item's work happens, not
 >    permission to have three of them running. An item already dispatched and still working
 >    **counts against the limit**; you do not get a free second item because the first one is
@@ -509,7 +509,8 @@ Do the phases **in this order** every time.
 > your turns, so a task's thread reflects the work you just did. It's gated on `user-settings.md → Telegram`.
 
 > **Scan first (applies to PHASE 1 *and* PHASE 2):** before judging any task, run
-> `oa-state.ps1 scan` once and use its JSON as your worklist. Each row tells you what changed and
+> **`oa_scan`** once and use its JSON as your worklist. It invokes the same `oa-state.ps1 scan`
+> with fresh app activity and reconciles delivery receipts. Each row tells you what changed and
 > what's `reopened` (the user spoke after your last turn — active again) or
 > `snoozed` (skip it). A reply on a task the user **closed** comes back `reopened_closed` and
 > `eligible: false` — report it, never work it (see "Reopened after close"). Don't
@@ -1022,20 +1023,44 @@ one task, one workspace, one thing being verified at a time"* — and this is th
    **Also pick up any row with `due_poll: true`** — a time-triggered recurring check that's now due
    (see "Polling"). Run its check, then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone`.
 
-2. **Check capacity before dispatching anything.** `oa-state.ps1 session -InFlight` reports the
-   resolved `Overnight Agent concurrency` (default **1**), how many tasks hold a live session, and
-   `admits` — how many more the priority wave may start. Dispatch at most `admits` items. The only
-   sanctioned exception is the **collect wave** (`Prioritisation.md` §4.1): a wake that exists
-   *because the user did something* may widen the run, and it is the one case where
-   `session ... -Force` past `session_at_capacity` is correct. Your own judgement is not.
+2. **Use `oa_capacity` before the wave and `oa_dispatch` for EVERY task wake.** These plugin tools
+   query **`get_sessions_status`**, resolve missing/alias IDs with **`get_session`**, and use the
+   same capacity reader as `scan`. `admits` is advisory; `oa_dispatch` rechecks under an OS-owned
+   state-store lock, so two coordinators cannot spend the same slot or wake one execution twice.
+   **Do not use raw `send_session_message`, a kickoff on `create_session`, or hand-written
+   `-ForDispatch` / `-SessionWoken` calls for task dispatch.** If these plugin tools are missing,
+   report the missing capability and stop dispatch; do not fall back to the old path.
 
-   **What actually holds a slot.** Only tasks that can progress *right now*. A task waiting on the
-   user holds nothing: `blocked` and `proposed` (#541), `awaiting_reply` (#487), and a doc-bound
-   task whose comment channel was read recently and is silent (#500). Its binding and worktree are
-   untouched either way — only the arithmetic changes — so recording a pause never costs the run
-   its dispatch slot. A due `poll`, a due `recheck` on a `blocked` task, and a session woken in the
-   last 45 minutes all count as real work in flight. If `in_flight` names a task you know is
-   parked on you, that is a bug in the accounting, not a reason to `-Force`.
+   **Readiness is not occupied execution.** An overdue poll/recheck, a retained conversation, a
+   task status, or a wake timestamp never reserves a worker. A fresh app `busy` reading does,
+   including for Deferred/off-board tasks or work started directly by the user. Idle retained
+   sessions occupy nothing, even when due. An app-owned human-input/plan gate is waiting, not
+   executing, and cannot be woken again. Bindings and user pauses remain intact.
+
+   **Read the membership, not just the scalar.** Capacity returns every execution's task IDs,
+   activity, inclusion/exclusion reason and pending dispatch IDs. Aliases and duplicate task
+   bindings count once; `scan.capacity_units` sums to `in_flight`, including explicitly
+   ineligible state-only audit rows. `actual_busy` is observed activity; `in_flight` also includes
+   conservatively charged pending/unknown members and is NOT proof of simultaneous execution.
+
+   **Unknown is visible and fails closed.** Activity is fresh for 30 seconds and fenced by the
+   admission generation: retiring a receipt invalidates older snapshots. Refresh the tools
+   rather than assuming a missing/stale/unknown session is idle. Admission has a two-minute
+   preparation lease; an expired token can never send. Once sending starts, a lost response or
+   accepted-but-not-running wake stays reserved until the target's matching interaction is
+   observed. At two minutes without that evidence, `dispatch_reconciliation_required` names the
+   token, target and recovery action. Report it in the wrap-up and inspect target/sender history;
+   never blindly resend, clear bindings, or expire a possibly accepted message. Each subsequent
+   `oa_capacity` / `oa_scan` retries reconciliation; known-started/finished receipts stop occupying
+   capacity immediately. A non-capacity receipt remains for 15 minutes to absorb late acknowledgments.
+   `accepted` with a receipt warning is still an accepted send, never a reason to send again.
+
+   The **collect wave** remains the only admission-cap exception: pass `collect_wave: true` to
+   `oa_dispatch` for a human-triggered reply. Fold inbox/Telegram replies into the journal first,
+   or observe the human's doc comment, so the exception has machine-readable provenance. It
+   never bypasses eligibility, an explicit pause, an active target, a duplicate wake or unknown
+   activity. Direct human-started overlap can exceed the cap; scheduled admissions cannot use
+   that overlap as permission to start more.
 
 3. **For each task, resolve its session before doing anything else** — never create one on a hunch:
 
@@ -1051,25 +1076,26 @@ one task, one workspace, one thing being verified at a time"* — and this is th
      **Do not pattern-match on `reuse` and proceed:** two consecutive runs did exactly that on
      2026-09-05 and woke a task he had twice asked to pause, because `state: live`,
      `released: false` and `last_woken_at` are each accurate and none of them is about permission.
-   - **`reuse`** — the task already has a live session. **Wake that one.** Do not create a second;
+   - **`reuse`** — the task already has a retained session. **Wake that one with `oa_dispatch`.** Do not create a second;
      `session -SessionId <other>` over a live binding is refused (`session_bind_conflict`) precisely
-     so "reuse it" is a rule rather than an intention. **Read the verdict with `-ForDispatch`**
-     (`session -Id N -ForDispatch`) when you are about to dispatch: it stamps `last_woken_at` in the
-     same write that answers you, and only that read returns `dispatch_authorised: true`. A plain
-     `session -Id N` is an inspection — it returns `dispatch_authorised: false` and stamps nothing,
-     so a run cannot dispatch on a read that never recorded the wake (#532).
+     so "reuse it" is a rule rather than an intention. The wrapper reserves, fences the start,
+     records `last_woken_at`, then calls the native app message tool with a unique delivery marker.
+     A plain `session -Id N` is still an inspection: no authority and no stamp (#532).
    - **`replace`** — a previous run recorded the bound session as non-wakeable. Create a fresh one
-     and use the emitted **`kickoff_continuation`** *verbatim* as the opening of its kickoff: it
+     **idle, without a kickoff**, and use the emitted **`kickoff_continuation`** *verbatim* as the opening of its `oa_dispatch` brief: it
      names the task and the prior session id, so the replacement knows it is continuing work rather
      than starting clean. Then bind it — which records `prior_session_id`.
-   - **`create`** — no session yet. Create one, then bind it (step 4).
+   - **`create`** — no session yet. Create one **idle, without a kickoff**, bind it (step 4),
+     then send its brief through `oa_dispatch`. Creating or binding an idle session is not work.
    - If a session will not wake, record that fact rather than retrying blindly:
      `oa-state.ps1 session -Id <ID> -SessionDead`. That is what turns the next verdict into
      `replace` and arms the continuation.
    - **If the user tells a sub-session to stop, record it on the spot** —
      `oa-state.ps1 mark -Id <ID> -Status blocked -StatusBy user`. That single write is what every
      reader derives from: `scan` reports `session_paused` and `eligible: false`, the capacity
-     accounting stops counting it (#541), and this verdict becomes `paused`. A pause that is only
+     accounting observes its actual app activity, and this verdict becomes `paused`. An already
+     executing session still counts until it stops; recording a pause cannot hide active work.
+     A pause that is only
      described in a run summary is not recorded — prose is not on any run's read path, and a
      mitigation of exactly that shape was violated 24 minutes after it was written.
 
@@ -1092,10 +1118,18 @@ one task, one workspace, one thing being verified at a time"* — and this is th
      -SessionWorkspace <worktree path> -WorkspaceType worktree
    ```
 
-5. **Brief the session properly.** Its kickoff must carry: the task id and title, the approved plan,
+5. **Brief the session properly through `oa_dispatch`.** Its `message` must carry: the task id and title, the approved plan,
    the **distilled linked-task context** from "Gather linked-task context FIRST" (never just the
    task's own journal), the `kickoff_continuation` line when the verdict was `replace`, and — when
    it gets a worktree — the standing worktree clause in PHASE 1.5 §5, **unedited**.
+
+   Invoke `oa_dispatch({ task_id: "<ID>", wake_key: "<the row's wake_key>", message: "<the complete approved brief>" })`.
+   The wrapper calls the native app tool itself; **do not send a second message after it returns**.
+   `accepted: true` means accepted, not completed. On an ambiguous transport error, inspect
+   `oa_capacity` and the named receipt instead of retrying the send.
+   Keep the worklist's `wake_key`: receipt retirement cannot make a racing copy of that same
+   wake new work. If the task's input changed, re-read it and plan the new brief rather than
+   retrying the old one with a newly invented key.
 
 6. **The session does the work AND writes the turn; the run session does not.** (GH #473)
 
