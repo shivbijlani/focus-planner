@@ -8,7 +8,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-window-'));
+// Hosted Windows runners expose TEMP through an 8.3 alias. CIM/native process paths
+// are canonical, so fixture identities must use the same spelling as GetFullPath.
+const root = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'supervisor-window-'));
 const subject = process.env.SUPERVISOR_TEST_SUBJECT || path.join(here, 'oa-supervisor.ps1');
 const engines = process.env.SUPERVISOR_TEST_POWERSHELL ? [process.env.SUPERVISOR_TEST_POWERSHELL]
   : process.platform === 'win32' ? ['powershell', 'pwsh'] : ['pwsh'];
@@ -182,7 +184,8 @@ try {
   for (const engine of engines) {
     check(`${engine}: before A never performs preventive restart`, () => {
       const f = fixture(engine, 'before-a', { ageHours: 11 });
-      assert.equal(f.invoke().decision, 'before-window');
+      const first = f.invoke();
+      assert.equal(first.decision, 'before-window', JSON.stringify(first));
       f.advance(30); assert.equal(f.invoke().decision, 'before-window');
       assert.deepEqual(f.calls(), []);
     });
