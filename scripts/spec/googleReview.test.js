@@ -546,14 +546,49 @@ describe('present and verifyReview', () => {
     expect(now).toHaveBeenCalledTimes(1)
   })
 
-  it('fails closed after a crash between initial insertion and receipt persistence', async () => {
-    const { adapter, state, fetchImpl } = fixture({ receiptFailure: true })
+  it('recovers an exact pending preview with a new post-readback floor that excludes earlier approvals', async () => {
+    const options = { receiptFailure: true }
+    const { adapter, state, fetchImpl } = fixture(options)
     await expect(adapter.present(input)).rejects.toThrow('HTTP 503')
     expect(state.text).toContain('[Wiki review 7 presentation pending]')
-    const restarted = createGoogleReview({ ...config, fetchImpl, now: () => new Date('2026-09-16T00:00:00Z') })
-    await expect(restarted.present(input)).rejects.toThrow('completed presentation receipt')
     const pendingSpan = state.text.slice(state.text.indexOf('[Wiki review 7 start]'), state.text.indexOf('[Wiki review 7 end]') + '[Wiki review 7 end]'.length)
-    await expect(restarted.verifyReview({ revision: 7, reviewTextHash: digest(pendingSpan) })).rejects.toThrow('completed presentation receipt')
+    await expect(adapter.verifyReview({ revision: 7, reviewTextHash: digest(pendingSpan) })).rejects.toThrow('completed presentation receipt')
+    state.comments.push({
+      id: 'approval-before-recovery',
+      content: 'Approve wiki revision 7',
+      createdTime: '2026-09-15T01:01:00.000Z',
+      author: { emailAddress: config.approverEmail },
+    })
+    options.receiptFailure = false
+    const recoveryTime = '2026-09-16T00:00:00.000Z'
+    const now = vi.fn(() => {
+      expect(state.text).toContain(pendingSpan)
+      expect(fetchImpl.mock.calls.at(-1)[0]).toContain('includeTabsContent=true')
+      expect(state.writes).toHaveLength(2)
+      return new Date(recoveryTime)
+    })
+    const restarted = createGoogleReview({ ...config, fetchImpl, now })
+    const result = await restarted.present(input)
+    expect(result.presentedAt).toBe(recoveryTime)
+    expect(Date.parse(state.comments.at(-1).createdTime)).toBeLessThan(Date.parse(result.presentedAt))
+    expect(state.text.match(/\[Wiki review 7 start\]/g)).toHaveLength(1)
+    expect(state.writes).toHaveLength(3)
+    expect(state.writes[2].requests[0]).toHaveProperty('replaceAllText')
+    expect(await restarted.verifyReview({ revision: 7, reviewTextHash: result.reviewTextHash })).toBe(true)
+    expect(await restarted.present(input)).toEqual(result)
+    expect(now).toHaveBeenCalledTimes(1)
+    expect(state.writes).toHaveLength(3)
+  })
+
+  it('never recovers a pending preview whose exact content changed', async () => {
+    const options = { receiptFailure: true }
+    const { adapter, state } = fixture(options)
+    await expect(adapter.present(input)).rejects.toThrow('HTTP 503')
+    options.receiptFailure = false
+    state.text = state.text.replace('A readable summary', 'An altered summary')
+    await expect(adapter.present(input)).rejects.toThrow('completed presentation receipt')
+    expect(state.text).toContain('An altered summary')
+    expect(state.text).toContain('[Wiki review 7 presentation pending]')
     expect(state.writes).toHaveLength(2)
   })
 

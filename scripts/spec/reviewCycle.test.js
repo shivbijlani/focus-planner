@@ -197,9 +197,12 @@ describe('exact-content publication and retries', () => {
     h.google.recordPublication.mockRejectedValueOnce(new Error('Doc write unavailable'))
     await expect(publishApproved(h)).rejects.toThrow('Doc write unavailable')
     expect(h.state().pending.publication.wikiSha).toBe('wiki-commit')
+    h.observation.comments[0].resolved = true
     await publishApproved({ ...h, now: NOW + 10_000 })
     expect(h.google.recordPublication.mock.calls[1][0]).toEqual(h.google.recordPublication.mock.calls[0][0])
     expect(h.state().pending).toBeNull()
+    expect(h.wiki.publish).toHaveBeenCalledTimes(1)
+    expect(h.repository.accept).toHaveBeenCalledTimes(1)
   })
   it('keeps the originally recorded approval when another valid comment appears first', async () => {
     const h = harness()
@@ -272,6 +275,15 @@ describe('reader-first policy', () => {
     expect(() => validatePages(p)).not.toThrow()
     p['Home.md'] += '\n[Absent](Prioritisation#today-2)'
     expect(() => validatePages(p)).toThrow('missing linked heading')
+  })
+  it('keeps every retained topic reachable, including optional-reference pages', () => {
+    const p = { ...pages(), 'Domain-storage.md': '# Storage\n\nYour devices share protected data.' }
+    expect(() => validatePages(p)).toThrow('unreachable')
+    p['Technical-Architecture.md'] += '\n\n[Storage](Domain-storage)'
+    expect(() => validatePages(p)).not.toThrow()
+    p['Technical-Architecture.md'] = p['Technical-Architecture.md'].replace('(Domain-storage)',
+      '(https://github.com/unrelated/repo/wiki/Domain-storage)')
+    expect(() => validatePages(p, {}, 'owner/repo')).toThrow('unreachable')
   })
   it('ignores generated page commits but notices source and issue changes', () => {
     const base = [{ path: 'src/A.js', sha: 'a', type: 'blob' }]

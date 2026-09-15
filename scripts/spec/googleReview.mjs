@@ -336,19 +336,21 @@ export function createGoogleReview({
       const document = await getDocument(headers)
       const existing = reviewSpan(document.text, input.revision)
       let presentedAt
-      if (existing !== null) {
+      if (existing !== null && existing !== expected.text) {
         presentedAt = recoverPresentationTime(existing, input.revision)
         expected = buildReview(input, repo, approverEmail, presentedAt)
         if (existing !== expected.text) throw new Error('Existing wiki review differs from the frozen snapshot')
       }
       if (existing === null) {
-        const { tabId } = document.target
         await appendSection(headers, document, expected, 'Google Docs review append')
+      }
+      if (presentedAt === undefined) {
+        const { tabId } = document.target
         const updated = await getDocument(headers)
         if (reviewSpan(updated.text, input.revision) !== expected.text) throw new Error('Google Docs review append verification failed')
         // The cutoff is chosen only AFTER the complete preview is confirmed
-        // visible, then persisted inside its checksum-protected marker span.
-        // A crash before this receipt exists cannot safely recover a cutoff.
+        // visible. An exact pending preview gets a NEW cutoff on recovery,
+        // excluding earlier comments rather than guessing its original time.
         presentedAt = presentationTime()
         expected = buildReview(input, repo, approverEmail, presentedAt)
         await request(`${documentUrl}:batchUpdate`, {

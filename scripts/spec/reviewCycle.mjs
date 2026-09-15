@@ -42,7 +42,7 @@ export async function stageReview({ store, google, ticket, source, pages, now = 
   const state = loaded.state ?? initialState()
   const verdict = canPropose(state, { now, inputHash: source.inputHash, allowProposal: true })
   if (!verdict.allowed) throw new Error(verdict.reason)
-  validatePages(pages, source.pages)
+  validatePages(pages, source.pages, source.repo)
   const contentHash = pagesHash(pages)
   if (contentHash === pagesHash(source.pages)) {
     await store.save({ ...state, acceptedInput: source.inputHash }, null, loaded.sha)
@@ -86,6 +86,18 @@ export async function publishApproved({ store, google, repository, wiki, approve
   if (!state?.pending) return { status: 'nothing-pending' }
   let pending = state.pending
   if (pending.status === 'presenting') return { status: 'awaiting-presentation' }
+  if (pending.publication) {
+    // The public write already happened with approval. Resume only its receipt;
+    // resolving that comment afterwards must not trigger another publication.
+    const pages = await store.pages(pending.snapshotSha)
+    assertSnapshot(pending, pages)
+    await wiki.preflight()
+    await wiki.verify(pages, { sha: pending.publication.wikiSha })
+    await google.recordPublication(pending.publication)
+    await store.save({ ...state, acceptedInput: pending.inputHash, pending: null,
+      published: pending.publication }, null, sha)
+    return { status: 'published', ...pending.publication }
+  }
   const observation = await google.read()
   await google.verifyReview({ revision: pending.revision, reviewTextHash: pending.review.reviewTextHash })
   const approval = findApproval(observation.comments, pending, approverEmail, now)
@@ -97,7 +109,7 @@ export async function publishApproved({ store, google, repository, wiki, approve
   assertSnapshot(pending, pages)
   const source = await repository.source()
   assertSource(pending, source.pages, source.policyHash)
-  validatePages(pages, source.pages)
+  validatePages(pages, source.pages, source.repo)
   await wiki.preflight()
   // Validate the snapshot, not freshly generated model output or a floating branch.
   await repository.verify(pending, pages)
@@ -119,16 +131,13 @@ export async function publishApproved({ store, google, repository, wiki, approve
   await google.verifyReview({ revision: pending.revision, reviewTextHash: pending.review.reviewTextHash })
   const receipt = await wiki.publish(pages, pending)
   await wiki.verify(pages, receipt)
-  const published = pending.publication ?? {
+  const published = {
     revision: pending.revision, contentHash: pending.contentHash, snapshotSha: pending.snapshotSha,
     acceptedSha, wikiSha: receipt.sha, approval, publishedAt: new Date(now).toISOString(),
   }
-  if (published.wikiSha !== receipt.sha) throw new Error('Wiki changed after verification; receipt cannot be reused')
-  if (!pending.publication) {
-    pending = { ...pending, publication: published }
-    state = { ...state, pending }
-    sha = await store.save(state, null, sha)
-  }
+  pending = { ...pending, publication: published }
+  state = { ...state, pending }
+  sha = await store.save(state, null, sha)
   await google.recordPublication(published)
   await store.save({ ...state, acceptedInput: pending.inputHash, pending: null, published }, null, sha)
   return { status: 'published', ...published }

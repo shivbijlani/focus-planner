@@ -96,8 +96,9 @@ function anchors(text) {
   return result
 }
 
-export function validatePages(pages, baseline = {}) {
+export function validatePages(pages, baseline = {}, repo) {
   const problems = []
+  const links = new Map(Object.keys(pages).map(name => [name, new Set()]))
   if (!Object.keys(pages).length) problems.push('No wiki pages')
   for (const name of Object.keys(baseline)) {
     if (!(name in pages)) problems.push(`Topic deletion requires a separate decision: ${name}`)
@@ -128,12 +129,14 @@ export function validatePages(pages, baseline = {}) {
     }
     for (const match of text.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
       const target = match[1]
-      const wiki = /^https:\/\/github\.com\/[^/]+\/[^/]+\/wiki\/([^#?]+)(?:#.*)?$/.exec(target)
+      const candidate = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/wiki\/([^#?]+)(?:#.*)?$/.exec(target)
+      const wiki = candidate && (!repo || candidate[1] === repo) ? candidate : null
       const local = !/^[a-z]+:/i.test(target)
       if (local || wiki) {
         const page = target.startsWith('#') ? name.replace(/\.md$/, '') :
-          decodeURIComponent((wiki?.[1] ?? target).split('#')[0]).replace(/\.md$/, '')
+          decodeURIComponent((wiki?.[2] ?? target).split('#')[0]).replace(/\.md$/, '')
         if (!(page + '.md' in pages)) problems.push(`${name}: missing linked page ${page}`)
+        else links.get(name).add(page + '.md')
         const fragment = target.split('#')[1]
         if (fragment && pages[page + '.md'] &&
             !anchors(pages[page + '.md']).has(decodeURIComponent(fragment))) {
@@ -143,6 +146,17 @@ export function validatePages(pages, baseline = {}) {
         problems.push(`${name}: unsupported link ${target}`)
       }
     }
+  }
+  const reached = new Set()
+  const queue = ['Home.md']
+  while (queue.length) {
+    const name = queue.pop()
+    if (reached.has(name)) continue
+    reached.add(name)
+    queue.push(...(links.get(name) ?? []))
+  }
+  for (const name of Object.keys(pages)) {
+    if (!reached.has(name)) problems.push(`${name}: page is unreachable from Home.md`)
   }
   for (const label of NAVIGATION) {
     if (!pages['Home.md']?.includes(label)) problems.push(`Home.md: missing reader navigation "${label}"`)

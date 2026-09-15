@@ -149,7 +149,7 @@ for (const domain of facts.domains) {
 
 // Reader-first coverage replaces quotas and forced module/code inventories.
 try {
-  validatePages(Object.fromEntries(pagesByName))
+  validatePages(Object.fromEntries(pagesByName), {}, process.env.GITHUB_REPOSITORY)
 } catch (error) {
   findings.push({ kind: 'reader-policy', page: '(all)', detail: error.message })
 }

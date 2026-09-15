@@ -68,7 +68,7 @@ export function createGitHubReview({ repo, token, fetchImpl = fetch }) {
     const openIssues = issues.filter(issue => issue.state === 'open')
     const decisions = renderMarkdown(buildDecisions({ commit: sha, issues: openIssues }, findConflicts(openIssues)))
       .replace(/#(\d+)\b/g, (_match, number) => `[#${number}](https://github.com/${repo}/issues/${number})`)
-    return { sha, policyHash: hash(policy), inputHash: inputHash(entries, issues, policy), decisions,
+    return { repo, sha, policyHash: hash(policy), inputHash: inputHash(entries, issues, policy), decisions,
       pages: await readPages(sha, 'docs/spec') }
   }
   return {

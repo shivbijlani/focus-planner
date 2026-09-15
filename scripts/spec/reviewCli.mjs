@@ -51,7 +51,7 @@ try {
   } else if (command === 'stage') {
     const pages = Object.fromEntries(readdirSync('docs/spec').filter(n => n.endsWith('.md') && n !== 'README.md')
       .map(n => [n, readFileSync(join('docs/spec', n), 'utf8')]))
-    validatePages(pages)
+    validatePages(pages, {}, repo)
     await checkLinks(pages)
     const result = await stageReview({
       store, google, ticket: JSON.parse(readFileSync(ticketFile, 'utf8')),
@@ -60,7 +60,7 @@ try {
     console.log(`Wiki review: ${result.pending?.status ?? result.status}`)
   } else if (command === 'publish') {
     repository.verify = async (_pending, pages) => {
-      validatePages(pages)
+      validatePages(pages, {}, repo)
       await checkLinks(pages)
     }
     const wiki = createWikiPublisher({ repo, token: process.env.WIKI_TOKEN })
