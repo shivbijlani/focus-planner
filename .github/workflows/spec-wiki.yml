@@ -1,419 +1,196 @@
 name: Spec wiki
 
-# Regenerates the design specification from the code, the tests and the open
-# issues, then publishes it to the GitHub wiki.
-#
-# WHY IT IS BUILT THIS WAY
-# ------------------------
-# The bar for this spec is "someone could rebuild the app from it", which rules
-# out the obvious implementation (hand the model the repo, ask for a spec). That
-# produces fluent prose that drifts from the code immediately and cannot be
-# checked, because what is wrong is its relationship to the code -- exactly what
-# a reader does not have in front of them.
-#
-# So the pipeline splits mechanism from policy:
-#
-#   collect.mjs  (no model)  -> extracts ground-truth facts: module graph,
-#                               exports, tests, workflows, open issues.
-#   copilot      (model)     -> writes prose FROM those facts, one page at a time
-#                               so each page gets a focused slice.
-#   verify.mjs   (no model)  -> fails the build if the prose references anything
-#                               that does not exist, or omits a domain.
-#   conflicts.mjs (no model) -> reports open issues that demand opposite things,
-#                               which verify.mjs cannot catch: both issues exist,
-#                               so both references are valid, and the
-#                               contradiction ships as design authority.
-#
-# Output lands as a PULL REQUEST, never a direct push: the spec is the design
-# authority for the system, so a machine may draft it but a human accepts it.
-# Since #470 that is ONE rolling pull request on a fixed `spec/auto` branch,
-# updated in place, rather than a new PR per run -- see the schedule note below.
-#
-# WHY THIS WORKFLOW VERIFIES ITS OWN PULL REQUEST
-# -----------------------------------------------
-# The rolling pull request is authored by `github-actions[bot]` with
-# `GITHUB_TOKEN`, and GitHub refuses to let a token-authored event cascade into
-# a workflow run. The visible form of that refusal is not "no run": `ci.yml`'s
-# `pull_request` run IS created for `spec/auto` and is then parked at
-# `conclusion: action_required` with a 0s duration, so no check-run ever reaches
-# the head commit and the PR's check rollup stays permanently empty.
-#
-# That deadlocked the spec PR against the overnight agent's merge rule, which
-# refuses to merge anything with an empty rollup -- correctly, because "nothing
-# has ever looked at this" is not "this is green". The PR regenerated every 6
-# hours forever and could be neither merged nor closed.
-#
-# So the `verify-spec-branch` job below runs the same verification `ci.yml` runs
-# against the exact commit that was just pushed, and publishes the result to that
-# commit through the statuses API. Statuses written with `GITHUB_TOKEN` DO appear
-# in a pull request's rollup -- the no-cascade rule governs triggering workflows,
-# not writing statuses. This workflow itself is `schedule`-triggered, so it is
-# not subject to the gate.
-#
-# `scripts/spec/verifyParity.mjs` (run by the unit suite) holds that job to CI's
-# command set and to deriving its status from real step outcomes, so the badge
-# cannot quietly decay into decoration.
-#
-# WIKI PUBLISHING NOTE
-# --------------------
-# `GITHUB_TOKEN` cannot push to `owner/repo.wiki.git` -- the wiki is a separate
-# repository outside the token's scope. The publish job therefore needs a PAT in
-# `secrets.WIKI_TOKEN`, and is skipped (not failed) when that secret is absent,
-# so the generate-and-review loop works with zero extra setup. The wiki must also
-# have been initialised with one page in the UI, or the remote 404s.
-
 on:
   schedule:
-    # Every 6 hours (#470). The spec used to regenerate weekly on the theory that
-    # design moves in weeks. It does not: this repo lands design-bearing changes
-    # several times a day, so a weekly spec is stale for six of its seven days.
-    #
-    # Cadence alone would have made things worse, not better. The old job opened a
-    # NEW pull request on every run that produced a diff -- fine at 1/week, but 28
-    # PRs/week once it runs 4x/day, which is exactly the kind of self-inflicted
-    # noise that gets a channel muted. So the PR step below was changed at the
-    # same time to maintain ONE rolling pull request instead. The two changes are
-    # a pair; raising the frequency without the rolling branch is a regression.
-    - cron: '0 */6 * * *'
+    - cron: '17 16 * * *' # One daily opportunity to propose; state also enforces a rolling 24h limit.
+    - cron: '17 0-15,17-23 * * *' # Approval/publication only; never generates another review.
   workflow_dispatch:
     inputs:
-      publish_wiki:
-        description: 'Also publish to the wiki (requires WIKI_TOKEN)'
+      propose:
+        description: 'Check for a new review (still subject to pending-review and 24-hour gates)'
         type: boolean
-        default: true
+        default: false
 
 permissions:
-  contents: write
-  pull-requests: write
-  issues: read
-  # Required for the workflow to make Copilot requests with GITHUB_TOKEN.
-  copilot-requests: write
+  contents: read
 
 concurrency:
   group: spec-wiki
   cancel-in-progress: false
 
 jobs:
-  generate:
-    name: Generate and verify spec
+  prepare:
+    name: Read review gate
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # Consumed by verify-spec-branch. `sha` is the exact commit pushed to
-    # spec/auto, carried forward explicitly so the verification and the status it
-    # publishes are about the same tree even if a later run replaces the branch.
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: read
     outputs:
-      pushed: ${{ steps.rolling_pr.outputs.pushed }}
-      sha: ${{ steps.rolling_pr.outputs.sha }}
+      generate: ${{ steps.gate.outputs.generate }}
     steps:
       - uses: actions/checkout@v4
         with:
-          # The spec describes design intent, which lives in commit messages and
-          # history as much as in the tree.
-          fetch-depth: 0
-
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+      - name: Check document, pending revision, and daily limit
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WIKI_ALLOW_PROPOSAL: ${{ github.event.schedule == '17 16 * * *' || inputs.propose }}
+          WIKI_REVIEW_DOC_ID: ${{ vars.WIKI_REVIEW_DOC_ID }}
+          WIKI_APPROVER_EMAIL: ${{ vars.WIKI_APPROVER_EMAIL }}
+          WIKI_GOOGLE_CLIENT_ID: ${{ secrets.WIKI_GOOGLE_CLIENT_ID }}
+          WIKI_GOOGLE_CLIENT_SECRET: ${{ secrets.WIKI_GOOGLE_CLIENT_SECRET }}
+          WIKI_GOOGLE_REFRESH_TOKEN: ${{ secrets.WIKI_GOOGLE_REFRESH_TOKEN }}
+        run: node scripts/spec/reviewCli.mjs prepare
+      - uses: actions/upload-artifact@v4
+        if: steps.gate.outputs.generate == 'true'
+        with:
+          name: wiki-review-ticket
+          path: .wiki-review-ticket.json
+          include-hidden-files: true
+          if-no-files-found: error
 
-      - run: npm ci
-
-      - name: Collect ground-truth facts
+  generate:
+    name: Draft affected pages
+    needs: prepare
+    if: needs.prepare.outputs.generate == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      copilot-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: wiki-review-ticket
+      - run: npm install -g @github/copilot
+      - name: Collect current facts
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/spec/collect.mjs --out spec-facts.json
-
-      - name: Install Copilot CLI
-        run: npm install -g @github/copilot
-
-      - name: Generate spec pages
+      - name: Draft using the accepted policy
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p docs/spec
-          # --yolo suppresses interactive prompts, required for CI.
-          copilot --yolo -p "$(cat scripts/spec/prompt.md)"
-
-      - name: Make technical examples opt-in
-        run: node scripts/spec/readability.mjs --dir docs/spec
-
-      - name: Verify the spec against the code
-        run: node scripts/spec/verify.mjs --facts spec-facts.json --dir docs/spec
-
-      - name: Flag conflicting requirements
-        # Runs whatever happened above, because a contradiction between two open
-        # issues is a fact about the issues, not about whether the prose built.
-        if: always()
-        run: |
-          node scripts/spec/conflicts.mjs \
-            --facts spec-facts.json \
-            --out spec-decisions.json \
-            --md spec-decisions.md
-
-      - name: Open or update the rolling pull request
-        id: rolling_pr
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # NOTE: spec-facts.json is deliberately NOT deleted here. It is
-          # gitignored and the staging below is scoped to docs/spec, so it cannot
-          # reach a commit -- and deleting it destroyed the diagnostic artifact
-          # the next step uploads, which is the only way to see what the model was
-          # actually given when a generated page looks wrong.
-          #
-          # ONE ROLLING BRANCH, not one branch per run. At the previous weekly
-          # cadence a timestamped branch per run was harmless; at every 6h it
-          # produces 28 pull requests a week, each superseding the last, and the
-          # review queue becomes unusable. A fixed branch means the open PR is
-          # always "the current state of the spec" and its diff is always against
-          # main, which is the only version anyone wants to read.
-          BRANCH="spec/auto"
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
-
-          # Stage FIRST, then test the staged diff. `git diff` ignores untracked
-          # files, so on the first run -- when every generated page is new -- it
-          # reports "no changes" and the step exits 0 having thrown the whole spec
-          # away. That is a silent success: the job goes green and produces
-          # nothing, which is the single hardest failure to notice in automation.
-          # Observed exactly once, on run 33230584969: 17 pages / 16,780 verified
-          # words discarded with a cheerful "the design has not drifted".
-          git add -A docs/spec
-          if git diff --cached --quiet -- docs/spec; then
-            echo "No spec changes: the design has not drifted since the last run."
-            echo "pushed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          git commit -m "docs(spec): regenerate design specification from code and issues
-
-          Generated by the Spec wiki workflow. Verified against the collected
-          facts: every referenced file and issue exists, and every domain is
-          covered.
-
-          Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>"
-
-          # Force-with-lease is wrong here: the remote branch is owned solely by
-          # this job and is intentionally replaced, not advanced, so there is no
-          # concurrent writer whose work could be lost. The `concurrency` group at
-          # the top of this file already serialises runs.
-          git push --force origin "HEAD:$BRANCH"
-
-          # Recorded AFTER the push succeeds, so a failed push cannot hand a SHA
-          # to the verification job and have it vouch for a commit no branch
-          # points at.
-          echo "pushed=true" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-          # The decisions block is regenerated into the body on every run, so the
-          # PR always states the CURRENT conflicts rather than accumulating a log
-          # of every conflict that ever existed.
-          {
-            echo "Automated regeneration of the design spec in \`docs/spec\`."
-            echo
-            echo "This is the source of truth that is mirrored to the wiki. It was written"
-            echo "from \`spec-facts.json\` (module graph, exports, tests, workflows, open"
-            echo "issues) and passed \`scripts/spec/verify.mjs\`, which fails on any"
-            echo "reference to a file or issue that does not exist and on any uncovered"
-            echo "domain."
-            echo
-            echo "**Review for judgement, not for facts** -- the structural claims are"
-            echo "machine-checked; what needs a human is whether the design rationale is"
-            echo "right."
-            echo
-            echo "---"
-            echo
-            cat spec-decisions.md
-            echo
-            echo "_This pull request is updated in place every 6 hours. Its branch is"
-            echo "\`spec/auto\` and it always shows the current spec, not a snapshot._"
-          } > pr-body.md
-
-          EXISTING="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
-          if [ -n "$EXISTING" ]; then
-            gh pr edit "$EXISTING" --body-file pr-body.md
-            echo "Updated existing pull request #$EXISTING."
-          else
-            gh pr create \
-              --title "docs(spec): regenerate design specification" \
-              --body-file pr-body.md \
-              --head "$BRANCH" \
-              --base main
-          fi
-
-      - name: Upload facts and decisions as build artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
+        run: copilot --yolo -p "$(cat scripts/spec/prompt.md)"
+      - uses: actions/upload-artifact@v4
         with:
-          name: spec-facts
-          path: |
-            spec-facts.json
-            spec-decisions.json
-            spec-decisions.md
-          if-no-files-found: ignore
+          name: wiki-candidate-pages
+          path: docs/spec/*.md
+          if-no-files-found: error
 
-  # The job that makes the rolling spec pull request reviewable at all.
-  #
-  # It re-runs CI's verification against the exact commit just pushed to
-  # spec/auto and writes the outcome to that commit as a pair of statuses, which
-  # is the only channel that reaches the PR's rollup from a run this branch's own
-  # events cannot trigger (see the header note).
-  #
-  # It deliberately does NOT reuse ci.yml via `workflow_call`: a called workflow
-  # runs at the CALLER's ref and attaches its check-runs to the caller's SHA, so
-  # it would verify main and report nothing against spec/auto. It removes no need
-  # for the statuses API and adds coupling. The cost of duplicating the commands
-  # is drift, which scripts/spec/verifyParity.mjs turns into a red unit test.
   verify-spec-branch:
-    name: Verify spec branch
+    name: Verify frozen candidate
     needs: generate
-    # Nothing was pushed means nothing new to vouch for; the existing PR (if any)
-    # keeps the statuses from the run that last changed it.
-    if: needs.generate.outputs.pushed == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
-      statuses: write
+      issues: read
+      pull-requests: read
     steps:
+      # Fresh trusted checkout: model-produced scripts or instructions never reach
+      # a job with document credentials or repository write permission.
       - uses: actions/checkout@v4
         with:
-          # Pinned to the SHA, never to `spec/auto` by name. The branch is
-          # force-pushed, so a name would let a later run's tree be verified
-          # while the status is attached to an earlier commit -- a green badge
-          # vouching for code that was never run.
-          ref: ${{ needs.generate.outputs.sha }}
-
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-
-      - name: Mark the commit as being verified
+      - uses: actions/download-artifact@v4
+        with:
+          name: wiki-candidate-pages
+          path: docs/spec
+      - run: npm ci
+      - name: Collect trusted facts
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ needs.generate.outputs.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          for context in "spec-verify / test & build" "spec-verify / lint"; do
-            gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
-              -f state=pending \
-              -f context="$context" \
-              -f description="Verifying the generated spec branch" \
-              -f target_url="${RUN_URL}" >/dev/null
-          done
-
-      - run: npm ci
-
-      # Every step below carries `if: always()` so one failure does not hide the
-      # others: a lint result is still worth having when a test fails, and the
-      # published status must describe what was actually observed. The steps are
-      # NOT `continue-on-error` -- a failure here still fails this job.
+        run: node scripts/spec/collect.mjs --out spec-facts.json
+      - name: Verify page facts and readability
+        run: node scripts/spec/verify.mjs --facts spec-facts.json --dir docs/spec
       - name: Unit tests
         id: test
-        if: always()
         run: npm test
-
       - name: Production build
         id: build
         if: always()
         run: npm run build
-
       - name: Lint
         id: lint
         if: always()
         run: npm run lint
 
-      - name: Publish the verification result to the spec branch commit
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ needs.generate.outputs.sha }}
-          TEST_OUTCOME: ${{ steps.test.outcome }}
-          BUILD_OUTCOME: ${{ steps.build.outcome }}
-          LINT_OUTCOME: ${{ steps.lint.outcome }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-
-          # Derived from the step outcomes, never asserted. Anything that is not
-          # an observed success -- failure, cancellation, or a step that never
-          # ran because the environment broke -- reports as a failure, because
-          # the one thing this status may never say is "verified" about a tree
-          # nothing verified.
-          state_for() {
-            for outcome in "$@"; do
-              if [ "$outcome" != "success" ]; then echo "failure"; return; fi
-            done
-            echo "success"
-          }
-
-          publish() {
-            gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
-              -f state="$1" -f context="$2" -f description="$3" \
-              -f target_url="${RUN_URL}" >/dev/null
-            echo "$2 -> $1"
-          }
-
-          publish \
-            "$(state_for "$TEST_OUTCOME" "$BUILD_OUTCOME")" \
-            "spec-verify / test & build" \
-            "tests: ${TEST_OUTCOME:-not run}, build: ${BUILD_OUTCOME:-not run}"
-
-          publish \
-            "$(state_for "$LINT_OUTCOME")" \
-            "spec-verify / lint" \
-            "lint: ${LINT_OUTCOME:-not run}"
-
-  publish-wiki:
-    name: Publish to wiki
-    needs: generate
+  stage-review:
+    name: Freeze and present the review
+    needs: [prepare, verify-spec-branch]
     runs-on: ubuntu-latest
-    # Only publishes what is already on main and reviewed. Skipped entirely when
-    # no PAT is configured, because GITHUB_TOKEN cannot push to a wiki repo.
-    if: github.event_name == 'schedule' || inputs.publish_wiki
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: read
     steps:
       - uses: actions/checkout@v4
-
-      - name: Publish docs/spec to the wiki
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: wiki-review-ticket
+      - uses: actions/download-artifact@v4
+        with:
+          name: wiki-candidate-pages
+          path: docs/spec
+      - name: Save immutable snapshot and append the review
         env:
+          GH_TOKEN: ${{ github.token }}
+          WIKI_REVIEW_DOC_ID: ${{ vars.WIKI_REVIEW_DOC_ID }}
+          WIKI_APPROVER_EMAIL: ${{ vars.WIKI_APPROVER_EMAIL }}
+          WIKI_GOOGLE_CLIENT_ID: ${{ secrets.WIKI_GOOGLE_CLIENT_ID }}
+          WIKI_GOOGLE_CLIENT_SECRET: ${{ secrets.WIKI_GOOGLE_CLIENT_SECRET }}
+          WIKI_GOOGLE_REFRESH_TOKEN: ${{ secrets.WIKI_GOOGLE_REFRESH_TOKEN }}
+        run: node scripts/spec/reviewCli.mjs stage
+
+  publish-wiki:
+    name: Publish only an approved snapshot
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check approval, write accepted source, publish, and verify remote bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
           WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${WIKI_TOKEN:-}" ]; then
-            echo "::notice::WIKI_TOKEN not set - skipping wiki publish."
-            echo "GITHUB_TOKEN cannot push to owner/repo.wiki.git, so a PAT with"
-            echo "repo scope is required. docs/spec on main remains the source of truth."
-            exit 0
-          fi
-          if [ ! -d docs/spec ]; then
-            echo "::notice::docs/spec does not exist yet - nothing to publish."
-            exit 0
-          fi
-
-          git clone "https://x-access-token:${WIKI_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" wiki || {
-            echo "::error::Could not clone the wiki. It must be initialised with one page in the UI first."
-            exit 1
-          }
-
-          # Mirror, so a page deleted from docs/spec disappears from the wiki too
-          # rather than lingering as a stale page nobody can trace to a source.
-          find wiki -maxdepth 1 -name '*.md' -delete
-          cp docs/spec/*.md wiki/
-          # README.md is provenance for humans browsing docs/spec, not a spec page --
-          # verify.mjs deliberately excludes it, so the wiki must not carry it either
-          # or it gains a stray README page with no counterpart in the page set.
-          rm -f wiki/README.md
-
-          cd wiki
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet && git diff --cached --quiet && [ -z "$(git status --porcelain)" ]; then
-            echo "Wiki already matches docs/spec."
-            exit 0
-          fi
-          git add -A
-          git commit -m "docs(spec): sync from docs/spec @ ${GITHUB_SHA}"
-          git push
+          WIKI_REVIEW_DOC_ID: ${{ vars.WIKI_REVIEW_DOC_ID }}
+          WIKI_APPROVER_EMAIL: ${{ vars.WIKI_APPROVER_EMAIL }}
+          WIKI_GOOGLE_CLIENT_ID: ${{ secrets.WIKI_GOOGLE_CLIENT_ID }}
+          WIKI_GOOGLE_CLIENT_SECRET: ${{ secrets.WIKI_GOOGLE_CLIENT_SECRET }}
+          WIKI_GOOGLE_REFRESH_TOKEN: ${{ secrets.WIKI_GOOGLE_REFRESH_TOKEN }}
+        run: node scripts/spec/reviewCli.mjs publish

@@ -181,7 +181,7 @@ export function checkTechnicalPageLink(pagesByName) {
       detail: TECHNICAL_PAGE,
     }]
   }
-  if (!home.includes('[Technical Architecture](Technical-Architecture)')) {
+  if (!/\[[^\]]+\]\((?:Technical-Architecture(?:\.md)?|https:\/\/github\.com\/[^/]+\/[^/]+\/wiki\/Technical-Architecture)\)/.test(home)) {
     return [{
       kind: 'unlinked-technical-doc',
       page: 'Home.md',

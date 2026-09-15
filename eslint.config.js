@@ -27,6 +27,12 @@ export default defineConfig([
     },
   },
   {
+    files: ['scripts/spec/*.{js,mjs}'],
+    extends: [js.configs.recommended],
+    languageOptions: { ecmaVersion: 'latest', sourceType: 'module', globals: globals.node },
+    rules: { 'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^_' }] },
+  },
+  {
     // Node-side Telegram bridge service (runs under Node, not the browser).
     files: ['packages/telegram-bridge/**/*.js'],
     languageOptions: {

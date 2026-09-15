@@ -20,7 +20,7 @@ describe('spec readability formatting', () => {
   })
 
   it('wraps tilde and longer-backtick fences rather than letting valid Markdown bypass the gate', () => {
-    for (const fence of ['~~~~json\n{\"status\":\"ready\"}\n~~~~', '````json\n{\"status\":\"ready\"}\n````']) {
+    for (const fence of ['~~~~json\n{"status":"ready"}\n~~~~', '````json\n{"status":"ready"}\n````']) {
       const formatted = formatTechnicalDetails(fence, 'Behaviour.md')
       expect(formatted).toContain('<details>')
       expect(readabilityFindings('Behaviour.md', formatted)).toEqual([])

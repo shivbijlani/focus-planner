@@ -43,6 +43,7 @@ spec-facts.json
 # day is pure churn.
 spec-decisions.json
 spec-decisions.md
+.wiki-review-ticket.json
 
 # impeccable design-hook cache (local tool state)
 .impeccable/

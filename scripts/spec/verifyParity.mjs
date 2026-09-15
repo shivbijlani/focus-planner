@@ -1,47 +1,5 @@
-/**
- * verifyParity — keep the spec branch's verification honest, and identical to CI.
- *
- * WHY THIS EXISTS
- * ---------------
- * The rolling spec pull request (`spec/auto`, opened and force-updated by the
- * Spec wiki workflow every 6 hours) could never acquire a single check. It is
- * authored by `github-actions[bot]` using `GITHUB_TOKEN`, and GitHub refuses to
- * let a token-authored event cascade into a workflow run: the `pull_request`
- * run for `ci.yml` IS created, then parked at `conclusion: action_required` with
- * a 0s duration, so zero check-runs ever reach the head commit.
- *
- * That produced a permanent deadlock with the overnight agent's merge rule,
- * which refuses to merge a pull request whose check rollup is empty -- correctly,
- * because "no check has ever looked at this" is not "this is green". The PR
- * regenerated forever and could never be merged or closed.
- *
- * The fix is for the Spec wiki workflow -- which runs on `schedule`, so it is
- * NOT gated -- to verify the branch it just pushed and publish the result to
- * that commit via the statuses API. Commit statuses written with `GITHUB_TOKEN`
- * do land in a PR's rollup; the no-cascade rule governs triggering workflows,
- * not writing statuses.
- *
- * WHY A GUARD IS NEEDED
- * ---------------------
- * That fix only holds if the status means what it says. Two ways it silently
- * stops meaning anything:
- *
- *   1. DRIFT. The verify job re-runs CI's commands rather than reusing CI.
- *      (Reuse was considered and rejected: a `workflow_call` into `ci.yml` runs
- *      at the CALLER's ref and attaches its check-runs to the caller's SHA, so
- *      it would verify `main` and report nothing against `spec/auto` -- it does
- *      not remove the need for the statuses API, it only adds coupling.) So the
- *      commands are duplicated, and duplication drifts. A green badge produced
- *      by a subset of CI is a lie in the shape of a fact.
- *
- *   2. DECOUPLING. A status whose state is not derived from the outcome of the
- *      steps that ran is decoration. Hardcoding `success`, or swallowing a
- *      failure with `continue-on-error`, is strictly worse than the empty rollup
- *      it replaced: the empty rollup was at least honest about knowing nothing.
- *
- * This module checks both mechanically, from the workflow files themselves, so
- * the failure mode is a red check on the pull request that causes it.
- */
+// A frozen candidate must pass the same checks as ordinary code, using trusted
+// scripts, before the credentialed job presents it for approval.
 
 const BLOCK_SCALAR = /^[|>][+-]?\d*$/
 
@@ -134,53 +92,35 @@ export function npmCommands(text, jobId) {
   return [...new Set(found)].sort()
 }
 
-/** Jobs in ci.yml whose commands the spec branch must be held to. */
+/** Jobs in ci.yml whose commands the candidate must be held to. */
 export const CI_VERIFICATION_JOBS = ['test', 'lint']
 
-/** The job in spec-wiki.yml that verifies the pushed spec branch. */
+/** Stable job ID retained from the former rolling-PR workflow. */
 export const SPEC_VERIFY_JOB = 'verify-spec-branch'
 
 /**
- * Structural requirements on the verify job, each tied to a way the status
- * could stop meaning "verified" without anyone noticing.
+ * Structural requirements prevent a green check for unverified artifacts.
  */
 const STRUCTURAL = [
   {
-    id: 'derives-test-outcome',
-    why: 'the published status must be derived from the unit-test step outcome',
-    holds: (body) => body.includes('steps.test.outcome'),
+    id: 'checks-facts',
+    why: 'candidate facts and readability must be checked before presenting a review',
+    holds: (body) => body.includes('node scripts/spec/verify.mjs --facts spec-facts.json --dir docs/spec'),
   },
   {
-    id: 'derives-build-outcome',
-    why: 'the published status must be derived from the build step outcome',
-    holds: (body) => body.includes('steps.build.outcome'),
+    id: 'trusted-checkout',
+    why: 'verification scripts come from the workflow revision, not model output',
+    holds: (body) => body.includes('ref: ${{ github.sha }}'),
   },
   {
-    id: 'derives-lint-outcome',
-    why: 'the published status must be derived from the lint step outcome',
-    holds: (body) => body.includes('steps.lint.outcome'),
+    id: 'frozen-candidate',
+    why: 'verification must consume the same candidate artifact that is staged',
+    holds: (body) => body.includes('name: wiki-candidate-pages'),
   },
   {
     id: 'no-continue-on-error',
     why: 'a failure must fail the job, not be absorbed into a green status',
     holds: (body) => !body.includes('continue-on-error'),
-  },
-  {
-    id: 'no-hardcoded-success',
-    why: 'no status state may be the literal success; it must come from a step outcome',
-    holds: (body) => !/state=["']?success/.test(body),
-  },
-  {
-    id: 'writes-statuses',
-    why: 'the job must publish to the commit statuses API, which is what reaches the PR rollup',
-    holds: (body) => /statuses\/\$?\{?/.test(body) && body.includes('statuses: write'),
-  },
-  {
-    id: 'pins-the-verified-sha',
-    why:
-      'checkout must pin the exact SHA the status is attached to; checking out the branch by ' +
-      'name lets a concurrent force-push verify one tree and vouch for another',
-    holds: (body) => body.includes('needs.generate.outputs.sha') && !/ref:\s*spec\/auto/.test(body),
   },
 ]
 
@@ -194,7 +134,7 @@ export function checkSpecVerifyParity(ciText, specText) {
   for (const job of CI_VERIFICATION_JOBS) {
     const cmds = npmCommands(ciText, job)
     if (!cmds) {
-      problems.push(`ci.yml has no "${job}" job -- the spec branch is measured against it`)
+      problems.push(`ci.yml has no "${job}" job -- the candidate is measured against it`)
       continue
     }
     for (const c of cmds) expected.add(c)
@@ -202,7 +142,7 @@ export function checkSpecVerifyParity(ciText, specText) {
 
   const actual = npmCommands(specText, SPEC_VERIFY_JOB)
   if (!actual) {
-    problems.push(`spec-wiki.yml has no "${SPEC_VERIFY_JOB}" job -- the spec PR cannot be verified`)
+    problems.push(`spec-wiki.yml has no "${SPEC_VERIFY_JOB}" job -- the candidate cannot be verified`)
     return { ok: false, problems }
   }
 
@@ -227,6 +167,10 @@ export function checkSpecVerifyParity(ciText, specText) {
     .join('\n')
   for (const rule of STRUCTURAL) {
     if (!rule.holds(body)) problems.push(`${rule.id}: ${rule.why}`)
+  }
+  const stage = (jobBlock(specText, 'stage-review') ?? []).join('\n')
+  if (!stage.includes('needs: [prepare, verify-spec-branch]') || /\bif:/.test(stage)) {
+    problems.push('stage-needs-verification: presenting a review must require successful verification')
   }
 
   return { ok: problems.length === 0, problems }

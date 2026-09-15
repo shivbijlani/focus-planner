@@ -114,3 +114,30 @@ Inspect the final Markdown, not merely the command that produced it.
 If the target Markdown renderer does not support GitHub alerts, replace the alert with its closest
 styled callout component while preserving the `<details>` boundary, and state the compatibility
 choice in the delivery note.
+
+## 6. Maintain an approved document without overwriting decisions
+
+For this repository, read `docs/wiki-maintenance-policy.md` before writing or updating the wiki.
+It records the approved reader-first navigation, visible agent priorities and reliability topics,
+and the daily review contract. The executable updater is `scripts/spec/reviewCli.mjs`, scheduled
+by `.github/workflows/spec-wiki.yml`; the skill is not itself a scheduler or approval mechanism.
+
+Use one existing catch-up document as the review surface. Its binding and the human approver
+identity are deployment configuration, not a title search or a new document on every run.
+Read human comments before proposing work. Incorporate approved requirements into the versioned
+project policy; do not treat questions, suggestions, or general approval of the process as
+permission to publish unseen content.
+
+At most once in a rolling 24-hour period, draft a new review of changed documentation inputs.
+If nothing relevant changed, create no review. If one is awaiting approval, freeze it and leave
+newer changes for later. Each review gives a revision number, concise summary, immutable
+full-page previews, and the exact approval phrase.
+
+Publish only that exact approved snapshot, without model rewriting after approval. Verify the
+accepted repository pages and the remotely published wiki before reporting success. On failure,
+keep the revision pending and retry the same content. Never bypass this gate with the legacy
+ad-hoc wiki publisher, a generic merge queue, or a fresh generation after approval.
+
+When using this skill in another repository, retain the same separation: reusable writing
+guidance here, project-specific approved policy in that repository, private review binding in
+configuration, and executable scheduling/approval/publication guards in the updater.

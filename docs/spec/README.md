@@ -1,9 +1,11 @@
-# Design specification (generated)
+# Reader-first wiki source
 
-The pages in this folder are the **design thesis** for this repository: enough detail to rebuild
-the system from scratch without reading the source.
+These pages explain the planner's behavior and design principles. Optional implementation detail
+is collapsed; the architecture companion uses principles and diagrams rather than code.
 
-They are **generated**, and this folder is the source of truth that the GitHub wiki mirrors. See
-[Updating-the-Spec](Updating-the-Spec) for the full maintenance pipeline. This file itself is not a
+Daily maintenance proposes a frozen revision in one persistent catch-up Doc, then publishes only
+the exact human-approved snapshot. See the [maintenance runbook](../wiki-maintenance.md) for
+deployment and [Keeping the wiki current](Updating-the-Spec.md) for the reading-level overview.
+This folder is the accepted source, but committing pages alone does not publish them. This file is not a
 spec page — it is not indexed from `Home.md` and is excluded from `verify.mjs`'s checks and from the
 wiki publish step.

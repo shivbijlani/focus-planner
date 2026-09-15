@@ -8,8 +8,7 @@
 //   1. INVENTION -- it confidently describes a file, module or export that does
 //      not exist. Prose is fluent, so this survives review.
 //   2. OMISSION  -- a whole domain of the system is simply absent, so the spec
-//      reads complete while being unusable for its stated purpose (rebuilding
-//      the app).
+//      appears complete while omitting an important product capability.
 //
 // Neither is detectable by reading the spec, because the thing that is wrong is
 // its relationship to the code -- which is exactly what a reader does not have
@@ -26,6 +25,7 @@
 import { readFileSync, readdirSync, existsSync } from 'fs'
 import { join } from 'path'
 import { checkTechnicalPageLink, readabilityFindings } from './readability.mjs'
+import { validatePages } from './reviewPolicy.mjs'
 
 const args = process.argv.slice(2)
 const factsPath = argValue('--facts') ?? 'spec-facts.json'
@@ -46,9 +46,7 @@ if (!existsSync(specDir)) {
 }
 
 const facts = JSON.parse(readFileSync(factsPath, 'utf8'))
-// README.md is provenance for humans browsing the folder, not a spec page. Left
-// in the page set it fails the thin-page floor forever and trains readers to
-// ignore this gate, which is how a check becomes decoration.
+// README.md is provenance for humans browsing the folder, not a wiki page.
 const pages = readdirSync(specDir)
   .filter((f) => f.endsWith('.md'))
   .filter((f) => f.toLowerCase() !== 'readme.md')
@@ -144,40 +142,16 @@ findings.push(...checkTechnicalPageLink(pagesByName))
 // --- 2. OMISSION: every domain must be described somewhere -------------------
 const allText = pages.map((p) => readFileSync(join(specDir, p), 'utf8')).join('\n')
 for (const domain of facts.domains) {
-  if (!allText.includes(domain)) {
+  if (!allText.includes(domain) && !pages.includes(`Domain-${domain}.md`)) {
     findings.push({ kind: 'uncovered-domain', page: '(none)', detail: domain })
   }
 }
 
-// Every domain's largest module should be reachable from the spec, otherwise a
-// domain is "covered" by a passing mention while its substance is missing.
-const biggestPerDomain = new Map()
-for (const m of facts.modules) {
-  const cur = biggestPerDomain.get(m.domain)
-  if (!cur || m.lines > cur.lines) biggestPerDomain.set(m.domain, m)
-}
-for (const [domain, m] of biggestPerDomain) {
-  if (!allText.includes(m.path)) {
-    findings.push({ kind: 'uncovered-key-module', page: '(none)', detail: `${domain}: ${m.path}` })
-  }
-}
-
-// --- 3. SUBSTANCE: the stated bar is "someone could rebuild it" --------------
-// A thin spec passes both checks above while being useless, so assert a floor.
-// The number is a floor, not a target: it is roughly the point below which a
-// page cannot carry an architecture, a data format and its rationale.
-const MIN_WORDS_PER_PAGE = 250
-for (const page of pages) {
-  const words = readFileSync(join(specDir, page), 'utf8').split(/\s+/).filter(Boolean).length
-  if (words < MIN_WORDS_PER_PAGE) {
-    findings.push({ kind: 'thin-page', page, detail: `${words} words < ${MIN_WORDS_PER_PAGE}` })
-  }
-}
-
-// A spec that never shows a concrete artifact cannot be rebuilt from: the
-// formats and signatures are the part prose cannot substitute for.
-if (!/```/.test(allText)) {
-  findings.push({ kind: 'no-examples', page: '(all)', detail: 'no fenced code blocks anywhere' })
+// Reader-first coverage replaces quotas and forced module/code inventories.
+try {
+  validatePages(Object.fromEntries(pagesByName))
+} catch (error) {
+  findings.push({ kind: 'reader-policy', page: '(all)', detail: error.message })
 }
 
 // --- report -------------------------------------------------------------------
