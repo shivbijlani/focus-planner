@@ -11,7 +11,7 @@ import { captureActivity, createDispatcher, dispatchReceipt, eventCursor, native
 const exec = promisify(execFile);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SUBJECT = process.env.OA_STATE_SCRIPT || path.join(HERE, '..', 'skills', 'overnight-agent', 'oa-state.ps1');
-const PS = process.platform === 'win32' ? 'powershell' : 'pwsh';
+const PS = process.env.OA_TEST_POWERSHELL || (process.platform === 'win32' ? 'powershell' : 'pwsh');
 const old = '2026-09-06T16:16:52-07:00';
 const writeJson = (file, data) => fs.writeFileSync(file, JSON.stringify(data));
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
@@ -98,7 +98,8 @@ function fixture(t) {
     }
     if (name === 'send_session_message') {
       if (f.sendMode === 'denied') return { resultType: 'denied', textResultForLlm: 'Permission denied before execution' };
-      assert.notEqual(readJson(f.stateFile(args.session_id.slice(2))).session.last_woken_at, old, 'wake must be stamped BEFORE the native send');
+      assert.ok(Date.parse(readJson(f.stateFile(args.session_id.slice(2))).session.last_woken_at) > Date.parse(old),
+        'wake must advance BEFORE the native send, not merely change timezone representation');
       sent.push(args);
       if (f.sendMode === 'lost') throw new Error('Response lost after accepting the message');
       return { resultType: 'success', textResultForLlm: 'Message accepted for priority delivery' };
@@ -106,7 +107,7 @@ function fixture(t) {
     throw new Error(`Unexpected native tool: ${name}`);
   };
   f.dispatcher = (overrides = {}) => createDispatcher({
-    invokeTool: f.invoke, ownerSessionId: 'coordinator-a', paths, sessionRoot, scriptPath: SUBJECT, ...overrides,
+    invokeTool: f.invoke, ownerSessionId: 'coordinator-a', paths, sessionRoot, scriptPath: SUBJECT, psExe: PS, ...overrides,
   });
   f.snapshot = () => captureActivity({ invokeTool: f.invoke, stateDir: paths.state_dir, sessionRoot });
   let inputCounter = 0;
@@ -327,7 +328,7 @@ test('a start token is single-use and a definite native denial cancels without a
   f.add('468');
   f.sendMode = 'denied';
   await assert.rejects(() => f.dispatcher().dispatch({ task_id: '468', message: 'Approved' }), /dispatch_not_sent/);
-  assert.equal(readJson(f.stateFile('468')).session.last_woken_at, old);
+  assert.equal(Date.parse(readJson(f.stateFile('468')).session.last_woken_at), Date.parse(old));
   assert.equal((await f.dispatcher().capacity()).admits, 1);
   const args = ['session', '-Id', '468', '-DispatchOwner', 'coordinator-a'];
   const reserved = await f.oa([...args, '-ForDispatch'], await f.snapshot());
