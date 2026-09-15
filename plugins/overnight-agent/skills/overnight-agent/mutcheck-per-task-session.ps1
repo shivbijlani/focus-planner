@@ -140,6 +140,7 @@ function Invoke-Oa {
   param([string[]]$OaArgs, [string]$Settings = $noSettings)
   $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $OaArgs +
   @('-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store,
+    '-PlannerCompleted', (Join-Path $root 'absent-completed.md'),
     '-UserSettings', $Settings, '-RunWorkspace', $runWs)
   # Must not throw: -ExpectPreFix runs this against a build that REJECTS the new parameters, and a
   # hard failure there has to surface as a failed arm rather than a crashed harness -- otherwise
@@ -358,35 +359,40 @@ Check 'M malformed value -> concurrency 1, not unlimited' { $m.concurrency -eq 1
 $n = Invoke-OaJson -OaArgs @('session', '-InFlight') -Settings $twoSettings
 Check 'N the settings row is actually read' { $n.concurrency -eq 2 }
 
-Check 'N- in_flight counts live sessions' { $l.in_flight -ge 3 }
+Check 'N- retained bindings are not a global in-flight count' {
+  $l.scope -eq 'per_run' -and $l.dispatch_limit -eq 1 -and -not $l.PSObject.Properties['in_flight']
+}
 
-# --- O/P/U: the cap is ENFORCED, with exactly one sanctioned exception -----------------
-# Release everything first, so the arms below control the in-flight count exactly.
+# --- O/P/U: binding is preparation, not admission (#589) -------------------------------
+# Enforcement moved to the actual dispatch boundary. Its cross-process/accepted-pending tests
+# run in CI alongside this suite; retaining a bind-time cap would restore the idle-task deadlock.
 foreach ($id in $ids) { [void](Invoke-Oa @('session', '-Id', "$id", '-SessionRelease')) }
 $zero = Invoke-OaJson @('session', '-InFlight')
-Check 'S release frees capacity' { $zero.in_flight -eq 0 -and $zero.at_capacity -eq $false }
+Check 'S releasing bindings leaves the configured per-run limit unchanged' { $zero.dispatch_limit -eq 1 }
 
 [void](New-Bind -Id '805' -SessionId 'SESS_805')
 $o = Invoke-Oa @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'folder')
-Check 'O bind past concurrency 1 is REFUSED' { $script:LastOaExit -ne 0 -and $o -match 'session_at_capacity' }
+Check 'O a second idle conversation can be bound without starting work' { $script:LastOaExit -eq 0 -and $o -match 'SESS_806' }
+Check 'O- two bindings do not spend or change the per-run limit' {
+  $capacity = Invoke-OaJson @('session', '-InFlight')
+  $capacity.scope -eq 'per_run' -and $capacity.dispatch_limit -eq 1 -and -not $capacity.PSObject.Properties['at_capacity']
+}
 
 $p = Invoke-OaJson @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'folder', '-Force')
-Check 'P -Force admits the collect-wave exception' { "$($p.session_id)" -eq 'SESS_806' }
+Check 'P an explicit rebind still preserves the requested conversation' { "$($p.session_id)" -eq 'SESS_806' }
 
-# At concurrency 2 the same bind that O refused must succeed, which is the consequence of N rather
-# than just its signal: a setting that is read but not USED would pass N and fail here.
+# Changing the concurrency setting does not change the identity operation.
 [void](Invoke-Oa @('session', '-Id', '806', '-SessionRelease'))
 $n2 = Invoke-OaJson -OaArgs @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'folder') -Settings $twoSettings
 Check 'N-- concurrency 2 admits the second item' { "$($n2.session_id)" -eq 'SESS_806' }
 [void](Invoke-Oa @('session', '-Id', '806', '-SessionRelease'))
 
-# U: a task whose session died must be able to get a replacement even at capacity 1 -- a
-# replacement continues an item already in flight, it does not add one. Charging it against the
-# cap would strand exactly the task that most needs the run's attention.
+# U: replacement still carries continuity. Waking the replacement is a separate, guarded
+# admission; a dead session is not an occupied worker and cannot bypass that check.
 [void](Invoke-Oa @('session', '-Id', '805', '-SessionDead'))
 [void](New-Bind -Id '807' -SessionId 'SESS_807')          # 807 now holds the single slot
 $u = Invoke-OaJson @('session', '-Id', '805', '-SessionId', 'SESS_805B')
-Check 'U a replacement is not charged against the cap' { "$($u.session_id)" -eq 'SESS_805B' -and "$($u.prior_session_id)" -eq 'SESS_805' }
+Check 'U a replacement binding preserves the prior conversation' { "$($u.session_id)" -eq 'SESS_805B' -and "$($u.prior_session_id)" -eq 'SESS_805' }
 
 # --- Q/R: one worklist, and it stays read-only ------------------------------------------
 $r807 = Get-Row '807'

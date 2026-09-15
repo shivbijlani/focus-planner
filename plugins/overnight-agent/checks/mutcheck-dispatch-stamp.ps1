@@ -42,14 +42,14 @@
   ARMS
     A1  a plain `session -Id N` read is an INSPECTION
           -> dispatch_authorised: false, and last_woken_at is byte-identical afterwards (#514)
-    A2  `session -Id N -ForDispatch` is a DISPATCH
-          -> dispatch_authorised: true, and last_woken_at advances in the same call
+    A2  -CheckDispatch is unstamped; -ForDispatch records the wake
+          -> dispatch_authorised: true, and last_woken_at advances before the send
     A3  binding a session does NOT stamp it
           -> a bind followed by no wake never leaves a fresh last_woken_at
 
   MUTANTS (each must break exactly the arm named)
     B_alwaysAuthorised  authority granted to every read, asked for or not     -> A1
-    C_neverStamp        -ForDispatch answers but does not record the wake     -> A2
+    C_neverStamp        -ForDispatch answers but does not record the wake    -> A2
     D_stampOnBind       the cheap fix: bind writes the wake stamp             -> A3
 #>
 [CmdletBinding()]
@@ -128,6 +128,12 @@ function New-Store {
     }
   }
   $state | ConvertTo-Json -Depth 8 | Set-Content -Path (Join-Path $dir 'task-999.json') -Encoding utf8
+  $journal = Join-Path $dir 'journal'
+  New-Item -ItemType Directory -Path $journal | Out-Null
+  Set-Content -Path (Join-Path $journal 'task-999.md') -Value '# Task 999: fixture' -Encoding utf8
+  Set-Content -Path (Join-Path $dir 'planner.md') -Value "## Today`n`n| ID | Task |`n|---|---|`n| 999 | fixture |" -Encoding utf8
+  Set-Content -Path (Join-Path $dir 'completed.md') -Value '' -Encoding utf8
+  Set-Content -Path (Join-Path $dir 'snooze.json') -Value '{}' -Encoding utf8
   return $dir
 }
 
@@ -148,7 +154,10 @@ function Read-Stamp {
 
 function Invoke-Session {
   param([string]$SubjectPath, [string]$StateDir, [string[]]$Extra = @())
-  $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $SubjectPath, 'session', '-Id', '999', '-StateDir', $StateDir) + $Extra
+  $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $SubjectPath, 'session', '-Id', '999',
+    '-StateDir', $StateDir, '-JournalDir', (Join-Path $StateDir 'journal'),
+    '-PlannerBoard', (Join-Path $StateDir 'planner.md'), '-PlannerCompleted', (Join-Path $StateDir 'completed.md'),
+    '-SnoozeStore', (Join-Path $StateDir 'snooze.json'), '-UserSettings', (Join-Path $StateDir 'absent-settings.md')) + $Extra
   $out = & pwsh @argv 2>&1
   $text = ($out | Out-String)
   try { return ($text | ConvertFrom-Json) } catch { return $null }
@@ -170,8 +179,12 @@ function Test-Arms {
   }
   if ($s1 -ne $StaleStamp) { $f += "A1: a plain read moved last_woken_at to '$s1' -- an inspection that stamps is #514" }
 
-  # A2 -- a declared dispatch is authorised AND records the wake in the same call.
+  # A2 -- the eligibility check does not stamp; the dispatch call stamps before native send.
   $d2 = New-Store
+  $checked = Invoke-Session -SubjectPath $SubjectPath -StateDir $d2 -Extra @('-CheckDispatch')
+  if (-not $checked.dispatch_eligible -or $checked.dispatch_authorised -or (Read-Stamp $d2) -ne $StaleStamp) {
+    $f += 'A2: eligibility check was not read-only'
+  }
   $r2 = Invoke-Session -SubjectPath $SubjectPath -StateDir $d2 -Extra @('-ForDispatch')
   $s2 = Read-Stamp $d2
   if (-not $r2) {
@@ -180,7 +193,7 @@ function Test-Arms {
     $auth2 = $r2.PSObject.Properties['dispatch_authorised'] -and $r2.dispatch_authorised
     if (-not $auth2) { $f += 'A2: -ForDispatch did not report dispatch_authorised' }
   }
-  if ($s2 -eq $StaleStamp) { $f += 'A2: -ForDispatch answered but left last_woken_at stale -- the verdict and the stamp are still two events' }
+  if ($s2 -eq $StaleStamp) { $f += 'A2: -ForDispatch answered but left last_woken_at stale' }
   elseif ($s2 -eq '<no-session>' -or $s2 -eq '<no-state>') { $f += "A2: -ForDispatch destroyed the binding ($s2)" }
 
   # A3 -- binding is not waking. A run binds a session and may then fail to wake it, so a bind
@@ -188,10 +201,7 @@ function Test-Arms {
   # VALUE being fresh rather than about equality: a first bind legitimately clears the field to
   # '', and the harmful version is specifically a bind that writes NOW.
   #
-  # The task starts UNBOUND on purpose. Binding a second session over a live one is refused for
-  # capacity (concurrency 1) before it writes anything, so that scenario would report "clean" for
-  # a reason that has nothing to do with stamping -- a mutant surviving because the code under it
-  # never ran.
+  # Start unbound so this exercises the bind, not a conflicting-live-binding refusal.
   $d3 = New-Store -Bound 'no'
   $ws3 = Join-Path $Tmp ('ws-a3-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
   New-Item -ItemType Directory -Path $ws3 -Force | Out-Null
@@ -218,7 +228,7 @@ $baseline = Test-Arms -SubjectPath $baseSubject
 if ($baseline.Count) {
   foreach ($x in $baseline) { Write-Host "  FAIL  baseline  $x" -ForegroundColor Red }
 } else {
-  Write-Host '  [baseline] OK -- plain read inspects, -ForDispatch stamps, bind does not'
+  Write-Host '  [baseline] OK -- inspections and checks do not stamp; dispatch does'
 }
 
 $mutants = @(

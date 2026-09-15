@@ -6,7 +6,7 @@ task's journal, you *approve* it (or ask for revisions), and only an **approved*
 plan gets **executed**. Approval is the safety gate.
 
 This plugin packages the `overnight-agent` skill (its `SKILL.md`, helper
-PowerShell scripts, and a settings template) so it can be installed with one
+PowerShell scripts, native task-dispatch extension, and a settings template) so it can be installed with one
 command from the Focus Planner plugin marketplace.
 
 ## What's inside
@@ -67,6 +67,42 @@ Ask Copilot to "run the overnight agent", "propose plans for my tasks", or
 "execute approved plans". The skill's `SKILL.md` documents the full run flow
 (inbox check → execute approved plans → propose new plans behind the approval
 gate).
+
+### Start/continue requests per run
+
+The setting historically named **`Overnight Agent concurrency`** means **automatic start/nudge
+attempts per overnight run**, not tasks running simultaneously. At `1`, the 10:00 run may start
+task 468; the 10:30 run may nudge 468 again or start another eligible task while 468 continues.
+Repeated nudges and overlapping task sessions are intentional. Coordinator runs are assumed
+not to overlap on the same machine.
+
+Use **`oa-state.ps1 scan`**, **`oa_run_budget`**, then **`oa_dispatch`** in the Copilot app.
+The extension invokes the native `send_session_message` tool; it does not query app activity or
+inspect task event logs. It needs Node 22+, Windows PowerShell 5.1 (or `pwsh` elsewhere), and the
+app's native message tool. Missing tools stop dispatch rather than bypassing the budget.
+
+`oa_dispatch` checks task eligibility and pauses, records the attempt in this run's counter,
+checks again while stamping the wake, and sends the instruction. Requests within one run are
+serialized. Failed/unconfirmed attempts consume this run's allowance only and are reported
+explicitly; the next run has a fresh allowance. There are no cross-run reservations, generations,
+delivery receipts, activity snapshots or deduplication keys.
+
+Each scheduled run already gets its own coordinator session. Its small `files/oa-run-budget.json`
+records the counted task IDs and whether each request was a priority or human collect request.
+This survives a tool reload in the same run; the next session starts at zero. Budget reads are
+read-only. Use a fresh coordinator session for a manual rerun too, rather than resetting a
+running session's counter.
+
+Saved task conversations and Today-first eligibility remain unchanged. Create new/replacement
+sessions **idle, without a kickoff**, bind them, then send their first instruction through
+`oa_dispatch`. Explicit human collect requests remain a separately reported budget exception;
+they never override pauses or eligibility. Task-state writes remain locked and atomic because
+task agents can still update state while a coordinator runs.
+
+`oa-state.ps1 session -RunLimit` reads configuration only. The legacy `-InFlight` flag is an
+alias for that read: it no longer emits a misleading running-worker count. `oa_run_budget`
+reports `attempted_this_run`, `collect_attempted_this_run`, `remaining_this_run` and the counted
+requests. No installed task state or old experimental receipt files are migrated or deleted.
 
 ### Is this issue already shipped?
 

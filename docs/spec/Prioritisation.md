@@ -3,7 +3,7 @@
 Prioritisation in this repository is a product behaviour, not one comparator. The durable inputs live
 in markdown (`planner.md`, journals, `agent-gate.md`, `user-settings.md`); the web app edits those
 inputs; `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1` turns them into an ordered,
-binding worklist; and dispatch then applies capacity, gating, and provenance rules before any task
+binding worklist; and dispatch then applies a per-run request limit, gating, and provenance rules before any task
 runs. [Domain-overnight-agent](Domain-overnight-agent), [Reliability](Reliability), and
 [Data-Formats](Data-Formats) describe adjacent parts of the system; this page describes the
 selection logic end to end.
@@ -206,7 +206,7 @@ The shipped template states the concurrency rationale plainly:
 <summary><strong>Show technical detail</strong></summary>
 
 ```md
-| Overnight Agent concurrency | `1` — how many items the agent may have **in flight** at once. At `1` it works one thing at a time; giving a task its own session is *isolation*, not permission to run several at once. |
+| Overnight Agent concurrency | `1` — automatic start/continue attempts per coordinator run, not simultaneous workers. |
 ```
 
 
@@ -331,13 +331,12 @@ make sure those parked rows do not freeze the whole system.
 | Due poll / due recheck override | `Test-Workable` yields the park to `due_poll` / `due_recheck` | A recurring timer must not stop firing just because the user stopped replying. |
 | Snooze precedence | `scan` suppresses due timers when `snoozed`, but leaves the timers armed | “Not until DATE” outranks both board rank and timers, without silently disarming the timer forever. |
 | Staleness backstop | `stale_turn_backstop` based on `Today gate backstop` | A wedged Today row eventually releases Deferred instead of freezing the backlog. |
-| Doc-observation freshness | `DocObservationFreshMinutes = 180` | A doc-bound task parks on comment silence only when silence was actually observed recently; stale or unread channels fail toward work, not invisible parking. This is the fix direction of **#500**. |
-| Active-wake freshness | `ActiveWakeMinutes = 45` | A doc-bound task that somebody is actively working still counts as in flight, even if comments are quiet. This closes the over-dispatch side guarded by **#522**. |
-| Capacity uncounts parked work | `Test-SessionHoldsCapacity` returns false for unworkable waiting tasks | A task waiting on a human reply or user pause does not consume the only dispatch slot. That closes **#487** and **#541** on the session-capacity surface. |
+| Per-run request counter | `oa_run_budget` / `oa_dispatch` | Saved conversations, overdue timers and work started in earlier runs do not spend the new run's allowance (**#589**). |
+| Visible send failures | An attempt is counted before sending; failure is reported | An uncertain send uses this run's quota only. It creates no cross-run reservation or permanent gate. |
 
 The key asymmetry is deliberate: when unsure, the system usually fails toward **holding** or
 **refusing extra dispatch**, not toward silently widening work. That is why snooze suppresses
-timers, stale wakes stop counting as active after 45 minutes, and a malformed concurrency setting
+timers, explicit pauses still refuse a nudge, and a malformed request-limit setting
 falls back to 1 instead of some guessed higher value.
 
 ### The ask is declared, not inferred (#560)
@@ -354,8 +353,8 @@ The ask is now stated in the same act as writing the turn. `write-turn.ps1` requ
 turn's own provenance marker. `HasBlockingAsk` reads that declaration first, so **`blocking` parks
 even when the wording opens dismissively, and `offer`/`none` do not park even when the wording
 contains a blocking-shaped clause.** The preference lives inside `Get-BlockingAskVerdict`, which
-`Get-JournalFacts` calls, so both the emitted `scan` row and the capacity reader inherit it from
-one edit rather than two.
+`Get-JournalFacts` calls, so the emitted `scan` row and the dispatch eligibility check inherit it
+from one edit. Capacity deliberately does not infer activity from asks.
 
 **The textual reading survives as a documented fallback** for turns written before the flag
 existed (~81 journals at the time of the change), where the pre-#560 semantics apply exactly:
@@ -375,18 +374,11 @@ while writing the turn, not a value reconstructed afterwards from narrative. Tha
 `-Exhausted` made for the Today gate, and it is why both remain subject to the cancelling
 conditions above rather than being trusted outright.
 
-**The parking expression is duplicated on purpose.** `Cmd-Scan` (which emits `awaiting_reply` on
-the worklist row) and `Test-SessionHoldsCapacity` (which gates whether that row's session counts
-against the concurrency ceiling) each compute `$facts.HasAgentBlock -and $facts.HasBlockingAsk -and
--not $facts.HasTrailingUser` independently, and the source keeps the two copies **textually
-identical** rather than factoring them into one shared function. The declared-ask preference
-itself lives once, inside `Get-BlockingAskVerdict` (called by `Get-JournalFacts`, which both
-readers call), so a `#560` declaration reaches both readers from one edit. But had that resolution
-happened inside `Cmd-Scan` instead, the emitted row would say `declared` while
-`Test-SessionHoldsCapacity` kept inferring from prose — **#545's "emitted field disagrees with
-gated field" shape**, on the exact reader pair the design calls out as needing to stay
-synchronized. Textual duplication, checked by review and by `mutcheck-awaiting-reply.ps1` rather
-than hidden behind an abstraction, is the guard against the two readers drifting apart again.
+**One worklist owns eligibility.** `Get-ScanRows` emits the declared/inferred ask and computes
+eligibility; dispatch consumes that same row under the state-store lock. The former duplicated
+parking predicate in capacity is removed. Whether a task is ready to work and whether its
+session is executing are different questions: making a timer due must not reserve the worker
+needed to run that timer.
 
 `has_open_ask` is unchanged in the non-regressing direction by all of this: a declaration only ever
 adds visibility onto a row that already had an open ask under the old inference; it never manufactures
@@ -415,7 +407,7 @@ The guard pattern is consistent across all of them:
 - **replies are read from human provenance or structural position**, not from the agent's own
   summary of what happened,
 - **Today release comes from a separate declaration plus human-controlled invalidations**,
-- **capacity trusts user-originated pauses more than agent-originated claims of completion**, and
+- **dispatch honours user-originated pauses while pacing counts this run's requests**, and
 - **dispatch exceptions are justified by provenance**: a user action may widen the run; the
   agent's own judgement may not.
 
@@ -427,50 +419,59 @@ choosing which signals are allowed to carry authority.
 Pacing and ordering are related but different. Ordering answers *which row is next*; pacing answers
 *how much work may this run take on before the next scheduled run arrives*.
 
-### Enforced mechanism: the concurrency ceiling
+### Enforced mechanism: start/continue requests per run
 
-`user-settings.md` exposes `Overnight Agent concurrency`, defaulting to `1`. `oa-state.ps1`
-resolves it itself, not by trusting the caller to remember a flag. The capacity view is emitted by
-`session -InFlight`:
+**Coordinator runs do not overlap on the same machine. Task sessions may overlap across runs,
+and repeated nudges to the same task are acceptable.** At a limit of `1`, a 10:00 run may start
+task 468; the 10:30 run may nudge it again or start another eligible task while 468 continues.
+This is an allowance for new requests, not a simultaneous-worker ceiling.
 
-> [!NOTE]
-> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+The existing `Overnight Agent concurrency` setting retains its name for compatibility, but
+means **automatic start/continue attempts per run**. `session -RunLimit` reads it. The legacy
+`session -InFlight` flag aliases that configuration read and emits no in-flight count.
+Neither command enumerates task state to infer occupied workers.
 
-<details>
-<summary><strong>Show technical detail</strong></summary>
+The normal flow is **`oa-state.ps1 scan` → `oa_run_budget` → `oa_dispatch`**. The dispatcher
+checks the selected task's eligibility and pause, counts the attempt, checks again while
+recording its wake, and invokes the native `send_session_message` tool. A busy saved session is
+not a reason to refuse. New/replacement sessions are created idle and bound before their first
+counted kickoff.
 
-```powershell
-return ([pscustomobject]@{
-    concurrency = [int]$script:ConcurrencyLimit
-    concurrency_source = "$script:ConcurrencySource"
-    in_flight   = [int]$live
-    at_capacity = [bool]($live -ge $script:ConcurrencyLimit)
-    admits      = [int][Math]::Max(0, $script:ConcurrencyLimit - $live)
-  } | ConvertTo-Json -Depth 4)
-```
+| Budget field | Meaning |
+| --- | --- |
+| `limit` / `limit_source` | The configured automatic request allowance and its provenance. |
+| `attempted_this_run` | Automatic attempts already made by this coordinator run. |
+| `collect_attempted_this_run` | Explicit human collect requests, reported separately. |
+| `remaining_this_run` | Automatic requests still permitted, clamped to zero. |
+| `requests` | Task ID and wave for each counted attempt, making the counter auditable. |
 
+Every scheduled run already has its own coordinator session. Its
+`files/oa-run-budget.json` contains the counted requests, so tool reloads in that session do not
+reset the counter. A new run's session starts at zero. Manual reruns also use a fresh coordinator
+session; resetting a live run's counter is not part of the protocol. Calls within one run are
+serialized so parallel tool requests cannot overspend its allowance.
 
-</details>
+**A failed or unconfirmed send consumes this run's allowance only.** There is no automatic retry,
+and no claim of successful delivery on an error. A later run may try again with its new allowance.
+There are no app-activity lookups, event-log inspections, pending reservations, generations,
+receipt reconciliation or cross-run deduplication keys.
+
+Task-state read/modify/write operations still use an OS-owned mutex and atomic JSON replacement:
+task agents can update that state while the coordinator runs. This is file integrity, not
+cross-run admission control. Budget inspection is read-only, and old experimental receipt files
+are neither consulted nor removed.
+
 `mutcheck-pacing-concurrency.ps1` proves the resolver's sharp edges: the setting must be a **bare
 whole number**, an explicit `-Concurrency` argument outranks the file, malformed prose reports
 `concurrency_source: settings-malformed`, and every failure narrows to `1` rather than widening the
 run. That is the executable part of issue **#391**.
 
-### Guidance, not yet a full mechanism
+### Finishing a run is not finishing its tasks
 
-The rest of pacing still lives in `plugins/overnight-agent/skills/overnight-agent/SKILL.md` as
-run-loop doctrine, and issue **#391** tracks that gap explicitly. The three rules are:
-
-1. one item in flight by default;
-2. estimate before starting another, using the rate observed this run against the time left before
-   the next scheduled run;
-3. done means **verified and published**, not code merely written.
-
-The concurrency ceiling is enforced today. The broader “should this run spend its remaining admits
-on another item?” rule is still guidance, not a fully enforced mechanism. That is why this page has
-to say both things at once: the system already has a real cap, but it does not yet mechanically
-prove that every additional admitted item can be finished, verified, and published before the next
-wake.
+The coordinator may finish collecting, dispatching and reporting while task sessions keep
+working. Its wrap-up must distinguish a sent instruction from a completed task. A task's result
+still needs to be verified and published where required; the per-run quota does not weaken that
+completion standard.
 
 `plugins/overnight-agent/checks/mutcheck-deliverable-gate.mjs` and
 `plugins/overnight-agent/checks/deliverable-gate-sweep.mjs` are relevant here because they guard
@@ -493,22 +494,9 @@ collection:
 3. Dispatch happens in **two waves**: the **priority wave** first, then the **collect wave**.
 4. A collect-phase wake is dispatched **in addition to** the priority selection, not instead of it.
 
-The sanctioned exception is encoded in the session-capacity refusal text itself:
-
-> [!NOTE]
-> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
-
-<details>
-<summary><strong>Show technical detail</strong></summary>
-
-```powershell
-throw ("session_at_capacity: ... -Force is for the collect-wave exception only " +
-  '(Prioritisation.md 4.1): a wake that exists because the USER did something may widen ' +
-  "the run; the agent's own judgement may not.")
-```
-
-
-</details>
+The sanctioned exception is `oa_dispatch`'s explicit **`collect_wave: true`**. It requires a
+recorded human journal reply or new doc comment. Inbox/Telegram replies must be folded first.
+The exception bypasses only the normal per-run quota, never a pause or ineligibility.
 That exception does **not** raise the configured setting, compound it, or move work back into the
 run session. It changes **when** a task is woken, not **where** its work happens. The rationale is
 provenance: a mail reply, a Telegram reply, or a journal reply is explicit user action, so it may
@@ -518,6 +506,9 @@ The executable statement of intended behaviour for this page is therefore spread
 important set of files:
 
 - `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1`
+- `plugins/overnight-agent/checks/oa-dispatch.mjs`
+- `plugins/overnight-agent/checks/oa-dispatch.test.mjs`
+- `plugins/overnight-agent/skills/overnight-agent/mutcheck-parked-capacity.ps1`
 - `plugins/overnight-agent/skills/overnight-agent/mutcheck-priority-order.ps1`
 - `plugins/overnight-agent/skills/overnight-agent/mutcheck-today-served.ps1`
 - `plugins/overnight-agent/skills/overnight-agent/mutcheck-awaiting-reply.ps1`
@@ -526,5 +517,4 @@ important set of files:
 - `plugins/overnight-agent/checks/deliverable-gate-sweep.mjs`
 
 Together they define prioritisation as the product actually behaves: board order, reply interrupts,
-Today gating, liveness, capacity, and the one provenance-based exception to the default one-item
-isolation model.
+Today gating, liveness, a per-run request quota, and its provenance-based human collect exception.
