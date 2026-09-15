@@ -14,6 +14,7 @@
 param([switch]$Json)
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'oa-supervisor-lifecycle.ps1')
 $now = [datetime]::Parse('2026-08-31T23:00:00Z', $null, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
 
 function New-Run([string]$status, [double]$ageMin) {
@@ -190,8 +191,8 @@ $SUT = Join-Path $PSScriptRoot 'oa-supervisor.ps1'
 # (=> SCHEDULE-DEAD => restart the app), while the truth is a 2-min-old run (=> HEALTHY).
 $writerSrc = @'
 import { DatabaseSync } from 'node:sqlite';
-import { writeFileSync } from 'node:fs';
-const [dbPath, readyFile, oldIso, newIso, holdMs] = process.argv.slice(2);
+import { writeFileSync, existsSync } from 'node:fs';
+const [dbPath, readyFile, oldIso, newIso, stopFile] = process.argv.slice(2);
 const db = new DatabaseSync(dbPath);
 db.exec('PRAGMA journal_mode=WAL');
 db.exec('CREATE TABLE workflows (id INTEGER PRIMARY KEY, name TEXT)');
@@ -205,9 +206,10 @@ db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
 // This commit lives ONLY in the -wal until the app next checkpoints.
 db.prepare("INSERT INTO workflow_runs (task_id, status, trigger, started_at) VALUES (1,'completed','schedule',?)").run(newIso);
 writeFileSync(readyFile, 'ready');
-// Hold the DB open like the app does, then self-terminate: a test must never need to
-// kill a process it started.
-setTimeout(() => process.exit(0), Number(holdMs));
+const timer = setInterval(() => {
+  if (existsSync(stopFile)) { clearInterval(timer); db.close(); }
+}, 50);
+setTimeout(() => { clearInterval(timer); db.close(); }, 60000).unref();
 '@
 
 # Runs in a CHILD PowerShell so each dot-source of the SUT is isolated - a mutant must
@@ -263,6 +265,7 @@ $res['pureFailures'] = @($pure)
 
 $walRoot   = Join-Path $env:TEMP ('mutcheck-supervisor-wal-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $walRoot -Force | Out-Null
+Copy-Item (Join-Path $PSScriptRoot 'oa-supervisor-lifecycle.ps1') (Join-Path $walRoot 'oa-supervisor-lifecycle.ps1')
 $writerFile = Join-Path $walRoot 'wal-writer.mjs'
 $runnerFile = Join-Path $walRoot 'runner.ps1'
 $writerSrc | Set-Content -Path $writerFile -Encoding UTF8
@@ -279,14 +282,22 @@ function Invoke-WalProbe([string]$SupervisorPath, [string]$Tag) {
   $db    = Join-Path $dir 'data.db'
   $ready = Join-Path $dir 'ready.txt'
   $out   = Join-Path $dir 'result.json'
-  Start-Process node -ArgumentList @($writerFile, $db, $ready, $oldRunIso, $newRunIso, 60000) -WindowStyle Hidden
-  for ($i = 0; $i -lt 150 -and -not (Test-Path $ready); $i++) { Start-Sleep -Milliseconds 100 }
-  if (-not (Test-Path $ready)) { return @{ error = 'wal fixture writer never became ready' } }
-  if (-not (Test-Path ($db + '-wal'))) { return @{ error = 'fixture is not in WAL mode - no -wal sidecar' } }
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $runnerFile `
-      -Supervisor $SupervisorPath -FixtureDb $db -NowIso $walNow.ToString('o') -OutFile $out | Out-Null
-  if (-not (Test-Path $out)) { return @{ error = 'runner produced no result' } }
-  return (Get-Content $out -Raw | ConvertFrom-Json)
+  $stop = Join-Path $dir 'stop.txt'
+  $writer = Start-Process node -ArgumentList @($writerFile, $db, $ready, $oldRunIso, $newRunIso, $stop) -WindowStyle Hidden -PassThru
+  try {
+    for ($i = 0; $i -lt 150 -and -not (Test-Path $ready); $i++) { Start-Sleep -Milliseconds 100 }
+    if (-not (Test-Path $ready)) { return @{ error = 'wal fixture writer never became ready' } }
+    if (-not (Test-Path ($db + '-wal'))) { return @{ error = 'fixture is not in WAL mode - no -wal sidecar' } }
+    $engine = if ($PSVersionTable.PSEdition -eq 'Core') { Join-Path $PSHOME 'pwsh.exe' } else { Join-Path $PSHOME 'powershell.exe' }
+    & $engine -NoProfile -ExecutionPolicy Bypass -File $runnerFile `
+        -Supervisor $SupervisorPath -FixtureDb $db -NowIso $walNow.ToString('o') -OutFile $out | Out-Null
+    if (-not (Test-Path $out)) { return @{ error = 'runner produced no result' } }
+    return ConvertFrom-SupervisorJson (Get-Content $out -Raw)
+  } finally {
+    [IO.File]::WriteAllText($stop, 'stop')
+    if (-not $writer.WaitForExit(10000)) { throw "fixture writer $($writer.Id) did not release DB" }
+    $writer.Dispose()
+  }
 }
 
 # --- baseline: the real script must read the UNCHECKPOINTED row --------------------

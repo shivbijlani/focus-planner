@@ -277,7 +277,12 @@ $AlwaysRequired = @(
   # installed-plugins and never reaches the copy the daemon actually runs. Classic
   # "merged isn't running" (cf. #196, #254).
   'oa-supervisor.ps1',
-  'oa-supervisor-daemon.ps1'
+  'oa-supervisor-daemon.ps1',
+  # Runtime closure for #648. Configuration overrides are local state, never shipped.
+  'oa-supervisor-lifecycle.ps1',
+  'supervisor-activity.mjs',
+  'supervisor-defaults.json',
+  'stuck-run-sweep.mjs'
 )
 
 # Subdirectories of the OA home that are data, not code. Never walked.
@@ -681,6 +686,8 @@ foreach ($p in $tracked) {
   $p = "$p".Trim()
   if (-not $p) { continue }
   $n = Split-Path $p -Leaf
+  # User overrides are never a shipped artifact, even if a future ref includes one.
+  if ($n -eq 'supervisor-config.json') { continue }
   if ($p -notmatch '\.(ps1|mjs|js)$') {
     # DATA (rule 6): non-code files are indexed SEPARATELY and are only ever handled in
     # the MISSING direction below. Keeping them out of $byName is what makes the data

@@ -995,6 +995,36 @@ jobs:
       - name: Mutation check (a real leak fires; a busy-but-healthy machine stays quiet)
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-supervisor-resource.ps1
+
+  supervisor-window:
+    name: Supervisor preventive window (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Lifecycle and deadline fixtures (Windows PowerShell 5.1 and pwsh)
+        run: node --disable-warning=ExperimentalWarning plugins/overnight-agent/checks/supervisor-window.test.mjs
+      - name: External activity evidence
+        run: node --disable-warning=ExperimentalWarning plugins/overnight-agent/checks/supervisor-activity.test.mjs
+      - name: Policy boundary mutations (Windows PowerShell 5.1)
+        shell: powershell
+        run: .\plugins\overnight-agent\checks\mutcheck-supervisor-window.ps1
+      - name: Policy boundary mutations (pwsh)
+        shell: pwsh
+        run: .\plugins\overnight-agent\checks\mutcheck-supervisor-window.ps1
+      - name: Existing classifier and WAL guards (Windows PowerShell 5.1)
+        shell: powershell
+        run: .\plugins\overnight-agent\checks\mutcheck-supervisor.ps1
+      - name: Existing classifier and WAL guards (pwsh)
+        shell: pwsh
+        run: .\plugins\overnight-agent\checks\mutcheck-supervisor.ps1
+      - name: Dispatcher and isolated deployment fixtures
+        run: node plugins/overnight-agent/checks/supervisor-deployment.test.mjs
+
   # session-state has never been pruned (GH #481).
   #
   # Measured 2026-09-04: 4,120 directories, 2.56 GB, oldest file 27 April, and 500

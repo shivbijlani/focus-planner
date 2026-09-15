@@ -48,18 +48,18 @@
   SAFETY POSTURE
   --------------
     * Opens the app DB read-only for classification.
-    * ACTS instead of alerting (Shiv, 2026-08-31: "it should act, restart ghcp - don't
-      message me"). The remedy is a silent app restart, GATED ON LIVENESS, not age: a run
-      is only restarted when stuck-run-sweep proves it is a genuine orphan (owning process
-      dead) or hung-alive (its own log says the task finished, then went silent). A run
-      that is merely long but still emitting events is NEVER touched - that is the
-      false-positive class that used to page a healthy 40-min run (GH #296).
-    * The row is cleared with the existing vetted sweep (--repair) BEFORE any restart, so
-      the schedule can resume even if the relaunch does not reconcile it. A restart is
-      only added on top when there is a live process to reclaim (hung-alive) or the
-      scheduler itself is wedged (schedule-dead while the app is up).
-    * One incident drives at most one restart per -RestartCooldownMinutes, so a bad state
-      cannot become a reboot loop.
+    * GH #648 adds an independent preventive lifecycle. A=12 hours opens a quiet
+      opportunity window; B=24 hours forces a restart even while BUSY or UNKNOWN.
+      These are configurable implementation defaults, not user-selected values.
+    * Before B, every restart trigger requires freshly observed all-session quiet
+      time and an immediate recheck. No admission hold exists: this is best-effort.
+      Completion of one run, or silence during a tool, is never global idle proof.
+    * B permits interruption, not unrelated process termination. Only the exact
+      configured GUI instance and creation-time-proven descendants are targeted.
+    * Durable cycle/attempt state, an exclusive tick lock, bounded failed-recovery
+      backoff and separate readiness/resumption observations survive supervisor crashes.
+    * Workflow enabled flags and schedules are never changed. Row-only stuck-run
+      repair is quiet-gated; it is not a request to restart all session hosts.
     * Fully silent: no Telegram, ever. Every decision is still written to supervisor-log.jsonl.
 
 .PARAMETER StuckMinutes
@@ -74,8 +74,12 @@
   i.e. three consecutive missed */30 ticks, so one skipped tick is never an alarm.
 
 .PARAMETER RestartCooldownMinutes
-  Do not restart the same incident more than once inside this window. Default 20, so a
-  state that keeps looking stuck cannot drive a reboot loop.
+  Minimum uptime for fault-triggered quiet restarts. Default 20 minutes. This is
+  fault-only spacing, not a global Y: preventive restarts use A; B overrides it.
+
+.PARAMETER OaHome
+  State, logs and supervisor-config.json directory. Defaults to the flat deployed
+  OA home. Code/defaults are resolved beside this script, not from the data directory.
 
 .PARAMETER NoAct
   Classify, run the sweep in DETECT-ONLY mode, and log the decision, but never kill or
@@ -86,11 +90,13 @@
   still accepted so an already-registered task or daemon that passes them keeps parsing.
 
 .OUTPUTS
-  One line of JSON on stdout. Exit 0 = healthy / no action, 1 = acted (or would act under
-  -NoAct), 2 = supervisor itself failed.
+  One JSON line with nextCheckUtc. Exit 0 = no action, 1 = action, 2 = failed recovery
+  or supervisor error. Launch, responsive-window readiness and observed work/schedule
+  recovery are distinct fields; a launch is not a success claim.
 #>
 [CmdletBinding()]
 param(
+  [string]$OaHome = (Join-Path $env:LOCALAPPDATA 'overnight-agent'),
   [int]$StuckMinutes   = 45,
   [int]$DeadMinutes    = 90,
   [int]$ReAlertMinutes = 240,
@@ -116,7 +122,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$OaHome    = Join-Path $env:LOCALAPPDATA 'overnight-agent'
 $StatePath = Join-Path $OaHome 'supervisor-state.json'
 $LogPath   = Join-Path $OaHome 'supervisor-log.jsonl'
 $Db        = Join-Path $env:USERPROFILE '.copilot\data.db'
@@ -126,9 +131,11 @@ function Write-Log([hashtable]$Record) {
   try {
     if (-not (Test-Path $OaHome)) { New-Item -ItemType Directory -Path $OaHome -Force | Out-Null }
     $Record['ts'] = $NowUtc.ToString('o')
-    ($Record | ConvertTo-Json -Compress -Depth 6) | Add-Content -Path $LogPath -Encoding utf8
-  } catch { }   # logging must never be the reason supervision fails
+    ($Record | ConvertTo-Json -Compress -Depth 20) | Add-Content -Path $LogPath -Encoding utf8
+  } catch { Write-Warning "supervisor log write failed: $_" }
 }
+
+. (Join-Path $PSScriptRoot 'oa-supervisor-lifecycle.ps1')
 
 # --- the classifier is a pure function of (newest run, now) so it is unit-testable ---
 function Get-SupervisorVerdict {
@@ -144,7 +151,7 @@ function Get-SupervisorVerdict {
     return @{ state = 'SCHEDULE-DEAD'; detail = 'no run has ever been recorded for this workflow'; ageMin = $null }
   }
 
-  $started = [datetime]::Parse($NewestRun.started_at, $null, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+  $started = ConvertTo-SupervisorUtc $NewestRun.started_at
   $ageMin  = [math]::Round(($Now - $started).TotalMinutes, 1)
 
   # A run still marked 'running' is the slot holder. If it has held the slot past the
@@ -349,9 +356,9 @@ console.log(JSON.stringify({ run: r ?? null }));
   $probeFile = Join-Path $env:TEMP ("oa-supervisor-probe-{0}.mjs" -f [guid]::NewGuid().ToString('N'))
   $probe | Out-File -FilePath $probeFile -Encoding utf8
   try {
-    $raw = & node $probeFile $tmp $WorkflowName 2>&1
+    $raw = & node --disable-warning=ExperimentalWarning $probeFile $tmp $WorkflowName 2>&1
     if ($LASTEXITCODE -ne 0) { throw "probe failed: $raw" }
-    $parsed = $raw | ConvertFrom-Json
+    $parsed = ConvertFrom-SupervisorJson ($raw -join "`n")
     if ($parsed.error) { throw "workflow '$WorkflowName' not found in $Db" }
     return $parsed.run
   } finally {
@@ -364,41 +371,6 @@ console.log(JSON.stringify({ run: r ?? null }));
   }
 }
 
-# The app we supervise is the desktop GUI process 'github.exe'; its children are the
-# 'copilot.exe --server' backends. Resolve its exe from the live process when we can
-# (survives version bumps), else the stable per-user install path.
-function Resolve-AppExe {
-  $p = Get-Process -Name 'github' -ErrorAction SilentlyContinue |
-         Where-Object { $_.Path } | Select-Object -First 1
-  if ($p -and $p.Path) { return $p.Path }
-  $stable = Join-Path $env:LOCALAPPDATA 'Programs\GitHub Copilot\github.exe'
-  if (Test-Path $stable) { return $stable }
-  return $null
-}
-
-# Kill the app process tree (GUI + server backends) by explicit PID, then relaunch it.
-function Restart-App {
-  $exe = Resolve-AppExe
-  $killed = @()
-  foreach ($name in @('github', 'copilot')) {
-    foreach ($proc in (Get-Process -Name $name -ErrorAction SilentlyContinue)) {
-      try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop; $killed += "$name#$($proc.Id)" } catch { }
-    }
-  }
-  Start-Sleep -Seconds 3
-  $launched = $false
-  if ($exe) { try { Start-Process -FilePath $exe | Out-Null; $launched = $true } catch { } }
-  return @{ exe = $exe; killed = $killed; launched = $launched }
-}
-
-# Schedule-dead with the app DOWN: nothing to kill, just launch it.
-function Start-App {
-  $exe = Resolve-AppExe
-  $launched = $false
-  if ($exe) { try { Start-Process -FilePath $exe | Out-Null; $launched = $true } catch { } }
-  return @{ exe = $exe; killed = @(); launched = $launched }
-}
-
 if ($TestAlert) {
   # Alerting was removed in favour of silent auto-restart; keep the flag inert so an old
   # caller does not error, but do nothing and say so in the machine-readable line.
@@ -408,140 +380,23 @@ if ($TestAlert) {
 
 if ($MyInvocation.InvocationName -eq '.') { return }   # dot-sourced by the mutcheck: expose functions only
 
-# ---------------------------------------------------------------- read app state --
-$newest = $null
-$appRunning = [bool](Get-Process -Name 'copilot' -ErrorAction SilentlyContinue)
-
+# An OS-held exclusive handle, not a PID lock: crashes release it automatically and
+# simultaneous Task Scheduler/Startup/manual ticks cannot double-restart the app.
+$lock = $null
 try {
-  if (-not (Test-Path $Db)) { throw "app database not found at $Db" }
-  $newest = Get-NewestWorkflowRun -Db $Db -WorkflowName $WorkflowName
+  if (-not (Test-Path $OaHome)) { New-Item -ItemType Directory -Path $OaHome -Force | Out-Null }
+  try {
+    $lock = [IO.File]::Open((Join-Path $OaHome 'supervisor-tick.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
+  } catch [IO.IOException] {
+    if (($_.Exception.HResult -band 0xffff) -notin @(32,33)) { throw }
+    $result = @{ state = 'TICK-BUSY'; action = 'none'; acted = $false; nextCheckUtc = $NowUtc.AddSeconds(10).ToString('o') }
+  }
+  if ($lock) { $result = Invoke-RestartTick }
 } catch {
-  $err = @{ state = 'SUPERVISOR-FAILED'; error = "$_" }
-  Write-Log $err
-  ($err | ConvertTo-Json -Compress)
-  exit 2
-}
-
-$verdict = Get-SupervisorVerdict -NewestRun $newest -Now $NowUtc `
-             -StuckMinutes $StuckMinutes -DeadMinutes $DeadMinutes -AppRunning $appRunning
-
-# ------------------------------------------------ arm 1: reuse the vetted sweep -------
-# Never reimplement orphan detection. When the run LOOKS stuck by age, ask stuck-run-sweep
-# for the truth: it distinguishes a live, still-working run (leave alone) from a genuine
-# orphan, and further splits orphans into process-dead vs hung-alive (a finished run whose
-# live process leaked). In act mode we pass --repair so a genuine orphan's row is cleared
-# regardless of whether we then restart.
-$sweepResult    = 'skipped'
-$flaggedOrphans = 0
-$hasHungAlive   = $false
-if ($verdict.state -eq 'STUCK') {
-  $sweep = Join-Path $PSScriptRoot 'stuck-run-sweep.mjs'
-  if (-not (Test-Path $sweep)) { $sweep = Join-Path $OaHome 'stuck-run-sweep.mjs' }
-  if (Test-Path $sweep) {
-    try {
-      $sweepArgs = @($sweep)
-      if (-not $NoAct) { $sweepArgs += '--repair' }   # detect-only under -NoAct
-      $out = & node @sweepArgs 2>&1 | Out-String
-      $m = [regex]::Match($out, 'orphaned runs blocking their workflow:\s*(\d+)')
-      if ($m.Success) { $flaggedOrphans = [int]$m.Groups[1].Value }
-      $hasHungAlive = ($out -match 'hung-alive')
-      $sweepResult  = ($out -split "`n" | Where-Object { $_ -match 'FLAGGED|repaired|ok\s|arm\s' } | Select-Object -First 4) -join ' | '
-    } catch { $sweepResult = "sweep-failed: $_" }
-  } else { $sweepResult = 'sweep-not-found' }
-}
-
-$action = Get-SupervisorAction -State $verdict.state -FlaggedOrphans $flaggedOrphans `
-            -HasHungAlive $hasHungAlive -AppRunning $appRunning
-
-# --------------------------------------------- arm 2: the resource detector (GH #403) --
-# Sampled EVERY tick and recorded in supervisor-log.jsonl regardless of verdict, so a future
-# investigation reads history instead of being done by hand at 100% CPU, which is how #403
-# was found in the first place.
-#
-# The schedule verdict wins when it already has something to say: it is the older, vetted
-# signal and it carries the orphan/liveness veto. The resource verdict only takes over when
-# the schedule says HEALTHY -- which is exactly the blind spot, since the machine was
-# unusable while the schedule looked perfect.
-$resSample = $null
-if ($ResourceFactsJson) {
-  if (-not (Test-Path $ResourceFactsJson)) { Write-Error "resource facts file not found: $ResourceFactsJson"; exit 2 }
-  $resSample = [IO.File]::ReadAllText($ResourceFactsJson, (New-Object Text.UTF8Encoding($false))) | ConvertFrom-Json
-} else {
-  $resSample = Get-ResourceSample
-}
-$resVerdict = Get-ResourceVerdict -Sample $resSample
-
-if ($verdict.state -eq 'HEALTHY' -and $resVerdict.state -ne 'HEALTHY') {
-  $verdict = @{ state = $resVerdict.state; detail = $resVerdict.detail; ageMin = $verdict.ageMin }
-  $action = Get-SupervisorAction -State $resVerdict.state -FlaggedOrphans 0 `
-              -HasHungAlive $false -AppRunning $appRunning
-}
-
-# ---------------------------------------------------------------- anti-loop cooldown --
-# One incident (state + the run it is about) may drive at most one restart per cooldown,
-# so a state that keeps looking stuck cannot become a reboot loop.
-$incidentKey = '{0}:{1}' -f $verdict.state, ($(if ($newest) { $newest.started_at } else { 'none' }))
-$state = @{}
-if (Test-Path $StatePath) {
-  try { $state = Get-Content $StatePath -Raw | ConvertFrom-Json -AsHashtable } catch { $state = @{} }
-}
-$onCooldown = $false
-if ($action -in @('restart','launch') -and $state.lastActionKey -eq $incidentKey -and $state.lastActionUtc) {
-  $since = ($NowUtc - [datetime]::Parse($state.lastActionUtc, $null, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()).TotalMinutes
-  if ($since -lt $RestartCooldownMinutes) { $onCooldown = $true }
-}
-
-# ----------------------------------------------------------------------- act (silent) --
-$acted     = $false
-$actResult = $null
-$actError  = $null
-if ($action -in @('restart','launch') -and -not $onCooldown -and -not $NoAct) {
-  try {
-    $actResult = if ($action -eq 'restart') { Restart-App } else { Start-App }
-    $acted = [bool]$actResult.launched
-    if (-not $acted) { $actError = 'app exe not found or relaunch failed' }
-  } catch {
-    $actError = "$_"
-  }
-  # Record the incident so the cooldown holds even if the relaunch itself failed - a
-  # failing restart must not become a hot loop.
-  $state.lastActionKey = $incidentKey
-  $state.lastActionUtc = $NowUtc.ToString('o')
-  try {
-    if (-not (Test-Path $OaHome)) { New-Item -ItemType Directory -Path $OaHome -Force | Out-Null }
-    ($state | ConvertTo-Json -Depth 6) | Set-Content -Path $StatePath -Encoding utf8
-  } catch { }
-}
-
-$result = @{
-  state          = $verdict.state
-  detail         = $verdict.detail
-  ageMin         = $verdict.ageMin
-  lastStatus     = $(if ($newest) { $newest.status } else { $null })
-  lastStarted    = $(if ($newest) { $newest.started_at } else { $null })
-  appRunning     = $appRunning
-  action         = $action
-  acted          = $acted
-  actResult      = $actResult
-  actError       = $actError
-  onCooldown     = $onCooldown
-  noAct          = [bool]$NoAct
-  flaggedOrphans = $flaggedOrphans
-  hasHungAlive   = $hasHungAlive
-  sweep          = $sweepResult
-  # GH #403: recorded on EVERY tick, not only when it fires, so the history exists before
-  # the next investigation needs it.
-  resource       = @{
-    state       = $resVerdict.state
-    detail      = $resVerdict.detail
-    cpuRatio    = $resVerdict.ratio
-    queueLength = $resVerdict.queue
-    sampled     = [bool]($null -ne $resSample)
-    replayed    = [bool]$ResourceFactsJson
-  }
-  thresholds     = @{ stuckMin = $StuckMinutes; deadMin = $DeadMinutes; restartCooldownMin = $RestartCooldownMinutes }
-}
+  $result = @{ state = 'SUPERVISOR-FAILED'; action = 'none'; acted = $false; error = "$_"; nextCheckUtc = (Get-Date).ToUniversalTime().AddSeconds(60).ToString('o') }
+} finally { if ($lock) { $lock.Dispose() } }
 Write-Log $result
-($result | ConvertTo-Json -Compress -Depth 6)
-
-if ($action -eq 'none') { exit 0 } else { exit 1 }
+($result | ConvertTo-Json -Compress -Depth 20)
+if ($result.state -eq 'SUPERVISOR-FAILED' -or $result.error) { exit 2 }
+if ($result.action -ne 'none') { exit 1 }
+exit 0

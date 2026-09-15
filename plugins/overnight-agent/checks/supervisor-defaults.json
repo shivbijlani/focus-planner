@@ -1,0 +1,11 @@
+{
+  "preventiveStartHours": 12,
+  "preventiveDeadlineHours": 24,
+  "pollSeconds": 60,
+  "quietSeconds": 30,
+  "evidenceMaxAgeSeconds": 300,
+  "retryInitialSeconds": 60,
+  "retryMaxSeconds": 900,
+  "readinessTimeoutSeconds": 30,
+  "appExe": ""
+}
