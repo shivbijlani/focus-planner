@@ -199,6 +199,19 @@ or a schedule-dead app gets a silent restart, with a cooldown to prevent loops. 
 second trigger: the supervisor now also restarts when the app stays *responsive enough to schedule*
 while consuming the machine pathologically.
 
+Every trigger above is **fault-triggered**: it reacts to a stall or a leak that has already been
+detected. Issue #648 asks for a complementary **preventive** restart the supervisor finds on its own
+schedule, independent of any fault signal, so a long-running app is periodically refreshed before it
+degrades rather than only after. The proposed shape is a configurable window between an elapsed-hours
+threshold `A` and a hard deadline `B`, both measured since the current app instance started or was
+last verified restarted: below `A`, no preventive restart; between `A` and `B`, poll for a verified
+quiet moment (no executing turns or tools, across every session — a silent long-running tool still
+counts as active, and unreadable activity evidence must read as unknown, never as idle) and restart
+only when one is found; at `B`, restart unconditionally even if activity is unknown, log the
+deadline-forced recovery, and never postpone `B` by resetting the window. This is direction, not a
+shipped mechanism — no polling window, no `A`/`B` configuration, and no quiet-verification exist in
+the supervisor today. See [Roadmap](Roadmap) (#648).
+
 ## Deploy propagation: “merged” is not “running”
 
 The repository treats deploy propagation as a first-class reliability problem. Three separate checks

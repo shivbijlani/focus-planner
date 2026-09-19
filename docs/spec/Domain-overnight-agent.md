@@ -1,10 +1,10 @@
 # Domain: overnight-agent
 
-`overnight-agent` is the repository's largest collected domain: `spec-facts.json` records **166**
+`overnight-agent` is the repository's largest collected domain: `spec-facts.json` records **180**
 JavaScript modules in `plugins/overnight-agent/checks/`. That count is real, but it is not the
 whole runtime surface. The plugin also ships PowerShell and markdown assets that `spec-facts.json`
 does not index because `scripts/spec/collect.mjs` only walks JS/TS extensions. Direct inspection
-shows a second layer under `plugins/overnight-agent/skills/overnight-agent/` (33 files: 30 `.ps1`,
+shows a second layer under `plugins/overnight-agent/skills/overnight-agent/` (35 files: 32 `.ps1`,
 2 `.md`, 1 `.json`) plus `plugins/overnight-agent/skills/catchup-doc/` (`SKILL.md` and
 `resolve-ids.ps1`).
 
@@ -30,6 +30,27 @@ The check suite exists because the agent runs while nobody watches it. The doc c
 `plugins/overnight-agent/checks/repo-drift-sweep.mjs` all make the same argument in different
 forms: a guard that only ever prints green, or that grades a hand-copied model of the real code,
 is indistinguishable from dead code.
+
+A recent addition to that argument is `plugins/overnight-agent/checks/issue-shipped.mjs` (issue
+**#635**). `plugins/overnight-agent/checks/shipped-but-open-sweep.mjs` (issue **#630**) had already
+established, and measured, that a shipped PR does not close its issue in this repository: `OPEN`
+spans both "filed and unworked" and "shipped, awaiting review," and a plain `gh issue list`
+renders the two identically — 98 of 169 open issues, at the time it was measured, were already
+shipped. Measuring the fact from a nightly sweep changed nothing, because the moment that matters
+is earlier: a run deciding what to hand a sub-session. Twelve already-shipped recommendations were
+made to one sub-session before this closed the gap. `issue-shipped.mjs` asks the identical
+classification question of a *single* issue, cheaply enough to sit in front of that decision
+(`node issue-shipped.mjs 588 620` exits `1` if either is already shipped, `2` if it could not
+classify — which is a refusal, never a pass), and the sweep now imports it so the census and the
+gate cannot hold two different opinions of "shipped." The consuming guard is
+`write-turn.ps1`'s **G15**: it inspects only forward-looking lines (a turn's `**Next:**` line, or
+an intent verb aimed at an issue number) — never a turn merely *reporting* shipped work, and never
+a pull-request number — and refuses to let the journal record a proposal to pick up an issue whose
+fix is already cited in shipped source on `origin/main`. `plugins/overnight-agent/checks/mutcheck-issue-shipped.mjs`
+pins the exit-code contract itself, because issue **#632** showed a scan that silently returned "0
+findings" reads as clean even when it never actually classified anything — `2` (could not
+classify) is the arm most tempting to regress into `0`, and every mutcheck arm here is paired
+against a fixture that must produce the *other* exit code.
 
 ## The check architecture
 
@@ -76,7 +97,7 @@ A small slice from the real source shows the pattern:
 </details>
 ## Collected module families in `spec-facts.json`
 
-The table below groups the **174 collected JS modules** by file family. Counts come from
+The table below groups the **180 collected JS modules** by file family. Counts come from
 `spec-facts.json`; examples are verbatim paths from that file.
 
 > [!NOTE]
@@ -87,8 +108,8 @@ The table below groups the **174 collected JS modules** by file family. Counts c
 
 | Family | Count | What it covers | Representative paths |
 | --- | ---: | --- | --- |
-| `mutcheck-*` | 49 | Mutation-tested proof that a guard's individual arms matter. | `plugins/overnight-agent/checks/mutcheck-basename-collision.mjs`; `plugins/overnight-agent/checks/mutcheck-phase07-ownership.mjs`; `plugins/overnight-agent/checks/mutcheck-mcp-transport.mjs` |
-| `*-sweep` | 50 | Live corpus scans for current failures and regressions. | `plugins/overnight-agent/checks/armed-trigger-sweep.mjs`; `plugins/overnight-agent/checks/basename-collision-sweep.mjs`; `plugins/overnight-agent/checks/mcp-transport-sweep.mjs` |
+| `mutcheck-*` | 52 | Mutation-tested proof that a guard's individual arms matter. | `plugins/overnight-agent/checks/mutcheck-basename-collision.mjs`; `plugins/overnight-agent/checks/mutcheck-phase07-ownership.mjs`; `plugins/overnight-agent/checks/mutcheck-issue-shipped.mjs` |
+| `*-sweep` | 52 | Live corpus scans for current failures and regressions. | `plugins/overnight-agent/checks/armed-trigger-sweep.mjs`; `plugins/overnight-agent/checks/basename-collision-sweep.mjs`; `plugins/overnight-agent/checks/shipped-but-open-sweep.mjs` |
 | `lib-*` | 13 | Shared readers/classifiers used by several checks. | `plugins/overnight-agent/checks/lib-doc-comments.mjs`; `plugins/overnight-agent/checks/lib-external-artifacts.mjs`; `plugins/overnight-agent/checks/lib-external-surfaces.mjs` |
 | `verify-*` | 3 | One-shot verification scripts aimed at a named change or surface. | `plugins/overnight-agent/checks/verify-186.mjs`; `plugins/overnight-agent/checks/verify-deployed-paths.mjs`; `plugins/overnight-agent/checks/verify-settings-form.mjs` |
 | `*-scope` | 9 | Scope readers that bound a question before a sweep answers it. | `plugins/overnight-agent/checks/block-newer-scope.mjs`; `plugins/overnight-agent/checks/block-truncation-scope.mjs`; `plugins/overnight-agent/checks/multi-block-slice-scope.mjs` |
@@ -97,8 +118,7 @@ The table below groups the **174 collected JS modules** by file family. Counts c
 | `ynab-*` | 4 | One-off YNAB-oriented probes/checks. | `plugins/overnight-agent/checks/ynab-234-check.mjs`; `plugins/overnight-agent/checks/ynab-236-lookup.mjs`; `plugins/overnight-agent/checks/ynab-236-wide.mjs` |
 | `yt-*` | 4 | YouTube-oriented probes/readers. | `plugins/overnight-agent/checks/yt-captions.mjs`; `plugins/overnight-agent/checks/yt-modern.mjs`; `plugins/overnight-agent/checks/yt-probe.mjs` |
 | `*-probe` | 2 | Narrow environment or repair probes. | `plugins/overnight-agent/checks/mcp-probe.mjs`; `plugins/overnight-agent/checks/probe-workspace-tiers.mjs` |
-| `pr-closing-keyword` | 1 | CI-facing PR-body guard. | `plugins/overnight-agent/checks/pr-closing-keyword.mjs` |
-| Other one-offs | 30 | Indexers, auditors, replay tools, and narrow incident checks that do not fit one prefix. | `plugins/overnight-agent/checks/artifact-index.mjs`; `plugins/overnight-agent/checks/body-header-drift.mjs`; `plugins/overnight-agent/checks/ensure-catchup-doc.mjs` |
+| Other one-offs | 32 | Indexers, auditors, replay tools, and narrow incident checks that do not fit one prefix — including `issue-shipped.mjs` and the CI-facing `pr-closing-keyword.mjs`. | `plugins/overnight-agent/checks/artifact-index.mjs`; `plugins/overnight-agent/checks/body-header-drift.mjs`; `plugins/overnight-agent/checks/issue-shipped.mjs` |
 
 </details>
 
@@ -120,6 +140,7 @@ These files are runtime-critical even though the fact collector does not index t
 | --- | --- |
 | `plugins/overnight-agent/skills/overnight-agent/SKILL.md` | Main operating contract. The phase headings in the file are literal: `PHASE 0`, `PHASE 0.7`, `PHASE 1`, `PHASE 1.5`, `PHASE 2`, `PHASE 2.5`, `PHASE 3`. |
 | `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1` | Core state-machine CLI and journal/board/session reader. |
+| `plugins/overnight-agent/skills/overnight-agent/write-turn.ps1` | The mandatory journal-turn writer; enforces guards `G1`-`G15`, including `G15`'s refusal of a proposal that names already-shipped work. |
 | `plugins/overnight-agent/skills/overnight-agent/user-settings.md` | Shareable template for the external settings file; the skill warns that updates overwrite the bundled template. |
 | `plugins/overnight-agent/skills/catchup-doc/SKILL.md` | The companion write-up skill the overnight agent points at when a task uses a catch-up document. |
 | `plugins/overnight-agent/skills/catchup-doc/resolve-ids.ps1` | ID-to-title link resolver used by the catch-up-doc workflow. |
@@ -183,10 +204,11 @@ live outside the plugin and that the bundled copy is overwritten on update.
 The PowerShell-side mutchecks parallel the JS ones. Files such as
 `plugins/overnight-agent/skills/overnight-agent/mutcheck-priority-order.ps1`,
 `plugins/overnight-agent/skills/overnight-agent/mutcheck-pacing-concurrency.ps1`,
-`plugins/overnight-agent/skills/overnight-agent/mutcheck-today-served.ps1`, and
-`plugins/overnight-agent/skills/overnight-agent/mutcheck-awaiting-reply.ps1` all build isolated
-synthetic boards/settings/state, run the *real* `oa-state.ps1`, and prove that specific gates or
-comparators are load-bearing.
+`plugins/overnight-agent/skills/overnight-agent/mutcheck-today-served.ps1`,
+`plugins/overnight-agent/skills/overnight-agent/mutcheck-awaiting-reply.ps1`, and
+`plugins/overnight-agent/skills/overnight-agent/mutcheck-shipped-pick.ps1` all build isolated
+synthetic boards/settings/state, run the *real* `oa-state.ps1` or `write-turn.ps1`, and prove that
+specific gates or comparators are load-bearing.
 
 ## A check that runs in CI, not only in the overnight loop
 
