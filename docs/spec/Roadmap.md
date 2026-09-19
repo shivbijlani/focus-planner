@@ -1,6 +1,6 @@
 # Roadmap
 
-This page records **known gaps and forward direction** from the **163 open issues** captured in `spec-facts.json`. Entries with a `priority:` label are grouped by that label first. Remaining issues are grouped by the exact non-priority labels present, and issues with no labels are grouped by recurring themes from their titles and bodies. Use this alongside [Behaviour](Behaviour), [Reliability](Reliability), [Prioritisation](Prioritisation), and the relevant `Domain-*` page.
+This page records **known gaps and forward direction** from the **179 open issues** captured in `spec-facts.json`. Entries with a `priority:` label are grouped by that label first. Remaining issues are grouped by the exact non-priority labels present, and issues with no labels are grouped by recurring themes from their titles and bodies. Use this alongside [Behaviour](Behaviour), [Reliability](Reliability), [Prioritisation](Prioritisation), and the relevant `Domain-*` page.
 
 ## Critical
 
@@ -112,7 +112,7 @@ This page records **known gaps and forward direction** from the **163 open issue
 
 ## Labelled but unprioritised
 
-22 open issues have labels, but none of those labels is a `priority:` band. The tables below keep the grouping faithful to the data instead of inventing a priority order.
+26 open issues have labels, but none of those labels is a `priority:` band. The tables below keep the grouping faithful to the data instead of inventing a priority order.
 
 ### `reliability`
 
@@ -132,6 +132,9 @@ This page records **known gaps and forward direction** from the **163 open issue
 | #528 | Adding a task can reuse a live task's ID and silently destroy that task's row | Adding a task through the UI can be assigned an ID that is already in use by a live task, and the existing task's row is then destroyed — silently, with no warning, no dialog, and… |
 | #502 | Doc comments read as empty: -Observe returns 0 for the MCP's own output shape | oa-state.ps1 doc -Id <ID> -Observe <file> returns zero comments when handed the exact output the Google Workspace MCP produces. -Observe then reports new_comments: 0 -- which is byte-identical to "the user said nothing." |
 | #343 | A task snoozed in the app can be worked before its wake date: the agent's snooze reader never sees the Wake column | Found while writing docs/spec/Prioritisation.md (related issue). Verified against the code; not previously filed as far as I can tell. |
+| #625 | find_and_replace_doc escapes a real newline into a literal `\n` in doc prose, reports `Replaced 1`, and the damage only matches back out with a real newline | A real newline in the replacement text arrives in the document as the two literal characters `\` and `n` — a paragraph break cannot be inserted through this tool at all — and the repair direction requires matching that damage back out with a real newline, an unguarded fourth corruption class. |
+| #626 | A stated finding and its own contradiction have equal standing in prose: the correct answer was transmitted and lost twice in one wake (6 instances, 2 shapes) | A **stated finding** that nothing validates — the same shape #618 already generalises for a **declared ask** — where the failing case and the succeeding case are indistinguishable to any reader that does not re-derive the answer itself. |
+| #628 | The collapse fixes cannot reach 208 of 229 bound topics: a message whose id was never recorded is unreachable forever, and no sweep measures the outcome Shiv actually looks at | Shiv: "The things I'm excited to see most about getting fixed are catch up document related fixes and stacked messages in Telegram related fixes. It's been a while and I still haven't seen any improvement there." A message whose id was never recorded by the collapse machinery cannot be reached by any later fix. |
 
 ### `bug + reliability + overnight-agent`
 
@@ -179,6 +182,12 @@ This page records **known gaps and forward direction** from the **163 open issue
 | #354 | Spec verify: make the gaps-page staleness gate position-aware (entry-position refs are the assertion; prose refs are history) | PR related issue also widens the issue-ref regex to a negative lookbehind (/(?<![\w\/])#(\d{1,4})\b/) because the previous /(?:^|\s)#/ boundary could not see #NNN preceded by *, (, or , — which is exactly Roadmap's entry format -… |
 | #337 | Supervisor: user-settings toggle + watchdog reconciles install/uninstall to match it | Today the supervisor is installed by a one-time manual run of install-oa-supervisor.ps1 and is never reconciled. There is no way to turn it off short of manually running -Uninstall, and nothing re-asserts it if the task/daemon… |
 
+### `enhancement + reliability`
+
+| Issue | Title | Gap / direction from issue text |
+| --- | --- | --- |
+| #648 | Supervisor: preventive GHCP restart window with configurable quiet-time start A and hard deadline B | The external supervisor (see [Reliability](Reliability)) supports fault-triggered recovery only. Shiv wants it to also find restart opportunities on its own — polling for a verified quiet moment between elapsed-hours threshold A and hard deadline B, restarting at A<=elapsed<B only when idle, and restarting unconditionally at B even if sessions are busy. Not yet built: no polling window, no A/B configuration, and no quiet-verification exists in the supervisor today. |
+
 ### `overnight-agent`
 
 | Issue | Title | Gap / direction from issue text |
@@ -194,7 +203,7 @@ This page records **known gaps and forward direction** from the **163 open issue
 
 ## Unlabelled issues, grouped by theme
 
-77 open issues have no labels at all in `spec-facts.json`. Because the data offers no explicit priority for them, the groups below follow the recurring topics visible in their titles and first body paragraphs.
+83 open issues have no labels at all in `spec-facts.json`. Because the data offers no explicit priority for them, the groups below follow the recurring topics visible in their titles and first body paragraphs.
 
 ### Docs, comments, and Google Workspace channels
 
@@ -243,6 +252,7 @@ These issues cluster around whether the scheduler is allowed to work a task, whe
 
 | Issue | Title | Gap / direction from issue text |
 | --- | --- | --- |
+| #641 | Journal entries written by an agent through the UI composer are stamped `<!-- from: me -->`, so agent prose is indistinguishable from Shiv's own words in the consent channel | An agent driving plannermd.com writes journal entries through the same "Message yourself…" composer a human uses. The app has no way to distinguish that call from Shiv typing directly, so it stamps `<!-- from: me -->` on both — the exact provenance-marker gap that `oa-state.ps1`'s `<!-- from: overnight-agent -->` convention exists to close for the skill's own writes, reopened one layer up in the UI. |
 | #607 | A session that correctly does nothing is recorded as unwakeable: task related issue burned 3 sessions, and both replacements cite a could not be woken that the event log disproves (3.4s and 9s wake latency) | The per-task session liveness verdict is wrong in a specific, repeatable way: a sub-session that wakes promptly and correctly decides there is nothing to do is recorded as `-SessionDead` and replaced. The event log shows the session waking in 3.4s and 9s respectively — well within budget — so the replacement's stated reason, "could not be woken", is disproved by the very log the verdict is supposed to be reading. |
 | #600 | A forgotten `mark` makes the turn boundary EOF, so a raw reply below it is never seen (measured: reopened=false, trailing empty) | A wake that writes a turn but skips `oa-state.ps1 mark` leaves the journal with a provenance marker and no `<!-- /overnight-agent turn-end -->` terminator. In that state `Get-AgentEndIndex` treats end-of-file as the boundary, so a user's raw reply appended below the missing terminator sits after the implicit end and is never read as a reopen — measured as `reopened=false` with the reply present but reported as trailing-empty content. |
 | #569 | A user message above the sentinel is invisible to reopened: scan and extract disagree on the same file, and the related issue Today row sat not_workable with a same-day request in it | scan's reopen reader only looks below the stamp. But the Focus Planner app does not always append the user's message there — when he edits the task's own notes, his message lands above the sentinel, in… |
@@ -294,6 +304,8 @@ These issues say “merged” is not yet a sufficient proxy for “running” or
 | --- | --- | --- |
 | #418 | auto-deploy still exceeds its 60s budget on the live repo after related issue, so PHASE 0 ends in exit 2 every run | PR related issue (merged as b46edfd) bounded the auto-deploy's history work and added a wall-clock budget. On the live repository the classification still does not fit inside that budget, so PHASE 0's deploy step ends in… |
 | #575 | deploy-installed-plugin REFUSE is ancestry-blind: a just-merged file reads as a "live fix" that deploying "would REVERT", and the message asserts the opposite of the truth | `deploy-installed-plugin.ps1` refuses to deploy a file when the installed bytes match some git ref other than `origin/main`, printing "live fix is not on origin/main — deploying would REVERT it" — on a normal merge the installed copy is the pre-merge content and deploying would advance it, not revert it, because the classifier compares content identity against a ref set and never asks which side is newer. |
+| #622 | The telegram-bridge checkout is on no deploy manifest: merged bridge code can stay inert while both deploy checks report clean | PHASE 0's `auto-deploy-plugin.ps1` closes "merged → running" for two targets (installed-plugins, OA home), and both report `verified-current: true` while the bridge's own checkout — the process that actually delivers Telegram messages — is on neither manifest, so a merge to the bridge can sit inert and undetected. |
+| #639 | issue-shipped.mjs reports historical mentions as shipped work, failing in the dangerous direction | `issue-shipped.mjs` (#635, see [Domain overnight-agent](Domain-overnight-agent) and [Reliability](Reliability)) classifies an open issue as already shipped when its number appears anywhere in implementation source on `origin/main`. It cannot tell "this code fixes #N" from "this code mentions #N as a historical note", and its own doc comment names over-blocking as the dangerous direction — this is that failure, not yet guarded. |
 
 ### Planner app UI and data integrity
 
@@ -304,6 +316,7 @@ surface a user drives directly, as opposed to the overnight agent's own machiner
 | --- | --- | --- |
 | #587 | Row kebab and its action sheet are both named just "Task actions" - a Delete/Complete menu that never says which task it will act on | Found while dogfooding the Planner UI on plannermd.com for board task 400. Every row's kebab (`⋯`) and the action sheet it opens are labelled with the same constant string, "Task actions"; neither the button's accessible name nor the open sheet says which task it is. |
 | #577 | Tasks created in the Pacific evening are stamped with tomorrow's UTC date and render an age of `-1d` | Tasks created through plannermd.com at ~23:00 PT land in `planner.md` stamped with the following day's date because the `Added` column is written in UTC, so the board then renders their age as `-1d` until the Pacific date catches up. |
+| #640 | Task actions sheet renders below the fold on a narrow viewport: Create Journal sits 226px off-screen and is the only way to start a new task's journal | Found by dogfooding the Planner UI on task 400 while creating task 483 on a narrow/mobile-width viewport. Opening the row kebab (⋯) → **Task actions** action sheet on a task low in the Deferred list renders with Create Journal — the only entry point to start a journal — 226px below the visible viewport. |
 
 ### Session, workspace, and runtime hygiene
 

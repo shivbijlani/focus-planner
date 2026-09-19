@@ -66,13 +66,14 @@ A representative slice from the source shows the domain's style:
 | `scripts/spec/collect.mjs` | Generates `spec-facts.json` without a model. Its rationale is the mechanism/policy split: collect structural facts deterministically, then let prose be generated from those facts. | Walks the repo, extracts exports/imports/components/header docs/tests/workflows/issues, and assigns each module to a domain. |
 | `scripts/spec/conflicts.mjs` | Detects contradictory open-issue requirements that `verify.mjs` cannot catch. The comment says cadence makes the spec fresher, not truer; two open issues can still ask for opposite things. | Exports `tokenize`, `sentences`, `sameTarget`, `extractDirectives`, `extractSettings`, `parseDuration`, `extractLifecycle`, `findConflicts`, `citesIssue`, `buildDecisions`, `renderMarkdown`. |
 | `scripts/spec/verify.mjs` | Fails the build when generated spec prose invents paths or omits domains. Its header names the two target failure classes directly: **INVENTION** and **OMISSION**. | Reads `spec-facts.json` plus `docs/spec/`, checks path references, issue references, domain coverage, key-module coverage, minimum page length, and fenced examples. |
+| `scripts/spec/readability.mjs` | Keeps implementation detail out of the spec's main reading path. Wraps an exposed fenced example or module-path table in a collapsible, alert-coloured `<details>` block so a non-technical reader is never blocked by one, and enforces the same rule (Mermaid only, no code) on `Technical-Architecture.md`. | Exports `formatTechnicalDetails`, `readabilityFindings`, `checkTechnicalPageLink`, `formatDirectory`; `verify.mjs` imports the latter two to fail the build on an unwrapped or uncoloured technical block. |
 | `scripts/spec/verifyParity.mjs` | Keeps the spec branch's verification honest. Its rationale is GitHub's no-cascade rule for token-authored PR events: the spec workflow must publish its own status, but that status must still mean the same thing as CI. | Exports `CI_VERIFICATION_JOBS`, `SPEC_VERIFY_JOB`, `jobBlock`, `runLines`, `npmCommands`, `checkSpecVerifyParity`. |
 
 </details>
 
 ## The `scripts/spec/*` pipeline
 
-These four files are tightly related, but they do different jobs.
+These five files are tightly related, but they do different jobs.
 
 - `scripts/spec/collect.mjs` is the **fact collector**. Its comments justify the deliberate lack of
   a parser: structural facts do not need one, and a parser would add maintenance surface. It also
@@ -80,6 +81,11 @@ These four files are tightly related, but they do different jobs.
   rationale a human spec needs.
 - `scripts/spec/verify.mjs` is the **truth gate** over prose. It does not ask whether the generator
   exited cleanly; it checks whether the prose names files that exist and covers domains that exist.
+- `scripts/spec/readability.mjs` is the **presentation gate**. It is what makes "the main reading
+  path stays non-technical" enforceable rather than a style request: any exposed fenced example or
+  module-path table gets auto-wrapped in a collapsible block with an adjacent GitHub alert, and
+  `verify.mjs` calls its `readabilityFindings` to fail a page that still exposes one, or that
+  exposes implementation code on the diagrams-only `Technical-Architecture.md`.
 - `scripts/spec/conflicts.mjs` is the **contradiction detector**. The source chooses precision over
   recall on purpose, using token overlap and Jaccard thresholds so a noisy report does not train
   maintainers to ignore it.
