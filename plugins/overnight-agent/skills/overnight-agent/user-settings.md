@@ -53,17 +53,17 @@ a value here takes effect on the next run with nothing else to change.
 | Today gate strict | `off` — set to `on` to make a workable Today task block the backlog **always**, with no release at all. The one-switch rollback if the agent starts leaving Today too readily. |
 | Overnight Agent concurrency | `1` |
 
-**The historical concurrency setting counts automatic start/continue attempts per run, not
-simultaneously running tasks.** Each new coordinator session starts at zero. A later run may
-nudge the same task again or start a different task while earlier task sessions keep working.
-Coordinator runs must not overlap on one machine. Human collect requests remain an explicit
-exception. Use a bare whole number in the cell; keep explanations outside it.
+**Concurrency is the drain width within each run, not a total-start quota.** At `1`, each completed
+task is followed by the next eligible prepared task; at `2`, either opening is refilled independently.
+The run stops sending at the next :00/:30 after its first prompt. Earlier tasks may finish across
+that boundary and do not reserve the new run's openings. Human collect requests remain an explicit
+exception, but never bypass pauses or cutoff. Use a bare whole number in the cell.
 
 **Raising the backstop makes the agent wait longer before giving up on a stuck Today task; lowering
 it makes it give up sooner.** Writing to the task *resets* the timer, so the agent can only ever
 delay this release, never trigger it.
 
-**The request limit fails narrow on purpose.** A missing row, an unreadable file or a value the agent
+**The drain width fails narrow on purpose.** A missing row, an unreadable file or a value the agent
 can't parse all give you `1` — never more. If it
 falls back, it says so in the run summary rather than quietly pretending you asked for `1`.
 

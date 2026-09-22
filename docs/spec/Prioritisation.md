@@ -3,7 +3,7 @@
 Prioritisation in this repository is a product behaviour, not one comparator. The durable inputs live
 in markdown (`planner.md`, journals, `agent-gate.md`, `user-settings.md`); the web app edits those
 inputs; `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1` turns them into an ordered,
-binding worklist; and dispatch then applies a per-run request limit, gating, and provenance rules before any task
+binding worklist; and dispatch then applies run-local drain width, gating, and provenance rules before any task
 runs. [Domain-overnight-agent](Domain-overnight-agent), [Reliability](Reliability), and
 [Data-Formats](Data-Formats) describe adjacent parts of the system; this page describes the
 selection logic end to end.
@@ -206,7 +206,7 @@ The shipped template states the concurrency rationale plainly:
 <summary><strong>Show technical detail</strong></summary>
 
 ```md
-| Overnight Agent concurrency | `1` — automatic start/continue attempts per coordinator run, not simultaneous workers. |
+| Overnight Agent concurrency | `1` — outstanding normal requests from this run, refilled on observed completion. |
 ```
 
 
@@ -331,8 +331,8 @@ make sure those parked rows do not freeze the whole system.
 | Due poll / due recheck override | `Test-Workable` yields the park to `due_poll` / `due_recheck` | A recurring timer must not stop firing just because the user stopped replying. |
 | Snooze precedence | `scan` suppresses due timers when `snoozed`, but leaves the timers armed | “Not until DATE” outranks both board rank and timers, without silently disarming the timer forever. |
 | Staleness backstop | `stale_turn_backstop` based on `Today gate backstop` | A wedged Today row eventually releases Deferred instead of freezing the backlog. |
-| Per-run request counter | `oa_run_budget` / `oa_dispatch` | Saved conversations, overdue timers and work started in earlier runs do not spend the new run's allowance (**#589**). |
-| Visible send failures | An attempt is counted before sending; failure is reported | An uncertain send uses this run's quota only. It creates no cross-run reservation or permanent gate. |
+| Code-owned drain | `oa_drain` | Saved conversations and overdue timers do not occupy openings before dispatch; completion refills automatically (**#589**). |
+| Visible send uncertainty | A marked instruction remains outstanding until its execution is observed | Unknown completion holds only its run-local opening until cutoff, never a permanent cross-run reservation. |
 
 The key asymmetry is deliberate: when unsure, the system usually fails toward **holding** or
 **refusing extra dispatch**, not toward silently widening work. That is why snooze suppresses
@@ -407,7 +407,7 @@ The guard pattern is consistent across all of them:
 - **replies are read from human provenance or structural position**, not from the agent's own
   summary of what happened,
 - **Today release comes from a separate declaration plus human-controlled invalidations**,
-- **dispatch honours user-originated pauses while pacing counts this run's requests**, and
+- **dispatch honours user-originated pauses while the drain observes this run's own requests**, and
 - **dispatch exceptions are justified by provenance**: a user action may widen the run; the
   agent's own judgement may not.
 
@@ -419,47 +419,58 @@ choosing which signals are allowed to carry authority.
 Pacing and ordering are related but different. Ordering answers *which row is next*; pacing answers
 *how much work may this run take on before the next scheduled run arrives*.
 
-### Enforced mechanism: start/continue requests per run
+### Enforced mechanism: continuously drain N at a time
 
-**Coordinator runs do not overlap on the same machine. Task sessions may overlap across runs,
-and repeated nudges to the same task are acceptable.** At a limit of `1`, a 10:00 run may start
-task 468; the 10:30 run may nudge it again or start another eligible task while 468 continues.
-This is an allowance for new requests, not a simultaneous-worker ceiling.
+**Keep draining the eligible prepared queue until it is exhausted or this run's cutoff arrives.**
+`1` starts one normal instruction and starts the next after the first finishes. `2` keeps two
+outstanding, refilling either opening independently. It is not a total-attempt quota.
 
-The existing `Overnight Agent concurrency` setting retains its name for compatibility, but
-means **automatic start/continue attempts per run**. `session -RunLimit` reads it. The legacy
-`session -InFlight` flag aliases that configuration read and emits no in-flight count.
-Neither command enumerates task state to infer occupied workers.
+The cutoff is the next **:00 or :30 after the coordinator session's first prompt**, matching
+the agreed half-hour schedule. Late tool calls and reloads do not grant another 30 minutes.
+At cutoff, no further instructions are submitted; outstanding task conversations are not killed.
+The next run can nudge an old conversation or start other eligible work. This is deliberately
+not a machine-global worker limit. Five minutes is never a completion heuristic.
 
-The normal flow is **`oa-state.ps1 scan` → `oa_run_budget` → `oa_dispatch`**. The dispatcher
-checks the selected task's eligibility and pause, counts the attempt, checks again while
-recording its wake, and invokes the native `send_session_message` tool. A busy saved session is
-not a reason to refuse. New/replacement sessions are created idle and bound before their first
-counted kickoff.
+The coordinator enrolls with `oa_drain_status`, prepares approved briefs and idle bound sessions,
+then submits the batch to `oa_drain`. Each brief carries the exact `dispatch_input` fingerprint
+from its source scan. Preparation and dispatch reject changed input rather than silently
+restamping a stale brief. The model supplies the approved work content; the code owns selection,
+priority/pause checks, width, sending, observation, refill and cutoff. Prepared Deferred work can
+become eligible after Today work finishes. Unprepared work needs a brief, not an invented plan.
 
-| Budget field | Meaning |
+| Scheduler outcome | Meaning |
 | --- | --- |
-| `limit` / `limit_source` | The configured automatic request allowance and its provenance. |
-| `attempted_this_run` | Automatic attempts already made by this coordinator run. |
-| `collect_attempted_this_run` | Explicit human collect requests, reported separately. |
-| `remaining_this_run` | Automatic requests still permitted, clamped to zero. |
-| `requests` | Task ID and wave for each counted attempt, making the counter auditable. |
+| `queued` | Prepared but not sent; fresh eligibility/input/cutoff checks still apply. |
+| `sending` / `accepted` / `unconfirmed` | Outstanding in this run. A transport error is not cancellation. |
+| `completed` | The marked interaction ran and ended, then the app reported idle. This observes the instruction ending, not independent certification of its deliverable. |
+| `waiting_for_user` | The marked interaction started and the app reports a human input/plan gate. Its opening is reusable, but this task is not nudged again in this run. |
+| `skipped` / `failed` | The reason is recorded, never silently reported as success. |
+| Run `drained` / `cutoff` / `error` | The prepared queue was processed, the fixed deadline arrived, or execution stopped with an explicit error. |
 
-Every scheduled run already has its own coordinator session. Its
-`files/oa-run-budget.json` contains the counted requests, so tool reloads in that session do not
-reset the counter. A new run's session starts at zero. Manual reruns also use a fresh coordinator
-session; resetting a live run's counter is not part of the protocol. Calls within one run are
-serialized so parallel tool requests cannot overspend its allowance.
+Each task is attempted at most once per run. Two aliases to one actual conversation are not
+dispatched concurrently by that run. The loop runs independently of `oa_drain_wait`; waiting
+observes progress rather than asking the model to schedule the next task.
 
-**A failed or unconfirmed send consumes this run's allowance only.** There is no automatic retry,
-and no claim of successful delivery on an error. A later run may try again with its new allowance.
-There are no app-activity lookups, event-log inspections, pending reservations, generations,
-receipt reconciliation or cross-run deduplication keys.
+**Completion is evidence, not age.** The sender marks each instruction. Observation requires the
+matching target user message, an assistant turn belonging to that interaction, its end, then a
+fresh app-idle reading. Old idle readings and unrelated completions do not refill an opening.
+Unknown activity or unreadable history holds that opening with a named error until evidence or
+cutoff; another existing opening may continue. Remote histories are unsupported and refused
+before sending. Native calls are bounded to 15 seconds or the remaining window; event reads
+are bounded to 16 MiB per request. Neither limit is a task timeout or proof of completion.
 
-Task-state read/modify/write operations still use an OS-owned mutex and atomic JSON replacement:
-task agents can update that state while the coordinator runs. This is file integrity, not
-cross-run admission control. Budget inspection is read-only, and old experimental receipt files
-are neither consulted nor removed.
+The coordinator host must remain alive while draining. A native-tool hook prevents its normal
+completion while the loop is active. Closing the host interrupts the loop; reload resumes its
+persisted `files/oa-drain.json` queue and original cutoff.
+
+**Operational native-tool guard:** after enrollment, raw session messages, create-with-kickoff
+and native launch/resume shortcuts are denied. Only the scheduler's exact one-use send is
+permitted before cutoff. This is not a security sandbox against arbitrary shell/network code,
+and does not control unenrolled sessions.
+
+Task-state writes remain locked/atomic because task agents can update them concurrently.
+`session -RunLimit` and legacy `-InFlight` read the configured drain width rather than enumerate
+saved tasks into a global worker count. Old prototype state is not migrated or deleted.
 
 `mutcheck-pacing-concurrency.ps1` proves the resolver's sharp edges: the setting must be a **bare
 whole number**, an explicit `-Concurrency` argument outranks the file, malformed prose reports
@@ -470,7 +481,7 @@ run. That is the executable part of issue **#391**.
 
 The coordinator may finish collecting, dispatching and reporting while task sessions keep
 working. Its wrap-up must distinguish a sent instruction from a completed task. A task's result
-still needs to be verified and published where required; the per-run quota does not weaken that
+still needs to be verified and published where required; the drain does not weaken that
 completion standard.
 
 `plugins/overnight-agent/checks/mutcheck-deliverable-gate.mjs` and
@@ -494,9 +505,9 @@ collection:
 3. Dispatch happens in **two waves**: the **priority wave** first, then the **collect wave**.
 4. A collect-phase wake is dispatched **in addition to** the priority selection, not instead of it.
 
-The sanctioned exception is `oa_dispatch`'s explicit **`collect_wave: true`**. It requires a
+The sanctioned exception is a prepared brief's explicit **`collect_wave: true`**. It requires a
 recorded human journal reply or new doc comment. Inbox/Telegram replies must be folded first.
-The exception bypasses only the normal per-run quota, never a pause or ineligibility.
+The exception bypasses only the normal drain width, never a pause, ineligibility, stale input or cutoff.
 That exception does **not** raise the configured setting, compound it, or move work back into the
 run session. It changes **when** a task is woken, not **where** its work happens. The rationale is
 provenance: a mail reply, a Telegram reply, or a journal reply is explicit user action, so it may
@@ -508,6 +519,7 @@ important set of files:
 - `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1`
 - `plugins/overnight-agent/checks/oa-dispatch.mjs`
 - `plugins/overnight-agent/checks/oa-dispatch.test.mjs`
+- `plugins/overnight-agent/checks/mutcheck-drain.mjs`
 - `plugins/overnight-agent/skills/overnight-agent/mutcheck-parked-capacity.ps1`
 - `plugins/overnight-agent/skills/overnight-agent/mutcheck-priority-order.ps1`
 - `plugins/overnight-agent/skills/overnight-agent/mutcheck-today-served.ps1`
@@ -517,4 +529,4 @@ important set of files:
 - `plugins/overnight-agent/checks/deliverable-gate-sweep.mjs`
 
 Together they define prioritisation as the product actually behaves: board order, reply interrupts,
-Today gating, liveness, a per-run request quota, and its provenance-based human collect exception.
+Today gating, liveness, a code-owned drain, and its provenance-based human collect exception.

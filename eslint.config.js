@@ -29,6 +29,7 @@ export default defineConfig([
   {
     files: [
       'plugins/overnight-agent/checks/oa-dispatch*.mjs',
+      'plugins/overnight-agent/checks/mutcheck-drain.mjs',
       'plugins/overnight-agent/extensions/task-dispatch/*.mjs',
     ],
     extends: [js.configs.recommended],

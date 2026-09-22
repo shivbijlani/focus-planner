@@ -295,7 +295,7 @@ Real sample excerpt from `plugins/overnight-agent/skills/overnight-agent/user-se
 | Non-table prose, blockquotes, comments, and preference bullets are preserved byte-for-byte. | This is the agent’s source of truth; the app must not erase surrounding guidance. | `serializeSettingsForm()` in `src/config/userSettingsForm.js` |
 | `Today gate backstop` accepts `6`, `6h`, `6 hours`, or `off`. | The gate reader wants a human-friendly but bounded grammar. | `Resolve-GateSettings` in `oa-state.ps1` |
 | `Today gate strict` is truthy only for `on`, `yes`, or `true`. | Fail-safe default is non-strict unless the file explicitly enables strict gating. | `Resolve-GateSettings` in `oa-state.ps1` |
-| `Overnight Agent concurrency` must be a **bare whole number**. Its historical name now means start/continue attempts per run. | Anchored parsing prevents dated prose like `2026-09-02: set to 1` from becoming a request limit of `2026`. | `Resolve-PacingSettings` in `oa-state.ps1` |
+| `Overnight Agent concurrency` must be a **bare whole number**. It is run-local drain width, refilled on completion. | Anchored parsing prevents dated prose like `2026-09-02: set to 1` from becoming a width of `2026`. | `Resolve-PacingSettings` in `oa-state.ps1` |
 | Browser-slot column order does not matter; Slot/Port/Profile are required. | Scripts resolve columns by name and must fail loudly on ambiguous slot definitions. | `user-settings.md` guidance; CI browser-slot mutation check in `.github/workflows/ci.yml` |
 
 </details>

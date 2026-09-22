@@ -94,11 +94,12 @@
                                 `replace` and arms the continuation kickoff.
           [-SessionWoken]       Record that the run reused this session (stamps last_woken_at).
           [-CheckDispatch]      Check eligibility and pauses without recording a wake.
-          [-ForDispatch]        Check again and stamp the wake before oa_dispatch sends its
+          [-ForDispatch]        Check again and stamp the wake before oa_drain sends its
                                 start/continue instruction. Being busy does not prevent a nudge.
+          [-DispatchInput hash] Refuse a brief prepared against changed journal/task inputs.
           [-SessionRelease]     Retire the binding (task finished, workspace torn down). Prints
                                 the teardown command; never runs it.
-          [-RunLimit]           Omit -Id to read the configured start/nudge limit per run.
+          [-RunLimit]           Omit -Id to read this run's maximum outstanding normal requests.
           [-InFlight]           Legacy alias for -RunLimit. Reports no in-flight count.
           [-Concurrency <n>]    Override the `Overnight Agent concurrency` setting for one call.
   resnapshot                    One-time migration after a change to how journals are decoded
@@ -170,15 +171,17 @@
                             reintroduced by the delegation step itself. Inheritance is the
                             default everywhere, so it has to be refused explicitly.
 
-  PER-RUN PACING (#391 / #589; user clarification 2026-09-14). The historical setting
-  `Overnight Agent concurrency` limits automatic START/CONTINUE REQUESTS PER RUN, not workers.
-  Coordinator runs do not overlap on one machine. A later run may nudge an already-busy task
-  or start a different task while previous task sessions continue.
+  RUN-LOCAL DRAIN (#391 / #589; user clarification 2026-09-22). `Overnight Agent concurrency`
+  is N outstanding normal instructions from THIS run, refilled after observed completion.
+  The oa_drain scheduler owns selection, send, observation, refill and cutoff in code.
+  It stops dispatching at the next :00/:30 after the coordinator's first prompt; reload does
+  not move that deadline. A later run may nudge or start tasks while earlier task sessions
+  finish. There is no global occupied-worker count derived from retained task state.
 
-  oa_dispatch keeps the request counter in the coordinator session's own files, never in
-  task state. Every scheduled run has a new coordinator session and starts at zero. A reload
-  of that same session retains its counter. Failed/uncertain attempts consume this run's
-  budget only; no cross-run reservation, activity snapshot or delivery receipt is needed.
+  The coordinator prepares approved task briefs and their scan fingerprints. The drain processes
+  each task at most once per run, respecting fresh eligibility and pauses. A failed/unknown
+  delivery holds its opening until correlated task execution ends or this run reaches cutoff.
+  It never expires into permission to overfill this run, and never blocks a later run.
   The settings precedence remains -Concurrency > user-settings.md > 1.
 
   CLEANUP is emitted, never performed. `-SessionRelease` prints the teardown command
@@ -552,10 +555,11 @@ param(
   [string]$RunWorkspace,
   [switch]$SessionDead,
   [switch]$SessionWoken,
-  # The native dispatch tool checks first, records its per-run attempt, then stamps the wake
+  # The native drain checks first, persists its run state, then stamps the wake
   # before sending (#532). Neither flag measures whether another task is running.
   [switch]$CheckDispatch,
   [switch]$ForDispatch,
+  [string]$DispatchInput,
   [switch]$RunLimit,
   [switch]$SessionRelease,
   # The path of a workspace that has just been REMOVED. Marks any binding pointing at it dead,
@@ -735,7 +739,7 @@ function Resolve-GateSettings {
 # The failure direction is deliberate and is the only one that is safe for a pacing control. An
 # absent, unreadable or malformed value yields 1 EXACTLY -- never "unlimited", never the last
 # value seen. A typo can therefore narrow a run; it can never widen one. A value below 1 is
-# clamped to 1; disable the workflow separately rather than treating zero as a positive quota.
+# clamped to 1; disable the workflow separately rather than treating zero as a drain width.
 #
 # THAT LAST GUARANTEE USED TO BE FALSE, and the way it failed is worth stating because it reads
 # as harmless. The parse was a LEADING-integer match, so that `2 tasks` would work -- but this
@@ -2048,8 +2052,8 @@ function Get-JournalFacts([string]$path) {
     # re-snapshotting the file. That erasure is what lost three of Shiv's messages on #245.
     HasTrailingHuman = (Test-TrailingHasHuman $trailing $consent)
     HasOpenAsk      = (Test-HasOpenAsk $agentLeft)       # visibility: digest must show it
-    # #560: eligibility WITH its provenance. The per-run counter separately counts requested
-    # starts/continues, never task status or an ask declaration (#589).
+    # #560: eligibility WITH its provenance. The drain separately observes its own requested
+    # work, never infers execution from task status or an ask declaration (#589).
     HasBlockingAsk  = [bool]$askVerdict.blocking          # gate: does it stop the run proceeding?
     AskSource       = "$($askVerdict.source)"             # declared | inferred
     AskDeclared     = "$($askVerdict.declared)"           # blocking | offer | none | '' (undeclared)
@@ -2875,6 +2879,7 @@ function Get-ScanRows {
     $sessFacts = Get-SessionState $st
     [pscustomobject]@{
       id            = $facts.Id
+      dispatch_input = (Get-DispatchInput $st $facts)
       status        = $status
       changed       = $changed
       reopened      = $reopened
@@ -4373,15 +4378,32 @@ function Get-SessionVerdict($sess, $row, $journalFacts) {
   return 'reuse'
 }
 
+function Get-DispatchInput($st, $facts) {
+  # A prepared brief cannot silently follow changed human input, approval, reminders or binding.
+  # Wake timestamps and observation timestamps are excluded: they do not change the requested work.
+  $inputState = [ordered]@{
+    journal = "$($facts.FullHash)"; status = "$($st.status)"; status_by = "$($st.status_by)"
+    plan_id = "$($st.plan_id)"; version = "$($st.version)"; session_id = "$($st.session.session_id)"
+    poll = ConvertTo-IsoText $st.poll.next_due; recheck = ConvertTo-IsoText $st.recheck.next_due
+    comments = @($st.doc.pending_ids | Sort-Object -Unique)
+  }
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(
+      ($inputState | ConvertTo-Json -Depth 4 -Compress))))).Replace('-', '').ToLowerInvariant()
+  }
+  finally { $sha.Dispose() }
+}
+
 function Get-RunLimit {
   [pscustomobject]@{
-    scope = 'per_run'
+    scope = 'run_local_concurrency'
     dispatch_limit = [int]$script:ConcurrencyLimit
     limit_source = "$script:ConcurrencySource"
     # Retained for settings-reader compatibility, not a simultaneous-worker promise.
     concurrency = [int]$script:ConcurrencyLimit
     concurrency_source = "$script:ConcurrencySource"
-    note = 'Limit counts start/continue attempts per coordinator run. Use oa_run_budget for the current run counter; saved sessions and running tasks do not consume a new run budget.'
+    note = 'N outstanding requests from this run, refilled after observed completion until cutoff. Earlier runs do not reserve openings. Use oa_drain_status for this run.'
   }
 }
 
@@ -4392,6 +4414,9 @@ function Assert-TaskDispatch($st, $sess, $facts) {
   $row = @(Get-ScanRows | Where-Object { "$($_.id)" -eq "$($st.id)" }) | Select-Object -First 1
   if (-not $row -or -not $row.eligible -or $row.session_paused) {
     throw 'session_not_eligible: follow the current Today-first worklist and user pauses'
+  }
+  if ($DispatchInput -and $DispatchInput -ne $row.dispatch_input) {
+    throw 'session_input_changed: the prepared task brief is stale'
   }
   if ($Force -and -not ($row.unanswered_user -or $row.doc_new_comments -gt 0)) {
     throw 'session_collect_evidence_required: fold the human reply or observe the human doc comment first'
@@ -4470,7 +4495,7 @@ function Cmd-Session {
       } | ConvertTo-Json -Depth 4)
   }
 
-  # No task/session enumeration: this is a per-run request limit, not an occupancy estimate.
+  # No task/session enumeration: this is drain width, not a global occupancy estimate.
   if (-not $Id) {
     if (-not ($RunLimit -or $InFlight)) { throw 'session requires -Id (or -RunLimit, or -WorkspaceGone for teardown)' }
     return (Get-RunLimit | ConvertTo-Json -Depth 4)
@@ -4560,7 +4585,7 @@ function Cmd-Session {
     }
 
     # Binding is identity, not admission. New/replacement sessions are created idle and sent
-    # their kickoff through oa_dispatch; charging a bind before that send recreates #589.
+    # their kickoff through oa_drain; charging a bind before that send recreates #589.
 
     $created = if ($sess -and "$($sess.session_id)" -eq $SessionId -and $sess.created_at) { $sess.created_at } else { Now-Iso }
     $replacedAt = if ($prior -and "$($sess.session_id)" -ne $SessionId) { Now-Iso } elseif ($sess) { $sess.replaced_at } else { '' }
@@ -4624,7 +4649,7 @@ function Cmd-Session {
     else { $null }
     concurrency    = [int]$script:ConcurrencyLimit
     concurrency_source = "$script:ConcurrencySource"
-    budget_scope   = 'per_run'
+    budget_scope   = 'run_local_concurrency'
     dispatch_limit = [int]$script:ConcurrencyLimit
     limit_source   = "$script:ConcurrencySource"
   } | ConvertTo-Json -Depth 8

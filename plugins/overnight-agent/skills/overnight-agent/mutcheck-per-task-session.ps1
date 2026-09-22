@@ -360,7 +360,7 @@ $n = Invoke-OaJson -OaArgs @('session', '-InFlight') -Settings $twoSettings
 Check 'N the settings row is actually read' { $n.concurrency -eq 2 }
 
 Check 'N- retained bindings are not a global in-flight count' {
-  $l.scope -eq 'per_run' -and $l.dispatch_limit -eq 1 -and -not $l.PSObject.Properties['in_flight']
+  $l.scope -eq 'run_local_concurrency' -and $l.dispatch_limit -eq 1 -and -not $l.PSObject.Properties['in_flight']
 }
 
 # --- O/P/U: binding is preparation, not admission (#589) -------------------------------
@@ -375,7 +375,7 @@ $o = Invoke-Oa @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKin
 Check 'O a second idle conversation can be bound without starting work' { $script:LastOaExit -eq 0 -and $o -match 'SESS_806' }
 Check 'O- two bindings do not spend or change the per-run limit' {
   $capacity = Invoke-OaJson @('session', '-InFlight')
-  $capacity.scope -eq 'per_run' -and $capacity.dispatch_limit -eq 1 -and -not $capacity.PSObject.Properties['at_capacity']
+  $capacity.scope -eq 'run_local_concurrency' -and $capacity.dispatch_limit -eq 1 -and -not $capacity.PSObject.Properties['at_capacity']
 }
 
 $p = Invoke-OaJson @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'folder', '-Force')

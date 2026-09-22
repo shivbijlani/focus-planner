@@ -68,41 +68,53 @@ Ask Copilot to "run the overnight agent", "propose plans for my tasks", or
 (inbox check → execute approved plans → propose new plans behind the approval
 gate).
 
-### Start/continue requests per run
+### Continuously drain the prepared queue
 
-The setting historically named **`Overnight Agent concurrency`** means **automatic start/nudge
-attempts per overnight run**, not tasks running simultaneously. At `1`, the 10:00 run may start
-task 468; the 10:30 run may nudge 468 again or start another eligible task while 468 continues.
-Repeated nudges and overlapping task sessions are intentional. Coordinator runs are assumed
-not to overlap on the same machine.
+`Overnight Agent concurrency` is the number of normal instructions **from this run** that may
+be outstanding. At `1`, start one task, observe it finish, then start the next eligible task.
+At `2`, refill either opening independently. This is not a total-attempt quota: a run can finish
+many tasks. Earlier runs' tasks do not reserve this run's openings, and a later run may nudge a
+saved conversation again.
 
-Use **`oa-state.ps1 scan`**, **`oa_run_budget`**, then **`oa_dispatch`** in the Copilot app.
-The extension invokes the native `send_session_message` tool; it does not query app activity or
-inspect task event logs. It needs Node 22+, Windows PowerShell 5.1 (or `pwsh` elsewhere), and the
-app's native message tool. Missing tools stop dispatch rather than bypassing the budget.
+The implementation assumes a half-hour schedule at **:00 and :30**. The cutoff is the next such
+boundary after the coordinator's first prompt, not 30 minutes after a late tool call. At cutoff
+the old run stops sending; its outstanding task conversations are left alone. This bounds
+dispatch time, not task runtime or machine-wide concurrency. The five-minute example is never
+used to infer completion.
 
-`oa_dispatch` checks task eligibility and pauses, records the attempt in this run's counter,
-checks again while stamping the wake, and sends the instruction. Requests within one run are
-serialized. Failed/unconfirmed attempts consume this run's allowance only and are reported
-explicitly; the next run has a fresh allowance. There are no cross-run reservations, generations,
-delivery receipts, activity snapshots or deduplication keys.
+The normal flow is **`oa_drain_status` → prepare/bind idle task sessions → scan and prepare
+approved briefs → `oa_drain` → `oa_drain_wait` / status**. The model supplies a batch of approved
+briefs and their exact `dispatch_input` fingerprints from that scan. Code owns queue selection,
+priority and pause rechecks, sending, completion observation, refill and cutoff. Changed inputs
+are rejected, not silently attached to an old brief. Each task is attempted at most once per run;
+unprepared tasks require more preparation rather than an invented plan. Deferred prepared tasks
+can become eligible as Today work finishes.
 
-Each scheduled run already gets its own coordinator session. Its small `files/oa-run-budget.json`
-records the counted task IDs and whether each request was a priority or human collect request.
-This survives a tool reload in the same run; the next session starts at zero. Budget reads are
-read-only. Use a fresh coordinator session for a manual rerun too, rather than resetting a
-running session's counter.
+The SDK extension runs the loop automatically; waiting/status calls do not drive it. The
+coordinator's `files/oa-drain.json` stores the queue, immutable cutoff and outcomes across tool
+reloads. An interrupted running/prepared queue resumes with the same cutoff, never a fresh window.
+The app must keep the coordinator host alive; its native completion tool is blocked while the
+drain is active. Closing the host stops the loop, and a restart recovers its saved state.
 
-Saved task conversations and Today-first eligibility remain unchanged. Create new/replacement
-sessions **idle, without a kickoff**, bind them, then send their first instruction through
-`oa_dispatch`. Explicit human collect requests remain a separately reported budget exception;
-they never override pauses or eligibility. Task-state writes remain locked and atomic because
-task agents can still update state while a coordinator runs.
+**Accepted is not complete.** The sender adds a unique marker. Refill requires the target's
+matching interaction to have started and ended, followed by an app-idle reading. A started
+interaction at a human-input/plan gate is parked and releases its opening without another nudge.
+Unconfirmed delivery and unknown completion stay visible and hold only that run's opening until
+evidence arrives or cutoff. They do not reserve a later run's capacity. Observation is bounded to
+16 MiB per outstanding request and native app calls to 15 seconds or the remaining window.
+Remote event histories are unsupported and refused before sending. A known new local session
+may create its event log after its first instruction; absent history never means completed.
 
-`oa-state.ps1 session -RunLimit` reads configuration only. The legacy `-InFlight` flag is an
-alias for that read: it no longer emits a misleading running-worker count. `oa_run_budget`
-reports `attempted_this_run`, `collect_attempted_this_run`, `remaining_this_run` and the counted
-requests. No installed task state or old experimental receipt files are migrated or deleted.
+After enrollment the pre-tool hook blocks raw native messages, create-with-kickoff, native
+launch/resume shortcuts and premature coordinator completion. Only the scheduler's exact
+one-use send is permitted, before cutoff. This is an operational native-tool guard, **not a
+sandbox against arbitrary shell/network code**. Unenrolled sessions are outside its scope.
+
+Today-first rules, saved conversations and pauses remain. Explicit human collect requests are
+the separately marked width exception, but never bypass pauses, input freshness or cutoff.
+Task-state writes remain locked/atomic because task agents can update them concurrently.
+`session -RunLimit` (legacy alias `-InFlight`) reads the width, not a global occupied-worker count.
+No live settings or old prototype state is automatically migrated or deleted.
 
 ### Is this issue already shipped?
 

@@ -467,22 +467,24 @@ user has spoken after your last turn:
 
 Do the phases **in this order** every time.
 
-> **Pacing — starts and nudges PER RUN (#391 / #589).** The historical setting
-> `Overnight Agent concurrency` now means the number of automatic start/continue requests a
-> coordinator run may make. **Coordinator runs do not overlap on the same machine. Task sessions
-> MAY overlap across runs, and repeated nudges to a saved task session are acceptable.**
+> **Pacing — continuously drain N at a time (#391 / #589).** `Overnight Agent concurrency` is
+> how many normal task instructions FROM THIS RUN may be outstanding. `1` drains sequentially;
+> `2` starts two and refills either opening when that work finishes. It is NOT a total-attempt quota.
 >
-> 1. **One automatic request per run by default.** Read `oa_run_budget`; its counter starts at
->    zero in each new coordinator session. A task started at 10:00 does not consume the 10:30
->    allowance, even if it is still working. The 10:30 run may nudge it again or start another task.
-> 2. **Use `oa_dispatch` for each request.** It counts the attempt before sending and serializes
->    this run's calls. A failed or uncertain attempt still uses this run's allowance; it creates
->    no reservation in the next run. Reading the budget or reloading tools never resets it.
-> 3. **Coordinator completion is not task completion.** The run may finish after dispatching
->    while task agents keep working. Report them as started/continuing, not finished. A task is
->    only done when its result is verified, published where needed, and its journal updated.
+> 1. **Enroll at the start with `oa_drain_status`.** The code fixes a cutoff at the next :00/:30
+>    after this coordinator session's FIRST prompt. This implements the agreed half-hour schedule.
+>    Late tool calls and reloads never grant another 30 minutes. Use a fresh session for a new run.
+> 2. **Prepare approved briefs, then call `oa_drain`.** The code chooses in current worklist order,
+>    sends, observes matching task execution, and refills without another model dispatch decision.
+>    Submit all prepared candidates, including Deferred candidates that may become eligible later.
+>    It does not invent plans for tasks you did not prepare, and processes each task at most once
+>    in this run. Newly changed input requires a fresh brief in a later run, not a stale queued one.
+> 3. **At cutoff, stop starting tasks; do not kill the remaining work.** A subsequent run may
+>    nudge the same saved task again or start different work while old tasks finish. There is no
+>    machine-global worker cap. Five minutes is NOT a completion heuristic. Observed completion,
+>    not age or an initial idle snapshot, permits an opening to be refilled.
 >
-> **Read `limit_source`, and say what it says.** `settings-malformed` means he wrote a value
+> **Read `limit_source` from `session -RunLimit`, and say what it says.** `settings-malformed` means he wrote a value
 > and it did **not** parse — so the run is at 1 *by accident*, not by his choice. Quote the row in
 > the wrap-up; silence there is indistinguishable from agreement. The setting always fails
 > **narrow** (absent, unreadable, malformed, zero and negative all yield 1), so a broken value can
@@ -497,9 +499,10 @@ Do the phases **in this order** every time.
 > compound, it does not raise the setting, and it changes *when* a task is woken, never *where* its
 > work happens.
 >
-> The scheduled workflow already creates a new coordinator session per run. Use a new run
-> session for a manual rerun too; do not delete or reset the current run's counter.
-> Guarded by `oa-dispatch.test.mjs` and `mutcheck-pacing-concurrency.ps1`.
+> The scheduled workflow already creates a new coordinator session per run. Do not reset
+> `oa-drain.json` to extend one run. `oa_drain_wait` waits for progress; it does NOT drive refills.
+> The native tool hook prevents finishing the coordinator while its drain is active.
+> Guarded by `oa-dispatch.test.mjs`, `mutcheck-drain.mjs` and `mutcheck-pacing-concurrency.ps1`.
 
 > **Telegram mirror runs last.** PHASE 3 mirrors the journals to Telegram *after* PHASE 1/2 have written
 > your turns, so a task's thread reflects the work you just did. It's gated on `user-settings.md → Telegram`.
@@ -1014,22 +1017,25 @@ finish before the next coordinator run can start more work.
    **Also pick up any row with `due_poll: true`** — a time-triggered recurring check that's now due
    (see "Polling"). Run its check, then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone`.
 
-2. **Use `oa_run_budget` before the wave and `oa_dispatch` for EVERY task wake.** The budget
-   reports `limit`, `attempted_this_run`, `remaining_this_run`, and the counted task requests.
-   This is a counter of start/continue attempts, **not** busy tasks or saved conversations.
+2. **Call `oa_drain_status` before preparing task sessions, then `oa_drain` with approved briefs.**
+   The status reports the immutable cutoff, configured width and each queued/sent/completed,
+   waiting, skipped or failed request. The code owns the loop, not a prose instruction to keep going.
    **Do not use raw `send_session_message`, a kickoff on `create_session`, or hand-written
    `-ForDispatch` / `-SessionWoken` calls for task dispatch.** If these plugin tools are missing,
-   report the missing capability and stop dispatch rather than bypassing the counter.
+   report the missing capability and stop dispatch rather than bypassing the scheduler.
 
-   **Do not wait for earlier task sessions to become idle.** A busy session may receive another
-   continue instruction, and a different task may start while it works. Normal requests stop when
-   `remaining_this_run` reaches zero. There is no cross-run activity, pending-delivery or receipt
-   gate. An unsuccessful attempt is reported as unconfirmed, not as successful work.
+   **Do not wait for tasks from earlier runs to become idle.** This run can nudge them or start
+   different work. Within this run, accepted/unconfirmed requests remain outstanding until the
+   matching interaction has run and the app subsequently reports idle. A started interaction at
+   a human input/plan gate is parked, frees an opening and is not nudged again this run.
+   Unreadable/missing/unknown completion evidence holds that opening with an explicit error until
+   cutoff; it never silently becomes free or creates a permanent reservation in a later run.
 
-   The **collect wave** remains the explicit per-run budget exception: pass `collect_wave: true` to
-   `oa_dispatch` for a human-triggered reply. Fold inbox/Telegram replies into the journal first,
+   The **collect wave** remains the explicit width exception: mark a prepared brief `collect_wave: true`
+   for a human-triggered reply. Fold inbox/Telegram replies into the journal first,
    or observe the human's doc comment. It never bypasses eligibility or an explicit pause.
-   `collect_attempted_this_run` reports those extra requests separately.
+   The cutoff applies to collect requests too. Task sessions must be observable locally; an
+   unsupported remote history is reported before sending rather than guessed complete.
 
 3. **For each task, resolve its session before doing anything else** — never create one on a hunch:
 
@@ -1045,17 +1051,17 @@ finish before the next coordinator run can start more work.
      **Do not pattern-match on `reuse` and proceed:** two consecutive runs did exactly that on
      2026-09-05 and woke a task he had twice asked to pause, because `state: live`,
      `released: false` and `last_woken_at` are each accurate and none of them is about permission.
-   - **`reuse`** — the task already has a retained session. **Wake that one with `oa_dispatch`.** Do not create a second;
+   - **`reuse`** — the task already has a retained session. **Prepare that one for `oa_drain`.** Do not create a second;
      `session -SessionId <other>` over a live binding is refused (`session_bind_conflict`) precisely
-     so "reuse it" is a rule rather than an intention. The wrapper counts this run's request,
-     records `last_woken_at`, then sends the brief through the native app message tool.
+     so "reuse it" is a rule rather than an intention. The scheduler records the request,
+     stamps `last_woken_at`, then sends its marked brief through the native app message tool.
      A plain `session -Id N` is still an inspection: no authority and no stamp (#532).
    - **`replace`** — a previous run recorded the bound session as non-wakeable. Create a fresh one
-     **idle, without a kickoff**, and use the emitted **`kickoff_continuation`** *verbatim* as the opening of its `oa_dispatch` brief: it
+     **idle, without a kickoff**, and use the emitted **`kickoff_continuation`** *verbatim* as the opening of its prepared brief: it
      names the task and the prior session id, so the replacement knows it is continuing work rather
      than starting clean. Then bind it — which records `prior_session_id`.
    - **`create`** — no session yet. Create one **idle, without a kickoff**, bind it (step 4),
-     then send its brief through `oa_dispatch`. Creating or binding an idle session is not work.
+     then include its brief in `oa_drain`. Creating or binding an idle session is not work.
    - If a session will not wake, record that fact rather than retrying blindly:
      `oa-state.ps1 session -Id <ID> -SessionDead`. That is what turns the next verdict into
      `replace` and arms the continuation.
@@ -1085,16 +1091,22 @@ finish before the next coordinator run can start more work.
      -SessionWorkspace <worktree path> -WorkspaceType worktree
    ```
 
-5. **Brief the session properly through `oa_dispatch`.** Its `message` must carry: the task id and title, the approved plan,
+5. **Prepare each approved brief for `oa_drain`.** Its `message` must carry: the task id and title, the approved plan,
    the **distilled linked-task context** from "Gather linked-task context FIRST" (never just the
    task's own journal), the `kickoff_continuation` line when the verdict was `replace`, and — when
    it gets a worktree — the standing worktree clause in PHASE 1.5 §5, **unedited**.
 
-   Invoke `oa_dispatch({ task_id: "<ID>", message: "<the complete approved brief>" })`.
-   It sends the instruction itself; do not add an uncounted raw follow-up.
-   `accepted: true` means the instruction was accepted, not that the task finished.
-   Failed/uncertain attempts consume this run's quota only. The next run has a fresh allowance
-   and may try the task again; do not mark its saved session dead merely because a reply was lost.
+   After creating/binding idle sessions, scan again and prepare from that snapshot. Invoke
+   `oa_drain({ tasks: [{ task_id: "<ID>", dispatch_input: "<exact hash from that scan>", message: "<approved brief>" }, ...] })`.
+   A changed hash is refused; never copy a newer hash onto an old brief.
+   The tool starts the autonomous loop. Use `oa_drain_wait` or status to observe it, not to choose
+   individual refills. `accepted` means sent, not finished. Report the final per-task outcomes.
+   Do not mark a saved session dead merely because a response was lost.
+
+   **Operational enforcement:** after enrollment, the extension's pre-tool hook blocks raw native
+   wakes, create-with-kickoff and other native launch/resume shortcuts. Only the scheduler's exact
+   one-use send is allowed, before cutoff. This is not a sandbox against arbitrary shell/network
+   code, and does not control sessions outside this enrolled coordinator.
 
 6. **The session does the work AND writes the turn; the run session does not.** (GH #473)
 

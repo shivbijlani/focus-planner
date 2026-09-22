@@ -1,7 +1,7 @@
 <#
   #589 regression: task bindings/status/timers must not become a global admission gate.
-  The clarified policy counts requests per coordinator run, not active workers. The actual
-  counter and dispatch behavior are tested in oa-dispatch.test.mjs; this compatibility guard
+  The clarified policy drains N-wide within each run, not a machine-global occupied-worker cap.
+  Refill and dispatch behavior are tested in oa-dispatch.test.mjs; this compatibility guard
   proves the CLI limit reader never derives an occupancy value from retained task state.
 #>
 [CmdletBinding()]
@@ -34,7 +34,7 @@ try {
       -UserSettings (Join-Path $root 'absent-settings.md')
     if ($LASTEXITCODE -ne 0) { throw "$flag failed" }
     $value = $out | ConvertFrom-Json
-    if ($value.scope -ne 'per_run' -or $value.dispatch_limit -ne 1 -or
+    if ($value.scope -ne 'run_local_concurrency' -or $value.dispatch_limit -ne 1 -or
         $value.PSObject.Properties['in_flight'] -or $value.PSObject.Properties['at_capacity']) {
       throw "$flag reported the wrong policy"
     }
