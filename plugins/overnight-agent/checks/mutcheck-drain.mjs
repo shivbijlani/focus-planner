@@ -15,6 +15,7 @@ const mutations = [
   ['idle means complete', "if (evidence.turnEnded && data.activity?.status === 'idle'", "if (data.activity?.status === 'idle'", '^idle before accepted'],
   ['free after save failure', 'if (ACTIVE.has(item.state)) throw error;', 'if (false) throw error;', '^a post-send save'],
   ['disable native gate', 'if (!enrolled()) return;', 'if (true) return;', '^native hook denies'],
+  ['ignore start buffer', '- startBufferMinutes * 60000', '- 0 * 60000', '^default buffer rejects'],
 ];
 try {
   for (const [name, find, replace, test] of mutations) {

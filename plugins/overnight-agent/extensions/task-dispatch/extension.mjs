@@ -26,9 +26,21 @@ async function initialize(paths) {
       const invoke = () => boundedToolCall(() => session.rpc.tools.execute({ name, arguments: args }), drain.status().cutoff);
       return name === 'send_session_message' ? guard.send(args, invoke) : invoke();
     };
+    const planner = createPlanner({ paths: settings });
+    // Pin the buffer at enrollment. Reload must not move an existing run's launch deadline.
+    const timing = existing ? {
+      start_buffer_minutes: existing.start_buffer_minutes,
+      start_buffer_source: existing.start_buffer_source,
+    } : await planner.settings();
+    if (timing.start_buffer_error) throw new Error(timing.start_buffer_error);
+    if (!Number.isSafeInteger(timing.start_buffer_minutes) ||
+        !['default', 'settings'].includes(timing.start_buffer_source)) {
+      throw new Error('drain_buffer_invalid: helper/run state lacks validated start-buffer settings; use the current plugin in a fresh run');
+    }
     drain = createDrain({
       directory, coordinatorSessionId: session.sessionId, startedAt: await coordinatorStart(session.workspacePath),
-      paths: settings, planner: createPlanner({ paths: settings }),
+      paths: settings, planner,
+      startBufferMinutes: timing.start_buffer_minutes, startBufferSource: timing.start_buffer_source,
       adapter: createNativeAdapter({ invokeTool, sessionRoot: path.dirname(session.workspacePath) }),
     });
     if (existing?.status === 'running' || existing?.status === 'ready' && existing.items.some(item => item.state === 'queued')) start();
@@ -58,13 +70,13 @@ const session = await joinSession({
   tools: [
     {
       name: 'oa_drain_status',
-      description: 'Enroll this overnight coordinator and read its code-owned queue/deadline. Call before preparing task sessions. Native raw wakes and create-with-kickoff are blocked after enrollment. Deadline is the next :00/:30 boundary after the first prompt, not reset by tool calls.',
+      description: 'Enroll this overnight coordinator and read its queue/deadline. Before preparing sessions, resolve Overnight Agent start buffer (default 5m) from user-settings. No new start at/after the next :00/:30 minus that buffer. Status includes next_run_at, start_buffer_minutes/source and cutoff; reload never extends it.',
       parameters: { type: 'object', properties: { paths: pathsSchema }, additionalProperties: false },
       handler: async args => JSON.stringify((await initialize(args.paths)).status()),
     },
     {
       name: 'oa_drain',
-      description: 'Prepare approved task briefs and start automatic N-wide queue draining. Code rechecks priority/pauses, sends instructions, observes completion, refills openings and stops at the stored half-hour deadline. It processes each task at most once in this run. Create/bind conversations idle first. Earlier runs do not reserve this run capacity. No five-minute completion assumption.',
+      description: 'Prepare approved briefs and start automatic N-wide draining. Code selects, checks, sends, observes and refills until next half-hour minus the configured start buffer (default5m). The buffer stops new starts, not already-running tasks. Each task is attempted once/run. Create/bind idle first. Earlier runs do not reserve this run capacity; elapsed time never proves completion.',
       parameters: {
         type: 'object', additionalProperties: false, required: ['tasks'],
         properties: {

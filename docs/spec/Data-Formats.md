@@ -273,6 +273,7 @@ Real sample excerpt from `plugins/overnight-agent/skills/overnight-agent/user-se
 | Today gate backstop | `6h` |
 | Today gate strict | `off` |
 | Overnight Agent concurrency | `1` |
+| Overnight Agent start buffer | `5m` |
 
 ## Browser slots
 
@@ -296,6 +297,7 @@ Real sample excerpt from `plugins/overnight-agent/skills/overnight-agent/user-se
 | `Today gate backstop` accepts `6`, `6h`, `6 hours`, or `off`. | The gate reader wants a human-friendly but bounded grammar. | `Resolve-GateSettings` in `oa-state.ps1` |
 | `Today gate strict` is truthy only for `on`, `yes`, or `true`. | Fail-safe default is non-strict unless the file explicitly enables strict gating. | `Resolve-GateSettings` in `oa-state.ps1` |
 | `Overnight Agent concurrency` must be a **bare whole number**. It is run-local drain width, refilled on completion. | Anchored parsing prevents dated prose like `2026-09-02: set to 1` from becoming a width of `2026`. | `Resolve-PacingSettings` in `oa-state.ps1` |
+| `Overnight Agent start buffer` is whole minutes `0..29`, optionally suffixed `m`; default `5m` when absent. | New-start cutoff is next half-hour minus this buffer. Invalid/unreadable configuration refuses a new drain; reload retains the enrolled buffer. | `Get-StartBufferSettings` in `oa-state.ps1`, `nextCutoff` in `oa-dispatch.mjs` |
 | Browser-slot column order does not matter; Slot/Port/Profile are required. | Scripts resolve columns by name and must fail loudly on ambiguous slot definitions. | `user-settings.md` guidance; CI browser-slot mutation check in `.github/workflows/ci.yml` |
 
 </details>

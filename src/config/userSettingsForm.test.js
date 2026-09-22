@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import {
   parseSettingsForm,
   serializeSettingsForm,
@@ -41,6 +42,19 @@ This file is the **source of truth** for the agent's config.
 `
 
 describe('parseSettingsForm', () => {
+  it('exposes the shipped start buffer and edits only its value cell', () => {
+    const template = readFileSync(new URL('../../plugins/overnight-agent/skills/overnight-agent/user-settings.md', import.meta.url), 'utf8')
+    const rows = parseSettingsForm(template)
+    const index = rows.findIndex(row => row.label === 'Overnight Agent start buffer')
+    expect(index).toBeGreaterThanOrEqual(0)
+    expect(rows[index].section).toBe('Overnight Agent behaviour')
+    expect(rows[index].value).toBe('`5m`')
+    const values = rows.map(row => row.value)
+    values[index] = '`10m`'
+    expect(serializeSettingsForm(template, values)).toBe(
+      template.replace('| Overnight Agent start buffer | `5m` |', '| Overnight Agent start buffer | `10m` |'),
+    )
+  })
   it('surfaces every Setting|Value data row across all tables, in order', () => {
     const rows = parseSettingsForm(SAMPLE)
     expect(rows.map(r => r.label)).toEqual([

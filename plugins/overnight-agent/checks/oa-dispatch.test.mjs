@@ -90,7 +90,7 @@ test('N=2 refills either opening independently without waiting for the slower ta
 
 test('at cutoff the old run stops sending and leaves its last task working', async t => {
   const w = world(t);
-  const tasks = [w.add('1', 28 * MINUTE), w.add('2'), w.add('3')];
+  const tasks = [w.add('1', 23 * MINUTE), w.add('2'), w.add('3')];
   const drain = w.make();
   await drain.prepare(tasks);
   const result = await drain.run();
@@ -98,7 +98,64 @@ test('at cutoff the old run stops sending and leaves its last task working', asy
   assert.deepEqual(w.sent.map(item => item.id), ['1', '2']);
   assert.equal(result.items.find(item => item.task_id === '2').state, 'accepted');
   assert.equal(result.items.find(item => item.task_id === '3').state, 'queued');
-  assert.equal(w.clock, Date.parse('2026-09-22T10:30:00Z'));
+  assert.equal(w.clock, Date.parse('2026-09-22T10:25:00Z'));
+  assert.equal(result.next_run_at, '2026-09-22T10:30:00.000Z');
+  assert.equal(result.start_buffer_minutes, 5);
+});
+
+test('default buffer rejects a new start exactly at minute25 while retaining already-running work', async t => {
+  const w = world(t);
+  const drain = w.make();
+  await drain.prepare([w.add('1', 25 * MINUTE), w.add('2')]);
+  const result = await drain.run();
+  assert.deepEqual(w.sent.map(item => item.id), ['1']);
+  assert.equal(result.cutoff, '2026-09-22T10:25:00.000Z');
+  assert.equal(result.next_run_at, '2026-09-22T10:30:00.000Z');
+  assert.equal(result.status, 'cutoff');
+  assert.equal(result.items[0].state, 'accepted', 'buffer neither kills work nor asserts it completed');
+});
+
+test('custom and zero buffers change the exact launch cutoff, not task duration', async t => {
+  for (const buffer of [0, 2, 10, 29]) {
+    const w = world(t);
+    const drain = w.make(`buffer-${buffer}`, { startBufferMinutes: buffer, startBufferSource: 'settings' });
+    await drain.prepare([w.add('1', 60 * MINUTE), w.add('2')]);
+    const result = await drain.run();
+    assert.equal(Date.parse(result.cutoff), Date.parse(START) + (30 - buffer) * MINUTE);
+    assert.equal(w.clock, Date.parse(result.cutoff));
+    assert.equal(result.start_buffer_minutes, buffer);
+    assert.equal(result.start_buffer_source, 'settings');
+    assert.equal(w.sent.length, 1);
+  }
+});
+
+test('first invocation inside the buffer starts nothing and never rolls the deadline to a later run', async t => {
+  const w = world(t, { start: '2026-09-22T10:27:00Z' });
+  const drain = w.make();
+  const result = await drain.prepare([w.add('1')]);
+  assert.equal(result.status, 'cutoff');
+  assert.equal(result.cutoff, '2026-09-22T10:25:00.000Z');
+  await drain.run();
+  assert.equal(w.sent.length, 0);
+});
+
+test('reload pins the original buffer even if configuration subsequently changes', async t => {
+  const w = world(t);
+  const first = w.make('run-a', { startBufferMinutes: 10, startBufferSource: 'settings' });
+  await first.prepare([w.add('1', 60 * MINUTE)]);
+  const resumed = w.make('run-a', { startBufferMinutes: 0, startBufferSource: 'settings' });
+  assert.equal(resumed.status().cutoff, '2026-09-22T10:20:00.000Z');
+  assert.equal(resumed.status().start_buffer_minutes, 10);
+  await resumed.run();
+  assert.equal(w.clock, Date.parse('2026-09-22T10:20:00Z'));
+});
+
+test('invalid runtime buffer values refuse before persisting or sending', async t => {
+  const w = world(t);
+  for (const value of [-1, 30, 300, 1.5, null, '5m', NaN, Infinity]) {
+    assert.throws(() => w.make('invalid', { startBufferMinutes: value }), /drain_buffer_invalid/);
+    assert.equal(fs.existsSync(path.join(w.root, 'invalid', 'oa-drain.json')), false);
+  }
 });
 
 for (const boundary of ['check', 'resolve', 'stamp', 'save']) {
@@ -152,6 +209,7 @@ test('an old unresolved run does not reserve an opening in the next coordinator 
   const task = w.add('1', 60 * MINUTE);
   const first = w.make();
   await first.prepare([task]); await first.run();
+  w.clock = Date.parse('2026-09-22T10:30:00Z');
   const next = w.make('run-b', { startedAt: '2026-09-22T10:30:00Z' });
   await next.prepare([task]); await next.run();
   assert.equal(w.sent.length, 2, 'same saved conversation may receive a later-run nudge');
@@ -322,7 +380,7 @@ test('bad state and unknown start refuse rather than resetting the run', async t
   writeJson(path.join(w.root, 'run-a', 'oa-drain.json'), { invalid: true });
   assert.throws(() => w.make(), /drain_state_invalid/);
   assert.throws(() => nextCutoff('unknown'), /drain_start_unknown/);
-  assert.equal(nextCutoff('2026-09-22T10:07:00Z'), '2026-09-22T10:30:00.000Z');
+  assert.equal(nextCutoff('2026-09-22T10:07:00Z'), '2026-09-22T10:25:00.000Z');
 });
 
 test('a post-send save failure never frees the outstanding instruction or launches another task', async t => {
@@ -430,7 +488,7 @@ test('coordinator deadline comes from the first real prompt, not tool invocation
   f.append({ type: 'user.message', timestamp: '2026-09-22T10:00:00Z' });
   f.append({ type: 'user.message', timestamp: '2026-09-22T10:40:00Z' });
   assert.equal(await coordinatorStart(path.dirname(f.file)), START);
-  assert.equal(nextCutoff(await coordinatorStart(path.dirname(f.file))), '2026-09-22T10:30:00.000Z');
+  assert.equal(nextCutoff(await coordinatorStart(path.dirname(f.file))), '2026-09-22T10:25:00.000Z');
 });
 
 test('native hook denies bypass wakes, kickoff creation and premature completion; exact scheduler send is permitted once', async () => {
@@ -452,6 +510,47 @@ test('native hook denies bypass wakes, kickoff creation and premature completion
   await assert.rejects(() => guard.send(args, async () => {}), /drain_cutoff/);
   enrolled = false;
   assert.equal(guard.before('send_session_message', args), undefined, 'ordinary task sessions are not coordinators');
+});
+
+test('native hook refuses delayed delivery at the buffered cutoff even before the next run boundary', async t => {
+  const w = world(t);
+  const drain = w.make();
+  const guard = createDispatchGuard({
+    enrolled: () => true, busy: () => true, cutoff: () => drain.status().cutoff, now: () => w.clock,
+  });
+  const args = { session_id: 's-1', message: 'approved', delivery_mode: 'immediate' };
+  w.clock = Date.parse('2026-09-22T10:24:59Z');
+  await guard.send(args, async () => {
+    w.clock = Date.parse('2026-09-22T10:25:00Z');
+    assert.equal(guard.before('send_session_message', args).permissionDecision, 'deny');
+  });
+  await assert.rejects(() => guard.send(args, async () => assert.fail('must never send')), /drain_cutoff/);
+});
+
+test('real settings reader supplies the default/custom/zero buffer and surfaces malformed or unreadable values', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oa-buffer-settings-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const settings = path.join(root, 'settings.md');
+  const planner = createPlanner({ scriptPath: SUBJECT, psExe: PS, paths: { user_settings: settings, state_dir: path.join(root, 'state') } });
+  assert.equal((await planner.settings()).start_buffer_minutes, 5, 'missing file defaults to five');
+  for (const [value, expected] of [
+    [undefined, 5], ['5m', 5], ['`10m`', 10], ['0', 0], ['29m', 29], ['5M', 5], [' 7 ', 7],
+    ['', null], ['-1m', null], ['30m', null], ['1.5m', null], ['999999999999999999', null], ['5m because', null],
+  ]) {
+    fs.writeFileSync(settings, '| Setting | Value |\n|---|---|\n| Overnight Agent concurrency | 2 |\n' +
+      (value === undefined ? '' : `| Overnight Agent start buffer | ${value} |\n`));
+    const result = await planner.settings();
+    assert.equal(result.dispatch_limit, 2);
+    assert.equal(result.start_buffer_minutes, expected, `setting ${value}`);
+    assert.equal(result.start_buffer_source, value === undefined ? 'default' : expected === null ? 'settings-malformed' : 'settings');
+    if (expected === null) assert.match(result.start_buffer_error, /0 to 29/);
+    else assert.equal(result.start_buffer_error, null);
+  }
+  fs.unlinkSync(settings); fs.mkdirSync(settings);
+  const unreadable = await planner.settings();
+  assert.equal(unreadable.start_buffer_minutes, null);
+  assert.equal(unreadable.start_buffer_source, 'settings-unreadable');
+  assert.match(unreadable.start_buffer_error, /Cannot read/);
 });
 
 test('the actual state helper enforces pause, input freshness and unchanged Today-first ordering', async t => {
@@ -506,7 +605,7 @@ test('actual extension handlers start a second batch even while the first comple
   // Execute the real entry's handlers with an injected host, not a reimplementation of start().
   const source = fs.readFileSync(path.join(HERE, '..', 'extensions', 'task-dispatch', 'extension.mjs'), 'utf8')
     .replace(/^import .+;\r?\n/gm, '');
-  let registration, calls = 0, resolveLog, status = { paths: {}, cutoff: '2099-01-01T00:00:00Z', items: [], status: 'ready' };
+  let registration, calls = 0, resolveLog, received, status = { paths: {}, cutoff: '2099-01-01T00:00:00Z', items: [], status: 'ready' };
   const scheduler = {
     status: () => structuredClone(status),
     prepare: async tasks => { status.items.push(...tasks); },
@@ -521,11 +620,51 @@ test('actual extension handlers start a second batch even while the first comple
     'fs', 'path', 'sleep', 'joinSession', 'boundedToolCall', 'coordinatorStart', 'createDrain',
     'createDispatchGuard', 'createNativeAdapter', 'createPlanner', source);
   await load({ existsSync: () => false }, path, async () => {}, async options => { registration = options; return host; },
-    boundedToolCall, async () => START, () => scheduler, createDispatchGuard, () => ({}), () => ({}));
+    boundedToolCall, async () => START, options => { received = options; return scheduler; }, createDispatchGuard, () => ({}),
+    () => ({ settings: async () => ({ start_buffer_minutes: 7, start_buffer_source: 'settings' }) }));
   const drainTool = registration.tools.find(tool => tool.name === 'oa_drain');
   await drainTool.handler({ tasks: [{ task_id: '1', message: 'first', dispatch_input: 'x' }] });
   await drainTool.handler({ tasks: [{ task_id: '2', message: 'second', dispatch_input: 'y' }] });
   assert.equal(calls, 2);
+  assert.equal(received.startBufferMinutes, 7, 'native entry passes configured buffer to scheduler');
+  assert.equal(received.startBufferSource, 'settings');
   assert.equal((await registration.hooks.onPreToolUse({ toolName: 'send_session_message', toolArgs: {} })).permissionDecision, 'deny');
   resolveLog();
+});
+
+for (const timing of [
+  { start_buffer_minutes: null, start_buffer_source: 'settings-malformed', start_buffer_error: 'Invalid start buffer configuration' },
+  {},
+]) {
+  test(`actual extension refuses ${timing.start_buffer_error ? 'malformed' : 'missing helper'} buffer evidence before creating a drain`, async () => {
+    const source = fs.readFileSync(path.join(HERE, '..', 'extensions', 'task-dispatch', 'extension.mjs'), 'utf8')
+      .replace(/^import .+;\r?\n/gm, '');
+    let registration, created = false;
+    const host = { workspacePath: path.join(os.tmpdir(), 'buffer-host-fixture'), sessionId: 'fixture' };
+    const load = new (Object.getPrototypeOf(async function () {}).constructor)(
+      'fs', 'path', 'sleep', 'joinSession', 'boundedToolCall', 'coordinatorStart', 'createDrain',
+      'createDispatchGuard', 'createNativeAdapter', 'createPlanner', source);
+    await load({ existsSync: () => false }, path, async () => {}, async options => { registration = options; return host; },
+      boundedToolCall, async () => START, () => { created = true; }, createDispatchGuard, () => ({}),
+      () => ({ settings: async () => timing }));
+    await assert.rejects(() => registration.tools.find(tool => tool.name === 'oa_drain_status').handler({}), /buffer/);
+    assert.equal(created, false);
+  });
+}
+
+test('actual extension reload uses the enrolled buffer without rereading changed settings', async () => {
+  const source = fs.readFileSync(path.join(HERE, '..', 'extensions', 'task-dispatch', 'extension.mjs'), 'utf8')
+    .replace(/^import .+;\r?\n/gm, '');
+  const existing = { paths: {}, start_buffer_minutes: 10, start_buffer_source: 'settings', status: 'drained', items: [] };
+  let received;
+  const host = { workspacePath: path.join(os.tmpdir(), 'buffer-reload-fixture'), sessionId: 'fixture' };
+  const load = new (Object.getPrototypeOf(async function () {}).constructor)(
+    'fs', 'path', 'sleep', 'joinSession', 'boundedToolCall', 'coordinatorStart', 'createDrain',
+    'createDispatchGuard', 'createNativeAdapter', 'createPlanner', source);
+  await load({ existsSync: () => true, readFileSync: () => JSON.stringify(existing) }, path, async () => {}, async () => host,
+    boundedToolCall, async () => START,
+    options => { received = options; return { status: () => existing }; }, createDispatchGuard, () => ({}),
+    () => ({ settings: async () => assert.fail('reload must preserve the enrolled buffer') }));
+  assert.equal(received.startBufferMinutes, 10);
+  assert.equal(received.startBufferSource, 'settings');
 });

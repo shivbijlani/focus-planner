@@ -425,11 +425,20 @@ Pacing and ordering are related but different. Ordering answers *which row is ne
 `1` starts one normal instruction and starts the next after the first finishes. `2` keeps two
 outstanding, refilling either opening independently. It is not a total-attempt quota.
 
-The cutoff is the next **:00 or :30 after the coordinator session's first prompt**, matching
-the agreed half-hour schedule. Late tool calls and reloads do not grant another 30 minutes.
+The next run boundary is **:00 or :30 after the coordinator session's first prompt**, matching
+the agreed half-hour schedule. The launch cutoff is that boundary **minus `Overnight Agent start
+buffer`**, read from `user-settings.md`, default **`5m`**. A 10:30 next run means no new start at
+or after 10:25. Late calls and reloads never grant extra time.
 At cutoff, no further instructions are submitted; outstanding task conversations are not killed.
 The next run can nudge an old conversation or start other eligible work. This is deliberately
 not a machine-global worker limit. Five minutes is never a completion heuristic.
+
+The buffer accepts whole minutes `0` through `29`, optionally suffixed `m`; `0m` disables it.
+A missing row/file defaults to five minutes. An invalid value or unreadable existing file reports
+an error and prevents a new drain rather than silently choosing a smaller buffer. The enrolled
+buffer and its provenance are stored alongside `next_run_at` and `cutoff`, so changing the setting
+applies to new runs and never extends a resumed run. Starting inside the buffer sends nothing,
+without rolling its deadline to the following half-hour. Existing task sessions are never killed.
 
 The coordinator enrolls with `oa_drain_status`, prepares approved briefs and idle bound sessions,
 then submits the batch to `oa_drain`. Each brief carries the exact `dispatch_input` fingerprint

@@ -174,8 +174,9 @@
   RUN-LOCAL DRAIN (#391 / #589; user clarification 2026-09-22). `Overnight Agent concurrency`
   is N outstanding normal instructions from THIS run, refilled after observed completion.
   The oa_drain scheduler owns selection, send, observation, refill and cutoff in code.
-  It stops dispatching at the next :00/:30 after the coordinator's first prompt; reload does
-  not move that deadline. A later run may nudge or start tasks while earlier task sessions
+  It stops dispatching at the next :00/:30 after the coordinator's first prompt MINUS the
+  configured Overnight Agent start buffer (default 5m); reload never moves that deadline.
+  A later run may nudge or start tasks while earlier task sessions
   finish. There is no global occupied-worker count derived from retained task state.
 
   The coordinator prepares approved task briefs and their scan fingerprints. The drain processes
@@ -183,6 +184,8 @@
   delivery holds its opening until correlated task execution ends or this run reaches cutoff.
   It never expires into permission to overfill this run, and never blocks a later run.
   The settings precedence remains -Concurrency > user-settings.md > 1.
+  Start buffer accepts 0..29 whole minutes (optional m), defaults to 5 only when absent, and
+  reports malformed/unreadable values so the extension refuses enrollment rather than guessing.
 
   CLEANUP is emitted, never performed. `-SessionRelease` prints the teardown command
   (`scripts/remove-worktree.ps1`), because the raw `git worktree remove --force` deletes THROUGH a
@@ -797,6 +800,30 @@ function Resolve-PacingSettings {
   }
   $script:ConcurrencyLimit = $value
   $script:ConcurrencySource = $source
+}
+
+function Get-StartBufferSettings {
+  $path = Get-UserSettingsPath
+  $value = $null
+  if ($path -and (Test-Path -LiteralPath $path)) {
+    try { $value = Get-SettingRow (Read-JournalText $path) 'Overnight Agent start buffer' }
+    catch {
+      return [pscustomobject]@{
+        minutes = $null; source = 'settings-unreadable'
+        error = "Cannot read Overnight Agent start buffer: $($_.Exception.Message)"
+      }
+    }
+  }
+  if ($null -eq $value) { return [pscustomobject]@{ minutes = 5; source = 'default'; error = $null } }
+  $minutes = 0
+  if ($value -match '^(\d+)\s*m?$' -and [int]::TryParse($Matches[1], [ref]$minutes) -and $minutes -lt 30) {
+    return [pscustomobject]@{ minutes = $minutes; source = 'settings'; error = $null }
+  }
+  # Falling back to a smaller buffer could start work later than the user intended.
+  [pscustomobject]@{
+    minutes = $null; source = 'settings-malformed'
+    error = 'Overnight Agent start buffer must be whole minutes from 0 to 29 (for example 5m); no new drain may start until corrected.'
+  }
 }
 
 function Ensure-StateDir {
@@ -4396,6 +4423,7 @@ function Get-DispatchInput($st, $facts) {
 }
 
 function Get-RunLimit {
+  $buffer = Get-StartBufferSettings
   [pscustomobject]@{
     scope = 'run_local_concurrency'
     dispatch_limit = [int]$script:ConcurrencyLimit
@@ -4403,7 +4431,10 @@ function Get-RunLimit {
     # Retained for settings-reader compatibility, not a simultaneous-worker promise.
     concurrency = [int]$script:ConcurrencyLimit
     concurrency_source = "$script:ConcurrencySource"
-    note = 'N outstanding requests from this run, refilled after observed completion until cutoff. Earlier runs do not reserve openings. Use oa_drain_status for this run.'
+    start_buffer_minutes = $buffer.minutes
+    start_buffer_source = $buffer.source
+    start_buffer_error = $buffer.error
+    note = 'N outstanding requests from this run, refilled until next half-hour minus the configured start buffer. Earlier runs do not reserve openings. Use oa_drain_status for this run.'
   }
 }
 

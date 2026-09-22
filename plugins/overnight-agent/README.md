@@ -76,11 +76,15 @@ At `2`, refill either opening independently. This is not a total-attempt quota: 
 many tasks. Earlier runs' tasks do not reserve this run's openings, and a later run may nudge a
 saved conversation again.
 
-The implementation assumes a half-hour schedule at **:00 and :30**. The cutoff is the next such
-boundary after the coordinator's first prompt, not 30 minutes after a late tool call. At cutoff
+The implementation assumes a half-hour schedule at **:00 and :30**. The launch cutoff is the next
+such boundary after the coordinator's first prompt **minus `Overnight Agent start buffer`**
+from `user-settings.md` (default **`5m`**). A 10:30 next run therefore stops new starts at **10:25**,
+not five minutes after a late tool call. At cutoff
 the old run stops sending; its outstanding task conversations are left alone. This bounds
 dispatch time, not task runtime or machine-wide concurrency. The five-minute example is never
-used to infer completion.
+used to infer completion. Buffer values are whole minutes `0` through `29`, with optional `m`;
+`0m` disables it. Missing configuration defaults to five minutes. A malformed value or unreadable
+existing file is explicit and prevents a new drain; it never silently chooses a shorter buffer.
 
 The normal flow is **`oa_drain_status` → prepare/bind idle task sessions → scan and prepare
 approved briefs → `oa_drain` → `oa_drain_wait` / status**. The model supplies a batch of approved
@@ -91,8 +95,12 @@ unprepared tasks require more preparation rather than an invented plan. Deferred
 can become eligible as Today work finishes.
 
 The SDK extension runs the loop automatically; waiting/status calls do not drive it. The
-coordinator's `files/oa-drain.json` stores the queue, immutable cutoff and outcomes across tool
+coordinator's `files/oa-drain.json` stores the queue, next run boundary, configured buffer/source,
+immutable cutoff and outcomes across tool
 reloads. An interrupted running/prepared queue resumes with the same cutoff, never a fresh window.
+Buffer edits take effect on new runs. An initial call already inside the buffer sends nothing;
+it does not roll forward to another half-hour. Old incompatible queue records are refused, not
+silently reset or migrated.
 The app must keep the coordinator host alive; its native completion tool is blocked while the
 drain is active. Closing the host stops the loop, and a restart recovers its saved state.
 

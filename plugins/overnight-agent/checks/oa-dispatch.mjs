@@ -18,10 +18,13 @@ const pathFlags = {
   planner_completed: 'PlannerCompleted', snooze_store: 'SnoozeStore', user_settings: 'UserSettings',
 };
 
-export function nextCutoff(startedAt) {
+export function nextCutoff(startedAt, startBufferMinutes = 5) {
   const time = Date.parse(startedAt);
   if (!Number.isFinite(time)) throw new Error('drain_start_unknown: coordinator prompt timestamp required');
-  return new Date((Math.floor(time / WINDOW_MS) + 1) * WINDOW_MS).toISOString();
+  if (!Number.isSafeInteger(startBufferMinutes) || startBufferMinutes < 0 || startBufferMinutes >= WINDOW_MS / 60000) {
+    throw new Error('drain_buffer_invalid: start buffer must be whole minutes from 0 to 29');
+  }
+  return new Date((Math.floor(time / WINDOW_MS) + 1) * WINDOW_MS - startBufferMinutes * 60000).toISOString();
 }
 
 export async function coordinatorStart(workspace) {
@@ -144,6 +147,7 @@ export function createPlanner({ paths = {}, scriptPath, psExe } = {}) {
   }
   return {
     scan: () => call(['scan']),
+    settings: () => call(['session', '-RunLimit']),
     limit: async () => (await call(['session', '-RunLimit'])).dispatch_limit,
     check: (task, stamp = false) => call(['session', '-Id', task.task_id,
       stamp ? '-ForDispatch' : '-CheckDispatch', '-DispatchInput', task.dispatch_input,
@@ -187,14 +191,18 @@ export function createNativeAdapter({ invokeTool, sessionRoot }) {
 }
 
 export function createDrain({ directory, coordinatorSessionId, startedAt, planner, adapter,
-  now = Date.now, wait = sleep, pollMs = POLL_MS, paths = {} }) {
-  const cutoff = nextCutoff(startedAt);
+  now = Date.now, wait = sleep, pollMs = POLL_MS, paths = {},
+  startBufferMinutes = 5, startBufferSource = 'default' }) {
+  const nextRunAt = nextCutoff(startedAt, 0);
   const file = path.join(directory, 'oa-drain.json');
   let state;
   if (fs.existsSync(file)) {
     state = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (state.version !== 1 || state.coordinator_session_id !== coordinatorSessionId ||
-        state.cutoff !== cutoff || !Array.isArray(state.items) || JSON.stringify(state.paths) !== JSON.stringify(paths) ||
+    if (state.version !== 2 || state.coordinator_session_id !== coordinatorSessionId ||
+        !Number.isSafeInteger(state.start_buffer_minutes) ||
+        state.next_run_at !== nextRunAt || state.cutoff !== nextCutoff(startedAt, state.start_buffer_minutes) ||
+        !['default', 'settings'].includes(state.start_buffer_source) ||
+        !Array.isArray(state.items) || JSON.stringify(state.paths) !== JSON.stringify(paths) ||
         !['ready', 'running', 'drained', 'cutoff', 'error'].includes(state.status)) {
       throw new Error('drain_state_invalid: refusing to reset this run or change its deadline/paths');
     }
@@ -206,7 +214,10 @@ export function createDrain({ directory, coordinatorSessionId, startedAt, planne
       }
     }
   } else {
-    state = { version: 1, coordinator_session_id: coordinatorSessionId, cutoff, paths,
+    if (!['default', 'settings'].includes(startBufferSource)) throw new Error('drain_buffer_invalid: unreadable or malformed buffer configuration');
+    state = { version: 2, coordinator_session_id: coordinatorSessionId,
+      next_run_at: nextRunAt, cutoff: nextCutoff(startedAt, startBufferMinutes),
+      start_buffer_minutes: startBufferMinutes, start_buffer_source: startBufferSource, paths,
       status: 'ready', limit: null, items: [], error: null };
     atomicWrite(file, state);
   }

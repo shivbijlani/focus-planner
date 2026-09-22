@@ -471,15 +471,20 @@ Do the phases **in this order** every time.
 > how many normal task instructions FROM THIS RUN may be outstanding. `1` drains sequentially;
 > `2` starts two and refills either opening when that work finishes. It is NOT a total-attempt quota.
 >
-> 1. **Enroll at the start with `oa_drain_status`.** The code fixes a cutoff at the next :00/:30
->    after this coordinator session's FIRST prompt. This implements the agreed half-hour schedule.
->    Late tool calls and reloads never grant another 30 minutes. Use a fresh session for a new run.
+> 1. **Enroll at the start with `oa_drain_status`.** The code fixes the next :00/:30 after this
+>    session's FIRST prompt, then subtracts **`Overnight Agent start buffer`** from user-settings
+>    (default **`5m`**). For a 10:30 next run, no new starts at/after **10:25**.
+>    Late calls and reloads never extend the deadline. Use a fresh session for a new run.
+>    Status reports `next_run_at`, `start_buffer_minutes`, `start_buffer_source`, and `cutoff`.
+>    Values are whole minutes `0` through `29`, optionally suffixed `m`; `0m` disables the buffer.
+>    Missing config defaults to five; invalid/unreadable config stops new enrollment visibly.
+>    Changes apply to new runs, not a running/reloaded queue.
 > 2. **Prepare approved briefs, then call `oa_drain`.** The code chooses in current worklist order,
 >    sends, observes matching task execution, and refills without another model dispatch decision.
 >    Submit all prepared candidates, including Deferred candidates that may become eligible later.
 >    It does not invent plans for tasks you did not prepare, and processes each task at most once
 >    in this run. Newly changed input requires a fresh brief in a later run, not a stale queued one.
-> 3. **At cutoff, stop starting tasks; do not kill the remaining work.** A subsequent run may
+> 3. **At the buffered cutoff, stop starting tasks; do not kill remaining work.** A subsequent run may
 >    nudge the same saved task again or start different work while old tasks finish. There is no
 >    machine-global worker cap. Five minutes is NOT a completion heuristic. Observed completion,
 >    not age or an initial idle snapshot, permits an opening to be refilled.
@@ -1018,7 +1023,8 @@ finish before the next coordinator run can start more work.
    (see "Polling"). Run its check, then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone`.
 
 2. **Call `oa_drain_status` before preparing task sessions, then `oa_drain` with approved briefs.**
-   The status reports the immutable cutoff, configured width and each queued/sent/completed,
+   The status reports the next run boundary, configured buffer/source, immutable launch cutoff,
+   configured width and each queued/sent/completed,
    waiting, skipped or failed request. The code owns the loop, not a prose instruction to keep going.
    **Do not use raw `send_session_message`, a kickoff on `create_session`, or hand-written
    `-ForDispatch` / `-SessionWoken` calls for task dispatch.** If these plugin tools are missing,
