@@ -23,7 +23,7 @@ import {
 // Real mojibake, generated on 2026-09-07 by the actual defect path:
 //   powershell 5.1 -> Get-Content -Raw (no -Encoding) -> write back as UTF-8
 // Not hand-typed: hand-typed fingerprints drift from the ones the bug really makes.
-const BROKEN = "# Task 468: em\u00E2\u20AC\u201Ddash and don't and G\u00C3\u00B6reme Nev\u00C5\u0178ehir \u00F0\u0178\u0152\u2122 \u00E2\u20AC\u02DCquoted\u00E2\u20AC\u2122";
+const BROKEN = "# Task 468: em\u00E2\u20AC\u201Ddash and don't and G\u00C3\u00B6reme Nev\u00C5\u0178ehir \u00F0\u0178\u0152\u2122 \u00E2\u20AC\u02DCquoted\u00E2\u20AC\u2122 and it shipped.\\n\\nThe next paragraph never began.";
 // The same sentence, correctly encoded. Must never fire: a detector that flags
 // well-formed text gets switched off, and then the surface is unguarded while
 // appearing guarded.
@@ -77,9 +77,15 @@ for (const missing of SIGNATURES.map((s) => s.name)) {
       const mutant = (text) => kept.some((s) => new RegExp(s.re.source, 'g').test(text));
       // Text corrupted ONLY in the dropped class must still be caught by somebody.
       const sig = SIGNATURES.find((s) => s.name === missing);
-      const onlyThis = 'clean prose ' + new RegExp(sig.re.source).source.replace(/\\u([0-9A-Fa-f]{4})/g, (_, h) =>
-        String.fromCharCode(parseInt(h, 16))
-      ).replace(/\[.*\]/, '\u00B6');
+      // Prefer an explicit sample where the signature carries one. Reconstructing a
+      // sample from the regex SOURCE only works for a plain byte pair; a signature with
+      // a character class or a lookahead reconstructs into a string that matches
+      // nothing, and the arm then "passes" while testing absolutely nothing (GH #625).
+      const onlyThis = sig.sample
+        ? 'clean prose ' + sig.sample
+        : 'clean prose ' + new RegExp(sig.re.source).source.replace(/\\u([0-9A-Fa-f]{4})/g, (_, h) =>
+            String.fromCharCode(parseInt(h, 16))
+          ).replace(/\[.*\]/, '\u00B6');
       assert.ok(
         !mutant(onlyThis),
         `dropping "${missing}" still detects its own corruption -- arm is not isolating anything`
