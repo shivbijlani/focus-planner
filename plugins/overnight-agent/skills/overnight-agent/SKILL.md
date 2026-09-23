@@ -1568,6 +1568,15 @@ See PHASE 0.
   your own words authorize you. This is a **guard, not a guideline**: it is asserted by
   `mutcheck-consent-authorship.ps1`, whose six mutations each restore a different version of the hole
   and are each killed by a different fixture.
+- **A doc comment counts too, when you ask for it (#442).** Shiv approved this channel in the doc
+  margin on 2026-09-09. Pass `-DocComments <dump>` — the same `list_document_comments` file
+  `doc -Observe` already takes, so it costs no extra Google call — and an affirmative he wrote as a
+  comment authorises the action, reported as `reason: doc-comment-affirmative` so a log can always
+  tell which channel granted it. Three bounds, all enforced rather than described: the **safety
+  floor still outranks it** (a doc comment cannot unlock send-to-many), it is consulted **only after
+  the journal declines**, and it is **revoked automatically** the moment any agent comment appears on
+  that page — which is why you must never post one. Every failure refuses: a missing or unparsed dump
+  grants nothing. Omit the flag and the doc is never opened. Pinned by `mutcheck-doc-consent.ps1`.
 - **Ask only for words the reader accepts (#301).** The approval vocabulary is one delimited list in
   this file (see "Approval vocabulary" above), held identical to `$script:ConsentAffirmRe` in
   `oa-state.ps1` by `mutcheck-consent-vocab-drift.ps1`. To authorize a merge, the word is
