@@ -34,6 +34,12 @@
                                 (see .CONSENT below). Ask this before any irreversible action.
           [-Action <kind>]      Also consult the AGENT GATE (see .GATE below) for this action
                                 kind, from a FIXED enum. Omit it and the output is unchanged.
+          [-DocComments <file>] #442. Also accept an affirmative on the task's CATCH-UP DOC,
+                                read from a `list_document_comments` dump (the same file
+                                `doc -Observe` takes, so no extra Google call). Consulted only
+                                after the journal declines, never above the safety floor, and
+                                only while the doc carries no agent comment. Omit it and the
+                                doc is never opened.
           [-Repo <name>]        The repository the action targets, so a repo-scoped gate rule
                                 can be matched exactly. A repo-scoped rule NEVER matches when
                                 this is omitted.
@@ -533,6 +539,12 @@ param(
   [switch]$Ack,
   # Drop the binding entirely (rare; the doc was deleted or replaced deliberately).
   [switch]$Unbind,
+
+  # #442 -- `consent` only. Names a `list_document_comments` dump (the same file `-Observe`
+  # takes) so the catch-up doc can answer "did he approve?". OPT-IN PER CALL, deliberately:
+  # this widens what counts as authorisation, so it must be asked for rather than inherited.
+  # Omitted, `consent` behaves exactly as it did and never opens the file.
+  [string]$DocComments,
 
   # Blocked-task rechecks (time-triggered re-test of a blocker). See .RECHECKING in the header.
   [string]$Recheck,
@@ -3607,6 +3619,50 @@ function Cmd-Gate {
   } | ConvertTo-Json -Depth 4
 }
 
+function Get-DocCommentConsent {
+  <#
+    #442 -- ask the catch-up doc whether HE approved, without ever deciding it here.
+
+    Every judgement (who wrote a comment, what counts as an affirmative, whether the
+    never-comment invariant still holds) belongs to `lib-doc-comments.mjs`, which has 17
+    mutation arms behind it. This function only carries the question across the process
+    boundary, so there is exactly one opinion about consent in the system.
+
+    IT CAN ONLY EVER RETURN A REFUSAL OR A VERDICT IT WAS GIVEN. There is no branch here
+    that invents consent: node missing, script missing, non-zero exit with no output,
+    unparseable output -- all fall through to $null, and the caller treats $null as "no".
+  #>
+  param([string]$DumpPath, [string]$DocId)
+
+  $script = Join-Path $PSScriptRoot '..\..\checks\doc-consent.mjs'
+  $script = [IO.Path]::GetFullPath($script)
+  if (-not (Test-Path -LiteralPath $script)) {
+    return [pscustomobject]@{ consent_ok = $false; reason = 'doc-consent-script-missing' }
+  }
+
+  # The committed backfill plus the live ledger, if either exists. Both are optional: a
+  # missing ledger makes FEWER comments provably the agent's, which can only push the
+  # verdict toward refusal (see ledgerForDoc's own note).
+  $ledgers = @()
+  $backfill = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\checks\doc-comment-ledger-backfill.json'))
+  if (Test-Path -LiteralPath $backfill) { $ledgers += $backfill }
+  $live = Join-Path $StateDir 'doc-comment-ledger.json'
+  if (Test-Path -LiteralPath $live) { $ledgers += $live }
+
+  try {
+    $argv = @($script, $DumpPath, "$DocId") + $ledgers
+    $raw = & node @argv 2>&1
+  }
+  catch {
+    return [pscustomobject]@{ consent_ok = $false; reason = 'doc-consent-not-runnable' }
+  }
+
+  $text = (@($raw) | Out-String).Trim()
+  if (-not $text) { return [pscustomobject]@{ consent_ok = $false; reason = 'doc-consent-no-output' } }
+  try { return ($text | ConvertFrom-Json) }
+  catch { return [pscustomobject]@{ consent_ok = $false; reason = 'doc-consent-unparseable' } }
+}
+
 function Cmd-Consent {
   # #227: the consent channel, read fail-CLOSED. Ask this BEFORE any irreversible action.
   #
@@ -3699,6 +3755,34 @@ function Cmd-Consent {
   }
   $facts = Get-JournalFacts $path
   $c = $facts.Consent
+
+  # --- #442: the catch-up doc as a SECOND consent channel -------------------------------
+  #
+  # Consulted ONLY when `-DocComments` names a dump, and ONLY after the journal has already
+  # declined. Both halves matter:
+  #
+  #   opt-in       -- a caller asks for this channel explicitly. It can never arrive by
+  #                   upgrading this file, which is how a gate silently widens.
+  #   journal first -- an existing journal approval keeps its own reason string, so nothing
+  #                   that works today starts reporting a different provenance.
+  #
+  # It sits BELOW the floor by construction: the floor returns above this point and never
+  # reaches here, so a doc comment cannot unlock a floor-blocked action. That ordering is the
+  # one thing that must not be got backwards, and it is asserted rather than described.
+  #
+  # FAIL CLOSED IN EVERY DIRECTION. `doc-consent.mjs` answers on stdout and returns 1 for "no
+  # consent"; a missing node, a missing file, an unparsed dump or a crash all leave
+  # `consent_ok` false. The one thing this must never do is treat an ABSENT answer as a yes.
+  $docConsent = $null
+  if ($DocComments -and -not $c.consent_ok) {
+    # The doc id comes from the JOURNAL stamp, not from stored state, for this command's own
+    # stated reason: consent is a property of the journal as it stands right now. Reading the
+    # binding out of state would let a field the agent writes choose which document is allowed
+    # to authorise it.
+    $meta = Get-DocMetaFromJournal $path
+    $docConsent = Get-DocCommentConsent -DumpPath $DocComments -DocId $(if ($meta) { $meta.doc_id } else { '' })
+  }
+
   $out = [ordered]@{
     id                       = $facts.Id
     consent_ok               = [bool]$c.consent_ok
@@ -3714,6 +3798,25 @@ function Cmd-Consent {
     # visible at the call site instead of being a footnote in a comment.
     trailing_has_user        = [bool]$facts.HasTrailingUser
     path                     = $facts.Path
+  }
+
+  # #442: the doc channel's answer, reported next to the journal's rather than replacing it,
+  # so an auditor can always see WHICH channel authorised an action. `consent_ok` becomes true
+  # only by way of an explicit `-DocComments` request whose verdict came back true.
+  if ($DocComments) {
+    $ok = [bool]($docConsent -and $docConsent.consent_ok)
+    $out['doc_consent_ok'] = $ok
+    $out['doc_consent_reason'] = $(if ($docConsent) { "$($docConsent.reason)" } else { 'doc-consent-not-consulted' })
+    $out['doc_comments_path'] = "$DocComments"
+    if ($ok) {
+      $out['consent_ok'] = $true
+      # The reason names the CHANNEL, not just the outcome. A verdict that reads
+      # `human-authored-affirmative` regardless of where it came from would make the journal
+      # and the doc indistinguishable in a log, which is the attribution problem one level up.
+      $out['reason'] = 'doc-comment-affirmative'
+      $out['affirmative_phrase'] = $docConsent.affirmative_phrase
+      $out['affirmative_author'] = $docConsent.affirmative_author
+    }
   }
   if ($Action) { Add-GateFallthrough $out $gate }
   [pscustomobject]$out | ConvertTo-Json -Depth 4

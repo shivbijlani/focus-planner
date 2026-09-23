@@ -787,6 +787,36 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-declared-ask.ps1
 
+  # THE ONE CHANGE IN THIS REPO THAT MAKES A GATE WIDER (GH #442).
+  #
+  # Everything else here refuses more than it used to. This lets a comment on the catch-up doc
+  # authorise an irreversible action, which Shiv approved in that document's margin on
+  # 2026-09-09 ("Yes approved" on the Pending section, and "Comment is the first class way to
+  # give you approvals"). The mechanism had been built and proven since #451 and deliberately
+  # left unwired, because an agent switching on its own approval channel is the failure this
+  # repo keeps recording.
+  #
+  # So the arms are about the BOUNDARY, not the happy path: the channel is inert unless asked
+  # for per call, the safety floor still outranks it, one agent comment on the page revokes it,
+  # an existing journal approval keeps its own provenance, and every failure mode -- missing
+  # dump, unparsed dump, missing bridge -- refuses. A gate that fails OPEN is worse than no gate,
+  # because the run proceeds believing it was authorised, and #227's thesis is that consent must
+  # never be inferred from an absence. An absent answer is an absence.
+  #
+  # Hermetic: synthetic journal, gate file and state dir under TEMP, driving the REAL
+  # oa-state.ps1 and doc-consent.mjs. No live store, no network, no Google.
+  doc-consent:
+    name: Doc comments as a consent channel, bounded
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check (grants only when asked; floor and invariant still bite)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-consent.ps1
+
   # A BOM-less .ps1 containing non-ASCII is decoded as Windows-1252 by the PowerShell 5.1
   # engine BEFORE the script runs, so the bytes the parser sees are not the bytes on disk.
   # Comment-only today is not safe tomorrow: the failure is silent, and the same file gaining
