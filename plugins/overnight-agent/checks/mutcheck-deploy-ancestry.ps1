@@ -57,6 +57,30 @@ function Assert([bool]$ok, [string]$name, [string]$why, [string]$detail = '') {
   }
 }
 
+# WINDOWS-ONLY ARMS, stated rather than silently skipped.
+#
+# The deploy script's WRITE path shells out to `cmd /c ... git cat-file blob ... > file`
+# to materialise the ref content. That predates this change (it is on origin/main
+# unmodified) and does not exist off Windows, so the three arms that assert bytes actually
+# landed cannot run on the Linux CI runner. Everything that decides WHETHER to write --
+# the classification, the refusals, the fail-closed paths, which is what #575 is about --
+# is host-independent and runs everywhere.
+#
+# Declared as SKIP with a reason rather than quietly passing: a skipped arm reported as a
+# pass is the false green this whole suite exists to detect, and "0 failures" on a host
+# that never executed the assertion is exactly that.
+$script:skipped = 0
+$script:CanWrite = ($env:OS -eq 'Windows_NT') -or ($PSVersionTable.Platform -eq 'Win32NT') -or ($null -eq $PSVersionTable.Platform)
+function AssertWrite([bool]$ok, [string]$name, [string]$why, [string]$detail = '') {
+  if (-not $script:CanWrite) {
+    Write-Host "  SKIP  $name  -- $why" -ForegroundColor DarkGray
+    Write-Host '        (the write path uses cmd.exe, which predates this change; decision arms still ran)' -ForegroundColor DarkGray
+    $script:skipped++
+    return
+  }
+  Assert $ok $name $why $detail
+}
+
 # --- the fixture repo ----------------------------------------------------------------
 # Built to reproduce the real mechanism rather than to simulate its output: a feature
 # branch is merged into main and NOT deleted, so its pre-merge blob stays reachable from
@@ -123,7 +147,7 @@ Assert ($b -notmatch 'would REVERT') 'MESSAGE' 'and the false "deploying would R
 
 $b2 = Deploy @('-Confirm')
 $after = [IO.File]::ReadAllText($instFile, $utf8)
-Assert ($after -eq $NEW) 'ADVANCES' 'with -Confirm the stale file is actually advanced to the ref content' $b2
+AssertWrite ($after -eq $NEW) 'ADVANCES' 'with -Confirm the stale file is actually advanced to the ref content' $b2
 
 Write-Host ''
 Write-Host 'AHEAD -- a possible live fix must still survive'
@@ -155,14 +179,14 @@ Assert ($blindAfter -eq $OLD) 'BLIND2' 'and nothing was written while unable to 
 # Pairs with BLIND: the SAME fixture deploys once the helper is available again, so BLIND
 # cannot be passing because the fixture was simply never deployable.
 $r = Deploy @('-Confirm')
-Assert (([IO.File]::ReadAllText($instFile, $utf8)) -eq $NEW) 'BLIND3' 'restoring the helper restores the deploy (BLIND pairs)' $r
+AssertWrite (([IO.File]::ReadAllText($instFile, $utf8)) -eq $NEW) 'BLIND3' 'restoring the helper restores the deploy (BLIND pairs)' $r
 
 Write-Host ''
 Write-Host 'FORCE -- the documented override still works'
 
 [IO.File]::WriteAllText($instFile, $LIVE, $utf8)
 $f = Deploy @('-Confirm', '-Force')
-Assert (([IO.File]::ReadAllText($instFile, $utf8)) -eq $NEW) 'FORCE' '-Force still overrides a genuine AHEAD refusal' $f
+AssertWrite (([IO.File]::ReadAllText($instFile, $utf8)) -eq $NEW) 'FORCE' '-Force still overrides a genuine AHEAD refusal' $f
 
 Write-Host ''
 Write-Host 'ONE OWNER -- -NoAncestry restores the pre-#575 refusal for auto-deploy'
@@ -179,6 +203,10 @@ Assert ($n -match '(?m)^\s*REFUSE\s') 'ONEOWNER' '-NoAncestry refuses a BEHIND f
 Assert ($nAfter -eq $OLD) 'ONEOWNER2' 'and writes nothing, so the refusal pile reaches that phase intact' ''
 
 Write-Host ''
+if ($script:skipped -gt 0) {
+  Write-Host ("NOTE: {0} write-assertion arm(s) skipped on this host -- the deploy write path uses cmd.exe." -f $script:skipped) -ForegroundColor DarkGray
+  Write-Host '      Every arm that decides WHETHER to write ran. Run on Windows for full coverage.' -ForegroundColor DarkGray
+}
 if ($script:fail -gt 0) {
   Write-Host ("FAILED: {0} arm(s) disagreed, {1} passed. The ancestry split is not bounded as claimed." -f $script:fail, $script:pass) -ForegroundColor Red
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
