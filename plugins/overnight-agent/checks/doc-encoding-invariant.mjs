@@ -103,6 +103,37 @@ export const SIGNATURES = [
     re: /\u00C5\u0178/g,
     means: 'double-encoded Turkish character',
   },
+  {
+    // THE FOURTH CORRUPTION CLASS (GH #625), and the only one here that is not a
+    // mis-decode. A real newline in replacement text can arrive in the document as the
+    // two literal characters `\` and `n`, so a paragraph break becomes visible garbage
+    // in the middle of prose. The call still reports `Replaced 1`: it is
+    // success-shaped, byte-identical at the call site to an edit that worked, which is
+    // the #520 family (#346, #502) arriving on the primary surface.
+    //
+    // It belongs in THIS file rather than in the writer for the reason the header
+    // already gives about #549: the damage happens on the way in, there is no single
+    // function to fix because an agent makes these calls ad hoc, and the only reliable
+    // check is reading the result back.
+    //
+    // DELIBERATELY NARROW, for the reason stated at the top of this file: a detector
+    // that cries wolf on the primary surface gets switched off, and the surface is then
+    // unguarded while appearing guarded. A bare `\n` is NOT enough -- a doc discussing
+    // code legitimately contains one. The fingerprint is the PARAGRAPH BREAK shape from
+    // the live evidence: a sentence terminator, two escaped newlines, then the start of
+    // a new sentence (`... when you agree.\n\nThe second is ...`). Prose that quotes
+    // code does not normally close a sentence and open a capitalised one across an
+    // escaped break.
+    name: 'escaped-newline',
+    re: /[.!?:)"\u201D][ \t]*\\n\\n[ \t]*(?=[A-Z"'(\u201C])/g,
+    means: 'a real newline escaped into the literal characters \\n (paragraph break lost)',
+    // A minimal instance of this class, for the mutation check. Supplied explicitly
+    // because that harness otherwise reconstructs a sample from the regex SOURCE, which
+    // works only for the four plain byte-pair signatures above -- this one carries a
+    // character class and a lookahead, and reconstructing it would yield a string that
+    // matches nothing, producing an arm that silently proves nothing.
+    sample: 'when you agree.\\n\\nThe second is',
+  },
 ];
 
 /**
