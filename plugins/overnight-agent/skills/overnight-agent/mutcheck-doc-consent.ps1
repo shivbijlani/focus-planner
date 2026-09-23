@@ -209,6 +209,40 @@ $i = Consent @('-DocComments', $breached)
 Assert ($i.json -and $i.json.consent_ok -and $i.json.reason -eq 'human-authored-affirmative') 'JOURNAL-FIRST' 'a journal approval wins and is not relabelled by the doc channel' (Detail $i)
 
 Write-Host ''
+Write-Host 'FLAT HOME -- the bridge must resolve where the agent actually runs'
+
+# THE REGRESSION THIS PINS (measured 2026-09-22, ten minutes after the channel merged).
+# The skill runs from two homes with different shapes: the installed plugin tree
+# (skills\overnight-agent\ + checks\) and the FLAT OA home, which user-settings.md actually
+# invokes. Resolving the bridge only by the tree shape left the channel permanently dead in
+# the flat home, reporting `doc-consent-script-missing` -- a correct refusal, and a useless
+# feature nobody would notice, because a consent channel that never grants looks exactly like
+# one nobody used.
+$flat = Join-Path $root 'flat'
+New-Item -ItemType Directory -Path $flat -Force | Out-Null
+Copy-Item $ScriptPath (Join-Path $flat 'oa-state.ps1') -Force
+$checksDir = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $ScriptPath) '..\..\checks'))
+Copy-Item (Join-Path $checksDir 'doc-consent.mjs') (Join-Path $flat 'doc-consent.mjs') -Force
+Copy-Item (Join-Path $checksDir 'lib-doc-comments.mjs') (Join-Path $flat 'lib-doc-comments.mjs') -Force
+
+# JOURNAL-FIRST above left a real approval in the journal; restore the approval-free fixture
+# so anything observed here can only have come from the doc channel.
+[IO.File]::WriteAllText((Join-Path $J 'task-999.md'), $journal, $utf8)
+
+$flatArgs = @((Join-Path $flat 'oa-state.ps1'), 'consent', '-Id', '999', '-JournalDir', $J,
+              '-StateDir', $S, '-GatePath', $gatePath, '-DocComments', $approved)
+$fo = (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File @flatArgs 2>&1 | Out-String)
+$fj = $null; try { $fj = $fo | ConvertFrom-Json } catch { }
+Assert ($fj -and $fj.consent_ok) 'FLAT' 'the channel grants from a FLAT home, with the bridge as a sibling' (($fo -replace '\s+', ' ').Trim())
+
+# Paired: remove the sibling bridge and the same flat home must refuse, so FLAT cannot be
+# passing because some other copy was found elsewhere on the machine.
+Remove-Item (Join-Path $flat 'doc-consent.mjs') -Force
+$fo2 = (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File @flatArgs 2>&1 | Out-String)
+$fj2 = $null; try { $fj2 = $fo2 | ConvertFrom-Json } catch { }
+Assert ($fj2 -and -not $fj2.consent_ok -and $fj2.doc_consent_reason -eq 'doc-consent-script-missing') 'FLAT2' 'and refuses when the sibling bridge is absent (FLAT pairs)' (($fo2 -replace '\s+', ' ').Trim())
+
+Write-Host ''
 if ($script:fail -gt 0) {
   Write-Host ("FAILED: {0} arm(s) disagreed, {1} passed. The doc consent channel is not bounded as claimed." -f $script:fail, $script:pass) -ForegroundColor Red
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
