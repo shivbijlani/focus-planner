@@ -28,7 +28,9 @@
 
     MISSING      on the ref, absent installed        -> deploy (nothing can be lost)
     UNVERSIONED  installed content on no ref at all  -> deploy, after backup (-Confirm)
-    BRANCH-ONLY  live fix exists only on a side ref  -> REFUSED unless -Force
+    BRANCH-ONLY  live bytes match a side ref, not $Ref. Split by ancestry (#575):
+                 provably an older commit of $Ref -> BEHIND, deployed (it advances)
+                 anything else                    -> REFUSED unless -Force
     MAIN         already identical                   -> skip
 
   Classification is delegated to installed-skill-drift-sweep.mjs rather than
@@ -53,7 +55,25 @@ param(
   [string]$Repo = 'V:\repos\focus-planner',
   [string]$Installed = "$env:USERPROFILE\.copilot\installed-plugins\focus-planner",
   [string]$RepoPrefix = 'plugins',
-  [string]$ClassifierPath
+  [string]$ClassifierPath,
+  # #575. The ancestry helper that tells a file that is merely BEHIND from one that is
+  # genuinely AHEAD. Overridable only so the mutation check can point it at a stub.
+  [string]$HistoryHelperPath,
+  # #575. Suppress the ancestry split and refuse every BRANCH-ONLY file, as this script
+  # did before that issue.
+  #
+  # THIS EXISTS FOR ONE CALLER, and not as a general escape hatch. `auto-deploy-plugin.ps1`
+  # runs a SECOND phase that re-examines the refusal pile, rescues the merely-stale files
+  # itself, and reports them as `superseded` in its JSON. That two-phase contract is
+  # covered by ~95 mutation arms. Splitting them here as well would empty the pile the
+  # rescue phase reads, so the rescue would report nothing while the files silently
+  # deployed a step earlier -- the same outcome, described wrongly, which is precisely the
+  # defect class #575 is about.
+  #
+  # The standalone path is the one #575 measured: a human or a sub-session running this
+  # script directly gets no rescue phase, obeys a refusal that asserts the opposite of the
+  # truth, and stops. That path is what the split fixes.
+  [switch]$NoAncestry
 )
 
 $ErrorActionPreference = 'Stop'
@@ -91,6 +111,104 @@ if (-not $plan.Count) {
   exit 1
 }
 
+# --- #575: is a BRANCH-ONLY file AHEAD of the ref, or merely BEHIND it? --------------
+#
+# `BRANCH-ONLY` means "the installed bytes match some ref that is not $Ref". That is a
+# DISJUNCTION covering two opposite situations, and this script used to read it as one
+# fact and print the more alarming reading:
+#
+#   genuinely AHEAD   someone hand-patched the installed tree and pushed it to a side
+#                     branch. Deploying WOULD revert it. Refusing is right.
+#   genuinely BEHIND  a PR merged; the installed tree still holds the pre-merge content,
+#                     which is still reachable from the (undeleted) source branch.
+#                     Deploying is the entire point. Refusing is wrong -- and the message
+#                     "deploying would REVERT it" asserts the exact opposite of the truth.
+#
+# Case 2 is the common one and gets MORE likely with every healthy merge: every merged
+# but undeleted branch is a standing reservoir of superseded blobs (41 of 229 local
+# branches, measured in #575).
+#
+# WHY THIS MATTERS MORE THAN A WORDING FIX. The refusal is the safety mechanism a reader
+# is supposed to obey, and obeying it is what blocks the deploy. A sub-session hit it on
+# two consecutive wakes and correctly declined to -Force past a message saying data loss
+# was the alternative; it only got past by diffing both sides by hand. A guard that lies
+# about which way the danger points teaches its readers to ignore it.
+#
+# The fix is not new logic: `auto-deploy-plugin.ps1` already resolves exactly this with
+# `ref-history-index.mjs`, and this script simply did not consult it. Sharing the helper
+# rather than re-deriving ancestry keeps the two deploy paths from forming two opinions
+# about what BRANCH-ONLY means.
+#
+# FAILS CLOSED. If the helper is missing, unrunnable, or returns something unparseable,
+# every BRANCH-ONLY file stays refused exactly as before. A blind run must not start
+# overwriting files it cannot classify.
+function Get-BehindSet {
+  param([string[]]$Rels)
+
+  $result = @{}
+  if (-not $Rels -or $Rels.Count -eq 0) { return $result }
+
+  # An EXPLICIT override that does not exist is an error, not an invitation to search.
+  # Silently falling back would make `-HistoryHelperPath` untestable and, worse, would
+  # mean a caller who pointed at a specific helper got a different one without being told.
+  # Only the DEFAULT path is allowed to fall back to the repo-local copy.
+  $helper = $null
+  if ($HistoryHelperPath) {
+    if (Test-Path -LiteralPath $HistoryHelperPath) { $helper = $HistoryHelperPath }
+    else {
+      Write-Host ("[deploy] NOTE - ancestry helper not found at {0}; BRANCH-ONLY stays refused (see #575)." -f $HistoryHelperPath)
+      return $result
+    }
+  }
+  else {
+    foreach ($c in @((Join-Path $env:LOCALAPPDATA 'overnight-agent\ref-history-index.mjs'),
+                     (Join-Path $PSScriptRoot 'ref-history-index.mjs'))) {
+      if (Test-Path -LiteralPath $c) { $helper = $c; break }
+    }
+    if (-not $helper) {
+      Write-Host '[deploy] NOTE - ancestry helper not found; BRANCH-ONLY stays refused (see #575).'
+      return $result
+    }
+  }
+
+  $rows = @()
+  foreach ($rel in $Rels) {
+    $instFile = Join-Path $Installed ($rel -replace '/', '\')
+    if (Test-Path -LiteralPath $instFile) {
+      $rows += [pscustomobject]@{ repoPath = "$RepoPrefix/$rel"; installedFile = $instFile }
+    }
+  }
+  if ($rows.Count -eq 0) { return $result }
+
+  try {
+    $payload = [pscustomobject]@{ paths = $rows } | ConvertTo-Json -Depth 4 -Compress
+    $env:OA_REPO = $Repo
+    $env:OA_REF = $Ref
+    $env:OA_HISTORY_SCOPE = "$RepoPrefix/overnight-agent"
+    $raw = $payload | & node $helper 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "helper exited $LASTEXITCODE" }
+    $history = (@($raw) | Out-String) | ConvertFrom-Json
+  }
+  catch {
+    Write-Host ("[deploy] NOTE - ancestry check unavailable ({0}); BRANCH-ONLY stays refused." -f $_.Exception.Message)
+    return $result
+  }
+
+  foreach ($rel in $Rels) {
+    $repoPath = "$RepoPrefix/$rel"
+    # BEHIND requires BOTH: the ref still carries this path (so deploying means replacing
+    # rather than resurrecting), AND the live bytes are a known historical version of it
+    # (so they are provably not an uncommitted live fix). Anything else stays refused.
+    $inHistory = ($history.matches.PSObject.Properties.Name -contains $repoPath) -and [bool]$history.matches.$repoPath
+    $onTip = ($history.onTip.PSObject.Properties.Name -contains $repoPath) -and [bool]$history.onTip.$repoPath
+    if ($inHistory -and $onTip) { $result[$rel] = $true }
+  }
+  return $result
+}
+
+$branchOnly = @($plan | Where-Object { $_.Verdict -eq 'BRANCH-ONLY' } | ForEach-Object { $_.Rel })
+$behind = if ($NoAncestry) { @{} } else { Get-BehindSet -Rels $branchOnly }
+
 # --- decide -------------------------------------------------------------------------
 $deployed = 0; $skipped = 0; $refused = 0; $failed = 0
 
@@ -106,9 +224,16 @@ foreach ($row in $plan) {
     $skipped++
     continue
   }
+  elseif ($row.Verdict -eq 'BRANCH-ONLY' -and $behind.ContainsKey($row.Rel)) {
+    # #575: provably an older commit of $Ref, not a live fix. Deploying ADVANCES it.
+    Write-Host ("  BEHIND   {0}" -f $row.Rel)
+  }
   elseif ($row.Verdict -eq 'BRANCH-ONLY' -and -not $Force) {
     Write-Host ("  REFUSE   {0}" -f $row.Rel)
-    Write-Host  "           live fix is not on $Ref - deploying would REVERT it. Use -Force to override."
+    # The claim is now the narrow one the evidence supports. The old wording asserted
+    # "deploying would REVERT it", which on a normal merge is exactly backwards (#575).
+    Write-Host  "           live bytes match a ref other than $Ref and are NOT a known older commit of it"
+    Write-Host  "           -- may be a hand-deployed live fix. Use -Force to override."
     $refused++
     continue
   }

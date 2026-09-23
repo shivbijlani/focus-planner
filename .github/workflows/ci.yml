@@ -730,6 +730,42 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-auto-deploy.ps1
 
+  # A deploy refusal that asserts the OPPOSITE of the truth (GH #575).
+  #
+  # `BRANCH-ONLY` means "the installed bytes match some ref that is not origin/main", and
+  # that is a disjunction covering two opposite situations: genuinely AHEAD (a hand-patched
+  # live fix, where deploying really would revert it) and merely BEHIND (a PR merged and the
+  # installed tree still holds the pre-merge content, still reachable from the undeleted
+  # source branch, where deploying is the entire point). Ancestry was never consulted, so
+  # the script printed the more alarming reading: "deploying would REVERT it".
+  #
+  # Case 2 is the common one and gets MORE likely with every healthy merge -- 41 of 229
+  # local branches were merged-but-undeleted when #575 measured it. The refusal is the
+  # safety mechanism a reader is supposed to obey, and obeying it is what blocked the
+  # deploy: a sub-session hit it on two consecutive wakes and correctly declined to -Force
+  # past a message saying data loss was the alternative. A guard that lies about which way
+  # the danger points teaches its readers to ignore it.
+  #
+  # This change makes a deploy path write files it previously refused, so the arms are
+  # about the boundary rather than the happy path. AHEAD-still-refuses and blind-refuses
+  # are the two that matter: the old behaviour was wrong but SAFE, and a mistake here
+  # destroys the live fix the original refusal existed to protect.
+  #
+  # Hermetic: a throwaway repo with a real merged-but-undeleted branch (the actual
+  # mechanism, not a simulation of its output), a fake installed tree, and a stub
+  # classifier, driving the REAL deploy script and the REAL ancestry helper.
+  deploy-ancestry:
+    name: Deploy refusal knows behind from ahead
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check (behind advances, ahead survives, blind refuses)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-deploy-ancestry.ps1
+
   # A shipped PR must not close its issue (GH #428). This job guards the CHECKER; the check
   # itself runs from .github/workflows/pr-closing-keyword.yml, which triggers on the PR events
   # that can change a body or a label without pushing a commit (`edited`, `labeled`,

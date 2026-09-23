@@ -372,7 +372,12 @@ if ($WhatIf) { Write-Note 'WHAT-IF - nothing will be written and no state will b
 # --- 2. DEPLOY (safe class only; -Force is never passed) -----------------------------
 $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$deployer,
           '-Ref',$Ref,'-Repo',$Repo,'-Installed',$Installed,'-RepoPrefix',$RepoPrefix,
-          '-ClassifierPath',$sweep)
+          '-ClassifierPath',$sweep,
+          # #575: this script owns the behind/ahead split, in the rescue phase below, and
+          # reports it as `superseded`. The deployer grew the same ability for callers who
+          # have no rescue phase; suppressing it here keeps ONE owner of that decision, so
+          # the pile the rescue reads is never emptied a step earlier.
+          '-NoAncestry')
 if (-not $WhatIf) { $args += '-Confirm' }
 
 $deployRun = Invoke-Bounded -FilePath 'powershell' -ArgumentList $args -BudgetMs (Get-RemainingMs)
