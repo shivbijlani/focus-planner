@@ -277,7 +277,19 @@ $AlwaysRequired = @(
   # installed-plugins and never reaches the copy the daemon actually runs. Classic
   # "merged isn't running" (cf. #196, #254).
   'oa-supervisor.ps1',
-  'oa-supervisor-daemon.ps1'
+  'oa-supervisor-daemon.ps1',
+  # #442. Reached from `oa-state.ps1 consent -DocComments`, which is PowerShell -- so no
+  # import edge names it, and it is not a sweep or a mutcheck. That is the exact "required by
+  # nothing" shape rules 2 and 5 above were written for, and it bit immediately: the channel
+  # deployed to installed-plugins, the flat home got `oa-state.ps1` WITHOUT its bridge, and
+  # the feature was dead in the only home that runs it -- refusing correctly, which is why it
+  # would have stayed quiet. A consent channel that silently never grants is not a safe
+  # default; it is an unnoticed outage of something Shiv explicitly asked for.
+  'doc-consent.mjs',
+  # Its library. doc-consent.mjs imports it, so the closure rule (2) covers it once the file
+  # above is rostered -- listed anyway because the closure only runs for .mjs REACHED from the
+  # roster, and a future refactor that inlined the import would silently drop it.
+  'lib-doc-comments.mjs'
 )
 
 # Subdirectories of the OA home that are data, not code. Never walked.

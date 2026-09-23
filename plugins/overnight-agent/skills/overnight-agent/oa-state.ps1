@@ -3634,9 +3634,27 @@ function Get-DocCommentConsent {
   #>
   param([string]$DumpPath, [string]$DocId)
 
-  $script = Join-Path $PSScriptRoot '..\..\checks\doc-consent.mjs'
-  $script = [IO.Path]::GetFullPath($script)
-  if (-not (Test-Path -LiteralPath $script)) {
+  # RESOLVED ACROSS BOTH LAYOUTS, and this is not defensive padding -- it was measured
+  # failing (GH #461/#632's class, arriving in this change ten minutes after it merged).
+  # The skill runs from two homes with different shapes:
+  #
+  #   installed plugin  ...\skills\overnight-agent\oa-state.ps1  + ...\checks\doc-consent.mjs
+  #   OA home (FLAT)    %LOCALAPPDATA%\overnight-agent\oa-state.ps1 + doc-consent.mjs beside it
+  #
+  # user-settings.md invokes the FLAT copy, so resolving only the plugin shape left the
+  # channel permanently dead exactly where it is used -- reporting
+  # `doc-consent-script-missing`, which is a correct refusal and a useless feature. A sibling
+  # lookup is tried first because that is the flat home; the tree path second.
+  $candidates = @(
+    (Join-Path $PSScriptRoot 'doc-consent.mjs'),
+    (Join-Path $PSScriptRoot '..\..\checks\doc-consent.mjs')
+  )
+  $script = $null
+  foreach ($c in $candidates) {
+    $full = [IO.Path]::GetFullPath($c)
+    if (Test-Path -LiteralPath $full) { $script = $full; break }
+  }
+  if (-not $script) {
     return [pscustomobject]@{ consent_ok = $false; reason = 'doc-consent-script-missing' }
   }
 
@@ -3644,8 +3662,14 @@ function Get-DocCommentConsent {
   # missing ledger makes FEWER comments provably the agent's, which can only push the
   # verdict toward refusal (see ledgerForDoc's own note).
   $ledgers = @()
-  $backfill = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\checks\doc-comment-ledger-backfill.json'))
-  if (Test-Path -LiteralPath $backfill) { $ledgers += $backfill }
+  $backfillCandidates = @(
+    (Join-Path $PSScriptRoot 'doc-comment-ledger-backfill.json'),
+    (Join-Path $PSScriptRoot '..\..\checks\doc-comment-ledger-backfill.json')
+  )
+  foreach ($b in $backfillCandidates) {
+    $full = [IO.Path]::GetFullPath($b)
+    if (Test-Path -LiteralPath $full) { $ledgers += $full; break }
+  }
   $live = Join-Path $StateDir 'doc-comment-ledger.json'
   if (Test-Path -LiteralPath $live) { $ledgers += $live }
 
