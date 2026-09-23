@@ -93,15 +93,14 @@
           [-SessionDead]        Record that the session could not be woken. Flips the verdict to
                                 `replace` and arms the continuation kickoff.
           [-SessionWoken]       Record that the run reused this session (stamps last_woken_at).
-          [-ForDispatch]        Read the verdict AS A DISPATCHER: stamps last_woken_at in the same
-                                write and returns dispatch_authorised: true. A plain read returns
-                                false and stamps nothing, so dispatch authority cannot be obtained
-                                without the wake being recorded (#532).
+          [-CheckDispatch]      Check eligibility and pauses without recording a wake.
+          [-ForDispatch]        Check again and stamp the wake before oa_drain sends its
+                                start/continue instruction. Being busy does not prevent a nudge.
+          [-DispatchInput hash] Refuse a brief prepared against changed journal/task inputs.
           [-SessionRelease]     Retire the binding (task finished, workspace torn down). Prints
                                 the teardown command; never runs it.
-          [-InFlight]           Omit -Id for the run-loop capacity view: the resolved
-                                concurrency, how many tasks hold a live session, and whether the
-                                run is at capacity.
+          [-RunLimit]           Omit -Id to read this run's maximum outstanding normal requests.
+          [-InFlight]           Legacy alias for -RunLimit. Reports no in-flight count.
           [-Concurrency <n>]    Override the `Overnight Agent concurrency` setting for one call.
   resnapshot                    One-time migration after a change to how journals are decoded
                                 or hashed: re-baseline processed_file_hash for tasks with
@@ -172,13 +171,21 @@
                             reintroduced by the delegation step itself. Inheritance is the
                             default everywhere, so it has to be refused explicitly.
 
-  CONCURRENCY (#391). `session -InFlight` reports the resolved `Overnight Agent concurrency`
-  (precedence: -Concurrency > the user-settings.md row > the built-in 1; absent, unreadable or
-  malformed yields 1 exactly), how many tasks hold a live session, and whether the run is at
-  capacity. A bind that would exceed capacity is refused with `session_at_capacity`. `-Force` is
-  the escape hatch, and it exists for exactly one sanctioned case: the collect-wave exception in
-  Prioritisation.md 4.1, where a wake exists BECAUSE THE USER DID SOMETHING. A human action may
-  widen the run; the agent's own judgement may not.
+  RUN-LOCAL DRAIN (#391 / #589; user clarification 2026-09-22). `Overnight Agent concurrency`
+  is N outstanding normal instructions from THIS run, refilled after observed completion.
+  The oa_drain scheduler owns selection, send, observation, refill and cutoff in code.
+  It stops dispatching at the next :00/:30 after the coordinator's first prompt MINUS the
+  configured Overnight Agent start buffer (default 5m); reload never moves that deadline.
+  A later run may nudge or start tasks while earlier task sessions
+  finish. There is no global occupied-worker count derived from retained task state.
+
+  The coordinator prepares approved task briefs and their scan fingerprints. The drain processes
+  each task at most once per run, respecting fresh eligibility and pauses. A failed/unknown
+  delivery holds its opening until correlated task execution ends or this run reaches cutoff.
+  It never expires into permission to overfill this run, and never blocks a later run.
+  The settings precedence remains -Concurrency > user-settings.md > 1.
+  Start buffer accepts 0..29 whole minutes (optional m), defaults to 5 only when absent, and
+  reports malformed/unreadable values so the extension refuses enrollment rather than guessing.
 
   CLEANUP is emitted, never performed. `-SessionRelease` prints the teardown command
   (`scripts/remove-worktree.ps1`), because the raw `git worktree remove --force` deletes THROUGH a
@@ -551,12 +558,12 @@ param(
   [string]$RunWorkspace,
   [switch]$SessionDead,
   [switch]$SessionWoken,
-  # #532: DECLARES that this read is about to dispatch, and stamps `last_woken_at` as part of
-  # answering. The point is not convenience -- it is that `dispatch_authorised` is false on every
-  # read that did not ask, so a run CANNOT obtain dispatch authority without the wake being
-  # recorded. Deliberately NOT inferred from the shape of the arguments: a plain `session -Id N`
-  # inspection and a dispatching read are byte-identical today, and that ambiguity is the bug.
+  # The native drain checks first, persists its run state, then stamps the wake
+  # before sending (#532). Neither flag measures whether another task is running.
+  [switch]$CheckDispatch,
   [switch]$ForDispatch,
+  [string]$DispatchInput,
+  [switch]$RunLimit,
   [switch]$SessionRelease,
   # The path of a workspace that has just been REMOVED. Marks any binding pointing at it dead,
   # so the next verdict is `replace` rather than `reuse` at a workspace that is gone (#452).
@@ -735,7 +742,7 @@ function Resolve-GateSettings {
 # The failure direction is deliberate and is the only one that is safe for a pacing control. An
 # absent, unreadable or malformed value yields 1 EXACTLY -- never "unlimited", never the last
 # value seen. A typo can therefore narrow a run; it can never widen one. A value below 1 is
-# clamped to 1, because "hold zero items in flight" is not a pacing setting, it is a stopped run.
+# clamped to 1; disable the workflow separately rather than treating zero as a drain width.
 #
 # THAT LAST GUARANTEE USED TO BE FALSE, and the way it failed is worth stating because it reads
 # as harmless. The parse was a LEADING-integer match, so that `2 tasks` would work -- but this
@@ -793,6 +800,30 @@ function Resolve-PacingSettings {
   }
   $script:ConcurrencyLimit = $value
   $script:ConcurrencySource = $source
+}
+
+function Get-StartBufferSettings {
+  $path = Get-UserSettingsPath
+  $value = $null
+  if ($path -and (Test-Path -LiteralPath $path)) {
+    try { $value = Get-SettingRow (Read-JournalText $path) 'Overnight Agent start buffer' }
+    catch {
+      return [pscustomobject]@{
+        minutes = $null; source = 'settings-unreadable'
+        error = "Cannot read Overnight Agent start buffer: $($_.Exception.Message)"
+      }
+    }
+  }
+  if ($null -eq $value) { return [pscustomobject]@{ minutes = 5; source = 'default'; error = $null } }
+  $minutes = 0
+  if ($value -match '^(\d+)\s*m?$' -and [int]::TryParse($Matches[1], [ref]$minutes) -and $minutes -lt 30) {
+    return [pscustomobject]@{ minutes = $minutes; source = 'settings'; error = $null }
+  }
+  # Falling back to a smaller buffer could start work later than the user intended.
+  [pscustomobject]@{
+    minutes = $null; source = 'settings-malformed'
+    error = 'Overnight Agent start buffer must be whole minutes from 0 to 29 (for example 5m); no new drain may start until corrected.'
+  }
 }
 
 function Ensure-StateDir {
@@ -2048,9 +2079,8 @@ function Get-JournalFacts([string]$path) {
     # re-snapshotting the file. That erasure is what lost three of Shiv's messages on #245.
     HasTrailingHuman = (Test-TrailingHasHuman $trailing $consent)
     HasOpenAsk      = (Test-HasOpenAsk $agentLeft)       # visibility: digest must show it
-    # #560: the gate reading, WITH its provenance. `HasBlockingAsk` keeps its name and meaning so
-    # every existing reader (the scan row, the capacity accounting in Test-CountsAgainstCapacity)
-    # is unchanged; `AskSource` is the new fact, and it exists so the inferred share is countable.
+    # #560: eligibility WITH its provenance. The drain separately observes its own requested
+    # work, never infers execution from task status or an ask declaration (#589).
     HasBlockingAsk  = [bool]$askVerdict.blocking          # gate: does it stop the run proceeding?
     AskSource       = "$($askVerdict.source)"             # declared | inferred
     AskDeclared     = "$($askVerdict.declared)"           # blocking | offer | none | '' (undeclared)
@@ -2070,7 +2100,19 @@ function Read-State([string]$id) {
 
 function Write-State($obj) {
   Ensure-StateDir
-  ($obj | ConvertTo-Json -Depth 6) | Set-Content -Path (State-Path $obj.id) -Encoding UTF8
+  Write-JsonAtomic (State-Path $obj.id) $obj
+}
+
+function Write-JsonAtomic([string]$path, $obj) {
+  $tmp = "$path.$([guid]::NewGuid().ToString('N')).tmp"
+  try {
+    [IO.File]::WriteAllText($tmp, ($obj | ConvertTo-Json -Depth 12), (New-Object Text.UTF8Encoding($true)))
+    if (Test-Path -LiteralPath $path) { [IO.File]::Replace($tmp, $path, [System.Management.Automation.Language.NullString]::Value) }
+    else { [IO.File]::Move($tmp, $path) }
+  }
+  finally {
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
+  }
 }
 
 function Now-Iso { (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK') }
@@ -2499,31 +2541,6 @@ $script:ClosedStatus = @('done', 'skip')
 # because the agent proposing a plan is also `proposed`.
 $script:PausedStatus = @($script:NonWorkableStatus | Where-Object { $script:ClosedStatus -notcontains $_ })
 
-# GH #500. How recently the catch-up doc's comments must have been read for "no new comments" to
-# count as EVIDENCE OF SILENCE rather than as absence of a reading.
-#
-# The number is chosen against the two failures on either side of it, not picked for roundness.
-# Too short and a healthy doc-bound task never parks, so the deadlock #500 records survives the
-# fix. Too long and a doc channel that died hours ago still reads as "recently observed", which
-# parks a task on a silence nobody has actually confirmed -- the exact #346 collapse this guard
-# exists to avoid.
-#
-# 180 minutes sits above the agent's own rhythm and well below a night. The run wakes every ~30
-# minutes and PHASE 0.7 observes on each wake, so a healthy task is re-observed roughly six times
-# inside the window; it takes a sustained outage, not one missed wake or a slow Google minute, to
-# fall out of it. And falling out is the SAFE direction: an unobserved task is treated as
-# workable, so the cost of being wrong here is a run that works a task it might have parked,
-# never a task parked on a channel nobody read.
-$script:DocObservationFreshMinutes = 180
-
-# GH #522 -- how recently a session must have been woken to count as actively working its task.
-# Deliberately SHORTER than the observation window above: a stale doc read is still evidence the
-# channel is silent, but a stale wake is not evidence anyone is working. Kept short for a second
-# reason -- `last_woken_at` is written by the agent about itself (#514), so the longer this
-# window, the more a retroactive stamp could hold a slot. It fails safe either way: a wrongly
-# FRESH stamp makes the task COUNT, which refuses dispatch rather than over-dispatching.
-$script:ActiveWakeMinutes = 45
-
 # WHO closed it (#501). `$script:ClosedStatus` names the closed STATUSES; this names the closed
 # TASKS, and the two are not the same set -- which is the whole bug.
 #
@@ -2827,7 +2844,7 @@ function Test-ExhaustionClaim($ex, $row, [string]$todayHash) {
   return 'declared_exhausted'
 }
 
-function Cmd-Scan {
+function Get-ScanRows {
   $snooze = Get-SnoozeMap
   $board = Get-BoardMap
   $completed = Get-CompletedBoardIds
@@ -2889,6 +2906,7 @@ function Cmd-Scan {
     $sessFacts = Get-SessionState $st
     [pscustomobject]@{
       id            = $facts.Id
+      dispatch_input = (Get-DispatchInput $st $facts)
       status        = $status
       changed       = $changed
       reopened      = $reopened
@@ -3077,7 +3095,11 @@ function Cmd-Scan {
     }
   }
 
-  $rows | ConvertTo-Json -Depth 4
+  return $rows
+}
+
+function Cmd-Scan {
+  ConvertTo-Json -InputObject @(Get-ScanRows) -Depth 8
 }
 
 function Cmd-Get {
@@ -4138,10 +4160,8 @@ function Cmd-Doc {
 
     # GH #468 -- a read that did not happen must NOT be recorded as a reading.
     #
-    # `observed_at` is what the capacity park treats as proof the channel was checked and was
-    # silent, so stamping it here on a failed read would launder a dead connection into evidence
-    # of silence -- and the park would then hold the task quiet on the strength of it. State is
-    # therefore left completely untouched: no watermark move, no fresh `observed_at`, so the next
+    # Stamping `observed_at` on a failed read would launder a dead connection into evidence
+    # of silence. State is left completely untouched: no watermark move or fresh stamp, so the next
     # run sees an observation that is stale rather than one that is falsely current.
     if (-not (Test-ObservationReadable $obsText)) {
       $observationUnreadable = $true
@@ -4385,256 +4405,53 @@ function Get-SessionVerdict($sess, $row, $journalFacts) {
   return 'reuse'
 }
 
-function Get-LiveSessionCount {
-  # In-flight = tasks holding a LIVE session AND able to be worked. Counted from the state store
-  # rather than tracked in a counter, because a counter drifts the first time a run dies mid-item --
-  # and a run dying mid-item is the case the count exists to survive.
-  #
-  # WHY WORKABILITY IS PART OF THE COUNT (GH #487)
-  # ---------------------------------------------
-  # It was not, and that produced a live dispatch DEADLOCK. Measured 2026-09-04 07:45 PT:
-  #
-  #   concurrency 1 (default) | in_flight 2 | at_capacity true | admits 0
-  #     #466  live session, being worked
-  #     #468  live session, NEVER WOKEN (last_woken_at ""), awaiting_reply TRUE
-  #
-  # #468 is parked on a human reply, so it cannot progress by itself -- yet it held the only
-  # capacity slot, so the run could dispatch NOTHING. Nothing self-heals: `admits` stays 0 until
-  # Shiv happens to reply. SKILL.md PHASE 1 step 6 also forbids releasing the binding while the
-  # task is `in-progress`, so the contract holds the slot open and the accounting counts it.
-  #
-  # This is a defect ALREADY FIXED ONE LEVEL UP and not carried down. The Today gate had the
-  # identical shape -- one unanswered row froze the whole Deferred backlog -- and the resolution
-  # was `Test-Workable`, which treats `awaiting_reply` as a waiting state (see its own comment:
-  # "Leaving it out of this list let a single unanswered Today row hold the whole Deferred backlog
-  # shut"). The capacity accounting never got the same treatment. The aggravating detail is that
-  # the two readers DISAGREE: the very signal that says "this task cannot be worked" is the one
-  # that leaves its session holding the slot.
-  #
-  # GH #541 CARRIED THE SAME RULE TO THE STATUS GATE, after the identical deadlock recurred a third
-  # time from a direction the workability terms above do not reach. Measured 2026-09-05 18:22 PT:
-  # Shiv paused #468, the run recorded `status: blocked, status_by: user`, and got
-  # `6 ELIGIBLE | in_flight 1 | admits 0` -- one user pause froze the entire board. See
-  # Test-SessionHoldsCapacity's status gate; the invariant is now pinned by
-  # mutcheck-parked-capacity.ps1 rather than restated per instance.
-  #
-  # THIS DOES NOT RELEASE ANYTHING, and that is what makes it safe. The binding is untouched --
-  # continuity across nights is exactly what it exists for (#404), and losing it is the failure
-  # mode that matters. Only the CAPACITY ARITHMETIC changes: a task that cannot be worked stops
-  # being counted as work in flight.
-  #
-  # UNKNOWN COUNTS. If the journal cannot be read, or anything throws, the task is COUNTED. The
-  # dangerous direction here is over-dispatch (two sessions racing one workspace, #404's deadlock),
-  # so an undefaulted value must not fail toward it -- #462's rule, applied deliberately.
-  #
-  # The cost is bounded by construction: this only reads journals for tasks that ALREADY hold a
-  # live session, which concurrency keeps to a handful -- never the 244-row board.
-  if (-not (Test-Path $StateDir)) { return 0 }
-  $n = 0
-  foreach ($f in (Get-ChildItem $StateDir -Filter 'task-*.json' -File -ErrorAction SilentlyContinue)) {
-    try { $obj = Get-Content -Raw $f.FullName | ConvertFrom-Json } catch { continue }
-    $s = Get-SessionState $obj
-    if (-not ($s -and "$($s.state)" -eq 'live')) { continue }
-    if (Test-SessionHoldsCapacity $obj) { $n++ }
+function Get-DispatchInput($st, $facts) {
+  # A prepared brief cannot silently follow changed human input, approval, reminders or binding.
+  # Wake timestamps and observation timestamps are excluded: they do not change the requested work.
+  $inputState = [ordered]@{
+    journal = "$($facts.FullHash)"; status = "$($st.status)"; status_by = "$($st.status_by)"
+    plan_id = "$($st.plan_id)"; version = "$($st.version)"; session_id = "$($st.session.session_id)"
+    poll = ConvertTo-IsoText $st.poll.next_due; recheck = ConvertTo-IsoText $st.recheck.next_due
+    comments = @($st.doc.pending_ids | Sort-Object -Unique)
   }
-  return $n
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(
+      ($inputState | ConvertTo-Json -Depth 4 -Compress))))).Replace('-', '').ToLowerInvariant()
+  }
+  finally { $sha.Dispose() }
 }
 
-function Test-SessionHoldsCapacity($st) {
-  # Does this task's live session represent work actually in flight? Separated from the counting
-  # loop so the mutation harness can drive the predicate directly rather than inferring it from a
-  # total, and so the "unknown counts" default has one place to live.
-  $id = "$($st.id)"
-  if (-not $id) { return $true }   # unidentifiable -> count it
-
-  $status = "$($st.status)".ToLowerInvariant()
-
-  # Read here, above the journal, because the status gate below needs the recheck timer and must
-  # not depend on a journal being readable: a status is known from the state file alone.
-  $poll = if ($st.PSObject.Properties['poll']) { $st.poll } else { $null }
-  $recheck = if ($st.PSObject.Properties['recheck']) { $st.recheck } else { $null }
-
-  # GH #541 -- A DUE RECHECK OUTRANKS THE STATUS GATE, and only for `blocked`.
-  #
-  # Copied from Test-Workable's own branch ("if ($row.due_recheck -and status -eq 'blocked')"),
-  # not paraphrased, because the two readers drifting apart is the bug being fixed one line
-  # below. `-Recheck` exists ONLY for "a recurring recheck of a BLOCKED task's blocker", so every
-  # task carrying one is `blocked` by construction; without this the gate would uncount the one
-  # blocked task that IS workable. That direction is the dangerous one -- it widens dispatch for a
-  # task the run may legitimately pick up, which is #522's shape.
-  #
-  # A due POLL is deliberately NOT accepted here. Test-Workable yields only the awaiting-reply
-  # park to `due_poll`, never the status gate, so a blocked task with a poll is still unworkable
-  # and must still be uncounted. The two readers agree by construction, term for term.
-  if ($status -eq 'blocked' -and (Test-PollDue $recheck)) { return $true }
-
-  # A task the board calls UNWORKABLE holds nothing, and this is deliberately the SAME list
-  # Test-Workable's own status gate reads rather than a second copy of it.
-  #
-  # It used to be `$script:ClosedStatus` (`done`/`skip`) only, which covered terminal work -- a
-  # finished row with a live session is a pure leak and could starve the run indefinitely -- but
-  # let the two WAITING statuses through. GH #541, measured 2026-09-05 18:22 PT: Shiv paused task
-  # #468 ("we need to pause this work for now"), the run recorded that as
-  # `mark -Id 468 -Status blocked -StatusBy user`, and the reward was
-  #
-  #     scan -> 249 rows, 6 ELIGIBLE   |   session -InFlight -> in_flight 1, admits 0
-  #
-  # -- six workable rows and nothing dispatchable, because the single task counted against the
-  # limit was the one provably unable to progress without a human. So a user pausing ONE task
-  # silently froze the whole board. `blocked` and `proposed` are both defined in SKILL.md as
-  # waiting-on-the-user states, and Test-Workable already agreed with that (`eligible: false`,
-  # `today_release_reason: not_workable`); only the capacity arithmetic disagreed. This is #487's
-  # defect (awaiting_reply) and #500's (the doc surface) on a third surface, which is why the fix
-  # pins the INVARIANT -- unworkable implies uncounted, unless a due timer overrides -- instead of
-  # naming the instance.
-  #
-  # NOT the same thing as adding these statuses to `$script:ClosedStatus`, which would be the
-  # tempting one-word version and is a different, worse bug. That list also confers USER-CLOSED
-  # semantics (Test-UserClosed), and SKILL.md is explicit that `proposed`/`blocked` are not
-  # closed: a reply is exactly the input they are waiting for and must reopen them normally.
-  # Widening it would make a paused task unreopenable -- #170's defect, pinned by
-  # mutcheck-reopened-closed.ps1's mutant M3. The capacity test and the closed test stay separate.
-  #
-  # RELEASES NOTHING, which is what makes it safe: the binding and the worktree are untouched, as
-  # with #487's fix. That matters here specifically, because SKILL.md forbids releasing a paused
-  # task's binding -- it is the continuity that lets it resume -- so the accounting is the only
-  # lever available.
-  if ($script:NonWorkableStatus -contains $status) { return $false }
-
-  try {
-    $jp = Join-Path $JournalDir ("task-$id.md")
-    if (-not (Test-Path $jp)) { return $true }   # cannot read -> count it
-    $facts = Get-JournalFacts $jp
-
-    # Deliberately the SAME expression the scan row uses for `awaiting_reply`, not a
-    # paraphrase of it. Two readers of one condition that drift apart is precisely the
-    # bug being fixed here, so they are kept textually identical.
-    #
-    # Note what the third term already buys: `-not HasTrailingUser` means a user reply
-    # un-parks the task by construction (#223 rule 4), so no separate "a reply outranks the
-    # park" branch is needed. An earlier draft had one; mutation testing proved it dead --
-    # deleting it changed no fixture -- and a guard that can be removed with everything still
-    # green is decoration pretending to be a safeguard. The behaviour is pinned by the
-    # trailing-reply fixture against a mutation of THIS line instead.
-    #
-    # #560 STRENGTHENED THIS RATHER THAN THREATENING IT. The declared-ask preference lives INSIDE
-    # `Get-BlockingAskVerdict`, which `Get-JournalFacts` calls, so both readers pick it up from
-    # the same field with no second edit. Had the declaration been resolved in `Cmd-Scan` instead,
-    # this reader would still be inferring from prose while the emitted row said `declared` --
-    # #545's "emitted field disagrees with gated field" shape, on the exact pair the
-    # Prioritisation spec calls out as needing to stay textually synchronized.
-    $awaiting = [bool]($facts.HasAgentBlock -and $facts.HasBlockingAsk -and -not $facts.HasTrailingUser)
-
-    # A due timer outranks the park, for the reason Test-Workable gives -- poll/recheck is
-    # read-only agent work that needs no reply, so parking it would silently stop the recurring
-    # duty polling exists to protect. Read exactly as the scan row reads it. ($poll/$recheck are
-    # read above the try, so the status gate can use the same values.)
-    if ((Test-PollDue $poll) -or (Test-PollDue $recheck)) { return $true }
-
-    if ($awaiting) { return $false }
-
-    # GH #500 -- THE DOC SURFACE, which is the second face of this same defect.
-    #
-    # #424/#425 made a doc-bound task write a POINTER turn, and the prescribed template's ask is
-    # dismissive by construction: "**Needs from you:** nothing blocking - read and comment." The
-    # `awaiting_reply` reader deliberately treats a dismissive ask as NOT parking (arms L1/L2/Q/R
-    # of mutcheck-awaiting-reply.ps1), which is correct and load-bearing for the Today gate -- it
-    # is what stopped the agent's own courtesy offers parking 186 of 238 rows.
-    #
-    # Net effect, measured 2026-09-04 14:31 PT: `concurrency 1 | in_flight 1 | admits 0` with 12
-    # eligible rows and nothing dispatched. Task #228 was doc-bound with 0 new comments, its doc
-    # emailed out for a group discussion, waiting on two humans -- and it read as fully workable
-    # because its ask was a pointer. It held the sole slot for ~3.3h. So the task whose ONLY
-    # input channel is doc comments, and which has none, is exactly the task that cannot progress
-    # and exactly the one nothing parks.
-    #
-    # THE TRAP IN THE OBVIOUS FIX, and why this is not keyed on the comment count alone.
-    # `doc_new_comments` reflects the LAST -Observe; `scan` is offline and never calls Google. So
-    # a task that has NEVER been observed reports 0, byte-identical to "he wrote nothing".
-    # Parking on that would let a dead doc channel silently park a task forever -- #346's shape
-    # wearing the costume of a fix for it. The park therefore requires POSITIVE evidence that the
-    # channel was read recently and was genuinely silent; a missing or stale `observed_at` is NOT
-    # parkable, and fails toward working the task. catchup-doc-sweep's NEVER_READ/UNACKED arms
-    # own reporting the unhealthy channel; this must not silently absorb it.
-    #
-    # Every existing release path is preserved above and by the count itself: a due poll or
-    # recheck already returned true, a journal reply clears `awaiting` via -not HasTrailingUser,
-    # and a non-zero pending count fails the silence test below.
-    $doc = if ($st.PSObject.Properties['doc']) { $st.doc } else { $null }
-    if ($doc -and "$($doc.doc_id)") {
-      $pending = @($doc.pending_ids).Count
-      $observedFresh = $false
-      $obsRaw = "$($doc.observed_at)"
-      if ($obsRaw) {
-        $obs = [datetime]::MinValue
-        if ([datetime]::TryParse($obsRaw, [Globalization.CultureInfo]::InvariantCulture,
-            [Globalization.DateTimeStyles]::None, [ref]$obs)) {
-          $observedFresh = ((Get-Date) - $obs).TotalMinutes -lt $script:DocObservationFreshMinutes
-        }
-      }
-      # GH #522 -- A TASK SOMEONE IS ACTIVELY WORKING IS IN FLIGHT, WHATEVER ITS DOC SAYS.
-      #
-      # The park above asks "can this progress on its own?" and never "is a session working it
-      # right now?" -- so a task parked waiting for comments and a task being actively worked are
-      # indistinguishable: both are doc-bound, observed recently, 0 pending. Measured live
-      # 2026-09-05 07:03 PT on this very task: `in_flight: 0, admits: 1` while its session was
-      # live, unreleased, and had been woken seconds earlier. The pacing control (#391) did not
-      # count the item the run had just dispatched, which is the over-dispatch direction
-      # `Get-LiveSessionCount` names as the dangerous one.
-      #
-      # The park now needs POSITIVE EVIDENCE OF AN ACTIVE WAKE to be BLOCKED -- the mirror of how
-      # it already needs positive evidence of a silent channel to be ALLOWED.
-      #
-      # The default here is deliberately "not recently woken", and the evidence for that choice is
-      # in this file: `Get-LiveSessionCount`'s own #487 case is a task with a live session and
-      # `last_woken_at ""` -- NEVER WOKEN -- holding the only slot and deadlocking dispatch. So an
-      # empty or unparseable stamp is not an unknown; it is the recorded signature of a session
-      # nobody has started working. Defaulting it to "active" would re-open #487 through this
-      # branch and un-park every world #500 exists to park.
-      #
-      # Note which way the #514 hazard points here. `last_woken_at` is agent-written, so a
-      # retroactive stamp could make a task look actively worked -- and that makes it COUNT,
-      # refusing dispatch. A stamp that is wrongly SET can therefore cost throughput but cannot
-      # cause the over-dispatch this fix exists to prevent.
-      #
-      # THAT IS ONLY HALF THE FIELD'S FAILURE MODES, AND THE OTHER HALF IS NOT SAFE (GH #532).
-      # The sentence above analyses the stamp being wrongly ADVANCED. The stamp is maintained by
-      # a line of prose in SKILL.md PHASE 1 ("stamp -SessionWoken once it responds"), so its far
-      # more common failure is not being advanced AT ALL on a wake that reuses a live binding --
-      # and a stamp left stale reads here as "not recently woken", parks the row, and frees a
-      # slot that is genuinely occupied. That is the over-dispatch direction, reached through the
-      # same field this comment called safe. Measured 2026-09-07 on #468: dispatched 21:55 and
-      # actively shipping, `last_woken_at` still 19:43, and `session -InFlight` did not count it
-      # from 21:55 until the stamp was written by hand at 22:59.
-      #
-      # DO NOT "FIX" THAT HERE BY TREATING A STALE STAMP AS ACTIVE. World O of
-      # mutcheck-parked-capacity pins the opposite as deliberate -- a 6-hour-old wake is not
-      # evidence anyone is working -- and #487, a live session with an EMPTY stamp holding the
-      # only slot, is the deadlock that argument exists to prevent. The park's reasoning is
-      # correct given its input; the input was false.
-      #
-      # This is also exactly where the analogous G12 repair does NOT transfer. write-turn could
-      # demote a stale stamp to "unknown boundary" because it only had to stop TRUSTING the
-      # field. The park needs the field to be TRUE: "nobody is working this" is a claim about the
-      # world, not about confidence. So no reader-side fix exists here, and the repair has to be
-      # on the write side -- the stamp has to stop being maintained by prose.
-      $wokenRecently = $false
-      $session = if ($st.PSObject.Properties['session']) { $st.session } else { $null }
-      $wokeRaw = if ($session -and $session.PSObject.Properties['last_woken_at']) { "$($session.last_woken_at)" } else { '' }
-      if ($wokeRaw) {
-        $woke = [datetime]::MinValue
-        if ([datetime]::TryParse($wokeRaw, [Globalization.CultureInfo]::InvariantCulture,
-            [Globalization.DateTimeStyles]::None, [ref]$woke)) {
-          $wokenRecently = ((Get-Date) - $woke).TotalMinutes -lt $script:ActiveWakeMinutes
-        }
-      }
-
-      if ($pending -eq 0 -and $observedFresh -and -not $wokenRecently) { return $false }
-    }
+function Get-RunLimit {
+  $buffer = Get-StartBufferSettings
+  [pscustomobject]@{
+    scope = 'run_local_concurrency'
+    dispatch_limit = [int]$script:ConcurrencyLimit
+    limit_source = "$script:ConcurrencySource"
+    # Retained for settings-reader compatibility, not a simultaneous-worker promise.
+    concurrency = [int]$script:ConcurrencyLimit
+    concurrency_source = "$script:ConcurrencySource"
+    start_buffer_minutes = $buffer.minutes
+    start_buffer_source = $buffer.source
+    start_buffer_error = $buffer.error
+    note = 'N outstanding requests from this run, refilled until next half-hour minus the configured start buffer. Earlier runs do not reserve openings. Use oa_drain_status for this run.'
   }
-  catch { return $true }   # anything unexpected -> count it
+}
 
-  return $true
+function Assert-TaskDispatch($st, $sess, $facts) {
+  if ((Get-SessionVerdict $sess $st $facts) -ne 'reuse') {
+    throw 'session_not_dispatchable: resolve the saved session first; paused tasks cannot be woken'
+  }
+  $row = @(Get-ScanRows | Where-Object { "$($_.id)" -eq "$($st.id)" }) | Select-Object -First 1
+  if (-not $row -or -not $row.eligible -or $row.session_paused) {
+    throw 'session_not_eligible: follow the current Today-first worklist and user pauses'
+  }
+  if ($DispatchInput -and $DispatchInput -ne $row.dispatch_input) {
+    throw 'session_input_changed: the prepared task brief is stale'
+  }
+  if ($Force -and -not ($row.unanswered_user -or $row.doc_new_comments -gt 0)) {
+    throw 'session_collect_evidence_required: fold the human reply or observe the human doc comment first'
+  }
 }
 
 function Get-KickoffContinuation([string]$taskId, [string]$priorId) {
@@ -4647,6 +4464,10 @@ function Get-KickoffContinuation([string]$taskId, [string]$priorId) {
 }
 
 function Cmd-Session {
+  if (($CheckDispatch -or $ForDispatch) -and (-not $Id -or
+      ($CheckDispatch -and $ForDispatch) -or $SessionId -or $SessionDead -or $SessionRelease -or $SessionWoken -or $WorkspaceGone)) {
+    throw 'session_dispatch_flags_conflict: use -Id with exactly one dispatch-check flag'
+  }
   # ---- workspace teardown: `session -WorkspaceGone <path>`, no -Id -----------------------
   #
   # The other half of #452, and it is NOT the half `Get-SessionVerdict` can cover. Measured
@@ -4705,23 +4526,10 @@ function Cmd-Session {
       } | ConvertTo-Json -Depth 4)
   }
 
-  # ---- capacity view: `session -InFlight`, no -Id ----------------------------------------
+  # No task/session enumeration: this is drain width, not a global occupancy estimate.
   if (-not $Id) {
-    if (-not $InFlight) { throw 'session requires -Id (or -InFlight for the capacity view, or -WorkspaceGone for teardown)' }
-    $live = Get-LiveSessionCount
-    return ([pscustomobject]@{
-        concurrency = [int]$script:ConcurrencyLimit
-        # `settings-malformed` here means the user WROTE a value and it did not parse, so the run
-        # is at 1 by accident rather than by choice. Reporting it is what makes the anchored parse
-        # safe to narrow on: a silent fallback is indistinguishable from agreement.
-        concurrency_source = "$script:ConcurrencySource"
-        in_flight   = [int]$live
-        at_capacity = [bool]($live -ge $script:ConcurrencyLimit)
-        # How many MORE items the priority wave may start. Never negative: a run that is already
-        # over capacity (a -Force bind for a collect-wave wake) admits nothing further, and
-        # reporting -1 would invite a caller to do arithmetic with it.
-        admits      = [int][Math]::Max(0, $script:ConcurrencyLimit - $live)
-      } | ConvertTo-Json -Depth 4)
+    if (-not ($RunLimit -or $InFlight)) { throw 'session requires -Id (or -RunLimit, or -WorkspaceGone for teardown)' }
+    return (Get-RunLimit | ConvertTo-Json -Depth 4)
   }
 
   $st = Read-State $Id
@@ -4740,6 +4548,8 @@ function Cmd-Session {
   catch { $pauseFacts = $null }
   $dirty = $false
   $released = $false
+
+  if ($CheckDispatch -or $ForDispatch) { Assert-TaskDispatch $st $sess $pauseFacts }
 
   if ($SessionRelease) {
     $sess = $null
@@ -4805,20 +4615,8 @@ function Cmd-Session {
       }
     }
 
-    # Capacity is checked only when this bind ADDS an item to the run. Re-binding the same id, or
-    # replacing a dead session, does not increase what is in flight, so charging them against the
-    # limit would make the run narrower than the user asked for.
-    $adds = -not ($sess -and ("$($sess.session_id)" -eq $SessionId -or "$($sess.state)" -eq 'dead'))
-    if ($adds -and -not $Force) {
-      $live = Get-LiveSessionCount
-      if ($live -ge $script:ConcurrencyLimit) {
-        throw ("session_at_capacity: $live task(s) already hold a live session and the " +
-          'Overnight Agent concurrency setting is ' + $script:ConcurrencyLimit + '. Finish or ' +
-          'release one first. -Force is for the collect-wave exception only ' +
-          '(Prioritisation.md 4.1): a wake that exists because the USER did something may widen ' +
-          "the run; the agent's own judgement may not.")
-      }
-    }
+    # Binding is identity, not admission. New/replacement sessions are created idle and sent
+    # their kickoff through oa_drain; charging a bind before that send recreates #589.
 
     $created = if ($sess -and "$($sess.session_id)" -eq $SessionId -and $sess.created_at) { $sess.created_at } else { Now-Iso }
     $replacedAt = if ($prior -and "$($sess.session_id)" -ne $SessionId) { Now-Iso } elseif ($sess) { $sess.replaced_at } else { '' }
@@ -4831,6 +4629,7 @@ function Cmd-Session {
 
   if ($SessionWoken -or $ForDispatch) {
     if (-not $sess) { throw "session_not_bound: task $Id has no session to wake" }
+    if (Test-UserPaused $st $pauseFacts) { throw 'session_user_paused: cannot stamp a wake for a paused task' }
     $sess = New-SessionObject -SessionIdValue "$($sess.session_id)" -Kind "$($sess.kind)" `
       -Project "$($sess.project)" -Workspace "$($sess.workspace)" -WsType "$($sess.workspace_type)" `
       -CreatedAt $sess.created_at -LastWokenAt (Now-Iso) -SessionState 'live' `
@@ -4845,29 +4644,14 @@ function Cmd-Session {
   }
 
   $verdict = Get-SessionVerdict $sess $st $pauseFacts
-  $live = Get-LiveSessionCount
   [pscustomobject]@{
     id             = $Id
     bound          = [bool]$sess
     session_id     = if ($sess) { "$($sess.session_id)" } else { $null }
     # create | reuse | replace | paused. The run loop acts on THIS, not on `bound`.
     verdict        = $verdict
-    # #532: the verdict alone never authorised anything -- it was a read, and whether the wake got
-    # recorded depended on a run remembering a sentence in SKILL.md PHASE 1. This field is the
-    # authority, and it is true ONLY on a read that asked for it with -ForDispatch, which stamps
-    # `last_woken_at` in the same write. A run that dispatches on a read where this is false is
-    # dispatching on an inspection, and the two guards that read the stamp -- the one-turn guard
-    # and the capacity park -- will both be reasoning about an earlier wake.
-    #
-    # NOTE WHY THIS IS NOT STAMPED ON BIND, which is the cheaper-looking place and is wrong.
-    # Binding is not waking: a run can bind a session and then fail to wake it, and a stamp
-    # written there records a wake that never happened. Every failure this field exists to fix is
-    # LOUD -- the turn guard refuses and says so, the capacity park over-offers and surfaces as
-    # contention. A stamp present when it should be absent is the #514 direction and is SILENT: a
-    # second turn reaches the page and nothing reports it. Trading a loud failure for a quiet one
-    # is not a fix. So the stamp is attached to ASKING FOR THE AUTHORITY, not to the preparation
-    # that precedes it, and a declared dispatch that then fails is recorded by -SessionDead.
     dispatch_authorised = [bool]$ForDispatch
+    dispatch_eligible = [bool]($CheckDispatch -or $ForDispatch)
     state          = if ($sess) { "$($sess.state)" } else { $null }
     kind           = if ($sess) { "$($sess.kind)" } else { $null }
     project        = if ($sess -and "$($sess.project)") { "$($sess.project)" } else { $null }
@@ -4896,9 +4680,10 @@ function Cmd-Session {
     else { $null }
     concurrency    = [int]$script:ConcurrencyLimit
     concurrency_source = "$script:ConcurrencySource"
-    in_flight      = [int]$live
-    at_capacity    = [bool]($live -ge $script:ConcurrencyLimit)
-  } | ConvertTo-Json -Depth 5
+    budget_scope   = 'run_local_concurrency'
+    dispatch_limit = [int]$script:ConcurrencyLimit
+    limit_source   = "$script:ConcurrencySource"
+  } | ConvertTo-Json -Depth 8
 }
 
 function Cmd-Resnapshot {
@@ -5122,10 +4907,8 @@ function Cmd-Mark {
     # and it took a second -PollDone to push it out. So the one-call form of "poll me less"
     # silently meant "poll me now".
     #
-    # At concurrency 1 that is not merely surprising. A due poll outranks the awaiting_reply
-    # park in Test-SessionHoldsCapacity, so an accidental due-now both consumes the only
-    # dispatch slot and re-qualifies the task to hold the Today gate -- a "relief" that starves
-    # the backlog it was meant to free.
+    # An accidental due-now also re-qualifies the task to hold the Today gate. Capacity no
+    # longer counts readiness (#589), but the selection-order consequence still matters.
     #
     # So a cadence change now keeps the existing schedule and re-bases it: next_due is measured
     # from the last actual poll, under the NEW interval. Shortening a cadence still fires
@@ -5249,21 +5032,39 @@ function Cmd-Mark {
   $st | ConvertTo-Json -Depth 6
 }
 
-# Resolve the gate tunables BEFORE dispatching, so every command sees the same values and no
-# code path can read a half-resolved one. It is here rather than beside the parameter block
-# because it calls Read-JournalText, which is defined further down the file.
-Resolve-GateSettings
-Resolve-PacingSettings
-
-switch ($Command) {
-  'seed' { Cmd-Seed }
-  'scan' { Cmd-Scan }
-  'get' { Cmd-Get }
-  'mark' { Cmd-Mark }
-  'resnapshot' { Cmd-Resnapshot }
-  'consent' { Cmd-Consent }
-  'gate' { Cmd-Gate }
-  'extract' { Cmd-Extract }
-  'doc' { Cmd-Doc }
-  'session' { Cmd-Session }
+# Task agents can still update state during a coordinator run. Serialize state read/modify/write
+# so their marks and doc observations cannot erase a binding. This is file integrity, not a
+# lock or reservation against starting work in another run.
+if (($CheckDispatch -or $ForDispatch -or $RunLimit) -and $Command -ne 'session') {
+  throw 'session_flag_command: dispatch checks and run-limit reads belong to the session command'
+}
+$lockPath = [IO.Path]::GetFullPath($StateDir).TrimEnd([char[]]'\/')
+if ($env:OS -eq 'Windows_NT') { $lockPath = $lockPath.ToLowerInvariant() }
+$sha = [Security.Cryptography.SHA256]::Create()
+try { $lockKey = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($lockPath)))).Replace('-', '') }
+finally { $sha.Dispose() }
+$mutex = New-Object Threading.Mutex($false, "oa-state-$lockKey")
+$locked = $false
+try {
+  try { $locked = $mutex.WaitOne(10000) }
+  catch [Threading.AbandonedMutexException] { $locked = $true }
+  if (-not $locked) { throw 'state_lock_timeout: another state operation is still running; retry rather than bypassing admission' }
+  Resolve-GateSettings
+  Resolve-PacingSettings
+  switch ($Command) {
+    'seed' { Cmd-Seed }
+    'scan' { Cmd-Scan }
+    'get' { Cmd-Get }
+    'mark' { Cmd-Mark }
+    'resnapshot' { Cmd-Resnapshot }
+    'consent' { Cmd-Consent }
+    'gate' { Cmd-Gate }
+    'extract' { Cmd-Extract }
+    'doc' { Cmd-Doc }
+    'session' { Cmd-Session }
+  }
+}
+finally {
+  if ($locked) { $mutex.ReleaseMutex() }
+  $mutex.Dispose()
 }

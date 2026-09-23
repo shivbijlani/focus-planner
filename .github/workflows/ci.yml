@@ -641,38 +641,38 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-per-task-session.ps1
 
-  # Capacity accounting: does a live session represent work actually IN FLIGHT? The job above
-  # guards the LIMIT (binding refusal, release, the in-flight view); this one guards the
-  # PREDICATE that decides what the limit counts, and the two are separable -- every bug below
-  # left the limit working perfectly and fed it the wrong number.
-  #
-  # `mutcheck-parked-capacity.ps1` shipped with #487 and has run in CI NOWHERE since. It was a
-  # guard against a deadlock that has now recurred three times (#487 awaiting_reply, #500 the doc
-  # surface, #541 the `blocked` status), and not one of those recurrences could have been caught
-  # by it, because nothing ran it on a pull request. That is #520's shape exactly -- a guard that
-  # cannot run reports the same thing as a guard with nothing to do -- and the same
-  # merged-and-never-executed class as the reaper-cohort and ps1-encoding guards above.
-  #
-  # What it pins is an AGREEMENT rather than a behaviour: every status `Test-Workable` calls
-  # unworkable must also be uncounted here unless a due timer overrides. The three bugs were all
-  # the two readers drifting apart, and the symptom is silent -- #541 measured `6 ELIGIBLE,
-  # admits 0`, a run that dispatches nothing and looks idle rather than broken.
-  #
-  # windows-latest because the harness shells out to `powershell` per fixture, the same as the
-  # pacing job below. Pure text work against synthetic state/journal dirs under TEMP, driven
-  # through -StateDir/-JournalDir; the live store is never read or written.
+  # Retained tasks and old receipt files must not become a cross-run gate (#589).
   parked-capacity:
-    name: Parked-capacity accounting
+    name: Per-run limit independence
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Mutation check (a task waiting on a human holds no dispatch slot)
+      - name: Saved task state does not change the per-run limit
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-parked-capacity.ps1
 
-  # A user's pause must be visible to the DISPATCHER (GH #540). The job above stops a paused task
-  # eating the concurrency slot; this one stops the run waking it in the first place. They are the
-  # two halves of honouring one instruction, and #541 shipping alone left the pause half-honoured.
+  execution-admission:
+    name: Queue drain (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Automatic refill, cutoff, completion, reload and native-tool guards
+        run: node --test plugins/overnight-agent/checks/oa-dispatch.test.mjs
+      - name: Behavioral mutations must break the drain guards
+        run: node plugins/overnight-agent/checks/mutcheck-drain.mjs
+      - name: Plugin extension syntax
+        run: node --check plugins/overnight-agent/extensions/task-dispatch/extension.mjs
+
+  # A user's pause must still stop dispatch (GH #540), even though task overlap and repeated
+  # nudges are now permitted. A per-run allowance is not permission to ignore a pause.
   #
   # `session -Id <ID>` answered "does a live session exist?" and never "is that session allowed to
   # work right now?", so a pause typed into a sub-session was invisible on the only path PHASE 1
@@ -696,8 +696,8 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-session-pause.ps1
 
-  # Pacing: how the `Overnight Agent concurrency` tunable (#391) is READ. #404's job above guards
-  # its ENFORCEMENT (capacity refusal, release, the in-flight view); this one guards the parse
+  # Pacing: how the historical `Overnight Agent concurrency` tunable (#391) is READ. The per-run
+  # dispatch job guards enforcement; this one guards the parse
   # boundary, the argument-over-file precedence, and whether a fallback is visible.
   #
   # It runs in CI because the failure it was written for has no tell. The parse was a leading-

@@ -43,7 +43,7 @@ the end of every run (SKILL.md → "PHASE 3 — Mirror to Telegram"). Leave `Ena
 
 ## Overnight Agent behaviour
 
-How the agent decides when it may stop working `## Today` and start on `## Deferred`. Both rows are
+How the agent orders work and limits new requests in each run. These rows are
 optional — delete them and the built-in defaults apply. `oa-state.ps1` reads this table directly, so
 a value here takes effect on the next run with nothing else to change.
 
@@ -51,15 +51,29 @@ a value here takes effect on the next run with nothing else to change.
 | --- | --- |
 | Today gate backstop | `6h` — if **nothing** has been written to a Today task for this long, the agent stops waiting on it and works the backlog. Guards against a run that jams. Accepts `6`, `6h`, or `off` to disable. |
 | Today gate strict | `off` — set to `on` to make a workable Today task block the backlog **always**, with no release at all. The one-switch rollback if the agent starts leaving Today too readily. |
-| Overnight Agent concurrency | `1` — how many items the agent may have **in flight** at once. At `1` it works one thing at a time; giving a task its own session is *isolation*, not permission to run several at once. Raising it does not make a run faster, it makes each result harder to check. **A bare whole number and nothing else** — put any explanation outside the cell, because a value like `2026-09-02: set to 1` does not parse and the agent falls back to `1`. |
+| Overnight Agent concurrency | `1` |
+| Overnight Agent start buffer | `5m` |
+
+**Concurrency is the drain width within each run, not a total-start quota.** At `1`, each completed
+task is followed by the next eligible prepared task; at `2`, either opening is refilled independently.
+The run stops sending at the next :00/:30 after its first prompt, **minus the start buffer**.
+At the default `5m`, a 10:30 next run means no new instruction at or after 10:25.
+Already-running tasks are left alone. Earlier tasks do not reserve the new run's openings.
+Human collect requests remain an explicit width exception, but never bypass pauses or the cutoff.
+Use a bare whole number for concurrency.
+
+**Start buffer:** whole minutes from `0` to `29`, optionally followed by `m`. `0m` disables the
+buffer. A missing row/file defaults to `5m`; an invalid value or unreadable existing file is
+reported and prevents a new drain from starting. The buffer is fixed when a run enrolls:
+changing it applies to new runs, never extends a running/reloaded run. This reduces overlap;
+it is not a task timeout or proof that a task finished within five minutes.
 
 **Raising the backstop makes the agent wait longer before giving up on a stuck Today task; lowering
 it makes it give up sooner.** Writing to the task *resets* the timer, so the agent can only ever
 delay this release, never trigger it.
 
-**Concurrency fails narrow on purpose.** A missing row, an unreadable file or a value the agent
-can't parse all give you `1` — never more. The agent starting what it can't finish before the next
-run is worse than it stopping early, so a broken setting can only make it take on *less*. If it
+**The drain width fails narrow on purpose.** A missing row, an unreadable file or a value the agent
+can't parse all give you `1` — never more. If it
 falls back, it says so in the run summary rather than quietly pretending you asked for `1`.
 
 > The third tunable — how long an "I'm out of work here" declaration stays valid — is deliberately

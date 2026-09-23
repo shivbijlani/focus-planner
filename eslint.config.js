@@ -27,6 +27,19 @@ export default defineConfig([
     },
   },
   {
+    files: [
+      'plugins/overnight-agent/checks/oa-dispatch*.mjs',
+      'plugins/overnight-agent/checks/mutcheck-drain.mjs',
+      'plugins/overnight-agent/extensions/task-dispatch/*.mjs',
+    ],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: globals.node,
+    },
+  },
+  {
     // Node-side Telegram bridge service (runs under Node, not the browser).
     files: ['packages/telegram-bridge/**/*.js'],
     languageOptions: {

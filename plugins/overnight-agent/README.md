@@ -6,7 +6,7 @@ task's journal, you *approve* it (or ask for revisions), and only an **approved*
 plan gets **executed**. Approval is the safety gate.
 
 This plugin packages the `overnight-agent` skill (its `SKILL.md`, helper
-PowerShell scripts, and a settings template) so it can be installed with one
+PowerShell scripts, native task-dispatch extension, and a settings template) so it can be installed with one
 command from the Focus Planner plugin marketplace.
 
 ## What's inside
@@ -67,6 +67,62 @@ Ask Copilot to "run the overnight agent", "propose plans for my tasks", or
 "execute approved plans". The skill's `SKILL.md` documents the full run flow
 (inbox check → execute approved plans → propose new plans behind the approval
 gate).
+
+### Continuously drain the prepared queue
+
+`Overnight Agent concurrency` is the number of normal instructions **from this run** that may
+be outstanding. At `1`, start one task, observe it finish, then start the next eligible task.
+At `2`, refill either opening independently. This is not a total-attempt quota: a run can finish
+many tasks. Earlier runs' tasks do not reserve this run's openings, and a later run may nudge a
+saved conversation again.
+
+The implementation assumes a half-hour schedule at **:00 and :30**. The launch cutoff is the next
+such boundary after the coordinator's first prompt **minus `Overnight Agent start buffer`**
+from `user-settings.md` (default **`5m`**). A 10:30 next run therefore stops new starts at **10:25**,
+not five minutes after a late tool call. At cutoff
+the old run stops sending; its outstanding task conversations are left alone. This bounds
+dispatch time, not task runtime or machine-wide concurrency. The five-minute example is never
+used to infer completion. Buffer values are whole minutes `0` through `29`, with optional `m`;
+`0m` disables it. Missing configuration defaults to five minutes. A malformed value or unreadable
+existing file is explicit and prevents a new drain; it never silently chooses a shorter buffer.
+
+The normal flow is **`oa_drain_status` → prepare/bind idle task sessions → scan and prepare
+approved briefs → `oa_drain` → `oa_drain_wait` / status**. The model supplies a batch of approved
+briefs and their exact `dispatch_input` fingerprints from that scan. Code owns queue selection,
+priority and pause rechecks, sending, completion observation, refill and cutoff. Changed inputs
+are rejected, not silently attached to an old brief. Each task is attempted at most once per run;
+unprepared tasks require more preparation rather than an invented plan. Deferred prepared tasks
+can become eligible as Today work finishes.
+
+The SDK extension runs the loop automatically; waiting/status calls do not drive it. The
+coordinator's `files/oa-drain.json` stores the queue, next run boundary, configured buffer/source,
+immutable cutoff and outcomes across tool
+reloads. An interrupted running/prepared queue resumes with the same cutoff, never a fresh window.
+Buffer edits take effect on new runs. An initial call already inside the buffer sends nothing;
+it does not roll forward to another half-hour. Old incompatible queue records are refused, not
+silently reset or migrated.
+The app must keep the coordinator host alive; its native completion tool is blocked while the
+drain is active. Closing the host stops the loop, and a restart recovers its saved state.
+
+**Accepted is not complete.** The sender adds a unique marker. Refill requires the target's
+matching interaction to have started and ended, followed by an app-idle reading. A started
+interaction at a human-input/plan gate is parked and releases its opening without another nudge.
+Unconfirmed delivery and unknown completion stay visible and hold only that run's opening until
+evidence arrives or cutoff. They do not reserve a later run's capacity. Observation is bounded to
+16 MiB per outstanding request and native app calls to 15 seconds or the remaining window.
+Remote event histories are unsupported and refused before sending. A known new local session
+may create its event log after its first instruction; absent history never means completed.
+
+After enrollment the pre-tool hook blocks raw native messages, create-with-kickoff, native
+launch/resume shortcuts and premature coordinator completion. Only the scheduler's exact
+one-use send is permitted, before cutoff. This is an operational native-tool guard, **not a
+sandbox against arbitrary shell/network code**. Unenrolled sessions are outside its scope.
+
+Today-first rules, saved conversations and pauses remain. Explicit human collect requests are
+the separately marked width exception, but never bypass pauses, input freshness or cutoff.
+Task-state writes remain locked/atomic because task agents can update them concurrently.
+`session -RunLimit` (legacy alias `-InFlight`) reads the width, not a global occupied-worker count.
+No live settings or old prototype state is automatically migrated or deleted.
 
 ### Is this issue already shipped?
 
