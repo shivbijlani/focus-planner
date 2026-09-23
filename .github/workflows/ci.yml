@@ -344,6 +344,32 @@ jobs:
       - name: Mutation check (a reply on work the USER closed is reported, never worked)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-reopened-closed.ps1
+
+  # A message from Shiv that no reader could see (GH #569).
+  #
+  # `reopened` and `unanswered_user` both read the region BELOW the agent's turn-end stamp,
+  # because that is where the Telegram bridge appends. The planner app writes his edits into
+  # his own space at the TOP of the file, above the sentinel -- structurally invisible to
+  # both, however recent. Measured live on task #472: row 1 of `## Today`, urgency red,
+  # carrying his list for that day, reported `eligible: false` / `not_workable` to every run,
+  # while `extract` listed the same text as a user message. Two readers of one file
+  # disagreeing is the shape this codebase already names as the thing to prevent.
+  #
+  # The arms are mostly about NOT firing, and that is deliberate. This flag widens
+  # workability, so the risk is not missing his message -- it is marking the whole board
+  # unanswered and becoming noise, at which point it is ignored and the surface is unguarded
+  # while appearing guarded. Three separate latching hazards were measured out of it during
+  # development (scanning the answered conversation: 119 of 267 rows; an inclusive same-day
+  # compare; treating a missing `last_turn_at` as unanswered: 18 rows). Each read as a
+  # plausible fix, each was wrong, and each has a fixture here that would fail if it returned.
+  above-sentinel-reply:
+    name: A reply in his own space is visible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (his space is read; nothing else latches)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-above-sentinel-reply.ps1
       - name: Mutation check (#245 -- an agent-declared done must not swallow his messages)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-agent-declared-done.ps1

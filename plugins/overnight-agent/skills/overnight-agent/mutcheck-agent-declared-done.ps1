@@ -373,7 +373,7 @@ Assert ($v1.eligible -ne $true) 'M1' 'the agent closing its own task silences #2
 
 # M2 - STANDING. Make the signal one-shot, so the re-snapshot at T+62s erases it. This is the
 #      arm that proves the compensating control actually compensates.
-$m2 = New-Mutant 'M2' '    unanswered_user    = [bool]$facts.HasTrailingHuman' '    unanswered_user    = $false'
+$m2 = New-Mutant 'M2' '    unanswered_user    = [bool]($facts.HasTrailingHuman -or $aboveSentinelReply)' '    unanswered_user    = $false'
 $sx2 = New-Sandbox 'm2'
 Initialize-Sandbox $m2 $sx2
 $v2 = Get-Row (Get-Rows $m2 $sx2) $Victim
