@@ -77,6 +77,122 @@ const IMPL = 'packages/telegram-bridge/src/bridge.js'
 const CITED = { [IMPL]: '// carry the ask in the pointer (GH #111)\nexport const x = 1\n' }
 const UNCITED = { [IMPL]: '// nothing named here\nexport const x = 1\n' }
 
+// ------------------------------------------------------- REFERENTIAL vs FIX (#639)
+//
+// The defect this section pins: the check used to ask only "does #N appear in
+// implementation source", so a comment RECALLING a past incident read exactly
+// like a comment FIXING the issue. Measured on the live backlog, 45 of the 102
+// open issues it called shipped are cited only referentially -- #442, which has
+// no implementation at all, among them. That is the dangerous direction: a false
+// `shipped` hides real work permanently, because nothing re-raises it.
+//
+// Every arm below is a VERBATIM line from the live repo, so these are
+// regression fixtures rather than invented strings. Each referential arm is
+// paired against an implementing arm in the same shape, because a rule that
+// called everything referential would pass the first half and be useless.
+{
+  const REFERENTIAL = [
+    // from run-sweeps.ps1 -- the line that defeated the previous attempt. The
+    // interposed date breaks "live ... on #442" adjacency, so any vocabulary
+    // matcher reads it as a fix; ONE such line carried the whole issue back.
+    ['# live 2026-08-30 on #442: 15,400 chars of agent prose inside a region', 442],
+    ['// Measured live on #442: the region the reader called human-authored', 442],
+    ['// Established 2026-08-30, after the gate was measured failing OPEN on live task #442.', 442],
+    ['// exactly the agent-programme cluster (#425, #442, #443, #399, #395 ...)', 442],
+    ['//   human marker above kept owning it -- to the end of the region. Measured on #442:', 442],
+    ['// advisory #433 warns about, and this file own header argues against', 433],
+    ['// This is distinct from the known *phrasing* bug (#433): here the marker exists,', 433],
+    ['// prose is one you stop reading (#433), and this one has to survive 400 journals.', 433],
+    ['// That is the failure this header warns about, quoting #433: an advisory that always', 433],
+    // position zero, but a WRAPPED SENTENCE rather than an annotation. This is
+    // why (b) insists on the trailing `:`/dash: without it, prose continuing
+    // from the line above reads as a fix.
+    ['// #433 warns about and the trap catchup-doc-sweep own header argues against.', 433]
+  ]
+  const IMPLEMENTING = [
+    ['// #588: bound but not yet written. Routine on the run a task is bound', 588],
+    ['// #588 \u2014 bound to a doc that no wake has written yet. Counted apart', 588],
+    [' * #588 \u2014 HAS THE BOUND DOC ACTUALLY BEEN WRITTEN?', 588],
+    ['// #620 \u2014 the notice now rides here rather than in a message of its own', 620],
+    ['// #620 \u2014 RETIRING THE SEPARATE NOTICE.', 620],
+    // trailing attribution closing a section header, and a divider tail
+    ['  G14 -- A QUESTION TO SHIV, DECLARED AS NOT NEEDING HIM (#618)', 618],
+    ['  # --- G14: the declared ask must not contradict its own question (#618) ----', 618],
+    // word tags
+    ['// Issue #549. On 2026-09-05 task #471 first catch-up doc was built by reading', 549],
+    ['# doc-encoding-invariant (added 2026-09-07, issue #549) \u2014 the THIRD surface', 549],
+    ['// issue-shipped.mjs -- GH #635', 635]
+  ]
+
+  let refBad = 0
+  for (const [line, n] of REFERENTIAL) {
+    const dir = makeRepo({ [IMPL]: `${line}\nexport const x = 1\n` })
+    const r = run(dir, [String(n)])
+    if (r.code !== 0) {
+      refBad++
+      console.log(`      line read as a FIX: ${line.slice(0, 72)}`)
+    }
+    rmSync(dir, { recursive: true, force: true })
+  }
+  say(refBad === 0, 'REFERENTIAL', `all ${REFERENTIAL.length} past-incident mentions read as unworked, not shipped`)
+
+  let implBad = 0
+  for (const [line, n] of IMPLEMENTING) {
+    const dir = makeRepo({ [IMPL]: `${line}\nexport const x = 1\n` })
+    const r = run(dir, [String(n)])
+    if (r.code !== 1) {
+      implBad++
+      console.log(`      attribution read as a mention: ${line.slice(0, 66)}`)
+    }
+    rmSync(dir, { recursive: true, force: true })
+  }
+  say(
+    implBad === 0,
+    'IMPLEMENTING',
+    `all ${IMPLEMENTING.length} attributions still read as shipped (the referential arm is not vacuous)`
+  )
+
+  // The two directions must be separable in ONE file, which is the realistic
+  // case: a file fixing #620 while recalling #442 is ordinary here.
+  {
+    const dir = makeRepo({
+      [IMPL]: '// #620 \u2014 the notice rides in the pointer\n// Measured live on #442: 15,473 chars\nexport const x = 1\n'
+    })
+    const shippedOne = run(dir, ['620'])
+    const otherOne = run(dir, ['442'])
+    say(
+      shippedOne.code === 1 && otherOne.code === 0,
+      'MIXED',
+      'one file, two citations: the fixed issue is shipped and the recalled one is not'
+    )
+    rmSync(dir, { recursive: true, force: true })
+  }
+
+  // The verdict must be per-LINE, not per-file: a single implementing line
+  // among referential ones still means shipped.
+  {
+    const dir = makeRepo({
+      [IMPL]: '// Measured live on #777: an old incident\n// more prose about #777 here\n// #777 \u2014 and here is the fix\n'
+    })
+    const r = run(dir, ['777'])
+    say(r.code === 1, 'PER-LINE', 'one implementing line among referential ones is enough to read shipped')
+    rmSync(dir, { recursive: true, force: true })
+  }
+
+  // And the reported reason must distinguish the two ways of being unworked,
+  // so a reader can tell "nobody mentioned it" from "mentioned, never fixed".
+  {
+    const dir = makeRepo({ [IMPL]: '// Measured live on #888: an old incident\n' })
+    const r = run(dir, ['888'])
+    say(
+      r.code === 0 && /only as a reference/.test(r.out),
+      'REASON',
+      'a referential-only issue says so, rather than looking like it was never mentioned'
+    )
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 // ------------------------------------------------------------------- EXIT 1 / EXIT 0
 {
   const cited = makeRepo(CITED)
