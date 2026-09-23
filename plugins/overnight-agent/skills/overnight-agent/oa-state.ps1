@@ -1840,6 +1840,90 @@ function Test-TrailingHasUser([string]$trailing) {
 # itself. A writer that forgets its marker fails closed (its text is `unknown`, which is not the
 # human), which is the requirement a convention cannot give.
 
+function Get-AboveSentinelRegion([string]$content) {
+  # #569: HIS space -- everything before the managed sentinel. The planner app writes his
+  # edits here, and nothing the agent writes lands above it.
+  #
+  # A journal with no sentinel yet (never touched by the agent) has no managed region, so
+  # the whole file is his. That is the right reading: there is no agent turn it could be
+  # older than.
+  if ([string]::IsNullOrEmpty($content)) { return '' }
+  $scan = Get-FenceMaskedText $content
+  $i = $scan.LastIndexOf('OVERNIGHT-AGENT do not edit')
+  if ($i -lt 0) { return $content }
+  return $content.Substring(0, $i)
+}
+
+function Get-NewestDatedHumanAbove([string]$region) {
+  <#
+    #569 -- WAS A MESSAGE FROM HIM WRITTEN ABOVE THE SENTINEL?
+
+    `reopened` and `unanswered_user` both read the region BELOW the agent's turn-end stamp,
+    because that is where the Telegram bridge appends. But the planner app writes his edits
+    into his own space at the TOP of the file, above the
+    `<!-- OVERNIGHT-AGENT ... -->` sentinel -- and a message there is structurally invisible
+    to both, however recent.
+
+    Measured live 2026-09-06 on task #472: row 1 of `## Today`, urgency red, carrying his
+    list for that day, and `scan` reported `reopened: false`, `unanswered_user: false`,
+    `eligible: false`, `today_release_reason: not_workable`. `extract` listed the same text
+    as a user message. Two readers of one file, disagreeing -- the shape this codebase
+    already names as the thing to prevent.
+
+    So the question becomes a TIMESTAMP one rather than a POSITION one: return the newest
+    date heading that governs a human-attributed block anywhere in this region, and let the
+    caller compare it with `last_turn_at`.
+
+    WHY A PARSEABLE DATE IS REQUIRED, against the issue's own suggestion to fail open.
+    -------------------------------------------------------------------------------
+    #569 proposes treating an undated or unparseable block as "he spoke", on the #170
+    reasoning that re-answering is cheap and dropping his instruction is not. That reasoning
+    is right for the region BELOW the stamp and wrong here, because of what lives above it:
+    EVERY journal opens with his original framing of the task, under `<!-- from: me -->`,
+    before any date heading. Counting that as a fresh message would mark every task on the
+    board reopened forever -- a permanent re-answer loop that no `mark` could quiet, which
+    is the hazard already recorded for `HasTrailingUser` and is worse than the miss.
+
+    It also contradicts the issue's own success criterion 3 ("a message older than
+    last_turn_at still reads quiet -- so `mark` still makes an answered task go silent").
+    An undated block can never be shown to be newer than anything.
+
+    The fail-open instinct is kept where it belongs: a block whose date parses but is
+    AMBIGUOUS relative to the turn (same day) counts as spoken, and the comparison below is
+    deliberately `>=` at day granularity rather than an exact timestamp.
+  #>
+  if ([string]::IsNullOrEmpty($region)) { return $null }
+
+  # Fence-masked for the reason Get-AuthorSegments gives: a `<!-- from: me -->` that exists
+  # only inside a quoted example must not be read as him speaking. Offsets are identical.
+  $scan = Get-FenceMaskedText $region
+
+  # Every date heading, with its offset, so each human marker can be attributed to the day
+  # heading it sits under.
+  $headings = @()
+  foreach ($m in [regex]::Matches($scan, '(?m)^[ \t]*##[ \t]+(\d{4})-(\d{2})-(\d{2})\b')) {
+    $headings += [pscustomobject]@{
+      Index = $m.Index
+      Date  = [datetime]::new([int]$m.Groups[1].Value, [int]$m.Groups[2].Value, [int]$m.Groups[3].Value)
+    }
+  }
+  if ($headings.Count -eq 0) { return $null }
+
+  $newest = $null
+  foreach ($m in [regex]::Matches($scan, $script:ProvenanceRe)) {
+    if ($m.Groups[1].Value.Trim() -ne $script:HumanAuthor) { continue }
+    # The nearest date heading ABOVE this marker owns it. A marker with no heading above it
+    # is the undated opening framing -- deliberately ignored, per the note above.
+    $owner = $null
+    foreach ($h in $headings) {
+      if ($h.Index -lt $m.Index) { $owner = $h } else { break }
+    }
+    if ($null -eq $owner) { continue }
+    if ($null -eq $newest -or $owner.Date -gt $newest) { $newest = $owner.Date }
+  }
+  return $newest
+}
+
 function Get-AuthorSegments([string]$region) {
   # Split a region into (author, text) segments by provenance marker.
   #
@@ -2085,6 +2169,18 @@ function Get-JournalFacts([string]$path) {
     FullHash        = Get-Sha256 $content
     AgentLeftHash   = Get-Sha256 $agentLeft     # file as the agent last left it (no trailing user prose)
     HasTrailingUser = (Test-TrailingHasUser $trailing)
+    # #569: the newest date heading governing a human block ABOVE the sentinel, or $null.
+    # Reported as a DATE rather than a boolean because recency is the whole question here --
+    # the caller compares it with `last_turn_at`, so `mark` still makes an answered task go
+    # quiet instead of the flag latching on forever.
+    #
+    # SCOPED TO THE SENTINEL, not to `$agentLeft`. `$agentLeft` is "the file as the agent last
+    # left it", i.e. everything before the TRAILING region -- which includes the whole managed
+    # conversation and every dated message in it. Measured while building this: scanning
+    # `$agentLeft` fired on 119 of 267 rows, because it re-read historical messages the agent
+    # had already answered. His own space is the region above the sentinel, and that is the
+    # region this question is about.
+    NewestHumanAbove = (Get-NewestDatedHumanAbove (Get-AboveSentinelRegion $content))
     # #501: the STANDING half of the same question -- a message the human provably wrote that no
     # agent turn has been written below yet. Derived from structure, so unlike `HasTrailingUser`
     # (which only becomes `reopened` when the hash also moved) it cannot be erased by
@@ -2870,6 +2966,9 @@ function Get-ScanRows {
     $poll = $null
     $recheck = $null
     $statusBy = 'agent'
+    # #569: set when a dated message from him sits ABOVE the sentinel and is not older than
+    # the last turn. Declared here so it is defined on every path, including the no-state one.
+    $aboveSentinelReply = $false
     $unansweredAt = $null
     if ($st) {
       $changed = ($facts.FullHash -ne $st.processed_file_hash)
@@ -2883,6 +2982,44 @@ function Get-ScanRows {
       if ($st.PSObject.Properties['status_by'] -and $st.status_by) { $statusBy = "$($st.status_by)".ToLowerInvariant() }
       if ($st.PSObject.Properties['unanswered_user_message_at'] -and $st.unanswered_user_message_at) {
         $unansweredAt = "$($st.unanswered_user_message_at)"
+      }
+
+      # --- #569: a message he wrote ABOVE the sentinel -------------------------------------
+      # Purely ADDITIVE. It can only turn these flags ON, never off, so every journal that
+      # works today keeps its exact verdict and only the structurally-invisible case changes.
+      #
+      # Compared at DAY granularity and STRICTLY NEWER. A `## YYYY-MM-DD` heading carries no
+      # time, so a message dated the SAME day as the turn cannot be shown to have come after
+      # it -- and treating it as unanswered re-fires on every message the agent already
+      # answered that day. Measured while building this: an inclusive comparison marked 119
+      # of 267 rows unanswered, which would make the flag noise and get it ignored, the exact
+      # failure mode this codebase records for a detector that cries wolf.
+      #
+      # The ordinary same-day reply is not lost: the bridge appends below the turn-end stamp,
+      # where `HasTrailingHuman` already reads it. This path exists for the case #569
+      # measured -- his edit landing in his own space while the newest turn is a day or more
+      # stale (#472: turn 09-05, his message 09-06).
+      #
+      # WIDENS WORKABILITY, NOT CONSENT. `consent` is a separate fail-CLOSED reader and is not
+      # touched here, so a false positive costs an unnecessary turn and can never authorise an
+      # irreversible action.
+      if ($facts.NewestHumanAbove) {
+        $turnDay = $null
+        if ($st.PSObject.Properties['last_turn_at'] -and $st.last_turn_at) {
+          $parsed = [datetime]::MinValue
+          if ([datetime]::TryParse("$($st.last_turn_at)", [ref]$parsed)) { $turnDay = $parsed.Date }
+        }
+        # A MISSING `last_turn_at` GRANTS NOTHING, and this is the third latching hazard this
+        # change had to be measured out of. Treating "no turn timestamp" as "he is unanswered"
+        # fires forever on every legacy state file that predates the field -- 18 rows, all of
+        # them with an empty `last_turn_at`, several with no dated human block at all. The
+        # flag is a RECENCY claim, so without a turn to be newer than there is nothing to
+        # claim, and the row is left to the readers that already handle it: a task whose agent
+        # never wrote a turn has no agent block and is proposable anyway.
+        if ($turnDay -and $facts.NewestHumanAbove -gt $turnDay) {
+          $reopened = $true
+          $aboveSentinelReply = $true
+        }
       }
     }
     else {
@@ -2968,7 +3105,11 @@ function Get-ScanRows {
       # Unlike `reopened` this does NOT depend on the hash having moved, so re-snapshotting the
       # journal cannot clear it -- which is precisely how #245's three messages disappeared.
       # It is re-reported on EVERY run until a turn answers it.
-      unanswered_user    = [bool]$facts.HasTrailingHuman
+      unanswered_user    = [bool]($facts.HasTrailingHuman -or $aboveSentinelReply)
+    # #569: WHERE the unanswered message is. `above-sentinel` is the case that was invisible
+    # to every reader until this shipped, so it is named rather than folded into a bare
+    # boolean -- a verdict a reader can audit beats one it has to trust.
+    unanswered_user_where = $(if ($facts.HasTrailingHuman) { 'below-turn' } elseif ($aboveSentinelReply) { 'above-sentinel' } else { '' })
       # When it was first seen unanswered, so the wrap-up can say HOW LONG it has been waiting.
       # Stamped by `mark`; null on a row whose message predates this field (the message is still
       # reported -- an unknown age must never be reported as no message).

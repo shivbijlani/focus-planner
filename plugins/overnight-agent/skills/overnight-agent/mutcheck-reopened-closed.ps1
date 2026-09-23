@@ -404,7 +404,7 @@ Assert ((Get-Row $rows7 '912').eligible -eq $true) 'M7_NARROW' 'while an in-prog
 #      journal's hash moved -- and #245 proves a `mark` 62 seconds later closes that window
 #      for good. This arm is what makes the fix survive a re-snapshot rather than merely
 #      survive the first scan after the reply.
-$m8 = New-Mutant 'M8' '    unanswered_user    = [bool]$facts.HasTrailingHuman' '    unanswered_user    = $false'
+$m8 = New-Mutant 'M8' '    unanswered_user    = [bool]($facts.HasTrailingHuman -or $aboveSentinelReply)' '    unanswered_user    = $false'
 $sx8 = New-Sandbox 'm8'
 Initialize-Sandbox $m8 $sx8
 # Re-mark 914 AFTER the reply landed: this is the #245 sequence exactly, and it is what erases
