@@ -102,8 +102,11 @@ console.log('  BRANCH-ONLY  $rel  [stub]')
 "@, $utf8)
 
 function Deploy([string[]]$Extra) {
+  # BackupRoot is explicit because $env:LOCALAPPDATA does not exist off Windows, and
+  # `Join-Path` with a null root is a binding error -- which made every arm here fail
+  # identically on the Linux runner while passing locally. Same host split as #632/#635.
   $argv = @($ScriptPath, '-Repo', $repo, '-Installed', $installed, '-ClassifierPath', $stub,
-            '-HistoryHelperPath', $helper) + $Extra
+            '-HistoryHelperPath', $helper, '-BackupRoot', (Join-Path $root 'backups')) + $Extra
   $out = (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File @argv 2>&1 | Out-String)
   return $out.Trim()
 }
@@ -143,7 +146,7 @@ Write-Host 'BLIND -- an ancestry check that cannot run must refuse, never procee
 [IO.File]::WriteAllText($instFile, $OLD, $utf8)
 $missingHelper = Join-Path $root 'no-such-helper.mjs'
 $argv = @($ScriptPath, '-Repo', $repo, '-Installed', $installed, '-ClassifierPath', $stub,
-          '-HistoryHelperPath', $missingHelper, '-Confirm')
+          '-HistoryHelperPath', $missingHelper, '-BackupRoot', (Join-Path $root 'backups'), '-Confirm')
 $blindOut = (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File @argv 2>&1 | Out-String).Trim()
 $blindAfter = [IO.File]::ReadAllText($instFile, $utf8)
 Assert ($blindOut -match '(?m)^\s*REFUSE\s') 'BLIND' 'without the helper the file stays refused (old behaviour)' $blindOut

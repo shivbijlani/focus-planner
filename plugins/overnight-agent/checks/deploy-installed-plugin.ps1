@@ -73,7 +73,10 @@ param(
   # The standalone path is the one #575 measured: a human or a sub-session running this
   # script directly gets no rescue phase, obeys a refusal that asserts the opposite of the
   # truth, and stops. That path is what the split fixes.
-  [switch]$NoAncestry
+  [switch]$NoAncestry,
+  # Where replaced files are backed up. Overridable so this script can run on a host with
+  # no %LOCALAPPDATA% (the Linux CI runner), where the default would be a null path.
+  [string]$BackupRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -81,10 +84,16 @@ $ErrorActionPreference = 'Stop'
 if (-not (Test-Path $Repo))      { throw "repo not found: $Repo" }
 if (-not (Test-Path $Installed)) { throw "installed plugin not found: $Installed" }
 
-$sweep = if ($ClassifierPath) { $ClassifierPath } else { Join-Path $env:LOCALAPPDATA 'overnight-agent\installed-skill-drift-sweep.mjs' }
-if (-not (Test-Path $sweep)) { throw "classifier not found: $sweep" }
+$sweep = if ($ClassifierPath) { $ClassifierPath } elseif ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'overnight-agent\installed-skill-drift-sweep.mjs' } else { '' }
+if (-not $sweep -or -not (Test-Path $sweep)) { throw "classifier not found: $sweep" }
 
-$backupRoot = Join-Path $env:LOCALAPPDATA ('overnight-agent\backups\deploy-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+# Where a replaced file is copied before it is overwritten. Overridable so the mutation
+# check can run on a host that has no %LOCALAPPDATA% -- `Join-Path` with a null root is a
+# binding error, so this line alone made the whole script unrunnable on the Linux CI
+# runner (the same host split #632 and #635 record).
+$backupRoot = if ($BackupRoot) { $BackupRoot }
+              elseif ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA ('overnight-agent\backups\deploy-' + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
+              else { Join-Path ([IO.Path]::GetTempPath()) ('oa-deploy-backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
 
 Write-Host "[deploy] ref       = $Ref"
 Write-Host "[deploy] repo      = $Repo"
