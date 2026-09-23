@@ -45,7 +45,7 @@
 // authority is the defect it is guarding against.
 
 import { spawnSync } from 'node:child_process'
-import { citationsFor, classifyPath, resolveRepo } from './issue-shipped.mjs'
+import { citationsFor, classifyPath, implementingFiles, resolveRepo } from './issue-shipped.mjs'
 
 // WHY THE CLASSIFIER IS IMPORTED RATHER THAN DEFINED HERE (GH #635)
 //
@@ -141,11 +141,24 @@ function main() {
     // `git grep 515` matches "$515-520", a price range in an unrelated fixture.
     const files = citationsFor(CWD, n)
     const kinds = new Set(files.map(classifyPath))
+    // #639: shipped means an implementation line CLAIMS TO FIX it, not merely
+    // that the number appears in implementation source. The census consumes the
+    // gate's definition for the reason stated at the top of this file -- two
+    // opinions about "shipped" would drift silently, both reporting confidently.
+    const impl = implementingFiles(CWD, n)
 
-    if (kinds.has('impl')) {
-      shipped.push({ n, title: issue.title, files, kinds: [...kinds] })
+    if (impl.length > 0) {
+      shipped.push({ n, title: issue.title, files, kinds: [...kinds], impl })
     } else {
-      unworked.push({ n, title: issue.title, weak: files.length > 0 ? [...kinds] : null })
+      unworked.push({
+        n,
+        title: issue.title,
+        weak: files.length > 0 ? [...kinds] : null,
+        // Cited in implementation source, yet nothing there claims to fix it.
+        // Surfaced separately: this is the population the old rule got wrong,
+        // and 45 of 102 issues it called shipped land here.
+        referentialOnly: kinds.has('impl')
+      })
     }
   }
 
@@ -159,10 +172,24 @@ function main() {
     console.log('These are OPEN but their fix is cited in implementation source.')
     console.log('Recommending one of these to a sub-session wastes the opening of a wake:')
     for (const s of shipped.sort((a, b) => b.n - a.n)) {
-      const impl = s.files.filter((f) => classifyPath(f) === 'impl').map((f) => f.replace(/^origin\/main:/, ''))
+      const impl = s.impl.map((f) => f.replace(/^origin\/main:/, ''))
       console.log(`  #${s.n}  ${s.title.slice(0, 74)}`)
       console.log(`         cited in: ${impl.slice(0, 3).join(', ')}${impl.length > 3 ? ` (+${impl.length - 3})` : ''}`)
     }
+    console.log('')
+  }
+
+  // #639: cited in implementation source but only as a past-incident reference.
+  // Named rather than folded into the silent majority, because this is the exact
+  // population the previous rule misreported as shipped.
+  const refOnly = unworked.filter((u) => u.referentialOnly)
+  if (refOnly.length) {
+    console.log('Cited in implementation source, but only REFERENTIALLY -- no line there')
+    console.log('claims to fix them, so they are safe to pick up (GH #639):')
+    for (const r of refOnly.sort((a, b) => b.n - a.n).slice(0, 12)) {
+      console.log(`  #${r.n}  ${r.title.slice(0, 70)}`)
+    }
+    if (refOnly.length > 12) console.log(`  ... and ${refOnly.length - 12} more`)
     console.log('')
   }
 

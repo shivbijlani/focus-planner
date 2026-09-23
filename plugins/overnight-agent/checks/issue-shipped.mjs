@@ -148,6 +148,90 @@ export function citationsFor(cwd, n) {
 }
 
 /**
+ * DOES THIS LINE CLAIM TO FIX #n, OR MERELY MENTION IT? (GH #639)
+ * ---------------------------------------------------------------
+ * The original check asked only "does #n appear in implementation source", and
+ * that is not the same question. This codebase deliberately cites past incidents
+ * in comments, so a number appears for two opposite reasons:
+ *
+ *   implementing  // #588 - DO NOT POINT AT A DOCUMENT NOBODY HAS WRITTEN.
+ *   referential   // Measured live 2026-08-30 on #442: the reader treated ...
+ *
+ * Measured on the live backlog: of 102 open issues the old rule called shipped,
+ * 45 are cited ONLY referentially. Two were proven wrong by hand -- #442, which
+ * has no implementation at all, and #433 -- and a run refusing to pick those up
+ * is a run that never starts real work. That is the dangerous direction: a false
+ * `unworked` wastes one look and recovers, a false `shipped` hides the work
+ * permanently, because nothing re-raises it.
+ *
+ * WHY POSITION, NOT VOCABULARY. The first attempt matched referential verbs
+ * ("measured", "warns", "argues") near the number. It lost to
+ * `# live 2026-08-30 on #442`, where an interposed date breaks the adjacency
+ * between "live" and "on #442" -- and ONE unmatched line out of eight carries the
+ * whole issue back to shipped. Position does not care what sits in between.
+ *
+ * An attribution appears in one of three shapes, all of them structural:
+ *   (a) a word tag        -- `GH #635`, `Issue #549`
+ *   (b) a leading annotation at the start of a comment, introducing what the
+ *       code below does -- `// #620 - the notice rides in the pointer`
+ *   (c) a trailing attribution closing a section header or divider --
+ *       `G14 -- A QUESTION TO SHIV, DECLARED AS NOT NEEDING HIM (#618)`
+ * Running prose does none of these; it embeds the number mid-sentence.
+ *
+ * (b) REQUIRES THE TRAILING `:` OR DASH, and that is not decoration. A wrapped
+ * sentence can also begin a line with the number --
+ * `// #433 warns about and the trap catchup-doc-sweep's own header argues` -- and
+ * position alone reads that as an annotation. The punctuation is what separates
+ * "here is the issue, here is what I did" from prose continuing from the line
+ * above.
+ *
+ * STATED LIMIT, as ever: this reads what the code CLAIMS, not what it does. A fix
+ * that shipped citing nothing still reads as unworked. That is the safe error.
+ */
+export function lineImplements(text, n) {
+  // (a) an explicit word tag. `GH #N` is this repo's file/section header
+  //     convention; `Issue #N` opens several sweep headers.
+  if (new RegExp(`\\b(?:GH|[Ii]ssue)\\s*#${n}(?![0-9])`).test(text)) return true
+  // (b) a leading annotation: the number opens the comment body and is followed
+  //     by `:`, a dash, or the end of the line.
+  if (
+    new RegExp(
+      `^\\s*(?://+|#+|\\*+|/\\*+|<!--)\\s*#${n}(?![0-9])\\s*(?:[:\\u2014\\u2013-]|$)`
+    ).test(text)
+  ) {
+    return true
+  }
+  // (c) a trailing attribution: `(#N)` as the last meaningful token, allowing a
+  //     divider tail (`---- `). A header names its issue at the end; prose that
+  //     happens to contain `(#N)` carries on past it.
+  if (new RegExp(`\\(#${n}\\)\\s*[-*/=\\s]*$`).test(text)) return true
+  return false
+}
+
+/**
+ * Implementation-path files whose citation of #n CLAIMS TO FIX IT (GH #639).
+ *
+ * `-n` rather than `-l`, because the verdict is now a property of the line and
+ * not of the file: one file legitimately holds both an annotation for the issue
+ * it fixes and a reference to an older one.
+ */
+export function implementingFiles(cwd, n) {
+  const g = gitIn(cwd, ['grep', '-n', '-E', `#${n}([^0-9]|$)`, 'origin/main', '--', ...REPO_PATHS])
+  if (g.code !== 0 || !g.out) return []
+  const hits = new Set()
+  for (const raw of g.out.split('\n').filter(Boolean)) {
+    // `origin/main:path:lineno:text` -- the text may itself contain colons, so
+    // split only the three leading fields.
+    const m = raw.match(/^[^:]*:([^:]+):\d+:([\s\S]*)$/)
+    if (!m) continue
+    const file = m[1]
+    if (classifyPath(file) !== 'impl') continue
+    if (lineImplements(m[2], n)) hits.add(file)
+  }
+  return [...hits]
+}
+
+/**
  * Classify issue numbers as shipped / unworked against source on origin/main.
  *
  * Returns { ok, reason, ref, results } where `ok:false` means NOT MEASURED --
@@ -171,11 +255,20 @@ export function classifyIssues(numbers, opts = {}) {
     if (!Number.isInteger(n) || n <= 0) continue
     const files = citationsFor(cwd, n).map((f) => f.replace(/^[^:]*:/, ''))
     const kinds = [...new Set(files.map(classifyPath))]
+    // #639: the verdict is the IMPLEMENTING set, not the citing set. `files` and
+    // `kinds` stay the full citation picture so the output can still show what
+    // was found and rejected -- a judgement a reader can disagree with beats one
+    // that is merely asserted.
+    const impl = implementingFiles(cwd, n)
     results.push({
       n,
-      shipped: kinds.includes('impl'),
+      shipped: impl.length > 0,
       kinds,
-      impl: files.filter((f) => classifyPath(f) === 'impl'),
+      impl,
+      // Cited in implementation source, but only as a reference to a past
+      // incident. Reported rather than dropped, because "mentioned everywhere
+      // and fixed nowhere" is exactly what misled the old rule.
+      referentialOnly: impl.length === 0 && kinds.includes('impl'),
       files
     })
   }
@@ -242,6 +335,9 @@ function cli(argv) {
       const cited = r.impl.slice(0, 3).join(', ')
       console.log(`  #${r.n}  SHIPPED -- do NOT pick up`)
       console.log(`        cited in: ${cited}${r.impl.length > 3 ? ` (+${r.impl.length - 3})` : ''}`)
+    } else if (r.referentialOnly) {
+      console.log(`  #${r.n}  unworked -- cited in implementation source, but only as a reference`)
+      console.log('        (a past-incident mention is not a fix -- GH #639)')
     } else if (r.files.length) {
       console.log(`  #${r.n}  unworked (cited only in [${r.kinds.join(',')}] -- not implementation)`)
     } else {
