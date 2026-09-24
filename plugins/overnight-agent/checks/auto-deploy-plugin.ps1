@@ -426,9 +426,24 @@ foreach ($rel in @($refused) + @($written)) {
   $historySeen[$rel] = $true
   $instFile = Join-Path $Installed ($rel -replace '/', '\')
   $repoPath = "$RepoPrefix/$rel"
-  if (Test-Path $instFile) {
-    $historyRows += [pscustomobject]@{ repoPath=$repoPath; installedFile=$instFile }
-  }
+  # INCLUDE PATHS THAT ARE NOT INSTALLED YET (#668 follow-up).
+  #
+  # This used to require `Test-Path $instFile`, which is right for the ancestry question --
+  # a file with no live bytes cannot be BEHIND or DIVERGENT -- but wrong for the SECOND
+  # consumer of this batch. `tipContent` from the same call is what the far-end verifier
+  # uses to prove the deployed bytes match the ref, and an ADDED file has no live copy at
+  # the moment the rows are built. It was therefore absent from tipContent, and
+  # verify-deployed-paths.mjs threw `missing expected content for <path>`.
+  #
+  # Measured 2026-09-24, deploying this very change: the run added
+  # `mutcheck-deploy-verdict.ps1`, verification threw, and auto-deploy exited 1 -- a HARD
+  # failure on a completely healthy deploy, and a different false alarm from the one #668
+  # is about. Every previous ADD hit this too; it only surfaces when a deploy actually adds
+  # a file, which is rare enough to look like a one-off.
+  #
+  # The ancestry side is unaffected: a path with no live bytes simply has no live hash to
+  # match, so it classifies exactly as before.
+  $historyRows += [pscustomobject]@{ repoPath=$repoPath; installedFile=$instFile }
 }
 
 $history = [pscustomobject]@{ matches=@{}; onTip=@{}; tipContent=@{} }
