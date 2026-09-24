@@ -370,6 +370,34 @@ jobs:
       - name: Mutation check (his space is read; nothing else latches)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-above-sentinel-reply.ps1
+
+  # PHASE 3 died naming nothing (GH #613).
+  #
+  # The Telegram mirror failed with "One or more errors occurred." / MIRROR_EXIT=1, and a
+  # second invocation printed NO OUTPUT AT ALL. The cause was the credential-vault read:
+  # `telegram-secret.ps1 get` calls `Add-Type -TypeDefinition`, which JIT-compiles C# and
+  # needs a burst of committed memory, and the box was at its commit limit (20.0 / 20.0 GB).
+  # Ten minutes later the identical call succeeded on attempt 1.
+  #
+  # Three defects, each fatal on its own: it was retryable and not retried; the message was
+  # an unwrapped AggregateException that named no step, no cause and no file (the #346 class,
+  # where a failure is indistinguishable from any other); and the fetch ran before the phase
+  # banner, so the failing run left a reader nothing to anchor on.
+  #
+  # The failure arms matter as much as the recovery arm: a retry that swallowed a genuine,
+  # permanent vault failure would be WORSE than the bug, because the phase would look healthy
+  # while posting nothing. So the suite asserts both directions.
+  #
+  # Hermetic: a stub vault that throws the real exception shape, synthetic settings and a stub
+  # bridge, driving the REAL wrapper with -WhatIf. No Telegram call, no live credential read.
+  mirror-token-retry:
+    name: Mirror survives a transient vault failure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (transient recovers, permanent fails loudly, both name the phase)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-mirror-token-retry.ps1
       - name: Mutation check (#245 -- an agent-declared done must not swallow his messages)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-agent-declared-done.ps1
