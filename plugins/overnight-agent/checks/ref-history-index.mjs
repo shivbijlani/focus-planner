@@ -107,7 +107,24 @@ const matches = {};
 const onTip = {};
 const tipContent = {};
 for (const [path, installedFile] of requested) {
-  const wanted = normHash(readFileSync(installedFile));
+  // A REQUESTED PATH MAY NOT EXIST ON DISK YET (#668 follow-up).
+  //
+  // Callers batch two questions here: "are these live bytes a historical version?"
+  // (`matches`) and "what does the ref tip hold?" (`tipContent`, used by the far-end
+  // verifier). An ADDED file has no live bytes at the moment the batch is built, but its
+  // tip content is exactly what the verifier needs -- so it must be requestable without
+  // a live copy.
+  //
+  // Reading it unconditionally threw ENOENT and took the whole deploy down with it.
+  // A missing file simply matches no historical version, which is the truthful answer:
+  // there are no live bytes to be a version OF.
+  let wanted = null;
+  try {
+    wanted = normHash(readFileSync(installedFile));
+  } catch {
+    matches[path] = false;
+    continue;
+  }
   matches[path] = (commitsByPath.get(path) || []).some((sha) => {
     const oid = oidByQuery.get(`${sha}:${path}`);
     return oid && hashByOid.get(oid) === wanted;
