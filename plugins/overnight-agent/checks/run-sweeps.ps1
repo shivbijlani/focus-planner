@@ -70,8 +70,31 @@ if (Test-Path $MirrorPs1) {
   if ($m) { $BridgeJs = $m.Matches[0].Groups[1].Value }
 }
 if (-not $BridgeJs) {
-  $BridgeJs = 'V:\repos\focus-planner.worktrees\oa-block-stray-marker\packages\telegram-bridge\bin\telegram-bridge.js'
-  Write-Warning "Could not read the bridge pin from run-telegram-mirror.ps1; using the built-in default."
+  # THE PIN COULD NOT BE READ. This used to fall through to a hard-coded default and carry
+  # on with a warning, and that is not safe: the default points at
+  # `focus-planner.worktrees\oa-block-stray-marker`, a RETIRED worktree that still exists on
+  # disk. So the preflight below passed and the whole suite ran against a stale bridge
+  # source, reporting normally -- measured 2026-09-24, after #613 made the assignment in
+  # run-telegram-mirror.ps1 conditional and therefore invisible to the regex above.
+  #
+  # A warning is not enough for this, because nothing downstream fails: every sweep still
+  # runs, still prints, and still exits 0. The only symptom is that the answers came from
+  # the wrong source, which is precisely the "success-shaped failure" class the suite exists
+  # to catch. Refusing here costs one loud run; carrying on costs a night of confident wrong
+  # results.
+  throw @"
+Could not read the bridge pin from run-telegram-mirror.ps1.
+
+  expected a line matching:  `$Bridge = '<path to telegram-bridge.js>'
+  in:                        $MirrorPs1
+
+That line is the single source of truth for BRIDGE_SRC. It must stay a PLAIN
+single-quoted literal on one line -- a conditional assignment is valid PowerShell and
+invisible to this reader, which silently redirects every sweep at a retired worktree.
+
+Refusing rather than falling back to the built-in default, because that default resolves
+to a retired worktree that still exists on disk, so nothing downstream would fail.
+"@
 }
 
 # bin\telegram-bridge.js -> ..\src

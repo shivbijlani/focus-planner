@@ -153,6 +153,49 @@ Assert ($a.out -match '\[mirror\] digest=') 'BANNER' 'the phase banner appears e
 Assert ($f.out -match '\[mirror\] digest=') 'BANNER2' 'and on the recovering run too (BANNER is not vacuous)' (D $f)
 
 Write-Host ''
+Write-Host 'THE PIN -- run-sweeps.ps1 reads this file by regex, so the line must stay readable'
+
+# MEASURED REGRESSION, 2026-09-24. This fix (#613) originally rewrote the bridge assignment
+# as `$Bridge = if ($BridgePath) { ... } else { '...' }` to add a test seam. That is correct
+# PowerShell and completely invisible to run-sweeps.ps1, which derives BRIDGE_SRC from this
+# exact file with `^\s*\$Bridge\s*=\s*'([^']+)'`.
+#
+# Nothing failed. run-sweeps.ps1 fell through to its built-in default, which points at a
+# RETIRED worktree that still exists on disk, so the preflight passed and every sweep ran
+# against a stale bridge source and reported normally. A wrong answer shaped exactly like a
+# right one -- the class this whole suite exists to catch, introduced by a change made to
+# improve testability.
+#
+# The lesson is the one this codebase keeps relearning: a rule that lives only in a comment
+# is prose. So the coupling is asserted here, against the REAL reader's REAL pattern, rather
+# than described above the line.
+$mirrorSrc = Get-Content $ScriptPath -Raw
+$pinRe = "(?m)^\s*\`$Bridge\s*=\s*'([^']+)'"
+$pinMatch = [regex]::Match($mirrorSrc, $pinRe)
+Assert $pinMatch.Success 'PIN' 'the bridge pin is a plain literal run-sweeps.ps1 can still read by regex' ($(if ($pinMatch.Success) { $pinMatch.Value.Trim() } else { 'NO MATCH -- run-sweeps.ps1 would silently use a retired worktree' }))
+Assert ($pinMatch.Success -and $pinMatch.Groups[1].Value -match 'telegram-bridge') 'PIN2' 'and it resolves to a telegram-bridge path, not to something else entirely' ($(if ($pinMatch.Success) { $pinMatch.Groups[1].Value } else { '(no pin)' }))
+
+# Paired with the arms above: the override must STILL work, or the readable form was bought
+# by giving up the testability the parameter exists for.
+Assert ($mirrorSrc -match '\$Bridge\s*=\s*\$BridgePath') 'PIN3' 'while the -BridgePath override still applies, on its own line (readable AND testable)' ''
+
+# And the REAL reader must agree, not just a copy of its pattern living here. Reading
+# run-sweeps.ps1's own regex out of its source and applying it is what stops these two
+# drifting apart silently -- the same "two readers of one file" failure #569 records.
+$sweeps = Join-Path (Split-Path -Parent $ScriptPath) 'run-sweeps.ps1'
+if (Test-Path $sweeps) {
+  $sweepSrc = Get-Content $sweeps -Raw
+  $readerRe = [regex]::Match($sweepSrc, "Select-String -Path \`$MirrorPs1 -Pattern ""([^""]+)""")
+  if ($readerRe.Success) {
+    $live = $readerRe.Groups[1].Value -replace '\`', ''
+    Assert ([regex]::IsMatch($mirrorSrc, $live, 'Multiline')) 'PIN4' "the reader's OWN live pattern matches this file (not just our copy of it)" $live
+  }
+  else {
+    Assert $false 'PIN4' "could not locate run-sweeps.ps1's pin reader -- the coupling is unverified" ''
+  }
+}
+
+Write-Host ''
 if ($script:fail -gt 0) {
   Write-Host ("FAILED: {0} arm(s) disagreed, {1} passed." -f $script:fail, $script:pass) -ForegroundColor Red
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
