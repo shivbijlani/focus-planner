@@ -784,6 +784,40 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-auto-deploy.ps1
 
+  # A CORRECT refusal announced as a deployment failure (GH #668).
+  #
+  # auto-deploy exits 2 when any of four independent facts needs a human, but only three are
+  # about DEPLOYMENT. The fourth -- the bridge CHECKOUT being dirty or off the ref -- is about
+  # a third working tree the script fast-forwards but does not deploy into. They shared one
+  # exit code and one sentence, so a dirty checkout was reported live, and to every overnight
+  # coordinator for days, as "DEPLOY NOT VERIFIED - merged code may not be running" while both
+  # copied targets read verified-current True, residual drift 0, 0 to write / 283 current.
+  #
+  # The code WAS installed. The only true fact was that another session had uncommitted work
+  # in the shared checkout, which the script rightly refused to fast-forward over. Acting on
+  # that false alarm cost a full sub-session wake chasing a timeout that was not there.
+  #
+  # THE QUIET DIRECTION IS THE DANGEROUS ONE. This change makes an alarm quieter, so the way
+  # it could do harm is by silencing the true one -- and it is the same sentence that has to
+  # be believed on the day a deploy really has failed. Every arm is therefore paired: the
+  # benign case must not claim a deployment failure, and a forced genuine failure must still
+  # print the original words and exit non-zero.
+  #
+  # The forced-failure arm mutates the real script IN PLACE and restores it in a `finally`,
+  # with a following arm asserting the subject is byte-identical afterwards: a copy in TEMP
+  # cannot resolve its sibling helpers, dies before the verdict, and proves nothing.
+  deploy-verdict:
+    name: Deploy verdict names which fact fired
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check (benign stays quiet, the real alarm is unchanged)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-deploy-verdict.ps1
+
   # A deploy refusal that asserts the OPPOSITE of the truth (GH #575).
   #
   # `BRANCH-ONLY` means "the installed bytes match some ref that is not origin/main", and
