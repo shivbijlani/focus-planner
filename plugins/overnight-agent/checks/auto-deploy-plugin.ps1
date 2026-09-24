@@ -771,11 +771,41 @@ try {
 }
 
 # --- 5. REPORT -----------------------------------------------------------------------
+# WHAT NEEDS A HUMAN, AND WHAT IT MEANS (#668)
+#
+# These four are independent facts and only the first two are about DEPLOYMENT:
+#
+#   escalate      a live fix refused on consecutive cycles       -> a human must decide
+#   -not verified a file on the ref is still absent installed    -> MERGED CODE IS NOT RUNNING
+#   oaHomeExit    the OA home sync could not finish clean        -> may not be running
+#   checkoutExit  the bridge CHECKOUT is dirty / not on the ref  -> about a third working tree
+#
+# `checkoutExit` fuses in here because PHASE 3 runs the bridge out of that tree, so it is
+# genuinely worth a human's attention. But it is NOT evidence that the deploy failed --
+# measured 2026-09-24: both copied targets reported `verified-current True`, residual drift
+# 0, `0 to write, 283 already current`, and the run still exited 2 and was reported to every
+# coordinator as "DEPLOY NOT VERIFIED - merged code may not be running". That sentence was
+# false: the code was installed and running. The only true fact was that ANOTHER session had
+# uncommitted supervisor work in the shared checkout, which this script rightly refused to
+# fast-forward over.
+#
+# An alarm that is wrong this reliably trains its readers to discount it -- and it is the
+# same sentence that must be believed on the day the deploy really has failed. So the exit
+# code is unchanged (a human is still needed) while the REPORTED VERDICT now names which of
+# the four fired. `deploymentOk` is the narrow claim a consumer should quote.
 $needsAttention = ($escalate.Count -gt 0) -or (-not $verified) -or ($oaHomeExit -ne 0) -or ($checkoutExit -ne 0)
+
+# TRUE when both copied deploy targets are current. Deliberately excludes the bridge
+# checkout: that is a working tree this script does not deploy INTO, it only fast-forwards.
+$deploymentOk = $verified -and ($oaHomeExit -eq 0) -and ($escalate.Count -eq 0)
 
 if ($Json) {
   [pscustomobject]@{
     ok              = -not $needsAttention
+    # #668: the narrow claim. `ok` answers "does a human need to look?", which is not the
+    # same question as "is the merged code installed?" -- and consumers were quoting the
+    # first while printing a sentence about the second.
+    deploymentOk    = $deploymentOk
     fetched         = $fetched
     ref             = $refSha
     deployed        = @($written)
@@ -796,6 +826,26 @@ if ($Json) {
   Write-Host ''
   Write-Note ("deployed {0}, removed {1}, refused {2}, residual drift {3}, verified-current {4}" -f `
               $written.Count, $removed.Count, $refused.Count, $residual.Count, $verified)
+
+  # #668: SAY WHICH FACT FIRED, in the deployment's own vocabulary.
+  #
+  # Without this line a reader sees exit 2 and reaches for the only sentence this script
+  # ever printed about failure -- "merged code may not be running" -- regardless of which
+  # of the four conditions actually tripped. Measured live: that sentence was relayed to
+  # coordinators for days while the deploy was complete and verified every single run.
+  #
+  # Printed unconditionally, including on the healthy path, for the same reason the bridge
+  # checkout row is: a verdict reported only on failure is one a reader cannot confirm was
+  # looked at.
+  if ($deploymentOk) {
+    Write-Note 'DEPLOYMENT OK - both copied targets are current; the merged code IS installed.'
+    if ($checkoutExit -ne 0) {
+      Write-Note 'ATTENTION is about the BRIDGE CHECKOUT below, not about this deployment.'
+    }
+  }
+  else {
+    Write-Note 'DEPLOYMENT NOT VERIFIED - a copied target is behind; merged code may not be running.'
+  }
   # The bridge checkout is stated unconditionally, including when it is clean. A surface
   # reported only on failure is one a reader cannot confirm was looked at, which is the
   # ambiguity #622 was filed about.
