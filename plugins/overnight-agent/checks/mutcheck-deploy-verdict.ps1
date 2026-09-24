@@ -63,6 +63,19 @@ function Assert([bool]$ok, [string]$name, [string]$why, [string]$detail = '') {
 $srcBytes = [IO.File]::ReadAllBytes($ScriptPath)
 $src = [IO.File]::ReadAllText($ScriptPath)
 
+# CAN THIS HOST RUN THE SUBJECT AT ALL?
+#
+# auto-deploy-plugin.ps1 deploys into a real OA home and a real installed-plugin tree, and
+# its defaults are built from %USERPROFILE% and %LOCALAPPDATA%. Off Windows those are null,
+# and `Join-Path` with a null root is a binding error, so the script dies before printing
+# anything -- including the verdict these arms are about.
+#
+# The SHAPE arms below read the source and are host-independent, so they still run
+# everywhere and are the ones that would catch the defect returning. The behavioural arms
+# are declared SKIP with a printed reason rather than being faked or quietly passing: a
+# skipped arm counted as a pass is the false green this suite exists to detect.
+$script:CanRunSubject = ($env:OS -eq 'Windows_NT') -or ($PSVersionTable.Platform -eq 'Win32NT') -or ($null -eq $PSVersionTable.Platform)
+
 Write-Host ''
 Write-Host 'SHAPE -- the verdict must be a separate fact from "does a human need to look?"'
 
@@ -75,6 +88,21 @@ Assert ($src -match 'deploymentOk\s*=\s*\$deploymentOk') 'JSON' 'and it is expos
 
 Write-Host ''
 Write-Host 'BENIGN -- a dirty third checkout must not be called a deployment failure'
+
+if (-not $script:CanRunSubject) {
+  Write-Host '  SKIP  BENIGN / GENUINE  -- auto-deploy needs a real OA home and installed tree'
+  Write-Host '        (%USERPROFILE% / %LOCALAPPDATA% are null off Windows, so the subject cannot start).'
+  Write-Host '        The SHAPE arms above are host-independent and did run.'
+  Write-Host ''
+  if ($script:fail -gt 0) {
+    Write-Host ("FAILED: {0} arm(s) disagreed, {1} passed." -f $script:fail, $script:pass) -ForegroundColor Red
+    Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+    exit 1
+  }
+  Write-Host ("OK: {0} structural arm(s) agreed; behavioural arms skipped on this host." -f $script:pass) -ForegroundColor Green
+  Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+  exit 0
+}
 
 function Run([string]$path) {
   # A GENEROUS BUDGET, on purpose. The default 60s is tuned for the nightly run, and on a
