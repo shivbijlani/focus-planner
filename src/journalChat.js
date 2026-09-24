@@ -204,9 +204,45 @@ export function parseJournalChat(content) {
 // approval typed in the app. The emitted shape is byte-identical to the Telegram
 // bridge's `appendUserReply`, so an approval reads the same from either channel.
 // Historical unmarked entries are never rewritten; only new text is stamped.
-export function appendJournalMessage(content, text, today = localISODate()) {
+/**
+ * Append a chat message to a journal.
+ *
+ * `author` decides the provenance marker, and it defaults to the human because the
+ * composer's overwhelmingly common caller IS the human typing in the app.
+ *
+ * WHY THIS IS A PARAMETER AT ALL (GH #641)
+ * ----------------------------------------
+ * An agent driving the UI writes through this same composer, and every entry landed
+ * stamped `<!-- from: me -->` — which means THE HUMAN. Agent prose then sits in the
+ * journal indistinguishable from something Shiv typed, in the file that is the consent
+ * and instruction channel. Worse, consecutive same-day entries merge into one bubble by
+ * design, so an agent note silently fuses into the same user-attributed block as anything
+ * he wrote that day.
+ *
+ * That is not cosmetic. `write-turn.ps1` refuses an unstamped turn on the explicit
+ * grounds that "an unstamped turn can be read back as his approval", and
+ * `oa-state.ps1 extract` splits the journal into user messages vs agent turns using
+ * exactly these markers, with later runs acting on the user-attributed text as
+ * instruction. The script path was airtight while the UI path wrote human-attributed
+ * text with no guard at all — measured live on task #483, where the agent's own inference
+ * about flight dates became, on disk, a constraint from Shiv.
+ *
+ * So attribution becomes POSITIVE (#442): a client says who it is, rather than
+ * provenance being inherited from which widget did the writing.
+ *
+ * The default stays `me` deliberately. Flipping it would silently re-attribute every
+ * existing caller, and a marker that is wrong in the other direction is just as bad —
+ * it would drop the user's real instructions out of the channel that reads them.
+ */
+export function appendJournalMessage(content, text, today = localISODate(), author = 'me') {
   const body = (content || '').replace(/\s+$/, '')
   const lines = body.split(/\r?\n/)
+  // The marker this write will claim. Normalised and validated: a marker is machine-read
+  // by several independent parsers, so an author string carrying a newline or `-->` could
+  // terminate the comment early and forge a different attribution downstream.
+  const who = String(author || 'me').trim().toLowerCase()
+  const safeWho = /^[a-z0-9][a-z0-9 _-]*$/.test(who) ? who : 'me'
+  const marker = safeWho === 'me' ? FROM_ME : `<!-- from: ${safeWho} -->`
   // Fenced lines are quoted text, not markup (#320) — a `## <date>` inside an example
   // must not be mistaken for the journal's newest day, which would merge today's message
   // under a heading that does not exist.
@@ -217,28 +253,34 @@ export function appendJournalMessage(content, text, today = localISODate()) {
     const m = lines[i].trim().match(DATE_RE)
     if (m) { lastDate = m[1]; break }
   }
-  // Whether a `<!-- from: me -->` marker still owns the end of the file. Any
+  // Whether a marker for THIS AUTHOR still owns the end of the file. Any
   // `## ` heading ends the previous marker's ownership, so only a marker that is
   // the last governing token can carry the new text's attribution. When one
   // does, merging under it is already attributed and needs no second marker.
+  //
+  // #641: this now tracks WHICH author owns the tail, not merely whether the tail is
+  // human-owned. Without that, an agent write following a human message would merge
+  // silently into his block — the exact fusion this issue reports, reached by a different
+  // route than the hardcoded marker.
   //
   // Fenced lines are skipped (#320): a marker quoted in an example is not a marker.
   // Reading one as real makes this writer conclude the text is already attributed and
   // omit the marker -- while the consent gate, which masks fences, sees unattributed
   // text and fails closed. The user's approval is then dropped by the disagreement
   // between the two readers rather than by either one being wrong on its own.
-  let attributed = false
+  let owner = null
   for (let i = 0; i < lines.length; i++) {
     if (attrMask[i]) continue
     const t = lines[i].trim()
     const fm = t.match(FROM_RE)
-    if (fm) { attributed = fm[1].toLowerCase() === 'me'; continue }
-    if (AGENT_SENTINEL_RE.test(t) || HEADING_RE.test(t)) attributed = false
+    if (fm) { owner = fm[1].trim().toLowerCase(); continue }
+    if (AGENT_SENTINEL_RE.test(t) || HEADING_RE.test(t)) owner = null
   }
+  const attributed = owner === safeWho
   let addition
-  if (lastDate !== today) addition = `\n\n## ${today}\n\n${FROM_ME}\n${text}`
+  if (lastDate !== today) addition = `\n\n## ${today}\n\n${marker}\n${text}`
   else if (attributed) addition = `\n${text}`
-  else addition = `\n\n${FROM_ME}\n${text}`
+  else addition = `\n\n${marker}\n${text}`
   return `${body}${addition}\n`
 }
 

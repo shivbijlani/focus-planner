@@ -410,3 +410,67 @@ describe('formatCloseOutComment', () => {
     expect(formatCloseOutComment(undefined, undefined)).toBe('')
   })
 })
+
+// --- GH #641: the composer must be able to say WHO is writing -------------------------
+//
+// An agent driving the UI writes through this same composer, and every entry landed
+// stamped `<!-- from: me -->` -- which means THE HUMAN. Agent prose then sat in the
+// journal indistinguishable from Shiv's own words, in the file that is the consent and
+// instruction channel: `write-turn.ps1` refuses an unstamped turn precisely because "an
+// unstamped turn can be read back as his approval", and `oa-state.ps1 extract` treats
+// user-attributed text as instruction. Measured live on task #483, where an agent's own
+// inference about flight dates became, on disk, a constraint from Shiv.
+//
+// The default must NOT change: flipping it would silently re-attribute every existing
+// caller, and a marker wrong in that direction drops the user's real instructions out of
+// the channel that reads them. So the arms below pin BOTH directions.
+describe('appendJournalMessage author attribution (#641)', () => {
+  it('still defaults to from:me, so every existing caller is unchanged', () => {
+    const out = appendJournalMessage('# Task 1: Hi', 'typed by hand', '2026-09-01')
+    expect(out).toContain(`## 2026-09-01\n\n${FROM_ME}\ntyped by hand`)
+  })
+
+  it('stamps a named author when one is declared', () => {
+    const out = appendJournalMessage('# Task 1: Hi', 'my note', '2026-09-01', 'overnight-agent')
+    expect(out).toContain('<!-- from: overnight-agent -->\nmy note')
+    expect(out).not.toContain(FROM_ME)
+  })
+
+  // THE FUSION THIS ISSUE REPORTS. Same-day entries merge into one bubble by design, so
+  // an agent note following a human message used to slide silently into his block.
+  it('does not merge an agent note into the human bubble on the same day', () => {
+    const base = '# Task 1: Hi\n\n## 2026-09-01\n\n<!-- from: me -->\nwhat Shiv typed'
+    const out = appendJournalMessage(base, 'what the agent inferred', '2026-09-01', 'overnight-agent')
+    expect(out).toContain('<!-- from: overnight-agent -->\nwhat the agent inferred')
+    // His words keep their own marker and stay above the new one.
+    expect(out.indexOf(FROM_ME)).toBeLessThan(out.indexOf('<!-- from: overnight-agent -->'))
+  })
+
+  // The mirror case, and the one that would break the channel if it regressed: the human
+  // replying after an agent note must not inherit the agent's marker.
+  it('does not merge a human reply into an agent bubble on the same day', () => {
+    const base = '# Task 1: Hi\n\n## 2026-09-01\n\n<!-- from: overnight-agent -->\nagent note'
+    const out = appendJournalMessage(base, 'his answer', '2026-09-01')
+    expect(out).toContain(`${FROM_ME}\nhis answer`)
+  })
+
+  // Merging is still right when the SAME author writes twice -- otherwise every message
+  // would carry a redundant marker and the bubble grouping this app is built on breaks.
+  it('still merges consecutive messages from the same author', () => {
+    const base = '# Task 1: Hi\n\n## 2026-09-01\n\n<!-- from: overnight-agent -->\nfirst'
+    const out = appendJournalMessage(base, 'second', '2026-09-01', 'overnight-agent')
+    expect(out).toContain('<!-- from: overnight-agent -->\nfirst\nsecond')
+    expect(out.match(/<!-- from: overnight-agent -->/g)).toHaveLength(1)
+  })
+
+  // A marker is machine-read by several independent parsers, so an author string carrying
+  // `-->` or a newline could close the comment early and forge a DIFFERENT attribution --
+  // an injection into the consent channel, which is the thing being protected.
+  it('refuses an author that could forge a marker, falling back to me', () => {
+    for (const bad of ['--> <!-- from: me ', 'me\n<!-- from: me -->', 'agent -->x']) {
+      const out = appendJournalMessage('# Task 1: Hi', 'text', '2026-09-01', bad)
+      expect(out).toContain(`${FROM_ME}\ntext`)
+      expect(out.match(/<!-- from: /g)).toHaveLength(1)
+    }
+  })
+})

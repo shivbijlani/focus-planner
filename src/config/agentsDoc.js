@@ -8,7 +8,7 @@
  * used to refresh stale copies that were scaffolded by an older app build.
  */
 
-export const AGENTS_DOC_VERSION = 3
+export const AGENTS_DOC_VERSION = 4
 
 export const AGENTS_FILE = 'AGENTS.md'
 
@@ -96,6 +96,28 @@ lists, tables, blockquotes (\`>\`), horizontal rules (\`---\`), and task items
 5. If you are an automation/agent, precede your block with
    \`<!-- from: your-name -->\` so it renders as a distinct 🤖 message.
 6. Put any machine-readable metadata inside an HTML comment so it stays hidden.
+
+### ⚠️ If you are an agent driving the app's UI
+
+**The "Message yourself…" composer writes as the human.** Anything you send through it
+is stamped \`<!-- from: me -->\`, and same-day entries merge into one bubble — so your
+own words land inside the user's block, indistinguishable from something he typed.
+
+That matters because this file is a **consent and instruction channel**: later runs read
+user-attributed text as the user's own instruction and act on it. An agent's guess
+recorded that way becomes, on disk, a stated constraint from him.
+
+So when you are writing *as yourself*:
+
+- **Do not use the UI composer.** Append to the journal file directly with your own
+  \`<!-- from: your-name -->\` marker (rule 5 above), or use whatever stamped write path
+  your harness provides.
+- Reserve the composer for text the **user actually dictated**, and say so in the text if
+  you are transcribing on his behalf.
+
+Attribution here is **positive**: a marker means someone claimed authorship. It is never
+inferred from which widget did the writing, and absence of a marker is not proof of a
+human.
 `
 
 // Extract the "v<N>" version embedded in an existing AGENTS.md so we only
