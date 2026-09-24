@@ -54,7 +54,27 @@ $PlannerPath = 'C:\Users\shiv\OneDrive\Apps\Focus Planner'
 $Settings    = if ($SettingsPath) { $SettingsPath } else { Join-Path $PlannerPath 'user-settings.md' }
 $ChatId      = '-1004310604015'
 $SecretTool  = if ($SecretToolPath) { $SecretToolPath } else { Join-Path $env:LOCALAPPDATA 'overnight-agent\secrets\telegram-secret.ps1' }
-$Bridge      = if ($BridgePath) { $BridgePath } else { 'V:\repos\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js' }
+
+# THE PINNED BRIDGE -- A PLAIN SINGLE-QUOTED LITERAL ON ONE LINE. DO NOT MAKE THIS
+# CONDITIONAL.
+#
+# `run-sweeps.ps1` treats this line as the single source of truth for the bridge pin and
+# reads it OUT OF THIS FILE BY REGEX: `^\s*\$Bridge\s*=\s*'([^']+)'`. Deriving it that way
+# is deliberate -- it means a rollback of the pin applies to the sweep suite automatically
+# instead of drifting into a second copy.
+#
+# MEASURED 2026-09-24, and it is the reason this comment exists. #613 briefly rewrote this
+# as `$Bridge = if ($BridgePath) { ... } else { '...' }`, which is correct PowerShell and
+# invisible to that regex. run-sweeps.ps1 then fell through to its built-in default, which
+# points at `focus-planner.worktrees\oa-block-stray-marker` -- a RETIRED worktree that still
+# exists on disk. So the preflight did not throw: the whole sweep suite simply ran against a
+# stale bridge source and reported normally. A wrong answer that looks exactly like a right
+# one, which is the defect class this repo keeps recording.
+#
+# The override still exists for tests; it is applied on the NEXT line so this one stays
+# machine-readable.
+$Bridge = 'V:\repos\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js'
+if ($BridgePath) { $Bridge = $BridgePath }
 
 if (-not (Test-Path $Settings)) { throw "user-settings.md not found at $Settings" }
 if (-not (Test-Path $Bridge))   { throw "bridge CLI not found at $Bridge" }
