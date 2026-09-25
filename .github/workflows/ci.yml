@@ -938,6 +938,46 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-declared-ask.ps1
 
+  # AN ASK THAT INSTRUCTS A GATE EDIT WHICH CANNOT WORK (GH #513).
+  #
+  # #491 one level up. That guard catches a turn advertising a REPLY WORD the consent reader
+  # rejects; this catches a turn advertising a GATE EDIT the consent reader ignores. Same shape
+  # -- Shiv does exactly what was asked and nothing changes -- but it fails on the
+  # safety-critical side.
+  #
+  # The floor stage in `Get-GateVerdict` runs first with `Scoped = $false`, deliberately: repo
+  # scope NARROWS a rule, and narrowing a prohibition removes protection. It also matches on the
+  # action KIND, so a floor rule naming an outcome blocks every action of that kind and no allow
+  # rule can carve an exception out of it. An ask saying "add this allow line and I'll proceed"
+  # on a floor-blocked action is therefore a promise the gate cannot keep.
+  #
+  # It has already cost a cycle. Task #463's ask named an exact line; measured against the real
+  # reader that line leaves the verdict `gate-floor-blocks`, and the only edit that flips it
+  # REMOVES the data-loss floor rule -- not "add one narrow permission" but "drop your only
+  # blanket protection against permanent data loss". Shiv had already replied `Done` once.
+  #
+  # THE MECHANISM ARMS DRIVE THE REAL `oa-state.ps1 consent` through `-GatePath`, so the claim
+  # "the requested edit cannot work" is measured here rather than quoted. They include the
+  # issue's row D: with the floor gone, the requested line contributes NOTHING -- same verdict,
+  # same deciding rule, which was the pre-existing YOLO grant. That is the case the issue's own
+  # first proposed check passed and should not have, so the guard must attribute a verdict change
+  # to the requested edit rather than merely observe that one happened.
+  #
+  # Most other arms prove the guard stays QUIET: an ordinary turn, a turn discussing the gate
+  # without instructing an edit, a turn that shows it ran the check, and a fenced example. A
+  # guard that fires on discussing the gate gets disabled, and then guards nothing.
+  #
+  # Hermetic: synthetic journals, gates, state dir and bodies under TEMP driving the REAL
+  # write-turn.ps1 and oa-state.ps1. No live store, no network, under pwsh on Linux.
+  gate-edit-ask:
+    name: A gate edit is not asked for until it is known to work
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (an unverified gate-edit ask is refused; discussion is not)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-gate-edit-ask.ps1
+
   # A SETTING SILENTLY ON ITS BUILT-IN DEFAULT (GH #579).
   #
   # oa-state.ps1's own .SETTINGS block promised that "`scan` reports the resolved values per

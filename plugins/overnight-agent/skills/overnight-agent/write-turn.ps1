@@ -727,6 +727,36 @@ function Test-TurnAsk([string]$Body) {
   is visible and Shiv can unpark it with one word, while a missed blocking question is
   silent and unbounded. `-DisableGuard G14` is the hatch for an author who means it.
 #>
+function Test-GateEditAsk([string]$Body) {
+  # #513: does this turn INSTRUCT an agent-gate edit, and does it show the edit was verified?
+  #
+  # Returns the offending line, or $null. Two independent narrowings keep it off ordinary prose,
+  # because a guard that fires on merely DISCUSSING the gate gets switched off within a week and
+  # the surface is then unguarded while appearing guarded:
+  #
+  #   1. the line must name the gate file or one of its two list headings, AND
+  #   2. the line must be INSTRUCTIONAL -- add/paste/put/append/copy/write/edit a line, or the
+  #      "once that line exists" construction #463 actually used.
+  #
+  # Fenced regions are masked first (#320): a turn DOCUMENTING this guard necessarily quotes an
+  # example of the bad ask, and reading a sample as the real thing is the defect this file has
+  # recorded before.
+  $scan = Get-FenceMaskedText $Body
+  # Verification is proven by naming the mechanism that performs it. `-GatePath` is the only way
+  # to evaluate a proposed gate without writing the real one, so a turn that has done the check
+  # has the word; a turn that has not, has not. Deliberately not a checkbox the author can tick
+  # -- it names the tool, and the tool is what makes the claim executable (#513's first comment).
+  if ($scan -match '(?i)-GatePath\b') { return $null }
+  $lines = $scan -split "`r?`n"
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    $l = $lines[$i]
+    if ($l -notmatch '(?i)agent-gate\.md|Do not gate these|Always ask\b') { continue }
+    if ($l -notmatch '(?i)\b(add|paste|put|append|copy|write|edit|insert)\b|once that line exists') { continue }
+    return [pscustomobject]@{ Line = ($i + 1); Text = $l.Trim() }
+  }
+  return $null
+}
+
 function Test-AskContradiction([string]$Body) {
   $lines = $Body -split "`r?`n"
   for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -1101,6 +1131,59 @@ function Test-TurnBody {
           '(duplicate it into the doc, never move it): "**Needs from you:** ...", "Reply `word`", ' +
           '"**Next:** ..." or "**Your call:** ...". Use -DisableGuard G11 for a genuinely informational turn')
       }
+    }
+  }
+
+  # --- G18: an ask that instructs a gate edit which cannot work (#513) -------------
+  #
+  # #491 (G16 above) is this one level down: it catches a turn advertising a REPLY WORD the
+  # consent reader rejects. This catches a turn advertising a GATE EDIT the consent reader
+  # ignores. Same shape -- Shiv does exactly what was asked and nothing changes -- but it fails
+  # on the safety-critical side.
+  #
+  # THE FLOOR CANNOT BE SCOPED, AND THAT IS CORRECT. `Get-GateVerdict` runs the floor stage
+  # first with `Scoped = $false`, because narrowing a prohibition removes protection. The floor
+  # also matches on the ACTION KIND via `$script:GateOutcomeKinds`, so any floor rule naming an
+  # outcome blocks every action of that kind. No allow rule, however narrowly worded, can carve
+  # an exception out of it.
+  #
+  # So an ask saying "paste this line into **Do not gate these** and I'll proceed" is a promise
+  # the gate cannot keep. Measured live on #513: the exact line task #463 asked for leaves the
+  # verdict at `gate-floor-blocks`, and the only edit that flips it is REMOVING the data-loss
+  # floor rule entirely -- which is not "add one narrow permission", it is "drop your only
+  # blanket protection against permanent data loss across the whole repo". The ask presented the
+  # second as the first, and Shiv had already replied `Done` once on an edit that could not work.
+  #
+  # WHAT THIS REFUSES, AND WHY IT IS A PROMPT RATHER THAN A VERDICT. This script cannot evaluate
+  # the proposed gate itself: doing so means writing a candidate gate file and running the real
+  # `consent -GatePath <temp>` reader, which is a second process and a filesystem write from
+  # inside a guard whose job is to be cheap and pure. What it CAN do is refuse the turn until the
+  # author says they performed that check, because the failure this prevents is not a subtle
+  # mis-evaluation -- it is nobody evaluating at all.
+  #
+  # THE CHECK THE AUTHOR MUST HAVE DONE is the corrected one from the issue's own second comment,
+  # and the correction matters: comparing the proposed gate against TODAY'S gate passes a
+  # compound ask whose requested line contributes nothing (measured -- "floor removed + line" and
+  # "floor removed alone" are identical verdicts, both decided by the pre-existing YOLO rule). So
+  # the comparison is the proposed gate WITH the requested edit against the proposed gate
+  # WITHOUT it. The guard must attribute the verdict change to the requested edit, not merely
+  # observe that a verdict changed.
+  if (& $on 'G18') {
+    $gateAsk = Test-GateEditAsk -Body $Body
+    if ($gateAsk) {
+      $findings += New-Finding 'G18' $gateAsk.Line $gateAsk.Text (
+        'this turn asks Shiv to edit `agent-gate.md`, and nothing here shows the edit was ' +
+        'verified to work. The floor is matched by action KIND and cannot be scoped, so no ' +
+        'allow rule can create an exception to it -- an ask to add an allow line for a ' +
+        'floor-blocked action is a promise the gate cannot keep, and he has already spent a ' +
+        'cycle doing exactly that (#513). Verify it first: write the PROPOSED gate to a temp ' +
+        'file and run `oa-state.ps1 consent -Id <id> -Action <kind> -Repo <repo> -GatePath ' +
+        '<temp>`, then run it again with the requested edit OMITTED from that same proposed ' +
+        'gate. If the two verdicts match, the line you are asking for contributes nothing and ' +
+        'the ask is false however green it looks. Record the result in the turn -- the word ' +
+        '`-GatePath` is what this guard looks for -- and if the only working edit is removing ' +
+        'a floor rule, say so in those words and name what it exposes. `-DisableGuard G18` ' +
+        'for a turn that discusses the gate without instructing an edit')
     }
   }
 
