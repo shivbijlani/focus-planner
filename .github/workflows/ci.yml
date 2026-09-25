@@ -938,6 +938,36 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-declared-ask.ps1
 
+  # A COUNT PUBLISHED WITHOUT THE READ BEHIND IT (GH #593).
+  #
+  # `scan` carried `doc_new_comments` but not the freshness of the observation that produced it,
+  # so on the one worklist a run actually reads, three different realities were byte-identical:
+  # observed 30 seconds ago and genuinely empty; last observed 5 days ago with comments since;
+  # and never observed in the task's life. All three printed `doc_new_comments: 0`.
+  #
+  # This matters most exactly where nobody looks. A parked task -- `proposed`, `blocked`,
+  # waiting on Shiv -- is simultaneously the task MOST likely to receive a comment from him,
+  # because it is the one waiting on his word, and the LEAST likely to be selected and
+  # therefore polled. Measured when the issue was filed, all 76 bound channels were fresh and
+  # the defect was latent; measured on the day this shipped, 44 of 106 were stale.
+  #
+  # The guard is the one the issue itself specifies: a never-observed and a freshly-observed
+  # EMPTY channel must produce DIFFERENT scan rows, and the arm to kill is the one that
+  # collapses them back to a bare `0`. `unread` and `stale` are pinned apart too -- a channel
+  # never read has no evidence, one read four hours ago has evidence that expired, and merging
+  # them is how "never observed" hid inside a measured-looking number.
+  #
+  # Hermetic: synthetic journals, state, board and snooze store under TEMP driving the REAL
+  # oa-state.ps1. `scan` is offline by design, so no arm here touches Google or the network.
+  doc-channel-provenance:
+    name: A count is published with the read that produced it
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (never-observed and observed-empty are distinguishable)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-channel-provenance.ps1
+
   # A PAUSE BINDS SELECTION BUT NOT WORK (GH #627).
   #
   # Dispatch already refuses to wake a task the user paused. Nothing re-checked that for a

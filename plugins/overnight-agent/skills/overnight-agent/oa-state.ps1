@@ -2649,6 +2649,45 @@ $script:ClosedStatus = @('done', 'skip')
 # because the agent proposing a plan is also `proposed`.
 $script:PausedStatus = @($script:NonWorkableStatus | Where-Object { $script:ClosedStatus -notcontains $_ })
 
+# GH #593. How long a `doc -Observe` stays evidence that a channel is quiet.
+#
+# THIS CONSTANT IS DEFINED HERE BECAUSE THREE FILES ALREADY SAY IT IS. `catchup-doc-sweep.mjs`,
+# `observe-bound-docs.mjs` and `run-sweeps.ps1` each cite `$script:DocObservationFreshMinutes`
+# by name, describing it as "oa-state.ps1's own freshness rule" and "the system's OWN" -- and it
+# did not exist in this file. Each of them carried its own literal 180 while documenting itself
+# as deferring to a shared definition, which is the worst of both: three copies that read as
+# one, so changing "the" threshold would have moved one of them and silently left two behind.
+# Defining it where they already point makes the deference real.
+#
+# 180 minutes is their value, adopted rather than chosen, so arming this changes no behaviour
+# anywhere. Overridable for the same reason the sweep allows OA_DOC_FRESH_MINUTES: a mutation
+# arm has to be able to make a fresh observation stale without waiting three hours.
+$script:DocObservationFreshMinutes = if ($env:OA_DOC_FRESH_MINUTES) { [int]$env:OA_DOC_FRESH_MINUTES } else { 180 }
+
+# The provenance verdict for one doc channel, as a word rather than as an absent number.
+#
+# #593's defect in one line: `doc_new_comments: 0` means "checked, he said nothing", "last
+# checked five days ago", and "never checked in this task's life" -- identically, on the one
+# worklist a run actually reads. A count is only as good as the read behind it, and the row
+# carried the count without the read.
+#
+# `unread` is deliberately its own word rather than a very old `stale`. A channel that has never
+# been read has no evidence either way; one read four hours ago has evidence that has merely
+# expired. They justify different actions, and collapsing them is how "never observed" hid
+# inside a number that looked measured.
+function Get-DocChannelState($doc) {
+  if (-not $doc -or -not "$($doc.doc_id)") { return $null }
+  $observed = "$($doc.observed_at)"
+  if (-not $observed) { return 'unread' }
+  $parsed = [datetime]::MinValue
+  # An unparseable stamp is NOT fresh. It is a stamp nobody can evaluate, and reading it as
+  # current would manufacture exactly the false confidence this field exists to remove.
+  if (-not [datetime]::TryParse($observed, [ref]$parsed)) { return 'unread' }
+  $age = ([datetime]::Now - $parsed.ToLocalTime()).TotalMinutes
+  if ($age -ge $script:DocObservationFreshMinutes) { return 'stale' }
+  return 'fresh'
+}
+
 # WHO closed it (#501). `$script:ClosedStatus` names the closed STATUSES; this names the closed
 # TASKS, and the two are not the same set -- which is the whole bug.
 #
@@ -3146,6 +3185,25 @@ function Get-ScanRows {
       # user has said something on the doc that this run has not answered -- the doc-surface
       # analogue of `reopened`.
       doc_new_comments = if ($docFacts.doc) { @($docFacts.doc.pending_ids).Count } else { 0 }
+      # #593: the READ behind that number, on the same row as the number.
+      #
+      # `doc_observed_at` is the timestamp already in state, passed through verbatim -- it was
+      # returned by `doc -Id <n>` and by nothing the worklist reads. `doc_channel` is the
+      # verdict: `fresh` (checked recently, so a 0 was earned), `stale` (checked, but long
+      # enough ago that the 0 is no longer evidence), `unread` (never checked in this task's
+      # life), or `$null` when there is no channel to check.
+      #
+      # WHY THIS MATTERS MOST ON THE ROWS NOBODY SELECTS. A parked task -- `proposed`,
+      # `blocked`, waiting on Shiv -- is simultaneously the task MOST likely to receive a
+      # comment from him, because it is the one waiting on his word, and the LEAST likely to be
+      # selected and therefore polled. A comment there is exactly the event that should reopen
+      # it, and today it lands on a channel whose staleness is invisible.
+      #
+      # `scan` stays OFFLINE: this reads the stored stamp and never calls Google. The point is
+      # not to refresh the channel here, it is that the worklist can tell whether someone else
+      # did.
+      doc_observed_at = if ($docFacts.doc -and "$($docFacts.doc.observed_at)") { "$($docFacts.doc.observed_at)" } else { $null }
+      doc_channel     = (Get-DocChannelState $docFacts.doc)
       # #404: the per-task session, on the SAME worklist as everything else, for the reason #423
       # gives -- a binding that lives on a second list the run has to remember to consult is a
       # binding the run will forget. READ-ONLY here: `scan` reports the verdict, and only the
@@ -3238,6 +3296,21 @@ function Get-ScanRows {
   foreach ($r in $rows) {
     if (-not $r.PSObject.Properties['has_journal']) {
       Add-Member -InputObject $r -NotePropertyName 'has_journal' -NotePropertyValue $true -Force
+    }
+  }
+
+  # #593, and the same rule one line above states: a field that is ABSENT on some rows cannot be
+  # read as a verdict on any of them. The #534 synthesised rows (on the board, no journal yet)
+  # carry no doc fields at all, so without this `doc_channel` would be missing exactly where a
+  # reader is most likely to be checking whether a channel was polled. Filled explicitly as
+  # "no channel" rather than left out, because the entire point of this field is that absence
+  # must stop being a silent answer.
+  foreach ($r in $rows) {
+    if (-not $r.PSObject.Properties['doc_observed_at']) {
+      Add-Member -InputObject $r -NotePropertyName 'doc_observed_at' -NotePropertyValue $null -Force
+    }
+    if (-not $r.PSObject.Properties['doc_channel']) {
+      Add-Member -InputObject $r -NotePropertyName 'doc_channel' -NotePropertyValue $null -Force
     }
   }
 
