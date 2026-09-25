@@ -423,10 +423,16 @@
 
 .SETTINGS (which values the user owns)
   Most parameters here are paths the agent passes in. TWO are read from `user-settings.md` by
-  THIS SCRIPT instead, under `## Overnight Agent behaviour`:
+  THIS SCRIPT instead, as `| Setting | Value |` rows anywhere in the file:
 
     Today gate backstop   hours, default 6, accepts `off`   -> -TodayGateBackstopHours
     Today gate strict     on|off, default off               -> -TodayGateStrict
+
+  ANYWHERE IN THE FILE is the literal rule, corrected here rather than restated (GH #579). This
+  block used to say the rows live "under `## Overnight Agent behaviour`". That section has never
+  existed in the live settings file, and `Get-SettingRow` does not look at headings at all -- it
+  matches the row by its name wherever it appears. A user following the old sentence would have
+  created a section that changes nothing, which is worse than no instruction.
 
   Read here rather than passed in, on purpose. A forgotten PATH argument fails loudly -- the
   journal folder is not found and the run stops. A forgotten NUMBER fails SILENTLY: the gate uses
@@ -438,7 +444,11 @@
   default. An absent, unreadable, empty or malformed settings file yields the built-in defaults
   EXACTLY -- a settings file can change a value that is already in service, but can never be the
   reason the gate stops working. `scan` reports the resolved values per Today row
-  (`gate_backstop_hours`, `gate_strict`), so a configured value that is not applying is visible.
+  (`gate_backstop_hours`, `gate_strict`) AND where each came from (`gate_backstop_source`,
+  `gate_strict_source`: `default`/`settings`/`settings-malformed`/`argument`), so a configured
+  value that is not applying is visible. The source is what makes that sentence true: the value
+  alone cannot distinguish "you configured 6" from "nothing is configured and 6 is built in",
+  and measured 2026-09-25 all three user-owned controls were in the second state.
 
   The exhaustion TTL is deliberately NOT exposed: it currently governs both how long a
   declaration survives and how recently a turn must have been written to make one, so raising it
@@ -712,6 +722,24 @@ function Resolve-GateSettings {
 
   $backstop = $script:GateDefaults.BackstopHours
   $strict = $script:GateDefaults.Strict
+  # GH #579: WHERE each value came from, not just what it is.
+  #
+  # The .SETTINGS block above promised that "`scan` reports the resolved values per Today row
+  # (`gate_backstop_hours`, `gate_strict`), so a configured value that is not applying is
+  # visible." It reported the VALUE and not its SOURCE, which does not deliver that: a row
+  # reading `gate_backstop_hours: 6` means either "you configured 6" or "nothing is configured
+  # and 6 is the built-in", and those are the two cases the sentence exists to separate.
+  #
+  # Measured live 2026-09-25: `Today gate backstop`, `Today gate strict` and `Overnight Agent
+  # concurrency` are ALL absent from user-settings.md, so all three controls are on built-in
+  # defaults -- and only concurrency said so, through `concurrency_source`.
+  #
+  # Same vocabulary as `$script:ConcurrencySource`, deliberately, so one word means one thing
+  # across every setting this script resolves: `default` (nothing configured), `settings` (read
+  # from the file), `settings-malformed` (a row exists and does not parse), `argument` (an
+  # explicit command-line value outranks the file).
+  $backstopSource = 'default'
+  $strictSource = 'default'
 
   if (-not ($explicitBackstop -and $explicitStrict)) {
     $path = Get-UserSettingsPath
@@ -725,24 +753,38 @@ function Resolve-GateSettings {
         if ($v) {
           # Accepts `6`, `6h`, `6 hours`, `off`. Anything else is ignored rather than guessed at,
           # because a typo must not silently disable a safety backstop.
-          if ($v -match '^(?i)(off|none|disabled)$') { $backstop = 0 }
-          elseif ($v -match '^\s*(\d+)') { $backstop = [int]$Matches[1] }
+          #
+          # An ignored row is now REPORTED rather than merely ignored, which is the whole point
+          # of #579: falling through to the default was indistinguishable from never having
+          # configured it, so a typo looked exactly like an unset control.
+          $backstopSource = 'settings-malformed'
+          if ($v -match '^(?i)(off|none|disabled)$') { $backstop = 0; $backstopSource = 'settings' }
+          elseif ($v -match '^\s*(\d+)') { $backstop = [int]$Matches[1]; $backstopSource = 'settings' }
         }
         $s = Get-SettingRow $text 'Today gate strict'
-        if ($s -match '^(?i)(on|yes|true)$') { $strict = $true }
+        if ($null -ne $s -and $s -ne '') {
+          # Both directions are a CONFIGURED value. Reading only the on-spellings meant `off`
+          # resolved to false through the default path, so a user who deliberately turned strict
+          # off was reported identically to one who had never heard of the setting.
+          $strictSource = 'settings-malformed'
+          if ($s -match '^(?i)(on|yes|true)$') { $strict = $true; $strictSource = 'settings' }
+          elseif ($s -match '^(?i)(off|no|false)$') { $strict = $false; $strictSource = 'settings' }
+        }
       }
     }
   }
 
-  if (-not $explicitBackstop) { $script:BackstopHours = $backstop } else { $script:BackstopHours = $TodayGateBackstopHours }
+  if (-not $explicitBackstop) { $script:BackstopHours = $backstop } else { $script:BackstopHours = $TodayGateBackstopHours; $backstopSource = 'argument' }
   # The legacy `-TodayServedMinutes 0` spelling still forces strict, whatever the file says: it is
   # an explicit instruction on the command line and outranks a stored preference.
-  if ($explicitStrict) { $script:GateStrict = [bool]$TodayGateStrict }
+  if ($explicitStrict) { $script:GateStrict = [bool]$TodayGateStrict; $strictSource = 'argument' }
   else { $script:GateStrict = [bool]$strict }
-  if ($TodayServedMinutes -eq 0) { $script:GateStrict = $true }
+  if ($TodayServedMinutes -eq 0) { $script:GateStrict = $true; $strictSource = 'argument' }
   # A negative backstop is the "not specified" sentinel leaking through an explicit -1; treat it
   # as the default rather than as "never fires", so the sentinel can never disable the backstop.
-  if ($script:BackstopHours -lt 0) { $script:BackstopHours = $script:GateDefaults.BackstopHours }
+  if ($script:BackstopHours -lt 0) { $script:BackstopHours = $script:GateDefaults.BackstopHours; $backstopSource = 'default' }
+  $script:BackstopSource = $backstopSource
+  $script:GateStrictSource = $strictSource
 }
 
 # --- Pacing: the concurrency tunable (#391, read here for #404) ----------------------------
@@ -3393,6 +3435,11 @@ function Get-ScanRows {
     if ($r.section -eq 'today') {
       Add-Member -InputObject $r -NotePropertyName 'gate_backstop_hours' -NotePropertyValue ([int]$script:BackstopHours) -Force
       Add-Member -InputObject $r -NotePropertyName 'gate_strict' -NotePropertyValue ([bool]$script:GateStrict) -Force
+      # #579: the value WITH its provenance, which is what makes "a configured value that is not
+      # applying is visible" true rather than intended. `default` here means the control was never
+      # configured -- a distinct fact from `settings`, and the one three live controls are in.
+      Add-Member -InputObject $r -NotePropertyName 'gate_backstop_source' -NotePropertyValue "$script:BackstopSource" -Force
+      Add-Member -InputObject $r -NotePropertyName 'gate_strict_source' -NotePropertyValue "$script:GateStrictSource" -Force
     }
   }
 
