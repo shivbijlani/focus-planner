@@ -195,10 +195,25 @@ $OA_HOME = if ($env:WRITE_TURN_OA_HOME) { $env:WRITE_TURN_OA_HOME } else { Join-
 $script:IssueResolver = if ($env:WRITE_TURN_ISSUE_RESOLVER) { $env:WRITE_TURN_ISSUE_RESOLVER }
                         else { [IO.Path]::Combine($PSScriptRoot, '..', '..', 'checks', 'issue-shipped.mjs') }
 
+# --- #627 the user pause, read on the WRITE side -----------------------------------------
+# Kept in step with `$script:PausedStatus` in oa-state.ps1, which is derived there as
+# NonWorkableStatus minus ClosedStatus. Written out literally rather than recomputed, because
+# this script has neither set -- and pinned against oa-state's derivation by an arm in
+# mutcheck-user-pause-write.ps1, so the two cannot drift apart unnoticed.
+#
+# `done`/`skip` are deliberately NOT here. They are CLOSED, not paused, and the turn that
+# reports a task finished is legitimately written to a row that has just been marked done.
+$script:PausedStatusWT = @('proposed', 'blocked')
+
 # Set by G15 when it could not classify. Printed as an advisory rather than swallowed,
 # because the defect class this whole guard belongs to is a check that cannot see reporting
 # the same shape as a check that looked and found nothing (#520, #632).
 $script:G15Note = $null
+
+# Set by G17 when the task's state file exists but could not be read. Same rule as G15Note:
+# a guard that could not look says so rather than passing quietly.
+$script:PauseAdvisory = $null
+$script:PauseVerdict = $null
 
 # --- #473 one-turn-per-wake ------------------------------------------------------------
 # A managed agent turn heading. Deliberately the SAME shape oa-state.ps1's ManagedHeadingRe
@@ -306,6 +321,76 @@ function Get-JournalDocMeta([string]$path) {
   [pscustomobject]@{
     doc_id  = $m.Groups['id'].Value
     doc_url = if ($m.Groups['url'].Success) { $m.Groups['url'].Value } else { '' }
+  }
+}
+
+function Test-HumanSpokeLast([string]$journalPath) {
+  # $true when a human marker sits BELOW the newest managed turn -- the same signal G12
+  # already reads, and the one `oa-state.ps1`'s Test-UserPaused treats as the resume.
+  #
+  # Every uncertain answer is $true (= "he may have spoken", = allow). A false $true costs a
+  # turn that should have been refused, which is exactly today's behaviour; a false $false
+  # refuses the turn that answers him, which is worse than the bug being fixed.
+  try {
+    if (-not $journalPath -or -not (Test-Path -LiteralPath $journalPath)) { return $true }
+    $scan = Get-FenceMaskedText ([IO.File]::ReadAllText((Resolve-Path -LiteralPath $journalPath)))
+    $sentinel = $scan.LastIndexOf('OVERNIGHT-AGENT do not edit')
+    if ($sentinel -lt 0) { return $true }
+    $managed = $scan.Substring($sentinel)
+    $lastTurn = -1
+    foreach ($m in [regex]::Matches($managed, '(?m)^[ \t]*##[ \t][^\r\n]*')) {
+      if ($m.Value -match $script:ManagedTurnRe) { $lastTurn = $m.Index }
+    }
+    if ($lastTurn -lt 0) { return $true }
+    $lastHuman = -1
+    foreach ($m in [regex]::Matches($managed, '(?m)^[ \t]*<!--[ \t]*from:[ \t]*me[ \t]*-->[ \t]*$')) {
+      $lastHuman = $m.Index
+    }
+    return ($lastHuman -gt $lastTurn)
+  }
+  catch { return $true }
+}
+
+function Get-UserPauseVerdict([string]$taskId, [string]$journalPath) {
+  # $null means "not provably paused" and is returned for every uncertainty. Only a state file
+  # that positively says the USER put this row into a paused status, with no reply below the
+  # newest turn, produces a verdict.
+  if (-not $taskId) { return $null }
+  $statePath = Join-Path $OA_HOME "state\task-$taskId.json"
+  if (-not (Test-Path -LiteralPath $statePath)) { return $null }
+  $st = $null
+  $raw = ''
+  try {
+    $raw = Get-Content -LiteralPath $statePath -Raw
+    $st = $raw | ConvertFrom-Json
+  }
+  catch {
+    # Reported rather than swallowed, for #520/#632's reason: a check that COULD NOT LOOK must
+    # not be indistinguishable from one that looked and found nothing.
+    $script:PauseAdvisory = "G17 could not read state for task $taskId; pause not checked"
+    return $null
+  }
+  if (-not $st) { return $null }
+  if ("$($st.status_by)".ToLowerInvariant() -ne 'user') { return $null }
+  $status = "$($st.status)".ToLowerInvariant()
+  if ($script:PausedStatusWT -notcontains $status) { return $null }
+  if (Test-HumanSpokeLast $journalPath) { return $null }
+  # THE STAMP IS QUOTED VERBATIM FROM THE FILE, not read off the parsed object.
+  # ConvertFrom-Json coerces an ISO-8601 string into a [datetime], and stringifying that
+  # renders it in the HOST's culture and zone: the same state file printed
+  # "2026-09-14T16:14:56-07:00" under Windows PowerShell and "09/14/2026 23:14:56" under pwsh
+  # on Linux -- a different format AND a seven-hour shift, with no zone marker to show it had
+  # moved. Telling him he paused something at a time he did not is worse than saying nothing,
+  # so the raw text wins over the parse.
+  $at = ''
+  try {
+    $m = [regex]::Match($raw, '"paused_at"\s*:\s*"([^"]*)"')
+    if ($m.Success) { $at = $m.Groups[1].Value }
+  }
+  catch { $at = '' }
+  return [pscustomobject]@{
+    status = $status
+    at     = $at
   }
 }
 
@@ -1039,6 +1124,53 @@ function Test-TurnBody {
     }
   }
 
+  # --- G17: a turn written into a task the user paused (#627) ----------------------
+  #
+  # #627's thesis in one line: `eligible` binds SELECTION but not WORK. Dispatch refuses to
+  # wake a paused task (`Assert-TaskDispatch`), and nothing re-checks that for a session
+  # that is ALREADY alive. A session woken before the pause lands keeps appending turns to
+  # a task he explicitly stopped -- measured on the live board: tasks 399 and 476 gained
+  # turns during a 6h window in which `admits` was 0 for the entire window.
+  #
+  # THIS GUARD IS DELIBERATELY THE PAUSE SLICE ONLY, and the reason is the blast radius.
+  # Measured across the live board, 270 rows, 2026-09-25:
+  #
+  #     eligible         2     <- refusing everything else would refuse 268 of 270 turns
+  #     awaiting_reply 182
+  #     done           137
+  #     off-board      123
+  #     USER-PAUSED      1
+  #
+  # So the eligibility test `Assert-TaskDispatch` applies is unusable here: applied to
+  # writing, it refuses essentially every turn. `done` and off-board have real cases too --
+  # the turn that REPORTS a task finished is written to a row that is already `done`. The
+  # user pause is the one condition that is unambiguous, because it is his instruction
+  # rather than a scheduling state, and it is 1 row rather than 137.
+  #
+  # IT FAILS OPEN EVERYWHERE EXCEPT THE CONFIDENT CASE. No -Id, no state file, unreadable
+  # state, no journal, no sentinel, no managed turn, or a human marker below the newest turn
+  # all ALLOW. That is not timidity: today this guard does not exist, so allowing is exactly
+  # the current behaviour and an under-fire is a no-op, while an over-fire would block the
+  # session that is trying to answer him. Given the resume rule below, that is the failure
+  # mode to design against.
+  #
+  # A REPLY IS THE RESUME. `oa-state.ps1`'s Test-UserPaused clears the pause when the journal
+  # has a trailing human message, BEFORE any `mark` records it. A guard keyed on the stored
+  # `paused_at` alone would latch: he replies, the field is still set until the next mark,
+  # and the turn answering him is the one refused. That is #569's defect pointed at his own
+  # resume, so the same trailing-human signal G12 already computes is honoured here.
+  if ((& $on 'G17') -and $script:PauseVerdict) {
+    $findings += New-Finding 'G17' 1 ("status=" + $script:PauseVerdict.status) (
+      'this task was paused by the user' +
+      $(if ($script:PauseVerdict.at) { ' at ' + $script:PauseVerdict.at } else { '' }) +
+      ', and writing a turn into it continues work he stopped. A pause is his instruction, not ' +
+      'a scheduling state: dispatch already refuses to WAKE a paused task, and this refuses the ' +
+      'other half #627 names -- a session that was already alive when the pause landed. He clears ' +
+      'it by replying in the journal below the newest turn, or a run records his decision with ' +
+      '`oa-state.ps1 mark -StatusBy user`. Use `-DisableGuard G17` only for a turn that is ' +
+      'deliberately recording the pause itself')
+  }
+
   # --- G16: an advertised reply word the consent reader will reject (#491) ---------
   #
   # A turn can advertise any reply word it likes; the consent reader accepts a fixed list.
@@ -1196,6 +1328,11 @@ if ($body.Trim().Length -eq 0) { Write-Error 'body file is empty'; exit 3 }
 $journal = if ($Id) { Join-Path $JournalDir "task-$Id.md" } else { $null }
 $doc = if ($journal) { Get-JournalDocMeta $journal } else { $null }
 
+# #627: computed HERE, beside $doc, for the same reason -- it is a property of the DESTINATION
+# rather than of the text, and `-Validate` must reach the same verdict as the real write or
+# validating is theatre.
+$script:PauseVerdict = Get-UserPauseVerdict $Id $journal
+
 # HOST-DEPENDENT COUNT (found 2026-08-27, by hitting it)
 # --------------------------------------------------------
 # `Test-TurnBody` returns 0, 1 or many findings. Under Windows PowerShell 5.1 a SINGLE
@@ -1275,6 +1412,11 @@ if ($Json) {
     Write-Host ("      {0}" -f $script:G15Note)
     Write-Host '      G15 did not run, so this turn may be proposing work that already shipped.'
     Write-Host '      Verify by hand: git grep "#<N>" origin/main -- packages plugins'
+  }
+  if ($script:PauseAdvisory) {
+    Write-Host '[write-turn] NOTE - could not check whether the user paused this task.' -ForegroundColor Yellow
+    Write-Host ("      {0}" -f $script:PauseAdvisory)
+    Write-Host '      G17 did not run, so this turn may be continuing work he stopped.'
   }
   # The #425 target, as a nudge rather than a refusal. G9's ceiling is where a turn stops
   # being defensible; this is where it stops being a pointer. Keeping them apart is what

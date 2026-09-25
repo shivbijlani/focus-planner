@@ -938,6 +938,37 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-declared-ask.ps1
 
+  # A PAUSE BINDS SELECTION BUT NOT WORK (GH #627).
+  #
+  # Dispatch already refuses to wake a task the user paused. Nothing re-checked that for a
+  # session that was ALREADY alive, so a session woken before the pause landed kept appending
+  # turns to work he had explicitly stopped. Measured on the live board over one 6h window:
+  # `admits` was 0 for the entire window -- the run was permitted to dispatch nothing -- and
+  # three journals gained turns anyway, two of them on rows `scan` marks ineligible.
+  #
+  # G17 IS THE PAUSE SLICE ONLY, and the arms exist mostly to hold it there. Measured across
+  # 270 live rows: eligible 2, awaiting_reply 182, done 137, off-board 123, user-paused 1.
+  # Applying dispatch's own eligibility test to writing would refuse 268 of 270 turns, and
+  # `done` has a legitimate case -- the turn that REPORTS a task finished is written to a row
+  # that was just marked done. The pause is the one unambiguous condition, because it is his
+  # instruction rather than a scheduling state.
+  #
+  # THE RESUME ARM IS THE LOAD-BEARING ONE. oa-state treats a human message below the newest
+  # turn as the resume, before any `mark` clears `paused_at`. A guard keyed on the stored field
+  # alone would latch and refuse the very turn that answers him -- #569's defect pointed at his
+  # own resume. Verified by mutation: deleting the resume check fails exactly that arm.
+  #
+  # Hermetic: synthetic journal and state under TEMP driving the REAL write-turn.ps1 via
+  # WRITE_TURN_OA_HOME and -JournalDir, under pwsh on Linux. No live store, no network.
+  user-pause-write:
+    name: A paused task refuses the turn, a resumed one does not
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (the pause binds work, not just selection)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-user-pause-write.ps1
+
   # A TURN CAN ADVERTISE A REPLY WORD ITS OWN READER REJECTS (GH #491).
   #
   # `oa-state.ps1` decides whether Shiv approved by matching his reply against one fixed
