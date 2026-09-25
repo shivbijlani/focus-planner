@@ -938,6 +938,37 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-declared-ask.ps1
 
+  # A SETTING SILENTLY ON ITS BUILT-IN DEFAULT (GH #579).
+  #
+  # oa-state.ps1's own .SETTINGS block promised that "`scan` reports the resolved values per
+  # Today row (`gate_backstop_hours`, `gate_strict`), so a configured value that is not applying
+  # is visible". It reported the VALUE and not its SOURCE, which does not deliver that: a row
+  # reading `gate_backstop_hours: 6` means either "you configured 6" or "nothing is configured
+  # and 6 is the built-in", and separating those two is the whole point of the sentence.
+  #
+  # Measured live 2026-09-25: `Today gate backstop`, `Today gate strict` and `Overnight Agent
+  # concurrency` are ALL absent from user-settings.md. Three user-owned controls running on
+  # built-in defaults, and only concurrency said so -- through `concurrency_source`, precisely
+  # the field the gate settings lacked. Same shape as #593 one job above: a value published
+  # without the provenance needed to interpret it.
+  #
+  # Two arms cover a defect found while writing this rather than the reported one: `off` was
+  # read only through the on-spellings, so a user who deliberately turned strict OFF resolved
+  # through the default path and was reported identically to one who had never heard of the
+  # setting. A typo fell through the same way. Both report now, and a malformed value still
+  # leaves the SAFE default in force -- a typo may narrow the gate, never disable it.
+  #
+  # Hermetic: synthetic journal, state, board, snooze store and settings file under TEMP driving
+  # the REAL oa-state.ps1 via -UserSettings. No live store and no network, under pwsh on Linux.
+  gate-settings-source:
+    name: A gate value is published with where it came from
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (unset, configured, malformed and argument are distinguishable)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-gate-settings-source.ps1
+
   # A COUNT PUBLISHED WITHOUT THE READ BEHIND IT (GH #593).
   #
   # `scan` carried `doc_new_comments` but not the freshness of the observation that produced it,
