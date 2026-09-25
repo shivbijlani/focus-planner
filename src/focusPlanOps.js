@@ -654,6 +654,14 @@ function findInsertAndMaxId(lines, section) {
  * `existingJournalIds` may be a Set<number>; any other value (including the
  * legacy numeric `baselineMaxId`) is ignored so old callers stay correct.
  *
+ * That set is really the **allocation universe** (see `allocationUniverse.js`):
+ * callers pass the union of journal IDs, the completed board's IDs, and the
+ * sync shadow's live + tombstoned entries. It is consulted for MEMBERSHIP only
+ * — never for a maximum — because the live shadow carries junk legacy IDs in
+ * the 426000+ range, and taking `max()` across it would number every future
+ * task 426593 and upward. Walking up from `contentMaxId + 1` never reaches
+ * them; they only ever prevent a reuse.
+ *
  * `contentIds` is the set of IDs actually present in the content being written
  * (GH #528). It exists because `contentMaxId` is a single number and therefore
  * cannot be a safety property: if it is ever computed too low — a stale
@@ -732,9 +740,19 @@ export function opPromoteTodoToTask(content, todoText, parentTaskId, existingJou
 
 export function opAddAndPrioritize(content, taskName, prioritySectionTitle, existingJournalIds = new Set()) {
   const lines = content.split('\n')
-  const { insertIndex, maxId } = findInsertAndMaxId(lines, 'Today')
+  const { insertIndex, maxId, usedIds } = findInsertAndMaxId(lines, 'Today')
   if (insertIndex === -1) return content
-  const newId = allocateNextId(maxId, existingJournalIds)
+  // This site allocated from `maxId` alone until GH #132/#528 named it as the
+  // third way onto the board. It now carries the same pair as the other two add
+  // paths: allocate over the content's own IDs, then assert. The assertion is
+  // unreachable by construction here — `maxId` comes from the same scan as
+  // `usedIds`, so `maxId + 1` is always above every parsed row — but it is kept
+  // because the failure it guards is silent and destructive, and because all
+  // three add paths should fail the same way if that ever stops holding.
+  const newId = allocateNextId(maxId, existingJournalIds, usedIds)
+  if (usedIds.has(newId)) {
+    throw new Error(`refusing to add a task with ID ${newId}: that ID is already in use on this board`)
+  }
   const today = new Date().toISOString().split('T')[0]
   lines.splice(insertIndex, 0, `| ${newId} | 🟡 | ${taskName} | - | ${today} | |`)
 
