@@ -938,6 +938,35 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-declared-ask.ps1
 
+  # A TURN CAN ADVERTISE A REPLY WORD ITS OWN READER REJECTS (GH #491).
+  #
+  # `oa-state.ps1` decides whether Shiv approved by matching his reply against one fixed
+  # vocabulary. `write-turn.ps1` writes the sentence that TELLS him which word to send. Nothing
+  # connected the two, so a turn could close with `reply **prune** to proceed` -- a perfectly
+  # clear instruction, and an answer the reader discards. He replies, the reply is read as
+  # nothing, and the task sits blocked on an approval he already gave. That is the same shape as
+  # #227: consent must never be inferred from an absence, and an unreadable answer is an absence.
+  #
+  # The existing vocabulary guard pinned SKILL.md -- the documentation -- not the asks actually
+  # sent, which is why this survived it. G16 reads the outgoing ask instead.
+  #
+  # The arms are mostly about NOT firing: an ordinary turn, every accepted word, `merge <N>`,
+  # bold emphasis and a fenced example must all stay quiet, because a guard that fires on normal
+  # prose gets disabled and then protects nothing. Two arms pin write-turn's copy of the pattern
+  # character-for-character against oa-state's, so the two drifting apart fails here rather than
+  # in a journal months later.
+  #
+  # Hermetic: synthetic journal/state/board under TEMP driving the REAL write-turn.ps1 and
+  # oa-state.ps1, no live store and no network, under pwsh on Linux.
+  advertised-reply-word:
+    name: Advertised reply word is one the reader accepts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (unanswerable asks refuse; ordinary turns stay quiet)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-advertised-reply-word.ps1
+
   # THE ONE CHANGE IN THIS REPO THAT MAKES A GATE WIDER (GH #442).
   #
   # Everything else here refuses more than it used to. This lets a comment on the catch-up doc
