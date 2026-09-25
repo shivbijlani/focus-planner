@@ -36,11 +36,32 @@ const MUTANTS = [
   {
     name: 'M2: Read-JournalText decodes as ANSI instead of UTF-8',
     expect: 'fail',
-    apply: (s) =>
-      s.replace(
+    // MUTATE THE DECODER, NOT THE FIRST LOOK-ALIKE (GH #602).
+    //
+    // `[IO.File]::ReadAllText($path, (New-Object Text.UTF8Encoding($false)))` appears THREE
+    // times in oa-state.ps1, and `String.prototype.replace` with a non-global regex rewrites
+    // only the FIRST. That one is at line 1209; `Read-JournalText` is at 2130. So this arm
+    // has always mutated a different function than the one it names, leaving the decoder
+    // untouched -- and no guard, however good, could have killed it.
+    //
+    // It therefore reported SURVIVED on main and was read as "the sweep is blind", when the
+    // real fault was that the mutant never applied where it claimed. A mutation arm that
+    // does not mutate its subject cannot prove anything about a guard, which is this suite's
+    // own defect class arriving inside the suite.
+    //
+    // Anchored on the function so it cannot drift onto a sibling call site again.
+    apply: (s) => {
+      const at = s.search(/function\s+Read-JournalText/);
+      if (at === -1) throw new Error('M2: Read-JournalText not found');
+      const head = s.slice(0, at);
+      const tail = s.slice(at);
+      const mutatedTail = tail.replace(
         /\[IO\.File\]::ReadAllText\(\$path,\s*\(New-Object\s+Text\.UTF8Encoding\(\$false\)\)\)/,
         '[IO.File]::ReadAllText($path, [Text.Encoding]::Default)'
-      ),
+      );
+      if (mutatedTail === tail) throw new Error('M2: decoder call site not found inside Read-JournalText');
+      return head + mutatedTail;
+    },
   },
   {
     name: 'M3: turn-end write re-encodes via Set-Content (ANSI read path restored)',
