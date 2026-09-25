@@ -49,6 +49,16 @@ $MOON = [char]::ConvertFromUtf32(0x1F319)
 $root = Join-Path ([IO.Path]::GetTempPath()) ("oa-491-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $root -Force | Out-Null
 
+# write-turn.ps1 resolves its home from %LOCALAPPDATA% unless WRITE_TURN_OA_HOME overrides it.
+# Leaving this unset does NOT fail the same way on both hosts, which is the whole hazard: on
+# Windows it silently resolves to the developer's REAL overnight-agent home -- the harness passes
+# while touching live state -- and on Linux $env:LOCALAPPDATA is null, so Join-Path throws
+# "Cannot bind argument to parameter 'Path' because it is null" and every arm that invokes
+# write-turn fails for a reason that has nothing to do with the guard under test. This harness hit
+# exactly that: 21/21 locally, 19 arms failing in CI on the null bind. Point it at the sandbox.
+$env:WRITE_TURN_OA_HOME = Join-Path $root 'oa-home'
+New-Item -ItemType Directory -Path $env:WRITE_TURN_OA_HOME -Force | Out-Null
+
 $script:pass = 0
 $script:fail = 0
 function Assert([bool]$ok, [string]$name, [string]$why, [string]$detail = '') {
@@ -150,6 +160,20 @@ if (Test-Path $OaStatePath) {
 else {
   Write-Host '  SKIP  IN-STEP  -- oa-state.ps1 not beside this script; vocabulary drift unverified'
 }
+
+Write-Host ''
+Write-Host 'HERMETIC -- the arms above must have run against the sandbox, not a real home'
+
+# Without this the harness is host-dependent in the worst way: green on Windows because it
+# quietly used the developer's live overnight-agent home, red on Linux because $env:LOCALAPPDATA
+# is null. Both readings are wrong, and only one of them is visible. So pin the contract the
+# sandbox depends on -- write-turn must still honour the override -- and prove the child process
+# actually landed in TEMP rather than somewhere real.
+$homeLine = [regex]::Match([IO.File]::ReadAllText($WriteTurnPath), '(?m)^\s*\$OA_HOME\s*=.*$').Value
+Assert ($homeLine -match 'WRITE_TURN_OA_HOME') 'OVERRIDE-HONOURED' `
+  'write-turn still resolves its home from WRITE_TURN_OA_HOME' "OA_HOME line: $homeLine"
+Assert ($env:WRITE_TURN_OA_HOME -and $env:WRITE_TURN_OA_HOME.StartsWith($root)) 'SANDBOXED' `
+  'and this run pointed that home inside its own TEMP root' "home=$env:WRITE_TURN_OA_HOME root=$root"
 
 Write-Host ''
 if ($script:fail -gt 0) {
