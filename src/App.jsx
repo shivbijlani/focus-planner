@@ -41,7 +41,7 @@ import { deleteJournalForTask } from './journalDelete.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { linkedNavFallbackFile } from './linkedNav.js'
-import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment } from './journalChat.js'
+import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment, insertTodoLine, stripEmptyTodoLines } from './journalChat.js'
 import * as readStateService from './readState/readStateService.js'
 import { enqueueJournalLoad, waitForInitialJournalLoads } from './journalLoadQueue.js'
 import { createJournalInSource } from './journalCreate.js'
@@ -4165,7 +4165,10 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
   }
 
   const handleSend = async () => {
-    const text = draft.trim()
+    // #645: an unfilled `- [ ] ` matches the todo extractor with empty text, so sending one
+    // would add a blank row to the task list. Stripped here rather than at insert, so the
+    // empty line stays available to type into while the draft is open.
+    const text = stripEmptyTodoLines(draft)
     if (!text || sending) return
     setSending(true)
     try {
@@ -4187,6 +4190,21 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
     const addition = draft && !/\s$/.test(draft) ? ` ${markdown}` : markdown
     setDraft(draft + addition)
     requestAnimationFrame(() => inputRef.current?.focus())
+  }
+
+  // #645: produce a well-formed todo line so adding one does not require remembering
+  // `- [ ]`. Deliberately NOT insertIntoDraft above -- that joins with a space, which would
+  // bury the checkbox mid-sentence where the extractor cannot see it.
+  const handleInsertTodo = () => {
+    const next = insertTodoLine(draft)
+    setDraft(next)
+    requestAnimationFrame(() => {
+      const el = inputRef.current
+      if (!el) return
+      el.focus()
+      // Cursor after the box, ready to type the todo itself.
+      el.setSelectionRange(next.length, next.length)
+    })
   }
 
   // Toggle the Nth checkbox / TODO / DONE line in the raw markdown. The index
@@ -4324,6 +4342,15 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
         >
           📎
         </button>
+        <button
+          type="button"
+          className="jc-attach-btn"
+          onClick={handleInsertTodo}
+          title="Insert a todo"
+          aria-label="Insert a todo"
+        >
+          ☑️
+        </button>
         <textarea
           ref={inputRef}
           className="jc-composer-input"
@@ -4334,7 +4361,7 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
           placeholder="Message yourself…  (Enter to send, Shift+Enter for newline)"
           rows={1}
         />
-        <button className="jc-send-btn" onClick={handleSend} disabled={!draft.trim() || sending}>
+        <button className="jc-send-btn" onClick={handleSend} disabled={!stripEmptyTodoLines(draft) || sending}>
           {sending ? '…' : 'Send'}
         </button>
       </div>

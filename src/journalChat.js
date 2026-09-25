@@ -284,6 +284,50 @@ export function appendJournalMessage(content, text, today = localISODate(), auth
   return `${body}${addition}\n`
 }
 
+// The markdown a journal todo has to be written as, and the one thing #645 exists to stop
+// people typing by hand. Kept next to the writer rather than in the component, because the
+// EXTRACTOR's rule is strict and non-obvious: `server.js` matches `/^-\s*\[([ x])\]\s*(.+)/`,
+// anchored at column 0 with text REQUIRED after the box. So a todo that is indented, or that
+// is appended to the end of an existing sentence, is not a todo to anything that reads the
+// file afterwards -- it merely looks like one in the composer.
+export const TODO_PREFIX = '- [ ] '
+
+// Insert a well-formed, empty todo line into a composer draft.
+//
+// COMPOSER-ONLY, resolving the issue's first open question in the direction it leans. Writing
+// straight to the file would add a SECOND writer to a file the agent also appends to, and the
+// append path already carries the attribution rule (#641): text sent from here goes through
+// appendJournalMessage as `me`, so a todo typed this way is his by construction rather than by
+// the button remembering to say so.
+//
+// Always starts its own line. Appending to a non-empty draft with a space -- which is what the
+// attachment inserter does, and the obvious thing to reuse -- would produce `note - [ ] buy
+// milk`, which renders as prose and is invisible to /api/todos. That is the failure this
+// button exists to prevent, so it cannot be the way the button works.
+export function insertTodoLine(draft) {
+  const text = draft || ''
+  // Pressing it twice should not stack empty boxes: an unfilled box is debris in a file he
+  // has to read, and the cursor is already on the open line, which is what he wanted.
+  const lastLine = text.split(/\r?\n/).pop()
+  if (lastLine.trim() === TODO_PREFIX.trim()) return text
+  if (!text) return TODO_PREFIX
+  return /\n$/.test(text) ? `${text}${TODO_PREFIX}` : `${text}\n${TODO_PREFIX}`
+}
+
+// Drop todo lines the user never filled in, before the draft is written to the journal.
+//
+// MEASURED, not assumed: `- [ ] ` with its trailing space DOES match the extractor's
+// `/^-\s*\[([ x])\]\s*(.+)/` -- `\s*` gives the space back to `(.+)`, so the line extracts as
+// a real todo whose text is empty. Only a box with NO trailing space fails to match, and that
+// is not the markdown to write. So a button that inserts a box, left untyped and sent, would
+// put a blank row in the task list: the button would create the mess it exists to save him
+// from. Stripping at the write boundary rather than at insert keeps the empty line available
+// to type into for as long as the draft is open.
+export function stripEmptyTodoLines(text) {
+  const kept = (text || '').split(/\r?\n/).filter((l) => !/^\s*[-*]\s*\[[ xX]\]\s*$/.test(l))
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 // Build the close-out comment written to a task journal when a task is
 // completed. `outcome` is a short label (e.g. "Canceled"); `comment` is
 // optional free text. Returns '' when there is nothing to record.
