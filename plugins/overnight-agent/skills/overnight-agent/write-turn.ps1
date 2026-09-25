@@ -224,6 +224,15 @@ $WAKE_WINDOW_MIN = [int]($env:WRITE_TURN_WAKE_WINDOW_MIN | ForEach-Object { if (
 # contains neither `AUTO` nor `AGENT` as a word: `AGENT_SENTINEL_RE` (/^<!--.*\b(AUTO|AGENT)\b.*-->/i)
 # would otherwise read the stamp as an agent-block marker and change how the thread renders.
 $script:AskValues = @('blocking', 'offer', 'none')
+
+# --- #491 the advertised reply word ------------------------------------------------------
+# Kept character-for-character in step with `$script:ConsentAffirmRe` in oa-state.ps1, for the
+# reason every other duplicated pattern in this file states: a looser copy here blesses a word
+# the reader will reject, a stricter one refuses a word it would have accepted, and either way
+# the two disagree silently. `mutcheck-consent-vocab-drift.ps1` already pins that reader
+# against SKILL.md; G16 below pins the EMITTED TURN against this copy, which is the surface
+# nothing was checking.
+$script:ConsentAffirmRe = '(?i)(?<![\w-])(approved?|approve it|yes|yep|yeah|go ahead|go for it|go|lgtm|ship it|do it|vibe it|send it|make it so|proceed|merge[ \t]+#?\d+)(?![\w-])'
 # `[ \t\r]*$` for the reason oa-state.ps1's copy spells out: under `(?m)` .NET anchors `$` before
 # the `\n`, so a CRLF line leaves the `\r` unmatched and the pattern silently never fires. Journals
 # are commonly CRLF here.
@@ -1027,6 +1036,64 @@ function Test-TurnBody {
          "blocked-on-human digest and no later run re-raises it (#618) -- it would reach " +
          'nobody. Use -Ask blocking if you need the answer to continue; reword to a ' +
          'statement if you do not; -DisableGuard G14 if you really mean it'))
+    }
+  }
+
+  # --- G16: an advertised reply word the consent reader will reject (#491) ---------
+  #
+  # A turn can advertise any reply word it likes; the consent reader accepts a fixed list.
+  # Nothing checked that the word we ADVERTISE is a word the reader ACCEPTS, so an ask
+  # could be born unanswerable -- and the failure is silent in BOTH directions. Shiv
+  # replies, the reader returns `human-spoke-but-no-affirmative`, and that is
+  # indistinguishable from him declining. He has no way to tell why nothing happened.
+  #
+  # Measured across 239 journals: 48 newest turns advertised a reply token, and 33 of them
+  # advertised at least one word the reader rejects. A live instance from this repo's own
+  # agent: "reply **prune** and I'll remove 2,951 old session folders" -- `prune` does not
+  # match, so the action could never have been authorised by the word offered for it.
+  #
+  # WHY THE EXISTING GUARD MISSES IT. `mutcheck-consent-vocab-drift.ps1` pins SKILL.md's
+  # documented list against the reader. That is the DOCUMENTATION, not the output. A turn
+  # inventing `prune`, `confirm`, `delete` or `apply` passes every guard, because no guard
+  # read the asks we actually send. This is #301's class surviving #301's fix.
+  #
+  # SCOPED TO AN OFFERED REPLY, not to every emphasis. `**Needs from you:** reply `x`` and
+  # `Reply `x`` are offers; bold text in ordinary prose is not. The patterns below match the
+  # two shapes that actually read as "type this word back", which is the narrowest rule
+  # covering the measured instances -- a guard that fired on every bold phrase would be
+  # switched off within a week, and the surface would be unguarded while appearing guarded.
+  #
+  # A REFUSAL, because the cost is asymmetric and silent. A wrongly-refused turn is one
+  # reword by an author who is right there; an unanswerable ask is an action Shiv believes
+  # he authorised and that never happens. `-DisableGuard G16` is the hatch for a turn that
+  # deliberately offers a word the gate does not read as consent.
+  if (& $on 'G16') {
+    # ANCHORED TO AN ASK LINE, not to the word "reply" anywhere on a line. The first version
+    # matched `^...reply **x**` across the whole turn, and fired on a FIXTURE whose heading
+    # merely ended in the word "reply" (`## ... 2026-08-27 reply`) while its ask was
+    # "**Needs from you:** nothing" -- a refusal on a turn offering no reply word at all.
+    # A guard that fires where there is nothing to offer is the alarm-fatigue direction this
+    # comment block warns about, so the match now requires the line to BE an ask: either an
+    # ask-marker line, or one that opens with the offer itself.
+    foreach ($m in [regex]::Matches($Body, '(?im)^[ \t]*(?:\*{0,2}(?:Needs from you|Your call|Next)\b[^\r\n]*?|)\breply\s+(?:\*\*([^*\r\n]{1,40})\*\*|`([^`\r\n]{1,40})`)')) {
+      $line = $m.Value
+      # The word must be OFFERED, not merely mentioned: the line has to carry an ask marker,
+      # or start with the offer. `I will **prune** it` and a heading ending in "reply" are
+      # neither.
+      if ($line -notmatch '(?i)(Needs from you|Your call|Next)\b' -and $line -notmatch '(?i)^[ \t]*reply\b') { continue }
+      $wordRaw = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[2].Value }
+      $word = "$wordRaw".Trim().Trim('.', ',', '!', ':', ';')
+      if (-not $word) { continue }
+      # Fenced quotations are examples, not offers -- the same exemption every other guard
+      # here grants, and the reason this file can document itself without refusing itself.
+      $lineNo = ($Body.Substring(0, $m.Index) -split "`r?`n").Count
+      if ($lineNo -le $lines.Count -and $inFence[$lineNo - 1]) { continue }
+      if ([regex]::IsMatch($word, $script:ConsentAffirmRe)) { continue }
+      $findings += New-Finding 'G16' $lineNo $m.Value.Trim() (
+        ("this turn offers `"$word`" as a reply, but the consent reader does not accept it, so " +
+         'typing it would do nothing and would be indistinguishable from him declining (#491). ' +
+         'Offer a word the reader accepts -- approve, yes, go ahead, lgtm, ship it, do it, ' +
+         'proceed, or `merge <N>` -- or use -DisableGuard G16 if you really mean it'))
     }
   }
 
