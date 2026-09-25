@@ -101,7 +101,12 @@ Write-Host 'REFUSES -- a turn into work the user stopped'
 $blocked = New-Task 'blocked' 'user'
 $r = Check $blocked
 Assert ($r.code -eq 2 -and $r.out -match 'G17') 'PAUSED' 'a user-paused task refuses the turn' (D $r)
-Assert ($r.out -match '2026-09-14') 'NAMES-WHEN' 'and the refusal says when he stopped it, not just that he did' (D $r)
+# PINNED TO THE EXACT RECORDED STRING, not merely to the date. ConvertFrom-Json turns an
+# ISO-8601 stamp into a [datetime], and stringifying that renders in the host's culture and
+# zone: this arm caught the same state file printing "2026-09-14T16:14:56-07:00" on Windows
+# and "09/14/2026 23:14:56" on Linux -- seven hours off, with nothing to show it had moved.
+Assert ($r.out -match '2026-09-14T16:14:56-07:00') 'NAMES-WHEN' `
+  'and quotes the recorded stamp verbatim, in every host''s culture and zone' (D $r)
 
 $proposed = New-Task 'proposed' 'user'
 $r = Check $proposed

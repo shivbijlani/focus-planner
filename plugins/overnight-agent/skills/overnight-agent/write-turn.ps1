@@ -359,7 +359,11 @@ function Get-UserPauseVerdict([string]$taskId, [string]$journalPath) {
   $statePath = Join-Path $OA_HOME "state\task-$taskId.json"
   if (-not (Test-Path -LiteralPath $statePath)) { return $null }
   $st = $null
-  try { $st = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json }
+  $raw = ''
+  try {
+    $raw = Get-Content -LiteralPath $statePath -Raw
+    $st = $raw | ConvertFrom-Json
+  }
   catch {
     # Reported rather than swallowed, for #520/#632's reason: a check that COULD NOT LOOK must
     # not be indistinguishable from one that looked and found nothing.
@@ -371,9 +375,22 @@ function Get-UserPauseVerdict([string]$taskId, [string]$journalPath) {
   $status = "$($st.status)".ToLowerInvariant()
   if ($script:PausedStatusWT -notcontains $status) { return $null }
   if (Test-HumanSpokeLast $journalPath) { return $null }
+  # THE STAMP IS QUOTED VERBATIM FROM THE FILE, not read off the parsed object.
+  # ConvertFrom-Json coerces an ISO-8601 string into a [datetime], and stringifying that
+  # renders it in the HOST's culture and zone: the same state file printed
+  # "2026-09-14T16:14:56-07:00" under Windows PowerShell and "09/14/2026 23:14:56" under pwsh
+  # on Linux -- a different format AND a seven-hour shift, with no zone marker to show it had
+  # moved. Telling him he paused something at a time he did not is worse than saying nothing,
+  # so the raw text wins over the parse.
+  $at = ''
+  try {
+    $m = [regex]::Match($raw, '"paused_at"\s*:\s*"([^"]*)"')
+    if ($m.Success) { $at = $m.Groups[1].Value }
+  }
+  catch { $at = '' }
   return [pscustomobject]@{
     status = $status
-    at     = if ($st.PSObject.Properties['paused_at'] -and $st.paused_at) { "$($st.paused_at)" } else { '' }
+    at     = $at
   }
 }
 
