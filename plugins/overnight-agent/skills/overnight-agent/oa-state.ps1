@@ -3166,6 +3166,81 @@ function Get-ScanRows {
     }
   }
 
+  # ---- #534: a BOARD row with no journal file must not be invisible ------------------------
+  #
+  # This loop is journal-driven: it enumerates `task-*.md` and joins board data onto what it
+  # finds. A row that is ON THE BOARD but has no journal yet produces no row at all, so it is
+  # invisible to every phase -- it cannot be ordered, gated, proposed for, or counted.
+  #
+  # Measured live 2026-09-05: `## Today` row 1 (`473`, added that day) was absent from all 248
+  # scan rows. Nothing reported it. There is no error and no `eligible: false`; the id simply
+  # does not appear.
+  #
+  # That is the #346 shape on the PRIMARY worklist: "this task does not exist" and "this task
+  # exists and I could not see it" are byte-identical, because both are absence. It also makes
+  # an exhaustion declaration unsound -- a journal-less Today row cannot hold the gate, so
+  # `-Exhausted` can be declared truthfully over a Today section that still has unexamined rows.
+  #
+  # SURFACED, NOT INVENTED. The synthesised row carries `has_journal: false` and no journal
+  # facts, because there are none: every journal-derived field stays at its empty default
+  # rather than being guessed. It is emitted so the run can SEE the task and act on SKILL.md's
+  # existing instruction to create a journal for it -- guidance that was unreachable while the
+  # row was missing.
+  #
+  # Deliberately placed after the main loop and before the joins below, so a synthesised row
+  # gets the same `reopened_closed` treatment and the same deterministic ordering as any other.
+  # `@(...)` BEFORE APPENDING. `$rows` comes from a `foreach` used as an expression, so with a
+  # single journal it is a scalar PSObject and `+=` throws "does not contain a method named
+  # op_Addition" -- the same host-dependent array-unrolling trap this codebase records for
+  # `.Count` on a scalar. Forcing an array makes the append mean the same thing at any size.
+  $rows = @($rows)
+  $seenScanIds = @{}
+  foreach ($r in $rows) { $seenScanIds["$($r.id)"] = $true }
+  foreach ($bid in @($board.Keys)) {
+    if ($seenScanIds.ContainsKey("$bid")) { continue }
+    $b = $board[$bid]
+    $rows += [pscustomobject]@{
+      id                    = "$bid"
+      status                = 'none'
+      changed               = $true
+      reopened              = $false
+      has_agent_block       = $false
+      # The fact that makes this row actionable rather than merely odd. A reader must be able
+      # to tell a synthesised row from a real one without inferring it from empty fields.
+      has_journal           = $false
+      tracked               = $false
+      snoozed               = $false
+      snooze_until          = $null
+      section               = "$($b.section)"
+      urgency               = "$($b.urgency)"
+      on_board              = $true
+      user_completed        = $false
+      status_by             = 'agent'
+      work_priority         = $b.work_priority
+      board_pos             = $b.pos
+      linked                = @($b.linked)
+      priorities_rank       = (Get-PrioritiesRank $b)
+      due_poll              = $false
+      poll_cadence          = $null
+      unanswered_user       = $false
+      unanswered_user_where = ''
+      session_paused        = $false
+      paused_at             = $null
+      exhaustion            = $null
+      # Why this row exists at all, in the row itself: a verdict a reader can audit beats one
+      # they have to reconstruct from which fields are empty.
+      no_journal_reason     = 'on the board, no journal file yet - create one before working it (#534)'
+    }
+  }
+
+  # Every row the main loop produced has a journal by construction; say so explicitly rather
+  # than leaving the field absent, or a consumer cannot distinguish "false" from "not reported".
+  foreach ($r in $rows) {
+    if (-not $r.PSObject.Properties['has_journal']) {
+      Add-Member -InputObject $r -NotePropertyName 'has_journal' -NotePropertyValue $true -Force
+    }
+  }
+
   # #501: `reopened_closed` is a JOIN of the journal and the board, so it cannot be computed
   # inside the row constructor above -- the board facts are only on the row once it exists. It
   # is filled here, from the single predicate every other reader uses, so the report and the

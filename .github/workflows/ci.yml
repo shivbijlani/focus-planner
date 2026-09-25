@@ -371,6 +371,33 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-above-sentinel-reply.ps1
 
+  # A board row with no journal file was invisible to the ENTIRE run (GH #534).
+  #
+  # `oa-state.ps1 scan` is the worklist -- SKILL.md says "run this first, every run" and "work
+  # the rows in the order scan gives you". But the loop is journal-driven: it enumerates
+  # task-*.md and joins board data onto what it finds. A row on the board with no journal yet
+  # produced NO ROW AT ALL, so it could not be ordered, gated, proposed for, or counted.
+  #
+  # Measured live 2026-09-05: Today row 1 (473, added that day) was absent from all 248 scan
+  # rows, with no error and no eligible:false -- the id simply did not appear. Measured again
+  # 2026-09-24 while fixing it: THREE live board rows were invisible, two on Today.
+  #
+  # That is the #346 shape on the primary worklist -- "does not exist" and "exists and I could
+  # not see it" are byte-identical, because both are absence -- and it makes an exhaustion
+  # declaration unsound, since a journal-less Today row cannot hold the Today gate.
+  #
+  # The arms guard BOTH halves: the row must appear, and it must appear HONESTLY. Fabricating
+  # journal facts would be worse than the invisibility, because an invented `reopened` sends a
+  # run to answer a message nobody wrote.
+  board-row-no-journal:
+    name: A board row with no journal is visible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (surfaced, honest, and load-bearing)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-board-row-no-journal.ps1
+
   # PHASE 3 died naming nothing (GH #613).
   #
   # The Telegram mirror failed with "One or more errors occurred." / MIRROR_EXIT=1, and a
