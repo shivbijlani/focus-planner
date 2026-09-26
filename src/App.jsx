@@ -250,28 +250,33 @@ function BottomSheet({ title, onClose, children }) {
 
 function ContextMenu({ x, y, options, onClose, title = 'Actions', sheet = false }) {
   const menuRef = useRef(null)
-  // #640: start at the pointer, then correct once the menu's real size is known. Seeded with the
-  // raw coordinates so the desktop menu behaves exactly as before whenever it already fits.
-  const [pos, setPos] = useState({ top: y, left: x })
-  const [maxH, setMaxH] = useState(null)
 
+  // #640: position after measuring, by writing straight to the node.
+  //
+  // NOT via setState. Measuring requires the menu to be in the DOM, so the correction can only
+  // happen in a layout effect — and setState there is a cascading render the lint rule rightly
+  // rejects. Since the only thing that changes is this element's own style, the effect writes it
+  // directly: one pass, no re-render, and no frame where the menu is drawn at the wrong place.
   useLayoutEffect(() => {
     if (sheet) return
     const el = menuRef.current
     if (!el) return
-    const r = el.getBoundingClientRect()
     const vh = window.innerHeight
     const vw = window.innerWidth
-    setMaxH(menuMaxHeight(vh))
-    setPos(clampMenuPosition({
-      x, y,
-      // The menu may already be capped by maxHeight from a previous pass, so clamp against the
-      // height it will actually occupy rather than its unconstrained scroll height.
-      width: r.width,
-      height: Math.min(r.height, menuMaxHeight(vh) ?? r.height),
-      viewportWidth: vw,
-      viewportHeight: vh,
-    }))
+    const cap = menuMaxHeight(vh)
+    // Applied BEFORE measuring, so the height read below is the height the menu will actually
+    // occupy rather than its unconstrained scroll height. Clamping against the taller figure
+    // would push a long menu further up than it needs to go.
+    if (cap != null) {
+      el.style.maxHeight = `${cap}px`
+      el.style.overflowY = 'auto'
+    }
+    const r = el.getBoundingClientRect()
+    const { top, left } = clampMenuPosition({
+      x, y, width: r.width, height: r.height, viewportWidth: vw, viewportHeight: vh,
+    })
+    el.style.top = `${top}px`
+    el.style.left = `${left}px`
   }, [x, y, sheet, options])
 
   useEffect(() => {
@@ -316,7 +321,7 @@ function ContextMenu({ x, y, options, onClose, title = 'Actions', sheet = false 
     <div
       ref={menuRef}
       className="context-menu"
-      style={{ top: pos.top, left: pos.left, maxHeight: maxH ?? undefined, overflowY: maxH ? 'auto' : undefined }}
+      style={{ top: y, left: x }}
     >
       {options.map((option, i) => (
         <button
