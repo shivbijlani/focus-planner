@@ -1,6 +1,6 @@
 # Domain: scripts
 
-`scripts/` is a small domain by count — **12 modules** in `spec-facts.json` — but it carries
+`scripts/` is a small domain by count — **13 modules** in `spec-facts.json` — but it carries
 high-leverage repository tooling. None of these files ship in the planner app's runtime bundle.
 They instead support developer workflow, repair historical data safely, or keep the spec pipeline
 anchored to code that exists.

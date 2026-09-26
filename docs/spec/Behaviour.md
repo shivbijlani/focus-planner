@@ -1,5 +1,5 @@
 # Behaviour
-This page turns the named acceptance corpus in `spec-facts.json` into implementation-facing requirements. The snapshot records **83 test files / 1,220 named tests** across the app, sync engine, Telegram bridge, task-paper renderer, diagnostics, storage, config, and repository scripts. Use it with [Architecture](Architecture), [Domain-app](Domain-app), [Domain-folder-sync](Domain-folder-sync), [Domain-storage](Domain-storage), [Domain-task-paper](Domain-task-paper), and [Domain-telegram-bridge](Domain-telegram-bridge) when rebuilding the system.
+This page turns the named acceptance corpus in `spec-facts.json` into implementation-facing requirements. The snapshot records **87 test files / 1,262 named tests** across the app, sync engine, Telegram bridge, task-paper renderer, diagnostics, storage, config, credential schema, overnight-agent inventory, and repository scripts. Use it with [Architecture](Architecture), [Domain-app](Domain-app), [Domain-config](Domain-config), [Domain-folder-sync](Domain-folder-sync), [Domain-storage](Domain-storage), [Domain-task-paper](Domain-task-paper), and [Domain-telegram-bridge](Domain-telegram-bridge) when rebuilding the system.
 The extraction shape is concrete. For example, `testFiles[]` contains entries like this, and the prose below simply restates them in “the system must …” form:
 > [!NOTE]
 > **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
@@ -26,7 +26,7 @@ The extraction shape is concrete. For example, `testFiles[]` contains entries li
 
 ## App: board, task, and journal behaviour ([Domain-app](Domain-app))
 
-These 35 suites define the planner UI and board model: task IDs, Today/Deferred board edits, link handling, journal chat parsing, file-tree refresh, unread state, and user-facing widgets.
+These 37 suites define the planner UI and board model: task IDs, Today/Deferred board edits, link handling, journal chat parsing, file-tree refresh, unread state, composer helpers, and user-facing widgets.
 
 > [!NOTE]
 > **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
@@ -48,6 +48,7 @@ These 35 suites define the planner UI and board model: task IDs, Today/Deferred 
 | `src/fileTreeFilter.test.js` | `filterPlannerTree` | The system must filter the planner file tree down to planner-relevant files and folders while preserving the paths the UI should still expose. |
 | `src/focusPlanOps.test.js` | `buildCompletedRow`, `opMoveLinesBetweenSections`, `opChangeLinkedId`, `snooze section moves`, `opBridgeLinks`, `opSetTaskSnooze`, `opRemoveTaskFromFocusPlanResult`, `completedRowExistsForTask`, `opAppendToCompleted` | The system must build completed-task rows correctly; move rows between sections; update linked IDs, snooze state, and bridge links; remove tasks cleanly from the board; and append completed rows without duplicating existing completions. |
 | `src/idTombstones.test.js` | `id tombstones` | The system must keep tombstones for deleted IDs, respect their TTL, and ignore malformed tombstone entries instead of treating them as live reservations. |
+| `src/insertTodoLine.test.js` | `insertTodoLine (GH #645)`, `what the button produces survives the round trip (GH #645)` | The system must insert todo checkboxes at line boundaries, avoid stray blank lines or duplicate empty boxes, preserve CRLF drafts, strip unfilled boxes before send, keep adjacent notes intact, and round-trip the resulting markdown through journal parsing and append logic without losing attribution. |
 | `src/journalAttachments.test.js` | `journal attachment helpers` | The system must derive stable journal attachment metadata and paths so attachments stay associated with the right task journal. |
 | `src/journalChat.test.js` | `parseJournalChat`, `appendJournalMessage`, `appendJournalMessage provenance marker`, `agent sentinel detection (parse)`, `fenced code is quoted text, not markup (#320)`, `appendJournalMessage is fence-blind no more (#320 / #325)`, `formatCloseOutComment` | The system must parse journals into chat turns, append human and agent messages with explicit provenance markers, keep fenced code literal, detect agent sentinels accurately, and generate close-out comments in the expected format. |
 | `src/journalCreate.test.js` | `combined journal creation` | The system must, when the board is combined from multiple sources, create a duplicate-ID journal in the specific clicked row source rather than in an arbitrary source. |
@@ -58,6 +59,7 @@ These 35 suites define the planner UI and board model: task IDs, Today/Deferred 
 | `src/journalLoadQueue.test.js` | `createLoadQueue` | The system must run journal loads through a bounded concurrent queue that preserves priority order, de-duplicates compatible reads, aborts stalled I/O, keeps seeding live, and handles remounts, provider changes, and failures without deadlocking. |
 | `src/journalLoadState.test.js` | `journal load state` | The system must offer journal creation only after a successful absence check, never after a failed content read, and preserve previously known journal existence across retries. |
 | `src/linkedNav.test.js` | `extractLinkedNum`, `shouldNavigateToCompleted`, `linkedNavFallbackFile` | The system must extract linked task numbers reliably, decide whether navigation should target the active or completed board, and fall back to the correct file when a preferred target is unavailable. |
+| `src/menuPosition.test.js` | `clampMenuPosition (GH #640)`, `menuMaxHeight (GH #640)` | The system must keep context menus reachable within the viewport by flipping or sliding them when needed, pin over-large menus to safe margins, tolerate missing measurements or junk input, and cap menu height so over-tall menus scroll instead of truncating. |
 | `src/misfiledLinkedId.test.js` | `#446 recoverMisfiledLinkedId`, `#446 the reader exposes the recovered link`, `#446 snoozing must not destroy the parent id`, `#446 normalizeRowCells composes both rules` | The system must recover a linked ID that was misfiled into the Wake column, expose the recovered link to readers, preserve it across later snoozes, and normalize rows with both recovery rules applied. |
 | `src/missionStatement.test.js` | `mission statement` | The system must persist the mission statement in settings storage, trim and clear empty values, notify subscribers on change, load existing values on startup, and survive unavailable settings storage without throwing. |
 | `src/moveTask.test.js` | `computeMoveSet`, `computeBrokenLinks`, `parseLocalId / maxTaskIdInRows`, `rewriteRowId`, `renumberMovedRows`, `retitleJournal` | The system must compute the move set for cross-source task moves, detect broken links, parse and rewrite local IDs, renumber moved rows, and retitle any moved journal to match the new task identity. |
@@ -206,13 +208,14 @@ These suites pin the lower-level support systems that the app and plugins rely o
 | `scripts/check-node-modules.test.js` | `classifyNodeModules`, `buildReport`, `checkNodeModules against a real directory` | The system must classify node_modules states accurately, build a user-facing report from that classification, and distinguish an empty install from a missing one against a real directory. |
 | `scripts/merge-queue.test.js` | `VERIFIED_QUEUE`, `planStep`, `planQueue`, `parseTestCount` | The system must validate the verified merge queue, parse test counts, describe each queue step, and plan queue execution order without duplicates or invalid exclusions. |
 | `scripts/spec/conflicts.test.js` | `tokenize`, `sameTarget`, `sentences`, `parseDuration`, `extractDirectives`, `extractSettings`, `extractLifecycle`, `findConflicts`, `buildDecisions`, `renderMarkdown` | The system must tokenize issue text, detect whether two issues target the same thing, parse durations and directives, extract settings and lifecycle signals, find actionable conflicts, build decisions, and render the resulting markdown report. |
+| `scripts/spec/readability.test.mjs` | `spec readability formatting`, `technical architecture document` | The system must enforce the spec’s readability rules by requiring exposed technical examples and module-path tables to sit inside compliant alert-plus-`<details>` wrappers, refusing nested or borrowed wrappers, allowing pure prose to pass unchanged, permitting architecture diagrams, and requiring the technical architecture document to stay linked from the main index. |
 | `scripts/spec/verifyParity.test.js` | `workflow reader`, `the spec branch is verified with exactly what CI runs`, `mutation check (each way the status could decay is caught)` | The system must read workflow definitions, verify that the spec branch is checked against exactly the same commands as CI, and fail on each mutation that would let workflow/spec parity silently decay. |
 
 </details>
 
 ## Overnight-agent named-test inventory ([Domain-overnight-agent](Domain-overnight-agent))
 
-The inventory includes two overnight-agent check files, but `spec-facts.json` captured zero named `tests[]` entries for them. The file presence still matters because the acceptance corpus expects these checks to exist.
+The inventory includes three overnight-agent check files, but `spec-facts.json` captured zero named `tests[]` entries for them. The file presence still matters because the acceptance corpus expects these checks to exist.
 
 > [!NOTE]
 > **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
@@ -222,6 +225,7 @@ The inventory includes two overnight-agent check files, but `spec-facts.json` ca
 
 | Source file | Suites present in `testFiles[]` | Required behaviour |
 | --- | --- | --- |
+| `plugins/overnight-agent/checks/oa-dispatch.test.mjs` | `(no named tests captured in spec-facts.json)` | The system must keep the overnight-agent dispatch check present in the acceptance inventory; expose named cases in future spec snapshots so its required behaviour can be restated as testable prose. |
 | `plugins/overnight-agent/checks/stuck-run-sweep.test.mjs` | `(no named tests captured in spec-facts.json)` | The system must keep the stuck-run sweep present in the acceptance inventory; expose named cases in future spec snapshots so its required behaviour can be restated as testable prose. |
 | `plugins/overnight-agent/checks/workflow-health-sweep.test.mjs` | `(no named tests captured in spec-facts.json)` | The system must keep the workflow-health sweep present in the acceptance inventory; expose named cases in future spec snapshots so its required behaviour can be restated as testable prose. |
 
