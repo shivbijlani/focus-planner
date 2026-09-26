@@ -1,10 +1,11 @@
 # Domain: overnight-agent
 
-`overnight-agent` is the repository's largest collected domain: `spec-facts.json` records **166**
-JavaScript modules in `plugins/overnight-agent/checks/`. That count is real, but it is not the
+`overnight-agent` is the repository's largest collected domain: `spec-facts.json` records **186**
+JavaScript modules — 185 in `plugins/overnight-agent/checks/` plus one in
+`plugins/overnight-agent/extensions/task-dispatch/`. That count is real, but it is not the
 whole runtime surface. The plugin also ships PowerShell and markdown assets that `spec-facts.json`
 does not index because `scripts/spec/collect.mjs` only walks JS/TS extensions. Direct inspection
-shows a second layer under `plugins/overnight-agent/skills/overnight-agent/` (33 files: 30 `.ps1`,
+shows a second layer under `plugins/overnight-agent/skills/overnight-agent/` (43 files: 40 `.ps1`,
 2 `.md`, 1 `.json`) plus `plugins/overnight-agent/skills/catchup-doc/` (`SKILL.md` and
 `resolve-ids.ps1`).
 
