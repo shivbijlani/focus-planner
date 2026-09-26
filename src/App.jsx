@@ -41,6 +41,7 @@ import { deleteJournalForTask } from './journalDelete.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { linkedNavFallbackFile } from './linkedNav.js'
+import { clampMenuPosition, menuMaxHeight } from './menuPosition.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment, insertTodoLine, stripEmptyTodoLines } from './journalChat.js'
 import * as readStateService from './readState/readStateService.js'
 import { enqueueJournalLoad, waitForInitialJournalLoads } from './journalLoadQueue.js'
@@ -249,6 +250,29 @@ function BottomSheet({ title, onClose, children }) {
 
 function ContextMenu({ x, y, options, onClose, title = 'Actions', sheet = false }) {
   const menuRef = useRef(null)
+  // #640: start at the pointer, then correct once the menu's real size is known. Seeded with the
+  // raw coordinates so the desktop menu behaves exactly as before whenever it already fits.
+  const [pos, setPos] = useState({ top: y, left: x })
+  const [maxH, setMaxH] = useState(null)
+
+  useLayoutEffect(() => {
+    if (sheet) return
+    const el = menuRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    const vh = window.innerHeight
+    const vw = window.innerWidth
+    setMaxH(menuMaxHeight(vh))
+    setPos(clampMenuPosition({
+      x, y,
+      // The menu may already be capped by maxHeight from a previous pass, so clamp against the
+      // height it will actually occupy rather than its unconstrained scroll height.
+      width: r.width,
+      height: Math.min(r.height, menuMaxHeight(vh) ?? r.height),
+      viewportWidth: vw,
+      viewportHeight: vh,
+    }))
+  }, [x, y, sheet, options])
 
   useEffect(() => {
     if (sheet) return
@@ -281,12 +305,18 @@ function ContextMenu({ x, y, options, onClose, title = 'Actions', sheet = false 
     )
   }
 
-  // Desktop: the existing positioned menu.
+  // Desktop: the existing positioned menu, clamped to the viewport (#640).
+  //
+  // It is `position: fixed`, so a menu opened near the bottom edge used to run off the fold with
+  // no way to reach the entries below it — scrolling the page moves the page, not the menu, and
+  // `.context-menu` sets `overflow: hidden`. Measured after render because the height depends on
+  // how many options this particular menu has; `useLayoutEffect` so the correction happens
+  // before paint rather than as a visible jump.
   return (
     <div
       ref={menuRef}
       className="context-menu"
-      style={{ top: y, left: x }}
+      style={{ top: pos.top, left: pos.left, maxHeight: maxH ?? undefined, overflowY: maxH ? 'auto' : undefined }}
     >
       {options.map((option, i) => (
         <button
