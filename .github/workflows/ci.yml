@@ -938,6 +938,43 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-declared-ask.ps1
 
+  # A READER THAT CANNOT PARSE WHAT POWERSHELL WROTE (GH #681).
+  #
+  # `oa-state.ps1` writes the per-task state store from PowerShell, which emits UTF-8 WITH a BOM,
+  # and `JSON.parse` rejects a leading BOM. Measured on the live store 2026-09-25: 279 of 281
+  # task files carry it, and all 281 parse cleanly once stripped. So a Node reader that forgets
+  # the strip does not fail on one odd file -- it fails on essentially every file.
+  #
+  # AND THE FAILURE IS SILENT, which is why this is a guard. The idiom throughout `checks/` is a
+  # per-file `try { ... } catch { continue }`, correctly, so that one unreadable file cannot take
+  # down a sweep. Combined with a BOM the reader cannot parse, the sweep completes, reports a
+  # confident `0`, and has examined nothing -- #520/#632's class, where a check that COULD NOT
+  # LOOK reads identically to one that looked and found nothing.
+  #
+  # Not hypothetical: the measurement script written for #433 hit this and reported "doc-bound
+  # tasks: 0 in state" against a store holding 106 live bindings. It was caught only because 0
+  # was implausible enough to check by hand, which is not a control.
+  #
+  # A RATCHET, NOT A BACKLOG. All 36 live-store readers already strip it correctly today, in at
+  # least five different spellings. The convention is held by hand with nothing enforcing it, so
+  # the risk being removed is entirely about the next reader. A shared-helper migration across 36
+  # working files would be a large diff for the same outcome.
+  #
+  # The sweep also applies its own rule to itself: matching no readers exits 2 rather than
+  # printing `clean` over an empty set.
+  state-bom:
+    name: A state-store reader can parse the store
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Sweep (every live-store reader strips the BOM)
+        run: node ./plugins/overnight-agent/checks/state-bom-sweep.mjs
+      - name: Mutation check (a deliberately blind reader is caught)
+        run: node ./plugins/overnight-agent/checks/mutcheck-state-bom.mjs
+
   # AN ASK THAT INSTRUCTS A GATE EDIT WHICH CANNOT WORK (GH #513).
   #
   # #491 one level up. That guard catches a turn advertising a REPLY WORD the consent reader
