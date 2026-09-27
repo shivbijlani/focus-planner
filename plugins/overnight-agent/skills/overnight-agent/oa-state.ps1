@@ -4088,10 +4088,44 @@ function Cmd-Consent {
       # its own reader with its own mutation arms rather than an `if` bolted on here.
       $trailingHasUser = $false
       if (Test-Path $path) { $trailingHasUser = [bool](Get-JournalFacts $path).HasTrailingUser }
+      # --- #302: the consumer half, made mechanical -------------------------------------
+      #
+      # The short-circuit above is CORRECT and is not changed: a standing permission any stray
+      # sentence could cancel would not be standing. But `consent` answers "am I authorised?",
+      # never "should I?", and those come apart in exactly one place -- an agent that reads
+      # `gate-allowed` and merges over a FRESH human "don't" is technically authorised and
+      # obviously wrong.
+      #
+      # Until now the only thing between that transcript and a real merge was two sentences of
+      # prose in SKILL.md. This repository's reliability history is a list of rules that were
+      # written down and broken anyway (#272, #297, #301, and the five journal-corruption
+      # classes that became guards G1-G7 precisely because describing them did not hold). A
+      # guard that exists only as advice to a model is the same shape.
+      #
+      # So a gate allowance with unread human text below the last turn becomes its OWN verdict
+      # and reports `consent_ok: false`. Refusing is the safe direction and it is what makes
+      # this mechanical rather than advisory: a caller that ignores the new reason gets a plain
+      # `false` and stops, instead of proceeding on a `true` it was told to think twice about.
+      #
+      # THE FLOOR IS UNTOUCHED AND STILL OUTRANKS EVERYTHING. This only ever narrows an ALLOW;
+      # it can never turn a floor block into permission.
+      #
+      # NO REFUSAL VOCABULARY IS PARSED, which is this issue's explicit non-goal. The question
+      # answered is "has a human spoken since the last turn", not "what did they mean" -- the
+      # latter is #301's problem and needs its own reader and its own arms. `HasTrailingUser`
+      # is deliberately the fail-OPEN reader, so unattributed prose counts: a false "someone may
+      # be waiting" costs one pause, a false "nobody spoke" costs acting over a refusal.
+      #
+      # IT CLEARS ITSELF. Folding the human's message in -- answering it with a turn -- puts the
+      # newest turn below their text, so the next call returns a plain `gate-allowed`. The
+      # channel is "read what he said first", not a lock needing an override.
+      $humanSpoke = ($verdict.decision -eq 'allow') -and $trailingHasUser
       [pscustomobject]@{
         id                = $Id
-        consent_ok        = ($verdict.decision -eq 'allow')
-        reason            = $(if ($verdict.decision -eq 'floor') { 'gate-floor-blocks' } else { 'gate-allowed' })
+        consent_ok        = ($verdict.decision -eq 'allow') -and -not $humanSpoke
+        reason            = $(if ($verdict.decision -eq 'floor') { 'gate-floor-blocks' }
+                              elseif ($humanSpoke) { 'gate-allowed-human-spoke' }
+                              else { 'gate-allowed' })
         action            = "$Action"
         repo              = $(if ($Repo) { "$Repo" } else { $null })
         gate_state        = "$($gate.state)"

@@ -294,26 +294,30 @@ $arms = [ordered]@{
     )
   }
   'H-gate-allowed-surfaces-human'    = @{
-    why     = 'a gate verdict still REPORTS whether a human is waiting below the turn (#302)'
+    why     = 'a gate allowance REFUSES while a human is waiting below the turn (#302)'
     gate    = (New-Gate -Allow @($RULE_EMAIL_SELF) -Ask @($FLOOR_MANY))
     entries = @()
     queries = @(
-      # Both halves are `gate-allowed` -- the verdict must NOT move. Only the reported fact does.
-      # A field that is always true is the same failure as no field, so the arm asserts both.
+      # #302's consumer half. The data half shipped with #300 and this arm pinned it; reporting
+      # alone left the refusal as two sentences of SKILL.md prose, which is the shape that failed
+      # in #272, #297 and #301. So an allowance with unread human text below the turn is now its
+      # OWN verdict and reports `consent_ok: false` -- a caller that ignores the new reason still
+      # stops, which is what makes it mechanical rather than advisory.
       @{ args = @('-Action', 'send_email_self'); entries = @($HumanWaiting)
-        expect = @{ consent_ok = $true; reason = 'gate-allowed'; trailing_has_user = $true }
+        expect = @{ consent_ok = $false; reason = 'gate-allowed-human-spoke'; trailing_has_user = $true }
       }
+      # The no-fresh-reply case is UNCHANGED, which is this issue's second success criterion.
       @{ args = @('-Action', 'send_email_self'); entries = @()
         expect = @{ consent_ok = $true; reason = 'gate-allowed'; trailing_has_user = $false }
       }
       # And it must be the FAIL-OPEN reader: unmarked prose below the turn is somebody, and the
       # cost of being wrong here is one pause, not a merge over a refusal.
       @{ args = @('-Action', 'send_email_self'); entries = @($UnmarkedWaiting)
-        expect = @{ consent_ok = $true; reason = 'gate-allowed'; trailing_has_user = $true }
+        expect = @{ consent_ok = $false; reason = 'gate-allowed-human-spoke'; trailing_has_user = $true }
       }
-      # Fail-open does NOT mean "any text at all". The two identifiable MACHINE shapes read false,
-      # which is what bounds the #302 consumer's blast radius: neither the agent's own unstamped
-      # turn nor a sibling skill's can masquerade as a human changing his mind.
+      # Fail-open does NOT mean "any text at all", and these two are what bound the blast radius:
+      # neither the agent's own unstamped turn nor a sibling skill's can masquerade as a human
+      # changing his mind and pause a run. Without them this guard would stall on its own output.
       @{ args = @('-Action', 'send_email_self'); entries = @($AgentTurnNoMarker)
         expect = @{ consent_ok = $true; reason = 'gate-allowed'; trailing_has_user = $false }
       }
@@ -365,10 +369,18 @@ $arms = [ordered]@{
     queries    = @(
       # The headline. Rule 1 names another repo; rule 4 covers creating, not merging.
       @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $true; reason = 'human-authored-affirmative'; gate_rule = $null } }
-      @{ args = @('-Action', 'open_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $true; reason = 'gate-allowed'; gate_rule = $RULE_CREATE_PR } }
-      @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner-ado-codeapp'); expect = @{ consent_ok = $true; reason = 'gate-allowed'; gate_rule = $RULE_YOLO_REPO } }
-      @{ args = @('-Action', 'send_email_self'); expect = @{ consent_ok = $true; reason = 'gate-allowed'; gate_rule = $RULE_EMAIL_SELF } }
-      @{ args = @('-Action', 'send_email_reply'); expect = @{ consent_ok = $true; reason = 'gate-allowed'; gate_rule = $RULE_REPLY } }
+      # #302: these four are gate ALLOWANCES with his text sitting below the turn, so they now
+      # refuse. Worth being explicit that the text here is an APPROVAL, not a refusal -- and it
+      # still pauses. That is deliberate: reading what he meant is #301's vocabulary problem and
+      # this issue's stated non-goal, so the question asked is only "has he spoken since". The
+      # cost is one pause, it clears the moment a turn answers him, and the alternative is a
+      # reader that decides for itself which of his sentences count.
+      @{ args = @('-Action', 'open_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $false; reason = 'gate-allowed-human-spoke'; gate_rule = $RULE_CREATE_PR } }
+      @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner-ado-codeapp'); expect = @{ consent_ok = $false; reason = 'gate-allowed-human-spoke'; gate_rule = $RULE_YOLO_REPO } }
+      @{ args = @('-Action', 'send_email_self'); expect = @{ consent_ok = $false; reason = 'gate-allowed-human-spoke'; gate_rule = $RULE_EMAIL_SELF } }
+      @{ args = @('-Action', 'send_email_reply'); expect = @{ consent_ok = $false; reason = 'gate-allowed-human-spoke'; gate_rule = $RULE_REPLY } }
+      # THE FLOOR IS UNTOUCHED. #302 only ever narrows an allow; it can never turn a floor block
+      # into permission, and these two prove the floor still reports its own reason and rule.
       @{ args = @('-Action', 'send_email_many'); expect = @{ consent_ok = $false; reason = 'gate-floor-blocks'; gate_rule = $FLOOR_MANY } }
       @{ args = @('-Action', 'send_email_new_thread'); expect = @{ consent_ok = $false; reason = 'gate-floor-blocks'; gate_rule = $FLOOR_FRESH } }
     )
@@ -676,10 +688,39 @@ $mutations = @(
   },
   @{
     name  = 'M9: the gate path reports trailing_has_user as always TRUE (the field says nothing)'
+    # BROAD BY CONSTRUCTION SINCE #302, and the breadth is the point rather than a weakness.
+    # While the field only REPORTED, an always-true mutant was invisible except to the one arm
+    # that read it -- which is exactly why it was pinned to H alone. Now the field DECIDES: an
+    # allowance with a human waiting refuses, so a mutant claiming "someone is always waiting"
+    # turns every gate allowance in the suite into a refusal.
+    #
+    # H remains the OWNER, and the rest are declared structural rather than added to `kills`.
+    # That is the mechanism this harness already provides, and it is not a formatting choice:
+    # the aim check requires exactly ONE owner arm, so a multi-arm `kills` string can never
+    # match and would report MISAIMED forever with identical expected and actual lists.
+    # `alsoCaughtBy` is how a mutation whose blast radius is a property of the DESIGN is
+    # declared, which is exactly what this is -- every gate allowance now consults the field,
+    # so every allow arm is sensitive to it by construction, not by duplicated testing.
     kills = 'H-gate-allowed-surfaces-human'
+    alsoCaughtBy = @('C-repo-scope', 'D-create-is-not-merge', 'F-enum-validation', 'I-floor-outcome-phrasing')
     apply = {
       param($s)
       $s -replace [regex]::Escape('if (Test-Path $path) { $trailingHasUser = [bool](Get-JournalFacts $path).HasTrailingUser }'), '$trailingHasUser = $true'
+    }
+  }
+  @{
+    # THE CONSUMER HALF ITSELF (#302). Without this mutant the guard could be deleted outright
+    # and the suite would stay green: M8/M9 mutate the DATA, and the data half shipped with #300
+    # and was already pinned. Reporting the fact while acting on it anyway is precisely the state
+    # this issue was filed to end, so the mutant deletes the decision and keeps the report.
+    name  = 'M12: the gate allows anyway while a human is waiting (the report is decorative)'
+    # Measured: only H counts the kill. L-live-gate-merge-finding also changes under this mutant,
+    # but it is `diagnostic = $true` -- a report on the real gate file rather than a pass/fail
+    # arm -- so the harness does not credit it. Naming it here would be an over-claim.
+    kills = 'H-gate-allowed-surfaces-human'
+    apply = {
+      param($s)
+      $s -replace [regex]::Escape('$humanSpoke = ($verdict.decision -eq ''allow'') -and $trailingHasUser'), '$humanSpoke = $false'
     }
   }
 )
