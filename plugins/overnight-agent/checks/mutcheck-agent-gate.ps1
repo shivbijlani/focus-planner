@@ -88,6 +88,13 @@ if (-not $ScriptPath) {
 }
 if (-not $ScriptPath -or -not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found (pass -ScriptPath)" }
 
+# The host to launch children with. `powershell` exists only on Windows, so hardcoding it made
+# every arm fail on Linux with "The term 'powershell' is not recognized" -- a harness that cannot
+# run at all, reported as twelve broken guarantees. Under pwsh this is pwsh itself, so the suite
+# runs in CI; under Windows PowerShell it stays `powershell`, which is how the skill invokes
+# these scripts in production.
+$script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
+
 # --- fixture material ---------------------------------------------------------------------
 # The rules below are the live gate's, VERBATIM. They are quoted rather than paraphrased on
 # purpose: a paraphrase would drift towards whatever the matcher happens to accept, and the whole
@@ -429,7 +436,7 @@ function Invoke-Child {
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   try {
-    $raw = (& powershell @ChildArgs 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    $raw = (& $script:PsExe @ChildArgs 2>&1 | ForEach-Object { "$_" }) -join "`n"
     $code = $LASTEXITCODE
   }
   finally { $ErrorActionPreference = $prev }
