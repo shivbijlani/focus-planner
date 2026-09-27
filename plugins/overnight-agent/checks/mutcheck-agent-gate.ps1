@@ -1,4 +1,4 @@
-<#
+﻿<#
   mutcheck-agent-gate.ps1 -- mutation check for the agent gate (#297).
 
   THE BUG THIS GUARDS
@@ -438,7 +438,7 @@ function Invoke-Child {
 
 function Invoke-Arm {
   param([string]$Script, [string]$Name, $Arm, [string]$GateOverride, [bool]$HasGateOverride)
-  $root = Join-Path $env:TEMP ("oa-gate-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+  $root = Join-Path ([IO.Path]::GetTempPath()) ("oa-gate-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
   $jdir = Join-Path $root 'journal'
   $sdir = Join-Path $root 'state'
   $gpath = Join-Path $root 'agent-gate.md'
@@ -555,7 +555,7 @@ $livePath = if ($env:USERPROFILE) { Join-Path $env:USERPROFILE 'OneDrive\Apps\Fo
 if ($livePath -and (Test-Path $livePath)) {
   Write-Host ""
   Write-Host "=== ADVISORY: the gate file on this machine (never fatal) ==="
-  $tmp = Join-Path $env:TEMP ("oa-gate-live-" + [guid]::NewGuid().ToString('N').Substring(0, 6))
+  $tmp = Join-Path ([IO.Path]::GetTempPath()) ("oa-gate-live-" + [guid]::NewGuid().ToString('N').Substring(0, 6))
   New-Item -ItemType Directory -Path $tmp -Force | Out-Null
   try {
     New-Journal -Dir $tmp -Id '970' -Entries @()
@@ -729,7 +729,7 @@ $mutations = @(
   }
 )
 
-$mutDir = Join-Path $env:TEMP ("oa-gate-mut-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$mutDir = Join-Path ([IO.Path]::GetTempPath()) ("oa-gate-mut-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $mutDir -Force | Out-Null
 $killed = 0; $survived = 0; $misaimed = 0
 try {
