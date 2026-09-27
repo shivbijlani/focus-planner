@@ -938,6 +938,35 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-declared-ask.ps1
 
+  # THE SAFETY FLOOR ITSELF, AND IT HAS NEVER RUN IN CI (GH #302).
+  #
+  # `mutcheck-agent-gate.ps1` is the suite that proves the floor outranks the allow list and
+  # outranks a human `approve` in the journal -- the single most consequential ordering in this
+  # repo, since reversing it converts the safety floor into a suggestion. It shipped with #297
+  # and was registered nowhere, so it only ever ran when someone remembered to. That is the same
+  # "shipped as a guard, runs nowhere" shape the ps1-encoding and shipped-but-open jobs above
+  # were added to end.
+  #
+  # It also now covers #302's consumer half. `consent` answers "am I authorised?", never
+  # "should I?", and those come apart in one bad place: an agent reading `gate-allowed` and
+  # merging over a FRESH human "don't" is technically authorised and obviously wrong. The data
+  # to notice that (`trailing_has_user`) shipped with #300; acting on it was two sentences of
+  # SKILL.md prose. A gate allowance with unread human text below the newest turn is now its own
+  # verdict, `gate-allowed-human-spoke`, reporting `consent_ok: false` -- so a caller that never
+  # learns the new reason still stops. The floor is untouched: this only narrows an allow.
+  #
+  # Hermetic: synthetic gates and journals under TEMP driving the REAL oa-state.ps1. It is slow
+  # (12 arms plus 12 mutations, each a full process launch per query), which is the other reason
+  # it needs to be here rather than relying on a developer to run it.
+  agent-gate:
+    name: The safety floor outranks everything, and an allow yields to a fresh reply
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (floor precedence, repo scope, and the #302 consumer half)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-agent-gate.ps1
+
   # A READER THAT CANNOT PARSE WHAT POWERSHELL WROTE (GH #681).
   #
   # `oa-state.ps1` writes the per-task state store from PowerShell, which emits UTF-8 WITH a BOM,

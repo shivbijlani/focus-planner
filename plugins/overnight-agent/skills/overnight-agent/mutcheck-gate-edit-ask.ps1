@@ -155,7 +155,16 @@ function New-Gate([switch]$WithFloor, [switch]$WithLine) {
 }
 
 $jp = Join-Path $jdir 'task-960.md'
-[IO.File]::WriteAllText($jp, "# Task 960: synthetic`n`nnotes`n", $utf8)
+# A journal with a MANAGED TURN as its last content, not bare prose. Since #302 a gate allowance
+# refuses when unread human text sits below the newest turn -- and a journal that is nothing but
+# prose reads exactly that way, because the fail-open reader counts unattributed text as
+# somebody. Without a turn here the arms below would measure #302's pause rather than the gate
+# verdict they are about, which is a real interaction and not a fixture technicality.
+$MOON960 = [char]::ConvertFromUtf32(0x1F319)
+[IO.File]::WriteAllText($jp, ("# Task 960: synthetic`n`nnotes`n`n---`n" +
+  "<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->`n`n" +
+  "## $MOON960 Overnight Agent -- 2026-09-25 12:00 PT`n`n<!-- from: overnight-agent -->`n`n" +
+  "**Status:** working.`n"), $utf8)
 
 # A SANDBOX STATE DIR, not the real one. `oa-state.ps1` takes a process-wide mutex keyed on the
 # RESOLVED StateDir path, so a harness that leaves it defaulted contends with whatever live run

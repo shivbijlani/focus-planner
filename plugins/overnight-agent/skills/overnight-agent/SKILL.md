@@ -748,19 +748,29 @@ It prints `{ path, exists, state, version, allow[], ask[], mtime }`, with every 
   and you do not get to weigh it against anything.
 - ✅ **The allow list (`allow`) is a standing grant.** A rule there authorises that action without a
   per-task approval, and `consent` will say so and name the rule that did it.
-- ⚠️ **A `gate-allowed` verdict short-circuits the journal — so it can tell you that you are
+- ⚠️ **A `gate-allowed` verdict short-circuits the journal — so the gate can tell you that you are
   *authorised*, not that you *should*.** Measured: with a gate rule allowing merges in a repo, a
-  journal carrying Shiv's own `<!-- from: me -->` *"do not merge that, hold off"* still returns
-  `consent_ok: true, reason: gate-allowed`. That is correct — a standing permission any stray
-  sentence could cancel would not be standing — but it means **the gate is not where you find out he
-  changed his mind.** So every gate verdict also reports **`trailing_has_user`**.
-- ⛔ **`trailing_has_user: true` means "stop and read", never "he refused".** Those look alike and
-  are not. The field is deliberately fail-**open**, so unattributed prose sets it too: it tells you
-  *someone may be waiting*, not what they said. Treating it as a refusal would let stray text
-  silently revoke a permission he actually granted — the same bug in a mirror, and just as wrong.
-  So: **pause, read the message, answer him, and let him decide.** Do not infer a decision from the
-  flag, and never quote `gate-allowed` back at a person who just said no. If he does want it to
-  stop being automatic, the answer is his file — move the rule to the floor, or delete it.
+  journal carrying Shiv's own `<!-- from: me -->` *"do not merge that, hold off"* used to return
+  `consent_ok: true, reason: gate-allowed`. The short-circuit itself is correct — a standing
+  permission any stray sentence could cancel would not be standing — but it meant **the gate was
+  not where you found out he had changed his mind**, and the only thing stopping a merge over a
+  fresh "don't" was this paragraph.
+- ✅ **That is now mechanical (#302).** A gate allowance with unread human text below the newest
+  turn returns its own verdict: `consent_ok: false, reason: gate-allowed-human-spoke`, with
+  `trailing_has_user: true` and the allowing `gate_rule` still named. A caller that never learns
+  the new reason still stops, because `consent_ok` is plainly `false` — which is what makes this a
+  guard rather than advice. **It clears itself:** answer him with a turn, and the newest turn is
+  below his text again, so the next call is a plain `gate-allowed`. No override exists, and none
+  is needed.
+- ⛔ **It still means "stop and read", never "he refused".** Those look alike and are not. The field
+  behind it is deliberately fail-**open**, so unattributed prose sets it too: it says *someone may
+  be waiting*, not what they said. Nothing parses refusal vocabulary — deciding what he *meant* is
+  a separate problem (#301) and must not ride in behind this. So: **read the message, answer him,
+  and let him decide.** Do not infer a decision from the flag, and never quote `gate-allowed` back
+  at a person who just said no. If he wants it to stop being automatic, the answer is his file —
+  move the rule to the floor, or delete it.
+- ✅ **The floor is untouched.** This only ever narrows an allow; it can never turn a
+  `gate-floor-blocks` into permission.
 - ✅ **What it will *not* fire on** (measured, and pinned by `mutcheck-agent-gate.ps1` arm H): your
   own turn appended without its provenance marker, and a sibling skill's turn. Both read `false`,
   so machine text cannot masquerade as him changing his mind. The residual `true`-but-not-him case
@@ -1590,11 +1600,12 @@ See PHASE 0.
      beats a human `approve` sitting in the journal. You do not weigh it, override it, or reason your
      way past it.
   2. Only then does a matching **Do not gate these** rule authorize you, and the verdict names the
-     verbatim rule (`gate_rule`) that did it — quote it when you record the action. A `gate-allowed`
-     verdict **does not read the journal at all**, so it cannot tell you he has just changed his mind:
-     check **`trailing_has_user`**, and if it is `true`, **stop and read** before acting. It means
-     someone may be waiting, *not* that he refused — pause and answer, never infer a decision from
-     the flag (see PHASE 0).
+     verbatim rule (`gate_rule`) that did it — quote it when you record the action. A gate verdict
+     **does not read the journal for permission**, so it cannot tell you what he decided; but since
+     #302 it does refuse when he has spoken since your last turn. `reason: gate-allowed-human-spoke`
+     with `consent_ok: false` means *someone may be waiting*, **not** that he refused — read the
+     message and answer it, and the next call returns a plain `gate-allowed`. Never infer a decision
+     from the flag (see PHASE 0).
   A missing or unparseable gate grants nothing and removes nothing; you are simply back to the journal
   reading above. **You never write `agent-gate.md`** — that one-way property is the only reason its
   contents can be trusted without an attribution marker. Asserted by `mutcheck-agent-gate.ps1`, whose
