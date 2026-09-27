@@ -181,13 +181,20 @@ const UNCITED = { [IMPL]: '// nothing named here\nexport const x = 1\n' }
 
   // And the reported reason must distinguish the two ways of being unworked,
   // so a reader can tell "nobody mentioned it" from "mentioned, never fixed".
+  //
+  // #684 strengthened what that second state is allowed to look like. It used to read
+  // `unworked -- cited in implementation source, but only as a reference`, and the summary
+  // counted it as a clear candidate -- so four issues that were shipped, merged and
+  // test-covered (#515, #436, #589, #459) were each handed to a session as safe to pick up.
+  // The arm now requires the word UNCERTAIN and requires the summary to keep it OUT of the
+  // clear count, because "says so" was satisfied by wording that still read as clearance.
   {
     const dir = makeRepo({ [IMPL]: '// Measured live on #888: an old incident\n' })
     const r = run(dir, ['888'])
     say(
-      r.code === 0 && /only as a reference/.test(r.out),
+      r.code === 0 && /UNCERTAIN/.test(r.out) && /1 UNCERTAIN/.test(r.out) && !/OK: 1 candidate/.test(r.out),
       'REASON',
-      'a referential-only issue says so, rather than looking like it was never mentioned'
+      'a referential-only issue reads UNCERTAIN and is not counted as clear'
     )
     rmSync(dir, { recursive: true, force: true })
   }

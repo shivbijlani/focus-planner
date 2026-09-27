@@ -328,6 +328,13 @@ function cli(argv) {
 
   const shipped = verdict.results.filter((r) => r.shipped)
   const clear = verdict.results.filter((r) => !r.shipped)
+  // #684: the two NEGATIVE states are not the same claim, and collapsing them is what sends a
+  // session off to rebuild finished work. "No evidence anywhere" is genuinely safe to pick up.
+  // "Discussed in implementation source, but nothing claims to fix it" is a question, not an
+  // answer -- measured 2026-09-25, four issues in that state (#515, #436, #589, #459) were all
+  // shipped, merged and test-covered. Counting them as clearance is the failure; counting them
+  // as a prompt to look is the fix.
+  const uncertain = clear.filter((r) => r.referentialOnly)
 
   console.log(`ref: origin/main ${verdict.ref.slice(0, 12)}`)
   for (const r of verdict.results) {
@@ -336,8 +343,10 @@ function cli(argv) {
       console.log(`  #${r.n}  SHIPPED -- do NOT pick up`)
       console.log(`        cited in: ${cited}${r.impl.length > 3 ? ` (+${r.impl.length - 3})` : ''}`)
     } else if (r.referentialOnly) {
-      console.log(`  #${r.n}  unworked -- cited in implementation source, but only as a reference`)
-      console.log('        (a past-incident mention is not a fix -- GH #639)')
+      console.log(`  #${r.n}  UNCERTAIN -- cited in implementation source, but nothing claims to fix it`)
+      console.log('        A past-incident mention is not a fix (GH #639), but this state has also')
+      console.log('        been wrong the other way: #515, #436, #589 and #459 all read this way and')
+      console.log('        were shipped. Read the source before starting (GH #684).')
     } else if (r.files.length) {
       console.log(`  #${r.n}  unworked (cited only in [${r.kinds.join(',')}] -- not implementation)`)
     } else {
@@ -347,7 +356,15 @@ function cli(argv) {
   console.log('')
 
   if (shipped.length === 0) {
-    console.log(`OK: ${clear.length} candidate(s), none already shipped.`)
+    // The count is split rather than summed. `OK: 5 candidate(s), none already shipped` read as
+    // clearance for all five even when four of them were merely un-attributed -- the number was
+    // true and the impression it left was false.
+    if (uncertain.length) {
+      console.log(`${clear.length - uncertain.length} clear, ${uncertain.length} UNCERTAIN -- none proven shipped.`)
+      console.log('Uncertain is not clearance: read the source for those before starting (GH #684).')
+    } else {
+      console.log(`OK: ${clear.length} candidate(s), none already shipped.`)
+    }
     return 0
   }
   console.log(`REFUSE: ${shipped.length} of ${verdict.results.length} candidate(s) already shipped.`)
