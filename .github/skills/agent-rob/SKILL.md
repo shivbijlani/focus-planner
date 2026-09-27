@@ -28,27 +28,16 @@ in one pass is still verifiable in the next:
 
 | State | Label | Authorizes |
 | --- | --- | --- |
-| No handoff decision recorded | *no handoff label* | Nothing by itself |
+| Not started | *no handoff label* | Being proposed for triage |
 | `human triaged` | `human-triaged` | Writing a plan for that issue |
 | `human plan approved` | `human-plan-approved` | Implementing and testing the named plan |
 | `human merge approved` | `human-merge-approved` | Merging and releasing the named change |
 | `human close approved` | `human-close-approved` | Closing that specific issue |
 
-**An absent label means no decision was recorded, not that no work was done.**
-These labels were introduced partway through the project, so work that predates
-them carries none regardless of how far it has progressed — an unlabelled issue
-may be untouched, in flight, or already merged and deployed. Never read an
-absent label as "not started". Establish where an item actually stands from its
-issue and pull request history, and use the label only to confirm which
-decisions have been recorded.
-
-For work that predates the labels, an attributable human action is acceptable
-evidence of the gate it demonstrates: a human merge event evidences merge
-approval, and a human-authored plan or implementation request evidences the
-gate that authorized it. Say in the report that you accepted a legacy signal
-and name it. Going forward, a recorded label is the expected evidence, and a
-missing label on work started after this convention means the prior gate is
-unverified — report it and do not advance the item.
+**Unstarted means no handoff label.** An issue carrying none of the four labels
+has not entered the ROB and is eligible for triage; the labels are the state,
+and you do not need to reconstruct it from history. Each queue below is defined
+by the label an item carries.
 
 The label is the durable record; the approval reply is the authorization to
 apply it. After the human approves a touch point, apply that state's label to
@@ -67,8 +56,7 @@ unverified and do not advance it.
 
 Read the current planner, journals, relevant GitHub issues and pull requests,
 release evidence, and any existing catch-up documents. Establish which items
-actually belong to each queue from the handoff labels *and* the issue and pull
-request history, since an absent label proves nothing on its own; do not infer
+actually belong to each queue from the handoff labels; do not infer
 completion from a commit title, an open issue, or a planner row alone. Respect
 the existing Overnight Agent priority and consent rules.
 
@@ -115,13 +103,11 @@ Follow the skill's target-specific formatting rules.
 
 ## The four handoff queues
 
-1. **Not started -> human triage.** Find work that carries no handoff label
-   *and* shows no sign of having been started. Confirm the absence of work from
-   its history — no linked pull request, no implementation discussion, no
-   deployment — as well as its planner entry, journal and linked context, so
-   already active, deferred, blocked or finished work is not proposed as new.
-   An unlabelled issue that is already merged or deployed belongs in queue 4,
-   not here. Choose one item needing triage. Make the case for why it should be triaged *next*: value, timing,
+1. **Not started -> human triage.** Find issues carrying none of the four
+   handoff labels. Skip anything already closed, merged or deployed — that work
+   has left the backlog even if it was never labelled. Check the planner entry,
+   journal and linked context so already active, deferred or blocked work is
+   not proposed as new. Choose one item needing triage. Make the case for why it should be triaged *next*: value, timing,
    urgency, dependencies, supporting evidence, and what could change the
    ranking. Ask the human to triage it, defer it, or pick another. Do not plan
    or implement it on the strength of the recommendation. Write its triage
@@ -134,11 +120,8 @@ Follow the skill's target-specific formatting rules.
    plan. Do not implement until the human approves the current plan. On
    approval, apply `human-plan-approved`.
 3. **Implemented -> merge approval.** An item is awaiting merge approval when
-   an open, non-draft pull request implements it and no merge approval has been
-   recorded. Where that pull request's issue predates the labels, treat it as
-   legacy work and say so; where the work began after this convention and
-   `human-plan-approved` is missing, report the prior gate as unverified and
-   do not propose the merge. Pick one and prove the exact change is
+   an open, non-draft pull request implements it and it does not yet carry
+   `human-merge-approved`. Pick one and prove the exact change is
    merge-ready:
    link the implementation, report relevant test and check results, identify
    failures or outstanding risks, and describe the intended release path.
@@ -154,10 +137,9 @@ Follow the skill's target-specific formatting rules.
    `human-merge-approved`, merge and release only what was approved, then
    verify and report the production outcome.
 4. **Released but open -> close approval.** Consider every open issue whose
-   change has reached production, whether or not it carries a handoff label. A
-   human merge event is acceptable evidence that the merge was approved even
-   when `human-merge-approved` is absent; name that you relied on it. Pick one
-   and prove that its stated outcome is present in the released product. Require a deployment record tied to the merged commit and
+   change has reached production, whether or not it carries a handoff label.
+   Pick one and prove that its stated outcome is present in the released
+   product. Require a deployment record tied to the merged commit and
    the production URL or behavior it affects; a comment asserting that work
    shipped is a claim to verify, not evidence. Inspect acceptance criteria,
    promised follow-ups and remaining risks, and resolve or explicitly surface
