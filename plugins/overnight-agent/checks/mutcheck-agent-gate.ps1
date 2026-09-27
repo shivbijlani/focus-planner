@@ -337,6 +337,17 @@ $arms = [ordered]@{
       }
     )
   }
+  'N-gate-never-written'             = @{
+    why     = 'the gate file is READ, never written -- the one-way property the channel rests on (#326)'
+    gate    = (New-Gate -Allow @($RULE_YOLO_THIS_REPO) -Ask @($FLOOR_MANY))
+    entries = @()
+    # The read-only check runs its own command surface (see Test-GateUnwritten); this query is
+    # here so the arm also behaves like every other arm rather than being a special case.
+    queries = @(
+      @{ args = @('-Action', 'merge_pr', '-Repo', 'focus-planner'); expect = @{ consent_ok = $true; reason = 'gate-allowed' } }
+    )
+    readOnly = $true
+  }
   'I-floor-outcome-phrasing'         = @{
     why     = 'a floor rule naming the OUTCOME binds, instead of matching nothing and being inert'
     gate    = (New-Gate -Allow @($RULE_YOLO_THIS_REPO) -Ask @($FLOOR_DATA_LOSS))
@@ -529,11 +540,84 @@ function Test-Arm {
         }
       }
     }
+    if ($Arm.readOnly) {
+      # #326: the gate file is never WRITTEN. That property is the entire reason `agent-gate.md`
+      # can be trusted without an attribution marker -- if this script could write it, the agent
+      # could grant itself a standing permission, and the gate would be worth exactly as much as
+      # the journal prose #227 taught us not to trust.
+      #
+      # THE VACUOUS-PASS TRAP, which this arm is shaped to avoid. The obvious implementation is
+      # "hash before, hash after, assert equal" -- and that passes when the file does not exist,
+      # because no-file and no-file hash to the same nothing. The arm would go green and STAY
+      # green while the property rotted, in a suite whose whole value is that a green arm means
+      # something. So existence is asserted POSITIVELY on both sides, and the content is pinned
+      # to a known value rather than merely to itself.
+      $fail += Test-GateUnwritten -Script $Script -Notes ([ref]$notes)
+    }
   }
   if (-not $Quiet) {
     Write-Host ("{0,-34} {1,-6} {2}" -f $Name, $(if ($fail -eq 0) { 'PASS' } else { 'FAIL' }), $Arm.why)
     foreach ($n in $notes) { Write-Host $n }
   }
+  return $fail
+}
+
+function Test-GateUnwritten {
+  # #326. Returns a failure count and appends notes. Seeds a REAL gate, runs the full command
+  # surface against it, and asserts the file is still there and still byte-identical.
+  param([string]$Script, [ref]$Notes)
+  $fail = 0
+  $root = Join-Path ([IO.Path]::GetTempPath()) ("oa-ro-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+  $jdir = Join-Path $root 'journal'
+  $sdir = Join-Path $root 'state'
+  $gpath = Join-Path $root 'agent-gate.md'
+  New-Item -ItemType Directory -Path $jdir -Force | Out-Null
+  New-Item -ItemType Directory -Path $sdir -Force | Out-Null
+  try {
+    # A gate that produces BOTH verdicts, because those are the two paths most likely to want to
+    # record something: an allow that might cache "granted", a floor block that might log a
+    # refusal. A gate that only ever denies would exercise half the surface.
+    $gateText = (New-Gate -Allow @($RULE_YOLO_THIS_REPO) -Ask @($FLOOR_MANY))
+    [IO.File]::WriteAllText($gpath, $gateText, [Text.UTF8Encoding]::new($false))
+    New-Journal -Dir $jdir -Id '972' -Entries @()
+
+    # POSITIVE EXISTENCE, BEFORE. Without this the whole arm is satisfiable by absence.
+    if (-not (Test-Path -LiteralPath $gpath -PathType Leaf)) {
+      $Notes.Value += '  x read-only: the seeded gate does not exist, so this arm would prove nothing'
+      return 1
+    }
+    $before = [IO.File]::ReadAllBytes($gpath)
+    if ($before.Length -eq 0) {
+      $Notes.Value += '  x read-only: the seeded gate is empty, so equality would be vacuous'
+      return 1
+    }
+
+    $common = @('-JournalDir', $jdir, '-StateDir', $sdir, '-GatePath', $gpath)
+    $surface = @(
+      @('gate'),
+      @('scan'),
+      @('get', '-Id', '972'),
+      @('consent', '-Id', '972'),
+      @('consent', '-Id', '972', '-Action', 'merge_pr', '-Repo', 'focus-planner'),   # gate-allowed
+      @('consent', '-Id', '972', '-Action', 'send_email_many'),                      # gate-floor-blocks
+      @('mark', '-Id', '972', '-Status', 'in-progress')
+    )
+    foreach ($cmd in $surface) {
+      [void](Invoke-Child -ChildArgs (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Script) + $cmd + $common))
+      # Checked after EVERY command rather than once at the end, so a failure names the command
+      # that wrote. "Something in these seven wrote the gate" is a much worse bug report.
+      if (-not (Test-Path -LiteralPath $gpath -PathType Leaf)) {
+        $fail++; $Notes.Value += "  x read-only: [$($cmd -join ' ')] DELETED the gate file"
+        break
+      }
+      $after = [IO.File]::ReadAllBytes($gpath)
+      if ($after.Length -ne $before.Length -or [Convert]::ToBase64String($after) -ne [Convert]::ToBase64String($before)) {
+        $fail++; $Notes.Value += "  x read-only: [$($cmd -join ' ')] WROTE the gate file"
+        break
+      }
+    }
+  }
+  finally { Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue }
   return $fail
 }
 
@@ -713,7 +797,7 @@ $mutations = @(
     # declared, which is exactly what this is -- every gate allowance now consults the field,
     # so every allow arm is sensitive to it by construction, not by duplicated testing.
     kills = 'H-gate-allowed-surfaces-human'
-    alsoCaughtBy = @('C-repo-scope', 'D-create-is-not-merge', 'F-enum-validation', 'I-floor-outcome-phrasing')
+    alsoCaughtBy = @('C-repo-scope', 'D-create-is-not-merge', 'F-enum-validation', 'I-floor-outcome-phrasing', 'N-gate-never-written')
     apply = {
       param($s)
       $s -replace [regex]::Escape('if (Test-Path $path) { $trailingHasUser = [bool](Get-JournalFacts $path).HasTrailingUser }'), '$trailingHasUser = $true'
@@ -732,6 +816,27 @@ $mutations = @(
     apply = {
       param($s)
       $s -replace [regex]::Escape('$humanSpoke = ($verdict.decision -eq ''allow'') -and $trailingHasUser'), '$humanSpoke = $false'
+    }
+  }
+  @{
+    # THE MUTANT IS SHAPED LIKE A HELPFUL EDIT, NOT LIKE SABOTAGE (#326). Nobody will submit a PR
+    # that writes to the gate on purpose; someone will absolutely submit one that tidies it while
+    # reading it. So the mutation is a `last_read` stamp appended after a successful parse --
+    # which reads as an improvement in review, and silently destroys the one-way property that is
+    # the entire reason `agent-gate.md` needs no attribution marker (#227).
+    name  = 'M13: Read-AgentGate stamps a last_read marker back into the gate (a helpful edit)'
+    kills = 'N-gate-never-written'
+    # E is a STRUCTURAL consequence, not a duplicated test. Appending to a path that does not
+    # exist CREATES it, so a gate the user never wrote springs into being mid-read -- and arm E
+    # asserts that an absent gate stays absent and grants nothing. That it fires here is the
+    # same property from the other side, and is worth keeping visible rather than narrowing the
+    # mutant to dodge it.
+    alsoCaughtBy = @('E-absent-file-fail-closed')
+    apply = {
+      param($s)
+      $s -replace [regex]::Escape('$result.mtime = (Get-Item -LiteralPath $path).LastWriteTimeUtc.ToString(''o'')'),
+        ('$result.mtime = (Get-Item -LiteralPath $path).LastWriteTimeUtc.ToString(''o''); ' +
+         '[IO.File]::AppendAllText($path, "<!-- last_read -->")')
     }
   }
 )

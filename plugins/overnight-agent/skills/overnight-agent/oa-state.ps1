@@ -1032,6 +1032,14 @@ $script:ConsentAffirmRe = '(?i)(?<![\w-])(approved?|approve it|yes|yep|yeah|go a
 # script does either. That is not an implementation detail -- it is the property that makes the
 # file a trustworthy consent channel (see .GATE in the header), so any future edit that adds a
 # write here destroys the guarantee rather than extending the feature.
+#
+# AND THAT IS NOW ASSERTED, NOT JUST STATED (#326). `mutcheck-agent-gate.ps1` arm
+# `N-gate-never-written` seeds a real gate, runs the whole command surface against it -- `gate`,
+# `scan`, `get`, `consent` with and without `-Action`, both an allow and a floor verdict, and
+# `mark` -- and requires the file to still exist with byte-identical content after each one.
+# Mutant M13 is the proof it bites: it appends a `last_read` stamp after a successful parse,
+# which reads as a tidy-up in review and is exactly the shape this comment used to be the only
+# defence against.
 
 # --- structure: kept in lockstep with src/config/agentGate.js -----------------------------
 # The web app is the WRITER of this file and this is the READER, so the two must agree on
