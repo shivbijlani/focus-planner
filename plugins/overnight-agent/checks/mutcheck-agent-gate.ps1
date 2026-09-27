@@ -75,11 +75,15 @@ $ErrorActionPreference = 'Stop'
 # Default to the installed skill's oa-state.ps1 when run by hand; run-sweeps.ps1 passes
 # -ScriptPath explicitly so the nightly sweep guards the PRODUCTION copy, not the repo's.
 if (-not $ScriptPath) {
-  $candidates = @(
-    (Join-Path $PSScriptRoot '..\skills\overnight-agent\oa-state.ps1'),
-    (Join-Path $env:LOCALAPPDATA 'overnight-agent\oa-state.ps1'),
-    "$env:USERPROFILE\.copilot\installed-plugins\focus-planner\overnight-agent\skills\overnight-agent\oa-state.ps1"
-  )
+  # The repo copy first, then the two installed locations. The installed ones are built ONLY on
+  # Windows: `$env:LOCALAPPDATA` and `$env:USERPROFILE` are null elsewhere, and `Join-Path` with
+  # a null root is a binding error that throws before the repo candidate is ever tried -- so on
+  # Linux this failed with "Cannot bind argument to parameter 'Path' because it is null" while
+  # the file it wanted was sitting right there. Guarded rather than wrapped in a try, because a
+  # swallowed throw here would silently test whichever copy happened to resolve.
+  $candidates = @((Join-Path $PSScriptRoot '..\skills\overnight-agent\oa-state.ps1'))
+  if ($env:LOCALAPPDATA) { $candidates += (Join-Path $env:LOCALAPPDATA 'overnight-agent\oa-state.ps1') }
+  if ($env:USERPROFILE) { $candidates += (Join-Path $env:USERPROFILE '.copilot\installed-plugins\focus-planner\overnight-agent\skills\overnight-agent\oa-state.ps1') }
   foreach ($c in $candidates) { if (Test-Path $c) { $ScriptPath = (Resolve-Path $c).Path; break } }
 }
 if (-not $ScriptPath -or -not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found (pass -ScriptPath)" }
@@ -547,8 +551,8 @@ if ($baselineFailures.Count -gt 0) { Write-Host ""; Write-Host "BASELINE FAILED"
 # --- advisory: what does the gate on THIS machine actually authorise? ------------------------
 # Never fatal. The user owns this file and may change it whenever he likes; a check that went
 # red on his edit would be crying wolf. This just states the current answer out loud.
-$livePath = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\agent-gate.md"
-if (Test-Path $livePath) {
+$livePath = if ($env:USERPROFILE) { Join-Path $env:USERPROFILE 'OneDrive\Apps\Focus Planner\agent-gate.md' } else { $null }
+if ($livePath -and (Test-Path $livePath)) {
   Write-Host ""
   Write-Host "=== ADVISORY: the gate file on this machine (never fatal) ==="
   $tmp = Join-Path $env:TEMP ("oa-gate-live-" + [guid]::NewGuid().ToString('N').Substring(0, 6))
