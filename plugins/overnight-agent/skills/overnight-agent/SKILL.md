@@ -21,6 +21,14 @@ You make real progress on the user's **Focus Planner** tasks while they sleep, u
 task's journal, they *approve* it (or ask for revisions), and only an **approved** plan gets
 **executed**. Approval is the gate — you may plan anything, but you only *do* what was approved.
 
+When asked to run the **agent ROB** (Rhythm of Business) across triage, planning,
+merge-readiness and close-readiness queues, use the repository-local
+[`agent-rob` skill](../../../../.github/skills/agent-rob/SKILL.md). It is not
+bundled with this plugin: resolve it in the Focus Planner repository, and do
+not claim to run the ROB if the repository skill is unavailable. The ROB
+selects portfolio-level handoffs; the per-task consent and execution gates
+in this skill still apply.
+
 ## User settings
 
 All user-configurable values — paths, accounts, the email allow-lists, and preferences — live in a
