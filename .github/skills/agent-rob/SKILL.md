@@ -107,11 +107,12 @@ Follow the skill's target-specific formatting rules.
    handoff labels. Skip anything already closed, merged or deployed — that work
    has left the backlog even if it was never labelled. Check the planner entry,
    journal and linked context so already active, deferred or blocked work is
-   not proposed as new. Choose one item needing triage. Make the case for why it should be triaged *next*: value, timing,
-   urgency, dependencies, supporting evidence, and what could change the
-   ranking. Ask the human to triage it, defer it, or pick another. Do not plan
-   or implement it on the strength of the recommendation. Write its triage
-   catch-up doc and point the human at it. On approval, apply `human-triaged`.
+   not proposed as new. Choose one item needing triage. Make the case for why
+   it should be triaged *next*: value, timing, urgency, dependencies,
+   supporting evidence, and what could change the ranking. Ask the human to
+   triage it, defer it, or pick another. Do not plan or implement it on the
+   strength of the recommendation. Write its triage catch-up doc and point the
+   human at it. On approval, apply `human-triaged`.
 2. **`human triaged` -> plan approval.** Consider all issues labelled
    `human-triaged` without an approved plan. Pick one and say why it is the
    best planning candidate. Check what is already done, then write a bounded
@@ -121,8 +122,7 @@ Follow the skill's target-specific formatting rules.
    approval, apply `human-plan-approved`.
 3. **Implemented -> merge approval.** An item is awaiting merge approval when
    an open, non-draft pull request implements it and it does not yet carry
-   `human-merge-approved`. Pick one and prove the exact change is
-   merge-ready:
+   `human-merge-approved`. Pick one and prove the exact change is merge-ready:
    link the implementation, report relevant test and check results, identify
    failures or outstanding risks, and describe the intended release path.
    Passing checks alone are not merge-readiness; state what the change does,
@@ -139,8 +139,8 @@ Follow the skill's target-specific formatting rules.
 4. **Released but open -> close approval.** Consider every open issue whose
    change has reached production, whether or not it carries a handoff label.
    Pick one and prove that its stated outcome is present in the released
-   product. Require a deployment record tied to the merged commit and
-   the production URL or behavior it affects; a comment asserting that work
+   product. Require a deployment record tied to the merged commit and the
+   production URL or behavior it affects; a comment asserting that work
    shipped is a claim to verify, not evidence. Inspect acceptance criteria,
    promised follow-ups and remaining risks, and resolve or explicitly surface
    each one before recommending closure. Record that proof in its own catch-up
