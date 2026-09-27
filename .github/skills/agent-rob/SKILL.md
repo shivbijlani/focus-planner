@@ -30,9 +30,9 @@ in one pass is still verifiable in the next:
 | --- | --- | --- |
 | Not started | *no handoff label* | Being proposed for triage |
 | `human triaged` | `human-triaged` | Writing a plan for that issue |
-| `human plan approved` | `plan-approved` | Implementing and testing the named plan |
-| `human merge approved` | `merge-approved` | Merging and releasing the named change |
-| `human close approved` | `close-approved` | Closing that specific issue |
+| `human plan approved` | `human-plan-approved` | Implementing and testing the named plan |
+| `human merge approved` | `human-merge-approved` | Merging and releasing the named change |
+| `human close approved` | `human-close-approved` | Closing that specific issue |
 
 The label is the durable record; the approval reply is the authorization to
 apply it. After the human approves a touch point, apply that state's label to
@@ -112,7 +112,7 @@ Follow the skill's target-specific formatting rules.
    plan with scope, intended result, assumptions, dependencies and verification
    in its own catch-up doc. Ask the human to approve or revise the specific
    plan. Do not implement until the human approves the current plan. On
-   approval, apply `plan-approved`.
+   approval, apply `human-plan-approved`.
 3. **Implemented -> merge approval.** Consider all implemented issues still
    awaiting merge approval. Pick one and prove the exact change is merge-ready:
    link the implementation, report relevant test and check results, identify
@@ -126,8 +126,8 @@ Follow the skill's target-specific formatting rules.
    queue empty. Record that proof in its own catch-up doc and ask for approval
    tied to that exact change. Do not merge or release based on triage or plan
    approval. Once the human explicitly approves the current change, apply
-   `merge-approved`, merge and release only what was approved, then verify and
-   report the production outcome.
+   `human-merge-approved`, merge and release only what was approved, then
+   verify and report the production outcome.
 4. **Released but open -> close approval.** Consider all released issues that
    remain open. Pick one and prove that its stated outcome is present in the
    released product. Require a deployment record tied to the merged commit and
@@ -137,8 +137,8 @@ Follow the skill's target-specific formatting rules.
    each one before recommending closure. Record that proof in its own catch-up
    doc and ask the human to approve closing that specific issue. Do not close
    it because it was merged or released, or because its merge was approved.
-   Close only after separate explicit human approval, apply `close-approved`,
-   and record the evidence.
+   Close only after separate explicit human approval, apply
+   `human-close-approved`, and record the evidence.
 
 The four recommendations may concern different items in a single pass.
 Select **at most one per queue**, not one across all queues. If a queue has no
