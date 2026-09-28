@@ -68,6 +68,16 @@ Ask Copilot to "run the overnight agent", "propose plans for my tasks", or
 (inbox check → execute approved plans → propose new plans behind the approval
 gate).
 
+When creating the scheduled **Overnight Agent** automation, select **Auto** as
+its model (`model: auto` in the automation configuration). The
+`Overnight Agent model` row in external `user-settings.md` defaults to `auto`;
+`oa-state.ps1 session -RunLimit`, `session -Id` and `scan` report the resolved
+preference and whether it came from the setting or the default. At present,
+the app's idle `create_session` and `send_session_message` tools do not accept
+a model argument, so changing this row does **not** change the automation's
+configured model or enforce a model on task sessions. Configure the
+automation's model separately; session-model enforcement requires an app API.
+
 ### Continuously drain the prepared queue
 
 `Overnight Agent concurrency` is the number of normal instructions **from this run** that may
@@ -191,4 +201,3 @@ tray itself never fetches `origin/main` or any other remote source; it only ever
 whatever copy is already deployed to its own home directory. Browser-watchdog tray
 ownership and a shared `user-settings.md`-driven policy are tracked as separate follow-up
 work and are intentionally not part of this tray.
-

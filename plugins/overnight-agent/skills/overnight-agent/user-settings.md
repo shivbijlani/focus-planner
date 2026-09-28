@@ -53,6 +53,10 @@ a value here takes effect on the next run with nothing else to change.
 | Today gate strict | `off` — set to `on` to make a workable Today task block the backlog **always**, with no release at all. The one-switch rollback if the agent starts leaving Today too readily. |
 | Overnight Agent concurrency | `1` |
 | Overnight Agent start buffer | `5m` |
+| Overnight Agent model | `auto` |
+
+**Model:** `auto` is the default when the row is absent. A malformed value falls back to
+`auto` and is reported as `settings-malformed` by `scan` and `session`.
 
 **Concurrency is the drain width within each run, not a total-start quota.** At `1`, each completed
 task is followed by the next eligible prepared task; at `2`, either opening is refilled independently.

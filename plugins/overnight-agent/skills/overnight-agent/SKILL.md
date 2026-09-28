@@ -1101,6 +1101,12 @@ finish before the next coordinator run can start more work.
      that catches the trap — a workspace equal to the run session's (`session_workspace_inherited`).
    - **Non-code task** → `-SessionKind folder` is fine; it still gets its own session.
 
+   Read `session -Id <ID>`'s `model` and `model_source` before creating or waking a
+   task session. The `Overnight Agent model` setting defaults to `auto`; a malformed
+   row falls back to `auto` with `settings-malformed` reported. This is the
+   resolved preference, not evidence that the app applied it: idle session
+   creation and session wakes do not currently accept a model argument.
+
    ```powershell
    oa-state.ps1 session -Id <ID> -SessionId <new session id> `
      -SessionKind code -SessionProject <repo project> `
