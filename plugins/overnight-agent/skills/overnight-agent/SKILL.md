@@ -1105,7 +1105,12 @@ finish before the next coordinator run can start more work.
    task session. The `Overnight Agent model` setting defaults to `auto`; a malformed
    row falls back to `auto` with `settings-malformed` reported. This is the
    resolved preference, not evidence that the app applied it: idle session
-   creation and session wakes do not currently accept a model argument.
+   creation and session wakes do not currently accept a model argument, so
+   those sessions inherit the app's default model. Set that default to Auto on
+   each computer during setup; create the coordinator automation with
+   `model: auto` in `save_workflow`. If the row overrides Auto, update the
+   automation and app default separately until the app supports session model
+   changes.
 
    ```powershell
    oa-state.ps1 session -Id <ID> -SessionId <new session id> `
