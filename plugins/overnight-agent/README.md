@@ -68,6 +68,20 @@ Ask Copilot to "run the overnight agent", "propose plans for my tasks", or
 (inbox check → execute approved plans → propose new plans behind the approval
 gate).
 
+Set the **app's default model to Auto** on each computer before running the
+Overnight Agent. When creating the scheduled **Overnight Agent** automation,
+select **Auto** as its model (`model: auto` in `save_workflow`). The
+`Overnight Agent model` row in external `user-settings.md` defaults to `auto`;
+`oa-state.ps1 session -RunLimit`, `session -Id` and `scan` report the resolved
+preference and whether it came from the setting or the default. At present,
+the app's idle `create_session` and `send_session_message` tools do not accept
+a model argument, so idle-created and woken task sessions inherit the **app's
+default model**. Changing this row does **not** change the automation's
+configured model or enforce a model on task sessions. When intentionally
+overriding Auto, pass the resolved value as `model` to `save_workflow` and set
+the app default to that value separately;
+session-model enforcement requires an app API.
+
 ### Continuously drain the prepared queue
 
 `Overnight Agent concurrency` is the number of normal instructions **from this run** that may
@@ -370,4 +384,3 @@ naming coincidence, not a shared or conflicting registration; see
 `docs/spec/Reliability.md` for the full design rationale. Install/uninstall for this mechanism
 is unchanged: `install-oa-supervisor.ps1` (status/install) and `install-oa-supervisor.ps1
 -Uninstall`.
-
