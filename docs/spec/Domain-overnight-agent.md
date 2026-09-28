@@ -180,6 +180,12 @@ backstop`, `Today gate strict`, and `Overnight Agent concurrency`; its settings 
 `Google account (Tasks)`, and Telegram settings. The template is explicit that the real settings
 live outside the plugin and that the bundled copy is overwritten on update.
 
+### Per-task session isolation
+
+Every non-code task uses a dedicated global chat session, with no project and no folder workspace.
+Chats are stored locally under `~/.copilot/chats`; the binder stores the session identity without a
+workspace path. Code tasks continue to use their repository worktrees under `V:\repos`.
+
 The PowerShell-side mutchecks parallel the JS ones. Files such as
 `plugins/overnight-agent/skills/overnight-agent/mutcheck-priority-order.ps1`,
 `plugins/overnight-agent/skills/overnight-agent/mutcheck-pacing-concurrency.ps1`,

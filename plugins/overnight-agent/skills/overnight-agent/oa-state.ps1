@@ -88,8 +88,8 @@
                                 DIFFERENT id over a LIVE one throws `session_bind_conflict`;
                                 binding over a DEAD one is the replacement path and records the
                                 prior id. `-Force` overrides.
-          [-SessionKind <k>]    `code` or `folder`. `code` REQUIRES -SessionProject and
-                                -SessionWorkspace, and refuses the run session's own workspace.
+          [-SessionKind <k>]    `code` or `chat`; defaults to `chat`. `code` REQUIRES
+                                -SessionProject and -SessionWorkspace. `chat` has neither.
           [-SessionProject <p>] The project the session must be created in -- the repository
                                 project for a code task, NOT the run session's project.
           [-SessionWorkspace <p>] The worktree/branch/folder path the session works in.
@@ -137,19 +137,19 @@
   A due recheck grants NO new permission: it is a read-only look at whether the blocker is gone.
   Acting on the result still obeys the reversibility gate.
 
-.SESSIONS (#404 -- one task, one session, one workspace)
+.SESSIONS (#404 -- one task, one isolated session)
   Before this, the overnight agent DID THE WORK ITSELF, in the run session. Measured live on
   2026-09-02 against task #451: the run read the journal, edited four deliverable files and wrote
   the turn entirely inside the main overnight-agent session. Nothing was isolated, and nothing
-  recorded where the work had happened -- so the next run cold-started the same task. #391 already
-  states the rule ("per-item sub-sessions are isolation, not concurrency: one task, one workspace,
-  one thing being verified at a time"), but it stated it about a mechanism that did not exist.
-  This is that mechanism.
+  recorded where the work had happened -- so the next run cold-started the same task. #391 states
+  that per-item sub-sessions provide isolation, not concurrency, but the state did not yet record
+  that mechanism. Code tasks now use their own repository worktree; non-code tasks use a global
+  chat with no project or workspace.
 
   The binding lives HERE, in skill state, for the same reason every other machine fact does: the
   journal is the user's prose and carries no metadata. A `session` member holds the session id,
-  the project and workspace it was created in, its liveness, and -- when it replaced one that
-  could not be woken -- the id it continues.
+  its scope (project/worktree for code, neither for chat), its liveness, and -- when it replaced
+  one that could not be woken -- the id it continues.
 
   THE COMMAND RETURNS A VERDICT, NOT A FIELD. `session -Id <id>` answers the only question the
   run loop actually has -- create, reuse, or replace? -- so that answer is computed from state
@@ -569,7 +569,7 @@ param(
   # kind. `code` is the constrained one -- it demands a project and a workspace and refuses the
   # run session's own.
   [string]$SessionId,
-  [ValidateSet('code', 'folder')]
+  [ValidateSet('code', 'chat')]
   [string]$SessionKind,
   [string]$SessionProject,
   [string]$SessionWorkspace,
@@ -5112,11 +5112,26 @@ function Cmd-Session {
     }
     elseif ($sess) { $prior = "$($sess.prior_session_id)" }
 
-    $kind = if ($SessionKind) { $SessionKind } elseif ($sess) { "$($sess.kind)" } else { 'folder' }
-    $project = if ($SessionProject) { $SessionProject } elseif ($sess) { "$($sess.project)" } else { '' }
-    $workspace = if ($SessionWorkspace) { $SessionWorkspace } elseif ($sess) { "$($sess.workspace)" } else { '' }
-    $wsType = if ($WorkspaceType) { $WorkspaceType } elseif ($sess -and "$($sess.workspace_type)") { "$($sess.workspace_type)" }
-    elseif ($kind -eq 'code') { 'worktree' } else { 'folder' }
+    $kind = if ($SessionKind) { $SessionKind } elseif ($sess) { "$($sess.kind)" } else { 'chat' }
+    if ($kind -notin @('code', 'chat')) {
+      throw ("session_kind_invalid: '$kind' is not a supported task session kind; pass " +
+        '-SessionKind chat for a non-code task or -SessionKind code with its worktree')
+    }
+    if ($kind -eq 'chat') {
+      if ($SessionProject -or $SessionWorkspace -or $WorkspaceType) {
+        throw 'session_chat_scope: a chat task session must be global, with no project or workspace'
+      }
+      $project = ''
+      $workspace = ''
+      $wsType = ''
+    } else {
+      $project = if ($SessionProject) { $SessionProject } elseif ($sess) { "$($sess.project)" } else { '' }
+      $workspace = if ($SessionWorkspace) { $SessionWorkspace }
+        elseif ($sess) { "$($sess.workspace)" }
+        else { '' }
+      $wsType = if ($WorkspaceType) { $WorkspaceType } elseif ($sess -and "$($sess.workspace_type)") { "$($sess.workspace_type)" }
+      else { 'worktree' }
+    }
 
     if ($kind -eq 'code') {
       # A code task without a named project is the inheritance trap: every session API defaults

@@ -367,9 +367,47 @@ Check 'K code bind with a folder workspace is REFUSED' { $script:LastOaExit -ne 
 
 Check 'K- nothing was bound by any refusal' { (Invoke-OaJson @('session', '-Id', '803')).bound -eq $false }
 
-# A non-code task still gets its own session, and is not held to the worktree rules.
-$folder = Invoke-OaJson @('session', '-Id', '804', '-SessionId', 'SESS_804', '-SessionKind', 'folder', '-Force')
-Check 'K-- a folder task still gets a session' { "$($folder.session_id)" -eq 'SESS_804' -and "$($folder.kind)" -eq 'folder' }
+# A non-code task gets its own global chat, with no project or workspace.
+$chat = Invoke-OaJson @('session', '-Id', '804', '-SessionId', 'SESS_804', '-SessionKind', 'chat', '-Force')
+Check 'K-- a non-code task gets a workspace-free chat' {
+  "$($chat.session_id)" -eq 'SESS_804' -and "$($chat.kind)" -eq 'chat' -and
+    -not $chat.project -and -not $chat.workspace
+}
+
+$chatDefault = Invoke-OaJson @('session', '-Id', '809', '-SessionId', 'SESS_809')
+Check 'K--- non-code sessions default to a workspace-free chat' {
+  "$($chatDefault.session_id)" -eq 'SESS_809' -and "$($chatDefault.kind)" -eq 'chat' -and
+    -not $chatDefault.project -and -not $chatDefault.workspace
+}
+
+$chatProject = Invoke-Oa @('session', '-Id', '810', '-SessionId', 'SESS_810',
+  '-SessionKind', 'chat', '-SessionProject', 'focus-planner')
+Check 'K---- a chat cannot be bound to a project' {
+  $script:LastOaExit -ne 0 -and $chatProject -match 'session_chat_scope'
+}
+
+$chatWorkspace = Invoke-Oa @('session', '-Id', '811', '-SessionId', 'SESS_811',
+  '-SessionKind', 'chat', '-SessionWorkspace', (Join-Path $root 'chat-811'))
+Check 'K----- a chat cannot be bound to a workspace' {
+  $script:LastOaExit -ne 0 -and $chatWorkspace -match 'session_chat_scope'
+}
+
+# A legacy folder binding remains an error unless the caller explicitly chooses its new kind.
+# Keep this fixture synthetic: no live state is read or changed.
+$legacyBind = Invoke-OaJson @('session', '-Id', '812', '-SessionId', 'SESS_LEGACY_812',
+  '-SessionKind', 'chat', '-Force')
+$legacyPath = Join-Path $sdir 'task-812.json'
+$legacyState = Get-Content -LiteralPath $legacyPath -Raw | ConvertFrom-Json
+$legacyState.session.kind = 'folder'
+$legacyState.session.state = 'dead'
+[IO.File]::WriteAllText($legacyPath, ($legacyState | ConvertTo-Json -Depth 20), $utf8)
+$legacyReplace = Invoke-Oa @('session', '-Id', '812', '-SessionId', 'SESS_REPLACEMENT_812')
+Check 'K------ the legacy folder binding fixture was persisted' {
+  $legacyBind.bound -eq $true -and "$($legacyState.session.kind)" -eq 'folder'
+}
+Check 'K------ a legacy folder replacement explains the required explicit kind' {
+  $script:LastOaExit -ne 0 -and $legacyReplace -match 'session_kind_invalid'
+}
 
 # --- L/M/N: the concurrency setting (#391), and its fail-safe direction ----------------
 $l = Invoke-OaJson -OaArgs @('session', '-InFlight') -Settings $noSettings
@@ -394,19 +432,19 @@ $zero = Invoke-OaJson @('session', '-InFlight')
 Check 'S releasing bindings leaves the configured per-run limit unchanged' { $zero.dispatch_limit -eq 1 }
 
 [void](New-Bind -Id '805' -SessionId 'SESS_805')
-$o = Invoke-Oa @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'folder')
+$o = Invoke-Oa @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'chat')
 Check 'O a second idle conversation can be bound without starting work' { $script:LastOaExit -eq 0 -and $o -match 'SESS_806' }
 Check 'O- two bindings do not spend or change the per-run limit' {
   $capacity = Invoke-OaJson @('session', '-InFlight')
   $capacity.scope -eq 'run_local_concurrency' -and $capacity.dispatch_limit -eq 1 -and -not $capacity.PSObject.Properties['at_capacity']
 }
 
-$p = Invoke-OaJson @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'folder', '-Force')
+$p = Invoke-OaJson @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'chat', '-Force')
 Check 'P an explicit rebind still preserves the requested conversation' { "$($p.session_id)" -eq 'SESS_806' }
 
 # Changing the concurrency setting does not change the identity operation.
 [void](Invoke-Oa @('session', '-Id', '806', '-SessionRelease'))
-$n2 = Invoke-OaJson -OaArgs @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'folder') -Settings $twoSettings
+$n2 = Invoke-OaJson -OaArgs @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'chat') -Settings $twoSettings
 Check 'N-- concurrency 2 admits the second item' { "$($n2.session_id)" -eq 'SESS_806' }
 [void](Invoke-Oa @('session', '-Id', '806', '-SessionRelease'))
 

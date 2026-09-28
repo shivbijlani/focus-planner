@@ -7,8 +7,17 @@
   This is a SEPARATE, additional supervision route from install-oa-supervisor.ps1
   (GH #226's Scheduled Task, which detects a stuck/dead Overnight Agent run). This
   installer owns only the M=3h/N=4h preventive-restart tray (GH #689/#695) and does
-  not touch, migrate, or remove that existing Scheduled Task/Startup-shim route,
-  the browser watchdog, or any shared settings file.
+  not touch, migrate, or remove that existing Scheduled Task/Startup-shim route or
+  any shared settings file.
+
+  The same tray is also the ONE resident dispatcher for browser checks (GH #698),
+  an independent workload that is completely OFF until the user opts in under
+  `## Tray browser checks` in user-settings.md. Enabling the tray never enables
+  browser checks, and this installer adds no browser-specific startup route.
+
+  It also hosts the plugin update-check workload (GH #701): on by default, daily,
+  and report-only unless `Auto apply` is on under `## Tray update checks`. It uses
+  only the Copilot plugin marketplace CLI and adds no startup route of its own.
 
   The tray is OFF by default. Installing or updating the plugin never registers
   or starts it; only an explicit user action does:
@@ -56,10 +65,16 @@ $ErrorActionPreference = 'Stop'
 
 # Fixed, reviewed set: adding a file here never adds another startup route. Only
 # the files this tray actually needs to run standalone from its deployed home.
+# The browser-check workload (GH #698) reuses the existing browser tools, deployed
+# flat beside it so browser-watchdog.ps1 resolves them as siblings.
 $script:DeployedFiles = @(
   'oa-supervisor-tray.ps1', 'oa-supervisor-startup.ps1',
   'reliability-supervisor.mjs', 'windows-app-actuator.mjs',
-  'session-terminal-evidence.mjs', 'consumer-reliability-supervisor.mjs'
+  'session-terminal-evidence.mjs', 'consumer-reliability-supervisor.mjs',
+  'oa-user-settings.mjs',
+  'consumer-browser-watchdog.mjs', 'browser-watchdog.ps1', 'check-browser-slots.ps1',
+  'browser-slot-table.ps1', '..\skills\overnight-agent\ensure-mcp-browsers.ps1',
+  'consumer-update-check.mjs'
 )
 
 function Get-ReliabilityTrayStatus {
@@ -92,7 +107,7 @@ function Copy-ReliabilityTrayFiles {
   foreach ($name in $script:DeployedFiles) {
     $source = Join-Path $PSScriptRoot $name
     if (-not (Test-Path -LiteralPath $source)) { throw "Required tray file missing from plugin: $source" }
-    $destination = Join-Path $files.home $name
+    $destination = Join-Path $files.home (Split-Path -Leaf $name)
     # Skip identical bytes so re-running -Enable is a no-op deploy, not churn.
     $needsCopy = $true
     if (Test-Path -LiteralPath $destination) {

@@ -185,6 +185,10 @@ function Invoke-Tool {
     $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Path) + $Arguments
     $p = Start-Process -FilePath $psExe -ArgumentList $argList -NoNewWindow -PassThru `
                        -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+    # Windows PowerShell 5.1 reports ExitCode as $null for a Start-Process
+    # -PassThru child unless its handle is opened before it exits. The tray
+    # runs this under 5.1, so without this a successful launch reads as failed.
+    $null = $p.Handle
     if (-not $p.WaitForExit($ToolTimeoutSec * 1000)) {
       try { $p.Kill() } catch { }
       return [pscustomobject]@{ ExitCode = 124; Stdout = ''; Stderr = "timed out after ${ToolTimeoutSec}s"; TimedOut = $true }

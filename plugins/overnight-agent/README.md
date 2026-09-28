@@ -170,6 +170,9 @@ plugins/overnight-agent/checks/
 ├── windows-app-actuator.mjs                # process identity + graceful/bounded-force actuation
 ├── session-terminal-evidence.mjs           # "quiet evidence" for the M/N window
 ├── consumer-reliability-supervisor.mjs     # wires the policy engine to the real desktop app
+├── consumer-browser-watchdog.mjs           # browser-check workload (off by default, GH #698)
+├── consumer-update-check.mjs               # plugin update-check workload (daily, report-only, GH #701)
+├── oa-user-settings.mjs                    # the ONE reader for tray policy in user-settings.md
 ├── oa-supervisor-tray.ps1                  # the tray app itself
 ├── oa-supervisor-startup.ps1               # shared HKCU Run + lock-ownership helpers
 └── install-oa-reliability-tray.ps1         # opt-in installer (status / -Enable / -Disable)
@@ -181,7 +184,7 @@ plugins/overnight-agent/checks/
 powershell -File plugins\overnight-agent\checks\install-oa-reliability-tray.ps1 -Enable
 ```
 
-This deploys the six files above to `%LOCALAPPDATA%\overnight-agent`, registers **one**
+This deploys the files above — plus the existing browser tools the browser-check workload reuses (`browser-watchdog.ps1`, `check-browser-slots.ps1`, `browser-slot-table.ps1`, `ensure-mcp-browsers.ps1`) — to `%LOCALAPPDATA%\overnight-agent`, registers **one**
 per-user startup entry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Overnight Agent
 supervisor`), and starts the tray immediately. `-Disable` (alias `-Uninstall`) stops it and
 removes the entry; running the installer with no switch only reports status.
@@ -189,12 +192,46 @@ removes the entry; running the installer with no switch only reports status.
 The tray owns a single check: a preventive restart of the desktop app on an **M=3h quiet
 opportunity / N=4h hard deadline** cycle, requiring a continuous **15-minute quiet window**
 before a preventive (non-hard-deadline) restart, and never restarting more than once per
-**60-minute cooldown**. Every restart decision — process identity (pid + start time + path),
-the exclusive action lock, graceful-close-then-bounded-force termination, and the durable
+**60-minute cooldown**. Those four values and the workload's on/off switch are **yours to
+change**, in the external `user-settings.md` (GH #696) — see below. Every restart decision —
+process identity (pid + start time + path), the exclusive action lock,
+graceful-close-then-bounded-force termination, and the durable
 JSONL audit trail — lives in `reliability-supervisor.mjs` / `windows-app-actuator.mjs`, run
 as a child process on every evaluation; the tray itself never touches a process directly.
 The tray's own **Pause** menu item is intentionally **not persisted**: it lasts only for the
 current tray process and always clears back to normal supervision on the next start.
+
+### The policy lives in `user-settings.md` (GH #696)
+
+The workload's user-facing policy is read from the **external** `user-settings.md` — the same
+file that carries every other Overnight Agent setting, resolved in the same documented order
+(`$OVERNIGHT_AGENT_SETTINGS` → project folder → `%OneDrive%\Apps\Focus Planner\` →
+`%LOCALAPPDATA%\overnight-agent\`), and never overwritten by a plugin update. Add the section
+below to change it; **leave it out and the product defaults above apply.**
+
+```markdown
+## Tray reliability supervision
+
+| Setting | Value |
+| --- | --- |
+| Enabled | `on` |
+| Quiet opportunity (M) | `3h` |
+| Hard deadline (N) | `4h` |
+| Quiet window | `15m` |
+| Restart cooldown | `60m` |
+```
+
+Every row is optional. Durations accept `3h` or `180m`; `Enabled` accepts `on`/`off`. Omit
+`Hard deadline (N)` and it is derived from the `M` you set. A row the reader cannot
+understand — an unknown name, an out-of-range value, an `N` that does not exceed `M` — is
+**refused by name**, and supervision declines to act rather than acting on a guessed policy;
+the tray's status shows the refusal.
+
+`%LOCALAPPDATA%\overnight-agent\reliability-supervisor.json` is **derived**: it is rewritten
+from `user-settings.md` on every evaluation, so hand-editing it has no lasting effect. Each
+tray workload owns its own sibling `##` section, so a later workload adds its own section and
+its own independently-missing policy rather than extending this one. This is a fresh-install
+design with no migration from previously hand-written JSON.
 
 This is signed-in-user supervision only — it runs solely while the user is signed in to
 Windows, exactly like the app it supervises, and it registers no Scheduled Task, Startup
@@ -202,6 +239,82 @@ shim, or service. Updating the *deployed* copy of these files (e.g. after a plug
 is a separate, maintainer/host-side concern — `auto-deploy-plugin.ps1` / `sync-oa-home.ps1`
 are one such maintainer adapter for keeping a local checkout's deployed copy current. The
 tray itself never fetches `origin/main` or any other remote source; it only ever executes
-whatever copy is already deployed to its own home directory. Browser-watchdog tray
-ownership and a shared `user-settings.md`-driven policy are tracked as separate follow-up
-work and are intentionally not part of this tray.
+whatever copy is already deployed to its own home directory. The only update action the tray
+can take is the separate update-check workload below, which goes through the Copilot plugin
+marketplace CLI, never git.
+
+### Browser checks in the tray (GH #698)
+
+The same tray is the **only** resident dispatcher for browser-watchdog checks — an
+**independent workload** with its own `## Tray browser checks` section in `user-settings.md`,
+its own schedule, its own in-memory **Pause browser checks**, its own state file
+(`browser-checks-state.json`) and its own lock (`browser-checks.lock`). It shares no M/N state,
+cooldown or action lock with reliability supervision. There is no separate Scheduled Task,
+Startup shim or VBS launcher for browser checks; `/browser-watchdog` stays available on demand.
+
+It is **completely off by default, including observation**. Each action is a separate opt-in:
+
+```markdown
+## Tray browser checks
+
+| Setting | Value |
+| --- | --- |
+| Enabled | `on` |
+| Observe | `on` |
+| Thaw stuck slots | `off` |
+| Auto-launch closed slots | `off` |
+| Check interval | `60m` |
+```
+
+`Observe` runs a read-only CDP work probe; `Thaw stuck slots` allows the non-destructive
+in-place thaw; `Auto-launch closed slots` allows starting a closed slot. **Observe and Thaw
+never imply Auto-launch** — the tray passes `-NoLaunch` to `browser-watchdog.ps1` unless
+Auto-launch is explicitly `on`. The slots are always the existing `## Browser slots` table. The
+workload reuses `browser-watchdog.ps1` / `check-browser-slots.ps1` / `browser-slot-table.ps1` /
+`ensure-mcp-browsers.ps1` rather than reimplementing them, and never kills or reparents a browser or MCP
+worker process. The tray's **Browser checks** menu shows the current status and recent outcomes.
+
+### Plugin update checks in the tray (GH #701)
+
+A third **independent workload** asks whether a newer `overnight-agent` is available. It has
+its own `## Tray update checks` section in `user-settings.md`, its own interval, its own
+in-memory **Pause update checks**, its own state file (`update-check-state.json`, holding
+`lastCheckedAt`, `installedVersion`, `availableVersion` and `lastResult`) and its own lock
+(`update-check.lock`). It shares no state, lock or cooldown with the reliability or browser
+workloads and imports neither of them.
+
+It is **on by default, checks daily, and only reports**. Hourly is one row away:
+
+```markdown
+## Tray update checks
+
+| Setting | Value |
+| --- | --- |
+| Enabled | `on` |
+| Check interval | `hourly` |
+| Auto apply | `off` |
+| Source | `marketplace` |
+```
+
+`Check interval` accepts `hourly`, `daily`, `weekly` or a duration from `60m` to `168h`.
+`Source` accepts only `marketplace`. A row it cannot read is refused by name and no check runs.
+
+The **only source is the Copilot plugin marketplace**, driven through the Copilot CLI:
+`copilot plugin marketplace list --json` (is `focus-planner` registered?), `copilot plugin
+list --json` (is `overnight-agent` installed from it, and at which version?), a best-effort
+`copilot plugin marketplace update focus-planner` plus `copilot plugin marketplace browse
+focus-planner --json` (the catalog version). The installed and catalog versions are then
+compared. With **Auto apply off** (the default) the tray's **Plugin updates** menu just
+shows *update available* and nothing is installed. With it on, the workload runs `copilot
+plugin install overnight-agent@focus-planner` and reads the installed version again to
+confirm it moved. A tray started with `-NoAct` can only report.
+
+It is idempotent. A run inside the interval touches no CLI and writes nothing, so restarting
+the tray never adds a check. A failed check is retried after at most an hour. The tray
+**never** runs git or fetches `origin/main`, and it never uses `auto-deploy-plugin.ps1`,
+`deploy-installed-plugin.ps1` or `sync-oa-home.ps1`; those stay maintainer-only.
+
+**Stale fallback without the tray:** `node consumer-update-check.mjs` performs a check only if
+one is due. `node consumer-update-check.mjs --stale-note` is read-only and non-blocking: it
+runs no CLI, writes nothing, and prints a note when the last completed check is older than
+the interval (or when an update is already known to be available).

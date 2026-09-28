@@ -35,6 +35,72 @@ function Get-OaSupervisorFiles {
     stopRequest = (Join-Path $oaHome 'supervisor-tray-stop.json')
     tray        = (Join-Path $oaHome 'oa-supervisor-tray.ps1')
     consumer    = (Join-Path $oaHome 'consumer-reliability-supervisor.mjs')
+    browserConsumer = (Join-Path $oaHome 'consumer-browser-watchdog.mjs')
+    browserState    = (Join-Path $oaHome 'browser-checks-state.json')
+    updateConsumer  = (Join-Path $oaHome 'consumer-update-check.mjs')
+    updateState     = (Join-Path $oaHome 'update-check-state.json')
+  }
+}
+
+# Pure: one update-check result line -> what the tray shows (GH #701). A 'not-due'
+# run carries the last recorded result, so the menu keeps showing it.
+function ConvertFrom-OaUpdateResult {
+  param($Result)
+  $status = [string]$Result.status
+  $last = $Result.last
+  $effective = if ($status -in @('not-due', 'busy') -and $last -and $last.lastResult) { [string]$last.lastResult } else { $status }
+  $summary = switch ($status) {
+    'disabled'     { 'off (Enabled = off)' }
+    'policy-error' { "settings refused: $($Result.error)" }
+    'busy'         { 'another update check holds the update-check lock' }
+    'not-due'      { if ($last -and $last.summary) { [string]$last.summary } else { 'waiting for the next check' } }
+    default {
+      if ($Result.outcome -and $Result.outcome.summary) { [string]$Result.outcome.summary } else { $status }
+    }
+  }
+  $checked = $null
+  if ($last -and $last.lastCheckedAt) {
+    $checked = try { ([datetime]::Parse([string]$last.lastCheckedAt, $null,
+      [System.Globalization.DateTimeStyles]::RoundtripKind)).ToLocalTime().ToString('yyyy-MM-dd HH:mm') } catch { $null }
+  }
+  [ordered]@{
+    state = $effective.ToUpperInvariant()
+    summary = $summary
+    updateAvailable = ($effective -eq 'update-available')
+    installedVersion = $(if ($last) { [string]$last.installedVersion } else { $null })
+    availableVersion = $(if ($last) { [string]$last.availableVersion } else { $null })
+    lastChecked = $checked
+    error = $(if ($status -in @('failed', 'apply-failed', 'policy-error')) { [string]$Result.error } else { $null })
+    settingsPath = $(if ($Result.policy) { [string]$Result.policy.settingsPath } else { $null })
+  }
+}
+
+# Pure: one browser-workload result line -> what the tray shows. Kept free of UI
+# and process state so the tray tests can drive it directly.
+function ConvertFrom-OaBrowserResult {
+  param($Result)
+  $summary = switch ([string]$Result.status) {
+    'disabled'     { if ($Result.policy -and $Result.policy.source -eq 'defaults') { 'off (default)' } else { 'off (Enabled = off)' } }
+    'no-opt-ins'   { 'enabled, but no Observe/Thaw/Auto-launch opted in - nothing runs' }
+    'policy-error' { "settings refused: $($Result.error)" }
+    'busy'         { 'another browser check holds the browser-check lock' }
+    default {
+      if ($Result.outcome) { "$($Result.outcome.mode) - $($Result.outcome.summary)" } else { [string]$Result.status }
+    }
+  }
+  $recent = @()
+  foreach ($entry in @($Result.recent)) {
+    if (-not $entry) { continue }
+    $when = try { ([datetime]::Parse([string]$entry.at, $null,
+      [System.Globalization.DateTimeStyles]::RoundtripKind)).ToLocalTime().ToString('MM-dd HH:mm') } catch { '?' }
+    $recent += "$when $($entry.mode): $($entry.summary)"
+  }
+  [ordered]@{
+    state = ([string]$Result.status).ToUpperInvariant()
+    summary = $summary
+    error = $(if ($Result.status -in @('failed', 'policy-error')) { [string]$Result.error } else { $null })
+    recent = $recent
+    settingsPath = $(if ($Result.policy) { [string]$Result.policy.settingsPath } else { $null })
   }
 }
 
