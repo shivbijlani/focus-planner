@@ -133,14 +133,15 @@ it and describe what it shows in text so the document still stands alone.
    value, timing, urgency, dependencies, supporting evidence, and what could
    change the ranking.
 
-   Then **plan it before proposing it.** Use plan mode to investigate the
-   actual code and produce a bounded plan: scope, intended result, the files
+   Then **plan it before proposing it.** Investigate the actual code yourself
+   and produce a bounded plan: scope, intended result, the files
    and behavior involved, assumptions, dependencies, risks, and how the result
    will be verified. Do not ask whether the issue is worth doing in the
    abstract — ask the human to approve a specific approach, so the answer
-   authorizes real work. Record the ranking case and the plan together in one
-   catch-up doc. Do not implement until the human approves that plan. On
-   approval, apply `human-plan-approved`.
+   authorizes real work. Do the reading in this session; do not delegate the
+   planning to another session. Record the ranking case and the plan together
+   in one catch-up doc. Do not implement until the human approves that plan.
+   On approval, apply `human-plan-approved`.
 2. **Implemented -> merge approval.** An item is awaiting merge approval when
    an open, non-draft pull request implements it and it does not yet carry
    `human-merge-approved`. Pick one and prove the exact change is merge-ready:
