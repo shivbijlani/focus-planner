@@ -289,10 +289,13 @@ It is **on by default, checks daily, and only reports**. Hourly is one row away:
 
 The **only source is the Copilot plugin marketplace**, driven through the Copilot CLI:
 `copilot plugin marketplace list --json` (is `focus-planner` registered?), `copilot plugin
-list --json` (is `overnight-agent` installed from it, and at which version?), a best-effort
-`copilot plugin marketplace update focus-planner` plus `copilot plugin marketplace browse
-focus-planner --json` (the catalog version). The installed and catalog versions are then
-compared. With **Auto apply off** (the default) the tray's **Plugin updates** menu just
+list --json` (is `overnight-agent` installed from it, and at which version?), and a best-effort
+`copilot plugin marketplace update focus-planner`. After refresh, the catalog version comes
+from the registered GitHub marketplace's `marketplace.json` in the Copilot CLI's local
+marketplace cache; `copilot plugin marketplace browse focus-planner --json` confirms catalog
+membership but does not expose a version. If this CLI cache is unavailable, the tray reports
+an explicit `capability-gap` instead of pretending the missing version is transient. The
+installed and catalog versions are then compared. With **Auto apply off** (the default) the tray's **Plugin updates** menu just
 shows *update available* and nothing is installed. With it on, the workload runs `copilot
 plugin install overnight-agent@focus-planner` and reads the installed version again to
 confirm it moved. A tray started with `-NoAct` can only report.
