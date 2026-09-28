@@ -21,6 +21,18 @@ You make real progress on the user's **Focus Planner** tasks while they sleep, u
 task's journal, they *approve* it (or ask for revisions), and only an **approved** plan gets
 **executed**. Approval is the gate — you may plan anything, but you only *do* what was approved.
 
+An optional reliability supervisor tray app (outside this agent run, off by
+default, enabled only by the user) owns the local background-check inventory: the
+Overnight Agent safety checks and the separate browser-slot watchdog. It uses one
+Windows sign-in route, one pause/exit control, and runs only while the user is signed
+in. Its policy, action lock and audit live in `%LOCALAPPDATA%\overnight-agent`; see
+the plugin README for the inventory and safeguards. Agent runs never install, enable,
+start or duplicate these local checks. Browser checks are enabled only through that
+tray's component control (off by default); no separate browser-watchdog or Focus
+Planner watchdog automation, Scheduled Task, Startup shim, service, or per-watchdog
+installer is supported. MCP reaping, deployment and sweeps remain in the run rather
+than gaining their own background schedules.
+
 ## User settings
 
 All user-configurable values — paths, accounts, the email allow-lists, and preferences — live in a

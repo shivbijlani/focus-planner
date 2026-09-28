@@ -17,7 +17,7 @@ loop itself lives under `plugins/overnight-agent/`.
 
 | Layer | Primary files | What it guards against |
 | --- | --- | --- |
-| OS-dispatched supervision | `plugins/overnight-agent/checks/install-oa-supervisor.ps1`, `oa-supervisor.ps1`, `oa-supervisor-daemon.ps1`, `supervisor-liveness-sweep.ps1`, `supervisor-replay.mjs` | The agent or app scheduler stopping entirely |
+| Out-of-band supervision (optional tray app) | `plugins/overnight-agent/checks/install-oa-supervisor.ps1`, `oa-supervisor-tray.ps1`, `oa-supervisor-components.ps1`, `oa-supervisor-startup.ps1`, `oa-supervisor.ps1`, `browser-watchdog.ps1`, `supervisor-liveness-sweep.ps1`, `supervisor-replay.mjs` | The agent, app scheduler, or browser slots stopping entirely |
 | Stuck-run and orphan repair | `plugins/overnight-agent/checks/stuck-run-sweep.mjs`, `orphan-liveness-sweep.mjs` | A `running` row, live ask, or live journal becoming invisible and permanently blocking progress |
 | Silent remedy | `plugins/overnight-agent/checks/oa-supervisor.ps1` | Alert fatigue from “red but unactioned” findings |
 | Deploy propagation | `version-bump-sweep.mjs`, `installed-skill-drift-sweep.mjs`, `installed-capability-sweep.mjs`, `sync-oa-home.ps1`, `SKILL.md` | Merged fixes not reaching the bytes the machine actually executes |
@@ -28,13 +28,38 @@ loop itself lives under `plugins/overnight-agent/`.
 
 </details>
 
-## OS-dispatched supervision
+## Out-of-band supervision (optional tray app)
 
 The core design choice is that supervision does **not** run inside the overnight run it watches.
-`plugins/overnight-agent/checks/install-oa-supervisor.ps1` installs the preferred Windows
-Scheduled Task, and falls back to a Startup-folder daemon only when unattended elevation is not
-available. `plugins/overnight-agent/checks/supervisor-liveness-sweep.ps1` then watches the
-watchers themselves.
+Since GH #689 the supervisor is an **optional Windows tray app**, off by default. It owns
+the complete reviewed inventory of local background checks: the Overnight Agent health
+check and the browser-slot watchdog.
+`plugins/overnight-agent/checks/install-oa-supervisor.ps1 -Enable` (or the tray's
+**Start with Windows** item) is the only way to turn it on. It uses exactly one startup route, a
+per-user `HKCU\...\Run` value that starts `oa-supervisor-tray.ps1` at sign-in. The tray owns the M/N
+scheduler (15-minute maximum cadence, with earlier M/N wakes) and runs `oa-supervisor.ps1` as a child
+process for each evaluation. After **Enable browser checks** in that same tray (off by default),
+it also runs `browser-watchdog.ps1` as a child every 60 minutes;
+that check repairs missing or stuck browser slots but never restarts a signed-in browser window.
+Each check has its own status and cadence. Browser consent, component pause and recent outcomes
+persist in the tray's state file; global pause, exit and startup remain shared controls.
+The two checks use the fixed inventory in `oa-supervisor-components.ps1`, with a 15-minute outer
+timeout per child. Exit stops verified checker workers, not the browser or Copilot GUI processes.
+The restart
+safeguards (process identity, action lock, graceful-then-bounded force, durable audit and cooldown)
+stay in `reliability-supervisor.mjs`. `plugins/overnight-agent/checks/supervisor-liveness-sweep.ps1`
+then watches the watchers themselves.
+
+This is the only project-owned Windows startup route for local background checks. There is no
+separate watchdog task, Startup-folder shim, service, or per-watchdog installer. Existing named
+task and Startup-folder entries are detected and removed during migration; an entry that cannot be
+removed prevents the tray from registering another route. Copilot-hosted schedules and workflows
+remain controlled by their existing host settings. The manually started planner development server
+and session-scoped MCP/browser processes are not installed as persistent services and are outside
+this tray's inventory. MCP reaping, auto-deploy and the sweep suite still run in the Overnight Agent;
+moving them into the tray, arbitrary daemons and logged-out supervision remain deferred.
+No separate watchdog chat automation is supported. Onboarding (issue #694) is separate work:
+one global Auto `Overnight Agent` automation without project/folder binding, plus this optional tray.
 
 > [!NOTE]
 > **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
@@ -43,27 +68,23 @@ watchers themselves.
 <summary><strong>Show technical detail</strong></summary>
 
 ```powershell
-# plugins/overnight-agent/checks/install-oa-supervisor.ps1
-Windows Task Scheduler is a service of the operating system. It is not the app, it
-is not the app's scheduler, and it is not an agent run - so it keeps firing exactly
-when everything this repo controls has stopped.
-
-# Two triggers on purpose:
-#   * at logon, so a reboot cannot silently leave supervision off;
-#   * a repeating trigger with an effectively unbounded duration.
-$atLogon = New-ScheduledTaskTrigger -AtLogOn
-$startNow = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
-              -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
+# plugins/overnight-agent/checks/oa-supervisor-startup.ps1
+$script:OaRunKeyPath    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$script:OaRunValueName  = 'Overnight Agent supervisor'
+# The one current Run value is shared by both local checks. Legacy task and
+# Startup-folder entries are only ever DETECTED and REMOVED:
+function Remove-OaLegacyInstall { ... Unregister-ScheduledTask ... Remove-Item $legacy.shimPath ... }
 ```
 
 
 </details>
-That separation is the whole point: a frozen app scheduler cannot suppress the task that judges the
-scheduler. Where Task Scheduler cannot be registered, `oa-supervisor-daemon.ps1` is still outside
-the failure domain because Explorer launches it from Startup at logon, as its own process. The
-trade-off is explicit in the file: the daemon does **not** auto-restart if it dies, so the
-scheduled-task route remains the stronger installation.
-
+The trade-off is stated plainly: a Run entry starts only after sign-in, and the tray exits at
+sign-out. **Nothing is supervised while the user is logged out.** That is acceptable because the
+desktop app and signed-in browser windows being supervised also run only in a signed-in session.
+The older per-watchdog Scheduled Task and Startup-folder routes are migration-only;
+`-Enable`/`-Disable` remove their exact known names. `oa-supervisor-daemon.ps1` is an inert stub, so
+an old Overnight Agent entry cannot start a second supervisor. The tray and any legacy daemon share
+one exclusive lock.
 `supervisor-liveness-sweep.ps1` closes the next gap: a supervisor that dies silently is another
 single point of failure.
 
@@ -75,10 +96,14 @@ single point of failure.
 
 ```powershell
 # plugins/overnight-agent/checks/supervisor-liveness-sweep.ps1
-Both are dispatched by Explorer from the Startup folder, NOT by Task Scheduler
-... a check that queries only `Get-ScheduledTask` therefore reports "no supervisor
-installed" while two supervisors are running.
+# Both components share one optional Run entry. No entry is the user's choice, not a gap.
+if ([bool]$Unit.legacyInstalled) { return 'LEGACY' }
+if (-not $installed) { if ([bool]$Unit.optional) { return 'OFF' }; return 'ABSENT' }
 
+if ([bool]$Unit.paused -and $daemonAlive -and $daemonFresh) { return 'PAUSED' }
+if ($daemonAlive -and $daemonFresh -and [bool]$Unit.componentDisabled) { return 'OFF' }
+if ($daemonAlive -and $daemonFresh -and $Unit.componentState -match 'ERROR|FAILED|UNHEALTHY') { return 'FAILED' }
+if ($daemonAlive -and $null -ne $Unit.componentAgeMin -and [double]$Unit.componentAgeMin -gt $tolerance) { return 'STALE' }
 if ($taskHealthy -or ($daemonAlive -and $daemonFresh)) { return 'HEALTHY' }
 if ($daemonAlive) { return 'STALE' }
 return 'DEAD'
@@ -89,8 +114,8 @@ return 'DEAD'
 `supervisor-replay.mjs` supplies evidence for the thresholds. It replays the classifier across real
 run history and asks the only questions that matter: does it catch true stalls, does it warn on
 slow self-terminating runs, and does it stay quiet on ordinary healthy runs. That is why the page's
-forward design is “OS-dispatched supervisor plus replayed thresholds”, not “more checks inside the
-run”.
+forward design is “one out-of-band tray for the reviewed local inventory, plus replayed thresholds”,
+not “more checks inside the run” or “one watchdog installer per process”.
 
 ## Liveness-gated stuck detection and orphan repair
 

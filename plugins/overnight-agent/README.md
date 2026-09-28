@@ -14,6 +14,17 @@ command from the Focus Planner plugin marketplace.
 ```
 overnight-agent/
 ├── plugin.json                 # Plugin manifest
+├── checks/
+│   ├── oa-supervisor.ps1       # Existing out-of-band health check
+│   ├── oa-supervisor-tray.ps1  # Optional tray app: one owner for local background checks
+│   ├── oa-supervisor-startup.ps1 # Single startup route (HKCU Run), legacy cleanup
+│   ├── oa-supervisor-components.ps1 # Fixed local-check inventory and child-process rules
+│   ├── install-oa-supervisor.ps1 # Opt-in: status (default) / -Enable / -Disable
+│   ├── oa-supervisor-daemon.ps1 # RETIRED stub; makes pre-#689 task/shim inert
+│   ├── consumer-reliability-supervisor.mjs
+│   ├── reliability-supervisor.mjs  # Shared M/N policy and transaction core
+│   ├── windows-app-actuator.mjs     # Enterprise activity/process adapter
+│   └── session-terminal-evidence.mjs # Enterprise session event evidence
 └── skills/
     └── overnight-agent/
         ├── SKILL.md            # The skill instructions
@@ -67,6 +78,138 @@ Ask Copilot to "run the overnight agent", "propose plans for my tasks", or
 "execute approved plans". The skill's `SKILL.md` documents the full run flow
 (inbox check → execute approved plans → propose new plans behind the approval
 gate).
+
+### Reliability supervisor (Windows, optional tray app)
+
+The out-of-band supervisor is an **optional tray app** and is **off by default**.
+Installing or updating the plugin (including `sync-oa-home.ps1`) never registers
+or starts it. You turn it on explicitly:
+
+```powershell
+# Status only - changes nothing
+powershell -NoProfile -ExecutionPolicy Bypass -File plugins/overnight-agent/checks/install-oa-supervisor.ps1
+# Opt in: deploy to %LOCALAPPDATA%\overnight-agent, remove legacy entries, register, start
+powershell -NoProfile -ExecutionPolicy Bypass -File plugins/overnight-agent/checks/install-oa-supervisor.ps1 -Enable
+# Opt out: stop the tray, remove the startup entry and any legacy entries
+powershell -NoProfile -ExecutionPolicy Bypass -File plugins/overnight-agent/checks/install-oa-supervisor.ps1 -Disable
+```
+
+**One startup route.** Enabling writes a single per-user value,
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Overnight Agent supervisor`,
+which starts `oa-supervisor-tray.ps1` at sign-in. It needs no elevation and appears
+in Task Manager's Startup apps. This is the only local background startup route for
+the project: there is no per-check Scheduled Task, Startup-folder shim or service.
+The tray's **Start with Windows** item toggles the same value.
+
+**What the tray runs.** Its reviewed inventory has two local checks:
+
+| Check | Cadence | Role |
+| --- | --- | --- |
+| Overnight Agent supervisor | Every 15 minutes and at its M/N policy boundaries | Detects and safely recovers an unhealthy Overnight Agent app/run. |
+| Browser watchdog | Every 60 minutes after **Enable browser checks** in the tray | Uses a CDP work probe to restore missing browser slots and thaw stuck pages in place; it does not close or restart signed-in browser windows. |
+
+Both checks run as bounded child processes of the same tray, share its pause/exit
+controls, and report separate state and last-check times. **Browser checks are independently
+off by default**; enable/pause/history controls belong to this same tray, not another supervisor.
+The browser helper remains callable on demand, but must not have its own chat automation,
+Windows startup installer or resident controller. Adding another local check requires adding it
+to the reviewed tray inventory; it does not create another startup entry.
+
+The tray manages only local background checks owned by this project. GitHub-hosted
+Copilot schedules and workflows keep their existing host-side controls. The planner's
+development server is started only by the explicit `start planner` bootstrap and is
+not installed as a persistent background service. Session-scoped MCP servers and
+browser windows remain under their existing owners. MCP reaping, plugin auto-deployment and
+the sweep suite remain in the Overnight Agent run; independent tray scheduling of those
+operations, arbitrary third-party daemons, services, and logged-out supervision are **deferred**.
+No background automation is created by the tray installer. The separate onboarding work in
+issue #694 reconciles exactly one global Auto `Overnight Agent` automation, with no project or
+folder binding; it must not create a `Focus Planner watchdog` or browser-watchdog automation.
+
+**Logged-in only.** A Run entry starts after you sign in, and the tray exits when
+you sign out. **Nothing is supervised while you are logged out.** The desktop app
+it supervises also runs only in a signed-in session.
+
+**Tray controls.** The shield icon's menu shows the last state and next check for
+both local checks. It also shows the policy (M, quiet window, N and cooldown, or *INVALID/DISABLED*),
+the current cycle's quiet-opportunity and hard-deadline times, any active cooldown,
+and the most recent restart/launch outcomes from the audit. Actions are
+**Check now**, **Enable browser checks**, **Check browsers now**, **Pause browser checks**,
+**Pause/Resume supervision** (saved in `supervisor-tray.json`), **Start with Windows**,
+**Remove legacy scheduled task / Startup shim**
+(shown only when one exists), **Open supervisor folder** and **Exit**. Exit stops both
+checks until the next sign-in, or until you start the tray again. Browser consent, pause and
+the last five outcomes survive restarts; `-Disable` clears browser consent as well.
+
+The tray is a separate process from the Overnight Agent and the desktop app. It
+runs `oa-supervisor.ps1` as a child process for each evaluation, so its UI and
+scheduler do not depend on overnight-agent process health. It evaluates at most
+every 15 minutes and writes a heartbeat every 15 seconds. It wakes early at the M/N
+boundaries or when the cooldown expires. The tray never restarts anything itself:
+every decision and safeguard below lives in `reliability-supervisor.mjs`.
+Each child check has a 15-minute outer timeout, independent of the other check; errors and
+timeouts remain visible in its heartbeat and tray status. Exit cancels verified checker
+PowerShell/Node workers without terminating browser windows or the Copilot desktop app.
+Pause prevents new checks; it does not interrupt one already in progress.
+
+**Migration from older installs.** `-Enable` and `-Disable` remove only the known
+legacy entries: the Overnight Agent supervisor task/Startup shim and the browser
+watchdog task/Startup shim (`Copilot browser watchdog` and `CopilotBrowserWatchdog.vbs`).
+The known `%LOCALAPPDATA%\playwright-mcp\browser-watchdog.ps1` controller is stopped only
+after matching its exact script command and process identity. Other active browser checks
+cause the tray to defer its browser check rather than kill an unknown process.
+If a legacy task cannot be removed (for example, it was
+registered from an elevated prompt), `-Enable` stops *before* registering the tray;
+remove that exact task from an elevated prompt and retry. The deployed
+`oa-supervisor-daemon.ps1` is an inert stub. `supervisor-liveness-sweep.ps1` reports
+legacy routes as `LEGACY`, an opted-out tray as `OFF`, and a paused tray as `PAUSED`.
+Migration refuses same-named tasks outside the root task folder. The retired
+`install-browser-watchdog-skill.ps1` only reports the canonical installer; it no longer writes
+a separate skill shim or restores the old watchdog. Remove any existing separate watchdog
+chat automation using Copilot's automation settings before opting in. The installer never
+edits the application's automation database.
+
+**Policy.** The default **M=3 hours** is a
+quiet opportunity: the enterprise snapshot adapter reads the GUI process,
+both app/session SQLite stores, workflow and session projections, process
+locks, and session events. Evidence must remain unchanged and continuously
+quiet for **15 minutes**. Unknown activity postpones M. At
+**N=4 hours**, active or unknown *activity* no longer postpones an attempt, but
+unknown or changed **process identity**, another action owner, and the **60-minute
+attempt cooldown** still prevent termination. The age is anchored to the GUI
+process start time; a failed attempt does not reset it. N bounds an attempt,
+not successful recovery or uninterrupted operation. An absent app is not launched
+by the preventive timer; the existing schedule-dead check can still launch it.
+
+The action lock and policy, cycle state, snapshot, heartbeat, and JSONL audit
+live under `%LOCALAPPDATA%\overnight-agent\` (`reliability-supervisor-action.lock`,
+`reliability-supervisor.json`, `reliability-supervisor-state.json`,
+`reliability-supervisor-snapshot.json`, `supervisor-daemon-heartbeat.json`,
+`reliability-supervisor-audit.jsonl`). The
+policy is created with defaults on the first check and can be edited to change
+M/N, the quiet window, cooldown, or `supervisor.enabled`. Invalid policy fails
+closed. The same action lock protects the existing stuck-run/schedule-dead/
+resource-leak **restart** and schedule-dead launch paths; no restart kills by process name. A quiet
+opportunity requests `CloseMainWindow` first, with a bounded wait before
+verified-PID force. N goes directly to verified-PID force. Each destructive
+step rechecks PID, executable path and process start time; only the verified GUI
+root and descendants of its process tree are eligible. A failed attempt is
+audited and holds the cooldown.
+
+**Node.js 24+ is required** for the enterprise `node:sqlite` evidence adapter;
+`-Enable` refuses an older runtime before changing anything. Updating the repo
+alone updates the deployed flat-home copies (through `sync-oa-home.ps1` or a re-run
+of `-Enable`) but never enables the tray. To inspect a check
+without restarting anything, run
+`node plugins/overnight-agent/checks/consumer-reliability-supervisor.mjs --no-act`.
+For the tray's read-only status view, run the same script with `--status`.
+The Windows desktop GUI and its local session/workflow evidence must be readable
+for a quiet restart; if resident activity cannot be proven quiet, it waits for N.
+After launch the enterprise adapter requires a distinct GUI identity and fresh
+scheduled/catch-up dispatch for work that was due (no due work requires readiness
+only). Unknown scheduler evidence does not count as a successful recovery.
+Enterprise Dev Box bootstrap, managed-app setup, MCP/profile seeding, ADO logic,
+and multi-machine announcements are intentionally not included.
 
 ### Continuously drain the prepared queue
 

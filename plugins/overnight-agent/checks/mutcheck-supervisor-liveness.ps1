@@ -45,14 +45,19 @@ function Assert([bool]$Cond, [string]$Id, [string]$Why) {
 function New-Unit {
   param(
     [string]$Name, [bool]$Task = $false, [string]$TaskState = '', $TaskLastRunMin = $null,
-    [bool]$Shim = $false, [bool]$Alive = $false, $SignalAgeMin = $null, [int]$Cadence = 15
+    [bool]$Shim = $false, [bool]$Alive = $false, $SignalAgeMin = $null, [int]$Cadence = 15,
+    [bool]$Optional = $false, [bool]$Run = $false, [bool]$Legacy = $false, [bool]$Paused = $false,
+    [string]$ComponentState = '', $ComponentAgeMin = $null, [bool]$ComponentDisabled = $false
   )
   [ordered]@{
     name = $Name; issue = '#261'; purpose = 'fixture'
     taskInstalled = $Task; taskState = $TaskState; taskLastRunMin = $TaskLastRunMin
     shimInstalled = $Shim; shimPath = $(if ($Shim) { 'shim' } else { '' })
+    optional = $Optional; runInstalled = $Run; legacyInstalled = $Legacy; paused = $Paused
     processAlive = $Alive; processPid = $(if ($Alive) { 42 } else { 0 })
     signalPath = 'signal'; signalAgeMin = $SignalAgeMin; cadenceMin = $Cadence
+    componentState = $ComponentState; componentAgeMin = $ComponentAgeMin
+    componentDisabled = $ComponentDisabled
   }
 }
 
@@ -70,17 +75,44 @@ $fixtures = @(
 
   # Dead process but a heartbeat written one minute before it died. This is why
   # liveness and freshness must be separate arms: the freshest possible signal is
-  # still no evidence that anything is running.
+  # still no evidence that anything is running. Uses the #689 tray's Run route.
   @{ owner = 'process'; expect = 'DEAD'
-     unit = (New-Unit -Name 'dead-daemon' -Shim $true -Alive $false -SignalAgeMin 2) }
+     unit = (New-Unit -Name 'dead-tray' -Optional $true -Run $true -Alive $false -SignalAgeMin 2) }
 
   # Alive but not beating: wedged inside its own child call, which is the failure the
   # heartbeat was written for and the one a process check alone cannot see.
   @{ owner = 'fresh';   expect = 'STALE'
      unit = (New-Unit -Name 'stale-daemon' -Shim $true -Alive $true -SignalAgeMin 300) }
 
+  # GH #689: the optional tray, never opted in. Default installs must stay quiet.
+  @{ owner = 'optional'; expect = 'OFF'
+     unit = (New-Unit -Name 'opted-out' -Optional $true) }
+
+  # GH #689: a healthy tray next to a leftover pre-#689 task/shim is still a finding.
+  @{ owner = 'legacy';  expect = 'LEGACY'
+     unit = (New-Unit -Name 'legacy-leftover' -Optional $true -Run $true -Alive $true -SignalAgeMin 1 -Legacy $true) }
+
+  # GH #689: the user paused the tray; it must not read as supervising.
+  @{ owner = 'paused';  expect = 'PAUSED'
+     unit = (New-Unit -Name 'paused-tray' -Optional $true -Run $true -Alive $true -SignalAgeMin 1 -Paused $true) }
+
+  @{ owner = 'component-failure'; expect = 'FAILED'
+     unit = (New-Unit -Name 'failed-browser' -Optional $true -Run $true -Alive $true -SignalAgeMin 1 -ComponentState 'ERROR') }
+
+  @{ owner = 'component-stale'; expect = 'STALE'
+     unit = (New-Unit -Name 'stale-browser' -Optional $true -Run $true -Alive $true -SignalAgeMin 1 -ComponentAgeMin 200 -Cadence 60) }
+
+  @{ owner = 'component-off'; expect = 'OFF'
+     unit = (New-Unit -Name 'browser-opted-out' -Optional $true -Run $true -Alive $true -SignalAgeMin 1 -ComponentDisabled $true) }
+
   @{ owner = '';        expect = 'HEALTHY'
      unit = (New-Unit -Name 'healthy-daemon' -Shim $true -Alive $true -SignalAgeMin 3) }
+
+  @{ owner = '';        expect = 'HEALTHY'
+     unit = (New-Unit -Name 'healthy-tray' -Optional $true -Run $true -Alive $true -SignalAgeMin 1) }
+
+  @{ owner = '';        expect = 'HEALTHY'
+     unit = (New-Unit -Name 'manual-tray' -Optional $true -Alive $true -SignalAgeMin 1) }
 
   # One missed beat (40 min at a 15 min cadence, floor 45) must NOT alarm.
   @{ owner = '';        expect = 'HEALTHY'
@@ -139,14 +171,29 @@ Assert ($baseBroken.Count -eq 0) 'T_BASELINE' "unmutated sweep misclassified: $(
 
 # The sweep must also REPORT findings, not merely compute them: a detector that
 # classifies correctly and exits 0 is invisible to run-sweeps.ps1.
-Assert ($base -and $base.findings -eq 3) 'T_FINDINGS_COUNTED' "expected 3 non-healthy units, got $($base.findings)"
+Assert ($base -and $base.findings -eq 6) 'T_FINDINGS_COUNTED' "expected 6 findings including failed/stale components, got $($base.findings)"
 
 # --- 2. Each arm, mutated alone, must break its own fixture and only its own ---------
 $arms = @(
   @{ id = 'install'
-     find    = "  if (-not `$installed) { return 'ABSENT' }"
-     replace = "  if (`$false) { return 'ABSENT' }"
+     find    = "    return 'ABSENT'"
+     replace = "    return 'DEAD'"
      why     = 'without it, "never installed" is indistinguishable from "installed but dead"' }
+
+  @{ id = 'optional'
+     find    = "    if ([bool]`$Unit.optional) { return 'OFF' }"
+     replace = "    if (`$false) { return 'OFF' }"
+     why     = 'without it, a default (not opted-in) install is reported ABSENT forever' }
+
+  @{ id = 'legacy'
+     find    = "  if ([bool]`$Unit.legacyInstalled) { return 'LEGACY' }"
+     replace = "  if (`$false) { return 'LEGACY' }"
+     why     = 'without it, a leftover pre-#689 task/shim next to the tray goes unreported' }
+
+  @{ id = 'paused'
+     find    = "  if ([bool]`$Unit.paused -and `$daemonAlive -and `$daemonFresh) { return 'PAUSED' }"
+     replace = "  if (`$false) { return 'PAUSED' }"
+     why     = 'without it, a paused tray reads as actively supervising' }
 
   @{ id = 'task'
      find    = "  `$taskHealthy = ([bool]`$Unit.taskInstalled) -and"
@@ -154,14 +201,29 @@ $arms = @(
      why     = 'without it, the elevated scheduled-task install reports DEAD forever' }
 
   @{ id = 'process'
-     find    = "  `$daemonAlive = ([bool]`$Unit.shimInstalled) -and ([bool]`$Unit.processAlive)"
-     replace = "  `$daemonAlive = ([bool]`$Unit.shimInstalled)"
-     why     = 'without it, a shim on disk is mistaken for a running daemon' }
+     find    = "  `$daemonAlive = (([bool]`$Unit.shimInstalled) -or ([bool]`$Unit.runInstalled) -or ([bool]`$Unit.optional)) -and ([bool]`$Unit.processAlive)"
+     replace = "  `$daemonAlive = (([bool]`$Unit.shimInstalled) -or ([bool]`$Unit.runInstalled) -or ([bool]`$Unit.optional))"
+     why     = 'without it, a startup entry on disk is mistaken for a running daemon' }
 
   @{ id = 'fresh'
      find    = "  `$daemonFresh = (`$null -ne `$Unit.signalAgeMin) -and ([double]`$Unit.signalAgeMin -le `$tolerance)"
      replace = "  `$daemonFresh = `$true"
      why     = 'without it, a wedged daemon that stopped beating still reads healthy' }
+
+  @{ id = 'component-failure'
+     find = "  if (`$daemonAlive -and `$daemonFresh -and `$Unit.componentState -match 'ERROR|FAILED|UNHEALTHY') { return 'FAILED' }"
+     replace = "  if (`$false) { return 'FAILED' }"
+     why = 'a fresh tray heartbeat must not hide a failed browser check' }
+
+  @{ id = 'component-stale'
+     find = "  if (`$daemonAlive -and `$null -ne `$Unit.componentAgeMin -and [double]`$Unit.componentAgeMin -gt `$tolerance) { return 'STALE' }"
+     replace = "  if (`$false) { return 'STALE' }"
+     why = 'a fresh tray heartbeat must not hide a component that stopped completing' }
+
+  @{ id = 'component-off'
+     find = "  if (`$daemonAlive -and `$daemonFresh -and [bool]`$Unit.componentDisabled) { return 'OFF' }"
+     replace = "  if (`$false) { return 'OFF' }"
+     why = 'tray-owned browser checks must remain off until opted in' }
 )
 
 $report = [ordered]@{}

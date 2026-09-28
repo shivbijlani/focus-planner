@@ -1,65 +1,37 @@
 <#
 .SYNOPSIS
-  Detects that an OUT-OF-BAND reliability daemon has gone dormant. The supervisors
-  watch the app; nothing watched the supervisors. This is that reader.
+  Detects when the optional reliability tray or one of its local checks has gone dormant.
 
 .DESCRIPTION
-  WHAT WAS ACTUALLY BROKEN (GH #261, measured 2026-09-03)
-  -------------------------------------------------------
-  #261 is "a stuck run freezes the */30 schedule with no timeout to fail and
-  reschedule". The recovery mechanism for it already exists and is already RUNNING:
-
-      oa-supervisor-daemon.ps1   pid 18196   up 9h41m   lastState HEALTHY
-      browser-watchdog.ps1       pid  4144   up 9h42m   hourly log lines
-
-  Both are dispatched by Explorer from the Startup folder, NOT by Task Scheduler
-  (install-oa-supervisor.ps1 falls back to a Startup shim because registering a
-  scheduled task is denied without elevation on this machine). A check that queries
-  only `Get-ScheduledTask` therefore reports "no supervisor installed" while two
-  supervisors are running - which is how this was nearly mis-diagnosed as dormant.
-
-  So the gap #261 still has is NOT that supervision is missing. It is that
-  supervision is UNOBSERVED:
-
-      supervisor-daemon-heartbeat.json   written every 15 min   readers: 0
-      browser-watchdog.log               written every ~62 min  readers: 0
-
-  Both numbers were measured with a repo-wide grep. The daemon's own source says
-  the heartbeat exists so "its absence is observable" - but nothing was ever
-  written to observe it. Both daemons also share one documented weakness:
-
-      "if it dies it stays dead until next logon"   (oa-supervisor-daemon.ps1)
-
-  A daemon that dies at 02:00 is gone until the next logon, silently, and #261's
-  freeze comes straight back with no signal. This sweep is the missing reader.
+  The optional tray is the only project-owned Windows startup route for local
+  background checks. It owns the Overnight Agent check and the browser watchdog,
+  records shared liveness plus per-component completion in one heartbeat, and runs
+  only while the user is signed in. This sweep detects a missing/failed tray, a stale
+  component, or a leftover legacy per-check launcher.
 
   WHY THIS IS NOT THE CIRCULAR SELF-HEAL (GH #243 / #226)
   -------------------------------------------------------
-  #243's trap is supervision that lives inside the failure domain it repairs. This
-  deliberately does not do that, and the direction of the relationship is the whole
-  argument:
+  The sweep runs as part of an Overnight Agent run; it does not restart or install
+  the tray. If the app and the tray both fail before another agent run, no local
+  checker can report that gap. A tray that is deliberately off or paused is reported
+  as such rather than treated as a failure.
 
-      the daemons     supervise   the app and its schedule   (dispatched by the OS)
-      this sweep      supervises  the daemons                (dispatched by a run)
-
-  Those are two DIFFERENT dispatch domains watching each other, not one domain
-  watching itself. If a run freezes, the daemons catch it - that is #261. If a
-  daemon dies, the next run catches it - that is this file. Neither is inside the
-  other.
-
-  THE LIMIT, STATED PLAINLY RATHER THAN BURIED: if the app freezes AND a daemon
-  dies in the same window, nothing catches that. Closing it needs a dispatcher
-  outside both, i.e. the elevated scheduled task install-oa-supervisor.ps1 already
-  registers when run as admin. This sweep reports which route is actually in use so
-  that gap is visible instead of assumed.
+  GH #689 CHANGED THE oa-supervisor UNIT: it is now an OPTIONAL tray app, off by
+  default, started by ONE route (a per-user HKCU Run entry) and only while the user
+  is signed in. So for that unit:
+    * no Run entry            -> OFF     (the user has not opted in; NOT a finding)
+    * tray alive, fresh, paused -> PAUSED (the user paused it; NOT a finding)
+    * a pre-#689 scheduled task or Startup shim still present -> LEGACY (a finding:
+      the retired route is inert and must be removed with install-oa-supervisor.ps1)
+  The browser watchdog is also owned by that tray. Its old task, Startup shim and
+  controller process are LEGACY, never required routes. The tray can be OFF or
+  PAUSED as a whole; the browser-watchdog can also be disabled or paused independently
+  inside the tray. A fresh tray heartbeat cannot hide a failed or stale component check.
 
   FALSE POSITIVES ARE THE REAL FAILURE MODE
   -----------------------------------------
-  run-sweeps.ps1 carries the lesson at length: workflow-health-sweep flagged a real
-  OVERDUE watchdog in 16 consecutive runs and every one of them skimmed it, because
-  a line that is permanently red teaches the reader to ignore it. So the tolerance
-  here is deliberately loose - a unit must miss SEVERAL consecutive beats before it
-  is called stale, and a unit that is healthy by EITHER route is healthy.
+  A unit must miss several consecutive beats before it is called stale. An opted-out
+  tray is OFF, and a live tray paused by the user is PAUSED; neither is a finding.
 
 .PARAMETER FactsJson
   Classify from a facts file instead of collecting from this machine. This is the
@@ -69,8 +41,9 @@
 
 .PARAMETER StaleMultiplier
   A unit is STALE when its liveness signal is older than cadence * this. Default 3,
-  so three consecutive missed beats are required. At the supervisor's 15 min cadence
-  that is 45 min; at the watchdog's ~62 min cadence it is ~3.1 h.
+  so three consecutive missed beats are required. The Overnight Agent checks every
+  15 minutes (45 minutes before stale); the browser watchdog checks hourly (3 hours
+  before stale).
 
 .PARAMETER MinStaleMinutes
   Floor for the staleness window, so a unit with a very short cadence cannot be
@@ -78,7 +51,8 @@
 
 .OUTPUTS
   Human lines on stdout, plus one JSON object under -Json.
-  Exit 0 = every unit healthy. Exit 1 = at least one unit ABSENT/DEAD/STALE.
+  Exit 0 = no unit dormant (HEALTHY, or OFF/PAUSED by user choice).
+  Exit 1 = at least one unit ABSENT/DEAD/STALE/LEGACY.
   Exit 2 = the sweep itself could not run.
 #>
 [CmdletBinding()]
@@ -92,19 +66,22 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # --- the units this machine expects to be supervising it ----------------------------
-# Kept as data, not code, so adding the next out-of-band daemon is a row rather than a
-# new sweep. Each row names BOTH install routes (scheduled task and Startup shim)
-# because the fallback route is the one actually in use here.
+# Both components have the same owner and startup route; per-component completion
+# evidence distinguishes a responsive tray from working supervision.
 function Get-UnitSpecs {
   $oaHome  = Join-Path $env:LOCALAPPDATA 'overnight-agent'
   $startup = [Environment]::GetFolderPath('Startup')
   @(
     [ordered]@{
       name        = 'oa-supervisor'
-      issue       = '#261/#226'
+      issue       = '#261/#226/#689'
       purpose     = 'ends a stuck run so the */30 schedule can resume'
-      taskName    = 'Overnight Agent supervisor'
-      shimPath    = (Join-Path $startup 'Overnight Agent supervisor.cmd')
+      optional    = $true
+      runValue    = 'Overnight Agent supervisor'
+      legacyTask  = 'Overnight Agent supervisor'
+      legacyShim  = (Join-Path $startup 'Overnight Agent supervisor.cmd')
+      taskName    = ''
+      shimPath    = ''
       lockPath    = (Join-Path $oaHome 'supervisor-daemon.lock')
       signalPath  = (Join-Path $oaHome 'supervisor-daemon-heartbeat.json')
       signalField = 'lastCheckUtc'
@@ -114,13 +91,16 @@ function Get-UnitSpecs {
       name        = 'browser-watchdog'
       issue       = '#197/#243'
       purpose     = 'restores a dead or stuck browser slot'
-      taskName    = 'Copilot browser watchdog'
-      shimPath    = (Join-Path $startup 'CopilotBrowserWatchdog.vbs')
-      lockPath    = ''
-      signalPath  = (Join-Path $env:LOCALAPPDATA 'playwright-mcp\browser-watchdog.log')
-      signalField = ''      # no structured field: freshness comes from the file mtime
-      cadence     = 62
-      procMatch   = 'browser-watchdog'
+      optional    = $true
+      runValue    = 'Overnight Agent supervisor'
+      legacyTask  = 'Copilot browser watchdog'
+      legacyShim  = (Join-Path $startup 'CopilotBrowserWatchdog.vbs')
+      taskName    = ''
+      shimPath    = ''
+      lockPath    = (Join-Path $oaHome 'supervisor-daemon.lock')
+      signalPath  = (Join-Path $oaHome 'supervisor-daemon-heartbeat.json')
+      signalField = 'lastCheckUtc'
+      cadence     = 60
     }
   )
 }
@@ -167,29 +147,50 @@ function Get-SignalAgeMinutes([string]$Path, [string]$Field) {
   catch { return $null }
 }
 
+function Get-RunValueInstalled([string]$Name) {
+  if (-not $Name) { return $false }
+  try {
+    $v = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name $Name -ErrorAction Stop
+    return [bool]$v.$Name
+  } catch { return $false }
+}
+
+function Get-HeartbeatPaused([string]$Path) {
+  if (-not $Path -or -not (Test-Path $Path)) { return $false }
+  try {
+    $raw = [IO.File]::ReadAllText($Path, (New-Object Text.UTF8Encoding($false)))
+    return [regex]::IsMatch($raw, '"paused"\s*:\s*true')
+  } catch { return $false }
+}
+
 function Get-Facts {
+  . (Join-Path $PSScriptRoot 'oa-supervisor-startup.ps1')
+  $owner = Get-OaSupervisorOwner
+  $legacy = Get-OaLegacyInstall
+  if ($legacy.taskError) { throw "Cannot inspect legacy tasks: $($legacy.taskError)" }
   $units = @()
   foreach ($spec in (Get-UnitSpecs)) {
     $task = Get-TaskFacts $spec.taskName
+    $optional = [bool]($spec.Contains('optional') -and $spec.optional)
+    $legacyTask = if ($optional) { (Get-TaskFacts $spec.legacyTask).installed } else { $false }
+    $legacyShim = [bool]($optional -and $spec.legacyShim -and (Test-Path $spec.legacyShim))
+    $runInstalled = if ($optional) { Get-RunValueInstalled $spec.runValue } else { $false }
 
-    $pid_ = 0
-    if ($spec.lockPath -and (Test-Path $spec.lockPath)) {
+    $pid_ = if ($owner) { $owner.pid } else { 0 }
+    $alive = [bool]($owner -and $owner.verified)
+    $component = $null
+    $componentAge = $null
+    if (Test-Path $spec.signalPath) {
       try {
-        $raw = [IO.File]::ReadAllText($spec.lockPath, (New-Object Text.UTF8Encoding($false)))
-        $m = [regex]::Match($raw, '"pid"\s*:\s*(\d+)')
-        if ($m.Success) { $pid_ = [int]$m.Groups[1].Value }
-      } catch { }
+        $beat = Get-Content -LiteralPath $spec.signalPath -Raw | ConvertFrom-Json
+        if ($beat.pid -eq $pid_) { $component = $beat.components.($spec.name) }
+        if ($component.lastEvaluationUtc) {
+          $componentAge = ([datetimeoffset]::UtcNow - [datetimeoffset]::Parse($component.lastEvaluationUtc)).TotalMinutes
+        }
+      } catch { throw "Cannot read tray heartbeat: $_" }
     }
-    $alive = Test-ProcessAlive $pid_
-    # Not every unit writes a lock file. Fall back to matching the command line, which
-    # is how the browser watchdog is identifiable at all.
-    if (-not $alive -and $spec.Contains('procMatch') -and $spec.procMatch) {
-      try {
-        $hit = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-                 Where-Object { $_.CommandLine -and $_.CommandLine -match [regex]::Escape($spec.procMatch) } |
-                 Select-Object -First 1
-        if ($hit) { $alive = $true; $pid_ = [int]$hit.ProcessId }
-      } catch { }
+    if ($null -eq $componentAge -and $owner) {
+      $componentAge = ([datetimeoffset]::UtcNow - [datetimeoffset]::Parse($owner.record.startedUtc)).TotalMinutes
     }
 
     $units += [ordered]@{
@@ -201,11 +202,19 @@ function Get-Facts {
       taskLastRunMin = $task.lastRunMinutes
       shimInstalled  = [bool]($spec.shimPath -and (Test-Path $spec.shimPath))
       shimPath       = $spec.shimPath
+      optional       = $optional
+      runInstalled   = $runInstalled
+      legacyInstalled = ($legacyTask -or $legacyShim -or
+        ($spec.name -eq 'browser-watchdog' -and @($legacy.browserProcesses).Count -gt 0))
+      paused         = ((Get-HeartbeatPaused $spec.signalPath) -or [bool]$component.paused)
       processAlive   = $alive
       processPid     = $pid_
       signalPath     = $spec.signalPath
       signalAgeMin   = (Get-SignalAgeMinutes $spec.signalPath $spec.signalField)
       cadenceMin     = $spec.cadence
+      componentState = $(if ($component) { $component.state })
+      componentAgeMin = $componentAge
+      componentDisabled = [bool]($component -and $component.enabled -eq $false)
     }
   }
   return [ordered]@{ collectedUtc = ([datetimeoffset]::UtcNow.ToString('o')); units = $units }
@@ -220,11 +229,23 @@ function Get-UnitVerdict {
   $cadence   = if ($Unit.cadenceMin) { [double]$Unit.cadenceMin } else { 15 }
   $tolerance = [math]::Max($cadence * $Multiplier, $Floor)
 
-  $installed = ([bool]$Unit.taskInstalled) -or ([bool]$Unit.shimInstalled)
-  # ARM 'install': nothing is installed by either route, so the protection this repo
-  # believes it has is simply not present. Distinguishing this from DEAD is the whole
-  # point - "never installed" and "installed but died" need different fixes.
-  if (-not $installed) { return 'ABSENT' }
+  $installed = ([bool]$Unit.taskInstalled) -or ([bool]$Unit.shimInstalled) -or ([bool]$Unit.runInstalled) -or
+    ([bool]$Unit.optional -and [bool]$Unit.processAlive)
+
+  # ARM 'legacy': a pre-#689 scheduled task or Startup shim for an optional unit. The
+  # retired daemon it launches is inert, so it protects nothing, and it is exactly the
+  # "second route" #689 forbids - report it until it is removed.
+  if ([bool]$Unit.legacyInstalled) { return 'LEGACY' }
+
+  if (-not $installed) {
+    # ARM 'optional': an opt-in unit with no startup entry is the user's choice, not a
+    # gap. Reporting it would make a default install permanently red.
+    if ([bool]$Unit.optional) { return 'OFF' }
+    # ARM 'install': nothing is installed by any route, so the protection this repo
+    # believes it has is simply not present. Distinguishing this from DEAD is the whole
+    # point - "never installed" and "installed but died" need different fixes.
+    return 'ABSENT'
+  }
 
   # ARM 'task': a registered, enabled scheduled task is a live dispatcher even though
   # it leaves NO resident process between firings. Without this arm the elevated
@@ -234,15 +255,23 @@ function Get-UnitVerdict {
                  ($Unit.taskState -ne 'Disabled') -and
                  (($null -eq $Unit.taskLastRunMin) -or ([double]$Unit.taskLastRunMin -le $tolerance))
 
-  # ARM 'process': the Startup-folder route is only alive while its process is alive.
-  # This must be checked independently of the heartbeat, because a daemon killed a
-  # minute ago still has a perfectly fresh heartbeat on disk.
-  $daemonAlive = ([bool]$Unit.shimInstalled) -and ([bool]$Unit.processAlive)
+  # ARM 'process': a Startup-folder or Run-entry route is only alive while its process
+  # is alive. This must be checked independently of the heartbeat, because a daemon
+  # killed a minute ago still has a perfectly fresh heartbeat on disk.
+  $daemonAlive = (([bool]$Unit.shimInstalled) -or ([bool]$Unit.runInstalled) -or ([bool]$Unit.optional)) -and ([bool]$Unit.processAlive)
 
   # ARM 'fresh': alive is not the same as working. A daemon wedged inside its own
   # child call stays alive forever and stops beating, which is the failure the
   # heartbeat was written for.
   $daemonFresh = ($null -ne $Unit.signalAgeMin) -and ([double]$Unit.signalAgeMin -le $tolerance)
+
+  # ARM 'paused': the tray is alive and beating but the user paused evaluations.
+  # Surfaced as its own verdict so "paused" is never mistaken for "supervising".
+  if ([bool]$Unit.paused -and $daemonAlive -and $daemonFresh) { return 'PAUSED' }
+
+  if ($daemonAlive -and $daemonFresh -and [bool]$Unit.componentDisabled) { return 'OFF' }
+  if ($daemonAlive -and $daemonFresh -and $Unit.componentState -match 'ERROR|FAILED|UNHEALTHY') { return 'FAILED' }
+  if ($daemonAlive -and $null -ne $Unit.componentAgeMin -and [double]$Unit.componentAgeMin -gt $tolerance) { return 'STALE' }
 
   if ($taskHealthy -or ($daemonAlive -and $daemonFresh)) { return 'HEALTHY' }
   if ($daemonAlive) { return 'STALE' }
@@ -261,17 +290,21 @@ try {
   $rows = @()
   foreach ($u in $facts.units) {
     $verdict = Get-UnitVerdict -Unit $u -Multiplier $StaleMultiplier -Floor $MinStaleMinutes
-    $route = if ($u.taskInstalled -and $u.shimInstalled) { 'task+startup' }
+    $route = if ($u.runInstalled) { 'run' }
+             elseif ($u.optional -and $u.processAlive) { 'tray-manual' }
+             elseif ($u.taskInstalled -and $u.shimInstalled) { 'task+startup' }
              elseif ($u.taskInstalled) { 'task' }
              elseif ($u.shimInstalled) { 'startup' }
              else { 'none' }
+    if ($u.legacyInstalled) { $route += '+legacy' }
     $rows += [pscustomobject]@{
       name = $u.name; issue = $u.issue; purpose = $u.purpose; verdict = $verdict
       route = $route; pid = $u.processPid; signalAgeMin = $u.signalAgeMin; cadenceMin = $u.cadenceMin
     }
   }
 
-  $bad = @($rows | Where-Object verdict -ne 'HEALTHY')
+  # OFF (not opted in) and PAUSED (user paused) are deliberate user states, not gaps.
+  $bad = @($rows | Where-Object { $_.verdict -notin @('HEALTHY', 'OFF', 'PAUSED') })
 
   if ($Json) {
     [pscustomobject]@{ collectedUtc = $facts.collectedUtc; units = $rows; findings = $bad.Count } |
@@ -280,8 +313,11 @@ try {
     foreach ($r in $rows) {
       $tag = switch ($r.verdict) {
         'HEALTHY' { '  ok      ' }
+        'OFF'     { '  off     ' }
+        'PAUSED'  { '  paused  ' }
         'STALE'   { '  DORMANT ' }
         'DEAD'    { '  DORMANT ' }
+        'LEGACY'  { '  LEGACY  ' }
         default   { '  DORMANT ' }
       }
       Write-Host ("{0} {1,-18} {2,-8} route={3,-12} pid={4,-7} signal_age={5} min (cadence {6})" -f `
@@ -294,14 +330,19 @@ try {
           'ABSENT' { "installed by NEITHER route - $($r.purpose) is not protected at all" }
           'DEAD'   { "installed but not running - it stays dead until next logon" }
           'STALE'  { "running but its liveness signal stopped - it is wedged, not working" }
+          'FAILED' { "the tray is running but the component check failed; inspect the tray menu and heartbeat error" }
+          'LEGACY' { "a retired scheduled task, Startup shim or browser controller remains; migrate with the canonical tray installer" }
         }
         Write-Host ("[supervisor-liveness] {0} ({1}) {2}: {3}" -f $r.name, $r.issue, $r.verdict, $why)
       }
       Write-Host ''
-      Write-Host '[supervisor-liveness] REPAIR: powershell -NoProfile -ExecutionPolicy Bypass -File plugins/overnight-agent/checks/install-oa-supervisor.ps1'
-      Write-Host '[supervisor-liveness] (run it ELEVATED to get the scheduled-task route, which survives logoff and restarts itself)'
+      if (@($bad | Where-Object { $_.name -in @('oa-supervisor', 'browser-watchdog') }).Count) {
+        Write-Host '[supervisor-liveness] oa-supervisor REPAIR (opt-in tray, one HKCU Run route):'
+        Write-Host '                      powershell -NoProfile -ExecutionPolicy Bypass -File plugins/overnight-agent/checks/install-oa-supervisor.ps1 -Enable'
+        Write-Host '                      (or -Disable to opt out; both remove legacy leftovers. The tray supervises only while signed in.)'
+      }
     } else {
-      Write-Host "[supervisor-liveness] $($rows.Count) unit(s) healthy."
+      Write-Host "[supervisor-liveness] $($rows.Count) unit(s) checked; none dormant."
     }
   }
 
