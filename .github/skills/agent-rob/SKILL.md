@@ -78,9 +78,18 @@ the **`catchup-doc` skill** from the repository's Overnight Agent plugin. A
 touch point is one selected item plus the one decision being requested for it:
 the issue whose plan needs approval, the change whose merge needs approval, and
 the released issue whose closure needs approval. Three selected items in a pass
-means three catch-up docs, each asking
-its own question. Never bundle several decisions into one document, and never
-ask for a decision that has no catch-up doc behind it.
+means three catch-up docs, each asking its own question. Never bundle several
+decisions into one document, and never ask for a decision that has no catch-up
+doc behind it.
+
+**Check the document target before starting.** This skill produces documents;
+if there is nowhere to put them, there is no touch point. Confirm a usable
+target is configured — the `catchup-doc` skill's Google Docs path, or its
+GitHub issue-document path — before investigating candidates. If none is
+available, stop and say so rather than working the queues and discarding the
+result: an approval request with no durable place to live cannot be answered,
+and the human's reply would have nowhere to land. Report which target you used
+so the human knows where to reply.
 
 **One document per item, not per visit.** Resolve the item's existing binding
 first and amend that document in place. Create and bind a new document only
