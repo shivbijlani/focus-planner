@@ -3399,6 +3399,9 @@ function Get-ScanRows {
       model           = $agentModel.model
       model_source    = $agentModel.source
       session_workspace = if ($sessFacts -and "$($sessFacts.workspace)") { "$($sessFacts.workspace)" } else { $null }
+      # #717: the workspace is GONE, derived at read time, on the worklist itself. Without it a
+      # row that needs a replacement is indistinguishable from a healthy one until the wake fails.
+      session_workspace_missing = [bool](Test-WorkspaceMissing "$($sessFacts.workspace)" "$($sessFacts.workspace_type)")
       # #540: the user said NOT NOW, as a column rather than something a caller must re-derive
       # from `status` + `status_by`. It is emitted for every row, bound or not, because a paused
       # task with no session must not be answered with `create` either.
@@ -3644,6 +3647,7 @@ $script:CompactFields = @(
   'tracked', 'work_priority', 'urgency', 'board_pos', 'priorities_rank', 'linked',
   'holds_today_gate', 'today_release_reason', 'has_open_ask', 'awaiting_reply', 'consent_ok',
   'doc_id', 'doc_new_comments', 'doc_channel', 'session_id', 'session_verdict', 'session_paused',
+  'session_workspace_missing',
   'dispatch_input', 'no_journal_reason'
 )
 
@@ -5075,6 +5079,37 @@ function Get-SessionState($st) {
   return $null
 }
 
+function Test-WorkspaceMissing([string]$path, [string]$wsType) {
+  # Is this code workspace GONE? (GH #717)
+  #
+  # Measured 2026-09-28: tasks #329 and #466 were bound to worktrees that had been deleted -- the
+  # directories did not exist at all -- and `session` still answered `reuse`/`live`. The run then
+  # spent a dispatch waking a session with no checkout. #452 only caught the half-torn-down shape
+  # (directory still present, `.git` gone); a clean `git worktree remove` leaves NOTHING behind,
+  # which read as "not created yet" and therefore as healthy.
+  #
+  # Derived at read time from `Test-Path` so it cannot go stale: no field records it, and the
+  # answer changes the instant the directory does.
+  #
+  # ⛔ Absence of evidence is still not evidence of absence. `Test-Path` answers $false for a path
+  # on a disconnected volume exactly as it does for a deleted one, so the CONTAINING ROOT is
+  # checked too: a missing path under a reachable root is gone; a path whose root we cannot even
+  # see is uninspectable and is never called missing.
+  if (-not $path) { return $false }
+  # A folder (chat) workspace is shared, long-lived and not created by us; it is out of scope
+  # here for the same reason it is out of scope for the checkout test below.
+  if ($wsType -and $wsType -ne 'worktree') { return $false }
+  try {
+    if (Test-Path -LiteralPath $path) { return $false }
+    $root = [System.IO.Path]::GetPathRoot($path)
+    if (-not $root) { return $false }
+    if (-not (Test-Path -LiteralPath $root)) { return $false }
+    return $true
+  } catch {
+    return $false
+  }
+}
+
 function Test-WorkspaceUsable([string]$path, [string]$wsType) {
   # Does this workspace still CONTAIN a checkout? (GH #452)
   #
@@ -5105,8 +5140,9 @@ function Test-WorkspaceUsable([string]$path, [string]$wsType) {
     # been created yet, which is exactly when a bind is being validated". This is also what makes
     # the function safe on an unreachable volume, where `Test-Path` answers $false for a
     # disconnected drive exactly as it does for a deleted directory -- the two are indistinguishable
-    # here, so neither is treated as evidence.
-    if (-not (Test-Path -LiteralPath $path)) { return $true }
+    # here, so neither is treated as evidence. #717 narrows that: a path missing UNDER A REACHABLE
+    # ROOT is a deleted worktree, not an uncreated one, and Test-WorkspaceMissing draws that line.
+    if (-not (Test-Path -LiteralPath $path)) { return (-not (Test-WorkspaceMissing $path $wsType)) }
     # `.git` in a worktree is a FILE (`gitdir: ...`), not a directory, so this must not test for a
     # container. Its absence beside a directory that STILL EXISTS is the measured signature of a
     # torn-down worktree: #466's workspace was present, empty, and deregistered.
@@ -5428,6 +5464,8 @@ function Cmd-Session {
     project        = if ($sess -and "$($sess.project)") { "$($sess.project)" } else { $null }
     workspace      = if ($sess -and "$($sess.workspace)") { "$($sess.workspace)" } else { $null }
     workspace_type = if ($sess) { "$($sess.workspace_type)" } else { $null }
+    # #717: why a bound code session reads `replace`. Derived from the filesystem on every call.
+    workspace_missing = [bool](Test-WorkspaceMissing "$($sess.workspace)" "$($sess.workspace_type)")
     prior_session_id = if ($sess -and "$($sess.prior_session_id)") { "$($sess.prior_session_id)" } else { $null }
     created_at     = if ($sess) { (ConvertTo-IsoText $sess.created_at) } else { $null }
     last_woken_at  = if ($sess -and $sess.last_woken_at) { (ConvertTo-IsoText $sess.last_woken_at) } else { $null }
