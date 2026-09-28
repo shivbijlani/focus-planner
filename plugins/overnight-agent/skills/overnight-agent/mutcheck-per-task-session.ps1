@@ -134,7 +134,7 @@ $badModelSettings = Join-Path $root 'settings-bad-model.md'
 [IO.File]::WriteAllText($badSettings, "## Overnight Agent behaviour`n`n| Setting | Value |`n|---|---|`n| Overnight Agent concurrency | plenty |`n", $utf8)
 [IO.File]::WriteAllText($twoSettings, "## Overnight Agent behaviour`n`n| Setting | Value |`n|---|---|`n| Overnight Agent concurrency | 2 |`n", $utf8)
 [IO.File]::WriteAllText($modelSettings, "| Setting | Value |`n|---|---|`n| Overnight Agent model | ``claude-sonnet-5`` |`n", $utf8)
-[IO.File]::WriteAllText($badModelSettings, "| Setting | Value |`n|---|---|`n| Overnight Agent model | unknown model |`n", $utf8)
+[IO.File]::WriteAllText($badModelSettings, "| Setting | Value |`n|---|---|`n| Overnight Agent model | banana |`n", $utf8)
 
 # The run session's own workspace -- the thing a per-task session must never be given.
 $runWs = Join-Path $root 'run-session-workspace'
