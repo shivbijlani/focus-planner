@@ -204,16 +204,18 @@ function Test-Arms {
   # A4 -- omitting the scan fingerprint must not turn authorisation into a bypass.
   $d4 = New-Store
   [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d4 -Extra @('-ForDispatch'))
-  if ($script:LastExitCode -eq 0 -or (Read-Stamp $d4) -ne $StaleStamp) {
-    $f += 'A4: missing dispatch_input was accepted or changed the wake stamp'
+  $stamp4 = Read-Stamp $d4
+  if ($script:LastExitCode -eq 0 -or $stamp4 -ne $StaleStamp) {
+    $f += "A4: missing dispatch_input exit=$script:LastExitCode stamp='$stamp4' output='$($script:LastSessionOutput.Trim())'"
   }
 
   # A5 -- stale input and a human pause are both rejected before stamping.
   $d5 = New-Store
   [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d5 -Extra @(
     '-ForDispatch', '-DispatchInput', 'stale-dispatch-input'))
-  if ($script:LastExitCode -eq 0 -or (Read-Stamp $d5) -ne $StaleStamp) {
-    $f += 'A5: changed dispatch_input was accepted or changed the wake stamp'
+  $stamp5 = Read-Stamp $d5
+  if ($script:LastExitCode -eq 0 -or $stamp5 -ne $StaleStamp) {
+    $f += "A5: stale dispatch_input exit=$script:LastExitCode stamp='$stamp5' output='$($script:LastSessionOutput.Trim())'"
   }
   $d6 = New-Store
   $statePath = Join-Path $d6 'task-999.json'
@@ -224,8 +226,9 @@ function Test-Arms {
   $hash6 = Get-DispatchInput -SubjectPath $SubjectPath -StateDir $d6
   [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d6 -Extra @(
     '-ForDispatch', '-DispatchInput', $hash6))
-  if ($script:LastExitCode -eq 0 -or (Read-Stamp $d6) -ne $StaleStamp) {
-    $f += 'A5: a user-paused task was authorised or its wake stamp changed'
+  $stamp6 = Read-Stamp $d6
+  if ($script:LastExitCode -eq 0 -or $stamp6 -ne $StaleStamp) {
+    $f += "A5: user-paused dispatch exit=$script:LastExitCode stamp='$stamp6' output='$($script:LastSessionOutput.Trim())'"
   }
 
   # A3 -- binding is not waking. A run binds a session and may then fail to wake it, so a bind
