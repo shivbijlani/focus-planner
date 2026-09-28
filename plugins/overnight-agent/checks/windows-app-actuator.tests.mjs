@@ -743,6 +743,64 @@ test("global historical dead locks do not become phantom app sessions", async ()
       assert.equal(second.activity.sessions[0].residentOwner, true);
 });
 
+async function addHistoricalSessions(paths, count, lockPidFor) {
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(paths.databasePath);
+  const insert = db.prepare("INSERT INTO sessions VALUES (?, ?, ?)");
+  for (let index = 0; index < count; index += 1) {
+    const id = `historical-${index}`;
+    insert.run(id, 0, "2026-08-01T00:00:00.000Z");
+    const historical = join(paths.sessionStateDirectory, id);
+    await mkdir(historical, { recursive: true });
+    await writeFile(join(historical, `inuse.${lockPidFor(index)}.lock`), "", "utf8");
+    await writeFile(
+      join(historical, "events.jsonl"),
+      `${JSON.stringify({ type: "assistant.turn_end", timestamp: "2026-08-01T00:00:00.000Z" })}\n`,
+      "utf8",
+    );
+  }
+  db.close();
+}
+
+const appCopilot = (pid) => ({
+  pid,
+  parentPid: 101,
+  name: "copilot.exe",
+  path: "C:\\Fixture\\copilot.exe",
+  startTime: "2026-09-14T19:00:00.000Z",
+});
+
+test("more than 500 historical sessions with stale locks still yield complete evidence (#720)", async () => {
+  const directory = await fixtureDirectory();
+  const paths = await databases(directory, { sessionRunning: false, settledTurn: true, lockPid: 700 });
+  await addHistoricalSessions(paths, 600, (index) => 10_000 + index);
+  const snapshot = await captureSnapshot({
+    ...paths,
+    snapshotPath: join(directory, "snapshot.json"),
+    processProvider: async () => [oldIdentity],
+    processTableProvider: async () => [appCopilot(700)],
+    now: () => Date.parse("2026-09-14T20:00:00.000Z"),
+  });
+  assert.deepEqual(snapshot.errors, []);
+  assert.equal(snapshot.activity.complete, true);
+  assert.deepEqual(snapshot.activity.sessions.map((item) => item.id), ["session"]);
+  assert.equal(snapshot.activity.sessions[0].residentOwner, true);
+});
+
+test("more than 500 app-owned resident sessions still fail closed", async () => {
+  const directory = await fixtureDirectory();
+  const paths = await databases(directory, { sessionRunning: false, settledTurn: true, lockPid: 700 });
+  await addHistoricalSessions(paths, 501, (index) => 10_000 + index);
+  const snapshot = await captureSnapshot({
+    ...paths,
+    snapshotPath: join(directory, "snapshot.json"),
+    processProvider: async () => [oldIdentity],
+    processTableProvider: async () => [appCopilot(700), ...Array.from({ length: 501 }, (_, i) => appCopilot(10_000 + i))],
+    now: () => Date.parse("2026-09-14T20:00:00.000Z"),
+  });
+  assert.equal(snapshot.activity.complete, false);
+});
+
 test("unreadable database or process evidence fails closed", async () => {
   const directory = await fixtureDirectory();
   const snapshot = await captureSnapshot({
