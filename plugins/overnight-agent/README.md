@@ -61,6 +61,18 @@ Keep your filled-in `user-settings.md` **out of any public repository** — see 
 "Making your settings persist" section at the bottom of that file for durable
 options.
 
+For non-code tasks, create one local folder project outside OneDrive (once per machine):
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$env:LOCALAPPDATA\overnight-agent\task-chats"
+```
+
+Then call `create_project` with `path` set to `%LOCALAPPDATA%\overnight-agent\task-chats`
+(expanded to its absolute path). Put the returned project ID in the external
+`user-settings.md` row `Non-code task project`. Do not use the OneDrive planner
+folder or a repository project: each non-code task gets a session in this fixed
+local folder project. The binding command refuses either unsafe location.
+
 ## Usage
 
 Ask Copilot to "run the overnight agent", "propose plans for my tasks", or
