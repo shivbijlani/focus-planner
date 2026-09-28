@@ -3629,7 +3629,7 @@ function New-ScanSummary($rows, [double]$seconds, [string]$outFile) {
     rows_due_poll  = @($rows | Where-Object { $_.due_poll }).Count
     rows_no_journal = @($rows | Where-Object { -not $_.has_journal }).Count
     today_holding  = @($rows | Where-Object { $_.holds_today_gate }).Count
-    out_file       = $outFile
+    out_file       = if ($outFile) { $outFile } else { $null }
   }
 }
 
@@ -4576,9 +4576,15 @@ function Get-DocMetaFromJournal([string]$path, [string]$content = $null) {
   #
   # `$content` is an optional pass-through of text the CALLER has already read from `$path`
   # (#711). `scan` reads every journal once for its facts and was then re-reading each one here
-  # purely to find this stamp. It is an optimisation only: omitted, the file is read exactly as
-  # before, and the stamp is parsed from the same bytes either way.
-  if ($null -eq $content) { $content = Read-JournalText $path }
+  # purely to find this stamp. It is an optimisation only: omitted OR EMPTY, the file is read
+  # exactly as before, and the stamp is parsed from the same bytes either way.
+  #
+  # Emptiness, not `$null`, is the test on purpose: a [string] parameter defaulted to `$null`
+  # arrives as `''`, so a `-eq $null` check here is always false and the fallback read would
+  # silently never happen -- which is exactly how the first version of this broke the
+  # journal-stamp rebind (caught by mutcheck-doc-binding). An empty journal re-read costs a
+  # stat and returns '', so the two paths agree.
+  if ([string]::IsNullOrEmpty($content)) { $content = Read-JournalText $path }
   if (-not $content) { return $null }
   $m = [regex]::Match((Get-FenceMaskedText $content), $script:DocMetaRe)
   if (-not $m.Success) { return $null }
