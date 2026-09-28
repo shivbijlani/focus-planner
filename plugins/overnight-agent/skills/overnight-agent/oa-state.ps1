@@ -98,16 +98,12 @@
                                 can be refused. Defaults to the current directory.
           [-SessionDead]        Record that the session could not be woken. Flips the verdict to
                                 `replace` and arms the continuation kickoff.
-          [-SessionWoken]       Record that the run reused this session (stamps last_woken_at).
           [-CheckDispatch]      Check eligibility and pauses without recording a wake.
-          [-ForDispatch]        Check again and stamp the wake before oa_drain sends its
-                                start/continue instruction. Being busy does not prevent a nudge.
-          [-DispatchInput hash] Refuse a brief prepared against changed journal/task inputs.
+          [-ForDispatch]        Recheck eligibility and stamp the wake immediately before the
+                                coordinator sends its start/continue instruction.
+          [-DispatchInput hash] Required with -ForDispatch; exact scan fingerprint, refusing stale input.
           [-SessionRelease]     Retire the binding (task finished, workspace torn down). Prints
                                 the teardown command; never runs it.
-          [-RunLimit]           Omit -Id to read this run's maximum outstanding normal requests.
-          [-InFlight]           Legacy alias for -RunLimit. Reports no in-flight count.
-          [-Concurrency <n>]    Override the `Overnight Agent concurrency` setting for one call.
   resnapshot                    One-time migration after a change to how journals are decoded
                                 or hashed: re-baseline processed_file_hash for tasks with
                                 nothing pending. SKIPS any journal with trailing user content,
@@ -177,21 +173,10 @@
                             reintroduced by the delegation step itself. Inheritance is the
                             default everywhere, so it has to be refused explicitly.
 
-  RUN-LOCAL DRAIN (#391 / #589; user clarification 2026-09-22). `Overnight Agent concurrency`
-  is N outstanding normal instructions from THIS run, refilled after observed completion.
-  The oa_drain scheduler owns selection, send, observation, refill and cutoff in code.
-  It stops dispatching at the next :00/:30 after the coordinator's first prompt MINUS the
-  configured Overnight Agent start buffer (default 5m); reload never moves that deadline.
-  A later run may nudge or start tasks while earlier task sessions
-  finish. There is no global occupied-worker count derived from retained task state.
-
-  The coordinator prepares approved task briefs and their scan fingerprints. The drain processes
-  each task at most once per run, respecting fresh eligibility and pauses. A failed/unknown
-  delivery holds its opening until correlated task execution ends or this run reaches cutoff.
-  It never expires into permission to overfill this run, and never blocks a later run.
-  The settings precedence remains -Concurrency > user-settings.md > 1.
-  Start buffer accepts 0..29 whole minutes (optional m), defaults to 5 only when absent, and
-  reports malformed/unreadable values so the extension refuses enrollment rather than guessing.
+  DIRECT DISPATCH (#716). The coordinator owns the sequence: resolve each session, skip paused
+  tasks, then use -ForDispatch with the exact scan fingerprint immediately before sending.
+  `Overnight Agent concurrency` limits total send attempts in that run; earlier task sessions do
+  not reserve capacity. The start cutoff is coordinator guidance, not an extension timer.
 
   CLEANUP is emitted, never performed. `-SessionRelease` prints the teardown command
   (`scripts/remove-worktree.ps1`), because the raw `git worktree remove --force` deletes THROUGH a
@@ -597,22 +582,14 @@ param(
   # session actually is -- so the inheritance refusal works without the caller having to opt in.
   [string]$RunWorkspace,
   [switch]$SessionDead,
-  [switch]$SessionWoken,
-  # The native drain checks first, persists its run state, then stamps the wake
-  # before sending (#532). Neither flag measures whether another task is running.
+  # Inspection is read-only; -ForDispatch is the only dispatch-authorising wake stamp.
   [switch]$CheckDispatch,
   [switch]$ForDispatch,
   [string]$DispatchInput,
-  [switch]$RunLimit,
   [switch]$SessionRelease,
   # The path of a workspace that has just been REMOVED. Marks any binding pointing at it dead,
   # so the next verdict is `replace` rather than `reuse` at a workspace that is gone (#452).
   [string]$WorkspaceGone,
-  [switch]$InFlight,
-  # Overrides the `Overnight Agent concurrency` settings row for one invocation. -1 is the
-  # "not specified" sentinel; see Resolve-PacingSettings for the precedence.
-  [int]$Concurrency = -1,
-
   # Overridable so the skill stays shareable; defaults match user-settings.md.
   [string]$JournalDir = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\journal",
   [string]$StateDir = "$env:LOCALAPPDATA\overnight-agent\state",
@@ -805,97 +782,33 @@ function Resolve-GateSettings {
   $script:GateStrictSource = $strictSource
 }
 
-# --- Pacing: the concurrency tunable (#391, read here for #404) ----------------------------
+# --- Direct-dispatch cap: the concurrency tunable -----------------------------------------
 #
-# Same contract as the gate tunables above, and for the same reason: a NUMBER that reaches this
-# script as a flag the agent is told to pass fails SILENTLY when the flag is forgotten. So it is
-# read where it is used.
-#
-# The failure direction is deliberate and is the only one that is safe for a pacing control. An
-# absent, unreadable or malformed value yields 1 EXACTLY -- never "unlimited", never the last
-# value seen. A typo can therefore narrow a run; it can never widen one. A value below 1 is
-# clamped to 1; disable the workflow separately rather than treating zero as a drain width.
-#
-# THAT LAST GUARANTEE USED TO BE FALSE, and the way it failed is worth stating because it reads
-# as harmless. The parse was a LEADING-integer match, so that `2 tasks` would work -- but this
-# file's cells are prose, and prose in this settings file characteristically opens with a DATE.
-# Measured against the live user-settings.md conventions:
-#
-#     | Overnight Agent concurrency | 2026-09-02: set to 1 by Shiv |   ->  concurrency 2026
-#     | Overnight Agent concurrency | 3 - raised for the backlog   |   ->  concurrency 3
-#
-# A note about setting it to 1 therefore set it to 2026: unbounded in every practical sense, on
-# the one control whose entire job is to stop a run over-committing, silently, and in the exact
-# direction the paragraph above promises is impossible. So the parse is now ANCHORED: the cell
-# must be a bare whole number and nothing else.
-#
-# Anchoring costs the `2 tasks` leniency, and that trade is only safe because of the second half
-# of this change: a cell that does not parse is now REPORTED (`concurrency_source` =
-# `settings-malformed`) instead of silently becoming 1. Narrowing a run that the user can SEE was
-# narrowed is recoverable; widening one nobody can see is not.
+# This is the maximum number of send attempts the coordinator may make in one run. Resolve it
+# here so each session verdict reports the same configured cap and its provenance.
 $script:PacingDefaults = @{ Concurrency = 1 }
 
 function Resolve-PacingSettings {
-  $explicit = $script:ExplicitArgs.ContainsKey('Concurrency')
   $value = $script:PacingDefaults.Concurrency
-  # Where the value in force came from, so a cell that did not parse is visible rather than
-  # silently indistinguishable from an unset one. `settings-malformed` is the whole point: it is
-  # the difference between "1 because you asked for 1" and "1 because your row is a sentence".
   $source = 'default'
 
-  if (-not $explicit) {
-    $path = Get-UserSettingsPath
-    if ($path) {
-      $text = $null
-      try { $text = Read-JournalText $path } catch { $text = $null }
-      if ($text) {
-        $v = Get-SettingRow $text 'Overnight Agent concurrency'
-        # ANCHORED: the cell must be a bare whole number. `2` parses; `two`, `many`, `2 tasks`,
-        # `-3` and `2026-09-02: set to 1 by Shiv` do not, and all fall through to 1. See the
-        # block comment above for why the leading-integer form had to go -- it read a dated note
-        # as 2026, which is a WIDENING, and no pacing control may ever widen by accident.
-        if ($null -ne $v -and $v -ne '') {
-          $source = 'settings-malformed'
-          if ($v -match '^\s*(\d+)\s*$') {
-            $n = [int]$Matches[1]
-            if ($n -ge 1) { $value = $n; $source = 'settings' }
-          }
+  $path = Get-UserSettingsPath
+  if ($path) {
+    $text = $null
+    try { $text = Read-JournalText $path } catch { $text = $null }
+    if ($text) {
+      $v = Get-SettingRow $text 'Overnight Agent concurrency'
+      if ($null -ne $v -and $v -ne '') {
+        $source = 'settings-malformed'
+        if ($v -match '^\s*(\d+)\s*$') {
+          $n = [int]$Matches[1]
+          if ($n -ge 1) { $value = $n; $source = 'settings' }
         }
       }
     }
   }
-  else { $value = $Concurrency; $source = 'argument' }
-
-  if ($value -lt 1) {
-    $value = $script:PacingDefaults.Concurrency
-    if ($source -eq 'argument') { $source = 'default' }
-  }
   $script:ConcurrencyLimit = $value
   $script:ConcurrencySource = $source
-}
-
-function Get-StartBufferSettings {
-  $path = Get-UserSettingsPath
-  $value = $null
-  if ($path -and (Test-Path -LiteralPath $path)) {
-    try { $value = Get-SettingRow (Read-JournalText $path) 'Overnight Agent start buffer' }
-    catch {
-      return [pscustomobject]@{
-        minutes = $null; source = 'settings-unreadable'
-        error = "Cannot read Overnight Agent start buffer: $($_.Exception.Message)"
-      }
-    }
-  }
-  if ($null -eq $value) { return [pscustomobject]@{ minutes = 5; source = 'default'; error = $null } }
-  $minutes = 0
-  if ($value -match '^(\d+)\s*m?$' -and [int]::TryParse($Matches[1], [ref]$minutes) -and $minutes -lt 30) {
-    return [pscustomobject]@{ minutes = $minutes; source = 'settings'; error = $null }
-  }
-  # Falling back to a smaller buffer could start work later than the user intended.
-  [pscustomobject]@{
-    minutes = $null; source = 'settings-malformed'
-    error = 'Overnight Agent start buffer must be whole minutes from 0 to 29 (for example 5m); no new drain may start until corrected.'
-  }
 }
 
 function Get-AgentModelSettings {
@@ -5208,28 +5121,12 @@ function Get-DispatchInput($st, $facts) {
   finally { $sha.Dispose() }
 }
 
-function Get-RunLimit {
-  $buffer = Get-StartBufferSettings
-  $agentModel = Get-AgentModelSettings
-  [pscustomobject]@{
-    scope = 'run_local_concurrency'
-    dispatch_limit = [int]$script:ConcurrencyLimit
-    limit_source = "$script:ConcurrencySource"
-    # Retained for settings-reader compatibility, not a simultaneous-worker promise.
-    concurrency = [int]$script:ConcurrencyLimit
-    concurrency_source = "$script:ConcurrencySource"
-    start_buffer_minutes = $buffer.minutes
-    start_buffer_source = $buffer.source
-    start_buffer_error = $buffer.error
-    model = $agentModel.model
-    model_source = $agentModel.source
-    note = 'N outstanding requests from this run, refilled until next half-hour minus the configured start buffer. Earlier runs do not reserve openings. Use oa_drain_status for this run.'
-  }
-}
-
 function Assert-TaskDispatch($st, $sess, $facts) {
   if ((Get-SessionVerdict $sess $st $facts) -ne 'reuse') {
     throw 'session_not_dispatchable: resolve the saved session first; paused tasks cannot be woken'
+  }
+  if ($ForDispatch -and [string]::IsNullOrWhiteSpace($DispatchInput)) {
+    throw 'session_input_required: -ForDispatch requires the exact dispatch_input from scan'
   }
   $row = @(Get-ScanRows | Where-Object { "$($_.id)" -eq "$($st.id)" }) | Select-Object -First 1
   if (-not $row -or -not $row.eligible -or $row.session_paused) {
@@ -5255,7 +5152,7 @@ function Get-KickoffContinuation([string]$taskId, [string]$priorId) {
 function Cmd-Session {
   $agentModel = Get-AgentModelSettings
   if (($CheckDispatch -or $ForDispatch) -and (-not $Id -or
-      ($CheckDispatch -and $ForDispatch) -or $SessionId -or $SessionDead -or $SessionRelease -or $SessionWoken -or $WorkspaceGone)) {
+      ($CheckDispatch -and $ForDispatch) -or $SessionId -or $SessionDead -or $SessionRelease -or $WorkspaceGone)) {
     throw 'session_dispatch_flags_conflict: use -Id with exactly one dispatch-check flag'
   }
   # ---- workspace teardown: `session -WorkspaceGone <path>`, no -Id -----------------------
@@ -5316,10 +5213,8 @@ function Cmd-Session {
       } | ConvertTo-Json -Depth 4)
   }
 
-  # No task/session enumeration: this is drain width, not a global occupancy estimate.
   if (-not $Id) {
-    if (-not ($RunLimit -or $InFlight)) { throw 'session requires -Id (or -RunLimit, or -WorkspaceGone for teardown)' }
-    return (Get-RunLimit | ConvertTo-Json -Depth 4)
+    throw 'session requires -Id (or -WorkspaceGone for teardown)'
   }
 
   $st = Read-State $Id
@@ -5420,8 +5315,7 @@ function Cmd-Session {
       }
     }
 
-    # Binding is identity, not admission. New/replacement sessions are created idle and sent
-    # their kickoff through oa_drain; charging a bind before that send recreates #589.
+    # Binding is identity, not dispatch. New and replacement sessions are created idle.
 
     $created = if ($sess -and "$($sess.session_id)" -eq $SessionId -and $sess.created_at) { $sess.created_at } else { Now-Iso }
     $replacedAt = if ($prior -and "$($sess.session_id)" -ne $SessionId) { Now-Iso } elseif ($sess) { $sess.replaced_at } else { '' }
@@ -5432,7 +5326,7 @@ function Cmd-Session {
     $dirty = $true
   }
 
-  if ($SessionWoken -or $ForDispatch) {
+  if ($ForDispatch) {
     if (-not $sess) { throw "session_not_bound: task $Id has no session to wake" }
     if (Test-UserPaused $st $pauseFacts) { throw 'session_user_paused: cannot stamp a wake for a paused task' }
     $sess = New-SessionObject -SessionIdValue "$($sess.session_id)" -Kind "$($sess.kind)" `
@@ -5489,9 +5383,6 @@ function Cmd-Session {
     else { $null }
     concurrency    = [int]$script:ConcurrencyLimit
     concurrency_source = "$script:ConcurrencySource"
-    budget_scope   = 'run_local_concurrency'
-    dispatch_limit = [int]$script:ConcurrencyLimit
-    limit_source   = "$script:ConcurrencySource"
   } | ConvertTo-Json -Depth 8
 }
 
@@ -5617,27 +5508,6 @@ function Set-ExhaustionDeclaration {
 
 function Cmd-Mark {
   if (-not $Id) { throw 'mark requires -Id' }
-  # GH #532 -- `-SessionWoken` belongs to `session`, and `mark` must not accept it silently.
-  #
-  # `$SessionWoken` is declared in the SHARED param block, so PowerShell binds it for every
-  # subcommand, but it is read in exactly one place and that place is inside `Cmd-Session`.
-  # `mark -Id X -SessionWoken` therefore parsed, did nothing, and exited 0. Measured against a
-  # real state file: the stamp did not move and the caller was told it had.
-  #
-  # The cost is not the wasted call, it is that the failure is UNFALSIFIABLE afterwards. An empty
-  # `last_woken_at` on a live session could mean the dispatcher never stamped, or that it stamped
-  # with this call and was silently ignored -- and those two produce byte-identical state, so
-  # nothing can distinguish them after the fact. Five of the eight tasks holding live sessions
-  # were in exactly that state when this was written.
-  #
-  # Refusing is deliberately NOT the same as making `mark` stamp the field. Doing that would hand
-  # the turn author a second working lever to reset its own wake window, which is the bypass #514
-  # measured -- and G12 judges that author, so the field it reads must not be writable by the
-  # party being judged. Stamping at DISPATCH is correct; stamping as REMEDIATION is the defect.
-  # A silent no-op and a working lever are both wrong; failing loudly is the third option.
-  if ($SessionWoken) {
-    throw "-SessionWoken is not a mark flag: it is read only by ``session``. Use ``oa-state.ps1 session -Id $Id -SessionWoken``. Accepting it here would exit 0 without stamping last_woken_at, which is indistinguishable afterwards from never having called it at all (#532)."
-  }
   $path = Join-Path $JournalDir "task-$Id.md"
   if (-not (Test-Path $path)) { throw "no journal at $path" }
   # The exhaustion declaration (#310) branches out BEFORE anything below touches the journal or
@@ -5844,8 +5714,8 @@ function Cmd-Mark {
 # Task agents can still update state during a coordinator run. Serialize state read/modify/write
 # so their marks and doc observations cannot erase a binding. This is file integrity, not a
 # lock or reservation against starting work in another run.
-if (($CheckDispatch -or $ForDispatch -or $RunLimit) -and $Command -ne 'session') {
-  throw 'session_flag_command: dispatch checks and run-limit reads belong to the session command'
+if (($CheckDispatch -or $ForDispatch) -and $Command -ne 'session') {
+  throw 'session_flag_command: dispatch checks belong to the session command'
 }
 $lockPath = [IO.Path]::GetFullPath($StateDir).TrimEnd([char[]]'\/')
 if ($env:OS -eq 'Windows_NT') { $lockPath = $lockPath.ToLowerInvariant() }

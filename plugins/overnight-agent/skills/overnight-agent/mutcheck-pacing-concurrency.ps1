@@ -1,16 +1,12 @@
 <#
   mutcheck-pacing-concurrency.ps1 -- mutation check for how the `Overnight Agent concurrency`
-  tunable (#391) is READ.
+  tunable (#391) is read for direct-dispatch attempt limits (#716).
 
   WHAT THIS GUARDS, AND WHY IT IS NOT ALREADY COVERED
 
-  #404 shipped the concurrency limit's ENFORCEMENT -- capacity refusal, release, the in-flight
-  view -- and `mutcheck-per-task-session.ps1` guards that. Its arms L/M/N establish that an
-  absent file yields 1, a malformed value yields 1, and a well-formed row is read at all.
-
-  This file guards the RESOLUTION itself: the exact boundary between a value that parses and one
-  that does not, the precedence of an explicit argument over the file, and whether a fallback is
-  VISIBLE. Those are separable concerns, and the gap between them is where the bug below lived.
+  This file guards the resolution of the user setting: the exact boundary between a value that
+  parses and one that does not, and whether a malformed value is visible. The direct dispatcher
+  reads the resolved cap from `session -Id`; there is no command-line override.
 
   THE BUG THIS WAS WRITTEN FOR (arm G, mutant M2) -- measured, not hypothetical
 
@@ -49,7 +45,7 @@
   arms beside dead mutants is the exact state this file exists to make impossible.
 
   Pure text work: each arm writes a synthetic user-settings.md into a temp dir and runs the REAL
-  script's `session -InFlight` against it with -UserSettings and an isolated -StateDir. The live
+  script's `session -Id 900` against it with -UserSettings and an isolated -StateDir. The live
   planner folder is never read and no real state is written.
 #>
 [CmdletBinding()]
@@ -69,6 +65,8 @@ if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath
 $script:Root = Join-Path ([IO.Path]::GetTempPath()) ("oa-pace-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $script:StateDir = Join-Path $script:Root 'state'
 New-Item -ItemType Directory -Path $script:StateDir -Force | Out-Null
+$script:JournalDir = Join-Path $script:Root 'journal'
+New-Item -ItemType Directory -Path $script:JournalDir -Force | Out-Null
 
 function New-Settings {
   # A synthetic user-settings.md carrying at most the one row under test.
@@ -87,12 +85,11 @@ function New-Settings {
 }
 
 function Get-Pacing {
-  # Runs the script under test and returns its parsed `session -InFlight` JSON, or $null if it
-  # failed. A crashed mutant counts as killed, which is correct: it also does not resolve the
-  # setting.
-  param([string]$Build, $Value, [string[]]$Extra = @())
+  # Returns the resolved per-run send cap from the real task-session verdict.
+  param([string]$Build, $Value)
   $settings = New-Settings $Value
-  $a = @('session', '-InFlight', '-UserSettings', $settings, '-StateDir', $script:StateDir) + $Extra
+  $a = @('session', '-Id', '900', '-UserSettings', $settings, '-JournalDir', $script:JournalDir,
+    '-StateDir', $script:StateDir)
   # $ErrorActionPreference is relaxed for the call itself. At 'Stop', a child process writing
   # ANYTHING to stderr raises a terminating NativeCommandError -- which is not a test result, it
   # is the harness crashing. That matters most under -ExpectPreFix, where the build under test
@@ -158,14 +155,6 @@ function Invoke-Arms {
     (Test-Value (Get-Pacing $Build '10 items') 1) -and
     (Test-Value (Get-Pacing $Build '2026-09-02: set to 1 by Shiv') 1)
 
-  # H. AN EXPLICIT ARGUMENT OUTRANKS THE FILE. The documented precedence -- and untested before
-  #    this file, so a build could ignore -Concurrency entirely and stay green.
-  $r['H argument-outranks-settings'] = Test-Value (Get-Pacing $Build '3' @('-Concurrency', '5')) 5
-
-  # I. A NONSENSE ARGUMENT NARROWS TOO. The sentinel guard: `-Concurrency 0` (and the internal -1
-  #    "not specified" default) must land on 1, not on 0, or the run can start nothing at all.
-  $r['I bogus-argument-narrows'] = Test-Value (Get-Pacing $Build $null @('-Concurrency', '0')) 1
-
   return $r
 }
 
@@ -202,22 +191,6 @@ $Mutants = [ordered]@{
     edits = @(@{
         find  = "`$source = 'settings-malformed'"
         with  = "`$source = 'settings'"
-        count = 1
-      })
-  }
-  'M5 argument-ignored' = @{
-    kills = 'H'
-    edits = @(@{
-        find  = "else { `$value = `$Concurrency; `$source = 'argument' }"
-        with  = "else { `$source = 'argument' }"
-        count = 1
-      })
-  }
-  'M6 sentinel-unguarded' = @{
-    kills = 'I'
-    edits = @(@{
-        find  = 'if ($value -lt 1) {'
-        with  = 'if ($false) {'
         count = 1
       })
   }

@@ -206,18 +206,14 @@ function Check([string]$name, [scriptblock]$body) {
 
 [void](Invoke-Oa @('seed'))
 
-Check 'model defaults to auto for coordinator and unbound task' {
-  $run = Invoke-OaJson -OaArgs @('session', '-RunLimit') -Settings $noSettings
+Check 'model defaults to auto for an unbound task session' {
   $task = Invoke-OaJson -OaArgs @('session', '-Id', '801') -Settings $noSettings
-  $run.model -eq 'auto' -and $run.model_source -eq 'default' -and
-    $task.model -eq 'auto' -and $task.model_source -eq 'default'
+  $task.model -eq 'auto' -and $task.model_source -eq 'default'
 }
-Check 'model override reaches coordinator, bound task and scan' {
-  $run = Invoke-OaJson -OaArgs @('session', '-RunLimit') -Settings $modelSettings
+Check 'model override reaches task session and scan' {
   $task = Invoke-OaJson -OaArgs @('session', '-Id', '801') -Settings $modelSettings
   $scan = Get-Row '801' -Settings $modelSettings
-  $run.model -eq 'claude-sonnet-5' -and $run.model_source -eq 'settings' -and
-    $task.model -eq 'claude-sonnet-5' -and $task.model_source -eq 'settings' -and
+  $task.model -eq 'claude-sonnet-5' -and $task.model_source -eq 'settings' -and
     $scan.model -eq 'claude-sonnet-5' -and $scan.model_source -eq 'settings'
 }
 Check 'malformed model falls back visibly to auto' {
@@ -261,10 +257,7 @@ Check 'C live binding -> verdict reuse' { "$($b2.verdict)" -eq 'reuse' -and "$($
 # speaking up for the verdict to be right.
 $wsTorn = Join-Path $root 'wt-802'
 New-Item -ItemType Directory -Path $wsTorn -Force | Out-Null
-# -WithForce because task 801 above already holds a live session and the default concurrency is 1.
-# Without it the bind is refused for CAPACITY, task 802 stays unbound, and the arm would then read
-# `create` for a reason that has nothing to do with the workspace -- passing arm C-w while proving
-# nothing about it.
+# -WithForce isolates this workspace-verdict fixture from the live binding already created above.
 $null = New-Bind -Id '802' -SessionId 'SESS_802' -WithForce
 # New-Bind materialises a healthy workspace; strip the checkout back off to restore the measured
 # torn-down signature (directory present, deregistered, no `.git`).
@@ -421,35 +414,23 @@ Check 'K------ a legacy folder replacement explains the required explicit kind' 
   $script:LastOaExit -ne 0 -and $legacyReplace -match 'session_kind_invalid'
 }
 
-# --- L/M/N: the concurrency setting (#391), and its fail-safe direction ----------------
-$l = Invoke-OaJson -OaArgs @('session', '-InFlight') -Settings $noSettings
+# --- L/M/N: the direct-dispatch send cap (#391 / #716), and its fail-safe direction ------
+$l = Invoke-OaJson -OaArgs @('session', '-Id', '801') -Settings $noSettings
 Check 'L absent settings file -> concurrency 1' { $l.concurrency -eq 1 }
 
-$m = Invoke-OaJson -OaArgs @('session', '-InFlight') -Settings $badSettings
+$m = Invoke-OaJson -OaArgs @('session', '-Id', '801') -Settings $badSettings
 Check 'M malformed value -> concurrency 1, not unlimited' { $m.concurrency -eq 1 }
 
 # N is what stops L and M being satisfied by a hard-coded 1.
-$n = Invoke-OaJson -OaArgs @('session', '-InFlight') -Settings $twoSettings
+$n = Invoke-OaJson -OaArgs @('session', '-Id', '801') -Settings $twoSettings
 Check 'N the settings row is actually read' { $n.concurrency -eq 2 }
 
-Check 'N- retained bindings are not a global in-flight count' {
-  $l.scope -eq 'run_local_concurrency' -and $l.dispatch_limit -eq 1 -and -not $l.PSObject.Properties['in_flight']
-}
-
-# --- O/P/U: binding is preparation, not admission (#589) -------------------------------
-# Enforcement moved to the actual dispatch boundary. Its cross-process/accepted-pending tests
-# run in CI alongside this suite; retaining a bind-time cap would restore the idle-task deadlock.
+# --- O/P/U: binding is preparation, not dispatch (#589) ----------------------------------
 foreach ($id in $ids) { [void](Invoke-Oa @('session', '-Id', "$id", '-SessionRelease')) }
-$zero = Invoke-OaJson @('session', '-InFlight')
-Check 'S releasing bindings leaves the configured per-run limit unchanged' { $zero.dispatch_limit -eq 1 }
 
 [void](New-Bind -Id '805' -SessionId 'SESS_805')
 $o = Invoke-Oa @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'chat')
 Check 'O a second idle conversation can be bound without starting work' { $script:LastOaExit -eq 0 -and $o -match 'SESS_806' }
-Check 'O- two bindings do not spend or change the per-run limit' {
-  $capacity = Invoke-OaJson @('session', '-InFlight')
-  $capacity.scope -eq 'run_local_concurrency' -and $capacity.dispatch_limit -eq 1 -and -not $capacity.PSObject.Properties['at_capacity']
-}
 
 $p = Invoke-OaJson @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'chat', '-Force')
 Check 'P an explicit rebind still preserves the requested conversation' { "$($p.session_id)" -eq 'SESS_806' }
@@ -460,10 +441,9 @@ $n2 = Invoke-OaJson -OaArgs @('session', '-Id', '806', '-SessionId', 'SESS_806',
 Check 'N-- concurrency 2 admits the second item' { "$($n2.session_id)" -eq 'SESS_806' }
 [void](Invoke-Oa @('session', '-Id', '806', '-SessionRelease'))
 
-# U: replacement still carries continuity. Waking the replacement is a separate, guarded
-# admission; a dead session is not an occupied worker and cannot bypass that check.
+# U: replacement still carries continuity. Waking the replacement is a separate guarded action.
 [void](Invoke-Oa @('session', '-Id', '805', '-SessionDead'))
-[void](New-Bind -Id '807' -SessionId 'SESS_807')          # 807 now holds the single slot
+[void](New-Bind -Id '807' -SessionId 'SESS_807')
 $u = Invoke-OaJson @('session', '-Id', '805', '-SessionId', 'SESS_805B')
 Check 'U a replacement binding preserves the prior conversation' { "$($u.session_id)" -eq 'SESS_805B' -and "$($u.prior_session_id)" -eq 'SESS_805' }
 
@@ -498,8 +478,9 @@ Check 'T- and never the raw force removal' { "$($t.teardown_command)" -notmatch 
 # the whole point: this harness ALSO calls ConvertFrom-Json, so `$v.created_at` is a [datetime]
 # here no matter what the tool stored, and stringifying it would test the harness rather than the
 # feature. The bytes on disk are the thing that has to survive to the next run.
-[void](Invoke-Oa @('session', '-Id', '807', '-SessionWoken'))
-[void](Invoke-Oa @('session', '-Id', '807', '-SessionWoken'))
+$dispatchInput807 = (Get-Row '807').dispatch_input
+[void](Invoke-Oa @('session', '-Id', '807', '-ForDispatch', '-DispatchInput', $dispatchInput807))
+[void](Invoke-Oa @('session', '-Id', '807', '-ForDispatch', '-DispatchInput', $dispatchInput807))
 $storedPath = Join-Path $sdir 'task-807.json'
 # Tolerant read: -ExpectPreFix runs this whole file against a build with no `session` command at
 # all, so nothing was ever bound and the file does not exist. That must surface as two failed arms,
@@ -508,44 +489,32 @@ $stored = if (Test-Path $storedPath) { [IO.File]::ReadAllText($storedPath) } els
 Check 'V created_at survives two round-trips as ISO' {
   $stored -match '"created_at"\s*:\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'
 }
-Check 'V- last_woken_at is stamped, and ISO' {
+Check 'V- ForDispatch stamps last_woken_at, and ISO' {
   $stored -match '"last_woken_at"\s*:\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'
 }
 
-# --- W: `-SessionWoken` on the wrong subcommand REFUSES (GH #532) -----------------------
-#
-# `$SessionWoken` sits in the SHARED param block, so PowerShell binds it for every subcommand,
-# but only `Cmd-Session` reads it. `mark -SessionWoken` therefore parsed, did nothing and exited
-# 0 -- and that silence is worse than a wrong answer, because an empty `last_woken_at` afterwards
-# cannot be distinguished from never having called it at all. Five of the eight tasks holding
-# live sessions were in exactly that state when this arm was written.
-#
-# Acts on 807 because $storedPath is 807: an arm that reads one task while acting on another
-# passes trivially, which is exactly how the first draft of W- reported green.
-#
-# The arm asserts REFUSAL rather than stamping on purpose. Making `mark` stamp would hand the
-# turn author a second lever to reset its own wake window (#514), and G12 judges that author.
+# --- W: the legacy stamp-only option is no longer a dispatch path (#716) ----------------
+# Both subcommands reject the removed flag; the only wake stamp now requires -ForDispatch and
+# the exact scan fingerprint. Acts on 807 because $storedPath is 807.
 $wokeBefore = if (Test-Path $storedPath) {
   ([regex]::Match([IO.File]::ReadAllText($storedPath), '"last_woken_at"\s*:\s*"([^"]*)"')).Groups[1].Value
 } else { '' }
 [void](Invoke-Oa @('mark', '-Id', '807', '-SessionWoken'))
-$wokeExit = $script:LastOaExit
+$markWokenExit = $script:LastOaExit
+$markWokenAfter = if (Test-Path $storedPath) {
+  ([regex]::Match([IO.File]::ReadAllText($storedPath), '"last_woken_at"\s*:\s*"([^"]*)"')).Groups[1].Value
+} else { '' }
+[void](Invoke-Oa @('session', '-Id', '807', '-SessionWoken'))
+$sessionWokenExit = $script:LastOaExit
 $wokeAfter = if (Test-Path $storedPath) {
   ([regex]::Match([IO.File]::ReadAllText($storedPath), '"last_woken_at"\s*:\s*"([^"]*)"')).Groups[1].Value
 } else { '' }
 
-Check 'W mark -SessionWoken refuses instead of exiting 0' { $wokeExit -ne 0 }
-# The load-bearing half: refusing must also mean CHANGING NOTHING. A refusal that still wrote
-# would be the #514 lever wearing an error message.
-Check 'W- a refused mark -SessionWoken leaves the stamp untouched' { $wokeAfter -eq $wokeBefore }
-# Discrimination: the CORRECT call must keep working, or this trades one broken path for another.
-[void](Invoke-Oa @('session', '-Id', '807', '-SessionWoken'))
-$sessExit = $script:LastOaExit
-$wokeVia = if (Test-Path $storedPath) {
-  ([regex]::Match([IO.File]::ReadAllText($storedPath), '"last_woken_at"\s*:\s*"([^"]*)"')).Groups[1].Value
-} else { '' }
-Check 'W-- session -SessionWoken still stamps' { $sessExit -eq 0 -and $wokeVia -ne '' }
-# ...and an ordinary mark is unaffected, so the refusal is scoped to the flag and not the verb.
+Check 'W removed -SessionWoken is rejected by mark' { $markWokenExit -ne 0 }
+Check 'W- removed -SessionWoken is rejected by session' { $sessionWokenExit -ne 0 }
+Check 'W-- rejected stamp-only calls leave the wake timestamp untouched' {
+  $markWokenAfter -eq $wokeBefore -and $wokeAfter -eq $wokeBefore
+}
 [void](Invoke-Oa @('mark', '-Id', '807', '-Status', 'in-progress'))
 Check 'W--- an ordinary mark still succeeds' { $script:LastOaExit -eq 0 }
 
