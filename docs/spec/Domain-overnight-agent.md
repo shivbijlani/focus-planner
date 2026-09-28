@@ -180,22 +180,25 @@ backstop`, `Today gate strict`, and `Overnight Agent concurrency`; its settings 
 `Google account (Tasks)`, and Telegram settings. The template is explicit that the real settings
 live outside the plugin and that the bundled copy is overwritten on update.
 
-### Task workspace isolation
+### Per-task session isolation
 
-Every non-code task session has a local, per-task working directory at
-`%LOCALAPPDATA%\overnight-agent\workspaces\task-<ID>`. The session binder creates that directory
-and refuses the nameable error `session_workspace_onedrive` for every task kind when an explicit
-workspace resolves equal to or beneath any detected OneDrive root. This boundary protects the
-planner database and legacy OneDrive scratch roots from tools that write relative to their current
-working directory.
+Every non-code task uses a dedicated global chat session, with no project and no folder workspace.
+Chats are stored locally under `~/.copilot/chats`; the binder stores the session identity without a
+workspace path. Code tasks use their own repository worktree, created from a freshly fetched
+`origin/main` outside OneDrive. The binder refuses the nameable error `session_workspace_onedrive`
+for every workspace-backed task session when an explicit workspace resolves equal to or beneath any
+detected OneDrive root. This boundary protects the planner database and old OneDrive scratch roots
+from tools that write relative to their current working directory.
 
 Legacy bindings are retired with `oa-state.ps1 session -MigrateOneDriveBindings`. Retirement is a
 state-only operation: it moves and deletes zero files, marks the unsafe session dead, and lets the
-existing replacement flow preserve the prior session id and continuation brief. The read-only
+existing replacement flow preserve the prior session id and continuation brief. A legacy non-code
+folder binding is replaced by a global chat; an old code binding is replaced by a new repository
+worktree. The read-only
 `session -WorkspaceHealth` command reports active violations, `migration_complete`, and the stricter
 `defender_exclusion_ready` gate. The latter is true only when no active binding is under OneDrive
-and every active folder binding is covered by the reported canonical root, making it suitable
-evidence before approving a narrow Defender exclusion for that exact root.
+and every retained active folder binding is covered by the reported canonical root. New non-code
+sessions no longer use that folder root; the gate only applies if legacy folder sessions remain.
 
 The out-of-process supervisor reads the same health verdict every tick. Any active OneDrive-backed
 binding is logged and surfaced as `WORKSPACE-ONEDRIVE`; it is never silently collapsed into the

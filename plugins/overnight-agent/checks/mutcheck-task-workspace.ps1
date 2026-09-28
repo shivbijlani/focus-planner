@@ -1,9 +1,9 @@
 <#
-  Proves the GH #547 task-workspace safety boundary against the real oa-state.ps1.
+  Proves the GH #547 task-session isolation boundary against the real oa-state.ps1.
 
-  Fixtures use isolated LOCALAPPDATA, USERPROFILE and state directories. The migration arm never
-  touches live data and verifies that legacy files remain in place while session continuity is
-  retained through the normal `replace` verdict.
+  Fixtures use isolated LOCALAPPDATA, USERPROFILE and state directories. Non-code bindings must
+  be projectless chats with no workspace. The migration arm never touches live data and verifies
+  that legacy files remain in place while chat replacement retains session continuity.
 #>
 [CmdletBinding()]
 param([string]$ScriptPath)
@@ -50,19 +50,29 @@ function Invoke-Session {
   [pscustomobject]@{ exit = $LASTEXITCODE; text = ($out | Out-String) }
 }
 
-function New-LegacyStore([string]$Name, [string]$Workspace) {
+function New-LegacyStore(
+  [string]$Name,
+  [string]$Workspace,
+  [string]$TaskId = '900',
+  [string]$Kind = 'folder'
+) {
   $dir = Join-Path $Tmp "state-$Name"
   New-Item -ItemType Directory -Path $dir -Force | Out-Null
+  $sessionId = if ($TaskId -eq '900') {
+    'aaaaaaaa-1111-2222-3333-444444444444'
+  } else {
+    "legacy-session-$TaskId"
+  }
   $state = [ordered]@{
-    id = '900'
+    id = $TaskId
     status = 'in-progress'
     version = 0
     session = [ordered]@{
-      session_id = 'aaaaaaaa-1111-2222-3333-444444444444'
-      kind = 'folder'
-      project = 'legacy-folder-project'
+      session_id = $sessionId
+      kind = $Kind
+      project = if ($Kind -eq 'code') { 'legacy-code-project' } else { 'legacy-folder-project' }
       workspace = $Workspace
-      workspace_type = 'folder'
+      workspace_type = if ($Kind -eq 'code') { 'worktree' } else { 'folder' }
       created_at = '2026-09-01T10:00:00-07:00'
       last_woken_at = '2026-09-25T10:00:00-07:00'
       state = 'live'
@@ -70,7 +80,7 @@ function New-LegacyStore([string]$Name, [string]$Workspace) {
       replaced_at = ''
     }
   }
-  $state | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $dir 'task-900.json') -Encoding utf8
+  $state | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $dir "task-$TaskId.json") -Encoding utf8
   return $dir
 }
 
@@ -79,47 +89,61 @@ function Test-Subject([string]$Subject) {
   $case = [guid]::NewGuid().ToString('N').Substring(0, 8)
   $state = Join-Path $Tmp "state-bind-$case"
   New-Item -ItemType Directory -Path $state -Force | Out-Null
-  $canonical = Join-Path $env:LOCALAPPDATA 'overnight-agent\workspaces\task-101'
-
+  $legacyCanonical = Join-Path $env:LOCALAPPDATA 'overnight-agent\workspaces\task-101'
   $r = Invoke-Session $Subject $state @(
-    '-Id', '101', '-SessionId', '11111111-1111-1111-1111-111111111111', '-SessionKind', 'folder')
-  if ($r.exit -ne 0) { $failures += "A1 default folder bind failed: $($r.text)" }
+    '-Id', '101', '-SessionId', '11111111-1111-1111-1111-111111111111')
+  if ($r.exit -ne 0) { $failures += "A1 default chat bind failed: $($r.text)" }
   else {
     $o = $r.text | ConvertFrom-Json
-    if ($o.workspace -ne $canonical -or -not (Test-Path -LiteralPath $canonical -PathType Container)) {
-      $failures += "A1 folder default was '$($o.workspace)', expected created '$canonical'"
+    if ($o.kind -ne 'chat' -or $o.project -or $o.workspace -or $o.workspace_type -or
+        (Test-Path -LiteralPath $legacyCanonical)) {
+      $failures += 'A1 non-code default was not a projectless chat without a workspace'
     }
   }
 
   $inside = Join-Path $env:OneDrive 'legacy\task-102'
   $r = Invoke-Session $Subject $state @(
     '-Id', '102', '-SessionId', '22222222-2222-2222-2222-222222222222',
-    '-SessionKind', 'folder', '-SessionWorkspace', $inside)
-  if ($r.exit -eq 0 -or $r.text -notmatch 'session_workspace_onedrive') {
-    $failures += 'A2 explicit folder workspace under OneDrive was not refused'
+    '-SessionKind', 'chat', '-SessionWorkspace', $inside)
+  if ($r.exit -eq 0 -or $r.text -notmatch 'session_chat_scope') {
+    $failures += 'A2 chat bind with a workspace was not refused'
   }
 
   $nested = Join-Path $env:OneDrive 'Apps\Focus Planner'
   $r = Invoke-Session $Subject $state @(
     '-Id', '103', '-SessionId', '33333333-3333-3333-3333-333333333333',
-    '-SessionKind', 'folder', '-SessionWorkspace', $nested)
-  if ($r.exit -eq 0 -or $r.text -notmatch 'session_workspace_onedrive') {
-    $failures += 'A3 planner workspace under OneDrive was not refused'
+    '-SessionKind', 'chat', '-SessionProject', 'folder-project')
+  if ($r.exit -eq 0 -or $r.text -notmatch 'session_chat_scope') {
+    $failures += 'A3 chat bind with a project was not refused'
   }
 
   $sibling = "$($env:OneDrive)-archive\task-104"
   $r = Invoke-Session $Subject $state @(
     '-Id', '104', '-SessionId', '44444444-4444-4444-4444-444444444444',
-    '-SessionKind', 'folder', '-SessionWorkspace', $sibling)
+    '-SessionKind', 'code', '-SessionProject', 'repo', '-SessionWorkspace', $sibling,
+    '-WorkspaceType', 'worktree')
   if ($r.exit -ne 0) { $failures += 'A4 path sharing only the OneDrive prefix was falsely refused' }
 
   $codeWorkspace = Join-Path $env:OneDrive 'code\task-105'
   $r = Invoke-Session $Subject $state @(
     '-Id', '105', '-SessionId', '55555555-5555-5555-5555-555555555555',
-    '-SessionKind', 'code', '-SessionProject', 'repo', '-SessionWorkspace', $codeWorkspace,
-    '-WorkspaceType', 'worktree')
+    '-SessionKind', 'code', '-SessionProject', 'repo', '-SessionWorkspace', $codeWorkspace)
   if ($r.exit -eq 0 -or $r.text -notmatch 'session_workspace_onedrive') {
-    $failures += 'A5 code workspace under OneDrive was not refused'
+    $failures += 'A5 code worktree under OneDrive was not refused'
+  }
+
+  $r = Invoke-Session $Subject $state @(
+    '-Id', '106', '-SessionId', '66666666-6666-6666-6666-666666666666',
+    '-SessionKind', 'code', '-SessionProject', 'repo',
+    '-SessionWorkspace', (Join-Path $Tmp 'branch-task-106'), '-WorkspaceType', 'branch')
+  if ($r.exit -eq 0 -or $r.text -notmatch 'session_workspace_type') {
+    $failures += 'A6 code binding accepted a branch instead of a worktree'
+  }
+
+  $r = Invoke-Session $Subject $state @(
+    '-Id', '107', '-SessionId', '77777777-7777-7777-7777-777777777777', '-SessionKind', 'folder')
+  if ($r.exit -eq 0) {
+    $failures += 'A7 legacy folder kind was accepted for a new binding'
   }
 
   $legacy = Join-Path $env:OneDrive 'overnight-agent\task-workspaces\task-900'
@@ -127,52 +151,82 @@ function Test-Subject([string]$Subject) {
   $evidence = Join-Path $legacy 'keep-me.txt'
   Set-Content -LiteralPath $evidence -Value 'legacy evidence' -Encoding utf8
   $legacyState = New-LegacyStore $case $legacy
+  $missingLegacy = Join-Path $env:OneDrive 'overnight-agent\task-workspaces\task-901-missing'
+  $missingCodeWorkspace = Join-Path $env:OneDrive 'overnight-agent\task-workspaces\task-902-code'
+  if ((Test-Path -LiteralPath $missingLegacy) -or (Test-Path -LiteralPath $missingCodeWorkspace)) {
+    $failures += 'A7 missing-workspace fixtures unexpectedly exist before migration'
+  }
+  [void](New-LegacyStore $case $missingLegacy '901')
+  [void](New-LegacyStore $case $missingCodeWorkspace '902' 'code')
 
   $before = Invoke-Session $Subject $legacyState @('-WorkspaceHealth')
-  if ($before.exit -ne 0 -or ($before.text | ConvertFrom-Json).active_onedrive_count -ne 1) {
-    $failures += 'A6 health did not expose the active OneDrive binding'
+  if ($before.exit -ne 0 -or ($before.text | ConvertFrom-Json).active_onedrive_count -ne 3) {
+    $failures += 'A8 health did not expose all active OneDrive bindings, including missing workspaces'
   }
 
   $migration = Invoke-Session $Subject $legacyState @('-MigrateOneDriveBindings')
-  if ($migration.exit -ne 0) { $failures += "A7 migration failed: $($migration.text)" }
+  if ($migration.exit -ne 0) { $failures += "A8 migration failed: $($migration.text)" }
   else {
     $m = $migration.text | ConvertFrom-Json
-    if ($m.migrated_count -ne 1 -or $m.files_moved -ne 0 -or $m.files_deleted -ne 0) {
-      $failures += 'A7 migration did not report one state-only retirement'
+    $folderReplacement = @($m.migrated | Where-Object { "$($_.id)" -eq '900' -or "$($_.id)" -eq '901' })
+    $codeReplacement = @($m.migrated | Where-Object { "$($_.id)" -eq '902' })
+    if ($m.migrated_count -ne 3 -or $m.files_moved -ne 0 -or $m.files_deleted -ne 0 -or
+        $folderReplacement.Count -ne 2 -or
+        @($folderReplacement | Where-Object { $_.replacement_kind -ne 'chat' -or $_.replacement_workspace }).Count -gt 0 -or
+        $codeReplacement.Count -ne 1 -or $codeReplacement[0].replacement_kind -ne 'code' -or
+        $codeReplacement[0].replacement_workspace) {
+      $failures += 'A9 migration did not prescribe chat and code replacements without folder targets'
     }
     if (-not (Test-Path -LiteralPath $evidence)) {
-      $failures += 'A7 migration touched legacy workspace data'
+      $failures += 'A9 migration touched legacy workspace data'
+    }
+    if ((Test-Path -LiteralPath $missingLegacy) -or (Test-Path -LiteralPath $missingCodeWorkspace)) {
+      $failures += 'A9 migration recreated a missing legacy workspace'
     }
   }
 
   $retired = Invoke-Session $Subject $legacyState @('-Id', '900')
-  if ($retired.exit -ne 0) { $failures += "A8 retired binding read failed: $($retired.text)" }
+  if ($retired.exit -ne 0) { $failures += "A10 retired binding read failed: $($retired.text)" }
   else {
     $o = $retired.text | ConvertFrom-Json
     if ($o.verdict -ne 'replace' -or $o.session_id -ne 'aaaaaaaa-1111-2222-3333-444444444444' -or
         $o.kickoff_continuation -notmatch [regex]::Escape($o.session_id)) {
-      $failures += 'A8 migration lost the replace verdict or prior-session continuity'
+      $failures += 'A10 migration lost the replace verdict or prior-session continuity'
     }
   }
 
   $replacement = Invoke-Session $Subject $legacyState @(
-    '-Id', '900', '-SessionId', '99999999-9999-9999-9999-999999999999', '-SessionKind', 'folder')
-  if ($replacement.exit -ne 0) { $failures += "A9 replacement bind failed: $($replacement.text)" }
+    '-Id', '900', '-SessionId', '99999999-9999-9999-9999-999999999999', '-SessionKind', 'chat')
+  if ($replacement.exit -ne 0) { $failures += "A11 replacement bind failed: $($replacement.text)" }
   else {
     $o = $replacement.text | ConvertFrom-Json
-    $expected = Join-Path $env:LOCALAPPDATA 'overnight-agent\workspaces\task-900'
-    if ($o.workspace -ne $expected -or $o.prior_session_id -ne 'aaaaaaaa-1111-2222-3333-444444444444') {
-      $failures += 'A9 replacement did not use canonical workspace and preserve prior session id'
+    if ($o.kind -ne 'chat' -or $o.project -or $o.workspace -or $o.workspace_type -or
+        $o.prior_session_id -ne 'aaaaaaaa-1111-2222-3333-444444444444') {
+      $failures += 'A11 replacement did not bind a workspace-free chat and preserve prior session id'
+    }
+  }
+
+  $codeReplacement = Invoke-Session $Subject $legacyState @(
+    '-Id', '902', '-SessionId', 'new-code-worktree-session', '-SessionKind', 'code',
+    '-SessionProject', 'repo', '-SessionWorkspace', (Join-Path $Tmp 'fresh-code-worktree-902'),
+    '-WorkspaceType', 'worktree')
+  if ($codeReplacement.exit -ne 0) { $failures += "A12 code replacement bind failed: $($codeReplacement.text)" }
+  else {
+    $o = $codeReplacement.text | ConvertFrom-Json
+    if ($o.kind -ne 'code' -or $o.prior_session_id -ne 'legacy-session-902' -or
+        $o.workspace -ne (Join-Path $Tmp 'fresh-code-worktree-902')) {
+      $failures += 'A12 code replacement lost its kind, worktree, or prior session id'
     }
   }
 
   $after = Invoke-Session $Subject $legacyState @('-WorkspaceHealth')
-  if ($after.exit -ne 0) { $failures += "A10 final health failed: $($after.text)" }
+  if ($after.exit -ne 0) { $failures += "A13 final health failed: $($after.text)" }
   else {
     $h = $after.text | ConvertFrom-Json
     if (-not $h.migration_complete -or -not $h.defender_exclusion_ready -or
-        $h.active_onedrive_count -ne 0 -or $h.active_noncanonical_folder_count -ne 0) {
-      $failures += 'A10 migration/Defender gate reported ready state incorrectly'
+        $h.active_onedrive_count -ne 0 -or $h.active_noncanonical_folder_count -ne 0 -or
+        $h.active_chat_count -ne 1 -or $h.active_bindings -ne 2) {
+      $failures += 'A13 migration/health gate reported the active chat and code bindings incorrectly'
     }
   }
   return $failures
@@ -193,20 +247,35 @@ try {
   $mutants = @(
     @{
       name = 'default-removed'
-      expect = 'A1|A9'
+      expect = 'A1'
       mutate = {
         param($s)
-        $s.Replace("elseif (`$kind -eq 'folder') { Get-CanonicalTaskWorkspace `$Id }",
-          "elseif (`$kind -eq 'folder') { '' }")
+        $s.Replace("else { 'chat' }", "else { 'folder' }")
+      }
+    },
+    @{
+      name = 'chat-scope-guard-removed'
+      expect = 'A2|A3'
+      mutate = {
+        param($s)
+        $s.Replace('if ($SessionProject -or $SessionWorkspace -or $WorkspaceType) {',
+          'if ($false) {')
       }
     },
     @{
       name = 'onedrive-guard-removed'
-      expect = 'A2|A3|A5|A6'
+      expect = 'A5'
       mutate = {
         param($s)
-        $s.Replace('if (Test-PathUnderRoot $path $root) { return $root }',
-          'if ($false) { return $root }')
+        $s.Replace('if ($oneDriveRoot) {', 'if ($false) {')
+      }
+    },
+    @{
+      name = 'worktree-type-guard-removed'
+      expect = 'A6'
+      mutate = {
+        param($s)
+        $s.Replace("if (`$wsType -ne 'worktree') {", 'if ($false) {')
       }
     },
     @{
@@ -220,10 +289,19 @@ try {
     },
     @{
       name = 'migration-retirement-removed'
-      expect = 'A7|A8|A9|A10'
+      expect = 'A9|A10|A11|A12|A13'
       mutate = {
         param($s)
         $s.Replace("if (-not `$s -or `"`$(`$s.state)`" -ne 'live') { continue }", 'if ($true) { continue }')
+      }
+    },
+    @{
+      name = 'migration-kind-regressed'
+      expect = 'A9|A11'
+      mutate = {
+        param($s)
+        $s.Replace("`$replacementKind = if (`"`$(`$s.kind)`" -eq 'folder') { 'chat' }",
+          "`$replacementKind = if (`"`$(`$s.kind)`" -eq 'folder') { 'folder' }")
       }
     }
   )
@@ -249,7 +327,7 @@ try {
     Write-Host "FAIL: $($baseline.Count) baseline failure(s), $($survived.Count) mutant(s) survived." -ForegroundColor Red
     exit 1
   }
-  Write-Host "PASS: workspace isolation, safe migration and all $($mutants.Count) mutation arms." -ForegroundColor Green
+  Write-Host "PASS: chat/worktree isolation, safe migration and all $($mutants.Count) mutation arms." -ForegroundColor Green
   exit 0
 }
 finally {
