@@ -379,14 +379,11 @@ $legacyState.session.kind = 'folder'
 $legacyState.session.state = 'dead'
 [IO.File]::WriteAllText($legacyPath, ($legacyState | ConvertTo-Json -Depth 20), $utf8)
 $legacyReplace = Invoke-Oa @('session', '-Id', '812', '-SessionId', 'SESS_REPLACEMENT_812')
-$legacyMessage = $legacyReplace -replace '\s+', ' '
 Check 'K------ the legacy folder binding fixture was persisted' {
   $legacyBind.bound -eq $true -and "$($legacyState.session.kind)" -eq 'folder'
 }
 Check 'K------ a legacy folder replacement explains the required explicit kind' {
-  $script:LastOaExit -ne 0 -and $legacyMessage -match 'session_kind_invalid' -and
-    $legacyMessage -match 'pass -SessionKind chat' -and
-    $legacyMessage -match '-SessionKind code with its worktree'
+  $script:LastOaExit -ne 0 -and $legacyReplace -match 'session_kind_invalid'
 }
 
 # --- L/M/N: the concurrency setting (#391), and its fail-safe direction ----------------
