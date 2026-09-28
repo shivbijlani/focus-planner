@@ -205,7 +205,7 @@ function Test-Arms {
   $d4 = New-Store
   [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d4 -Extra @('-ForDispatch'))
   $stamp4 = Read-Stamp $d4
-  if ($script:LastExitCode -eq 0 -or $stamp4 -ne $StaleStamp) {
+  if ($script:LastSessionOutput -notmatch 'session_input_required' -or $stamp4 -ne $StaleStamp) {
     $f += "A4: missing dispatch_input exit=$script:LastExitCode stamp='$stamp4' output='$($script:LastSessionOutput.Trim())'"
   }
 
@@ -214,7 +214,7 @@ function Test-Arms {
   [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d5 -Extra @(
     '-ForDispatch', '-DispatchInput', 'stale-dispatch-input'))
   $stamp5 = Read-Stamp $d5
-  if ($script:LastExitCode -eq 0 -or $stamp5 -ne $StaleStamp) {
+  if ($script:LastSessionOutput -notmatch 'session_input_changed' -or $stamp5 -ne $StaleStamp) {
     $f += "A5: stale dispatch_input exit=$script:LastExitCode stamp='$stamp5' output='$($script:LastSessionOutput.Trim())'"
   }
   $d6 = New-Store
@@ -227,7 +227,7 @@ function Test-Arms {
   [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d6 -Extra @(
     '-ForDispatch', '-DispatchInput', $hash6))
   $stamp6 = Read-Stamp $d6
-  if ($script:LastExitCode -eq 0 -or $stamp6 -ne $StaleStamp) {
+  if ($script:LastSessionOutput -notmatch 'session_not_dispatchable' -or $stamp6 -ne $StaleStamp) {
     $f += "A5: user-paused dispatch exit=$script:LastExitCode stamp='$stamp6' output='$($script:LastSessionOutput.Trim())'"
   }
 
