@@ -168,14 +168,14 @@ $mutants = @(
   @{
     Name = 'M2_ignore-event-freshness'
     Expect = 'C_recent-events'
-    Find = '    return ((Get-Item -LiteralPath $eventsPath -ErrorAction Stop).LastWriteTimeUtc -le $staleBefore)'
-    Replace = '    return $true'
+    Find = '  return ((Get-Item -LiteralPath $eventsPath -ErrorAction Stop).LastWriteTimeUtc -le $staleBefore)'
+    Replace = '  return $true'
   }
   @{
     Name = 'M3_ignore-live-lock-owner'
     Expect = 'B_live-owner'
-    Find = '        if (-not $process.HasExited) { return $false }'
-    Replace = '        if ($false) { return $false }'
+    Find = '      if (-not $process.HasExited) { return $false }'
+    Replace = '      if ($false) { return $false }'
   }
 )
 

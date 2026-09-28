@@ -5048,6 +5048,18 @@ function Get-SessionState($st) {
 }
 
 function Test-SessionProcessDead([string]$sessionId) {
+  # Is this bound session's CLI process gone? (GH #728)
+  #
+  # Measured 2026-09-28: task #228's session host (PID 18728) exited at 08:42 without a shutdown
+  # line, the binding still read `live`, and the 10:00 run spent its only dispatch slot on it.
+  # Derived at read time from the host's own `inuse.<pid>.lock` (the signal stuck-run-sweep and
+  # zero-writer-sweep already trust) AND a quiet events.jsonl, so a recycled PID or a host that is
+  # still writing cannot be read as dead. Any missing or unreadable evidence answers $false:
+  # replacing a live session discards its continuity, the expensive direction.
+  try { return [bool](Test-SessionProcessDeadCore $sessionId) } catch { return $false }
+}
+
+function Test-SessionProcessDeadCore([string]$sessionId) {
   if (-not $sessionId -or $sessionId -match '[\\/]' -or $sessionId -in '.', '..') { return $false }
   $sessionDir = Join-Path $SessionStateDir $sessionId
   if (-not (Test-Path -LiteralPath $sessionDir -PathType Container)) { return $false }
