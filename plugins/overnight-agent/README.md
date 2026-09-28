@@ -143,3 +143,52 @@ It resolves each issue against implementation source on `origin/main` rather tha
 commit log, because a commit subject names the PR, not the issue. `write-turn.ps1`'s G15
 enforces the same answer on journal turns, so a run cannot recommend shipped work by
 skipping the check (GH #635).
+
+## Optional reliability supervision tray (GH #695)
+
+The plugin ships an **optional, off-by-default** Windows tray app that supervises the
+GitHub Copilot desktop app itself — separate from, and out of process from, both the
+overnight agent and the app it supervises:
+
+```
+plugins/overnight-agent/checks/
+├── reliability-supervisor.mjs             # M/N preventive-restart policy engine
+├── windows-app-actuator.mjs                # process identity + graceful/bounded-force actuation
+├── session-terminal-evidence.mjs           # "quiet evidence" for the M/N window
+├── consumer-reliability-supervisor.mjs     # wires the policy engine to the real desktop app
+├── oa-supervisor-tray.ps1                  # the tray app itself
+├── oa-supervisor-startup.ps1               # shared HKCU Run + lock-ownership helpers
+└── install-oa-reliability-tray.ps1         # opt-in installer (status / -Enable / -Disable)
+```
+
+**Nothing is registered or started by installing or updating the plugin.** To opt in:
+
+```powershell
+powershell -File plugins\overnight-agent\checks\install-oa-reliability-tray.ps1 -Enable
+```
+
+This deploys the six files above to `%LOCALAPPDATA%\overnight-agent`, registers **one**
+per-user startup entry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Overnight Agent
+supervisor`), and starts the tray immediately. `-Disable` (alias `-Uninstall`) stops it and
+removes the entry; running the installer with no switch only reports status.
+
+The tray owns a single check: a preventive restart of the desktop app on an **M=3h quiet
+opportunity / N=4h hard deadline** cycle, requiring a continuous **15-minute quiet window**
+before a preventive (non-hard-deadline) restart, and never restarting more than once per
+**60-minute cooldown**. Every restart decision — process identity (pid + start time + path),
+the exclusive action lock, graceful-close-then-bounded-force termination, and the durable
+JSONL audit trail — lives in `reliability-supervisor.mjs` / `windows-app-actuator.mjs`, run
+as a child process on every evaluation; the tray itself never touches a process directly.
+The tray's own **Pause** menu item is intentionally **not persisted**: it lasts only for the
+current tray process and always clears back to normal supervision on the next start.
+
+This is signed-in-user supervision only — it runs solely while the user is signed in to
+Windows, exactly like the app it supervises, and it registers no Scheduled Task, Startup
+shim, or service. Updating the *deployed* copy of these files (e.g. after a plugin update)
+is a separate, maintainer/host-side concern — `auto-deploy-plugin.ps1` / `sync-oa-home.ps1`
+are one such maintainer adapter for keeping a local checkout's deployed copy current. The
+tray itself never fetches `origin/main` or any other remote source; it only ever executes
+whatever copy is already deployed to its own home directory. Browser-watchdog tray
+ownership and a shared `user-settings.md`-driven policy are tracked as separate follow-up
+work and are intentionally not part of this tray.
+

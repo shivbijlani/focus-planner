@@ -1,0 +1,132 @@
+<#
+.SYNOPSIS
+  Deterministic tests for the reliability supervisor tray's startup/lock helpers
+  and the install-oa-reliability-tray.ps1 opt-in flow (GH #695).
+
+.DESCRIPTION
+  Runs entirely against isolated state: a temp directory standing in for
+  %LOCALAPPDATA%, and (for the Enable/Disable end-to-end case) a throwaway HKCU
+  registry key instead of the real Run value, so this never touches a real
+  machine's startup configuration or the real supervisor lock.
+
+  Exit 0 = all assertions passed. Non-zero = at least one failed; failures are
+  printed to stderr.
+#>
+[CmdletBinding()]
+param()
+
+$ErrorActionPreference = 'Stop'
+$failures = New-Object System.Collections.Generic.List[string]
+
+function Assert-Equal($Actual, $Expected, [string]$Message) {
+  if ("$Actual" -ne "$Expected") {
+    $failures.Add("FAIL: $Message (expected [$Expected], got [$Actual])")
+  } else {
+    Write-Host "ok - $Message"
+  }
+}
+
+function Assert-True($Condition, [string]$Message) {
+  if (-not $Condition) { $failures.Add("FAIL: $Message") } else { Write-Host "ok - $Message" }
+}
+
+$checksDir = $PSScriptRoot
+$root = New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) "oa-reliability-tray-test-$([Guid]::NewGuid().ToString('N').Substring(0,8))") -Force
+$originalLocalAppData = $env:LOCALAPPDATA
+$testKey = 'HKCU:\Software\FocusPlannerReliabilityTrayTest'
+try {
+  $env:LOCALAPPDATA = $root.FullName
+  . (Join-Path $checksDir 'oa-supervisor-startup.ps1')
+
+  # ---- Get-OaSupervisorFiles: paths are derived from LOCALAPPDATA, not hardcoded ----
+  $files = Get-OaSupervisorFiles
+  Assert-Equal $files.home (Join-Path $root.FullName 'overnight-agent') 'home resolves under LOCALAPPDATA'
+  Assert-True ($files.lock -like '*supervisor-tray.lock') 'lock path is the tray-specific lock file'
+  Assert-True ($files.consumer -like '*consumer-reliability-supervisor.mjs') 'consumer path points at the checker'
+
+  # ---- Get-OaTrayCommandLine: pure, exact command line stored in the Run value ----
+  $cmd = Get-OaTrayCommandLine -TrayPath 'C:\fake\oa-supervisor-tray.ps1' -IntervalMinutes 15 -PowerShellPath 'C:\fake\powershell.exe'
+  Assert-True ($cmd -like '*"C:\fake\powershell.exe"*') 'command line quotes the PowerShell executable'
+  Assert-True ($cmd -like '*-File "C:\fake\oa-supervisor-tray.ps1"*') 'command line points at the tray script'
+  Assert-True ($cmd -like '*-IntervalMinutes 15*') 'command line carries the interval'
+  Assert-True ($cmd -notlike '*-NoAct*') 'command line omits -NoAct by default'
+  $cmdNoAct = Get-OaTrayCommandLine -TrayPath 'C:\fake\oa-supervisor-tray.ps1' -NoAct -PowerShellPath 'C:\fake\powershell.exe'
+  Assert-True ($cmdNoAct -like '*-NoAct*') 'command line carries -NoAct when requested'
+
+  # ---- Test-OaOwnerIdentity: pure identity check, no live process required ----
+  $now = (Get-Date).ToUniversalTime()
+  $record = @{ pid = 4242; startedUtc = $now.ToString('o') }
+  $matchingProcess = [pscustomobject]@{ ProcessId = 4242; Name = 'powershell.exe'
+    CommandLine = 'powershell -File oa-supervisor-tray.ps1 -IntervalMinutes 15'; CreationDate = $now }
+  Assert-True (Test-OaOwnerIdentity $record $matchingProcess) 'matching pid+time+cmdline verifies as owner'
+
+  $wrongPid = [pscustomobject]@{ ProcessId = 9999; Name = 'powershell.exe'
+    CommandLine = 'powershell -File oa-supervisor-tray.ps1'; CreationDate = $now }
+  Assert-True (-not (Test-OaOwnerIdentity $record $wrongPid)) 'mismatched pid is rejected'
+
+  $wrongScript = [pscustomobject]@{ ProcessId = 4242; Name = 'powershell.exe'
+    CommandLine = 'powershell -File some-other-script.ps1'; CreationDate = $now }
+  Assert-True (-not (Test-OaOwnerIdentity $record $wrongScript)) 'a command line not naming the tray is rejected'
+
+  $wrongTime = [pscustomobject]@{ ProcessId = 4242; Name = 'powershell.exe'
+    CommandLine = 'powershell -File oa-supervisor-tray.ps1'; CreationDate = $now.AddMinutes(10) }
+  Assert-True (-not (Test-OaOwnerIdentity $record $wrongTime)) 'a PID reused by a newer process is rejected'
+
+  Assert-True (-not (Test-OaOwnerIdentity $null $matchingProcess)) 'a missing lock record verifies as false'
+
+  # ---- Get-OaTrayStartup / Enable / Disable against an isolated registry key ----
+  Remove-Item -Path $testKey -Recurse -Force -ErrorAction SilentlyContinue
+  try {
+    $before = Get-OaTrayStartup -KeyPath $testKey -ValueName 'Test entry'
+    Assert-True (-not $before.enabled) 'fresh test key starts disabled'
+
+    Enable-OaTrayStartup -CommandLine 'C:\fake\powershell.exe -File tray.ps1' -KeyPath $testKey -ValueName 'Test entry'
+    $after = Get-OaTrayStartup -KeyPath $testKey -ValueName 'Test entry'
+    Assert-True $after.enabled 'Enable-OaTrayStartup registers the value'
+    Assert-Equal $after.command 'C:\fake\powershell.exe -File tray.ps1' 'registered command line matches'
+
+    Disable-OaTrayStartup -KeyPath $testKey -ValueName 'Test entry'
+    $removed = Get-OaTrayStartup -KeyPath $testKey -ValueName 'Test entry'
+    Assert-True (-not $removed.enabled) 'Disable-OaTrayStartup removes the value'
+  } finally {
+    Remove-Item -Path $testKey -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  # ---- Lock ownership: no lock file => no owner, never throws ----
+  Assert-True (-not (Test-OaLockHeld $files.lock)) 'no lock file means the lock is not held'
+  Assert-True (-not (Get-OaSupervisorOwner)) 'no lock file means there is no owner'
+  Assert-Equal (Stop-OaSupervisorOwner) 'none' 'stopping with no owner is a safe no-op'
+
+  # ---- End-to-end: install-oa-reliability-tray.ps1 -Enable / -Disable, fully isolated ----
+  $installer = Join-Path $checksDir 'install-oa-reliability-tray.ps1'
+  $psExe = (Get-Process -Id $PID).Path
+  $enableJson = & $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installer `
+    -Enable -NoStart -Json -TestKeyPath $testKey -TestValueName 'Test entry' 2>&1 | Out-String
+  $enableResult = $enableJson | ConvertFrom-Json
+  Assert-True $enableResult.enabled '-Enable registers the isolated startup value'
+  Assert-True (-not $enableResult.started) '-Enable -NoStart does not launch the tray'
+  Assert-True (Test-Path (Join-Path $files.home 'oa-supervisor-tray.ps1')) '-Enable deploys the tray script to the OA home'
+  Assert-True (Test-Path (Join-Path $files.home 'reliability-supervisor.mjs')) '-Enable deploys the reliability engine'
+  Assert-True (Test-Path (Join-Path $files.home 'consumer-reliability-supervisor.mjs')) '-Enable deploys the consumer wrapper'
+
+  $disableJson = & $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installer `
+    -Disable -Json -TestKeyPath $testKey -TestValueName 'Test entry' 2>&1 | Out-String
+  $disableResult = $disableJson | ConvertFrom-Json
+  Assert-True (-not $disableResult.enabled) '-Disable removes the isolated startup value'
+
+  $statusJson = & $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installer `
+    -Json -TestKeyPath $testKey -TestValueName 'Test entry' 2>&1 | Out-String
+  $statusResult = $statusJson | ConvertFrom-Json
+  Assert-True (-not $statusResult.enabled) 'default (status-only) invocation reports disabled and changes nothing'
+} finally {
+  Remove-Item -Path $testKey -Recurse -Force -ErrorAction SilentlyContinue
+  $env:LOCALAPPDATA = $originalLocalAppData
+  Remove-Item -LiteralPath $root.FullName -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+if ($failures.Count) {
+  $failures | ForEach-Object { Write-Error $_ }
+  exit 1
+}
+Write-Host 'All assertions passed.'
+exit 0
