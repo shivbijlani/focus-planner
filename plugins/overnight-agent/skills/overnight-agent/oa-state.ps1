@@ -88,8 +88,8 @@
                                 DIFFERENT id over a LIVE one throws `session_bind_conflict`;
                                 binding over a DEAD one is the replacement path and records the
                                 prior id. `-Force` overrides.
-          [-SessionKind <k>]    `code` or `chat`; defaults to `chat`. `code` REQUIRES
-                                -SessionProject and -SessionWorkspace. `chat` has neither.
+          [-SessionKind <k>]    `code` or `chat`; defaults to `chat`. Both require a
+                                project and workspace; chat uses the configured local folder.
           [-SessionProject <p>] The project the session must be created in -- the repository
                                 project for a code task, NOT the run session's project.
           [-SessionWorkspace <p>] The worktree/branch/folder path the session works in.
@@ -4990,6 +4990,51 @@ function Test-SamePath([string]$a, [string]$b) {
   return [string]::Equals($na, $nb, [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Test-PathWithin([string]$path, [string]$root) {
+  if (-not $path -or -not $root) { return $false }
+  $full = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($path)).TrimEnd('\', '/')
+  $base = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($root)).TrimEnd('\', '/')
+  return [string]::Equals($full, $base, [StringComparison]::OrdinalIgnoreCase) -or
+    $full.StartsWith($base + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-ChatWorkspace([string]$project, [string]$workspace, [string]$wsType) {
+  $settingsPath = Get-UserSettingsPath
+  $configured = if ($settingsPath -and (Test-Path -LiteralPath $settingsPath)) {
+    Get-SettingRow (Get-Content -LiteralPath $settingsPath -Raw) 'Non-code task project'
+  } else { '' }
+  if (-not $configured -or $configured -match '[<>]') {
+    throw 'session_chat_project_required: configure Non-code task project in user-settings.md before binding a non-code session'
+  }
+  if (-not $env:LOCALAPPDATA) {
+    throw 'session_chat_home_required: LOCALAPPDATA is required for Non-code task project'
+  }
+  $chatHome = Join-Path $env:LOCALAPPDATA 'overnight-agent\task-chats'
+  if (-not $project -or $project -ne $configured -or -not $workspace -or $wsType -ne 'folder') {
+    throw 'session_chat_scope: bind the configured Non-code task project with its folder workspace (-SessionProject, -SessionWorkspace, -WorkspaceType folder)'
+  }
+  $oneDriveRoots = @($env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial)
+  if ($env:USERPROFILE) { $oneDriveRoots += Join-Path $env:USERPROFILE 'OneDrive' }
+  foreach ($root in $oneDriveRoots) {
+    if ($root -and (Test-PathWithin $workspace $root)) {
+      throw 'session_chat_onedrive: Non-code task project must be outside OneDrive'
+    }
+  }
+  $folder = [IO.DirectoryInfo]::new([IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($workspace)))
+  while ($folder) {
+    if ($folder.Parent -and $folder.Parent.FullName -eq $env:USERPROFILE -and $folder.Name -like 'OneDrive*') {
+      throw 'session_chat_onedrive: Non-code task project must be outside OneDrive'
+    }
+    if (Test-Path -LiteralPath (Join-Path $folder.FullName '.git') -PathType Leaf) {
+      throw 'session_chat_worktree: Non-code task project cannot be inside a code worktree'
+    }
+    $folder = $folder.Parent
+  }
+  if (-not (Test-SamePath ([IO.Path]::GetFullPath($workspace)) ([IO.Path]::GetFullPath($chatHome)))) {
+    throw 'session_chat_home: Non-code task project must use %LOCALAPPDATA%\overnight-agent\task-chats'
+  }
+}
+
 function Get-SessionState($st) {
   if ($st -and $st.PSObject.Properties['session'] -and $st.session -and "$($st.session.session_id)") {
     return $st.session
@@ -5317,21 +5362,13 @@ function Cmd-Session {
       throw ("session_kind_invalid: '$kind' is not a supported task session kind; pass " +
         '-SessionKind chat for a non-code task or -SessionKind code with its worktree')
     }
-    if ($kind -eq 'chat') {
-      if ($SessionProject -or $SessionWorkspace -or $WorkspaceType) {
-        throw 'session_chat_scope: a chat task session must be global, with no project or workspace'
-      }
-      $project = ''
-      $workspace = ''
-      $wsType = ''
-    } else {
-      $project = if ($SessionProject) { $SessionProject } elseif ($sess) { "$($sess.project)" } else { '' }
-      $workspace = if ($SessionWorkspace) { $SessionWorkspace }
-        elseif ($sess) { "$($sess.workspace)" }
-        else { '' }
-      $wsType = if ($WorkspaceType) { $WorkspaceType } elseif ($sess -and "$($sess.workspace_type)") { "$($sess.workspace_type)" }
-      else { 'worktree' }
-    }
+    $project = if ($SessionProject) { $SessionProject } elseif ($sess) { "$($sess.project)" } else { '' }
+    $workspace = if ($SessionWorkspace) { $SessionWorkspace }
+      elseif ($sess) { "$($sess.workspace)" }
+      else { '' }
+    $wsType = if ($WorkspaceType) { $WorkspaceType } elseif ($sess -and "$($sess.workspace_type)") { "$($sess.workspace_type)" }
+    elseif ($kind -eq 'chat') { 'folder' } else { 'worktree' }
+    if ($kind -eq 'chat') { Assert-ChatWorkspace $project $workspace $wsType }
 
     if ($kind -eq 'code') {
       # A code task without a named project is the inheritance trap: every session API defaults
