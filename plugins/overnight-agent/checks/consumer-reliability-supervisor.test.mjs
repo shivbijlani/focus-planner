@@ -70,14 +70,17 @@ test('consumer wiring installs enterprise snapshot and scheduler verification co
   const home = await mkdtemp(join(tmpdir(), 'oa-actuator-config-'));
   t.after(() => rm(home, { recursive: true, force: true }));
   const paths = supervisorPaths(home);
-  const config = await reconcileConsumerConfig(paths);
+  // No policy is read from the machine's user-settings.md here (GH #696): the
+  // wiring under test is machine-owned and must not depend on user policy.
+  const policy = { source: 'defaults', settingsPath: null, values: {} };
+  const config = await reconcileConsumerConfig(paths, { policy });
   assert.equal(config.supervisor.inputPath, paths.snapshot);
   assert.equal(config.commands.snapshot.args[0], join(import.meta.dirname, 'windows-app-actuator.mjs'));
   assert.ok(config.commands.snapshot.args.includes('--session-store'));
   assert.ok(config.commands.snapshot.args.includes('--session-state'));
   assert.ok(config.commands.verifyScheduler.args.includes('--before-due-workflows'));
   assert.ok(config.commands.forceTerminate.args.includes('--restart-mode'));
-  assert.deepEqual(await reconcileConsumerConfig(paths), config);
+  assert.deepEqual(await reconcileConsumerConfig(paths, { policy }), config);
 });
 
 test('one action lock excludes another owner', async t => {
@@ -205,7 +208,10 @@ test('tray status reports policy, cycle, cooldown and recent outcomes without cr
   const home = await mkdtemp(join(tmpdir(), 'oa-status-'));
   t.after(() => rm(home, { recursive: true, force: true }));
   const files = supervisorPaths(home);
-  const empty = await readSupervisorStatus({ paths: files, clock: { now: () => now } });
+  // The policy is injected so this suite never reads the machine's own
+  // user-settings.md; GH #696 coverage for reading it lives in oa-user-settings.test.mjs.
+  const defaults = { source: 'defaults', settingsPath: null, values: {} };
+  const empty = await readSupervisorStatus({ paths: files, clock: { now: () => now }, policy: defaults });
   assert.equal(empty.policy.valid, true);
   assert.equal(empty.policy.quietOpportunityHours, 3);
   assert.equal(empty.policy.hardDeadlineHours, 4);
@@ -225,7 +231,7 @@ test('tray status reports policy, cycle, cooldown and recent outcomes without cr
     JSON.stringify({ id: 'a1', reason: 'preventive-hard-deadline', outcome: 'failed',
       error: 'synthetic', completedAt: attemptAt }),
   ].join('\n'));
-  const status = await readSupervisorStatus({ paths: files, clock: { now: () => now } });
+  const status = await readSupervisorStatus({ paths: files, clock: { now: () => now }, policy: defaults });
   assert.equal(status.cycle.opportunityAt, new Date(Date.parse(old.startTime) + 3 * hour).toISOString());
   assert.equal(status.cycle.hardDeadlineAt, new Date(Date.parse(old.startTime) + 4 * hour).toISOString());
   assert.equal(status.cooldown.active, true);
@@ -233,8 +239,20 @@ test('tray status reports policy, cycle, cooldown and recent outcomes without cr
   assert.deepEqual(status.recent.map(r => [r.id, r.outcome]), [['a1', 'failed'], ['a0', 'succeeded']]);
   assert.equal(status.recent[0].error, 'synthetic');
 
+  // The JSON beside the state is DERIVED from user-settings.md (GH #696), so a
+  // damaged one is not a damaged policy: status stays readable and the values
+  // still come from the canonical file.
   await writeFile(files.config, '{"preventiveRestart":{"targetIntervalHours":5,"hardIntervalHours":4}}');
-  const invalid = await readSupervisorStatus({ paths: files, clock: { now: () => now } });
-  assert.equal(invalid.policy.valid, false);
-  assert.equal(invalid.cooldown, null);
+  const derivedDamaged = await readSupervisorStatus({ paths: files, clock: { now: () => now },
+    policy: defaults });
+  assert.equal(derivedDamaged.policy.valid, true);
+  assert.equal(derivedDamaged.policy.quietOpportunityHours, 3);
+  assert.equal(derivedDamaged.cooldown.active, true);
+
+  // A policy the CANONICAL file states but that cannot be honoured is refused.
+  const refused = await readSupervisorStatus({ paths: files, clock: { now: () => now },
+    policy: { source: 'user-settings', settingsPath: 'U.md',
+      values: { targetIntervalHours: 5, hardIntervalHours: 4 } } });
+  assert.equal(refused.policy.valid, false);
+  assert.equal(refused.cooldown, null);
 });

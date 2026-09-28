@@ -1,0 +1,250 @@
+/*
+ * oa-user-settings.mjs -- the ONE reader for tray-workload policy in the
+ * EXTERNAL `user-settings.md` (GH #696).
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * The tray host (oa-supervisor-tray.ps1) runs independent workloads. Each one
+ * has its own policy, and a user must be able to read and change that policy in
+ * ONE user-facing place -- the external `user-settings.md` that already carries
+ * every other Overnight Agent setting, and that plugin updates never overwrite.
+ *
+ * Before this file, the reliability workload's M/N/quiet/cooldown/enabled policy
+ * lived only in `%LOCALAPPDATA%\overnight-agent\reliability-supervisor.json`, a
+ * machine-managed file the user was never told about. That file is now DERIVED:
+ * it is rewritten from this reader on every reconcile, so editing it by hand has
+ * no lasting effect. `user-settings.md` is canonical.
+ *
+ * ONE HOST, MANY WORKLOADS, SIBLING SECTIONS
+ * ------------------------------------------
+ * Each workload owns its own H2 section with a two-column `| Setting | Value |`
+ * table. The reliability workload's section is `## Tray reliability supervision`.
+ * A later workload (browser watchdog #696-adjacent, update check #701) adds a
+ * SIBLING section and its own value map -- it never extends this one, because
+ * separate workloads must have separate, independently-missing policies.
+ *
+ * MISSING IS NOT BROKEN; WRONG IS BROKEN
+ * --------------------------------------
+ * A missing file or a missing section means the user has expressed no opinion,
+ * so the shipped product defaults apply (M=3h, N=4h, quiet=15m, cooldown=60m,
+ * enabled). A section that IS present but carries a value that cannot be read --
+ * a typo'd row name, `soon`, `-1`, `off-ish` -- is an expressed opinion that
+ * cannot be honoured, so it THROWS, naming the row, the file and the accepted
+ * values. Supervision then refuses to act rather than acting on a guess.
+ *
+ * The bundled `skills/overnight-agent/user-settings.md` is a TEMPLATE, not user
+ * data: a candidate sitting next to a `SKILL.md` is skipped, exactly as
+ * browser-slot-table.ps1 skips it.
+ */
+
+import { readFile, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+
+export const RELIABILITY_SECTION_HEADING = 'Tray reliability supervision';
+
+// The shipped product defaults, stated once. These mirror DEFAULT_CONFIG in
+// reliability-supervisor.mjs and are what a missing section means.
+export const RELIABILITY_DEFAULTS = Object.freeze({
+  enabled: true,
+  targetIntervalHours: 3,
+  hardIntervalHours: 4,
+  quietWindowMinutes: 15,
+  cooldownMinutes: 60,
+});
+
+// Row name (normalized) -> how to read it. Adding a workload means adding a new
+// map like this one plus its own heading, never a new row here.
+const RELIABILITY_ROWS = new Map([
+  ['enabled', { key: 'enabled', kind: 'switch' }],
+  ['quiet opportunity m', { key: 'targetIntervalHours', kind: 'hours', min: 1 / 60, max: 168 }],
+  ['hard deadline n', { key: 'hardIntervalHours', kind: 'hours', min: 1, max: 170 }],
+  ['quiet window', { key: 'quietWindowMinutes', kind: 'minutes', min: 5, max: 240 }],
+  ['restart cooldown', { key: 'cooldownMinutes', kind: 'minutes', min: 1, max: 1440 }],
+]);
+
+function normalizeName(text) {
+  return String(text)
+    .toLowerCase()
+    .replace(/[`*_]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function plainCell(cell) {
+  return String(cell ?? '')
+    .replace(/`/g, '')
+    .replace(/\*\*|\*|__/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function splitRow(line) {
+  return line.trim().replace(/^\|/, '').replace(/\|\s*$/, '').split('|').map(cell => cell.trim());
+}
+
+function isSeparatorRow(line) {
+  return /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line) && line.includes('-');
+}
+
+/**
+ * The value cell is written for humans: "`3h` -- how long ...". The value is the
+ * first code span when there is one, otherwise the text before the first dash
+ * comment. Never guess past that.
+ */
+function valueToken(cell) {
+  const raw = String(cell ?? '');
+  const fenced = raw.match(/`([^`]+)`/);
+  if (fenced) return fenced[1].trim();
+  return plainCell(raw.split(/\s+(?:--|—|–)\s+/)[0]);
+}
+
+/** Every `| Setting | Value |` row under `## <heading>`, in file order. */
+export function readSettingsSection(text, heading) {
+  const lines = String(text ?? '').split(/\r?\n/);
+  const start = lines.findIndex(line =>
+    new RegExp(`^##\\s+${heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(line));
+  if (start < 0) return null;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^##\s+/.test(lines[i])) { end = i; break; }
+  }
+  const rows = [];
+  for (let i = start + 1; i < end; i += 1) {
+    const line = lines[i];
+    if (!/^\s*\|/.test(line)) continue;
+    if (isSeparatorRow(line)) continue;
+    const cells = splitRow(line);
+    if (cells.length < 2) continue;
+    const name = normalizeName(cells[0]);
+    if (!name || name === 'setting') continue;
+    rows.push({ name, value: valueToken(cells[1]), rawName: plainCell(cells[0]), rawValue: cells[1] });
+  }
+  return rows;
+}
+
+function readSwitch(token, context) {
+  const value = String(token).toLowerCase();
+  if (['on', 'yes', 'true', 'enabled'].includes(value)) return true;
+  if (['off', 'no', 'false', 'disabled'].includes(value)) return false;
+  throw new Error(`${context} must be 'on' or 'off' (read: '${token}')`);
+}
+
+function readDuration(token, { unit, min, max }, context) {
+  const match = String(token).match(/^([0-9]+(?:\.[0-9]+)?)\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes)?$/i);
+  if (!match) {
+    throw new Error(
+      `${context} must be a duration such as '3h' or '90m' (read: '${token}')`);
+  }
+  const amount = Number(match[1]);
+  const suffix = (match[2] ?? '').toLowerCase();
+  const inHours = suffix.startsWith('h') || (suffix === '' && unit === 'hours');
+  const hours = inHours ? amount : amount / 60;
+  const value = unit === 'hours' ? hours : hours * 60;
+  if (!Number.isFinite(value) || value < min || value > max) {
+    throw new Error(
+      `${context} must be from ${min} to ${max} ${unit} (read: '${token}')`);
+  }
+  return value;
+}
+
+/**
+ * Declared reliability policy: only the rows the user actually wrote. An absent
+ * row is absent from the result, so the caller can tell "user chose the default"
+ * from "user chose nothing" -- which is what lets N derive from a raised M.
+ */
+export function parseReliabilityPolicy(text, { settingsPath = '(memory)' } = {}) {
+  const rows = readSettingsSection(text, RELIABILITY_SECTION_HEADING);
+  if (rows === null) return { source: 'defaults', settingsPath, values: {} };
+  const values = {};
+  for (const row of rows) {
+    const spec = RELIABILITY_ROWS.get(row.name);
+    const context = `'${row.rawName}' in '## ${RELIABILITY_SECTION_HEADING}' (${settingsPath})`;
+    if (!spec) {
+      throw new Error(
+        `${context} is not a supported setting. Supported: ` +
+        `${[...RELIABILITY_ROWS.keys()].join(', ')}.`);
+    }
+    if (Object.hasOwn(values, spec.key)) {
+      throw new Error(`${context} is declared twice; keep one row per setting.`);
+    }
+    values[spec.key] = spec.kind === 'switch'
+      ? readSwitch(row.value, context)
+      : readDuration(row.value, { unit: spec.kind, min: spec.min, max: spec.max }, context);
+  }
+  if (values.hardIntervalHours !== undefined && values.targetIntervalHours !== undefined &&
+      values.hardIntervalHours <= values.targetIntervalHours) {
+    throw new Error(
+      `'Hard deadline (N)' must exceed 'Quiet opportunity (M)' in '## ${RELIABILITY_SECTION_HEADING}' ` +
+      `(${settingsPath}): read N=${values.hardIntervalHours}h, M=${values.targetIntervalHours}h.`);
+  }
+  return { source: Object.keys(values).length ? 'user-settings' : 'user-settings-empty', settingsPath, values };
+}
+
+/**
+ * The candidate order SKILL.md documents, in one place. The user's OneDrive path
+ * is composed from %OneDrive% rather than hardcoded, so this works on any machine.
+ */
+export function userSettingsPathCandidates({
+  env = process.env, projectFolder = null, cwd = null,
+} = {}) {
+  const candidates = [];
+  const add = value => { if (value && String(value).trim()) candidates.push(value); };
+  add(env.OVERNIGHT_AGENT_SETTINGS);
+  const project = projectFolder ?? env.PLANNER_PATH;
+  if (project) add(join(project, 'user-settings.md'));
+  if (cwd) add(join(cwd, 'user-settings.md'));
+  for (const root of [env.OneDrive, env.OneDriveConsumer, env.OneDriveCommercial]) {
+    if (root) add(join(root, 'Apps', 'Focus Planner', 'user-settings.md'));
+  }
+  if (env.LOCALAPPDATA) add(join(env.LOCALAPPDATA, 'overnight-agent', 'user-settings.md'));
+  return candidates;
+}
+
+async function isFile(path) {
+  try { return (await stat(path)).isFile(); } catch { return false; }
+}
+
+export async function resolveUserSettingsPath(options = {}) {
+  const env = options.env ?? process.env;
+  const tried = userSettingsPathCandidates(options);
+  const skippedTemplate = [];
+  for (const candidate of tried) {
+    if (!(await isFile(candidate))) continue;
+    // A `user-settings.md` next to a `SKILL.md` is the template shipped INSIDE
+    // the plugin. It carries placeholders, not user data. An explicit override
+    // still wins: naming a path outright is an instruction, not a guess.
+    if (candidate !== env.OVERNIGHT_AGENT_SETTINGS &&
+        await isFile(join(candidate, '..', 'SKILL.md'))) {
+      skippedTemplate.push(candidate);
+      continue;
+    }
+    return { path: candidate, tried, skippedTemplate };
+  }
+  return { path: null, tried, skippedTemplate };
+}
+
+/**
+ * Canonical reliability policy for the tray workload. A missing file or missing
+ * section yields `{ source: 'defaults', values: {} }` -- never an error.
+ */
+export async function loadReliabilityPolicy(options = {}) {
+  const resolved = options.settingsPath
+    ? { path: options.settingsPath, tried: [options.settingsPath], skippedTemplate: [] }
+    : await resolveUserSettingsPath(options);
+  if (!resolved.path) {
+    return { source: 'defaults', settingsPath: null, values: {}, tried: resolved.tried };
+  }
+  let text;
+  try {
+    text = await readFile(resolved.path, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return { source: 'defaults', settingsPath: null, values: {}, tried: resolved.tried };
+    }
+    throw error;
+  }
+  return {
+    ...parseReliabilityPolicy(text.replace(/^\uFEFF/, ''), { settingsPath: resolved.path }),
+    tried: resolved.tried,
+  };
+}

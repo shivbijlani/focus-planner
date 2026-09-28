@@ -59,7 +59,8 @@ $ErrorActionPreference = 'Stop'
 $script:DeployedFiles = @(
   'oa-supervisor-tray.ps1', 'oa-supervisor-startup.ps1',
   'reliability-supervisor.mjs', 'windows-app-actuator.mjs',
-  'session-terminal-evidence.mjs', 'consumer-reliability-supervisor.mjs'
+  'session-terminal-evidence.mjs', 'consumer-reliability-supervisor.mjs',
+  'oa-user-settings.mjs'
 )
 
 function Get-ReliabilityTrayStatus {
