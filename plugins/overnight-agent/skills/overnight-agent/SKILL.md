@@ -1019,10 +1019,11 @@ dropped); it is quiet on a healthy loop. **Report a non-zero count in the wrap-u
 
 ### PHASE 1 — Dispatch approved plans to each task's own session
 
-⛔ **The run session does not do task work.** It collects, orders, dispatches and reports. The work
-of a task happens in a **session dedicated to that task**, in **that task's own workspace** (#404).
-This preserves its history across runs. Isolation does not require previous task sessions to
-finish before the next coordinator run can start more work.
+⛔ **The run session does not do task work.** It collects, orders, dispatches and reports. Each
+task gets a **dedicated session** so its history persists across runs. Code tasks use their own
+repository worktree; non-code tasks use a global chat with no project or folder workspace.
+Isolation does not require previous task sessions to finish before the next coordinator run can
+start more work.
 
 1. From the `scan` worklist — **taken in the order it returned, skipping `eligible: false` rows** —
    collect tasks whose stored `status` is `approved` (also continue any
@@ -1088,23 +1089,26 @@ finish before the next coordinator run can start more work.
      described in a run summary is not recorded — prose is not on any run's read path, and a
      mitigation of exactly that shape was violated 24 minutes after it was written.
 
-4. **Choose the project and workspace for the TASK, never inherit the run session's.** This is the
-   trap, and it is the default behaviour of every session API: omit the project and the new session
-   is created in the *caller's* project. Done from an overnight run, that yields a "per-task
-   session" sharing the run session's own folder — with no git repo in it — which is exactly the
-   isolation failure this phase exists to prevent, reintroduced by the delegation step itself.
+4. **Choose the task's session scope; never inherit the run session's project or folder.** Session
+   APIs default to the caller's project, so non-code work must be created as a **global chat** with
+   no project and no folder workspace. A code task must name its repository project and its own
+   worktree.
 
-   - **Code task** → the **repository project** the change belongs to, `workspace_type: worktree`,
-     branched from a freshly fetched `origin/main`. Bind it as `code`, and the bind will refuse a
-     missing project (`session_project_required`), a missing workspace
-     (`session_workspace_required`), a `folder` workspace (`session_workspace_type`) and — the one
-     that catches the trap — a workspace equal to the run session's (`session_workspace_inherited`).
-   - **Non-code task** → `-SessionKind folder` is fine; it still gets its own session.
-
+   - **Code task** → create its session in the **repository project** the change belongs to, with
+     `workspace_type: worktree`, from a freshly fetched `origin/main`, under `V:\repos`. Bind it as
+     `code`; the bind refuses a missing project (`session_project_required`), a missing workspace
+     (`session_workspace_required`), a `folder` workspace (`session_workspace_type`) and the run
+     session's own workspace (`session_workspace_inherited`).
+   - **Non-code task** → create a **global chat session**: no project, folder, branch or workspace.
+     Chats are stored locally under `~/.copilot/chats`; do not create a folder project or pass a
+     workspace. Bind it as `chat`. Relative-output tools such as Playwright therefore write to
+     chat-local storage rather than the planner folder or a task folder.
    ```powershell
    oa-state.ps1 session -Id <ID> -SessionId <new session id> `
      -SessionKind code -SessionProject <repo project> `
      -SessionWorkspace <worktree path> -WorkspaceType worktree
+
+   oa-state.ps1 session -Id <ID> -SessionId <new global chat id> -SessionKind chat
    ```
 
 5. **Prepare each approved brief for `oa_drain`.** Its `message` must carry: the task id and title, the approved plan,
