@@ -162,6 +162,37 @@ exactly how this drifts out of date without anyone noticing, so the scripts fail
    Fix: close that window and reopen its shortcut — sign-ins persist, since the cookies live with the
    profile directory, not the process.
 
+## Tray reliability supervision
+
+*(Optional — the whole section can be omitted.)* Policy for the **optional reliability
+supervision tray** (plugin README → "Optional reliability supervision tray"), which
+preventively restarts the GitHub Copilot desktop app. **This section is the source of truth
+for that policy**: `%LOCALAPPDATA%\overnight-agent\reliability-supervisor.json` is derived
+from it on every evaluation, so hand-editing that JSON has no lasting effect.
+
+**Omit the section — or any single row — and the shipped defaults below apply.** Installing
+the tray is itself the opt-in; `Enabled = off` turns the workload off without uninstalling.
+
+| Setting | Value |
+| --- | --- |
+| Enabled | `on` — supervise the desktop app. `off` stops the checks without removing the tray. |
+| Quiet opportunity (M) | `3h` — earliest preventive restart, and only during a verified quiet window. |
+| Hard deadline (N) | `4h` — restart regardless of activity evidence. Omit this row and N is derived from M. |
+| Quiet window | `15m` — continuous quiet required before a preventive (non-deadline) restart. |
+| Restart cooldown | `60m` — never restart more than once per this interval. |
+
+Durations accept `3h` or `180m` (a bare number means the unit named in the row). `Enabled`
+accepts `on`/`off`. A row that cannot be read — an unknown setting name, an out-of-range
+value, or an `N` that does not exceed `M` — is **refused by name**, and supervision declines
+to act rather than acting on a guessed policy.
+
+The tray's **Pause** menu item is deliberately *not* a setting: it lives in memory for the
+lifetime of that tray process only, so restarting the tray always resumes supervision.
+
+Each tray workload owns its **own** `##` section here (later ones for the browser watchdog
+and the tray update check are separate, sibling sections). One tray host, independent
+workloads, separate policies — a missing section for one workload never affects another.
+
 ## Where your real settings live
 
 This bundled file is a **template inside the installed plugin, so plugin updates overwrite it.** Your real,

@@ -108,6 +108,7 @@ try {
   Assert-True (Test-Path (Join-Path $files.home 'oa-supervisor-tray.ps1')) '-Enable deploys the tray script to the OA home'
   Assert-True (Test-Path (Join-Path $files.home 'reliability-supervisor.mjs')) '-Enable deploys the reliability engine'
   Assert-True (Test-Path (Join-Path $files.home 'consumer-reliability-supervisor.mjs')) '-Enable deploys the consumer wrapper'
+  Assert-True (Test-Path (Join-Path $files.home 'oa-user-settings.mjs')) '-Enable deploys the user-settings policy reader'
 
   $disableJson = & $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installer `
     -Disable -Json -TestKeyPath $testKey -TestValueName 'Test entry' 2>&1 | Out-String

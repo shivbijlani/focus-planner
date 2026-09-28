@@ -6,8 +6,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import {
   acquireExclusiveLock, assessActivity, atomicJsonWrite, commandAdapters, cooldownStatus,
-  createSupervisor, determineReason, loadConfig, loadState, restartCycleStatus, validateConfig,
+  createSupervisor, DEFAULT_CONFIG, determineReason, loadConfig, loadState, restartCycleStatus,
+  validateConfig,
 } from './reliability-supervisor.mjs';
+import { loadReliabilityPolicy } from './oa-user-settings.mjs';
 import { listCopilotProcesses } from './windows-app-actuator.mjs';
 
 function guiIdentity(rows) {
@@ -51,6 +53,39 @@ export function requireSqliteRuntime(version = process.versions.node) {
   }
 }
 
+/**
+ * Overlay the user-facing policy from `user-settings.md` (GH #696) onto the
+ * machine-managed config. Only the five user-facing knobs are touched; every
+ * other key (commands, deadlines, evidence budgets) stays machine-owned.
+ *
+ * A knob the user did not declare is set back to the shipped default, so the
+ * derived JSON can never keep a value the canonical file no longer states.
+ * `hardIntervalHours` is the one exception: when the user states no N, the key
+ * is left OUT so validateConfig re-derives it from the M they did state.
+ */
+export function applyReliabilityPolicy(config, values = {}) {
+  return validateConfig({
+    ...config,
+    preventiveRestart: {
+      targetIntervalHours: values.targetIntervalHours ??
+        DEFAULT_CONFIG.preventiveRestart.targetIntervalHours,
+      quietWindowMinutes: values.quietWindowMinutes ??
+        DEFAULT_CONFIG.preventiveRestart.quietWindowMinutes,
+      ...(values.hardIntervalHours === undefined
+        ? {}
+        : { hardIntervalHours: values.hardIntervalHours }),
+    },
+    appRestart: {
+      ...(config.appRestart ?? {}),
+      minIntervalMinutes: values.cooldownMinutes ?? DEFAULT_CONFIG.appRestart.minIntervalMinutes,
+    },
+    supervisor: {
+      ...(config.supervisor ?? {}),
+      enabled: values.enabled ?? DEFAULT_CONFIG.supervisor.enabled,
+    },
+  });
+}
+
 export function nextEvaluationDelay(config, lastCycle, nowMs = Date.now()) {
   let delay = config.supervisor.checkIntervalSeconds * 1_000;
   const evaluatedAt = Date.parse(lastCycle.checkedAt);
@@ -67,8 +102,9 @@ export function nextEvaluationDelay(config, lastCycle, nowMs = Date.now()) {
   return delay;
 }
 
-export async function reconcileConsumerConfig(paths) {
+export async function reconcileConsumerConfig(paths, { policy } = {}) {
   const config = await loadConfig(paths.config);
+  const declared = policy ?? await loadReliabilityPolicy();
   const snapshotPath = config.supervisor.inputPath ?? paths.snapshot;
   const helper = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'windows-app-actuator.mjs');
   const db = join(homedir(), '.copilot', 'data.db');
@@ -100,11 +136,11 @@ export async function reconcileConsumerConfig(paths) {
       config.commands[name].args?.some(arg => /windows-app-actuator\.mjs$/i.test(arg))
       ? value : config.commands[name],
   ]));
-  const updated = validateConfig({
+  const updated = applyReliabilityPolicy({
     ...config,
     supervisor: { ...config.supervisor, inputPath: snapshotPath },
     commands,
-  });
+  }, declared.values);
   if (JSON.stringify(updated) !== JSON.stringify(config)) {
     await atomicJsonWrite(paths.config, updated, { expectedRaw: await readFile(paths.config, 'utf8') });
   }
@@ -222,18 +258,24 @@ function summarizeAttempt(entry) {
   };
 }
 
-// Read-only view for the tray: never creates the policy file and never needs node:sqlite,
-// so status stays visible even when the evidence runtime or the policy is broken.
+// Read-only view for the tray: never writes anything and never needs node:sqlite, so
+// status stays visible even when the evidence runtime or the policy is broken. The policy
+// it reports is the canonical one from user-settings.md (GH #696), not the derived JSON,
+// so the tray shows what the user wrote even before the first reconcile.
 export async function readSupervisorStatus({
   paths = supervisorPaths(), clock = { now: () => Date.now() }, recentLimit = 5,
+  policy: suppliedPolicy,
 } = {}) {
   const nowMs = clock.now();
   let config = null;
   let policy;
   try {
-    config = await loadConfig(paths.config, { create: false });
+    const declared = suppliedPolicy ?? await loadReliabilityPolicy();
+    config = applyReliabilityPolicy(DEFAULT_CONFIG, declared.values);
     policy = {
       valid: true,
+      source: declared.source,
+      settingsPath: declared.settingsPath,
       enabled: config.supervisor.enabled,
       quietOpportunityHours: config.preventiveRestart.targetIntervalHours,
       hardDeadlineHours: config.preventiveRestart.hardIntervalHours,
