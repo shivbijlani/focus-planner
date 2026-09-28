@@ -16,6 +16,7 @@ New-Item -ItemType Directory -Path $Tmp -Force | Out-Null
 $oldUser = $env:USERPROFILE
 $oldLocal = $env:LOCALAPPDATA
 $oldTemp = $env:TEMP
+$oldNoWarn = $env:NODE_NO_WARNINGS
 
 function New-Subject([string]$Name, [scriptblock]$Mutate) {
   $src = $Source
@@ -60,6 +61,9 @@ try {
   $env:LOCALAPPDATA = Join-Path $Tmp 'local'
   # The supervisor snapshots the app DB under %TEMP%, which Linux CI does not define.
   $env:TEMP = $Tmp
+  # CI's Node prints an ExperimentalWarning for node:sqlite; the supervisor probe merges
+  # stderr into the JSON it parses, so silence it for the fixture run.
+  $env:NODE_NO_WARNINGS = '1'
   New-Item -ItemType Directory -Path (Join-Path $env:USERPROFILE '.copilot'), $env:LOCALAPPDATA -Force | Out-Null
 
   @{ queueLength = 0; appCpuHours = 0; appAgeHours = 1; procCount = 0 } |
@@ -138,5 +142,6 @@ finally {
   $env:USERPROFILE = $oldUser
   $env:LOCALAPPDATA = $oldLocal
   $env:TEMP = $oldTemp
+  $env:NODE_NO_WARNINGS = $oldNoWarn
   Remove-Item -LiteralPath $Tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
