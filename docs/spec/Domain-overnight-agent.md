@@ -190,14 +190,6 @@ for every workspace-backed task session when an explicit workspace resolves equa
 detected OneDrive root. This boundary protects the planner database and old OneDrive scratch roots
 from tools that write relative to their current working directory.
 
-The read-only `session -WorkspaceHealth` command reports any active bindings under OneDrive. It
-does not alter binding state or move workspace data. If a violation is reported, the operator must
-resolve that binding explicitly before waking the task.
-
-The out-of-process supervisor reads the same health verdict every tick. Any active OneDrive-backed
-binding is logged and surfaced as `WORKSPACE-ONEDRIVE`; it is never silently collapsed into the
-schedule's `HEALTHY` state and never causes the supervisor to move or delete workspace data.
-
 The PowerShell-side mutchecks parallel the JS ones. Files such as
 `plugins/overnight-agent/skills/overnight-agent/mutcheck-priority-order.ps1`,
 `plugins/overnight-agent/skills/overnight-agent/mutcheck-pacing-concurrency.ps1`,

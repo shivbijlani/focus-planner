@@ -1406,9 +1406,6 @@ jobs:
       - name: Mutation check (a real leak fires; a busy-but-healthy machine stays quiet)
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-supervisor-resource.ps1
-      - name: Mutation check (supervisor flags active OneDrive task bindings)
-        shell: pwsh
-        run: ./plugins/overnight-agent/checks/mutcheck-supervisor-workspace.ps1
   # session-state has never been pruned (GH #481).
   #
   # Measured 2026-09-04: 4,120 directories, 2.56 GB, oldest file 27 April, and 500

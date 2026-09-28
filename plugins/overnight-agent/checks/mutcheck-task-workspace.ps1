@@ -3,7 +3,7 @@
 
   Fixtures use isolated LOCALAPPDATA, USERPROFILE and state directories. Non-code bindings must
   be projectless chats with no workspace; code bindings must use isolated worktrees outside
-  OneDrive. The read-only health audit reports active OneDrive bindings without changing state.
+  OneDrive.
 #>
 [CmdletBinding()]
 param([string]$ScriptPath)
@@ -107,32 +107,6 @@ function Test-Subject([string]$Subject) {
     '-Id', '107', '-SessionId', '77777777-7777-7777-7777-777777777777', '-SessionKind', 'folder')
   if ($r.exit -eq 0) { $failures += 'A7 legacy folder kind was accepted for a new binding' }
 
-  $healthState = Join-Path $Tmp "state-health-$case"
-  New-Item -ItemType Directory -Path $healthState -Force | Out-Null
-  $healthRecord = @{
-    id = '108'
-    session = @{
-      session_id = 'legacy-session-108'
-      kind = 'code'
-      project = 'repo'
-      workspace = (Join-Path $env:OneDrive 'legacy\task-108')
-      workspace_type = 'worktree'
-      state = 'live'
-    }
-  }
-  $healthPath = Join-Path $healthState 'task-108.json'
-  $healthRecord | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $healthPath -Encoding utf8
-  $beforeHealth = Get-FileHash -LiteralPath $healthPath -Algorithm SHA256
-  $health = Invoke-Session $Subject $healthState @('-WorkspaceHealth')
-  if ($health.exit -ne 0) { $failures += "A8 workspace health failed: $($health.text)" }
-  else {
-    $h = $health.text | ConvertFrom-Json
-    $afterHealth = Get-FileHash -LiteralPath $healthPath -Algorithm SHA256
-    if ($h.active_onedrive_count -ne 1 -or $h.active_onedrive[0].id -ne '108' -or
-        $afterHealth.Hash -ne $beforeHealth.Hash) {
-      $failures += 'A8 health did not report the active OneDrive binding without changing state'
-    }
-  }
   return $failures
 }
 
@@ -189,15 +163,6 @@ try {
         $s.Replace("`$candidate.StartsWith((`$parent + '\'), [StringComparison]::OrdinalIgnoreCase)",
           "`$candidate.StartsWith(`$parent, [StringComparison]::OrdinalIgnoreCase)")
       }
-    },
-    @{
-      name = 'health-audit-disabled'
-      expect = 'A8'
-      mutate = {
-        param($s)
-        $s.Replace('$oneDriveActive = @($active | Where-Object { $_.oneDrive_root })',
-          '$oneDriveActive = @()')
-      }
     }
   )
 
@@ -222,7 +187,7 @@ try {
     Write-Host "FAIL: $($baseline.Count) baseline failure(s), $($survived.Count) mutant(s) survived." -ForegroundColor Red
     exit 1
   }
-  Write-Host "PASS: chat/worktree isolation, OneDrive refusal/health and all $($mutants.Count) mutation arms." -ForegroundColor Green
+  Write-Host "PASS: chat/worktree isolation, OneDrive refusal and all $($mutants.Count) mutation arms." -ForegroundColor Green
   exit 0
 }
 finally {

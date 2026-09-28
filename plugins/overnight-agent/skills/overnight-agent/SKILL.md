@@ -1105,10 +1105,6 @@ start more work.
      Chats are stored locally under `~/.copilot/chats`; do not create a folder project or pass a
      workspace. Bind it as `chat`. Relative-output tools such as Playwright therefore write to
      chat-local storage rather than the planner folder or a task folder.
-   - **Existing task bindings** → run `oa-state.ps1 session -WorkspaceHealth` to check whether any
-     active task session still points into OneDrive. If one is reported, do not wake it; resolve the
-     binding explicitly before dispatch. The check is read-only and does not move or delete data.
-
    ```powershell
    oa-state.ps1 session -Id <ID> -SessionId <new session id> `
      -SessionKind code -SessionProject <repo project> `

@@ -107,7 +107,6 @@
           [-DispatchInput hash] Refuse a brief prepared against changed journal/task inputs.
           [-SessionRelease]     Retire the binding (task finished, workspace torn down). Prints
                                 the teardown command; never runs it.
-          [-WorkspaceHealth]    Read-only audit of active bindings under OneDrive.
           [-RunLimit]           Omit -Id to read this run's maximum outstanding normal requests.
           [-InFlight]           Legacy alias for -RunLimit. Reports no in-flight count.
           [-Concurrency <n>]    Override the `Overnight Agent concurrency` setting for one call.
@@ -592,7 +591,6 @@ param(
   # The path of a workspace that has just been REMOVED. Marks any binding pointing at it dead,
   # so the next verdict is `replace` rather than `reuse` at a workspace that is gone (#452).
   [string]$WorkspaceGone,
-  [switch]$WorkspaceHealth,
   [switch]$InFlight,
   # Overrides the `Overnight Agent concurrency` settings row for one invocation. -1 is the
   # "not specified" sentinel; see Resolve-PacingSettings for the precedence.
@@ -4867,33 +4865,6 @@ function Get-OneDriveRootForPath([string]$path) {
   return $null
 }
 
-function Get-WorkspaceBindingHealth {
-  $active = @()
-  if (Test-Path -LiteralPath $StateDir) {
-    foreach ($f in (Get-ChildItem -LiteralPath $StateDir -Filter 'task-*.json' -File -ErrorAction SilentlyContinue)) {
-      try { $obj = Get-Content -Raw -LiteralPath $f.FullName | ConvertFrom-Json } catch { continue }
-      $s = Get-SessionState $obj
-      if (-not $s) { continue }
-      $oneDriveRoot = Get-OneDriveRootForPath "$($s.workspace)"
-      $row = [pscustomobject]@{
-        id = "$($obj.id)"
-        session_id = "$($s.session_id)"
-        kind = "$($s.kind)"
-        state = "$($s.state)"
-        workspace = (ConvertTo-WorkspacePath "$($s.workspace)")
-        oneDrive_root = $oneDriveRoot
-      }
-      if ("$($s.state)" -eq 'live') { $active += $row }
-    }
-  }
-  $oneDriveActive = @($active | Where-Object { $_.oneDrive_root })
-  [pscustomobject]@{
-    active_bindings = $active.Count
-    active_onedrive_count = $oneDriveActive.Count
-    active_onedrive = $oneDriveActive
-  }
-}
-
 function Get-SessionState($st) {
   if ($st -and $st.PSObject.Properties['session'] -and $st.session -and "$($st.session.session_id)") {
     return $st.session
@@ -5101,14 +5072,10 @@ function Cmd-Session {
       } | ConvertTo-Json -Depth 4)
   }
 
-  if ($WorkspaceHealth) {
-    return (Get-WorkspaceBindingHealth | ConvertTo-Json -Depth 8)
-  }
-
   # No task/session enumeration: this is drain width, not a global occupancy estimate.
   if (-not $Id) {
     if (-not ($RunLimit -or $InFlight)) {
-      throw 'session requires -Id (or -RunLimit, -WorkspaceGone, or -WorkspaceHealth)'
+      throw 'session requires -Id (or -RunLimit, -WorkspaceGone)'
     }
     return (Get-RunLimit | ConvertTo-Json -Depth 4)
   }
