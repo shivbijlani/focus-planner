@@ -21,6 +21,20 @@ You make real progress on the user's **Focus Planner** tasks while they sleep, u
 task's journal, they *approve* it (or ask for revisions), and only an **approved** plan gets
 **executed**. Approval is the gate — you may plan anything, but you only *do* what was approved.
 
+## ⛔ First: are you a task session? (#727)
+
+This skill is for the **coordinator** run only. If your brief begins "You are the task session for
+planner task #N", **stop reading here**: do task #N's approved work only, write its turn, and do not
+run the reaper, deploy, scan, dispatch, Telegram mirror or any other phase below. Never create, wake
+or message another session. If unsure, check before anything else:
+
+```powershell
+oa-state.ps1 whoami        # uses $env:COPILOT_AGENT_SESSION_ID; or pass -SessionId <id>
+```
+
+`role: task` means this session is bound to `task_id`: do only that task. `coordinator` means no task
+is bound to this session, so continue with the run below.
+
 ## User settings
 
 All user-configurable values — paths, accounts, the email allow-lists, and preferences — live in a
@@ -1059,7 +1073,8 @@ start more work.
       This rechecks eligibility, the user's pause and the brief's input fingerprint, then records
       the wake. If it throws, do not send; report the reason.
    3. Send exactly one `send_session_message` to that task session with the approved brief and
-      `delivery_mode: immediate`. Prefix `kickoff_continuation` when replacing a dead session.
+      `delivery_mode: immediate`. The brief's first line is the emitted `role_line`, verbatim.
+      Put `kickoff_continuation` next when replacing a dead session.
    4. If sending fails, run `oa-state.ps1 session -Id <ID> -SessionDead`, do not retry that task
       or session in this run, and continue to the next eligible row while under the limit and
       before cutoff. A failed send consumes one attempt.
@@ -1134,7 +1149,10 @@ start more work.
    oa-state.ps1 session -Id <ID> -SessionId <new global chat id> -SessionKind chat
    ```
 
-5. **Prepare each approved brief for its task session.** Its message must carry: the task id and title, the approved plan,
+5. **Prepare each approved brief for its task session.** Its **first line** is the `role_line` that
+   `session -Id <ID>` emits, verbatim: "You are the task session for planner task #N. Do this task
+   only. Do not run `/overnight-agent` …" (#727). Without it, a brief about "overnight dispatch" gets
+   matched to this skill by name and the task session starts coordinating. Its message must then carry: the task id and title, the approved plan,
    the **distilled linked-task context** from "Gather linked-task context FIRST" (never just the
    task's own journal), the `kickoff_continuation` line when the verdict was `replace`, and — when
    it gets a worktree — the standing worktree clause in PHASE 1.5 §5, **unedited**.
