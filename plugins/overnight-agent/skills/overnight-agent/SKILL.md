@@ -1075,16 +1075,40 @@ start more work.
    configured width and each queued/sent/completed,
    waiting, skipped or failed request. The code owns the loop, not a prose instruction to keep going.
    **Do not use raw `send_session_message`, a kickoff on `create_session`, or hand-written
-   `-ForDispatch` / `-SessionWoken` calls for task dispatch.** If these plugin tools are missing,
-   **call `extensions_reload` once and check again** before concluding anything (#713). A missing
-   tool is usually a startup race, not a missing plugin: a scheduled session starts every MCP
-   server and the dispatch extension at once, and on a contended 4-core box the extension misses
-   the host's 30-second ready window. The extension log then ends in `=== ready-timeout ===`
-   (under `~\.copilot\logs\extensions\`), whereas a reload after startup settles is ready at
-   once. This was measured on 2026-09-28: all three scheduled coordinator sessions that night
-   timed out, while a reload in an already-running session became ready immediately. Only if the
-   tools are still absent after that one reload, report the missing capability and stop dispatch
-   rather than bypassing the scheduler. Say in the wrap-up whether a reload was needed.
+   `-ForDispatch` / `-SessionWoken` calls for task dispatch while these tools are present.** If
+   they are missing, **call `extensions_reload` once and check again** (#713). A missing tool is a
+   startup race, not a missing plugin: the host gives the extension 30 s to become ready, and a
+   session started by an automation (or with a kickoff prompt) misses it every time on this box.
+   Measured 2026-09-28: the log ends in `=== ready-timeout ===` in all six scheduled runs, and in
+   those sessions **the reload times out too** (it prints "ready", but the tools never appear).
+   A session started idle and then messaged loads the extension at once.
+
+   **If the tools are still absent after that one reload, dispatch ONE task yourself: the
+   fallback.** Stopping here silently turns every scheduled run into a plan-only run, so approved
+   work never moves. The fallback keeps every safety check the drain applies, except that there
+   is no refill:
+
+   1. **Exactly one task per run**, whatever `Overnight Agent concurrency` says. Take the first
+      row in `scan -Compact` order that is `eligible` and actually has work to hand over: an
+      approved plan, an approved `in-progress` next step, a `reopened`/`unanswered_user` reply
+      on open work, or a due `poll`/`recheck`.
+   2. `oa-state.ps1 session -Id <ID>` → a **`paused`** verdict means skip it and take the next
+      row. Otherwise, per steps 3–4 below: `reuse` keeps the bound session; `create`/`replace`
+      creates a new session **idle, without a kickoff** (a global chat for a non-code task, a
+      worktree for a code task), then binds it.
+   3. `oa-state.ps1 session -Id <ID> -ForDispatch -DispatchInput <dispatch_input from scan>`.
+      This re-checks eligibility, pause and changed input, then stamps the wake. **If it throws,
+      do not send**; report the reason.
+   4. `send_session_message` to that session with the brief from step 5, prefixed with the
+      `kickoff_continuation` line when the verdict was `replace`. One message, `delivery_mode:
+      immediate`.
+   5. Do not wait for that task to finish, and do not send a second task. Put
+      **`dispatch: fallback (oa_drain unavailable after reload) → task <ID>`** at the top of the
+      wrap-up, so a run that bypassed the drain is never mistaken for one that used it.
+
+   The fallback is only for a genuinely absent tool. If `oa_drain_status` exists, use the drain.
+   Never use the fallback because the drain refused, paused or cut off a task, since that is the
+   drain doing its job.
 
    **Do not wait for tasks from earlier runs to become idle.** This run can nudge them or start
    different work. Within this run, accepted/unconfirmed requests remain outstanding until the
