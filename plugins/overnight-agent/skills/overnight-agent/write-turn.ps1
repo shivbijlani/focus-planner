@@ -513,13 +513,11 @@ function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$Window
   $ageMin = ((Get-Date) - $written).TotalMinutes
 
   # --- #532 A STALE STAMP IS AN UNKNOWN BOUNDARY, NOT AN AUTHORITATIVE ONE ----------------
-  # The block above trusts `last_woken_at` completely whenever it is present. That is only
-  # sound while something keeps it current, and nothing in this process does: the stamp is
-  # written by `oa-state.ps1 session -SessionWoken`, and the only thing that CALLS it is a
-  # sentence of prose in SKILL.md PHASE 1 ("Stamp `-SessionWoken` once it responds"). A guard
-  # is code; the fact this guard reads is an instruction someone has to remember. When the
-  # dispatcher skips it, the stamp keeps pointing at a PREVIOUS wake, every later turn is
-  # newer than it, and the comparison below refuses forever.
+  # The block above trusts `last_woken_at` completely whenever it is present. Direct dispatch
+  # now records that timestamp through `session -ForDispatch -DispatchInput` immediately before
+  # sending, after rechecking task eligibility, pause and input freshness. A stamp older than the
+  # wake window still means the current dispatch has no reliable boundary, so the comparison below
+  # must refuse rather than attribute an old turn to a new wake.
   #
   # MEASURED, on this task, by the run that could not record itself. Task #468, 2026-09-07:
   #
@@ -552,11 +550,9 @@ function Get-WakeTurnFinding([string]$journalPath, [string]$taskId, [int]$Window
   # reaches 45 minutes independently for the same judgement (`$script:ActiveWakeMinutes` --
   # "a stale wake is not evidence anyone is working"). Two knobs would drift apart.
   #
-  # NOT FIXED BY STAMPING FROM HERE, and that is not an oversight. `oa-state.ps1 Cmd-Mark`
-  # refuses `-SessionWoken` precisely so the turn author cannot reset its own wake window
-  # (#514) -- G12 judges this author, so this author must not be able to write the field it
-  # is judged by. Stamping at dispatch is correct; stamping as remediation is the defect. So
-  # the read side is hardened instead, which needs no trust in the party being judged.
+  # NOT FIXED BY STAMPING FROM HERE, and that is not an oversight. Only the dispatch boundary
+  # may write the wake timestamp; allowing a task turn to reset it would hand the turn author a
+  # lever to extend its own wake window (#514). This guard only reads the boundary.
   $staleWake = $false
   $wakeAgeMin = 0
   if ($null -ne $wokenAt) {

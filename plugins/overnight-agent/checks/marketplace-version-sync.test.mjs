@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,12 @@ const plugin = (version) => JSON.stringify({ name: 'overnight-agent', version })
 test('the repo as committed is in sync', () => {
   const r = checkMarketplaceSync(realMarketplace, realPlugin);
   assert.equal(r.ok, true, r.reason);
+});
+
+test('the plugin no longer declares or ships the drain extension', () => {
+  const manifest = JSON.parse(realPlugin);
+  assert.equal(Object.hasOwn(manifest, 'extensions'), false);
+  assert.equal(existsSync(join(root, 'plugins', 'overnight-agent', 'extensions', 'task-dispatch', 'extension.mjs')), false);
 });
 
 test('equal versions pass', () => {

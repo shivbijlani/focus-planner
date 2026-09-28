@@ -4,26 +4,12 @@
 
   WHY THIS EXISTS
   ---------------
-  `session.last_woken_at` was maintained by NOTHING except a sentence of prose in SKILL.md PHASE 1
-  ("stamp -SessionWoken once it responds"). Two guards read it, and a run that skipped the
-  sentence broke both -- in OPPOSITE directions:
+  `session.last_woken_at` was maintained by a prose-only `-SessionWoken` call. The one-turn-per-wake
+  guard read an old stamp as current and refused a fresh author. The direct dispatch path now
+  records the wake at its authorization boundary, and this check proves that inspection and
+  binding still do not stamp.
 
-    * the one-turn-per-wake guard read the stale stamp as authoritative and refused EVERY author,
-      so the wake recorded nothing at all;
-    * `Test-SessionHoldsCapacity` read its staleness as "nobody is working this", parked the row
-      and offered its slot away while the session holding it was mid-flight.
-
-  Measured 2026-09-07 on task #468: stamp written 19:43, a fresh run re-dispatched at 21:55, the
-  turn guard refused at 22:00 naming a turn two hours and one run old, and the capacity view did
-  not count the live session until the stamp was written BY HAND at 22:59.
-
-  Neither symptom is repairable where the field is READ. The turn guard only had to stop trusting
-  a stamp too old to be about the current wake (shipped). The capacity park needs the field to be
-  TRUE, not merely trusted -- "nobody is working this" is a claim about the world -- and teaching
-  it to read staleness as activity re-opens #487 and un-parks exactly what #500 exists to park.
-  World O of `mutcheck-parked-capacity` already pins that as deliberate.
-
-  So the repair is on the WRITE side, and this check pins its shape.
+  The repair is on the WRITE side, and this check pins its shape.
 
   THE TRAP THIS CHECK EXISTS TO KILL
   ----------------------------------
@@ -31,11 +17,8 @@
   and that path already writes. It is wrong, because BINDING IS NOT WAKING -- a run can bind a
   session and then fail to wake it, and a stamp written there records a wake that never happened.
 
-  Note the direction. Every symptom above is the stamp being ABSENT, and both are LOUD: the guard
-  refuses and says so, the park over-offers and surfaces as contention. A stamp PRESENT when it
-  should be absent is the #514 direction and is SILENT -- a second turn reaches the page and
-  nothing reports it. Closing a loud failure by opening a quiet one is not a fix, which is why
-  arm A3 exists and why mutant D must die.
+  A stamp PRESENT when it should be absent is the #514 direction and is SILENT -- a second turn
+  reaches the page and nothing reports it. That is why arm A3 exists and why mutant D must die.
 
   It runs the REAL oa-state.ps1 against an isolated -StateDir, so live state is never touched.
 
@@ -46,6 +29,8 @@
           -> dispatch_authorised: true, and last_woken_at advances before the send
     A3  binding a session does NOT stamp it
           -> a bind followed by no wake never leaves a fresh last_woken_at
+    A4  -ForDispatch requires the exact dispatch_input from scan
+    A5  changed fingerprints and user pauses cannot be stamped
 
   MUTANTS (each must break exactly the arm named)
     B_alwaysAuthorised  authority granted to every read, asked for or not     -> A1
@@ -160,7 +145,25 @@ function Invoke-Session {
     '-SnoozeStore', (Join-Path $StateDir 'snooze.json'), '-UserSettings', (Join-Path $StateDir 'absent-settings.md')) + $Extra
   $out = & pwsh @argv 2>&1
   $text = ($out | Out-String)
+  $script:LastExitCode = $LASTEXITCODE
+  $script:LastSessionOutput = $text
   try { return ($text | ConvertFrom-Json) } catch { return $null }
+}
+
+function Get-DispatchInput {
+  param([string]$SubjectPath, [string]$StateDir)
+  $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $SubjectPath, 'scan',
+    '-StateDir', $StateDir, '-JournalDir', (Join-Path $StateDir 'journal'),
+    '-PlannerBoard', (Join-Path $StateDir 'planner.md'),
+    '-PlannerCompleted', (Join-Path $StateDir 'completed.md'),
+    '-SnoozeStore', (Join-Path $StateDir 'snooze.json'),
+    '-UserSettings', (Join-Path $StateDir 'absent-settings.md'))
+  $out = & pwsh @argv 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "scan failed while preparing the dispatch fingerprint: $out" }
+  $rows = (($out | Out-String) | ConvertFrom-Json)
+  $row = @($rows | Where-Object { "$($_.id)" -eq '999' }) | Select-Object -First 1
+  if (-not $row -or -not $row.dispatch_input) { throw 'scan did not return task 999 dispatch_input' }
+  return "$($row.dispatch_input)"
 }
 
 function Test-Arms {
@@ -179,13 +182,15 @@ function Test-Arms {
   }
   if ($s1 -ne $StaleStamp) { $f += "A1: a plain read moved last_woken_at to '$s1' -- an inspection that stamps is #514" }
 
-  # A2 -- the eligibility check does not stamp; the dispatch call stamps before native send.
+  # A2 -- the eligibility check does not stamp; direct dispatch requires a scan hash and stamps
+  # only after rechecking the task.
   $d2 = New-Store
   $checked = Invoke-Session -SubjectPath $SubjectPath -StateDir $d2 -Extra @('-CheckDispatch')
   if (-not $checked.dispatch_eligible -or $checked.dispatch_authorised -or (Read-Stamp $d2) -ne $StaleStamp) {
     $f += 'A2: eligibility check was not read-only'
   }
-  $r2 = Invoke-Session -SubjectPath $SubjectPath -StateDir $d2 -Extra @('-ForDispatch')
+  $hash2 = Get-DispatchInput -SubjectPath $SubjectPath -StateDir $d2
+  $r2 = Invoke-Session -SubjectPath $SubjectPath -StateDir $d2 -Extra @('-ForDispatch', '-DispatchInput', $hash2)
   $s2 = Read-Stamp $d2
   if (-not $r2) {
     $f += 'A2: -ForDispatch produced no parseable verdict'
@@ -195,6 +200,34 @@ function Test-Arms {
   }
   if ($s2 -eq $StaleStamp) { $f += 'A2: -ForDispatch answered but left last_woken_at stale' }
   elseif ($s2 -eq '<no-session>' -or $s2 -eq '<no-state>') { $f += "A2: -ForDispatch destroyed the binding ($s2)" }
+
+  # A4 -- omitting the scan fingerprint must not turn authorisation into a bypass.
+  [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d2 -Extra @('-ForDispatch'))
+  if ($script:LastExitCode -eq 0 -or $script:LastSessionOutput -notmatch 'session_input_required' -or
+      (Read-Stamp $d2) -ne $s2) {
+    $f += 'A4: missing dispatch_input was accepted or changed the wake stamp'
+  }
+
+  # A5 -- stale input and a human pause are both rejected before stamping.
+  [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d2 -Extra @(
+    '-ForDispatch', '-DispatchInput', 'stale-dispatch-input'))
+  if ($script:LastExitCode -eq 0 -or $script:LastSessionOutput -notmatch 'session_input_changed' -or
+      (Read-Stamp $d2) -ne $s2) {
+    $f += 'A5: changed dispatch_input was accepted or changed the wake stamp'
+  }
+  $d5 = New-Store
+  $statePath = Join-Path $d5 'task-999.json'
+  $pausedState = Get-Content -Raw $statePath | ConvertFrom-Json
+  $pausedState.status = 'blocked'
+  $pausedState | Add-Member -NotePropertyName status_by -NotePropertyValue 'user' -Force
+  $pausedState | Add-Member -NotePropertyName paused_at -NotePropertyValue '2026-09-07T19:40:00-07:00' -Force
+  $pausedState | ConvertTo-Json -Depth 8 | Set-Content -Path $statePath -Encoding utf8
+  $hash5 = Get-DispatchInput -SubjectPath $SubjectPath -StateDir $d5
+  [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d5 -Extra @(
+    '-ForDispatch', '-DispatchInput', $hash5))
+  if ($script:LastExitCode -eq 0 -or (Read-Stamp $d5) -ne $StaleStamp) {
+    $f += 'A5: a user-paused task was authorised or its wake stamp changed'
+  }
 
   # A3 -- binding is not waking. A run binds a session and may then fail to wake it, so a bind
   # must never leave a stamp that says a wake happened. The assertion is deliberately about the
@@ -239,12 +272,20 @@ $mutants = @(
   # -ForDispatch answers the question but does not record the wake: the verdict and the stamp go
   # back to being two events joined by nothing.
   @{ Name = 'C_neverStamp'; Expect = 'A2'; Mutate = {
-      param($s) $s.Replace('if ($SessionWoken -or $ForDispatch) {', 'if ($SessionWoken) {') } }
+      param($s) $s.Replace('if ($ForDispatch) {', 'if ($false) {') } }
   # THE TRAP. Stamp on bind: cheap, plausible, and it records wakes that never happened.
   @{ Name = 'D_stampOnBind'; Expect = 'A3'; Mutate = {
       param($s) $s.Replace(
         "-LastWokenAt `$(if (`$sess -and `"`$(`$sess.session_id)`" -eq `$SessionId) { `$sess.last_woken_at } else { '' }) ``",
         "-LastWokenAt (Now-Iso) ``") } }
+  @{ Name = 'E_missingDispatchInputAllowed'; Expect = 'A4'; Mutate = {
+      param($s) $s.Replace(
+        "if (`$ForDispatch -and [string]::IsNullOrWhiteSpace(`$DispatchInput)) {",
+        'if ($false) {') } }
+  @{ Name = 'F_changedDispatchInputAllowed'; Expect = 'A5'; Mutate = {
+      param($s) $s.Replace(
+        'if ($DispatchInput -and $DispatchInput -ne $row.dispatch_input) {',
+        'if ($false) {') } }
 )
 
 Write-Host ''

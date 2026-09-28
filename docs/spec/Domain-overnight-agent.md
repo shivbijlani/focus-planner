@@ -161,7 +161,7 @@ consent -Id <id> [-Action <kind>] [-Repo <name>]
 gate
 extract -Id <id> [-BudgetKB <n>] [-Json] [-Verify]
 mark   -Id <id> [-Status s] [-Version n] [-PlanId p] [-Poll <cadence>] [-Recheck <cadence>]
-session [-Id <id>] [-InFlight] [-SessionId <sid>] [-SessionDead] [-SessionWoken] [-SessionRelease]
+session [-Id <id>] [-SessionId <sid>] [-SessionDead] [-SessionRelease]
 doc    -Id <id> ...
 resnapshot
 ```
@@ -175,7 +175,7 @@ Its function map matches those commands. `Get-UserSettingsPath`, `Resolve-GateSe
 and eligibility; `Cmd-Doc`, `Cmd-Session`, `Cmd-Extract`, and `Cmd-Mark` handle durable state.
 
 `user-settings.md` is equally concrete. Its `## Overnight Agent behaviour` table exposes `Today gate
-backstop`, `Today gate strict`, and `Overnight Agent concurrency`; its settings table also names
+backstop`, `Today gate strict`, `Overnight Agent concurrency`, and the coordinator start buffer; its settings table also names
 `Planner board`, `Completed board`, `Journals folder`, `Agent state store`, `Dev drive (repos)`,
 `Google account (Tasks)`, and Telegram settings. The template is explicit that the real settings
 live outside the plugin and that the bundled copy is overwritten on update.
