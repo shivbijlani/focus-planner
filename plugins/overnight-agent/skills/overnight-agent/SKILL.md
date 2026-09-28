@@ -1031,7 +1031,9 @@ dropped); it is quiet on a healthy loop. **Report a non-zero count in the wrap-u
 
 ⛔ **The run session does not do task work.** It collects, orders, dispatches and reports. Each
 task gets a **dedicated session** so its history persists across runs. Code tasks use their own
-repository worktree; non-code tasks use a global chat with no project or folder workspace.
+repository worktree; non-code tasks use their own sessions in the fixed local folder project
+named by `user-settings.md` → `Non-code task project`. Never put non-code work in the planner's
+OneDrive folder or a code repository.
 Isolation does not require previous task sessions to finish before the next coordinator run can
 start more work.
 
@@ -1052,7 +1054,8 @@ start more work.
 
    1. Run `oa-state.ps1 session -Id <ID>`. **`paused` means skip** and leave its saved binding
       untouched. `reuse` uses the bound session. `create` or `replace` means create a new session
-      idle, without a kickoff (a global chat for non-code work, a worktree for code), then bind it.
+      idle, without a kickoff (a session in the configured local folder project for non-code
+      work, a worktree for code), then bind it.
       For `replace`, retain the returned `kickoff_continuation` line for the message.
    2. Immediately before sending, run
       `oa-state.ps1 session -Id <ID> -ForDispatch -DispatchInput <exact dispatch_input from scan>`.
@@ -1102,19 +1105,26 @@ start more work.
      mitigation of exactly that shape was violated 24 minutes after it was written.
 
 4. **Choose the task's session scope; never inherit the run session's project or folder.** Session
-   APIs default to the caller's project, so non-code work must be created as a **global chat** with
-   no project and no folder workspace. A code task must name its repository project and its own
-   worktree.
+   APIs default to the caller's project, so always pass the project explicitly. A code task must
+   name its repository project and its own worktree.
 
    - **Code task** → create its session in the **repository project** the change belongs to, with
      `workspace_type: worktree`, from a freshly fetched `origin/main`, under `V:\repos`. Bind it as
      `code`; the bind refuses a missing project (`session_project_required`), a missing workspace
      (`session_workspace_required`), a `folder` workspace (`session_workspace_type`) and the run
      session's own workspace (`session_workspace_inherited`).
-   - **Non-code task** → create a **global chat session**: no project, folder, branch or workspace.
-     Chats are stored locally under `~/.copilot/chats`; do not create a folder project or pass a
-     workspace. Bind it as `chat`. Relative-output tools such as Playwright therefore write to
-     chat-local storage rather than the planner folder or a task folder.
+   - **Non-code task** → read `Non-code task project` from the resolved external
+     `user-settings.md`. If absent, first follow the one-time setup in the plugin README:
+     create `%LOCALAPPDATA%\overnight-agent\task-chats`, register it once with
+     `create_project(path=<expanded absolute folder path>)`, and put its returned project ID
+     in that setting. Do not silently substitute a code or OneDrive project.
+     For each task call `create_session(project_id=<Non-code task project>)` **without
+     `workspace_type` or `kickoff`**; a folder project creates a folder session automatically.
+     Bind its session ID as `chat`, with `-SessionProject` set to the configured project ID,
+     `-SessionWorkspace` set to `%LOCALAPPDATA%\overnight-agent\task-chats` (expanded),
+     and `-WorkspaceType folder`. The bind refuses a OneDrive root, a code worktree,
+     another project or another folder, naming `Non-code task project` in the error.
+     Each task has its own session even though the project has one fixed local folder.
 
     Read `session -Id <ID>`'s `model` and `model_source` before creating or waking a
     task session. The `Overnight Agent model` setting defaults to `auto`; a malformed
@@ -1131,7 +1141,9 @@ start more work.
      -SessionKind code -SessionProject <repo project> `
      -SessionWorkspace <worktree path> -WorkspaceType worktree
 
-   oa-state.ps1 session -Id <ID> -SessionId <new global chat id> -SessionKind chat
+   oa-state.ps1 session -Id <ID> -SessionId <new non-code session id> `
+     -SessionKind chat -SessionProject <Non-code task project ID> `
+     -SessionWorkspace "$env:LOCALAPPDATA\overnight-agent\task-chats" -WorkspaceType folder
    ```
 
 5. **Prepare each approved brief for its task session.** Its message must carry: the task id and title, the approved plan,
