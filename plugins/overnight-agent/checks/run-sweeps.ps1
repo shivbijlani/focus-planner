@@ -335,9 +335,9 @@ $Suite = @(
   # with no signal at all. This is that reader, and it is deliberately dispatched
   # from a run: the daemons watch the app, a run watches the daemons, which is two
   # dispatch domains watching each other rather than the circular self-heal of #243.
-  # GH #689: reliability and browser checks are now independently opt-in in ONE tray
-  # started by one HKCU Run value. The sweep reports OFF / PAUSED as non-findings
-  # and leftover scheduled tasks / Startup shims as LEGACY.
+  # GH #689: reliability and browser checks are owned by ONE optional tray and
+  # one HKCU Run value. Browser consent/pause are component controls in that tray.
+  # OFF / PAUSED are non-findings; old task/shim/controller routes are LEGACY.
   # 4 arms, each mutation-proven load-bearing by mutcheck-supervisor-liveness.ps1,
   # plus two must-stay-green fixtures so it cannot become the permanently red line
   # that the workflow-health-sweep note above is a warning about.

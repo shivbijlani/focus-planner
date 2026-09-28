@@ -14,9 +14,6 @@
       cooldown (default 60m) boundaries reported by the checker.
     * Shows status and controls in the notification area: policy, cycle boundaries,
       cooldown, recent outcomes, Check now, Pause/Resume, Start with Windows, Exit.
-    * Independently opt-in browser checks run browser-watchdog.ps1 once per hour as
-      a child. Browser health, recent outcomes, pause and on-demand checks appear
-      in the same tray. Browser and MCP processes remain under their own owners.
 
   WHAT IT DOES NOT DO
     * It never restarts anything itself. Every restart decision, the action lock, the
@@ -40,24 +37,29 @@
 #>
 [CmdletBinding()]
 param(
-  [int]$IntervalMinutes = 15,
+  [ValidateRange(1, 1440)][int]$IntervalMinutes = 15,
+  [ValidateRange(1, 3600)][int]$EvaluationTimeoutSeconds = 900,
   [switch]$NoAct,
   [switch]$NoTrayIcon
 )
 
-$ErrorActionPreference = 'Continue'
+$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'oa-supervisor-startup.ps1')
+. (Join-Path $PSScriptRoot 'oa-supervisor-components.ps1')
 
 $files = Get-OaSupervisorFiles
 $oaHome = $files.home
 if (-not (Test-Path $oaHome)) { New-Item -ItemType Directory -Path $oaHome -Force | Out-Null }
-$supervisor = Join-Path $oaHome 'oa-supervisor.ps1'
-$browserScript = Join-Path $oaHome 'browser-watchdog.ps1'
+$components = @(Get-OaSupervisorComponents -OaHome $oaHome -IntervalMinutes $IntervalMinutes -NoAct:$NoAct)
+$componentStates = @{}
+foreach ($component in $components) {
+  $componentStates[$component.name] = New-OaComponentState -Enabled ($component.name -eq 'oa-supervisor')
+}
 $statusScript = Join-Path $oaHome 'consumer-reliability-supervisor.mjs'
 if (-not (Test-Path $statusScript)) { $statusScript = Join-Path $PSScriptRoot 'consumer-reliability-supervisor.mjs' }
 $psExe = (Get-Process -Id $PID).Path
 $trayPath = if (Test-Path $files.tray) { $files.tray } else { $PSCommandPath }
-$startedUtc = (Get-Date).ToUniversalTime()
+$startedUtc = (Get-Process -Id $PID).StartTime.ToUniversalTime()
 
 try {
   $lockHandle = [IO.File]::Open($files.lock, [IO.FileMode]::OpenOrCreate,
@@ -77,189 +79,139 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 $tray = [ordered]@{
-  paused = $false; state = 'STARTING'; lastEvaluationUtc = $null; overdue = $null
-  nextEvaluationAt = (Get-Date).ToUniversalTime()
-  evaluation = $null; evaluationStartedUtc = $null; evalOut = $null; evalErr = $null
+  paused = $false; state = 'STARTING'
   statusProc = $null; statusOut = $null; status = $null; statusRefreshAt = (Get-Date).ToUniversalTime()
-  lastBeatUtc = [datetime]::MinValue; error = $null; legacy = $null; exitRequested = $false
-  browser = [ordered]@{
-    enabled = $false; paused = $false; state = 'OFF'; lastCheckUtc = $null
-    nextCheckUtc = (Get-Date).ToUniversalTime(); proc = $null; out = $null; err = $null
-    recent = @(); lastExitCode = $null
-  }
+  statusStartedUtc = $null; lastBeatUtc = [datetime]::MinValue; error = $null; legacy = $null
 }
 if (Test-Path $files.trayState) {
   try {
     $saved = Get-Content $files.trayState -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     $tray.paused = [bool]$saved.paused
-    $tray.browser.enabled = [bool]$saved.browserEnabled
-    $tray.browser.paused = [bool]$saved.browserPaused
-    if ($saved.browserRecent) { $tray.browser.recent = @($saved.browserRecent | Select-Object -Last 5) }
-    if ($saved.browserLastCheckUtc) {
-      $tray.browser.lastCheckUtc = [datetime]::Parse([string]$saved.browserLastCheckUtc, $null,
-        [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
-    }
+    $browser = $componentStates['browser-watchdog']
+    $browser.enabled = [bool]$saved.browserEnabled
+    $browser.paused = [bool]$saved.browserPaused
+    if ($saved.browserRecent) { $browser.recent = @($saved.browserRecent | Select-Object -Last 5) }
+    if ($browser.enabled) { $browser.state = 'STARTING' }
   } catch {
-    $tray.error = "could not read tray state; browser checks remain off: $_"
-    $tray.browser.enabled = $false
-    Write-Warning $tray.error
+    $tray.paused = $true
+    $componentStates['browser-watchdog'].enabled = $false
+    $tray.error = "Invalid saved tray state; paused for safety: $_"
   }
 }
 
 function Save-TrayState {
   try {
-    $lastBrowserCheck = $null
-    if ($tray.browser.lastCheckUtc) { $lastBrowserCheck = $tray.browser.lastCheckUtc.ToString('o') }
-    @{
-      paused = $tray.paused; browserEnabled = $tray.browser.enabled
-      browserPaused = $tray.browser.paused; browserRecent = @($tray.browser.recent)
-      browserLastCheckUtc = $lastBrowserCheck
-      updatedUtc = (Get-Date).ToUniversalTime().ToString('o')
-    } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $files.trayState -Encoding utf8
+    $browser = $componentStates['browser-watchdog']
+    @{ paused = $tray.paused; updatedUtc = (Get-Date).ToUniversalTime().ToString('o')
+       browserEnabled = $browser.enabled; browserPaused = $browser.paused; browserRecent = @($browser.recent) } |
+      ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $files.trayState -Encoding utf8 -ErrorAction Stop
     return $true
-  } catch {
-    $tray.error = "could not save tray state: $_"
-    Write-Warning $tray.error
-    return $false
-  }
+  } catch { $tray.error = "could not save tray state: $_"; return $false }
 }
 
 function Write-Heartbeat {
   $now = (Get-Date).ToUniversalTime()
   try {
-    $lastEvaluation = $null
-    $lastBrowserCheck = $null
-    if ($tray.lastEvaluationUtc) { $lastEvaluation = $tray.lastEvaluationUtc.ToString('o') }
-    if ($tray.browser.lastCheckUtc) { $lastBrowserCheck = $tray.browser.lastCheckUtc.ToString('o') }
+    $states = @{}
+    foreach ($component in $components) {
+      $s = $componentStates[$component.name]
+      $states[$component.name] = [ordered]@{
+        state = $s.state; error = $s.error; lastExitCode = $s.lastExitCode
+        enabled = $s.enabled; paused = $s.paused
+        lastEvaluationUtc = $(if ($s.lastEvaluationUtc) { $s.lastEvaluationUtc.ToString('o') })
+        nextEvaluationAt = $s.nextEvaluationAt.ToString('o'); evaluating = [bool]$s.process
+        intervalMinutes = $component.intervalMinutes
+      }
+    }
+    $oa = $componentStates['oa-supervisor']
     [ordered]@{
       pid = $PID; kind = 'tray'; lastCheckUtc = $now.ToString('o')
-      lastEvaluationUtc = $lastEvaluation
+      lastEvaluationUtc = $states['oa-supervisor'].lastEvaluationUtc
       lastState = $tray.state; paused = $tray.paused; intervalMinutes = $IntervalMinutes
-      nextEvaluationAt = $tray.nextEvaluationAt.ToString('o'); overdue = $tray.overdue
-      evaluating = [bool]$tray.evaluation
-      browserEnabled = $tray.browser.enabled; browserPaused = $tray.browser.paused
-      browserEvaluating = [bool]$tray.browser.proc
-      browserLastCheckUtc = $lastBrowserCheck
-      browserNextCheckUtc = $tray.browser.nextCheckUtc.ToString('o')
-      browserState = $tray.browser.state
-      browserLastExitCode = $tray.browser.lastExitCode
-      statusEvaluating = [bool]$tray.statusProc
-      exitRequested = $tray.exitRequested; error = $tray.error
-    } | ConvertTo-Json | Set-Content -LiteralPath $files.heartbeat -Encoding utf8
+      nextEvaluationAt = $oa.nextEvaluationAt.ToString('o'); overdue = $oa.overdue
+      evaluating = [bool]$oa.process; components = $states; error = $tray.error
+    } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $files.heartbeat -Encoding utf8
   } catch { $tray.error = "heartbeat failed: $_" }
   $tray.lastBeatUtc = $now
 }
 
-function Start-Evaluation {
-  $tray.evaluationStartedUtc = (Get-Date).ToUniversalTime()
-  if (-not (Test-Path $supervisor)) {
-    $tray.state = 'SUPERVISOR-MISSING'
-    Complete-Evaluation $null
+function Start-Evaluation($Component) {
+  $s = $componentStates[$Component.name]
+  $s.startedUtc = (Get-Date).ToUniversalTime()
+  $s.error = $null
+  if ($Component.name -eq 'browser-watchdog') {
+    $legacy = Get-OaLegacyInstall
+    if ($legacy.browserTaskInstalled -or $legacy.browserShimInstalled -or $legacy.taskError -or
+        (Test-OaLegacyBrowserProcessRunning)) {
+      Complete-Evaluation -Component $Component -Failure 'Legacy browser dispatcher or another browser check remains; remove the old route or let that check finish.'
+      return
+    }
+  }
+  if (-not (Test-Path $Component.script)) {
+    Complete-Evaluation -Component $Component -Failure "Component missing: $($Component.script)"
     return
   }
   $stamp = [Guid]::NewGuid().ToString('N').Substring(0, 8)
-  $tray.evalOut = Join-Path ([IO.Path]::GetTempPath()) "oa-tray-eval-$stamp.out"
-  $tray.evalErr = Join-Path ([IO.Path]::GetTempPath()) "oa-tray-eval-$stamp.err"
-  $argList = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "`"$supervisor`"")
-  if ($NoAct) { $argList += '-NoAct' }
+  $s.stdout = Join-Path ([IO.Path]::GetTempPath()) "oa-tray-eval-$stamp.out"
+  $s.stderr = Join-Path ([IO.Path]::GetTempPath()) "oa-tray-eval-$stamp.err"
+  $argList = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "`"$($Component.script)`"") +
+    @($Component.arguments | Where-Object { $_ })
   try {
-    # A child process on purpose: a checker crash must not kill the scheduler.
-    $tray.evaluation = Start-Process -FilePath $psExe -ArgumentList $argList -NoNewWindow -PassThru `
-      -RedirectStandardOutput $tray.evalOut -RedirectStandardError $tray.evalErr
+    $s.process = Start-Process -FilePath $psExe -ArgumentList $argList -NoNewWindow -PassThru `
+      -RedirectStandardOutput $s.stdout -RedirectStandardError $s.stderr
+    # Windows PowerShell otherwise loses ExitCode when the child exits between ticks.
+    $null = $s.process.Handle
   } catch {
-    $tray.state = "TRAY-ERROR: $_"
-    Complete-Evaluation $null
+    Complete-Evaluation -Component $Component -Failure "Could not start component: $_"
   }
 }
 
-function Complete-Evaluation($Output) {
-  $next = (Get-Date).ToUniversalTime().AddMinutes($IntervalMinutes)
-  $tray.overdue = $null
-  if ($Output) {
-    $line = ($Output -split "`n" | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1)
-    if ($line) {
-      try {
+function Complete-Evaluation {
+  param($Component, [string]$Output, $ExitCode, [string]$Failure)
+  $s = $componentStates[$Component.name]
+  $next = (Get-Date).ToUniversalTime().AddMinutes($Component.intervalMinutes)
+  $s.overdue = $null
+  $s.lastExitCode = $ExitCode
+  try {
+    if ($Failure) { throw $Failure }
+    if (-not $Output -or -not $Output.Trim()) { throw 'Component returned no result.' }
+    if ($Component.name -eq 'oa-supervisor') {
+        $line = ($Output -split "`n" | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1)
+        if (-not $line) { throw 'Component returned no JSON result.' }
         $result = $line | ConvertFrom-Json
-        $tray.state = [string]$result.state
-        $tray.overdue = $result.actResult.overdue
+        if (-not $result.state) { throw 'Component result has no state.' }
+        $s.state = [string]$result.state
+        $s.overdue = $result.actResult.overdue
+        if ($ExitCode -notin @(0, 1) -or $result.error -or $result.actError) {
+          throw "Exit $ExitCode`: $($result.error) $($result.actError)"
+        }
         $candidate = $result.actResult.nextEvaluationAt
         if ($candidate) {
           $date = [datetime]::Parse($candidate, $null,
             [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
           if ($date -lt $next) { $next = $date }
         }
-      } catch { $tray.state = 'UNPARSEABLE-RESULT' }
-    } elseif ($tray.state -notmatch '^(SUPERVISOR-MISSING|TRAY-ERROR)') { $tray.state = 'NO-RESULT' }
+    } else {
+      $result = $Output | ConvertFrom-Json
+      if ($ExitCode -notin @(0, 2) -or $result.healthy -isnot [bool] -or $result.error) {
+        throw "Invalid browser result (exit $ExitCode): $($result.error)"
+      }
+      $s.state = if ($result.healthy -and $ExitCode -eq 0) { 'HEALTHY' } else { 'UNHEALTHY' }
+    }
+  } catch {
+    $s.state = 'ERROR'
+    $s.error = "$_"
   }
-  $tray.lastEvaluationUtc = (Get-Date).ToUniversalTime()
-  $tray.nextEvaluationAt = $next
-  $tray.evaluation = $null
-  foreach ($p in @($tray.evalOut, $tray.evalErr)) { if ($p) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue } }
+  $s.lastEvaluationUtc = (Get-Date).ToUniversalTime()
+  $s.recent = @(@($s.recent) + @([ordered]@{
+    at = $s.lastEvaluationUtc.ToString('o'); state = $s.state; exitCode = $s.lastExitCode; error = $s.error
+  }) | Select-Object -Last 5)
+  if ($Component.name -eq 'browser-watchdog') { [void](Save-TrayState) }
+  $s.nextEvaluationAt = $next
+  if ($s.process) { $s.process.Dispose(); $s.process = $null }
+  Remove-OaComponentOutput $s
+  $tray.state = $componentStates['oa-supervisor'].state
   $tray.statusRefreshAt = (Get-Date).ToUniversalTime()
-  Write-Heartbeat
-  Update-Ui
-}
-
-function Start-BrowserCheck {
-  $b = $tray.browser
-  $legacy = Get-OaLegacyInstall
-  if ($legacy.browserTaskInstalled -or $legacy.browserShimInstalled -or $legacy.taskError) {
-    $b.state = 'LEGACY-ROUTE: remove old browser dispatcher before checking'
-    $b.nextCheckUtc = (Get-Date).ToUniversalTime().AddMinutes(1)
-    Write-Heartbeat
-    return
-  }
-  if (-not (Test-Path -LiteralPath $browserScript)) {
-    $b.state = 'CHECKER-MISSING'
-    $b.nextCheckUtc = (Get-Date).ToUniversalTime().AddMinutes(60)
-    Write-Heartbeat
-    return
-  }
-  if (Test-OaLegacyBrowserProcessRunning) {
-    $b.state = 'ANOTHER-CHECK-RUNNING'
-    $b.nextCheckUtc = (Get-Date).ToUniversalTime().AddMinutes(1)
-    Write-Heartbeat
-    return
-  }
-  $stamp = [Guid]::NewGuid().ToString('N').Substring(0, 8)
-  $b.out = Join-Path ([IO.Path]::GetTempPath()) "oa-tray-browser-$stamp.out"
-  $b.err = Join-Path ([IO.Path]::GetTempPath()) "oa-tray-browser-$stamp.err"
-  try {
-    $b.proc = Start-Process -FilePath $psExe -ArgumentList @('-NoProfile', '-NonInteractive',
-      '-ExecutionPolicy', 'Bypass', '-File', "`"$browserScript`"", '-Json') -NoNewWindow -PassThru `
-      -RedirectStandardOutput $b.out -RedirectStandardError $b.err
-    $b.state = 'CHECKING'
-  } catch {
-    $b.state = "CHECK-ERROR: $_"
-    $b.nextCheckUtc = (Get-Date).ToUniversalTime().AddMinutes(1)
-  }
-  Write-Heartbeat
-  Update-Ui
-}
-
-function Complete-BrowserCheck {
-  $b = $tray.browser
-  $now = (Get-Date).ToUniversalTime()
-  try {
-    $b.proc.WaitForExit()
-    $raw = Get-Content -LiteralPath $b.out -Raw -ErrorAction Stop
-    $result = $raw | ConvertFrom-Json -ErrorAction Stop
-    if ($null -eq $result.healthy) { throw 'browser checker returned no health verdict' }
-    $b.lastExitCode = $b.proc.ExitCode
-    $b.state = if ($result.error) { "ERROR: $($result.error)" }
-               elseif ($result.healthy -and ($null -eq $b.lastExitCode -or $b.lastExitCode -eq 0)) { 'HEALTHY' }
-               else { "UNHEALTHY: $($result.unhealthy) slot(s), exit $($b.lastExitCode)" }
-  } catch {
-    $b.state = "CHECK-ERROR: $_"
-  }
-  $b.lastCheckUtc = $now
-  $b.recent = @(@($b.recent) + @([ordered]@{ at = $now.ToString('o'); state = $b.state }) | Select-Object -Last 5)
-  $b.proc = $null
-  $b.nextCheckUtc = $now.AddMinutes(60)
-  foreach ($p in @($b.out, $b.err)) {
-    if ($p) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
-  }
-  [void](Save-TrayState)
   Write-Heartbeat
   Update-Ui
 }
@@ -268,9 +220,11 @@ function Start-StatusRefresh {
   if ($NoTrayIcon -or $tray.statusProc -or -not (Test-Path $statusScript)) { return }
   $tray.statusOut = Join-Path ([IO.Path]::GetTempPath()) ("oa-tray-status-" + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.out')
   try {
+    $tray.statusStartedUtc = (Get-Date).ToUniversalTime()
     $tray.statusProc = Start-Process -FilePath 'node' -ArgumentList @("`"$statusScript`"", '--status') `
       -NoNewWindow -PassThru -RedirectStandardOutput $tray.statusOut `
       -RedirectStandardError ($tray.statusOut + '.err')
+    $null = $tray.statusProc.Handle
   } catch { $tray.statusProc = $null; $tray.error = "status unavailable: $_" }
 }
 
@@ -278,8 +232,9 @@ function Complete-StatusRefresh {
   try {
     $raw = Get-Content -LiteralPath $tray.statusOut -Raw -ErrorAction Stop
     $tray.status = $raw | ConvertFrom-Json
-  } catch { $tray.status = $null }
+  } catch { $tray.status = $null; $tray.error = "Status unavailable: $_" }
   Remove-Item -LiteralPath $tray.statusOut, ($tray.statusOut + '.err') -Force -ErrorAction SilentlyContinue
+  if ($tray.statusProc) { $tray.statusProc.Dispose() }
   $tray.statusProc = $null
   $tray.statusRefreshAt = (Get-Date).ToUniversalTime().AddSeconds(60)
   Update-Ui
@@ -305,14 +260,33 @@ function Add-InfoItem([string]$Key) {
 
 function Update-Ui {
   if ($NoTrayIcon -or -not $icon) { return }
-  $summary = if ($tray.paused) { 'Paused' } elseif ($tray.evaluation) { 'Checking...' } else { $tray.state }
+  $oa = $componentStates['oa-supervisor']
+  $summary = if ($tray.paused) { 'Paused' } elseif ($oa.process) { 'Checking...' } else { $tray.state }
   $tip = "Overnight Agent supervisor: $summary"
   $icon.Text = $tip.Substring(0, [math]::Min(63, $tip.Length))
   $icon.Icon = if ($tray.paused) { [System.Drawing.SystemIcons]::Information }
-               elseif ($tray.state -match 'FAIL|ERROR|MISSING|UNPARSEABLE') { [System.Drawing.SystemIcons]::Warning }
+               elseif ($tray.error -or @($componentStates.Values | Where-Object { $_.state -match 'FAIL|ERROR|MISSING|UNHEALTHY' }).Count) { [System.Drawing.SystemIcons]::Warning }
                else { [System.Drawing.SystemIcons]::Shield }
-  $items.state.Text = "State: $summary (last check $(Format-Local $(if ($tray.lastEvaluationUtc) { $tray.lastEvaluationUtc.ToString('o') })))"
-  $items.next.Text = if ($tray.paused) { 'Next check: paused' } else { "Next check: $(Format-Local $tray.nextEvaluationAt.ToString('o'))" }
+  $items.state.Text = "State: $summary (last check $(Format-Local $(if ($oa.lastEvaluationUtc) { $oa.lastEvaluationUtc.ToString('o') })))"
+  $items.next.Text = if ($tray.paused) { 'Next check: paused' } else { "Next OA check: $(Format-Local $oa.nextEvaluationAt.ToString('o'))" }
+  $browser = $componentStates['browser-watchdog']
+  $browserSummary = if (-not $browser.enabled) { 'OFF' }
+    elseif ($tray.paused -or $browser.paused) { 'PAUSED' } else { $browser.state }
+  $items.browser.Text = "Browser watchdog: $browserSummary$(if ($browser.process) { ' (checking)' }) - last $(Format-Local $(if ($browser.lastEvaluationUtc) { $browser.lastEvaluationUtc.ToString('o') }))"
+  $items.browserNext.Text = if ($browser.enabled -and -not $browser.paused -and -not $tray.paused) {
+    "Next browser check: $(Format-Local $browser.nextEvaluationAt.ToString('o'))"
+  } else { 'Next browser check: off/paused' }
+  $items.browserEnable.Checked = $browser.enabled
+  $items.browserPause.Checked = $browser.paused
+  $items.browserPause.Enabled = $browser.enabled
+  $items.browserCheck.Enabled = $browser.enabled -and -not $browser.paused -and -not $tray.paused -and -not $browser.process
+  $items.browserRecent.DropDownItems.Clear()
+  foreach ($outcome in @($browser.recent)) {
+    $entry = $items.browserRecent.DropDownItems.Add("$(Format-Local $outcome.at) $($outcome.state) $($outcome.error)")
+    $entry.Enabled = $false
+  }
+  $items.error.Text = (@($tray.error) + @($componentStates.Values | ForEach-Object { $_.error }) | Where-Object { $_ }) -join '; '
+  $items.error.Visible = [bool]$items.error.Text
   $s = $tray.status
   if ($s -and $s.policy.valid) {
     $p = $s.policy
@@ -333,54 +307,26 @@ function Update-Ui {
       $entry.Enabled = $false
     }
   } else { ($items.recent.DropDownItems.Add('No restart or launch attempts recorded')).Enabled = $false }
-  $b = $tray.browser
-  $browserSummary = if (-not $b.enabled) { 'off (default)' }
-                    elseif ($b.paused) { 'paused' }
-                    else { $b.state }
-  $items.browserState.Text = "Browser checks: $browserSummary (last $(Format-Local $(if ($b.lastCheckUtc) { $b.lastCheckUtc.ToString('o') })))"
-  $items.browserNext.Text = if (-not $b.enabled -or $b.paused) { 'Next browser check: off' }
-                            else { "Next browser check: $(Format-Local $b.nextCheckUtc.ToString('o'))" }
-  $items.browserRecent.DropDownItems.Clear()
-  if (@($b.recent).Count) {
-    foreach ($r in @($b.recent)) {
-      $entry = $items.browserRecent.DropDownItems.Add("$(Format-Local $r.at)  $($r.state)")
-      $entry.Enabled = $false
-    }
-  } else { ($items.browserRecent.DropDownItems.Add('No browser checks recorded')).Enabled = $false }
-  $items.browserEnable.Checked = $b.enabled
-  $items.browserEnable.Text = if ($b.enabled) { 'Disable browser checks' } else { 'Enable browser checks (hourly)' }
-  $items.browserPause.Enabled = $b.enabled
-  $items.browserPause.Text = if ($b.paused) { 'Resume browser checks' } else { 'Pause browser checks' }
-  $items.browserNow.Enabled = ($b.enabled -and -not $b.paused -and -not $b.proc)
-  $items.error.Visible = [bool]$tray.error
-  if ($tray.error) { $items.error.Text = "Last tray error: $($tray.error)" }
   $items.pause.Text = if ($tray.paused) { 'Resume supervision' } else { 'Pause supervision' }
   $startup = Get-OaTrayStartup
   $items.startup.Checked = $startup.enabled
   if (-not $tray.legacy) { $tray.legacy = Get-OaLegacyInstall }
-  if ($tray.legacy.taskError) {
-    $items.error.Visible = $true
-    $items.error.Text = "Legacy task inspection failed: $($tray.legacy.taskError)"
-  }
   $items.legacy.Visible = ($tray.legacy.taskInstalled -or $tray.legacy.shimInstalled -or
-    $tray.legacy.browserTaskInstalled -or $tray.legacy.browserShimInstalled)
+    $tray.legacy.browserTaskInstalled -or $tray.legacy.browserShimInstalled -or
+    @($tray.legacy.browserProcesses).Count -gt 0 -or $tray.legacy.taskError)
 }
 
 function Exit-Tray {
-  if ($tray.evaluation -or $tray.browser.proc -or $tray.statusProc) {
-    $tray.exitRequested = $true
-    if ($icon) {
-      $icon.ShowBalloonTip(5000, 'Overnight Agent supervisor',
-        'Exiting after the current check finishes; no new checks will start.', 'Info')
-    }
-    return
-  }
   $timer.Stop()
+  foreach ($component in $components) {
+    $s = $componentStates[$component.name]
+    Stop-OaComponentProcess $s.process
+    $s.process = $null
+    Remove-OaComponentOutput $s
+  }
+  Stop-OaComponentProcess $tray.statusProc
   if ($icon) { $icon.Visible = $false; $icon.Dispose() }
-  $timer.Dispose()
-  $lockHandle.Dispose()
-  Remove-Item -LiteralPath $files.lock -Force -ErrorAction SilentlyContinue
-  [Environment]::Exit(0)
+  [System.Windows.Forms.Application]::ExitThread()
 }
 
 if (-not $NoTrayIcon) {
@@ -388,67 +334,47 @@ if (-not $NoTrayIcon) {
   $title = $menu.Items.Add('Overnight Agent reliability supervisor')
   $title.Enabled = $false
   [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
-  foreach ($k in @('state', 'next', 'policy', 'cycle', 'cooldown')) { Add-InfoItem $k }
+  foreach ($k in @('state', 'next', 'browser', 'browserNext', 'error', 'policy', 'cycle', 'cooldown')) { Add-InfoItem $k }
+  $items.browserRecent = New-Object System.Windows.Forms.ToolStripMenuItem('Recent browser outcomes')
+  [void]$menu.Items.Add($items.browserRecent)
   $items.recent = New-Object System.Windows.Forms.ToolStripMenuItem('Recent outcomes')
   [void]$menu.Items.Add($items.recent)
   $note = $menu.Items.Add('Supervises only while you are signed in to Windows')
   $note.Enabled = $false
   [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
-  foreach ($k in @('browserState', 'browserNext')) { Add-InfoItem $k }
-  $items.browserRecent = New-Object System.Windows.Forms.ToolStripMenuItem('Recent browser checks')
-  [void]$menu.Items.Add($items.browserRecent)
-  $items.browserNow = $menu.Items.Add('Check browser slots now')
-  $items.browserNow.add_Click({ $tray.browser.nextCheckUtc = (Get-Date).ToUniversalTime(); Update-Ui })
-  $items.browserEnable = New-Object System.Windows.Forms.ToolStripMenuItem('Enable browser checks (hourly)')
-  $items.browserEnable.add_Click({
-    $previous = $tray.browser.enabled
-    try {
-      if (-not $tray.browser.enabled) {
-        [void](Remove-OaLegacyInstall)
-        if (Test-OaLegacyBrowserProcessRunning) {
-          throw 'An older browser check is still running; wait for it to finish before enabling.'
-        }
-        if (-not (Test-Path -LiteralPath $browserScript)) { throw "browser checker missing: $browserScript" }
-        $tray.browser.enabled = $true
-        $tray.browser.nextCheckUtc = (Get-Date).ToUniversalTime()
-      } else { $tray.browser.enabled = $false }
-      if (-not (Save-TrayState)) { throw $tray.error }
-      Write-Heartbeat
-    } catch {
-      $tray.browser.enabled = $previous
-      $icon.ShowBalloonTip(8000, 'Browser checks', "$_", 'Error')
-    }
-    $tray.legacy = $null
-    Update-Ui
-  })
-  [void]$menu.Items.Add($items.browserEnable)
-  $items.browserPause = $menu.Items.Add('Pause browser checks')
-  $items.browserPause.add_Click({
-    $tray.browser.paused = -not $tray.browser.paused
-    if (-not (Save-TrayState)) {
-      $tray.browser.paused = -not $tray.browser.paused
-      $icon.ShowBalloonTip(8000, 'Browser checks', $tray.error, 'Error')
-    }
-    Write-Heartbeat
-    Update-Ui
-  })
-  [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
-  Add-InfoItem 'error'
-  $items.error.Visible = $false
 
   $check = $menu.Items.Add('Check now')
-  $check.add_Click({ if (-not $tray.evaluation -and -not $tray.paused) { $tray.nextEvaluationAt = (Get-Date).ToUniversalTime() } })
+  $check.add_Click({
+    if (-not $tray.paused) {
+      foreach ($s in $componentStates.Values) {
+        if ($s.enabled -and -not $s.paused -and -not $s.process) { $s.nextEvaluationAt = (Get-Date).ToUniversalTime() }
+      }
+    }
+  })
   $items.pause = New-Object System.Windows.Forms.ToolStripMenuItem('Pause supervision')
   $items.pause.add_Click({
     $tray.paused = -not $tray.paused
-    if (-not (Save-TrayState)) {
-      $tray.paused = -not $tray.paused
-      $icon.ShowBalloonTip(8000, 'Overnight Agent supervisor', $tray.error, 'Error')
-    }
-    Write-Heartbeat
-    Update-Ui
+    if (-not (Save-TrayState)) { $tray.paused = -not $tray.paused }
+    Write-Heartbeat; Update-Ui
   })
   [void]$menu.Items.Add($items.pause)
+  $items.browserEnable = $menu.Items.Add('Enable browser checks')
+  $items.browserEnable.add_Click({
+    $browser = $componentStates['browser-watchdog']
+    $browser.enabled = -not $browser.enabled
+    if (-not (Save-TrayState)) { $browser.enabled = -not $browser.enabled }
+    if ($browser.enabled) { $browser.nextEvaluationAt = (Get-Date).ToUniversalTime() }
+    Write-Heartbeat; Update-Ui
+  })
+  $items.browserPause = $menu.Items.Add('Pause browser checks')
+  $items.browserPause.add_Click({
+    $browser = $componentStates['browser-watchdog']
+    $browser.paused = -not $browser.paused
+    if (-not (Save-TrayState)) { $browser.paused = -not $browser.paused }
+    Write-Heartbeat; Update-Ui
+  })
+  $items.browserCheck = $menu.Items.Add('Check browsers now')
+  $items.browserCheck.add_Click({ $componentStates['browser-watchdog'].nextEvaluationAt = (Get-Date).ToUniversalTime() })
 
   $items.startup = New-Object System.Windows.Forms.ToolStripMenuItem('Start with Windows')
   $items.startup.add_Click({
@@ -504,24 +430,32 @@ $timer.add_Tick({
       if ($req -and [int]$req.pid -eq $PID) { Exit-Tray; return }
     }
     $now = (Get-Date).ToUniversalTime()
-    if ($tray.evaluation -and $tray.evaluation.HasExited) {
-      $out = Get-Content -LiteralPath $tray.evalOut -Raw -ErrorAction SilentlyContinue
-      Complete-Evaluation $(if ($out) { $out } else { ' ' })
-    } elseif (-not $tray.exitRequested -and -not $tray.evaluation -and -not $tray.paused -and $now -ge $tray.nextEvaluationAt) {
-      Start-Evaluation
-      Write-Heartbeat
-      Update-Ui
+    foreach ($component in $components) {
+      $s = $componentStates[$component.name]
+      if ($s.process -and $s.process.HasExited) {
+        $s.process.WaitForExit()
+        $out = Get-Content -LiteralPath $s.stdout -Raw -ErrorAction SilentlyContinue
+        $err = Get-Content -LiteralPath $s.stderr -Raw -ErrorAction SilentlyContinue
+        $exitCode = $s.process.ExitCode
+        Complete-Evaluation -Component $component -Output $out -ExitCode $exitCode -Failure $(if (-not $out) { $err })
+      } elseif ($s.process -and ($now - $s.startedUtc).TotalSeconds -ge $EvaluationTimeoutSeconds) {
+        Stop-OaComponentProcess $s.process
+        Complete-Evaluation -Component $component -ExitCode 124 -Failure "Timed out after ${EvaluationTimeoutSeconds}s."
+      } elseif (-not $s.process -and $s.enabled -and -not $s.paused -and -not $tray.paused -and $now -ge $s.nextEvaluationAt) {
+        Start-Evaluation $component
+        Write-Heartbeat
+        Update-Ui
+      }
     }
-    if ($tray.browser.proc -and $tray.browser.proc.HasExited) { Complete-BrowserCheck }
-    elseif (-not $tray.exitRequested -and $tray.browser.enabled -and -not $tray.browser.paused -and
-            -not $tray.browser.proc -and $now -ge $tray.browser.nextCheckUtc) { Start-BrowserCheck }
     if ($tray.statusProc -and $tray.statusProc.HasExited) { Complete-StatusRefresh }
-    elseif (-not $tray.exitRequested -and -not $tray.statusProc -and $now -ge $tray.statusRefreshAt) { Start-StatusRefresh }
-    if (($now - $tray.lastBeatUtc).TotalSeconds -ge 15) { Write-Heartbeat }
-    if ($tray.exitRequested -and -not $tray.evaluation -and -not $tray.browser.proc -and -not $tray.statusProc) {
-      Exit-Tray
+    elseif ($tray.statusProc -and ($now - $tray.statusStartedUtc).TotalSeconds -ge 30) {
+      Stop-OaComponentProcess $tray.statusProc
+      $tray.error = 'Status refresh timed out.'
+      Complete-StatusRefresh
     }
-  } catch { $tray.error = "$_" }
+    elseif (-not $tray.statusProc -and $now -ge $tray.statusRefreshAt) { Start-StatusRefresh }
+    if (($now - $tray.lastBeatUtc).TotalSeconds -ge 15) { Write-Heartbeat }
+  } catch { $tray.error = "$_"; Write-Heartbeat; Update-Ui }
 })
 
 try {
@@ -531,6 +465,9 @@ try {
   [System.Windows.Forms.Application]::Run()
 } finally {
   $timer.Dispose()
+  foreach ($s in $componentStates.Values) { Stop-OaComponentProcess $s.process; Remove-OaComponentOutput $s }
+  Stop-OaComponentProcess $tray.statusProc
+  if ($tray.statusOut) { Remove-Item -LiteralPath $tray.statusOut, ($tray.statusOut + '.err') -Force -ErrorAction SilentlyContinue }
   if ($icon) { $icon.Dispose() }
   $lockHandle.Dispose()
   Remove-Item -LiteralPath $files.lock -Force -ErrorAction SilentlyContinue

@@ -182,7 +182,10 @@ function Invoke-Tool {
   $outFile = [IO.Path]::GetTempFileName()
   $errFile = [IO.Path]::GetTempFileName()
   try {
-    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Path) + $Arguments
+    $quotedArguments = @($Arguments | ForEach-Object {
+      if ($_ -match '\s') { '"' + $_ + '"' } else { $_ }
+    })
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$Path`"") + $quotedArguments
     $p = Start-Process -FilePath $psExe -ArgumentList $argList -NoNewWindow -PassThru `
                        -RedirectStandardOutput $outFile -RedirectStandardError $errFile
     if (-not $p.WaitForExit($ToolTimeoutSec * 1000)) {

@@ -14,17 +14,18 @@
 
   ONE STARTUP ROUTE: a per-user value 'Overnight Agent supervisor' under
   HKCU\Software\Microsoft\Windows\CurrentVersion\Run that launches
-  %LOCALAPPDATA%\overnight-agent\oa-supervisor-tray.ps1 at sign-in. No Scheduled Task,
-  no Startup-folder shim, no service. The tray's "Start with Windows" item toggles the
-  same value.
+  %LOCALAPPDATA%\overnight-agent\oa-supervisor-tray.ps1 at sign-in. The tray owns both
+  the Overnight Agent check and the browser-slot watchdog. No per-watchdog Scheduled
+  Task, Startup-folder shim, or service is installed. The tray's "Start with Windows"
+  item toggles the same value.
 
   LIMITATION: a Run entry starts only after the user signs in, and the tray exits when
   they sign out. Nothing is supervised while logged out. (The desktop app being
   supervised also only runs in a signed-in session.)
 
-  MIGRATION: -Enable and -Disable remove legacy 'Overnight Agent supervisor' and
-  'Copilot browser watchdog' Scheduled Tasks, and their corresponding Startup shims,
-  and stop a verified running legacy daemon or tray (PID + start time + command line).
+  MIGRATION: -Enable and -Disable remove the legacy Overnight Agent and browser-watchdog
+  Scheduled Tasks and Startup shims, and stop a verified running supervisor (PID + start
+  time + command line).
   If a legacy task cannot be removed (for example it was registered from an elevated
   prompt), -Enable stops BEFORE registering the tray so two supervisors never coexist;
   re-run -Disable from an elevated prompt, then -Enable. Independently, the deployed
@@ -45,7 +46,7 @@
 param(
   [Parameter(ParameterSetName = 'Enable', Mandatory)][switch]$Enable,
   [Parameter(ParameterSetName = 'Disable', Mandatory)][Alias('Uninstall')][switch]$Disable,
-  [Parameter(ParameterSetName = 'Enable')][int]$IntervalMinutes = 15,
+  [Parameter(ParameterSetName = 'Enable')][ValidateRange(1, 1440)][int]$IntervalMinutes = 15,
   [Parameter(ParameterSetName = 'Enable')][switch]$NoAct,
   [Parameter(ParameterSetName = 'Enable')][switch]$NoStart,
   [switch]$Json
@@ -56,20 +57,12 @@ $ErrorActionPreference = 'Stop'
 
 $DeployedFiles = @(
   'oa-supervisor-tray.ps1', 'oa-supervisor-startup.ps1', 'oa-supervisor.ps1', 'oa-supervisor-daemon.ps1',
+  'oa-supervisor-components.ps1', 'browser-watchdog.ps1', 'check-browser-slots.ps1', 'browser-slot-table.ps1',
+  'ensure-mcp-browsers.ps1', 'launch-signed-in-browser.ps1',
+  'stuck-run-sweep.mjs',
   'reliability-supervisor.mjs', 'windows-app-actuator.mjs', 'session-terminal-evidence.mjs',
-  'consumer-reliability-supervisor.mjs', 'browser-watchdog.ps1', 'check-browser-slots.ps1',
-  'browser-slot-table.ps1', 'ensure-mcp-browsers.ps1'
+  'consumer-reliability-supervisor.mjs'
 )
-
-function Get-DeploySource([string]$Name) {
-  $local = Join-Path $PSScriptRoot $Name
-  if (Test-Path -LiteralPath $local) { return $local }
-  if ($Name -eq 'ensure-mcp-browsers.ps1') {
-    $skill = Join-Path $PSScriptRoot '..\skills\overnight-agent\ensure-mcp-browsers.ps1'
-    if (Test-Path -LiteralPath $skill) { return $skill }
-  }
-  throw "required tray file missing: $Name"
-}
 
 function Get-SupervisorStatus {
   $startup = Get-OaTrayStartup
@@ -82,6 +75,7 @@ function Get-SupervisorStatus {
     running    = [bool]$owner
     owner      = $(if ($owner) { [ordered]@{ pid = $owner.pid; kind = $owner.kind; verified = $owner.verified } })
     legacy     = $legacy
+    components = @('oa-supervisor', 'browser-watchdog')
     limitation = 'Runs only while you are signed in to Windows; nothing is supervised while logged out.'
   }
 }
@@ -94,9 +88,12 @@ function Write-Status($Status) {
   } else { Write-Host '[oa-supervisor] running: no' }
   if ($Status.legacy.taskInstalled) { Write-Host "[oa-supervisor] LEGACY scheduled task present: '$($Status.legacy.taskName)' (remove with -Disable)" }
   if ($Status.legacy.shimInstalled) { Write-Host "[oa-supervisor] LEGACY Startup shim present: $($Status.legacy.shimPath) (remove with -Disable)" }
-  if ($Status.legacy.browserTaskInstalled) { Write-Host "[oa-supervisor] LEGACY browser task present: '$($Status.legacy.browserTaskName)' (remove with -Disable)" }
-  if ($Status.legacy.browserShimInstalled) { Write-Host "[oa-supervisor] LEGACY browser shim present: $($Status.legacy.browserShimPath) (remove with -Disable)" }
-  if ($Status.legacy.taskError) { Write-Host "[oa-supervisor] ERROR inspecting legacy tasks: $($Status.legacy.taskError)" }
+  if ($Status.legacy.browserTaskInstalled) { Write-Host "[oa-supervisor] LEGACY browser-watchdog task present: '$($Status.legacy.browserTaskName)' (remove with -Disable)" }
+  if ($Status.legacy.browserShimInstalled) { Write-Host "[oa-supervisor] LEGACY browser-watchdog Startup shim present: $($Status.legacy.browserShimPath) (remove with -Disable)" }
+  if ($Status.legacy.taskError) { Write-Host "[oa-supervisor] Cannot inspect legacy tasks: $($Status.legacy.taskError)" }
+  if (@($Status.legacy.browserProcesses).Count) {
+    Write-Host "[oa-supervisor] LEGACY browser watchdog PID(s): $($Status.legacy.browserProcesses -join ', ') (stop with -Disable)"
+  }
   Write-Host "[oa-supervisor] $($Status.limitation)"
 }
 
@@ -121,7 +118,7 @@ if ($Disable) {
     $state | Add-Member -MemberType NoteProperty -Name browserEnabled -Value $false -Force
     $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $files.trayState -Encoding utf8
   }
-  Write-Host '[oa-supervisor] disabled. Policy, state and audit files are kept in %LOCALAPPDATA%\overnight-agent.'
+  Write-Host '[oa-supervisor] disabled. Both local checks stop with the tray. Policy, state and audit files are kept in %LOCALAPPDATA%\overnight-agent.'
   if ($Json) { Get-SupervisorStatus | ConvertTo-Json -Depth 5 }
   return
 }
@@ -131,8 +128,12 @@ $nodeMajor = & node -p "process.versions.node.split('.')[0]"
 if ($LASTEXITCODE -ne 0 -or -not $nodeMajor -or [int]$nodeMajor -lt 24) {
   throw 'Reliability supervisor requires Node.js 24+ for enterprise-parity SQLite session evidence.'
 }
+$sources = @{}
 foreach ($name in $DeployedFiles) {
-  [void](Get-DeploySource $name)
+  $source = Join-Path $PSScriptRoot $name
+  if (-not (Test-Path $source)) { $source = Join-Path $PSScriptRoot "..\skills\overnight-agent\$name" }
+  if (-not (Test-Path $source)) { throw "required supervisor file missing: $name" }
+  $sources[$name] = (Resolve-Path $source).Path
 }
 
 # Migrate first: if a legacy route cannot be removed, stop before adding the tray route.
@@ -145,9 +146,10 @@ if ($stopped -ne 'none') { Write-Host "[oa-supervisor] previous supervisor $stop
 $files = Get-OaSupervisorFiles
 if (-not (Test-Path $files.home)) { New-Item -ItemType Directory -Path $files.home -Force | Out-Null }
 foreach ($name in $DeployedFiles) {
-  Copy-Item (Get-DeploySource $name) (Join-Path $files.home $name) -Force
+  $target = Join-Path $files.home $name
+  if ($sources[$name] -ne $target) { Copy-Item -LiteralPath $sources[$name] -Destination $target -Force }
 }
-Write-Host "[oa-supervisor] deployed supervisor files to $($files.home)."
+Write-Host "[oa-supervisor] deployed the unified supervisor and browser watchdog to $($files.home)."
 
 $command = Get-OaTrayCommandLine -TrayPath $files.tray -IntervalMinutes $IntervalMinutes -NoAct:$NoAct
 Enable-OaTrayStartup $command
@@ -161,7 +163,7 @@ if (-not $NoStart) {
   $deadline = (Get-Date).AddSeconds(15)
   while ((Get-Date) -lt $deadline -and -not (Test-OaLockHeld $files.lock)) { Start-Sleep -Milliseconds 250 }
   if (Test-OaLockHeld $files.lock) { Write-Host '[oa-supervisor] tray started; look for the shield icon in the notification area.' }
-  else { Write-Host '[oa-supervisor] WARNING: tray did not take the supervisor lock within 15s.' }
+  else { throw 'Tray did not take the supervisor lock within 15s. Startup is registered; inspect the deployed files or use -Disable.' }
 }
 Write-Host '[oa-supervisor] NOTE: supervises only while you are signed in to Windows.'
 Write-Host "[oa-supervisor] UNDO: powershell -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Disable"

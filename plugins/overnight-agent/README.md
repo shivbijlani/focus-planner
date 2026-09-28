@@ -16,8 +16,9 @@ overnight-agent/
 ├── plugin.json                 # Plugin manifest
 ├── checks/
 │   ├── oa-supervisor.ps1       # Existing out-of-band health check
-│   ├── oa-supervisor-tray.ps1  # Optional tray app: M/N scheduler, status, controls
+│   ├── oa-supervisor-tray.ps1  # Optional tray app: one owner for local background checks
 │   ├── oa-supervisor-startup.ps1 # Single startup route (HKCU Run), legacy cleanup
+│   ├── oa-supervisor-components.ps1 # Fixed local-check inventory and child-process rules
 │   ├── install-oa-supervisor.ps1 # Opt-in: status (default) / -Enable / -Disable
 │   ├── oa-supervisor-daemon.ps1 # RETIRED stub; makes pre-#689 task/shim inert
 │   ├── consumer-reliability-supervisor.mjs
@@ -78,7 +79,7 @@ Ask Copilot to "run the overnight agent", "propose plans for my tasks", or
 (inbox check → execute approved plans → propose new plans behind the approval
 gate).
 
-### Reliability and browser supervision (Windows, optional tray app)
+### Reliability supervisor (Windows, optional tray app)
 
 The out-of-band supervisor is an **optional tray app** and is **off by default**.
 Installing or updating the plugin (including `sync-oa-home.ps1`) never registers
@@ -96,33 +97,49 @@ powershell -NoProfile -ExecutionPolicy Bypass -File plugins/overnight-agent/chec
 **One startup route.** Enabling writes a single per-user value,
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Overnight Agent supervisor`,
 which starts `oa-supervisor-tray.ps1` at sign-in. It needs no elevation and appears
-in Task Manager's Startup apps. There is no Scheduled Task, Startup-folder shim or
-service. The tray's **Start with Windows** item toggles the same value.
+in Task Manager's Startup apps. This is the only local background startup route for
+the project: there is no per-check Scheduled Task, Startup-folder shim or service.
+The tray's **Start with Windows** item toggles the same value.
+
+**What the tray runs.** Its reviewed inventory has two local checks:
+
+| Check | Cadence | Role |
+| --- | --- | --- |
+| Overnight Agent supervisor | Every 15 minutes and at its M/N policy boundaries | Detects and safely recovers an unhealthy Overnight Agent app/run. |
+| Browser watchdog | Every 60 minutes after **Enable browser checks** in the tray | Uses a CDP work probe to restore missing browser slots and thaw stuck pages in place; it does not close or restart signed-in browser windows. |
+
+Both checks run as bounded child processes of the same tray, share its pause/exit
+controls, and report separate state and last-check times. **Browser checks are independently
+off by default**; enable/pause/history controls belong to this same tray, not another supervisor.
+The browser helper remains callable on demand, but must not have its own chat automation,
+Windows startup installer or resident controller. Adding another local check requires adding it
+to the reviewed tray inventory; it does not create another startup entry.
+
+The tray manages only local background checks owned by this project. GitHub-hosted
+Copilot schedules and workflows keep their existing host-side controls. The planner's
+development server is started only by the explicit `start planner` bootstrap and is
+not installed as a persistent background service. Session-scoped MCP servers and
+browser windows remain under their existing owners. MCP reaping, plugin auto-deployment and
+the sweep suite remain in the Overnight Agent run; independent tray scheduling of those
+operations, arbitrary third-party daemons, services, and logged-out supervision are **deferred**.
+No background automation is created by the tray installer. The separate onboarding work in
+issue #694 reconciles exactly one global Auto `Overnight Agent` automation, with no project or
+folder binding; it must not create a `Focus Planner watchdog` or browser-watchdog automation.
 
 **Logged-in only.** A Run entry starts after you sign in, and the tray exits when
 you sign out. **Nothing is supervised while you are logged out.** The desktop app
 it supervises also runs only in a signed-in session.
 
-**Tray controls.** The shield icon's menu shows the last state and the next check.
-It also shows the policy (M, quiet window, N and cooldown, or *INVALID/DISABLED*),
+**Tray controls.** The shield icon's menu shows the last state and next check for
+both local checks. It also shows the policy (M, quiet window, N and cooldown, or *INVALID/DISABLED*),
 the current cycle's quiet-opportunity and hard-deadline times, any active cooldown,
 and the most recent restart/launch outcomes from the audit. Actions are
-**Check now**, **Pause/Resume supervision** (saved in `supervisor-tray.json`),
-**Start with Windows**, **Remove legacy scheduled task / Startup shim** (shown only
-when one exists), **Open supervisor folder** and **Exit**. Exit stops supervision
-until the next sign-in, or until you start the tray again.
-
-**Browser checks are a separate opt-in inside the same tray.** By default the
-tray does not check browser slots. Choose **Enable browser checks (hourly)** in
-the tray menu to enable them, or uncheck it to turn them off. **Check browser
-slots now**, **Pause/Resume browser checks**, the last outcome and recent
-outcomes are also in that menu. This reuses the existing
-`browser-watchdog.ps1` assess/launch/non-destructive thaw/confirm logic as a
-child process; it never kills or reparents a browser or MCP process. The
-existing `/browser-watchdog` Copilot skill remains available for on-demand use,
-but must not be configured as an independent hourly dispatcher. The tray's
-single HKCU Run entry is the only resident supervisor startup route. Browser
-checks and reliability supervision both stop at sign-out.
+**Check now**, **Enable browser checks**, **Check browsers now**, **Pause browser checks**,
+**Pause/Resume supervision** (saved in `supervisor-tray.json`), **Start with Windows**,
+**Remove legacy scheduled task / Startup shim**
+(shown only when one exists), **Open supervisor folder** and **Exit**. Exit stops both
+checks until the next sign-in, or until you start the tray again. Browser consent, pause and
+the last five outcomes survive restarts; `-Disable` clears browser consent as well.
 
 The tray is a separate process from the Overnight Agent and the desktop app. It
 runs `oa-supervisor.ps1` as a child process for each evaluation, so its UI and
@@ -130,23 +147,27 @@ scheduler do not depend on overnight-agent process health. It evaluates at most
 every 15 minutes and writes a heartbeat every 15 seconds. It wakes early at the M/N
 boundaries or when the cooldown expires. The tray never restarts anything itself:
 every decision and safeguard below lives in `reliability-supervisor.mjs`.
+Each child check has a 15-minute outer timeout, independent of the other check; errors and
+timeouts remain visible in its heartbeat and tray status. Exit cancels verified checker
+PowerShell/Node workers without terminating browser windows or the Copilot desktop app.
+Pause prevents new checks; it does not interrupt one already in progress.
 
-**Migration from the pre-#689 installer.** `-Enable` and `-Disable` remove the old
-`Overnight Agent supervisor` Scheduled Task and `Overnight Agent supervisor.cmd`
-Startup shim, as well as the browser watchdog's `Copilot browser watchdog`
-Scheduled Task and `CopilotBrowserWatchdog.vbs` Startup shim. If either legacy
-task cannot be inspected or removed, enabling the tray fails before installing
-a new route. When enabling browser checks from the tray, an older browser check
-still in progress must finish first; the tray never kills it. The installer
-also stops a running legacy daemon or tray after verifying its PID,
-start time and command line. If the old task cannot be removed (for example, it was
-registered from an elevated prompt), `-Enable` stops *before* registering the tray.
-Run `-Disable` from an elevated prompt, then `-Enable`. The deployed
-`oa-supervisor-daemon.ps1` is now an inert stub. A leftover legacy entry therefore
-launches nothing, and the tray and legacy daemon share one exclusive lock. Two
-supervisors can never be active at once. `supervisor-liveness-sweep.ps1` reports a
-leftover as `LEGACY`, and a not-opted-in reliability supervisor or browser
-checker as `OFF` (not a finding). Paused components are `PAUSED`, not healthy.
+**Migration from older installs.** `-Enable` and `-Disable` remove only the known
+legacy entries: the Overnight Agent supervisor task/Startup shim and the browser
+watchdog task/Startup shim (`Copilot browser watchdog` and `CopilotBrowserWatchdog.vbs`).
+The known `%LOCALAPPDATA%\playwright-mcp\browser-watchdog.ps1` controller is stopped only
+after matching its exact script command and process identity. Other active browser checks
+cause the tray to defer its browser check rather than kill an unknown process.
+If a legacy task cannot be removed (for example, it was
+registered from an elevated prompt), `-Enable` stops *before* registering the tray;
+remove that exact task from an elevated prompt and retry. The deployed
+`oa-supervisor-daemon.ps1` is an inert stub. `supervisor-liveness-sweep.ps1` reports
+legacy routes as `LEGACY`, an opted-out tray as `OFF`, and a paused tray as `PAUSED`.
+Migration refuses same-named tasks outside the root task folder. The retired
+`install-browser-watchdog-skill.ps1` only reports the canonical installer; it no longer writes
+a separate skill shim or restores the old watchdog. Remove any existing separate watchdog
+chat automation using Copilot's automation settings before opting in. The installer never
+edits the application's automation database.
 
 **Policy.** The default **M=3 hours** is a
 quiet opportunity: the enterprise snapshot adapter reads the GUI process,

@@ -1245,6 +1245,20 @@ jobs:
   # runs on the nightly laptop is a guard that can rot. The mutation check drives the real sweep
   # file through its -FactsJson replay path, so it needs no daemon, no scheduled task and no
   # Windows, and runs unmodified here under pwsh.
+  supervisor-tray:
+    name: Unified supervisor tray (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Policy, identity, migration and real tray lifecycle
+        run: node --test plugins/overnight-agent/checks/consumer-reliability-supervisor.test.mjs plugins/overnight-agent/checks/reliability-supervisor.tests.mjs plugins/overnight-agent/checks/windows-app-actuator.tests.mjs plugins/overnight-agent/checks/supervisor-tray.test.mjs
+      - name: Browser work-probe decisions
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-browser-watchdog.ps1
+
   supervisor-liveness:
     name: Supervisor liveness
     runs-on: ubuntu-latest
