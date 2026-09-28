@@ -147,7 +147,18 @@ $files = Get-OaSupervisorFiles
 if (-not (Test-Path $files.home)) { New-Item -ItemType Directory -Path $files.home -Force | Out-Null }
 foreach ($name in $DeployedFiles) {
   $target = Join-Path $files.home $name
-  if ($sources[$name] -ne $target) { Copy-Item -LiteralPath $sources[$name] -Destination $target -Force }
+  $copy = -not (Test-Path -LiteralPath $target -PathType Leaf)
+  if (-not $copy) {
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+      $sourceHash = [Convert]::ToBase64String($hasher.ComputeHash([IO.File]::ReadAllBytes($sources[$name])))
+      $targetHash = [Convert]::ToBase64String($hasher.ComputeHash([IO.File]::ReadAllBytes($target)))
+      $copy = $sourceHash -ne $targetHash
+    }
+    finally { $hasher.Dispose() }
+  }
+  # Short and long Windows paths can name the same file; identical bytes need no copy.
+  if ($copy) { Copy-Item -LiteralPath $sources[$name] -Destination $target -Force }
 }
 Write-Host "[oa-supervisor] deployed the unified supervisor and browser watchdog to $($files.home)."
 

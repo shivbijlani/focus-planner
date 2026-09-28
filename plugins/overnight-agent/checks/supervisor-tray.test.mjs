@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -385,14 +385,20 @@ function Get-OaTrayStartup { @{ enabled = $true; route = 'fixture'; command = ''
 `;
   await writeFile(join(source, 'oa-supervisor-startup.ps1'),
     (await readFile(startupLib, 'utf8')) + fixtureHelpers);
-  const run = file => spawnSync('powershell.exe', [...psArgs, '-File', file, '-Enable', '-NoStart'], {
-    env: { ...process.env, LOCALAPPDATA: root }, encoding: 'utf8', windowsHide: true, timeout: 60_000,
+  const run = (file, localAppData = root) => spawnSync('powershell.exe', [...psArgs, '-File', file, '-Enable', '-NoStart'], {
+    env: { ...process.env, LOCALAPPDATA: localAppData }, encoding: 'utf8', windowsHide: true, timeout: 60_000,
   });
   const first = run(join(source, 'install-oa-supervisor.ps1'));
   assert.equal(first.status, 0, first.stderr);
   for (const name of names) assert.ok(existsSync(join(home, name)), `missing ${name}`);
   assert.match(await readFile(join(home, 'fixture-run.txt'), 'utf8'), /oa-supervisor-tray\.ps1/);
   await copyFile(installer, join(home, 'install-oa-supervisor.ps1'));
-  const second = run(join(home, 'install-oa-supervisor.ps1'));
-  assert.equal(second.status, 0, second.stderr);
+  const aliasRoot = join(tmpdir(), `oa-tray-alias-${process.pid}-${Date.now()}`);
+  await symlink(root, aliasRoot, 'junction');
+  try {
+    const second = run(join(home, 'install-oa-supervisor.ps1'), aliasRoot);
+    assert.equal(second.status, 0, second.stderr);
+  } finally {
+    await rm(aliasRoot, { recursive: true, force: true });
+  }
 });
