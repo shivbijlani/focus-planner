@@ -183,9 +183,17 @@ function New-Bind {
   # A well-formed code bind for task $id, in its own worktree. Every arm that is not ABOUT the
   # workspace guard goes through this, so a change to the guard cannot quietly break the rest.
   param([string]$Id, [string]$SessionId, [string]$Settings = $noSettings, [switch]$WithForce)
+  $ws = Join-Path $root "wt-$Id"
+  # The workspace is MATERIALISED, because a real one is: `create_session` makes the worktree and
+  # only then is the binding written. Since #717 the verdict derives "gone" from the filesystem,
+  # so a fixture that names a path it never creates would describe a torn-down worktree for every
+  # arm here -- none of which is about teardown. The arms that ARE about it build their own paths.
+  New-Item -ItemType Directory -Path $ws -Force | Out-Null
+  # A worktree's `.git` is a FILE (`gitdir: ...`), which is what the checkout test looks for.
+  Set-Content -Path (Join-Path $ws '.git') -Value 'gitdir: /repo/.git/worktrees/x' -Encoding utf8
   $a = @('session', '-Id', $Id, '-SessionId', $SessionId, '-SessionKind', 'code',
     '-SessionProject', 'focus-planner',
-    '-SessionWorkspace', (Join-Path $root "wt-$Id"), '-WorkspaceType', 'worktree')
+    '-SessionWorkspace', $ws, '-WorkspaceType', 'worktree')
   if ($WithForce) { $a += '-Force' }
   return (Invoke-OaJson -OaArgs $a -Settings $Settings)
 }
@@ -247,10 +255,10 @@ Check 'C live binding -> verdict reuse' { "$($b2.verdict)" -eq 'reuse' -and "$($
 # continuity the binding exists to provide.
 #
 # Note the two directory states below are NOT interchangeable, and that distinction is the arm's
-# real content. A workspace that EXISTS and is EMPTY is the torn-down signature. A workspace that
-# does not exist AT ALL is a session that has been bound but has not materialised its checkout yet
-# -- which `Test-SamePath` in the subject already calls out as "exactly when a bind is being
-# validated" -- and calling that dead would refuse to reuse a perfectly healthy young session.
+# real content. A workspace that EXISTS and is EMPTY is the half-torn-down signature #452 measured.
+# A workspace that does not exist AT ALL is the CLEAN teardown `git worktree remove` leaves, and
+# since #717 that is judged too -- see arm C-t below, which no longer depends on the remover
+# speaking up for the verdict to be right.
 $wsTorn = Join-Path $root 'wt-802'
 New-Item -ItemType Directory -Path $wsTorn -Force | Out-Null
 # -WithForce because task 801 above already holds a live session and the default concurrency is 1.
@@ -258,6 +266,9 @@ New-Item -ItemType Directory -Path $wsTorn -Force | Out-Null
 # `create` for a reason that has nothing to do with the workspace -- passing arm C-w while proving
 # nothing about it.
 $null = New-Bind -Id '802' -SessionId 'SESS_802' -WithForce
+# New-Bind materialises a healthy workspace; strip the checkout back off to restore the measured
+# torn-down signature (directory present, deregistered, no `.git`).
+Remove-Item -LiteralPath (Join-Path $wsTorn '.git') -Force -ErrorAction SilentlyContinue
 $tornVerdict = Invoke-OaJson @('session', '-Id', '802')
 Check 'C-w a torn-down workspace is not reused' { "$($tornVerdict.verdict)" -ne 'reuse' }
 Check 'C-w- and it is replace, so prior work is not cold-started' { "$($tornVerdict.verdict)" -eq 'replace' }
@@ -274,9 +285,10 @@ Check 'C-w-- a workspace holding a checkout is reused again' {
 #
 # Measured 2026-09-04 against a REAL worktree removed with the sanctioned remove-worktree.ps1: a
 # clean teardown leaves NO directory at all. #466's survived only because a live session's cwd
-# blocked the final delete, which is what produced the empty-directory signature C-w tests. The
-# verdict cannot judge the clean case -- an absent path is equally a workspace that was never
-# materialised, and treating absence as death would discard live young sessions.
+# blocked the final delete, which is what produced the empty-directory signature C-w tests. Since
+# #717 the verdict judges that clean case too (a missing path under a reachable root is a deleted
+# worktree, not an uncreated one) -- but the remover still SAYS so, because a fact reported by the
+# side that holds it survives the workspace being recreated by something else.
 #
 # So the fact travels from the side that holds it: the remover knows it removed the workspace.
 $wsClean = Join-Path $root 'wt-812'
