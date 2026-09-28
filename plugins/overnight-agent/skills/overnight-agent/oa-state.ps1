@@ -880,6 +880,22 @@ function Get-StartBufferSettings {
   }
 }
 
+function Get-AgentModelSettings {
+  $path = Get-UserSettingsPath
+  $value = $null
+  if ($path -and (Test-Path -LiteralPath $path)) {
+    try { $value = Get-SettingRow (Read-JournalText $path) 'Overnight Agent model' }
+    catch {
+      return [pscustomobject]@{ model = 'auto'; source = 'settings-unreadable' }
+    }
+  }
+  if ($null -eq $value) { return [pscustomobject]@{ model = 'auto'; source = 'default' } }
+  if ($value -match '^(?i)(auto|claude-(?:sonnet|opus|haiku)-[0-9]+(?:\.[0-9]+)?|gpt-[0-9]+(?:\.[0-9]+)?(?:-[a-z0-9]+)*|gemini-[0-9]+(?:\.[0-9]+)?-[a-z0-9-]+|grok-[0-9]+(?:\.[0-9]+)?|mai-code-[0-9]+(?:\.[0-9]+)?-[a-z0-9-]+)$') {
+    return [pscustomobject]@{ model = $value.ToLowerInvariant(); source = 'settings' }
+  }
+  return [pscustomobject]@{ model = 'auto'; source = 'settings-malformed' }
+}
+
 function Ensure-StateDir {
   if (-not (Test-Path $StateDir)) { New-Item -ItemType Directory -Path $StateDir -Force | Out-Null }
 }
@@ -3042,6 +3058,7 @@ function Test-ExhaustionClaim($ex, $row, [string]$todayHash) {
 }
 
 function Get-ScanRows {
+  $agentModel = Get-AgentModelSettings
   $snooze = Get-SnoozeMap
   $board = Get-BoardMap
   $completed = Get-CompletedBoardIds
@@ -3262,6 +3279,8 @@ function Get-ScanRows {
       session_id      = if ($sessFacts) { "$($sessFacts.session_id)" } else { $null }
       session_state   = if ($sessFacts) { "$($sessFacts.state)" } else { $null }
       session_verdict = (Get-SessionVerdict $sessFacts $st $facts)
+      model           = $agentModel.model
+      model_source    = $agentModel.source
       session_workspace = if ($sessFacts -and "$($sessFacts.workspace)") { "$($sessFacts.workspace)" } else { $null }
       # #540: the user said NOT NOW, as a column rather than something a caller must re-derive
       # from `status` + `status_by`. It is emitted for every row, bound or not, because a paused
@@ -4929,6 +4948,7 @@ function Get-DispatchInput($st, $facts) {
 
 function Get-RunLimit {
   $buffer = Get-StartBufferSettings
+  $agentModel = Get-AgentModelSettings
   [pscustomobject]@{
     scope = 'run_local_concurrency'
     dispatch_limit = [int]$script:ConcurrencyLimit
@@ -4939,6 +4959,8 @@ function Get-RunLimit {
     start_buffer_minutes = $buffer.minutes
     start_buffer_source = $buffer.source
     start_buffer_error = $buffer.error
+    model = $agentModel.model
+    model_source = $agentModel.source
     note = 'N outstanding requests from this run, refilled until next half-hour minus the configured start buffer. Earlier runs do not reserve openings. Use oa_drain_status for this run.'
   }
 }
@@ -4969,6 +4991,7 @@ function Get-KickoffContinuation([string]$taskId, [string]$priorId) {
 }
 
 function Cmd-Session {
+  $agentModel = Get-AgentModelSettings
   if (($CheckDispatch -or $ForDispatch) -and (-not $Id -or
       ($CheckDispatch -and $ForDispatch) -or $SessionId -or $SessionDead -or $SessionRelease -or $SessionWoken -or $WorkspaceGone)) {
     throw 'session_dispatch_flags_conflict: use -Id with exactly one dispatch-check flag'
@@ -5166,6 +5189,8 @@ function Cmd-Session {
   $verdict = Get-SessionVerdict $sess $st $pauseFacts
   [pscustomobject]@{
     id             = $Id
+    model          = $agentModel.model
+    model_source   = $agentModel.source
     bound          = [bool]$sess
     session_id     = if ($sess) { "$($sess.session_id)" } else { $null }
     # create | reuse | replace | paused. The run loop acts on THIS, not on `bound`.

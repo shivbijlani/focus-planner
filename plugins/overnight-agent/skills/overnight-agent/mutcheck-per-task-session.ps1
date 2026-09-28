@@ -129,8 +129,12 @@ foreach ($id in $ids) { $boardText += "| $id | synthetic |`n" }
 $noSettings = Join-Path $root 'settings-absent.md'          # deliberately never created
 $badSettings = Join-Path $root 'settings-bad.md'
 $twoSettings = Join-Path $root 'settings-two.md'
+$modelSettings = Join-Path $root 'settings-model.md'
+$badModelSettings = Join-Path $root 'settings-bad-model.md'
 [IO.File]::WriteAllText($badSettings, "## Overnight Agent behaviour`n`n| Setting | Value |`n|---|---|`n| Overnight Agent concurrency | plenty |`n", $utf8)
 [IO.File]::WriteAllText($twoSettings, "## Overnight Agent behaviour`n`n| Setting | Value |`n|---|---|`n| Overnight Agent concurrency | 2 |`n", $utf8)
+[IO.File]::WriteAllText($modelSettings, "| Setting | Value |`n|---|---|`n| Overnight Agent model | ``claude-sonnet-5`` |`n", $utf8)
+[IO.File]::WriteAllText($badModelSettings, "| Setting | Value |`n|---|---|`n| Overnight Agent model | banana |`n", $utf8)
 
 # The run session's own workspace -- the thing a per-task session must never be given.
 $runWs = Join-Path $root 'run-session-workspace'
@@ -167,8 +171,8 @@ function Invoke-OaJson {
   try { return $text.Substring($start) | ConvertFrom-Json } catch { return $null }
 }
 
-function Get-Row([string]$id) {
-  $json = Invoke-Oa @('scan')
+function Get-Row([string]$id, [string]$Settings = $noSettings) {
+  $json = Invoke-Oa -OaArgs @('scan') -Settings $Settings
   $start = $json.IndexOf('[')
   if ($start -lt 0) { return $null }
   try { $rows = $json.Substring($start) | ConvertFrom-Json } catch { return $null }
@@ -193,6 +197,25 @@ function Check([string]$name, [scriptblock]$body) {
 }
 
 [void](Invoke-Oa @('seed'))
+
+Check 'model defaults to auto for coordinator and unbound task' {
+  $run = Invoke-OaJson -OaArgs @('session', '-RunLimit') -Settings $noSettings
+  $task = Invoke-OaJson -OaArgs @('session', '-Id', '801') -Settings $noSettings
+  $run.model -eq 'auto' -and $run.model_source -eq 'default' -and
+    $task.model -eq 'auto' -and $task.model_source -eq 'default'
+}
+Check 'model override reaches coordinator, bound task and scan' {
+  $run = Invoke-OaJson -OaArgs @('session', '-RunLimit') -Settings $modelSettings
+  $task = Invoke-OaJson -OaArgs @('session', '-Id', '801') -Settings $modelSettings
+  $scan = Get-Row '801' -Settings $modelSettings
+  $run.model -eq 'claude-sonnet-5' -and $run.model_source -eq 'settings' -and
+    $task.model -eq 'claude-sonnet-5' -and $task.model_source -eq 'settings' -and
+    $scan.model -eq 'claude-sonnet-5' -and $scan.model_source -eq 'settings'
+}
+Check 'malformed model falls back visibly to auto' {
+  $task = Invoke-OaJson -OaArgs @('session', '-Id', '801') -Settings $badModelSettings
+  $task.model -eq 'auto' -and $task.model_source -eq 'settings-malformed'
+}
 
 # --- A/B/C: the binding exists, persists, and is INTERPRETED ---------------------------
 $a = Invoke-OaJson @('session', '-Id', '801')
