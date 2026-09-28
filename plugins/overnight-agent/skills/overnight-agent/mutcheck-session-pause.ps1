@@ -47,6 +47,10 @@
     reuse       resumed                                       (a reply un-pauses, #170 boundary)
     reuse       user-CLOSED done/skip                         (closed is a different set)
     replace     resumed with a dead session, continuation intact   (nothing is lost by ranking)
+    paused      user-paused, NO paused_at, his message trailing    (#734, task #472's live shape)
+    paused      the pause recorded AFTER he wrote                  (#734, a pause is not its own resume)
+    reuse       a run OBSERVED his message after the pause         (#734, the non-mtime route)
+    refused     -ForDispatch on the #472 shape, by name            (#734, the call the run makes)
 
   ...and the STAMP, which is a timestamp for that same fact rather than an independent claim:
 
@@ -94,7 +98,14 @@ function Check([string]$label, [bool]$cond, [string]$detail) {
 # about what `mark` writes -- so they drive the real command instead.
 function New-World {
   param([string]$Name, [string]$Id, [string]$Status = 'in-progress', [string]$StatusBy = 'agent',
-    [ValidateSet('live', 'dead', 'none')][string]$Session = 'live', [switch]$UserReplied)
+    [ValidateSet('live', 'dead', 'none')][string]$Session = 'live', [switch]$UserReplied,
+    # #734: WHEN the pause was recorded, and WHEN he last wrote in the journal. The resume rule
+    # is an ORDERING question -- a trailing human message only ends a pause if he wrote it after
+    # being paused -- so both clocks have to be settable, and the journal's is set explicitly
+    # rather than inherited from "whenever this fixture happened to run".
+    [string]$PausedAt, [string]$JournalWrittenAt, [string]$UnansweredAt,
+    # #734: the measured task #472 binding had been marked dead and replaced minutes earlier.
+    [switch]$Replaced)
   $w = Join-Path $root $Name
   $sd = Join-Path $w 'state'; $jd = Join-Path $w 'journal'
   New-Item -ItemType Directory -Force -Path $sd, $jd | Out-Null
@@ -106,7 +117,9 @@ function New-World {
   "<!-- from: overnight-agent -->`r`n`r`n**Status:** In progress - fixture.`r`n`r`n" +
   "<!-- /overnight-agent turn-end -->`r`n"
   if ($UserReplied) { $journal += "`r`n<!-- from: me -->`r`nok go ahead, please carry on`r`n" }
-  $journal | Set-Content (Join-Path $jd "task-$Id.md") -Encoding UTF8
+  $jfile = Join-Path $jd "task-$Id.md"
+  $journal | Set-Content $jfile -Encoding UTF8
+  if ($JournalWrittenAt) { (Get-Item $jfile).LastWriteTime = [datetime]::Parse($JournalWrittenAt) }
   # The FULL field set, not just the ones under test. `mark` assigns to `updated` (and friends)
   # directly, and assigning to a property a hand-built object does not carry THROWS -- the same
   # hazard `Cmd-Session`'s teardown path documents. A fixture missing them fails in a way that
@@ -116,12 +129,19 @@ function New-World {
     plan_id = "t$Id-v1"; processed_file_hash = ''; has_agent_block = $true
     seeded = $false; updated = '2026-09-05T06:00:00-07:00'
   }
+  # Written unconditionally so the ABSENT case is a real `null` on disk -- task #472's live state
+  # carries `"paused_at": null`, and a fixture that omitted the property would test a shape the
+  # product never produces.
+  $st.paused_at = $(if ($PausedAt) { $PausedAt } else { $null })
+  $st.unanswered_user_message_at = $(if ($UnansweredAt) { $UnansweredAt } else { $null })
   if ($Session -ne 'none') {
     $st.session = [ordered]@{
       session_id = "S-$Id"; kind = 'folder'; project = 'p'
       workspace = ''; workspace_type = 'folder'
       created_at = '2026-09-05T06:00:00-07:00'; last_woken_at = '2026-09-05T16:08:50-07:00'
-      state = $Session; prior_session_id = ''; replaced_at = ''
+      state = $Session
+      prior_session_id = $(if ($Replaced) { "S-$Id-prior" } else { '' })
+      replaced_at = $(if ($Replaced) { '2026-09-05T16:05:32-07:00' } else { '' })
     }
   }
   ($st | ConvertTo-Json -Depth 8) | Set-Content (Join-Path $sd "task-$Id.json") -Encoding UTF8
@@ -177,7 +197,29 @@ $worlds.I = New-World 'I' '709' -Status 'approved' -StatusBy 'user' -Session 'de
 # its status gate, so the row reads `eligible: true` while the verdict still says `paused` -- a
 # task the run may work and may not dispatch, with his reply unable to take effect. That is the
 # same two-readers-disagree defect as #487/#500/#541, reintroduced by the fix for #540.
-$worlds.J = New-World 'J' '711' -Status 'blocked' -StatusBy 'user' -UserReplied
+#
+# #734 made this arm an ORDERING claim rather than a presence one: the reply is dated by writing
+# the journal AFTER the pause was recorded, which is what "he replied since" actually means.
+$worlds.J = New-World 'J' '711' -Status 'blocked' -StatusBy 'user' -UserReplied `
+  -PausedAt '2026-09-05T06:00:00-07:00' -JournalWrittenAt '2026-09-05T07:00:00-07:00'
+# K -- THE BUG (#734), in task #472's exact live shape: `status: blocked`, `status_by: user`,
+# `paused_at: null`, a binding that was marked dead and replaced minutes earlier, and his own
+# checklist sitting in the trailing region. The old reader saw a trailing human message, called
+# it a resume, and the 14:00 run dispatched the task he had stopped -- so the PAUSE ITSELF was
+# read as its own resume. With no `paused_at` nothing can be shown to post-date the pause, and
+# the fail-closed answer is the only honest one.
+$worlds.K = New-World 'K' '713' -Status 'blocked' -StatusBy 'user' -UserReplied -Replaced
+# L -- the same ordering question with the clock PRESENT and pointing the other way: he wrote in
+# the journal, and the run recorded the pause afterwards. That is the ordinary "the run read his
+# message and paused the task" sequence, and it must not read as a resume of itself.
+$worlds.L = New-World 'L' '714' -Status 'blocked' -StatusBy 'user' -UserReplied `
+  -PausedAt '2026-09-05T08:00:00-07:00' -JournalWrittenAt '2026-09-05T07:00:00-07:00'
+# M -- the OTHER evidence route. A journal mtime can be rewritten by a sync client, so a run's
+# own observation of an unanswered human message (`unanswered_user_message_at`) resumes too. Here
+# the file's mtime predates the pause and only the observation post-dates it.
+$worlds.M = New-World 'M' '715' -Status 'blocked' -StatusBy 'user' -UserReplied `
+  -PausedAt '2026-09-05T08:00:00-07:00' -JournalWrittenAt '2026-09-05T07:00:00-07:00' `
+  -UnansweredAt '2026-09-05T09:00:00-07:00'
 
 $expected = [ordered]@{
   A = 'reuse|paused=False|nokick|noat'
@@ -189,7 +231,10 @@ $expected = [ordered]@{
   G = 'reuse|paused=False|nokick|noat'
   H = 'paused|paused=True|nokick|noat'
   I = 'replace|paused=False|kick|noat'
-  J = 'reuse|paused=False|nokick|noat'
+  J = 'reuse|paused=False|nokick|at'
+  K = 'paused|paused=True|nokick|noat'
+  L = 'paused|paused=True|nokick|at'
+  M = 'reuse|paused=False|nokick|at'
 }
 $why = [ordered]@{
   A = 'an ordinary live session is still reused'
@@ -201,7 +246,10 @@ $why = [ordered]@{
   G = 'user-CLOSED done is a different set, not a pause'
   H = 'proposed by the user is the other waiting status'
   I = 'resumed with a dead session: replace returns WITH its continuation'
-  J = 'he replied in the journal: the reply IS the resume, so dispatch is allowed again'
+  J = 'he replied in the journal AFTER the pause: the reply IS the resume, so dispatch is allowed again'
+  K = 'task #472 shape: paused, no paused_at, his own message in the trailing region -- NOT a resume (#734)'
+  L = 'the run recorded the pause AFTER he wrote: his message cannot resume the pause it caused (#734)'
+  M = 'a run OBSERVED his message after the pause: that resumes too, without trusting the file mtime'
 }
 
 Write-Host '== baseline (real script, unmutated) =='
@@ -262,8 +310,12 @@ Check 'K resuming CLEARS the stamp, so a stale one cannot report an ended pause'
 # the pause as a side effect of reporting its own work, and the next run would then see `reuse`
 # and dispatch it legitimately. One erroneous wake launders itself into a permanent resume.
 function Measure-Refusal([string]$Build, [string]$Mode) {
+  # #734: the 'replied' world carries a pause CLOCK, because "he replied since" is an ordering
+  # claim. Without `paused_at` there is nothing for his message to be later than, and the pause
+  # correctly stands -- which is a different arm (world K), not this one.
   $w = New-World ('refuse-' + $Mode + '-' + [guid]::NewGuid().ToString('N').Substring(0, 4)) '712' `
-    -Status 'blocked' -StatusBy 'user' -UserReplied:($Mode -eq 'replied')
+    -Status 'blocked' -StatusBy 'user' -UserReplied:($Mode -eq 'replied') `
+    -PausedAt $(if ($Mode -eq 'replied') { '2026-09-05T06:00:00-07:00' } else { '' })
   $markArgs = @('mark', '-Id', '712', '-Status', 'in-progress',
     '-StateDir', $w.State, '-JournalDir', $w.Journal)
   if ($Mode -eq 'byuser') { $markArgs += @('-StatusBy', 'user') }
@@ -298,9 +350,35 @@ Check 'M -StatusBy user is allowed: a run may record HIS decision to resume' `
 Check 'N once he has replied the pause is over, so the agent may mark normally again' `
   ($baseRefusal.replied -eq 'allowed') "got $($baseRefusal.replied)"
 
+# --- the dispatch path itself (#734) ------------------------------------------------------
+# The verdict arms prove what `session -Id` REPORTS. This proves what `-ForDispatch` DOES, which
+# is the call the run actually makes before waking a task: on #472 it returned
+# `dispatch_authorised: true` and the run dispatched. A refusal here must be nameable, for the
+# same reason the `mark` refusal is -- a caller that cannot tell "paused" from "binding broken"
+# will try to repair the binding and dispatch anyway.
+function Measure-Dispatch([string]$Build, $World) {
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $Build session -Id $World.Id `
+    -ForDispatch -DispatchInput 'deadbeef' -StateDir $World.State -JournalDir $World.Journal 2>&1
+  $code = $LASTEXITCODE
+  $ErrorActionPreference = $prevEap
+  $text = ($out | Out-String)
+  if ($code -eq 0 -and $text -match '"dispatch_authorised":\s*true') { return 'authorised' }
+  if ($code -ne 0 -and $text -match 'session_user_paused') { return 'refused_paused' }
+  if ($code -ne 0) { return 'refused_other' }
+  return "other:$code"
+}
+
+Write-Host ''
+Write-Host '== the dispatch path (-ForDispatch) =='
+$baseDispatch = Measure-Dispatch $ScriptPath $worlds.K
+Check 'O -ForDispatch on the #472 shape is REFUSED as a user pause, by name' `
+  ($baseDispatch -eq 'refused_paused') "got $baseDispatch"
+
 # --- mutations ---------------------------------------------------------------------------
 $mutations = @(
-  @{ n = 'the pause check removed (the #540 bug, restored)'; guards = 'B,D,E,H'
+  @{ n = 'the pause check removed (the #540 bug, restored)'; guards = 'B,D,E,H,K,L'
     find = '  if (Test-UserPaused $row $journalFacts) { return ''paused'' }'
     repl = '  if ($false) { return ''paused'' }' }
   @{ n = 'the pause check ranked BELOW the create branch, so an unbound paused task reads create'; guards = 'D'
@@ -315,9 +393,18 @@ $mutations = @(
   @{ n = 'closed statuses folded into the paused set, conflating finished with stopped'; guards = 'G'
     find = '$script:PausedStatus = @($script:NonWorkableStatus | Where-Object { $script:ClosedStatus -notcontains $_ })'
     repl = '$script:PausedStatus = @($script:NonWorkableStatus)' }
-  @{ n = 'a reply no longer resumes, so his own message cannot un-pause the task'; guards = 'J'
-    find = '  if ($journalFacts -and $journalFacts.HasTrailingHuman) { return $false }'
+  @{ n = 'a reply no longer resumes, so his own message cannot un-pause the task'; guards = 'J,M'
+    find = '  if ($journalFacts -and $journalFacts.HasTrailingHuman -and (Test-ResumeIsAfterPause $row $journalFacts)) { return $false }'
     repl = '  if ($false) { return $false }' }
+  @{ n = 'the ordering dropped, so the pause reads as its own resume (the #734 bug, restored)'; guards = 'K,L'
+    find = '  if ($journalFacts -and $journalFacts.HasTrailingHuman -and (Test-ResumeIsAfterPause $row $journalFacts)) { return $false }'
+    repl = '  if ($journalFacts -and $journalFacts.HasTrailingHuman) { return $false }' }
+  @{ n = 'a missing paused_at read as "resumed", so #472 dispatches again'; guards = 'K'
+    find = '  if (-not $pausedAt) { return $false }'
+    repl = '  if (-not $pausedAt) { return $true }' }
+  @{ n = 'the observation stamp ignored, so only a file mtime can end a pause'; guards = 'M'
+    find = '  if ($seenAt -and $seenAt -gt $pausedAt) { return $true }'
+    repl = '  if ($false) { return $true }' }
 )
 
 Write-Host ''

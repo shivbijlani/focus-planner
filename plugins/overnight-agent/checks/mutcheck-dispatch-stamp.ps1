@@ -227,7 +227,10 @@ function Test-Arms {
   [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d6 -Extra @(
     '-ForDispatch', '-DispatchInput', $hash6))
   $stamp6 = Read-Stamp $d6
-  if ($script:LastSessionOutput -notmatch 'session_not_dispatchable' -or $stamp6 -ne $StaleStamp) {
+  # #734: the refusal is NAMED. It used to arrive as the generic `session_not_dispatchable`,
+  # which reads as "the binding needs attention" and invites a caller to repair the binding and
+  # dispatch anyway. A pause is not a binding fault, so the token says who stopped this.
+  if ($script:LastSessionOutput -notmatch 'session_user_paused' -or $stamp6 -ne $StaleStamp) {
     $f += "A5: user-paused dispatch exit=$script:LastExitCode stamp='$stamp6' output='$($script:LastSessionOutput.Trim())'"
   }
 
