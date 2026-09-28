@@ -1082,6 +1082,19 @@ start more work.
    4. If sending fails, run `oa-state.ps1 session -Id <ID> -SessionDead`, do not retry that task
       or session in this run, and continue to the next eligible row while the number of accepted
       sends is under the limit and before cutoff. A failed send does not count toward the limit.
+   5. **One send per task per run, and a refusal ends that task for the run.** If the task
+      session answers with a refusal — a user opt-out, a pause, or a blocker it cannot clear —
+      that is the answer. **Do not send a follow-up**: not "write the required turn now", not
+      "execute now", not a re-ask for the same work in different words, and not a nudge because
+      no journal turn appeared. Record the reason (a user opt-out or pause is
+      `oa-state.ps1 mark -Id <ID> -Status blocked -StatusBy user`), report it in the run summary,
+      and move to the next eligible row.
+      Measured 2026-09-28 (#734): task #472's session correctly refused — "stopped on explicit
+      user opt-out … do not redispatch without an explicit user resume request" — and the
+      coordinator sent it two more messages within 80 seconds to push it past the refusal. A
+      second send does not produce a missing turn; it overrides a human, and "no journal turn
+      appeared" is what a refusal *looks like*, not evidence the session failed to hear you.
+      A refused task is retried in a LATER run only if he resumes it.
 
    Stop after the accepted-send count reaches the limit, when no eligible prepared work remains,
    or at cutoff. Do not wait for a task to finish before proceeding, and do not use an alternate

@@ -2892,8 +2892,80 @@ function Test-UserPaused($row, $journalFacts) {
   if (-not $row) { return $false }
   if ("$($row.status_by)".ToLowerInvariant() -ne 'user') { return $false }
   if ($script:PausedStatus -notcontains "$($row.status)".ToLowerInvariant()) { return $false }
-  if ($journalFacts -and $journalFacts.HasTrailingHuman) { return $false }
+  if ($journalFacts -and $journalFacts.HasTrailingHuman -and (Test-ResumeIsAfterPause $row $journalFacts)) { return $false }
   return $true
+}
+
+# GH #734 -- A REPLY IS THE RESUME, BUT ONLY A REPLY WRITTEN *AFTER* THE PAUSE.
+#
+# THE DEFECT. The resume rule above asked one question -- "is there a human message below the
+# agent's newest turn?" -- and a pause is very often recorded while exactly such a message is
+# sitting there, because that message IS the pause. Measured 2026-09-28 on task #472: the state
+# store read `status: blocked, status_by: user` (his journal said "skip using Ai and agent for
+# this task"), the journal's trailing region was his own checklist, and `session -Id 472` still
+# returned `replace`, then `reuse` after the bind, and `-ForDispatch` returned
+# `dispatch_authorised: true`. The 14:00 run woke the task he had stopped. The pause only became
+# visible AFTERWARDS, when the task session wrote its refusal turn below his message and the
+# trailing region went quiet -- i.e. the guard worked in every moment except the one that mattered.
+#
+# So the old reader treated the PAUSE ITSELF as its own resume, and did it silently, on a */30
+# schedule. That is the exact failure #540 exists to prevent, wearing the costume of #540's fix.
+#
+# THE FIX IS ORDERING, AND IT DEMANDS POSITIVE EVIDENCE. A trailing human message clears a pause
+# only when it can be shown to have arrived AFTER the pause was recorded:
+#
+#   paused_at absent   -> NOT a resume. We do not know when the pause was recorded, so nothing
+#                         can be shown to post-date it. Task #472's live state carries
+#                         `paused_at: null` and is precisely this case.
+#   observed later     -> resume. `unanswered_user_message_at` is when a run FIRST SAW a human
+#                         message standing unanswered; later than `paused_at` means he wrote
+#                         after being paused.
+#   journal written later -> resume. The pause-recording `mark` stamps the terminator BEFORE it
+#                         stamps `paused_at`, so a journal whose last write post-dates the stamp
+#                         carries text he added afterwards.
+#
+# WHY FAILING CLOSED IS RIGHT HERE, AND IT IS NOT SYMMETRIC. Over-honouring a pause costs one
+# declined dispatch and says so out loud: `verdict: paused` is printed, and he resumes by replying
+# again or by a run recording his decision with `-StatusBy user`. Under-honouring it overrides a
+# human instruction with no trace -- which is what #540, and then this issue, both measured. The
+# rest of this file already chooses that direction (#227, #272, #465) and so does this.
+#
+# NOTHING HERE IS A SECOND SOURCE OF TRUTH. The pause is still the one recorded fact
+# (`status` + `status_by`); `paused_at` remains a timestamp FOR that fact, used here as the clock
+# it always was, and the journal is read for its own mtime rather than for a new flag.
+function Test-ResumeIsAfterPause($row, $journalFacts) {
+  if (-not $row -or -not $journalFacts) { return $false }
+  $pausedAt = Get-IsoDate $(if ($row.PSObject.Properties['paused_at']) { $row.paused_at } else { $null })
+  # No recorded pause time -- nothing can be proven to come after it. See above: this is the
+  # measured #734 shape, and standing pat is the loud, cheap direction.
+  if (-not $pausedAt) { return $false }
+  $seenAt = Get-IsoDate $(if ($row.PSObject.Properties['unanswered_user_message_at']) { $row.unanswered_user_message_at } else { $null })
+  if ($seenAt -and $seenAt -gt $pausedAt) { return $true }
+  try {
+    if ($journalFacts.Path -and (Test-Path -LiteralPath "$($journalFacts.Path)")) {
+      $written = (Get-Item -LiteralPath "$($journalFacts.Path)").LastWriteTime
+      if ($written -gt $pausedAt) { return $true }
+    }
+  }
+  catch {
+    # A journal we cannot stat is not evidence that he replied. Leave the pause standing.
+    return $false
+  }
+  return $false
+}
+
+function Get-IsoDate($value) {
+  # Parse-or-nothing. An unparseable timestamp is NOT a date, and must never be silently read as
+  # [datetime]::MinValue -- that would make every comparison against it succeed and turn an
+  # unreadable stamp into a resume.
+  if (-not $value) { return $null }
+  if ($value -is [datetime]) { return ([datetime]$value).ToLocalTime() }
+  $parsed = [datetime]::MinValue
+  if ([datetime]::TryParse("$value", [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::None, [ref]$parsed)) {
+    return $parsed.ToLocalTime()
+  }
+  return $null
 }
 
 # An unanswered message from the human on work that is still OPEN (#501). Standing, not one-shot:
@@ -5237,6 +5309,15 @@ function Get-DispatchInput($st, $facts) {
 }
 
 function Assert-TaskDispatch($st, $sess, $facts) {
+  # #734: a pause is named, not folded into the generic refusal. `session_not_dispatchable` reads
+  # as "the binding needs attention" and invites a caller to fix the binding and try again, which
+  # is exactly the wrong move here -- so the refusal says WHO stopped this and uses the same token
+  # the wake-stamp guard throws.
+  if (Test-UserPaused $st $facts) {
+    throw ("session_user_paused: task $($st.id) was paused by the user (status $($st.status), " +
+      'status_by user). Do not dispatch it. Only he clears a pause: he replies in the journal ' +
+      'below the newest turn, or a run records his decision with `-StatusBy user`.')
+  }
   if ((Get-SessionVerdict $sess $st $facts) -ne 'reuse') {
     throw 'session_not_dispatchable: resolve the saved session first; paused tasks cannot be woken'
   }
