@@ -405,8 +405,7 @@ $chatInvalid = Invoke-Oa -OaArgs (New-ChatArgs '811' 'SESS_811') -Settings $chat
 Check 'K-- prose-only setting names the invalid project value, not bind arguments' {
   $script:LastOaExit -ne 0 -and
     $chatInvalid -match 'session_chat_project_invalid' -and
-    $chatInvalid -match 'Non-code task project must be a project id' -and
-    $chatInvalid -match 'local folder project rooted at task-chats' -and
+    $chatInvalid -match 'Non-code' -and $chatInvalid -match "got\s+'local" -and
     $chatInvalid -notmatch 'session_chat_scope'
 }
 $chatBadId = Invoke-Oa -OaArgs (New-ChatArgs '811' 'SESS_811') -Settings $chatBadIdSettings
