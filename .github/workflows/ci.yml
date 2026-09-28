@@ -292,6 +292,29 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-binding.ps1
 
+  # `scan` is the first step of PHASE 1 and PHASE 2, so a scan that is too slow to read and a
+  # scan that crashed produce the SAME outcome -- a run that dispatches nothing -- and only one
+  # of them looks like a failure (GH #711). Measured live 2026-09-28: 224 s and 507 KB against a
+  # coordinator whose tool calls wait 30-120 s; the run abandoned the scan twice and still
+  # reported success.
+  #
+  # The guard builds a 300-journal synthetic corpus in a temp dir and times the real script
+  # against it, so it never touches the planner folder or the live state store and runs
+  # unmodified on the Linux runner. Its fourth arm re-times a COPY with the memo table disabled
+  # and requires it to be measurably slower -- without that arm this job would keep passing after
+  # the optimisation was deleted, which is the one way a perf test is worse than no test.
+  #
+  # The budget is deliberately looser than the local target: a shared runner is slower and
+  # noisier than a laptop, and a threshold that flakes is a threshold people disable.
+  scan-perf:
+    name: Scan performance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (scan stays readable and fast)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-scan-perf.ps1 -BudgetSeconds 120
+
   # Changing a poll/recheck cadence must not make a task MORE aggressive (GH #506).
   #
   # Measured live 2026-09-04: moving task 468 from a 2h poll to 6h -- done deliberately to stop it

@@ -515,6 +515,24 @@ param(
   [switch]$Json,
   [switch]$Verify,
 
+  # --- `scan` output shape (#711) ---------------------------------------------------------
+  #
+  # The full worklist is ~500 KB of JSON on the live corpus, which no agent can read inside one
+  # tool result -- so the run that cannot read it dispatches nothing, which is the same outcome
+  # as the scan having failed. These two switches make the SAME data readable without changing
+  # what is computed: `scan` still derives every row and every verdict, and the default output
+  # is still the full array, byte-for-byte, for every existing caller.
+  #
+  # `-Compact` keeps the rows a run acts on (see Test-CompactRowNeeded) with the fields it acts
+  # with, plus a summary carrying the counts for everything dropped. It is a PROJECTION, never a
+  # different computation: a row is not omitted because it was cheap to skip, it is omitted
+  # because nothing reads it, and the count of omissions is reported.
+  #
+  # `-ScanOutFile` writes the whole thing to a file and prints the summary, for the caller that
+  # wants every field and can grep it.
+  [switch]$Compact,
+  [string]$ScanOutFile,
+
   # The agent gate (#297). `-Action` is a CLOSED ENUM on purpose: free text would put the
   # matcher's input under the control of whatever prose the agent happened to generate, which is
   # the same self-authored-permission hole #227 closed one level down. A caller that cannot name
@@ -902,11 +920,62 @@ function Ensure-StateDir {
 
 function Get-Sha256([string]$text) {
   # Normalise newlines so OneDrive CRLF/LF churn never looks like a user edit.
-  $norm = ($text -replace "`r`n", "`n")
+  #
+  # `String.Replace` and `BitConverter`, NOT `-replace` and a `ForEach-Object` pipeline (#711).
+  # Both of those are per-call regex/pipeline machinery running over whole journals, and this
+  # is called twice per row. The VALUE is byte-identical: an ordinal replace of a two-character
+  # literal is exactly what the regex did, and `BitConverter.ToString` lower-cased is the same
+  # lowercase hex the `x2` format produced. Hashes therefore keep matching every
+  # `processed_file_hash` already on disk -- a change of digest here would read as every journal
+  # having been edited.
+  $norm = $text.Replace("`r`n", "`n")
   $bytes = [System.Text.Encoding]::UTF8.GetBytes($norm)
   $sha = [System.Security.Cryptography.SHA256]::Create()
-  try { ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join '' }
+  try { ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant() }
   finally { $sha.Dispose() }
+}
+
+# --- Memoised pure readers (#711) --------------------------------------------------------
+#
+# WHY THIS EXISTS. `scan` re-derived the same facts from the same strings many times per
+# journal: the fence mask is taken over the full content by BOTH Get-AgentEndIndex and
+# Get-AboveSentinelRegion, over `$agentLeft` by Get-NewestAgentTurn -- which is itself called
+# up to four times per row via Get-DeclaredAsk, Test-HasBlockingAsk and Test-HasOpenAsk -- and
+# again over each newest turn. Measured on the live corpus (272 journals, 6.9 MB): 224 s in the
+# field, 104 s warm, of which Get-JournalFacts was 30 s and was dominated by that repetition.
+#
+# EVERY MEMOISED FUNCTION BELOW IS A PURE FUNCTION OF ITS STRING ARGUMENT. That is the whole
+# safety argument and it is checkable by reading each one: they take text, they read no file,
+# no clock and no state, and they return a value derived only from that text. Memoising such a
+# function cannot change a verdict; it can only stop the verdict being recomputed. Functions
+# that touch the filesystem or the clock are deliberately NOT in here.
+#
+# The cache is per-process and dies with the invocation, so there is no staleness window across
+# runs. It is capped because `extract` and `mark` can feed it large one-off strings and an
+# unbounded table on a 6.9 MB corpus is a memory leak with extra steps; on overflow it is
+# cleared wholesale rather than evicted cleverly, because a correct cheap policy beats a clever
+# one for something whose miss cost is "do the work we used to do every time anyway".
+$script:MemoTables = @{}
+$script:MemoMaxEntries = 4096
+
+function Get-Memoised([string]$table, [string]$key, [scriptblock]$compute) {
+  $t = $script:MemoTables[$table]
+  if ($null -eq $t) {
+    # An ORDINAL dictionary, never PowerShell's `@{}`. `@{}` is a Hashtable with a
+    # case-INSENSITIVE comparer, so every lookup case-folds the whole key -- and these keys are
+    # whole journals. Measured while building this (#711): the case-insensitive version made
+    # scan SLOWER than the un-memoised original, because each hit paid a 25 KB case conversion
+    # to avoid work that cost less than the conversion. Ordinal is also the correct comparison:
+    # two journals differing only in case are different journals.
+    $t = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    $script:MemoTables[$table] = $t
+  }
+  $hit = $null
+  if ($t.TryGetValue($key, [ref]$hit)) { return $hit }
+  $value = & $compute
+  if ($t.Count -ge $script:MemoMaxEntries) { $t.Clear() }
+  $t[$key] = $value
+  return $value
 }
 
 # A journal turn is stamped with a provenance marker, `<!-- from: <author> -->`. Exactly ONE
@@ -959,11 +1028,19 @@ $script:FenceOpenRe  = '^[ ]{0,3}(?<f>`{3,}|~{3,})(?<info>[^\r\n]*)$'
 $script:FenceCloseRe = '^[ ]{0,3}(?<f>`{3,}|~{3,})[ \t]*$'
 
 function Get-FenceMaskedText([string]$text) {
-  # Same-length copy of $text with fenced-code characters replaced by spaces. Newlines are
-  # never masked, so line numbering, `(?m)` anchors and all offsets are identical to $text.
+  # Memoised (#711): the SAME string is masked by several readers per journal -- the full
+  # content by both Get-AgentEndIndex and Get-AboveSentinelRegion, `$agentLeft` by every path
+  # through Get-NewestAgentTurn. This is a pure function of $text, so caching it cannot change
+  # a verdict. The key IS the text; a hashtable lookup hashes it once, which is cheaper by
+  # orders of magnitude than re-walking every line.
   if ([string]::IsNullOrEmpty($text)) { return $text }
   if ($text.IndexOf('`') -lt 0 -and $text.IndexOf('~') -lt 0) { return $text }
+  return (Get-Memoised 'fenceMask' $text { Get-FenceMaskedTextCore $text })
+}
 
+function Get-FenceMaskedTextCore([string]$text) {
+  # Same-length copy of $text with fenced-code characters replaced by spaces. Newlines are
+  # never masked, so line numbering, `(?m)` anchors and all offsets are identical to $text.
   $sb = [System.Text.StringBuilder]::new($text.Length)
   $i = 0
   $len = $text.Length
@@ -977,28 +1054,45 @@ function Get-FenceMaskedText([string]$text) {
     $raw = $text.Substring($i, $lineEnd - $i)
     $line = $raw.TrimEnd("`r")
 
+    # A fence line is `^[ ]{0,3}(`{3,}|~{3,})`, so a line whose first non-space character in
+    # the first four columns is neither a backtick nor a tilde cannot match EITHER pattern
+    # (#711). Checking that with four character comparisons skips the regex on the ~95% of
+    # journal lines that are ordinary prose. This is a pre-filter, not a second matcher: every
+    # line that could match still reaches the same regex below and is judged by it alone.
+    $couldFence = $false
+    $probe = [Math]::Min(4, $line.Length)
+    for ($p = 0; $p -lt $probe; $p++) {
+      $ch = $line[$p]
+      if ($ch -eq '`' -or $ch -eq '~') { $couldFence = $true; break }
+      if ($ch -ne ' ') { break }
+    }
+
     $mask = $false
     if (-not $inFence) {
-      $m = [regex]::Match($line, $script:FenceOpenRe)
-      if ($m.Success) {
-        # An info string may not contain a backtick when the fence is backticks (CommonMark),
-        # which keeps inline code like `a``b` from opening a block.
-        $f = $m.Groups['f'].Value
-        $info = $m.Groups['info'].Value
-        if (-not ($f[0] -eq '`' -and $info.Contains('`'))) {
-          $inFence = $true
-          $fenceChar = [string]$f[0]
-          $fenceLen = $f.Length
-          $mask = $true
+      if ($couldFence) {
+        $m = [regex]::Match($line, $script:FenceOpenRe)
+        if ($m.Success) {
+          # An info string may not contain a backtick when the fence is backticks (CommonMark),
+          # which keeps inline code like `a``b` from opening a block.
+          $f = $m.Groups['f'].Value
+          $info = $m.Groups['info'].Value
+          if (-not ($f[0] -eq '`' -and $info.Contains('`'))) {
+            $inFence = $true
+            $fenceChar = [string]$f[0]
+            $fenceLen = $f.Length
+            $mask = $true
+          }
         }
       }
     }
     else {
       $mask = $true
-      $c = [regex]::Match($line, $script:FenceCloseRe)
-      if ($c.Success) {
-        $cf = $c.Groups['f'].Value
-        if ([string]$cf[0] -eq $fenceChar -and $cf.Length -ge $fenceLen) { $inFence = $false }
+      if ($couldFence) {
+        $c = [regex]::Match($line, $script:FenceCloseRe)
+        if ($c.Success) {
+          $cf = $c.Groups['f'].Value
+          if ([string]$cf[0] -eq $fenceChar -and $cf.Length -ge $fenceLen) { $inFence = $false }
+        }
       }
     }
 
@@ -1575,6 +1669,13 @@ function Get-NewestAgentTurn([string]$agentLeft) {
   # The agent's LAST turn only. Scoping is what keeps this honest: an ask answered three turns
   # ago is not an open ask, and testing the whole block would leave a task awaiting forever.
   if ([string]::IsNullOrEmpty($agentLeft)) { return '' }
+  # Memoised (#711): pure function of $agentLeft, and it is asked the same question up to four
+  # times per row -- directly, and again through Get-DeclaredAsk, Test-HasBlockingAsk and
+  # Test-HasOpenAsk.
+  return (Get-Memoised 'newestAgentTurn' $agentLeft { Get-NewestAgentTurnCore $agentLeft })
+}
+
+function Get-NewestAgentTurnCore([string]$agentLeft) {
   # Scan the fence mask so a heading or marker inside a quoted example cannot be mistaken for
   # the start of a real turn (#320). Offsets are mask-identical, so the substring is of the
   # original text.
@@ -1617,6 +1718,14 @@ function Get-DeclaredAsk([string]$agentLeft) {
   #
   # LAST match wins within the turn, matching every other "the newest statement is the true one"
   # rule in this file.
+  #
+  # Memoised (#711) for the same reason as Get-NewestAgentTurn: pure in $agentLeft, and asked
+  # twice per row (Get-BlockingAskVerdict and Test-HasOpenAsk both open with it).
+  if ([string]::IsNullOrEmpty($agentLeft)) { return '' }
+  return (Get-Memoised 'declaredAsk' $agentLeft { Get-DeclaredAskCore $agentLeft })
+}
+
+function Get-DeclaredAskCore([string]$agentLeft) {
   $turn = Get-NewestAgentTurn $agentLeft
   if ([string]::IsNullOrEmpty($turn)) { return '' }
   $scan = Get-FenceMaskedText $turn
@@ -2260,6 +2369,10 @@ function Get-JournalFacts([string]$path) {
     AskDeclared     = "$($askVerdict.declared)"           # blocking | offer | none | '' (undeclared)
     Consent         = $consent   # #227: fail-CLOSED authorship verdict
     Trailing        = $trailing
+    # The bytes every field above was derived from, so a caller that needs the journal text
+    # again (the doc-stamp fallback, #711) does not have to re-read the file off disk. It is
+    # the exact string Read-JournalText returned; nothing here re-decodes or normalises it.
+    Content         = $content
     Legacy          = Parse-LegacyOaState $content
   }
 }
@@ -2268,7 +2381,11 @@ function State-Path([string]$id) { Join-Path $StateDir "task-$id.json" }
 
 function Read-State([string]$id) {
   $p = State-Path $id
-  if (Test-Path $p) { return (Get-Content -Raw $p | ConvertFrom-Json) }
+  # `[IO.File]::ReadAllText`, not `Get-Content -Raw` (#711). `Get-Content` builds a provider
+  # pipeline per call, which `scan` pays once per journal; this reads the same bytes with none
+  # of it. JSON is UTF-8 by contract here (Write-JsonAtomic writes it with a BOM), and
+  # ReadAllText honours the BOM, so the decoded text is identical.
+  if (Test-Path $p) { return ([IO.File]::ReadAllText($p) | ConvertFrom-Json) }
   return $null
 }
 
@@ -3156,7 +3273,7 @@ function Get-ScanRows {
     $pRank = 999999
     if ($prioRank.ContainsKey($facts.Id)) { $pRank = $prioRank[$facts.Id] }
     # #423: resolve the doc binding for this row (state first, journal stamp as fallback).
-    $docFacts = Get-DocState $st $f.FullName
+    $docFacts = Get-DocState $st $f.FullName $facts.Content
     # #404: the per-task session binding, read-only.
     $sessFacts = Get-SessionState $st
     [pscustomobject]@{
@@ -3474,7 +3591,104 @@ function Get-ScanRows {
 }
 
 function Cmd-Scan {
-  ConvertTo-Json -InputObject @(Get-ScanRows) -Depth 8
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  $rows = @(Get-ScanRows)
+  $sw.Stop()
+  $seconds = [Math]::Round($sw.Elapsed.TotalSeconds, 2)
+
+  # FULL is still the default, so every existing caller, fixture and mutcheck keeps reading the
+  # exact JSON array it read before. `-Compact` and `-OutFile` are additive.
+  $full = ConvertTo-Json -InputObject $rows -Depth 8
+
+  if ($ScanOutFile) {
+    # The whole worklist to a FILE, a short summary to stdout (#711). This is the escape hatch
+    # for a caller that genuinely wants every field: a 507 KB tool result is not something an
+    # agent can read in one call, but a file is something it can grep.
+    $dir = Split-Path -Parent $ScanOutFile
+    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $payload = if ($Compact) { (New-CompactScan $rows $seconds | ConvertTo-Json -Depth 8) } else { $full }
+    [IO.File]::WriteAllText($ScanOutFile, $payload, (New-Object Text.UTF8Encoding($false)))
+    (New-ScanSummary $rows $seconds $ScanOutFile) | ConvertTo-Json -Depth 4
+    return
+  }
+
+  if ($Compact) { (New-CompactScan $rows $seconds) | ConvertTo-Json -Depth 8; return }
+  $full
+}
+
+function New-ScanSummary($rows, [double]$seconds, [string]$outFile) {
+  # The counts a caller needs to know the read SUCCEEDED, rather than inferring it from a
+  # payload it could not finish reading. `rows_total` being 0 is a different fact from an empty
+  # eligible list, and both used to be invisible behind half a megabyte of JSON.
+  [ordered]@{
+    scan_seconds   = $seconds
+    rows_total     = @($rows).Count
+    rows_eligible  = @($rows | Where-Object { $_.eligible }).Count
+    rows_reopened  = @($rows | Where-Object { $_.reopened }).Count
+    rows_unanswered = @($rows | Where-Object { $_.unanswered_user }).Count
+    rows_due_poll  = @($rows | Where-Object { $_.due_poll }).Count
+    rows_no_journal = @($rows | Where-Object { -not $_.has_journal }).Count
+    today_holding  = @($rows | Where-Object { $_.holds_today_gate }).Count
+    out_file       = if ($outFile) { $outFile } else { $null }
+  }
+}
+
+# The fields a run actually consumes to SELECT and DISPATCH work. Everything omitted is either
+# audit detail (`gate_backstop_source`, `exhaustion`, `ask_declared`) or a value the run can ask
+# for per task with `get -Id <id>` once it has picked one. Listed here, once, so the compact
+# contract is a thing you can read rather than something spread across a projection expression.
+$script:CompactFields = @(
+  'id', 'order', 'eligible', 'section', 'status', 'status_by', 'changed', 'reopened',
+  'reopened_closed', 'unanswered_user', 'unanswered_user_where', 'snoozed', 'snooze_until',
+  'due_poll', 'poll_cadence', 'due_recheck', 'recheck_kind', 'has_journal', 'has_agent_block',
+  'tracked', 'work_priority', 'urgency', 'board_pos', 'priorities_rank', 'linked',
+  'holds_today_gate', 'today_release_reason', 'has_open_ask', 'awaiting_reply', 'consent_ok',
+  'doc_id', 'doc_new_comments', 'doc_channel', 'session_id', 'session_verdict', 'session_paused',
+  'dispatch_input', 'no_journal_reason'
+)
+
+function Test-CompactRowNeeded($r) {
+  # WHICH ROWS SURVIVE, and why each arm is here rather than "just the eligible ones":
+  #
+  #   eligible           the work itself.
+  #   holds_today_gate   the rows EXPLAINING why the rest are ineligible. Dropping these would
+  #                      make a gated run unauditable -- "nothing was eligible" with no visible
+  #                      cause is the #346 shape on the primary worklist.
+  #   reopened_closed    must be REPORTED and never worked. Silently omitting it trades one
+  #                      silent failure for another (see "Reopened after close").
+  #   unanswered_user    a message from him that no turn has answered. It is re-reported every
+  #                      run on purpose; a compact mode that hid it would undo #501.
+  #   due_poll/recheck   time-triggered work that has come due.
+  #   no journal         #534: on the board with no journal file, so it needs one created.
+  #
+  # An ineligible, quiet, unchanged row is the case this mode exists to drop -- it is counted in
+  # the summary and nothing reads its fields.
+  if ($r.eligible) { return $true }
+  if ($r.holds_today_gate) { return $true }
+  if ($r.reopened_closed) { return $true }
+  if ($r.unanswered_user) { return $true }
+  if ($r.due_poll -or $r.due_recheck) { return $true }
+  if ($r.PSObject.Properties['has_journal'] -and -not $r.has_journal) { return $true }
+  return $false
+}
+
+function New-CompactScan($rows, [double]$seconds) {
+  $kept = @()
+  foreach ($r in $rows) {
+    if (-not (Test-CompactRowNeeded $r)) { continue }
+    $o = [ordered]@{}
+    foreach ($f in $script:CompactFields) {
+      if ($r.PSObject.Properties[$f]) { $o[$f] = $r.$f }
+    }
+    $kept += [pscustomobject]$o
+  }
+  $summary = New-ScanSummary $rows $seconds $null
+  $summary['rows_returned'] = $kept.Count
+  # `omitted` is stated rather than left to be derived, because "this row is not here" and "this
+  # row does not exist" must not be the same observation -- the exact distinction #534 is about.
+  $summary['rows_omitted'] = (@($rows).Count - $kept.Count)
+  $summary['omitted_reason'] = 'ineligible, not holding the Today gate, quiet, and nothing due - use -OutFile for the full worklist'
+  [ordered]@{ summary = [pscustomobject]$summary; rows = $kept }
 }
 
 function Cmd-Get {
@@ -4355,11 +4569,22 @@ function Add-TurnTerminator([string]$path) {
 # Accepts the stamp with or without the optional docUrl, and tolerates arbitrary inner spacing.
 $script:DocMetaRe = '<!--\s*doc-meta\s+docId=(?<id>[A-Za-z0-9_\-]+)(?:\s+docUrl=(?<url>\S+))?\s*-->'
 
-function Get-DocMetaFromJournal([string]$path) {
+function Get-DocMetaFromJournal([string]$path, [string]$content = $null) {
   # Read the self-healing stamp out of the journal. Fence-masked (#320) so a `doc-meta` shown
   # inside a fenced example in a turn is never mistaken for this task's real binding -- the same
   # rule the turn-end reader already applies, for the same reason.
-  $content = Read-JournalText $path
+  #
+  # `$content` is an optional pass-through of text the CALLER has already read from `$path`
+  # (#711). `scan` reads every journal once for its facts and was then re-reading each one here
+  # purely to find this stamp. It is an optimisation only: omitted OR EMPTY, the file is read
+  # exactly as before, and the stamp is parsed from the same bytes either way.
+  #
+  # Emptiness, not `$null`, is the test on purpose: a [string] parameter defaulted to `$null`
+  # arrives as `''`, so a `-eq $null` check here is always false and the fallback read would
+  # silently never happen -- which is exactly how the first version of this broke the
+  # journal-stamp rebind (caught by mutcheck-doc-binding). An empty journal re-read costs a
+  # stat and returns '', so the two paths agree.
+  if ([string]::IsNullOrEmpty($content)) { $content = Read-JournalText $path }
   if (-not $content) { return $null }
   $m = [regex]::Match((Get-FenceMaskedText $content), $script:DocMetaRe)
   if (-not $m.Success) { return $null }
@@ -4612,12 +4837,13 @@ function New-DocObject([string]$docId, [string]$docUrl, [string]$boundAt, $seen,
   }
 }
 
-function Get-DocState($st, [string]$path) {
+function Get-DocState($st, [string]$path, [string]$content = $null) {
   # Resolve the binding, state first, journal stamp as the self-healing fallback.
   # Returns @{ doc = <object|null>; source = 'state'|'journal'|'none'; healed = $bool }
+  # `$content` is the caller's already-read copy of `$path`, if it has one (#711).
   $doc = if ($st -and $st.PSObject.Properties['doc']) { $st.doc } else { $null }
   if ($doc -and "$($doc.doc_id)") { return @{ doc = $doc; source = 'state'; healed = $false } }
-  $stamp = Get-DocMetaFromJournal $path
+  $stamp = Get-DocMetaFromJournal $path $content
   if ($stamp) {
     # State was lost or never written, but the journal remembers. Rebind rather than create --
     # this is the exact case the issue's third acceptance criterion names.
