@@ -189,8 +189,8 @@ to act rather than acting on a guessed policy.
 The tray's **Pause** menu item is deliberately *not* a setting: it lives in memory for the
 lifetime of that tray process only, so restarting the tray always resumes supervision.
 
-Each tray workload owns its **own** `##` section here (the browser checks below, and later the
-tray update check, are separate, sibling sections). One tray host, independent workloads,
+Each tray workload owns its **own** `##` section here (the browser checks and the update
+checks below are separate, sibling sections). One tray host, independent workloads,
 separate policies — a missing section for one workload never affects another.
 
 ## Tray browser checks
@@ -216,6 +216,30 @@ Switches accept `on`/`off`; a row that cannot be read is **refused by name** and
 check runs. This workload shares **no** state, lock, pause or cooldown with the reliability
 workload above. The tray never kills, closes or restarts a browser or MCP worker process, and
 its **Pause browser checks** menu item lives in memory only — restarting the tray clears it.
+
+## Tray update checks
+
+*(Optional — the whole section can be omitted.)* Policy for the **plugin update-check
+workload** of the same optional tray. It asks the **Copilot plugin marketplace** (and nothing
+else) whether a newer `overnight-agent` is available, via `copilot plugin marketplace list`,
+`copilot plugin list` and — only with Auto apply — `copilot plugin install
+overnight-agent@focus-planner`. It never runs git or fetches `origin/main`.
+
+**Omit the section — or any single row — and the defaults below apply:** on, daily, and
+**report only**. With `Auto apply = off` the tray only shows *update available*; nothing is
+installed until you opt in.
+
+| Setting | Value |
+| --- | --- |
+| Enabled | `on` — check for plugin updates from the tray. |
+| Check interval | `daily` — also `hourly`, `weekly`, or a duration from `60m` to `168h` such as `6h`. |
+| Auto apply | `off` — `on` installs a newer marketplace version and re-checks the installed version. |
+| Source | `marketplace` — the Copilot plugin marketplace; the only supported source. |
+
+A row that cannot be read is **refused by name** and no check runs. This workload has its own
+state (`update-check-state.json`), lock and interval, and shares **no** state, lock, pause or
+cooldown with the reliability or browser workloads. Its **Pause update checks** menu item
+lives in memory only — restarting the tray clears it.
 
 ## Where your real settings live
 

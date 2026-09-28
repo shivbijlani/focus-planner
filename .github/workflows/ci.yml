@@ -772,6 +772,25 @@ jobs:
       - name: Default-off policy and independent opt-ins
         run: node --test plugins/overnight-agent/checks/consumer-browser-watchdog.test.mjs
 
+  # GH #701: tray plugin update checks are ON by default, daily (hourly selectable),
+  # and report-only unless Auto apply is on. The only source is the Copilot plugin
+  # marketplace CLI (faked here); the workload never runs git or a deploy script.
+  tray-update-checks:
+    name: Tray update checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Marketplace-only, report-only-by-default update checks
+        run: node --test plugins/overnight-agent/checks/consumer-update-check.test.mjs
+
   # A user's pause must still stop dispatch (GH #540), even though task overlap and repeated
   # nudges are now permitted. A per-run allowance is not permission to ignore a pause.
   #

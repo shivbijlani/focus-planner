@@ -19,9 +19,9 @@
  * ------------------------------------------
  * Each workload owns its own H2 section with a two-column `| Setting | Value |`
  * table. The reliability workload's section is `## Tray reliability supervision`;
- * the browser-check workload's is `## Tray browser checks` (GH #698). A later
- * workload (update check #701) adds a
- * SIBLING section and its own value map -- it never extends this one, because
+ * the browser-check workload's is `## Tray browser checks` (GH #698); the plugin
+ * update-check workload's is `## Tray update checks` (GH #701). Each is a
+ * SIBLING section with its own value map -- none extends another, because
  * separate workloads must have separate, independently-missing policies.
  *
  * MISSING IS NOT BROKEN; WRONG IS BROKEN
@@ -84,6 +84,27 @@ const BROWSER_CHECKS_ROWS = new Map([
   ['auto launch closed slots', { key: 'autoLaunch', kind: 'switch' }],
   ['check interval', { key: 'intervalMinutes', kind: 'minutes', min: 15, max: 1440 }],
 ]);
+
+// The plugin update-check workload (GH #701) is another SIBLING section. It is ON
+// by default and checks DAILY, but it only REPORTS an available update unless the
+// user opts in to `Auto apply`. The only source is the Copilot plugin marketplace.
+export const UPDATE_CHECKS_SECTION_HEADING = 'Tray update checks';
+
+export const UPDATE_CHECKS_DEFAULTS = Object.freeze({
+  enabled: true,
+  intervalMinutes: 1440,
+  autoApply: false,
+  source: 'marketplace',
+});
+
+const UPDATE_CHECKS_ROWS = new Map([
+  ['enabled', { key: 'enabled', kind: 'switch' }],
+  ['check interval', { key: 'intervalMinutes', kind: 'cadence', min: 60, max: 10080 }],
+  ['auto apply', { key: 'autoApply', kind: 'switch' }],
+  ['source', { key: 'source', kind: 'choice', values: ['marketplace'] }],
+]);
+
+const NAMED_CADENCES = new Map([['hourly', 60], ['daily', 1440], ['weekly', 10080]]);
 
 function normalizeName(text) {
   return String(text)
@@ -170,6 +191,32 @@ function readDuration(token, { unit, min, max }, context) {
   return value;
 }
 
+// `hourly` / `daily` / `weekly`, or any duration in range ('6h', '90m').
+function readCadence(token, { min, max }, context) {
+  const named = NAMED_CADENCES.get(String(token).trim().toLowerCase());
+  if (named !== undefined) return named;
+  try {
+    return readDuration(token, { unit: 'minutes', min, max }, context);
+  } catch {
+    throw new Error(
+      `${context} must be 'hourly', 'daily', 'weekly' or a duration from ${min} to ${max} minutes ` +
+      `such as '6h' (read: '${token}')`);
+  }
+}
+
+function readChoice(token, { values }, context) {
+  const value = String(token).trim().toLowerCase();
+  if (values.includes(value)) return value;
+  throw new Error(`${context} must be one of: ${values.join(', ')} (read: '${token}')`);
+}
+
+function readValue(spec, token, context) {
+  if (spec.kind === 'switch') return readSwitch(token, context);
+  if (spec.kind === 'cadence') return readCadence(token, spec, context);
+  if (spec.kind === 'choice') return readChoice(token, spec, context);
+  return readDuration(token, { unit: spec.kind, min: spec.min, max: spec.max }, context);
+}
+
 /**
  * One workload's declared rows under `## <heading>`, read against that workload's
  * own row map. Shared by every workload so there is one parser, never a copy.
@@ -189,9 +236,7 @@ export function parseSectionPolicy(text, heading, rowSpecs, { settingsPath = '(m
     if (Object.hasOwn(values, spec.key)) {
       throw new Error(`${context} is declared twice; keep one row per setting.`);
     }
-    values[spec.key] = spec.kind === 'switch'
-      ? readSwitch(row.value, context)
-      : readDuration(row.value, { unit: spec.kind, min: spec.min, max: spec.max }, context);
+    values[spec.key] = readValue(spec, row.value, context);
   }
   return { source: Object.keys(values).length ? 'user-settings' : 'user-settings-empty', settingsPath, values };
 }
@@ -220,6 +265,14 @@ export function parseReliabilityPolicy(text, { settingsPath = '(memory)' } = {})
  */
 export function parseBrowserChecksPolicy(text, { settingsPath = '(memory)' } = {}) {
   return parseSectionPolicy(text, BROWSER_CHECKS_SECTION_HEADING, BROWSER_CHECKS_ROWS, { settingsPath });
+}
+
+/**
+ * Declared plugin update-check policy (GH #701): only the rows the user wrote.
+ * Absent rows take UPDATE_CHECKS_DEFAULTS (on, daily, report-only, marketplace).
+ */
+export function parseUpdateChecksPolicy(text, { settingsPath = '(memory)' } = {}) {
+  return parseSectionPolicy(text, UPDATE_CHECKS_SECTION_HEADING, UPDATE_CHECKS_ROWS, { settingsPath });
 }
 
 /**
@@ -279,6 +332,14 @@ export async function loadReliabilityPolicy(options = {}) {
  */
 export async function loadBrowserChecksPolicy(options = {}) {
   return loadSectionPolicy(parseBrowserChecksPolicy, options);
+}
+
+/**
+ * Canonical update-check policy for the tray workload (GH #701). A missing file
+ * or section means the shipped defaults: check daily, report only.
+ */
+export async function loadUpdateChecksPolicy(options = {}) {
+  return loadSectionPolicy(parseUpdateChecksPolicy, options);
 }
 
 async function loadSectionPolicy(parse, options = {}) {
