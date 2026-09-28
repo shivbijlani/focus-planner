@@ -269,15 +269,19 @@ $AlwaysRequired = @(
   # is not restorable. Added with #180, which moved the slot table into
   # user-settings.md and gave it a single reader.
   'browser-slot-table.ps1',
-  # The #226 supervisor and its daemon are dispatched by the OS (a Windows scheduled task
-  # or the Startup-folder shim) as `%LOCALAPPDATA%\overnight-agent\<name>` - the same
+  # The #226 supervisor is now scheduled by the OPTIONAL tray app (GH #689), whose single
+  # startup route (a per-user HKCU Run entry, opt-in only) launches
+  # `%LOCALAPPDATA%\overnight-agent\oa-supervisor-tray.ps1` - the same
   # absolute-path-from-the-flat-home contract as the entries above. They are named by no
-  # roster (not sweeps), reached by no import edge (.ps1), and the installer only SEEDS
-  # them when absent - so without this line a merged supervisor fix lands in
-  # installed-plugins and never reaches the copy the daemon actually runs. Classic
-  # "merged isn't running" (cf. #196, #254).
+  # roster (not sweeps), reached by no import edge (.ps1), so without these lines a merged
+  # supervisor fix lands in installed-plugins and never reaches the copy the tray actually
+  # runs. Classic "merged isn't running" (cf. #196, #254). Syncing never registers or
+  # starts the tray. oa-supervisor-daemon.ps1 stays listed as a RETIRED stub so a leftover
+  # pre-#689 scheduled task / Startup shim launches nothing.
   'oa-supervisor.ps1',
   'oa-supervisor-daemon.ps1',
+  'oa-supervisor-tray.ps1',
+  'oa-supervisor-startup.ps1',
   'reliability-supervisor.mjs',
   'windows-app-actuator.mjs',
   'session-terminal-evidence.mjs',

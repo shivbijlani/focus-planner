@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-  The Overnight Agent's OUT-OF-BAND supervisor. Dispatched by Windows Task Scheduler,
-  never by an agent run.
+  The Overnight Agent's OUT-OF-BAND supervisor. Run as a child process by the optional
+  tray app (oa-supervisor-tray.ps1, GH #689), never by an agent run.
 
 .DESCRIPTION
   WHY THIS EXISTS (GH #226)
@@ -83,7 +83,7 @@
 
 .PARAMETER Repair, NoAlert, TestAlert
   LEGACY and inert. Alerting was removed in favour of silent auto-restart, but these are
-  still accepted so an already-registered task or daemon that passes them keeps parsing.
+  still accepted so older callers (legacy task/daemon command lines) keep parsing.
 
 .OUTPUTS
   One line of JSON on stdout. Exit 0 = healthy / no action, 1 = acted (or would act under
@@ -100,8 +100,8 @@ param(
   # Detect + log only; never kill or launch anything. For testing/replay.
   [switch]$NoAct,
   # LEGACY and inert: alerting was removed in favour of silent auto-restart
-  # (Shiv, 2026-08-31). Retained only so an already-registered task/daemon that
-  # still passes them keeps parsing.
+  # (Shiv, 2026-08-31). Retained only so older callers that still pass them
+  # keep parsing.
   [switch]$Repair,
   [switch]$NoAlert,
   [switch]$TestAlert,

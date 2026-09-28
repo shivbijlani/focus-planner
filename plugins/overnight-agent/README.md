@@ -15,8 +15,11 @@ command from the Focus Planner plugin marketplace.
 overnight-agent/
 ├── plugin.json                 # Plugin manifest
 ├── checks/
-│   ├── oa-supervisor.ps1       # Existing OS-dispatched health check
-│   ├── oa-supervisor-daemon.ps1 # OS-owned loop, heartbeat and boundary wakeups
+│   ├── oa-supervisor.ps1       # Existing out-of-band health check
+│   ├── oa-supervisor-tray.ps1  # Optional tray app: M/N scheduler, status, controls
+│   ├── oa-supervisor-startup.ps1 # Single startup route (HKCU Run), legacy cleanup
+│   ├── install-oa-supervisor.ps1 # Opt-in: status (default) / -Enable / -Disable
+│   ├── oa-supervisor-daemon.ps1 # RETIRED stub; makes pre-#689 task/shim inert
 │   ├── consumer-reliability-supervisor.mjs
 │   ├── reliability-supervisor.mjs  # Shared M/N policy and transaction core
 │   ├── windows-app-actuator.mjs     # Enterprise activity/process adapter
@@ -75,11 +78,59 @@ Ask Copilot to "run the overnight agent", "propose plans for my tasks", or
 (inbox check → execute approved plans → propose new plans behind the approval
 gate).
 
-### Reliability supervisor (Windows)
+### Reliability supervisor (Windows, optional tray app)
 
-The existing out-of-band supervisor now runs as a single OS-dispatched daemon
-with a 15-second heartbeat between checks. It evaluates at most every 15 minutes, but wakes
-early at M/N boundaries or the cooldown expiry. The default **M=3 hours** is a
+The out-of-band supervisor is an **optional tray app** and is **off by default**.
+Installing or updating the plugin (including `sync-oa-home.ps1`) never registers
+or starts it. You turn it on explicitly:
+
+```powershell
+# Status only - changes nothing
+powershell -NoProfile -ExecutionPolicy Bypass -File plugins/overnight-agent/checks/install-oa-supervisor.ps1
+# Opt in: deploy to %LOCALAPPDATA%\overnight-agent, remove legacy entries, register, start
+powershell -NoProfile -ExecutionPolicy Bypass -File plugins/overnight-agent/checks/install-oa-supervisor.ps1 -Enable
+# Opt out: stop the tray, remove the startup entry and any legacy entries
+powershell -NoProfile -ExecutionPolicy Bypass -File plugins/overnight-agent/checks/install-oa-supervisor.ps1 -Disable
+```
+
+**One startup route.** Enabling writes a single per-user value,
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Overnight Agent supervisor`,
+which starts `oa-supervisor-tray.ps1` at sign-in. It needs no elevation and appears
+in Task Manager's Startup apps. There is no Scheduled Task, Startup-folder shim or
+service. The tray's **Start with Windows** item toggles the same value.
+
+**Logged-in only.** A Run entry starts after you sign in, and the tray exits when
+you sign out. **Nothing is supervised while you are logged out.** The desktop app
+it supervises also runs only in a signed-in session.
+
+**Tray controls.** The shield icon's menu shows the last state and the next check.
+It also shows the policy (M, quiet window, N and cooldown, or *INVALID/DISABLED*),
+the current cycle's quiet-opportunity and hard-deadline times, any active cooldown,
+and the most recent restart/launch outcomes from the audit. Actions are
+**Check now**, **Pause/Resume supervision** (saved in `supervisor-tray.json`),
+**Start with Windows**, **Remove legacy scheduled task / Startup shim** (shown only
+when one exists), **Open supervisor folder** and **Exit**. Exit stops supervision
+until the next sign-in, or until you start the tray again.
+
+The tray is a separate process from the Overnight Agent and the desktop app. It
+runs `oa-supervisor.ps1` as a child process for each evaluation, so its UI and
+scheduler do not depend on overnight-agent process health. It evaluates at most
+every 15 minutes and writes a heartbeat every 15 seconds. It wakes early at the M/N
+boundaries or when the cooldown expires. The tray never restarts anything itself:
+every decision and safeguard below lives in `reliability-supervisor.mjs`.
+
+**Migration from the pre-#689 installer.** `-Enable` and `-Disable` remove the old
+`Overnight Agent supervisor` Scheduled Task and `Overnight Agent supervisor.cmd`
+Startup shim. They also stop a running legacy daemon or tray after verifying its PID,
+start time and command line. If the old task cannot be removed (for example, it was
+registered from an elevated prompt), `-Enable` stops *before* registering the tray.
+Run `-Disable` from an elevated prompt, then `-Enable`. The deployed
+`oa-supervisor-daemon.ps1` is now an inert stub. A leftover legacy entry therefore
+launches nothing, and the tray and legacy daemon share one exclusive lock. Two
+supervisors can never be active at once. `supervisor-liveness-sweep.ps1` reports a
+leftover as `LEGACY`, and a not-opted-in supervisor as `OFF` (not a finding).
+
+**Policy.** The default **M=3 hours** is a
 quiet opportunity: the enterprise snapshot adapter reads the GUI process,
 both app/session SQLite stores, workflow and session projections, process
 locks, and session events. Evidence must remain unchanged and continuously
@@ -107,12 +158,12 @@ root and descendants of its process tree are eligible. A failed attempt is
 audited and holds the cooldown.
 
 **Node.js 24+ is required** for the enterprise `node:sqlite` evidence adapter;
-the installer refuses an older runtime before changing the installed supervisor.
-This machine's default Node 21 must be upgraded before installing/running this
-change. Install/update using `checks/install-oa-supervisor.ps1`; updating the repo alone
-does **not** update an existing OS task's flat-home copy. To inspect a check
+`-Enable` refuses an older runtime before changing anything. Updating the repo
+alone updates the deployed flat-home copies (through `sync-oa-home.ps1` or a re-run
+of `-Enable`) but never enables the tray. To inspect a check
 without restarting anything, run
 `node plugins/overnight-agent/checks/consumer-reliability-supervisor.mjs --no-act`.
+For the tray's read-only status view, run the same script with `--status`.
 The Windows desktop GUI and its local session/workflow evidence must be readable
 for a quiet restart; if resident activity cannot be proven quiet, it waits for N.
 After launch the enterprise adapter requires a distinct GUI identity and fresh

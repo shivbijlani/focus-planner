@@ -211,13 +211,79 @@ export async function runConsumerSupervisor({
     nextEvaluationAt: new Date(clock.now() + nextEvaluationDelay(config, lastCycle, clock.now())).toISOString() };
 }
 
+function summarizeAttempt(entry) {
+  return {
+    id: entry.id ?? null,
+    at: entry.completedAt ?? entry.attemptedAt ?? null,
+    reason: entry.reason ?? null,
+    restartMode: entry.restartMode ?? null,
+    outcome: entry.outcome ?? 'unknown',
+    error: entry.error ? String(entry.error).slice(0, 200) : null,
+  };
+}
+
+// Read-only view for the tray: never creates the policy file and never needs node:sqlite,
+// so status stays visible even when the evidence runtime or the policy is broken.
+export async function readSupervisorStatus({
+  paths = supervisorPaths(), clock = { now: () => Date.now() }, recentLimit = 5,
+} = {}) {
+  const nowMs = clock.now();
+  let config = null;
+  let policy;
+  try {
+    config = await loadConfig(paths.config, { create: false });
+    policy = {
+      valid: true,
+      enabled: config.supervisor.enabled,
+      quietOpportunityHours: config.preventiveRestart.targetIntervalHours,
+      hardDeadlineHours: config.preventiveRestart.hardIntervalHours,
+      quietWindowMinutes: config.preventiveRestart.quietWindowMinutes,
+      cooldownMinutes: config.appRestart.minIntervalMinutes,
+    };
+  } catch (error) {
+    policy = { valid: false, enabled: false, error: String(error?.message ?? error) };
+  }
+  let state = null;
+  let stateError = null;
+  try { state = await loadState(paths.state); } catch (error) { stateError = String(error?.message ?? error); }
+  let recent = [];
+  let auditError = null;
+  try {
+    const lines = (await readFile(paths.audit, 'utf8')).split(/\r?\n/).filter(Boolean);
+    for (const line of lines.slice(-Math.max(recentLimit * 4, recentLimit)).reverse()) {
+      try { recent.push(summarizeAttempt(JSON.parse(line))); } catch { /* skip torn line */ }
+      if (recent.length >= recentLimit) break;
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') auditError = String(error?.message ?? error);
+  }
+  const cooldown = config && state ? cooldownStatus(state, config, nowMs) : null;
+  return {
+    status: 'status',
+    checkedAt: new Date(nowMs).toISOString(),
+    policy,
+    cycle: config && state ? restartCycleStatus(state, config) : null,
+    cooldown: cooldown ? {
+      active: !cooldown.allowed,
+      until: cooldown.allowed ? null : new Date(nowMs + cooldown.remainingMs).toISOString(),
+    } : null,
+    activeAttempt: state?.activeAttempt ?? null,
+    recent,
+    errors: [stateError, auditError].filter(Boolean),
+  };
+}
+
 export async function main(argv = process.argv.slice(2)) {
+  if (argv.length === 1 && argv[0] === '--status') {
+    console.log(JSON.stringify(await readSupervisorStatus()));
+    return;
+  }
   if (argv.some(arg => !['--no-act', '--recovery', '--launch-missing'].includes(arg) &&
       argv[argv.indexOf(arg) - 1] !== '--recovery') ||
       argv.filter(arg => arg === '--recovery').length > 1 ||
       (argv.includes('--recovery') && !argv[argv.indexOf('--recovery') + 1]) ||
       (argv.includes('--recovery') && argv.includes('--launch-missing'))) {
-    throw new Error('Usage: node consumer-reliability-supervisor.mjs [--no-act] [--recovery reason | --launch-missing]');
+    throw new Error('Usage: node consumer-reliability-supervisor.mjs [--status | [--no-act] [--recovery reason | --launch-missing]]');
   }
   const recoveryReason = argv.includes('--recovery') ? argv[argv.indexOf('--recovery') + 1] : null;
   const result = await runConsumerSupervisor({ noAct: argv.includes('--no-act'), recoveryReason,

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +8,7 @@ import {
 } from './reliability-supervisor.mjs';
 import { sameIdentity, descendantProcessIds, revalidateIdentity } from './windows-app-actuator.mjs';
 import {
-  nextEvaluationDelay, reconcileConsumerConfig, requireSqliteRuntime,
+  nextEvaluationDelay, readSupervisorStatus, reconcileConsumerConfig, requireSqliteRuntime,
   runConsumerSupervisor, supervisorPaths,
 } from './consumer-reliability-supervisor.mjs';
 
@@ -79,42 +78,6 @@ test('consumer wiring installs enterprise snapshot and scheduler verification co
   assert.ok(config.commands.verifyScheduler.args.includes('--before-due-workflows'));
   assert.ok(config.commands.forceTerminate.args.includes('--restart-mode'));
   assert.deepEqual(await reconcileConsumerConfig(paths), config);
-});
-
-test('OS-owned daemon wakes at supervisor M/N boundary before its periodic interval', async t => {
-  if (process.platform !== 'win32') return t.skip('Windows daemon');
-  const root = await mkdtemp(join(tmpdir(), 'oa-daemon-boundary-'));
-  const home = join(root, 'overnight-agent');
-  const { mkdir } = await import('node:fs/promises');
-  await mkdir(home);
-  await writeFile(join(home, 'oa-supervisor.ps1'), `
-$countPath = Join-Path $PSScriptRoot 'count.txt'
-$count = if (Test-Path $countPath) { [int](Get-Content $countPath -Raw) } else { 0 }
-($count + 1) | Set-Content $countPath
-@{ state = 'HEALTHY'; actResult = @{ nextEvaluationAt =
-  (Get-Date).ToUniversalTime().AddMilliseconds(700).ToString('o') } } | ConvertTo-Json -Compress -Depth 4
-`);
-  const daemon = spawn('powershell.exe', ['-NoProfile', '-NonInteractive',
-    '-ExecutionPolicy', 'Bypass', '-File',
-    join(import.meta.dirname, 'oa-supervisor-daemon.ps1'), '-IntervalMinutes', '15'], {
-    env: { ...process.env, LOCALAPPDATA: root }, stdio: 'ignore', windowsHide: true,
-  });
-  t.after(async () => {
-    if (daemon.exitCode === null) {
-      daemon.kill();
-      await new Promise(resolveDone => daemon.once('exit', resolveDone));
-    }
-    await rm(root, { recursive: true, force: true });
-  });
-  const deadline = Date.now() + 20_000;
-  let count = 0;
-  while (Date.now() < deadline) {
-    try { count = Number(await readFile(join(home, 'count.txt'), 'utf8')); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
-    if (count >= 2) break;
-    await new Promise(resolveWait => setTimeout(resolveWait, 100));
-  }
-  assert.ok(count >= 2, 'the daemon did not wake at the 700ms boundary');
 });
 
 test('one action lock excludes another owner', async t => {
@@ -236,4 +199,42 @@ test('schedule-dead launch shares action lock, audit and cooldown without termin
   const second = await runConsumerSupervisor(options);
   assert.equal(second.status, 'cooldown');
   assert.equal((await readFile(files.audit, 'utf8')).trim().split('\n').length, 1);
+});
+
+test('tray status reports policy, cycle, cooldown and recent outcomes without creating policy', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'oa-status-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const files = supervisorPaths(home);
+  const empty = await readSupervisorStatus({ paths: files, clock: { now: () => now } });
+  assert.equal(empty.policy.valid, true);
+  assert.equal(empty.policy.quietOpportunityHours, 3);
+  assert.equal(empty.policy.hardDeadlineHours, 4);
+  assert.equal(empty.policy.quietWindowMinutes, 15);
+  assert.equal(empty.policy.cooldownMinutes, 60);
+  assert.deepEqual(empty.recent, []);
+  await assert.rejects(readFile(files.config, 'utf8'), error => error.code === 'ENOENT');
+
+  const attemptAt = new Date(now - 10 * 60_000).toISOString();
+  await writeFile(files.state, JSON.stringify({ version: 1, restartCycleStartedAt: old.startTime,
+    activeAttempt: null, attempts: [{ id: 'a1', restartIntentPersisted: true, restartIntentAt: attemptAt,
+      attemptedAt: attemptAt, outcome: 'failed' }] }));
+  await writeFile(files.audit, [
+    JSON.stringify({ id: 'a0', reason: 'preventive-quiet-opportunity', outcome: 'succeeded',
+      completedAt: new Date(now - 5 * hour).toISOString() }),
+    '{"torn":',
+    JSON.stringify({ id: 'a1', reason: 'preventive-hard-deadline', outcome: 'failed',
+      error: 'synthetic', completedAt: attemptAt }),
+  ].join('\n'));
+  const status = await readSupervisorStatus({ paths: files, clock: { now: () => now } });
+  assert.equal(status.cycle.opportunityAt, new Date(Date.parse(old.startTime) + 3 * hour).toISOString());
+  assert.equal(status.cycle.hardDeadlineAt, new Date(Date.parse(old.startTime) + 4 * hour).toISOString());
+  assert.equal(status.cooldown.active, true);
+  assert.equal(status.cooldown.until, new Date(Date.parse(attemptAt) + 60 * 60_000).toISOString());
+  assert.deepEqual(status.recent.map(r => [r.id, r.outcome]), [['a1', 'failed'], ['a0', 'succeeded']]);
+  assert.equal(status.recent[0].error, 'synthetic');
+
+  await writeFile(files.config, '{"preventiveRestart":{"targetIntervalHours":5,"hardIntervalHours":4}}');
+  const invalid = await readSupervisorStatus({ paths: files, clock: { now: () => now } });
+  assert.equal(invalid.policy.valid, false);
+  assert.equal(invalid.cooldown, null);
 });

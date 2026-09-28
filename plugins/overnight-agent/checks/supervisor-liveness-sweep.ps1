@@ -48,10 +48,17 @@
   other.
 
   THE LIMIT, STATED PLAINLY RATHER THAN BURIED: if the app freezes AND a daemon
-  dies in the same window, nothing catches that. Closing it needs a dispatcher
-  outside both, i.e. the elevated scheduled task install-oa-supervisor.ps1 already
-  registers when run as admin. This sweep reports which route is actually in use so
-  that gap is visible instead of assumed.
+  dies in the same window, nothing catches that. This sweep reports which route is
+  actually in use so that gap is visible instead of assumed.
+
+  GH #689 CHANGED THE oa-supervisor UNIT: it is now an OPTIONAL tray app, off by
+  default, started by ONE route (a per-user HKCU Run entry) and only while the user
+  is signed in. So for that unit:
+    * no Run entry            -> OFF     (the user has not opted in; NOT a finding)
+    * tray alive, fresh, paused -> PAUSED (the user paused it; NOT a finding)
+    * a pre-#689 scheduled task or Startup shim still present -> LEGACY (a finding:
+      the retired route is inert and must be removed with install-oa-supervisor.ps1)
+  The browser watchdog keeps its task/Startup-shim routes unchanged.
 
   FALSE POSITIVES ARE THE REAL FAILURE MODE
   -----------------------------------------
@@ -78,7 +85,8 @@
 
 .OUTPUTS
   Human lines on stdout, plus one JSON object under -Json.
-  Exit 0 = every unit healthy. Exit 1 = at least one unit ABSENT/DEAD/STALE.
+  Exit 0 = no unit dormant (HEALTHY, or OFF/PAUSED by user choice).
+  Exit 1 = at least one unit ABSENT/DEAD/STALE/LEGACY.
   Exit 2 = the sweep itself could not run.
 #>
 [CmdletBinding()]
@@ -93,18 +101,23 @@ $ErrorActionPreference = 'Stop'
 
 # --- the units this machine expects to be supervising it ----------------------------
 # Kept as data, not code, so adding the next out-of-band daemon is a row rather than a
-# new sweep. Each row names BOTH install routes (scheduled task and Startup shim)
-# because the fallback route is the one actually in use here.
+# new sweep. The browser watchdog names BOTH of its install routes (scheduled task and
+# Startup shim). The oa-supervisor tray (GH #689) is optional and has exactly one route,
+# the HKCU Run value; its old task/shim names are listed only to detect LEGACY leftovers.
 function Get-UnitSpecs {
   $oaHome  = Join-Path $env:LOCALAPPDATA 'overnight-agent'
   $startup = [Environment]::GetFolderPath('Startup')
   @(
     [ordered]@{
       name        = 'oa-supervisor'
-      issue       = '#261/#226'
+      issue       = '#261/#226/#689'
       purpose     = 'ends a stuck run so the */30 schedule can resume'
-      taskName    = 'Overnight Agent supervisor'
-      shimPath    = (Join-Path $startup 'Overnight Agent supervisor.cmd')
+      optional    = $true
+      runValue    = 'Overnight Agent supervisor'
+      legacyTask  = 'Overnight Agent supervisor'
+      legacyShim  = (Join-Path $startup 'Overnight Agent supervisor.cmd')
+      taskName    = ''
+      shimPath    = ''
       lockPath    = (Join-Path $oaHome 'supervisor-daemon.lock')
       signalPath  = (Join-Path $oaHome 'supervisor-daemon-heartbeat.json')
       signalField = 'lastCheckUtc'
@@ -167,10 +180,30 @@ function Get-SignalAgeMinutes([string]$Path, [string]$Field) {
   catch { return $null }
 }
 
+function Get-RunValueInstalled([string]$Name) {
+  if (-not $Name) { return $false }
+  try {
+    $v = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name $Name -ErrorAction Stop
+    return [bool]$v.$Name
+  } catch { return $false }
+}
+
+function Get-HeartbeatPaused([string]$Path) {
+  if (-not $Path -or -not (Test-Path $Path)) { return $false }
+  try {
+    $raw = [IO.File]::ReadAllText($Path, (New-Object Text.UTF8Encoding($false)))
+    return [regex]::IsMatch($raw, '"paused"\s*:\s*true')
+  } catch { return $false }
+}
+
 function Get-Facts {
   $units = @()
   foreach ($spec in (Get-UnitSpecs)) {
     $task = Get-TaskFacts $spec.taskName
+    $optional = [bool]($spec.Contains('optional') -and $spec.optional)
+    $legacyTask = if ($optional) { (Get-TaskFacts $spec.legacyTask).installed } else { $false }
+    $legacyShim = [bool]($optional -and $spec.legacyShim -and (Test-Path $spec.legacyShim))
+    $runInstalled = if ($optional) { Get-RunValueInstalled $spec.runValue } else { $false }
 
     $pid_ = 0
     if ($spec.lockPath -and (Test-Path $spec.lockPath)) {
@@ -201,6 +234,10 @@ function Get-Facts {
       taskLastRunMin = $task.lastRunMinutes
       shimInstalled  = [bool]($spec.shimPath -and (Test-Path $spec.shimPath))
       shimPath       = $spec.shimPath
+      optional       = $optional
+      runInstalled   = $runInstalled
+      legacyInstalled = ($legacyTask -or $legacyShim)
+      paused         = (Get-HeartbeatPaused $spec.signalPath)
       processAlive   = $alive
       processPid     = $pid_
       signalPath     = $spec.signalPath
@@ -220,11 +257,22 @@ function Get-UnitVerdict {
   $cadence   = if ($Unit.cadenceMin) { [double]$Unit.cadenceMin } else { 15 }
   $tolerance = [math]::Max($cadence * $Multiplier, $Floor)
 
-  $installed = ([bool]$Unit.taskInstalled) -or ([bool]$Unit.shimInstalled)
-  # ARM 'install': nothing is installed by either route, so the protection this repo
-  # believes it has is simply not present. Distinguishing this from DEAD is the whole
-  # point - "never installed" and "installed but died" need different fixes.
-  if (-not $installed) { return 'ABSENT' }
+  $installed = ([bool]$Unit.taskInstalled) -or ([bool]$Unit.shimInstalled) -or ([bool]$Unit.runInstalled)
+
+  # ARM 'legacy': a pre-#689 scheduled task or Startup shim for an optional unit. The
+  # retired daemon it launches is inert, so it protects nothing, and it is exactly the
+  # "second route" #689 forbids - report it until it is removed.
+  if ([bool]$Unit.legacyInstalled) { return 'LEGACY' }
+
+  if (-not $installed) {
+    # ARM 'optional': an opt-in unit with no startup entry is the user's choice, not a
+    # gap. Reporting it would make a default install permanently red.
+    if ([bool]$Unit.optional) { return 'OFF' }
+    # ARM 'install': nothing is installed by any route, so the protection this repo
+    # believes it has is simply not present. Distinguishing this from DEAD is the whole
+    # point - "never installed" and "installed but died" need different fixes.
+    return 'ABSENT'
+  }
 
   # ARM 'task': a registered, enabled scheduled task is a live dispatcher even though
   # it leaves NO resident process between firings. Without this arm the elevated
@@ -234,15 +282,19 @@ function Get-UnitVerdict {
                  ($Unit.taskState -ne 'Disabled') -and
                  (($null -eq $Unit.taskLastRunMin) -or ([double]$Unit.taskLastRunMin -le $tolerance))
 
-  # ARM 'process': the Startup-folder route is only alive while its process is alive.
-  # This must be checked independently of the heartbeat, because a daemon killed a
-  # minute ago still has a perfectly fresh heartbeat on disk.
-  $daemonAlive = ([bool]$Unit.shimInstalled) -and ([bool]$Unit.processAlive)
+  # ARM 'process': a Startup-folder or Run-entry route is only alive while its process
+  # is alive. This must be checked independently of the heartbeat, because a daemon
+  # killed a minute ago still has a perfectly fresh heartbeat on disk.
+  $daemonAlive = (([bool]$Unit.shimInstalled) -or ([bool]$Unit.runInstalled)) -and ([bool]$Unit.processAlive)
 
   # ARM 'fresh': alive is not the same as working. A daemon wedged inside its own
   # child call stays alive forever and stops beating, which is the failure the
   # heartbeat was written for.
   $daemonFresh = ($null -ne $Unit.signalAgeMin) -and ([double]$Unit.signalAgeMin -le $tolerance)
+
+  # ARM 'paused': the tray is alive and beating but the user paused evaluations.
+  # Surfaced as its own verdict so "paused" is never mistaken for "supervising".
+  if ([bool]$Unit.paused -and $daemonAlive -and $daemonFresh) { return 'PAUSED' }
 
   if ($taskHealthy -or ($daemonAlive -and $daemonFresh)) { return 'HEALTHY' }
   if ($daemonAlive) { return 'STALE' }
@@ -261,17 +313,20 @@ try {
   $rows = @()
   foreach ($u in $facts.units) {
     $verdict = Get-UnitVerdict -Unit $u -Multiplier $StaleMultiplier -Floor $MinStaleMinutes
-    $route = if ($u.taskInstalled -and $u.shimInstalled) { 'task+startup' }
+    $route = if ($u.runInstalled) { 'run' }
+             elseif ($u.taskInstalled -and $u.shimInstalled) { 'task+startup' }
              elseif ($u.taskInstalled) { 'task' }
              elseif ($u.shimInstalled) { 'startup' }
              else { 'none' }
+    if ($u.legacyInstalled) { $route += '+legacy' }
     $rows += [pscustomobject]@{
       name = $u.name; issue = $u.issue; purpose = $u.purpose; verdict = $verdict
       route = $route; pid = $u.processPid; signalAgeMin = $u.signalAgeMin; cadenceMin = $u.cadenceMin
     }
   }
 
-  $bad = @($rows | Where-Object verdict -ne 'HEALTHY')
+  # OFF (not opted in) and PAUSED (user paused) are deliberate user states, not gaps.
+  $bad = @($rows | Where-Object { $_.verdict -notin @('HEALTHY', 'OFF', 'PAUSED') })
 
   if ($Json) {
     [pscustomobject]@{ collectedUtc = $facts.collectedUtc; units = $rows; findings = $bad.Count } |
@@ -280,8 +335,11 @@ try {
     foreach ($r in $rows) {
       $tag = switch ($r.verdict) {
         'HEALTHY' { '  ok      ' }
+        'OFF'     { '  off     ' }
+        'PAUSED'  { '  paused  ' }
         'STALE'   { '  DORMANT ' }
         'DEAD'    { '  DORMANT ' }
+        'LEGACY'  { '  LEGACY  ' }
         default   { '  DORMANT ' }
       }
       Write-Host ("{0} {1,-18} {2,-8} route={3,-12} pid={4,-7} signal_age={5} min (cadence {6})" -f `
@@ -294,14 +352,18 @@ try {
           'ABSENT' { "installed by NEITHER route - $($r.purpose) is not protected at all" }
           'DEAD'   { "installed but not running - it stays dead until next logon" }
           'STALE'  { "running but its liveness signal stopped - it is wedged, not working" }
+          'LEGACY' { "a retired pre-#689 scheduled task / Startup shim is still installed - it launches an inert stub" }
         }
         Write-Host ("[supervisor-liveness] {0} ({1}) {2}: {3}" -f $r.name, $r.issue, $r.verdict, $why)
       }
       Write-Host ''
-      Write-Host '[supervisor-liveness] REPAIR: powershell -NoProfile -ExecutionPolicy Bypass -File plugins/overnight-agent/checks/install-oa-supervisor.ps1'
-      Write-Host '[supervisor-liveness] (run it ELEVATED to get the scheduled-task route, which survives logoff and restarts itself)'
+      if (@($bad | Where-Object name -eq 'oa-supervisor').Count) {
+        Write-Host '[supervisor-liveness] oa-supervisor REPAIR (opt-in tray, one HKCU Run route):'
+        Write-Host '                      powershell -NoProfile -ExecutionPolicy Bypass -File plugins/overnight-agent/checks/install-oa-supervisor.ps1 -Enable'
+        Write-Host '                      (or -Disable to opt out; both remove legacy leftovers. The tray supervises only while signed in.)'
+      }
     } else {
-      Write-Host "[supervisor-liveness] $($rows.Count) unit(s) healthy."
+      Write-Host "[supervisor-liveness] $($rows.Count) unit(s) checked; none dormant."
     }
   }
 
