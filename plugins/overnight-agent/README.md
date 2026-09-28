@@ -33,15 +33,6 @@ copilot plugin marketplace add shivbijlani/focus-planner
 copilot plugin install overnight-agent@focus-planner
 ```
 
-For chat-first setup, ask Copilot to:
-
-> follow onboarding in github__shivb--focusplanner__
-
-The plugin's `focus-planner-onboarding` skill installs the global watchdog first; that watchdog
-reconciles the global Overnight Agent automation. Both use model Auto and have no project, folder,
-workspace, branch, or OneDrive binding. Windows scheduled tasks, Startup shims, and resident daemon
-processes remain off unless separately enabled in `user-settings.md`.
-
 Or install the plugin directly from the repo subdirectory:
 
 ```shell
