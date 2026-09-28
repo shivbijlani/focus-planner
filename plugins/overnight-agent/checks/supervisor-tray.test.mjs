@@ -91,6 +91,10 @@ async function readCount(home) {
   catch (error) { if (['ENOENT', 'EBUSY', 'EPERM'].includes(error.code)) return 0; throw error; }
 }
 
+async function enableBrowser(ctx) {
+  await writeFile(join(ctx.home, 'supervisor-tray.json'), JSON.stringify({ browserEnabled: true }));
+}
+
 const countingSupervisor = `
 $countPath = Join-Path $PSScriptRoot 'count.txt'
 $count = if (Test-Path $countPath) { [int](Get-Content $countPath -Raw) } else { 0 }
@@ -133,6 +137,7 @@ $host2 = [pscustomobject]@{ ProcessId = 5; Name = 'notepad.exe'; CommandLine = $
 test('tray scheduler wakes at the supervisor M/N boundary before its periodic interval', { skip: !windows }, async t => {
   const ctx = await fakeHome(t, countingSupervisor);
   const { root, home } = ctx;
+  await enableBrowser(ctx);
   startTray(ctx);
   assert.ok(await waitFor(async () => (await readCount(home)) >= 2),
     `the tray did not wake at the 700ms boundary; heartbeat=${JSON.stringify(await readBeat(home))}`);
@@ -232,6 +237,7 @@ param([switch]$Json, [switch]$ReportOnly)
 if (-not $Json -or -not $ReportOnly) { throw 'ReportOnly was not forwarded' }
 @{ healthy = $true } | ConvertTo-Json
 `);
+  await enableBrowser(ctx);
   startTray(ctx, ['-NoAct']);
   const healthy = await waitFor(async () => {
     if (!existsSync(join(ctx.home, 'supervisor-daemon-heartbeat.json'))) return false;
@@ -250,6 +256,7 @@ test('browser errors remain visible without blocking OA evaluations', { skip: !w
   ]) {
     await t.test(label, async sub => {
       const ctx = await fakeHome(sub, countingSupervisor, body);
+      await enableBrowser(ctx);
       startTray(ctx);
       assert.ok(await waitFor(async () => (await readCount(ctx.home)) >= 2));
       const beat = await readBeat(ctx.home);
@@ -266,6 +273,7 @@ $child = Start-Process node -ArgumentList @('-e', '"setInterval(()=>{},1000)"') 
 $child.Id | Set-Content (Join-Path $PSScriptRoot 'worker.txt')
 Start-Sleep -Seconds 120
 `);
+  await enableBrowser(ctx);
   startTray(ctx, ['-EvaluationTimeoutSeconds', '5']);
   assert.ok(await waitFor(async () => (await readBeat(ctx.home)).components['oa-supervisor'].lastExitCode === 124));
   const beat = await readBeat(ctx.home);
@@ -340,6 +348,7 @@ test('browser consent defaults off inside the one tray and a component pause doe
 
 test('tray-owned browser history survives restart without adding a dispatcher', { skip: !windows }, async t => {
   const ctx = await fakeHome(t, countingSupervisor);
+  await enableBrowser(ctx);
   const first = startTray(ctx);
   assert.ok(await waitFor(async () => (await readBeat(ctx.home)).components['browser-watchdog'].state === 'HEALTHY'));
   const saved = JSON.parse((await readFile(join(ctx.home, 'supervisor-tray.json'), 'utf8')).replace(/^\uFEFF/, ''));

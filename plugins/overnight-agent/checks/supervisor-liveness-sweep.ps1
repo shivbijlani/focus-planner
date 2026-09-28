@@ -24,8 +24,9 @@
     * a pre-#689 scheduled task or Startup shim still present -> LEGACY (a finding:
       the retired route is inert and must be removed with install-oa-supervisor.ps1)
   The browser watchdog is also owned by that tray. Its old task, Startup shim and
-  controller process are LEGACY, never required routes. Both units are OFF or PAUSED
-  together. A fresh tray heartbeat cannot hide a failed or stale component check.
+  controller process are LEGACY, never required routes. The tray can be OFF or
+  PAUSED as a whole; the browser-watchdog can also be disabled or paused independently
+  inside the tray. A fresh tray heartbeat cannot hide a failed or stale component check.
 
   FALSE POSITIVES ARE THE REAL FAILURE MODE
   -----------------------------------------
