@@ -1044,9 +1044,10 @@ start more work.
    (see "Polling"). Run its check, then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone`.
 
 2. **Dispatch directly, in `scan -Compact` order, up to the configured concurrency limit.**
-   Count each send attempt toward the limit. Do not dispatch an ineligible row or invent a brief
-   for work that was not approved. Before each send, check the local :00/:30 cutoff in the pacing
-   rule above. Replies collected during this run do not widen the limit or reorder the worklist.
+   Count only sends accepted by `send_session_message` toward the limit; a failed delivery does
+   not consume a slot. Do not dispatch an ineligible row or invent a brief for work that was not
+   approved. Before each send, check the local :00/:30 cutoff in the pacing rule above. Replies
+   collected during this run do not widen the limit or reorder the worklist.
 
    For each task with work to hand over:
 
@@ -1061,11 +1062,12 @@ start more work.
    3. Send exactly one `send_session_message` to that task session with the approved brief and
       `delivery_mode: immediate`. Prefix `kickoff_continuation` when replacing a dead session.
    4. If sending fails, run `oa-state.ps1 session -Id <ID> -SessionDead`, do not retry that task
-      or session in this run, and continue to the next eligible row while under the limit and
-      before cutoff. A failed send consumes one attempt.
+      or session in this run, and continue to the next eligible row while the number of accepted
+      sends is under the limit and before cutoff. A failed send does not count toward the limit.
 
-   Stop after the limit, when no eligible prepared work remains, or at cutoff. Do not wait for a
-   task to finish before proceeding, and do not use an alternate dispatch mechanism.
+   Stop after the accepted-send count reaches the limit, when no eligible prepared work remains,
+   or at cutoff. Do not wait for a task to finish before proceeding, and do not use an alternate
+   dispatch mechanism.
 
 3. **For each task, resolve its session before doing anything else** — never create one on a hunch:
 
