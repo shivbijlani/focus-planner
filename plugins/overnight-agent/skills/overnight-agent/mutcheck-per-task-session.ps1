@@ -426,7 +426,7 @@ $inWorktree = Invoke-Oa -OaArgs (New-ChatArgs '811' 'SESS_811') -Settings $chatS
 Check 'K----- a code worktree containing the folder refuses binding' {
   $script:LastOaExit -ne 0 -and $inWorktree -match 'session_chat_worktree'
 }
-Remove-Item -LiteralPath $gitMarker
+Remove-Item -LiteralPath $gitMarker -Force
 
 # A legacy folder binding remains an error unless the caller explicitly chooses its new kind.
 # Keep this fixture synthetic: no live state is read or changed.
