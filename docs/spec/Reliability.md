@@ -31,10 +31,13 @@ loop itself lives under `plugins/overnight-agent/`.
 ## OS-dispatched supervision
 
 The core design choice is that supervision does **not** run inside the overnight run it watches.
-`plugins/overnight-agent/checks/install-oa-supervisor.ps1` installs the preferred Windows
-Scheduled Task, and falls back to a Startup-folder daemon only when unattended elevation is not
-available. `plugins/overnight-agent/checks/supervisor-liveness-sweep.ps1` then watches the
-watchers themselves.
+OS-level supervision is optional and defaults off. `user-settings.md` has separate switches for
+the Windows Scheduled Task, Startup-folder daemon, and browser-watchdog background process. Missing,
+unreadable, or invalid settings fail closed, and enabling the scheduled task never silently enables
+the Startup daemon as a fallback. `plugins/overnight-agent/checks/install-oa-supervisor.ps1`
+reconciles only explicitly enabled routes. `plugins/overnight-agent/checks/supervisor-liveness-sweep.ps1`
+watches enabled routes and reports disabled routes as intentional. Issue #689 tracks replacing these
+legacy mechanisms with an optional tray app rather than redesigning them here.
 
 > [!NOTE]
 > **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
@@ -58,11 +61,10 @@ $startNow = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
 
 
 </details>
-That separation is the whole point: a frozen app scheduler cannot suppress the task that judges the
-scheduler. Where Task Scheduler cannot be registered, `oa-supervisor-daemon.ps1` is still outside
-the failure domain because Explorer launches it from Startup at logon, as its own process. The
-trade-off is explicit in the file: the daemon does **not** auto-restart if it dies, so the
-scheduled-task route remains the stronger installation.
+When explicitly enabled, that separation is the whole point: a frozen app scheduler cannot suppress
+the task that judges the scheduler. The Startup daemon is an independent opt-in rather than an
+automatic fallback. `uninstall-background-components.ps1` backs up and removes the exact legacy
+task/shim names and stops only positively identified script PIDs.
 
 `supervisor-liveness-sweep.ps1` closes the next gap: a supervisor that dies silently is another
 single point of failure.

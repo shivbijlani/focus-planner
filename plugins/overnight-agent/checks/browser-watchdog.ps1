@@ -77,6 +77,10 @@
   debounce is therefore deliberately not implemented for this rung, and remains
   required for any rung that closes or restarts anything.
 
+.PARAMETER ChatInvocation
+  Run from an explicit chat/user invocation. Without this flag the script is an
+  off-process/background entry point and requires its user-settings toggle to be on.
+
 .PARAMETER Json
   Emit a machine-readable report instead of the human table.
 
@@ -120,6 +124,7 @@ param(
   [switch]$ReportOnly,
   [switch]$NoLaunch,
   [switch]$NoRepair,
+  [switch]$ChatInvocation,
   [switch]$Quiet,
   [string]$CheckerPath,
   [string]$EnsurePath,
@@ -128,6 +133,22 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+if (-not $ChatInvocation) {
+  $settingsHelper = Join-Path $PSScriptRoot 'background-settings.ps1'
+  if (-not (Test-Path -LiteralPath $settingsHelper -PathType Leaf)) {
+    Write-Error "browser-watchdog: background settings helper missing: $settingsHelper"
+    exit 3
+  }
+  . $settingsHelper
+  $backgroundSettings = Get-OaBackgroundSettings -SettingsPath $SettingsPath
+  if (-not $backgroundSettings.BrowserWatchdogBackgroundProcess) {
+    $disabled = 'browser-watchdog: background execution is disabled by user settings. Chat invocations must pass -ChatInvocation.'
+    if ($Json) { [pscustomobject]@{ disabled = $true; healthy = $true; detail = $disabled } | ConvertTo-Json }
+    else { Write-Host $disabled -ForegroundColor DarkGray }
+    exit 0
+  }
+}
 
 function Note {
   param([string]$Message, [string]$Color = 'Gray')

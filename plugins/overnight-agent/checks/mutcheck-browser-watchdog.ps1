@@ -143,7 +143,7 @@ function Invoke-Watchdog {
 
   $outFile = Join-Path $tempRoot ("out-" + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.txt')
   $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Variant,
-    '-CheckerPath', $checkerPath, '-EnsurePath', $ensurePath) + $ExtraArgs
+    '-ChatInvocation', '-CheckerPath', $checkerPath, '-EnsurePath', $ensurePath) + $ExtraArgs
   $p = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $args `
     -NoNewWindow -PassThru -RedirectStandardOutput $outFile -Wait
   [pscustomobject]@{

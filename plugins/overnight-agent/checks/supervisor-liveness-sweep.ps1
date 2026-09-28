@@ -1,7 +1,6 @@
 <#
 .SYNOPSIS
-  Detects that an OUT-OF-BAND reliability daemon has gone dormant. The supervisors
-  watch the app; nothing watched the supervisors. This is that reader.
+  Detects that an enabled OUT-OF-BAND reliability daemon has gone dormant.
 
 .DESCRIPTION
   WHAT WAS ACTUALLY BROKEN (GH #261, measured 2026-09-03)
@@ -53,6 +52,12 @@
   registers when run as admin. This sweep reports which route is actually in use so
   that gap is visible instead of assumed.
 
+  OPT-IN EXPECTATIONS
+  -------------------
+  The scheduled task, Startup daemon, and browser watchdog process all default off
+  in user-settings.md. A disabled unit is DISABLED, not ABSENT, and never contributes
+  a finding. Missing or invalid settings fail closed.
+
   FALSE POSITIVES ARE THE REAL FAILURE MODE
   -----------------------------------------
   run-sweeps.ps1 carries the lesson at length: workflow-health-sweep flagged a real
@@ -84,6 +89,7 @@
 [CmdletBinding()]
 param(
   [string]$FactsJson,
+  [string]$SettingsPath,
   [double]$StaleMultiplier = 3,
   [int]$MinStaleMinutes    = 45,
   [switch]$Json
@@ -91,11 +97,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+$settingsHelper = Join-Path $PSScriptRoot 'background-settings.ps1'
+if (-not (Test-Path -LiteralPath $settingsHelper -PathType Leaf)) {
+  throw "background settings helper not found: $settingsHelper"
+}
+. $settingsHelper
+
 # --- the units this machine expects to be supervising it ----------------------------
 # Kept as data, not code, so adding the next out-of-band daemon is a row rather than a
 # new sweep. Each row names BOTH install routes (scheduled task and Startup shim)
 # because the fallback route is the one actually in use here.
 function Get-UnitSpecs {
+  param([psobject]$BackgroundSettings)
   $oaHome  = Join-Path $env:LOCALAPPDATA 'overnight-agent'
   $startup = [Environment]::GetFolderPath('Startup')
   @(
@@ -109,6 +122,7 @@ function Get-UnitSpecs {
       signalPath  = (Join-Path $oaHome 'supervisor-daemon-heartbeat.json')
       signalField = 'lastCheckUtc'
       cadence     = 15
+      expected    = ([bool]$BackgroundSettings.SupervisorScheduledTask -or [bool]$BackgroundSettings.SupervisorStartupDaemon)
     }
     [ordered]@{
       name        = 'browser-watchdog'
@@ -121,6 +135,7 @@ function Get-UnitSpecs {
       signalField = ''      # no structured field: freshness comes from the file mtime
       cadence     = 62
       procMatch   = 'browser-watchdog'
+      expected    = [bool]$BackgroundSettings.BrowserWatchdogBackgroundProcess
     }
   )
 }
@@ -168,8 +183,9 @@ function Get-SignalAgeMinutes([string]$Path, [string]$Field) {
 }
 
 function Get-Facts {
+  $background = Get-OaBackgroundSettings -SettingsPath $SettingsPath
   $units = @()
-  foreach ($spec in (Get-UnitSpecs)) {
+  foreach ($spec in (Get-UnitSpecs -BackgroundSettings $background)) {
     $task = Get-TaskFacts $spec.taskName
 
     $pid_ = 0
@@ -206,6 +222,7 @@ function Get-Facts {
       signalPath     = $spec.signalPath
       signalAgeMin   = (Get-SignalAgeMinutes $spec.signalPath $spec.signalField)
       cadenceMin     = $spec.cadence
+      expected       = [bool]$spec.expected
     }
   }
   return [ordered]@{ collectedUtc = ([datetimeoffset]::UtcNow.ToString('o')); units = $units }
@@ -216,6 +233,10 @@ function Get-Facts {
 # mutcheck-supervisor-liveness.ps1 and must break exactly one fixture.
 function Get-UnitVerdict {
   param([psobject]$Unit, [double]$Multiplier, [int]$Floor)
+
+  if ($Unit.PSObject.Properties.Name -contains 'expected' -and -not [bool]$Unit.expected) {
+    return 'DISABLED'
+  }
 
   $cadence   = if ($Unit.cadenceMin) { [double]$Unit.cadenceMin } else { 15 }
   $tolerance = [math]::Max($cadence * $Multiplier, $Floor)
@@ -271,7 +292,7 @@ try {
     }
   }
 
-  $bad = @($rows | Where-Object verdict -ne 'HEALTHY')
+  $bad = @($rows | Where-Object { $_.verdict -ne 'HEALTHY' -and $_.verdict -ne 'DISABLED' })
 
   if ($Json) {
     [pscustomobject]@{ collectedUtc = $facts.collectedUtc; units = $rows; findings = $bad.Count } |
@@ -280,6 +301,7 @@ try {
     foreach ($r in $rows) {
       $tag = switch ($r.verdict) {
         'HEALTHY' { '  ok      ' }
+        'DISABLED' { '  disabled' }
         'STALE'   { '  DORMANT ' }
         'DEAD'    { '  DORMANT ' }
         default   { '  DORMANT ' }
@@ -301,7 +323,7 @@ try {
       Write-Host '[supervisor-liveness] REPAIR: powershell -NoProfile -ExecutionPolicy Bypass -File plugins/overnight-agent/checks/install-oa-supervisor.ps1'
       Write-Host '[supervisor-liveness] (run it ELEVATED to get the scheduled-task route, which survives logoff and restarts itself)'
     } else {
-      Write-Host "[supervisor-liveness] $($rows.Count) unit(s) healthy."
+      Write-Host "[supervisor-liveness] $($rows.Count) unit(s) healthy or intentionally disabled."
     }
   }
 

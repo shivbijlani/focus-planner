@@ -49,6 +49,11 @@ everywhere. When the user asks to change any setting (e.g. "use a different driv
 PRs", "add someone to the email allow-list"), edit the **resolved external file** in place — never the
 bundled template inside the plugin (edits there are wiped on the next update) and never `SKILL.md`.
 
+The recurring **Overnight Agent** and **Focus Planner watchdog** are global chat automations. They
+must use model Auto and must not be bound to a project, repository, workspace, branch, or OneDrive
+folder. OS-level scheduled tasks, Startup shims, and resident daemons are separate opt-ins under
+`Background and off-process components`; missing or invalid settings mean off.
+
 Throughout the rest of this skill, references to "User settings", "Preferences", the
 "Authorized sender addresses", and the "Auto-send allow-list" all mean the values in the resolved
 `user-settings.md`.

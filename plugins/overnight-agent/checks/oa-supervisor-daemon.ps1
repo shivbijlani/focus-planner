@@ -35,10 +35,23 @@
 [CmdletBinding()]
 param(
   [int]$IntervalMinutes = 15,
+  [string]$SettingsPath,
   [switch]$Once
 )
 
 $ErrorActionPreference = 'Continue'
+$settingsHelper = Join-Path $PSScriptRoot 'background-settings.ps1'
+if (-not (Test-Path -LiteralPath $settingsHelper -PathType Leaf)) {
+  Write-Error "[oa-daemon] background settings helper missing: $settingsHelper"
+  exit 2
+}
+. $settingsHelper
+$background = Get-OaBackgroundSettings -SettingsPath $SettingsPath
+if (-not $background.SupervisorStartupDaemon) {
+  Write-Host '[oa-daemon] disabled by user settings; exiting without creating a lock or heartbeat.'
+  exit 0
+}
+
 $oaHome     = Join-Path $env:LOCALAPPDATA 'overnight-agent'
 $supervisor = Join-Path $oaHome 'oa-supervisor.ps1'
 $lockPath   = Join-Path $oaHome 'supervisor-daemon.lock'
@@ -61,6 +74,12 @@ if (Test-Path $lockPath) {
 
 try {
   do {
+    $background = Get-OaBackgroundSettings -SettingsPath $SettingsPath
+    if (-not $background.SupervisorStartupDaemon) {
+      Write-Host '[oa-daemon] disabled by user settings; stopping.'
+      break
+    }
+
     $state = 'SUPERVISOR-MISSING'
     try {
       if (Test-Path $supervisor) {

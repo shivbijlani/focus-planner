@@ -131,6 +131,7 @@ param(
 if (`$WhatIf) { `$forward += '-ReportOnly' }
 if (`$Quiet)  { `$forward += '-Quiet' }
 if (`$Json)   { `$forward += '-Json' }
+`$forward += '-ChatInvocation'
 if (`$Rest)   { `$forward += `$Rest }
 
 if (`$candidates.Count -gt 0) {

@@ -1251,6 +1251,15 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-supervisor-liveness.ps1
 
+  background-opt-in:
+    name: Background components default off
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (fail closed, disabled is quiet, uninstall is scoped)
+        shell: powershell
+        run: ./plugins/overnight-agent/checks/mutcheck-background-opt-in.ps1
+
   # The OTHER half of GH #261, and the half that actually freezes the schedule.
   #
   # `supervisor-liveness` above proves the daemons are watched. This proves a hung RUN is

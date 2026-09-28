@@ -33,6 +33,8 @@ if (-not (Test-Path $Subject)) { throw "subject not found: $Subject" }
 $PsExe = (Get-Process -Id $PID).Path
 $Root  = Join-Path ([IO.Path]::GetTempPath()) ("mutcheck-sl-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $Root -Force | Out-Null
+Copy-Item (Join-Path $PSScriptRoot 'background-settings.ps1') `
+          (Join-Path $Root 'background-settings.ps1') -Force
 
 $script:pass = 0
 $script:fail = 0

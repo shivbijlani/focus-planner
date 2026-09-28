@@ -269,6 +269,8 @@ $AlwaysRequired = @(
   # is not restorable. Added with #180, which moved the slot table into
   # user-settings.md and gave it a single reader.
   'browser-slot-table.ps1',
+  # Shared fail-closed settings reader used by every OS-level/background route.
+  'background-settings.ps1',
   # The #226 supervisor and its daemon are dispatched by the OS (a Windows scheduled task
   # or the Startup-folder shim) as `%LOCALAPPDATA%\overnight-agent\<name>` - the same
   # absolute-path-from-the-flat-home contract as the entries above. They are named by no

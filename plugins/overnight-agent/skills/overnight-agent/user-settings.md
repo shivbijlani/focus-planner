@@ -54,6 +54,23 @@ a value here takes effect on the next run with nothing else to change.
 | Overnight Agent concurrency | `1` |
 | Overnight Agent start buffer | `5m` |
 
+## Background and off-process components
+
+These switches control operating-system-level processes outside Copilot chat automations. They are
+independent and **default off**: a missing row, missing settings file, unreadable file, or invalid value
+is treated as `off`. Enabling one route never enables another as a fallback.
+
+| Setting | Value |
+| --- | --- |
+| OA supervisor scheduled task | `off` |
+| OA supervisor Startup daemon | `off` |
+| Browser watchdog background process | `off` |
+
+The normal global chat watchdog and Overnight Agent automations do not require these switches. Use
+`checks\uninstall-background-components.ps1` to remove older scheduled tasks, Startup shims, and
+positively identified daemon processes. Issue #689 tracks a future tray-app redesign; these settings
+only make the current mechanisms explicit opt-ins.
+
 **Concurrency is the drain width within each run, not a total-start quota.** At `1`, each completed
 task is followed by the next eligible prepared task; at `2`, either opening is refilled independently.
 The run stops sending at the next :00/:30 after its first prompt, **minus the start buffer**.

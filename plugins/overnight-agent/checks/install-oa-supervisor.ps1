@@ -3,14 +3,12 @@
   Registers (or removes) the OS-level Windows Scheduled Task that runs oa-supervisor.ps1.
 
 .DESCRIPTION
-  This script is the actual fix for GH #226. `oa-supervisor.ps1` is only a checker;
-  a checker dispatched from inside the failure domain is what we already had, and it
-  is what left 18 stalls (314.8 h) to be ended by a human restarting the app.
+  This script manages the legacy GH #226 OS-level routes. Both routes are optional
+  and default off in user-settings.md. They are kept until #689 replaces them; this
+  installer must never infer consent from an absent or invalid setting.
 
-  Windows Task Scheduler is a service of the operating system. It is not the app, it
-  is not the app's scheduler, and it is not an agent run - so it keeps firing exactly
-  when everything this repo controls has stopped. That property, and nothing about
-  the checker's cleverness, is what makes supervision real.
+  The scheduled task and Startup daemon are independent settings. A failed task
+  registration may use the Startup route only when that second route is also on.
 
   IDEMPOTENT: re-running updates the existing task rather than creating a second one.
   REVERSIBLE: `-Uninstall` removes it completely. That is the whole rollback.
@@ -20,13 +18,20 @@
   is a quarter hour rather than the 3.8 days the worst recorded stall actually ran.
 
 .PARAMETER Uninstall
-  Remove the scheduled task and exit.
+  Remove the historical OA scheduled task, Startup shim, and lock-owned daemon.
+  Use uninstall-background-components.ps1 to remove every project-owned supervisor,
+  including the browser watchdog, with backups and a JSON evidence record.
+
+.PARAMETER Plan
+  Resolve settings and print the desired routes without changing the machine.
 #>
 [CmdletBinding()]
 param(
   [int]$IntervalMinutes = 15,
   [string]$TaskName = 'Overnight Agent supervisor',
+  [string]$SettingsPath,
   [switch]$Uninstall,
+  [switch]$Plan,
   # Install a DETECT-ONLY supervisor (classifies + logs, never restarts). Default is the
   # acting supervisor: on a genuine hang it silently restarts the app.
   [switch]$NoAct
@@ -61,9 +66,64 @@ if ($Uninstall) {
   return
 }
 
+$settingsHelper = Join-Path $PSScriptRoot 'background-settings.ps1'
+if (-not (Test-Path -LiteralPath $settingsHelper -PathType Leaf)) {
+  throw "background settings helper not found: $settingsHelper"
+}
+. $settingsHelper
+$background = Get-OaBackgroundSettings -SettingsPath $SettingsPath
+
+if ($Plan) {
+  [pscustomobject]@{
+    settingsPath = $background.SettingsPath
+    scheduledTask = [bool]$background.SupervisorScheduledTask
+    startupDaemon = [bool]$background.SupervisorStartupDaemon
+    errors = @($background.Errors)
+  } | ConvertTo-Json -Depth 4
+  return
+}
+
+$startup = [Environment]::GetFolderPath('Startup')
+$shim = Join-Path $startup 'Overnight Agent supervisor.cmd'
+$oaHome = Join-Path $env:LOCALAPPDATA 'overnight-agent'
+$lock = Join-Path $oaHome 'supervisor-daemon.lock'
+
+# Reconcile OFF as well as ON. Otherwise changing a setting would leave the old
+# dispatcher running indefinitely, which makes the setting cosmetic.
+if (-not $background.SupervisorScheduledTask) {
+  $disabledTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  if ($disabledTask) {
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+    Write-Host "[oa-supervisor] removed disabled scheduled task '$TaskName'."
+  }
+}
+if (-not $background.SupervisorStartupDaemon) {
+  if (Test-Path -LiteralPath $shim -PathType Leaf) {
+    Remove-Item -LiteralPath $shim -Force
+    Write-Host "[oa-supervisor] removed disabled Startup shim $shim."
+  }
+  if (Test-Path -LiteralPath $lock -PathType Leaf) {
+    $daemonPid = 0
+    try { $daemonPid = [int]((Get-Content -LiteralPath $lock -Raw | ConvertFrom-Json).pid) } catch { }
+    if ($daemonPid -gt 0) {
+      $daemon = Get-CimInstance Win32_Process -Filter "ProcessId=$daemonPid" -ErrorAction SilentlyContinue
+      if ($daemon -and $daemon.CommandLine -match '(?i)(?:^|\s)-File\s+(?:"[^"]*\\|[^\s"]*\\)?oa-supervisor-daemon\.ps1"?(?:\s|$)') {
+        Stop-Process -Id $daemonPid -Force
+        Write-Host "[oa-supervisor] stopped disabled Startup daemon (pid $daemonPid)."
+      }
+    }
+    Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
+  }
+}
+
+if (-not $background.SupervisorScheduledTask -and -not $background.SupervisorStartupDaemon) {
+  Write-Host '[oa-supervisor] disabled by user settings; no scheduled task, Startup shim, or daemon was created.'
+  foreach ($error in $background.Errors) { Write-Host "[oa-supervisor] $error" }
+  return
+}
+
 # Prefer the deployed copy in the OA home: the scheduled task must keep working when
 # a worktree is deleted, so it must not point into one.
-$oaHome     = Join-Path $env:LOCALAPPDATA 'overnight-agent'
 $deployed   = Join-Path $oaHome 'oa-supervisor.ps1'
 $repoCopy   = Join-Path $PSScriptRoot 'oa-supervisor.ps1'
 if (-not (Test-Path $oaHome)) { New-Item -ItemType Directory -Path $oaHome -Force | Out-Null }
@@ -120,30 +180,36 @@ $desc = "GH #226: out-of-band supervisor for the Overnight Agent. Runs every $In
         "powershell -File `"$PSCommandPath`" -Uninstall"
 
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-if ($existing) { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false }
+if ($existing -and $background.SupervisorScheduledTask) {
+  Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+}
 
 # Task Scheduler is the preferred dispatcher. On this machine registering one is denied
 # without elevation, and the agent cannot elevate itself, so a failure here must NOT
 # leave the system unsupervised - it falls back to the Startup-folder daemon, which is
 # still outside the failure domain and can be installed unattended.
 $registered = $false
-try {
-  Register-ScheduledTask -TaskName $TaskName -Action $action `
-    -Trigger @($atLogon, $startNow) -Principal $principal -Settings $settings `
-    -Description $desc | Out-Null
-  $registered = $true
-} catch {
-  Write-Host "[oa-supervisor] Task Scheduler registration failed: $($_.Exception.Message.Trim())"
-  Write-Host "[oa-supervisor] falling back to the unelevated Startup-folder daemon."
+if ($background.SupervisorScheduledTask) {
+  try {
+    Register-ScheduledTask -TaskName $TaskName -Action $action `
+      -Trigger @($atLogon, $startNow) -Principal $principal -Settings $settings `
+      -Description $desc | Out-Null
+    $registered = $true
+  } catch {
+    Write-Host "[oa-supervisor] Task Scheduler registration failed: $($_.Exception.Message.Trim())"
+    if ($background.SupervisorStartupDaemon) {
+      Write-Host '[oa-supervisor] the separately enabled Startup daemon will be installed.'
+    } else {
+      throw 'Scheduled-task registration failed and the independent Startup daemon setting is off.'
+    }
+  }
 }
 
-if (-not $registered) {
+if ($background.SupervisorStartupDaemon) {
   $daemonSrc  = Join-Path $PSScriptRoot 'oa-supervisor-daemon.ps1'
   $daemonDst  = Join-Path $oaHome 'oa-supervisor-daemon.ps1'
   if (Test-Path $daemonSrc) { Copy-Item $daemonSrc $daemonDst -Force }
 
-  $startup = [Environment]::GetFolderPath('Startup')
-  $shim    = Join-Path $startup 'Overnight Agent supervisor.cmd'
 @"
 @echo off
 rem GH #226 - out-of-band supervisor for the Overnight Agent.
@@ -163,8 +229,9 @@ start "" /min "$psExe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Windo
   Write-Host "[oa-supervisor] UPGRADE (recommended, one elevated command):"
   Write-Host "               powershell -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
   Write-Host "               run from an ADMIN prompt - it will register the real scheduled task instead."
-  return
 }
+
+if (-not $registered) { return }
 
 $t = Get-ScheduledTask -TaskName $TaskName
 Write-Host "[oa-supervisor] registered '$TaskName' (state=$($t.State), every $IntervalMinutes min, logon type $logonType)."
