@@ -184,11 +184,7 @@ live outside the plugin and that the bundled copy is overwritten on update.
 
 Every non-code task uses a dedicated global chat session, with no project and no folder workspace.
 Chats are stored locally under `~/.copilot/chats`; the binder stores the session identity without a
-workspace path. Code tasks use their own repository worktree, created from a freshly fetched
-`origin/main` outside OneDrive. The binder refuses the nameable error `session_workspace_onedrive`
-for every workspace-backed task session when an explicit workspace resolves equal to or beneath any
-detected OneDrive root. This boundary protects the planner database and old OneDrive scratch roots
-from tools that write relative to their current working directory.
+workspace path. Code tasks continue to use their repository worktrees under `V:\repos`.
 
 The PowerShell-side mutchecks parallel the JS ones. Files such as
 `plugins/overnight-agent/skills/overnight-agent/mutcheck-priority-order.ps1`,

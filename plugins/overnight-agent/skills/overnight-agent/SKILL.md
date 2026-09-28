@@ -1095,12 +1095,10 @@ start more work.
    worktree.
 
    - **Code task** → create its session in the **repository project** the change belongs to, with
-     `workspace_type: worktree`, from a freshly fetched `origin/main`. Put the worktree outside
-     every resolved OneDrive root. Bind it as `code`; the bind refuses a missing project
-     (`session_project_required`), a missing workspace (`session_workspace_required`), a folder or
-     other unsupported workspace type (`session_workspace_type`), the run session's own workspace
-     (`session_workspace_inherited`), and every workspace under OneDrive
-     (`session_workspace_onedrive`).
+     `workspace_type: worktree`, from a freshly fetched `origin/main`, under `V:\repos`. Bind it as
+     `code`; the bind refuses a missing project (`session_project_required`), a missing workspace
+     (`session_workspace_required`), a `folder` workspace (`session_workspace_type`) and the run
+     session's own workspace (`session_workspace_inherited`).
    - **Non-code task** → create a **global chat session**: no project, folder, branch or workspace.
      Chats are stored locally under `~/.copilot/chats`; do not create a folder project or pass a
      workspace. Bind it as `chat`. Relative-output tools such as Playwright therefore write to

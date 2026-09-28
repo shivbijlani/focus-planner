@@ -89,13 +89,11 @@
                                 binding over a DEAD one is the replacement path and records the
                                 prior id. `-Force` overrides.
           [-SessionKind <k>]    `code` or `chat`; defaults to `chat`. `code` REQUIRES
-                                -SessionProject and -SessionWorkspace. `chat` forbids both.
+                                -SessionProject and -SessionWorkspace. `chat` has neither.
           [-SessionProject <p>] The project the session must be created in -- the repository
                                 project for a code task, NOT the run session's project.
           [-SessionWorkspace <p>] The worktree/branch/folder path the session works in.
-                                Code sessions require a task-specific worktree outside OneDrive.
-                                Global chat sessions have no project or workspace.
-          [-WorkspaceType <t>]  Code task worktrees must be `worktree`; chat sessions have none.
+          [-WorkspaceType <t>]  `worktree` | `branch` | `folder`. Defaults from -SessionKind.
           [-RunWorkspace <p>]   This run session's own workspace, so a bind that would reuse it
                                 can be refused. Defaults to the current directory.
           [-SessionDead]        Record that the session could not be woken. Flips the verdict to
@@ -568,7 +566,8 @@ param(
   #
   # `-SessionKind` is a CLOSED ENUM for the same reason `-Action` is: it selects which refusals
   # apply, so free text would let the caller opt out of the workspace guard by mis-spelling the
-  # kind. `code` demands a project and a repository worktree; `chat` has neither.
+  # kind. `code` is the constrained one -- it demands a project and a workspace and refuses the
+  # run session's own.
   [string]$SessionId,
   [ValidateSet('code', 'chat')]
   [string]$SessionKind,
@@ -4824,47 +4823,6 @@ function Test-SamePath([string]$a, [string]$b) {
   return [string]::Equals($na, $nb, [StringComparison]::OrdinalIgnoreCase)
 }
 
-function ConvertTo-WorkspacePath([string]$path) {
-  if (-not $path) { return '' }
-  $expanded = [Environment]::ExpandEnvironmentVariables($path)
-  try {
-    if (Test-Path -LiteralPath $expanded) {
-      return (Resolve-Path -LiteralPath $expanded -ErrorAction Stop).Path.TrimEnd('\')
-    }
-  } catch { }
-  try { return [IO.Path]::GetFullPath($expanded).TrimEnd('\') }
-  catch { return ($expanded -replace '/', '\').TrimEnd('\') }
-}
-
-function Test-PathUnderRoot([string]$path, [string]$root) {
-  $candidate = ConvertTo-WorkspacePath $path
-  $parent = ConvertTo-WorkspacePath $root
-  if (-not $candidate -or -not $parent) { return $false }
-  if ([string]::Equals($candidate, $parent, [StringComparison]::OrdinalIgnoreCase)) { return $true }
-  return $candidate.StartsWith(($parent + '\'), [StringComparison]::OrdinalIgnoreCase)
-}
-
-function Get-OneDriveRoots {
-  $candidates = @(
-    $env:OneDrive,
-    $env:OneDriveConsumer,
-    $env:OneDriveCommercial
-  )
-  if ($env:USERPROFILE -and (Test-Path -LiteralPath $env:USERPROFILE -PathType Container)) {
-    $candidates += @(Get-ChildItem -LiteralPath $env:USERPROFILE -Directory -Filter 'OneDrive*' `
-      -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
-  }
-  @($candidates | Where-Object { $_ } | ForEach-Object { ConvertTo-WorkspacePath "$_" } |
-    Where-Object { $_ } | Sort-Object -Unique)
-}
-
-function Get-OneDriveRootForPath([string]$path) {
-  foreach ($root in @(Get-OneDriveRoots)) {
-    if (Test-PathUnderRoot $path $root) { return $root }
-  }
-  return $null
-}
-
 function Get-SessionState($st) {
   if ($st -and $st.PSObject.Properties['session'] -and $st.session -and "$($st.session.session_id)") {
     return $st.session
@@ -4892,7 +4850,8 @@ function Test-WorkspaceUsable([string]$path, [string]$wsType) {
   # expensive direction. Only a directory that is provably there and provably has no checkout is
   # reported unusable.
   if (-not $path) { return $true }
-  # A legacy non-worktree session or a global chat has no checkout to look for.
+  # A non-worktree workspace (a plain folder session) has no checkout to look for, so there is
+  # nothing here that could distinguish healthy from broken.
   if ($wsType -and $wsType -ne 'worktree') { return $true }
   try {
     # A path that does not exist is NOT judged. "Never created yet" and "torn down" are different
@@ -5074,9 +5033,7 @@ function Cmd-Session {
 
   # No task/session enumeration: this is drain width, not a global occupancy estimate.
   if (-not $Id) {
-    if (-not ($RunLimit -or $InFlight)) {
-      throw 'session requires -Id (or -RunLimit, -WorkspaceGone)'
-    }
+    if (-not ($RunLimit -or $InFlight)) { throw 'session requires -Id (or -RunLimit, or -WorkspaceGone for teardown)' }
     return (Get-RunLimit | ConvertTo-Json -Depth 4)
   }
 
@@ -5132,9 +5089,6 @@ function Cmd-Session {
     }
     elseif ($sess) { $prior = "$($sess.prior_session_id)" }
 
-    if (-not $SessionKind -and $sess -and "$($sess.kind)" -eq 'folder') {
-      throw 'session_kind_required: replace a legacy folder binding as a chat or code session'
-    }
     $kind = if ($SessionKind) { $SessionKind } elseif ($sess) { "$($sess.kind)" } else { 'chat' }
     if ($kind -notin @('code', 'chat')) {
       throw "session_kind_invalid: '$kind' is not a supported task session kind"
@@ -5165,12 +5119,12 @@ function Cmd-Session {
           'how a "per-task session" ends up sharing the run session workspace with no git repo in it.')
       }
       if (-not $workspace) {
-        throw ('session_workspace_required: a code task must name its own repository worktree ' +
-          '(-SessionWorkspace), not a shared folder.')
+        throw ('session_workspace_required: a code task must name its own workspace ' +
+          '(-SessionWorkspace) -- a worktree or branch checkout, not a shared folder.')
       }
-      if ($wsType -ne 'worktree') {
-        throw ("session_workspace_type: a code task requires its own git worktree; " +
-          'branch, folder and other workspace types are not supported.')
+      if ($wsType -eq 'folder') {
+        throw ("session_workspace_type: a code task cannot use a 'folder' workspace; " +
+          'use worktree (preferred) or branch.')
       }
       $runWs = if ($RunWorkspace) { $RunWorkspace } else { (Get-Location).Path }
       if ($runWs -and (Test-SamePath $workspace $runWs)) {
@@ -5178,18 +5132,6 @@ function Cmd-Session {
           'workspace. One task, one workspace -- sharing one deadlocks the sessions and reproduces ' +
           'the very isolation failure #404 exists to prevent.')
       }
-    }
-
-    if ($kind -eq 'code' -and -not $workspace) {
-      throw 'session_workspace_required: every task session must have an isolated workspace'
-    }
-    if ($workspace) {
-      $oneDriveRoot = Get-OneDriveRootForPath $workspace
-      if ($oneDriveRoot) {
-        throw ("session_workspace_onedrive: workspace '$workspace' resolves under OneDrive root " +
-          "'$oneDriveRoot'. Task worktrees must be local-only.")
-      }
-      $workspace = ConvertTo-WorkspacePath $workspace
     }
 
     # Binding is identity, not admission. New/replacement sessions are created idle and sent

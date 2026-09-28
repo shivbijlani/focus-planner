@@ -351,6 +351,24 @@ Check 'K-- a non-code task gets a workspace-free chat' {
     -not $chat.project -and -not $chat.workspace
 }
 
+$chatDefault = Invoke-OaJson @('session', '-Id', '809', '-SessionId', 'SESS_809')
+Check 'K--- non-code sessions default to a workspace-free chat' {
+  "$($chatDefault.session_id)" -eq 'SESS_809' -and "$($chatDefault.kind)" -eq 'chat' -and
+    -not $chatDefault.project -and -not $chatDefault.workspace
+}
+
+$chatProject = Invoke-Oa @('session', '-Id', '810', '-SessionId', 'SESS_810',
+  '-SessionKind', 'chat', '-SessionProject', 'focus-planner')
+Check 'K---- a chat cannot be bound to a project' {
+  $script:LastOaExit -ne 0 -and $chatProject -match 'session_chat_scope'
+}
+
+$chatWorkspace = Invoke-Oa @('session', '-Id', '811', '-SessionId', 'SESS_811',
+  '-SessionKind', 'chat', '-SessionWorkspace', (Join-Path $root 'chat-811'))
+Check 'K----- a chat cannot be bound to a workspace' {
+  $script:LastOaExit -ne 0 -and $chatWorkspace -match 'session_chat_scope'
+}
+
 # --- L/M/N: the concurrency setting (#391), and its fail-safe direction ----------------
 $l = Invoke-OaJson -OaArgs @('session', '-InFlight') -Settings $noSettings
 Check 'L absent settings file -> concurrency 1' { $l.concurrency -eq 1 }
