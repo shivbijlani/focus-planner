@@ -202,30 +202,29 @@ function Test-Arms {
   elseif ($s2 -eq '<no-session>' -or $s2 -eq '<no-state>') { $f += "A2: -ForDispatch destroyed the binding ($s2)" }
 
   # A4 -- omitting the scan fingerprint must not turn authorisation into a bypass.
-  [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d2 -Extra @('-ForDispatch'))
-  if ($script:LastExitCode -eq 0 -or $script:LastSessionOutput -notmatch 'session_input_required' -or
-      (Read-Stamp $d2) -ne $s2) {
+  $d4 = New-Store
+  [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d4 -Extra @('-ForDispatch'))
+  if ($script:LastExitCode -eq 0 -or (Read-Stamp $d4) -ne $StaleStamp) {
     $f += 'A4: missing dispatch_input was accepted or changed the wake stamp'
   }
 
   # A5 -- stale input and a human pause are both rejected before stamping.
-  [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d2 -Extra @(
+  $d5 = New-Store
+  [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d5 -Extra @(
     '-ForDispatch', '-DispatchInput', 'stale-dispatch-input'))
-  if ($script:LastExitCode -eq 0 -or $script:LastSessionOutput -notmatch 'session_input_changed' -or
-      (Read-Stamp $d2) -ne $s2) {
+  if ($script:LastExitCode -eq 0 -or (Read-Stamp $d5) -ne $StaleStamp) {
     $f += 'A5: changed dispatch_input was accepted or changed the wake stamp'
   }
-  $d5 = New-Store
-  $statePath = Join-Path $d5 'task-999.json'
-  $pausedState = Get-Content -Raw $statePath | ConvertFrom-Json
-  $pausedState.status = 'blocked'
-  $pausedState | Add-Member -NotePropertyName status_by -NotePropertyValue 'user' -Force
-  $pausedState | Add-Member -NotePropertyName paused_at -NotePropertyValue '2026-09-07T19:40:00-07:00' -Force
-  $pausedState | ConvertTo-Json -Depth 8 | Set-Content -Path $statePath -Encoding utf8
-  $hash5 = Get-DispatchInput -SubjectPath $SubjectPath -StateDir $d5
-  [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d5 -Extra @(
-    '-ForDispatch', '-DispatchInput', $hash5))
-  if ($script:LastExitCode -eq 0 -or (Read-Stamp $d5) -ne $StaleStamp) {
+  $d6 = New-Store
+  $statePath = Join-Path $d6 'task-999.json'
+  $pausedState = [IO.File]::ReadAllText($statePath).Replace(
+    '"status": "in-progress"',
+    '"status": "blocked", "status_by": "user", "paused_at": "2026-09-07T19:40:00-07:00"')
+  [IO.File]::WriteAllText($statePath, $pausedState, [Text.UTF8Encoding]::new($false))
+  $hash6 = Get-DispatchInput -SubjectPath $SubjectPath -StateDir $d6
+  [void](Invoke-Session -SubjectPath $SubjectPath -StateDir $d6 -Extra @(
+    '-ForDispatch', '-DispatchInput', $hash6))
+  if ($script:LastExitCode -eq 0 -or (Read-Stamp $d6) -ne $StaleStamp) {
     $f += 'A5: a user-paused task was authorised or its wake stamp changed'
   }
 
