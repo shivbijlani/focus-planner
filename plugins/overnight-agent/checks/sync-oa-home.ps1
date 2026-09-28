@@ -276,12 +276,15 @@ $AlwaysRequired = @(
   # roster (not sweeps), reached by no import edge (.ps1), so without these lines a merged
   # supervisor fix lands in installed-plugins and never reaches the copy the tray actually
   # runs. Classic "merged isn't running" (cf. #196, #254). Syncing never registers or
-  # starts the tray. oa-supervisor-daemon.ps1 stays listed as a RETIRED stub so a leftover
-  # pre-#689 scheduled task / Startup shim launches nothing.
+  # starts the tray. The separately opt-in browser check is also tray-owned and needs
+  # its checker/launch dependencies in this flat home. oa-supervisor-daemon.ps1 stays
+  # listed as a RETIRED stub so a leftover pre-#689 task/shim launches nothing.
   'oa-supervisor.ps1',
   'oa-supervisor-daemon.ps1',
   'oa-supervisor-tray.ps1',
   'oa-supervisor-startup.ps1',
+  'browser-watchdog.ps1',
+  'ensure-mcp-browsers.ps1',
   'reliability-supervisor.mjs',
   'windows-app-actuator.mjs',
   'session-terminal-evidence.mjs',

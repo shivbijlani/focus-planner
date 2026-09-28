@@ -26,7 +26,9 @@ default, enabled only by the user) evaluates quiet preventive restarts after 3 h
 and a guarded hard deadline after 4 hours, and only while the user is signed in.
 Its policy, action lock and audit live in `%LOCALAPPDATA%\overnight-agent`; see the
 plugin README for safeguards and the detect-only command. Agent runs never enable,
-start or duplicate this supervisor.
+start or duplicate this supervisor. Browser checks are also optional and off by
+default inside the same tray (hourly when enabled); the `/browser-watchdog`
+skill remains an on-demand Copilot command, not a separate hourly dispatcher.
 
 ## User settings
 

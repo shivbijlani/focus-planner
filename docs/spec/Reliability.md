@@ -40,6 +40,13 @@ safeguards (process identity, action lock, graceful-then-bounded force, durable 
 stay in `reliability-supervisor.mjs`. `plugins/overnight-agent/checks/supervisor-liveness-sweep.ps1`
 then watches the watchers themselves.
 
+The same tray optionally owns the hourly browser watchdog. Browser checks are independently
+default-off and explicitly enabled, paused, or disabled in its menu. Each check runs the existing
+`browser-watchdog.ps1` once as a child; its CDP assessment, guarded launch, non-destructive thaw,
+and confirmation semantics remain unchanged. The `/browser-watchdog` Copilot skill stays
+on-demand, not an additional resident scheduler. Browser and MCP processes themselves remain
+outside the tray's ownership and are never killed merely to consolidate dispatch.
+
 > [!NOTE]
 > **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
 
@@ -61,7 +68,10 @@ sign-out. **Nothing is supervised while the user is logged out.** That is accept
 desktop app being supervised also runs only in a signed-in session. The older Scheduled Task and
 Startup-folder routes are gone. `-Enable`/`-Disable` remove them, and `oa-supervisor-daemon.ps1` is
 an inert stub, so a leftover entry cannot start a second supervisor. The tray and any legacy daemon
-also share one exclusive lock.
+also share one exclusive lock. The browser watchdog's old `Copilot browser watchdog` Scheduled
+Task and `CopilotBrowserWatchdog.vbs` Startup shim are also removed before enabling; the tray
+refuses to start a browser check alongside a still-running old browser check. Both optional
+components appear as `OFF`, `PAUSED`, `HEALTHY`, or `LEGACY` in the liveness sweep.
 `supervisor-liveness-sweep.ps1` closes the next gap: a supervisor that dies silently is another
 single point of failure.
 

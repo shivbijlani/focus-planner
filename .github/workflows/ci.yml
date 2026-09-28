@@ -1237,8 +1237,9 @@ jobs:
   # 15 min, the watchdog logs hourly, and a repo-wide grep found zero readers of either -- while
   # oa-supervisor-daemon.ps1's own header states that if it dies "it stays dead until next
   # logon". So supervision could lapse in silence and #261 would return with no signal.
-  # (GH #689 replaced that daemon with an optional, default-off tray app started by one HKCU
-  # Run value; the sweep now also covers OFF, PAUSED and LEGACY-leftover states.)
+  # (GH #689 replaced resident reliability and browser dispatchers with independently
+  # opt-in checks in one tray app, started by one HKCU Run value. OFF and PAUSED are
+  # intentional; either leftover task/shim is LEGACY.)
   #
   # This job is in CI for the reason the ps1-encoding job above spells out: a guard that only
   # runs on the nightly laptop is a guard that can rot. The mutation check drives the real sweep

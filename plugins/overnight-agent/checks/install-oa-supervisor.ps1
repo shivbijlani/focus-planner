@@ -22,8 +22,8 @@
   they sign out. Nothing is supervised while logged out. (The desktop app being
   supervised also only runs in a signed-in session.)
 
-  MIGRATION: -Enable and -Disable remove a legacy 'Overnight Agent supervisor' Scheduled
-  Task and 'Overnight Agent supervisor.cmd' Startup shim from the pre-#689 installer,
+  MIGRATION: -Enable and -Disable remove legacy 'Overnight Agent supervisor' and
+  'Copilot browser watchdog' Scheduled Tasks, and their corresponding Startup shims,
   and stop a verified running legacy daemon or tray (PID + start time + command line).
   If a legacy task cannot be removed (for example it was registered from an elevated
   prompt), -Enable stops BEFORE registering the tray so two supervisors never coexist;
@@ -57,8 +57,19 @@ $ErrorActionPreference = 'Stop'
 $DeployedFiles = @(
   'oa-supervisor-tray.ps1', 'oa-supervisor-startup.ps1', 'oa-supervisor.ps1', 'oa-supervisor-daemon.ps1',
   'reliability-supervisor.mjs', 'windows-app-actuator.mjs', 'session-terminal-evidence.mjs',
-  'consumer-reliability-supervisor.mjs'
+  'consumer-reliability-supervisor.mjs', 'browser-watchdog.ps1', 'check-browser-slots.ps1',
+  'browser-slot-table.ps1', 'ensure-mcp-browsers.ps1'
 )
+
+function Get-DeploySource([string]$Name) {
+  $local = Join-Path $PSScriptRoot $Name
+  if (Test-Path -LiteralPath $local) { return $local }
+  if ($Name -eq 'ensure-mcp-browsers.ps1') {
+    $skill = Join-Path $PSScriptRoot '..\skills\overnight-agent\ensure-mcp-browsers.ps1'
+    if (Test-Path -LiteralPath $skill) { return $skill }
+  }
+  throw "required tray file missing: $Name"
+}
 
 function Get-SupervisorStatus {
   $startup = Get-OaTrayStartup
@@ -83,6 +94,9 @@ function Write-Status($Status) {
   } else { Write-Host '[oa-supervisor] running: no' }
   if ($Status.legacy.taskInstalled) { Write-Host "[oa-supervisor] LEGACY scheduled task present: '$($Status.legacy.taskName)' (remove with -Disable)" }
   if ($Status.legacy.shimInstalled) { Write-Host "[oa-supervisor] LEGACY Startup shim present: $($Status.legacy.shimPath) (remove with -Disable)" }
+  if ($Status.legacy.browserTaskInstalled) { Write-Host "[oa-supervisor] LEGACY browser task present: '$($Status.legacy.browserTaskName)' (remove with -Disable)" }
+  if ($Status.legacy.browserShimInstalled) { Write-Host "[oa-supervisor] LEGACY browser shim present: $($Status.legacy.browserShimPath) (remove with -Disable)" }
+  if ($Status.legacy.taskError) { Write-Host "[oa-supervisor] ERROR inspecting legacy tasks: $($Status.legacy.taskError)" }
   Write-Host "[oa-supervisor] $($Status.limitation)"
 }
 
@@ -101,6 +115,12 @@ if ($Disable) {
   if ($stopped -ne 'none') { Write-Host "[oa-supervisor] running supervisor $stopped." }
   $removed = Remove-OaLegacyInstall
   foreach ($r in $removed) { Write-Host "[oa-supervisor] removed legacy $r." }
+  $files = Get-OaSupervisorFiles
+  if (Test-Path $files.trayState) {
+    $state = Get-Content -LiteralPath $files.trayState -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    $state | Add-Member -MemberType NoteProperty -Name browserEnabled -Value $false -Force
+    $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $files.trayState -Encoding utf8
+  }
   Write-Host '[oa-supervisor] disabled. Policy, state and audit files are kept in %LOCALAPPDATA%\overnight-agent.'
   if ($Json) { Get-SupervisorStatus | ConvertTo-Json -Depth 5 }
   return
@@ -112,7 +132,7 @@ if ($LASTEXITCODE -ne 0 -or -not $nodeMajor -or [int]$nodeMajor -lt 24) {
   throw 'Reliability supervisor requires Node.js 24+ for enterprise-parity SQLite session evidence.'
 }
 foreach ($name in $DeployedFiles) {
-  if (-not (Test-Path (Join-Path $PSScriptRoot $name))) { throw "required supervisor file missing: $name" }
+  [void](Get-DeploySource $name)
 }
 
 # Migrate first: if a legacy route cannot be removed, stop before adding the tray route.
@@ -125,7 +145,7 @@ if ($stopped -ne 'none') { Write-Host "[oa-supervisor] previous supervisor $stop
 $files = Get-OaSupervisorFiles
 if (-not (Test-Path $files.home)) { New-Item -ItemType Directory -Path $files.home -Force | Out-Null }
 foreach ($name in $DeployedFiles) {
-  Copy-Item (Join-Path $PSScriptRoot $name) (Join-Path $files.home $name) -Force
+  Copy-Item (Get-DeploySource $name) (Join-Path $files.home $name) -Force
 }
 Write-Host "[oa-supervisor] deployed supervisor files to $($files.home)."
 

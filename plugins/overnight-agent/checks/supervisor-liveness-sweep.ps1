@@ -58,7 +58,8 @@
     * tray alive, fresh, paused -> PAUSED (the user paused it; NOT a finding)
     * a pre-#689 scheduled task or Startup shim still present -> LEGACY (a finding:
       the retired route is inert and must be removed with install-oa-supervisor.ps1)
-  The browser watchdog keeps its task/Startup-shim routes unchanged.
+  Browser checks are independently opt-in within the same tray. Their old task
+  and Startup shim are legacy routes, not alternative dispatchers.
 
   FALSE POSITIVES ARE THE REAL FAILURE MODE
   -----------------------------------------
@@ -101,9 +102,8 @@ $ErrorActionPreference = 'Stop'
 
 # --- the units this machine expects to be supervising it ----------------------------
 # Kept as data, not code, so adding the next out-of-band daemon is a row rather than a
-# new sweep. The browser watchdog names BOTH of its install routes (scheduled task and
-# Startup shim). The oa-supervisor tray (GH #689) is optional and has exactly one route,
-# the HKCU Run value; its old task/shim names are listed only to detect LEGACY leftovers.
+# new sweep. Both units are optional and use the SAME HKCU Run tray entry. Task and
+# shim names are listed only to detect legacy routes; the browser is not a second daemon.
 function Get-UnitSpecs {
   $oaHome  = Join-Path $env:LOCALAPPDATA 'overnight-agent'
   $startup = [Environment]::GetFolderPath('Startup')
@@ -127,13 +127,17 @@ function Get-UnitSpecs {
       name        = 'browser-watchdog'
       issue       = '#197/#243'
       purpose     = 'restores a dead or stuck browser slot'
-      taskName    = 'Copilot browser watchdog'
-      shimPath    = (Join-Path $startup 'CopilotBrowserWatchdog.vbs')
-      lockPath    = ''
-      signalPath  = (Join-Path $env:LOCALAPPDATA 'playwright-mcp\browser-watchdog.log')
-      signalField = ''      # no structured field: freshness comes from the file mtime
-      cadence     = 62
-      procMatch   = 'browser-watchdog'
+      optional    = $true
+      runValue    = 'Overnight Agent supervisor'
+      legacyTask  = 'Copilot browser watchdog'
+      legacyShim  = (Join-Path $startup 'CopilotBrowserWatchdog.vbs')
+      taskName    = ''
+      shimPath    = ''
+      lockPath    = (Join-Path $oaHome 'supervisor-daemon.lock')
+      statePath   = (Join-Path $oaHome 'supervisor-tray.json')
+      signalPath  = (Join-Path $oaHome 'supervisor-daemon-heartbeat.json')
+      signalField = 'lastCheckUtc'
+      cadence     = 15
     }
   )
 }
@@ -196,6 +200,14 @@ function Get-HeartbeatPaused([string]$Path) {
   } catch { return $false }
 }
 
+function Get-BrowserTraySettings([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) { return @{ enabled = $false; paused = $false } }
+  try {
+    $beat = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    return @{ enabled = [bool]$beat.browserEnabled; paused = [bool]$beat.browserPaused }
+  } catch { return @{ enabled = $false; paused = $false } }
+}
+
 function Get-Facts {
   $units = @()
   foreach ($spec in (Get-UnitSpecs)) {
@@ -204,6 +216,10 @@ function Get-Facts {
     $legacyTask = if ($optional) { (Get-TaskFacts $spec.legacyTask).installed } else { $false }
     $legacyShim = [bool]($optional -and $spec.legacyShim -and (Test-Path $spec.legacyShim))
     $runInstalled = if ($optional) { Get-RunValueInstalled $spec.runValue } else { $false }
+    $browserSettings = if ($spec.name -eq 'browser-watchdog') {
+      Get-BrowserTraySettings $spec.statePath
+    } else { $null }
+    if ($browserSettings) { $runInstalled = $runInstalled -and $browserSettings.enabled }
 
     $pid_ = 0
     if ($spec.lockPath -and (Test-Path $spec.lockPath)) {
@@ -237,7 +253,8 @@ function Get-Facts {
       optional       = $optional
       runInstalled   = $runInstalled
       legacyInstalled = ($legacyTask -or $legacyShim)
-      paused         = (Get-HeartbeatPaused $spec.signalPath)
+      paused         = $(if ($browserSettings) { $browserSettings.paused }
+                         else { Get-HeartbeatPaused $spec.signalPath })
       processAlive   = $alive
       processPid     = $pid_
       signalPath     = $spec.signalPath
@@ -259,9 +276,8 @@ function Get-UnitVerdict {
 
   $installed = ([bool]$Unit.taskInstalled) -or ([bool]$Unit.shimInstalled) -or ([bool]$Unit.runInstalled)
 
-  # ARM 'legacy': a pre-#689 scheduled task or Startup shim for an optional unit. The
-  # retired daemon it launches is inert, so it protects nothing, and it is exactly the
-  # "second route" #689 forbids - report it until it is removed.
+  # ARM 'legacy': a pre-#689 task or Startup shim for an optional unit is an
+  # independent dispatcher, which the single-tray route forbids.
   if ([bool]$Unit.legacyInstalled) { return 'LEGACY' }
 
   if (-not $installed) {
@@ -352,7 +368,7 @@ try {
           'ABSENT' { "installed by NEITHER route - $($r.purpose) is not protected at all" }
           'DEAD'   { "installed but not running - it stays dead until next logon" }
           'STALE'  { "running but its liveness signal stopped - it is wedged, not working" }
-          'LEGACY' { "a retired pre-#689 scheduled task / Startup shim is still installed - it launches an inert stub" }
+          'LEGACY' { "a retired pre-#689 scheduled task / Startup shim is still installed - remove it before using tray-owned checks" }
         }
         Write-Host ("[supervisor-liveness] {0} ({1}) {2}: {3}" -f $r.name, $r.issue, $r.verdict, $why)
       }

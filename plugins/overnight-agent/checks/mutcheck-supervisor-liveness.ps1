@@ -88,10 +88,16 @@ $fixtures = @(
   # GH #689: a healthy tray next to a leftover pre-#689 task/shim is still a finding.
   @{ owner = 'legacy';  expect = 'LEGACY'
      unit = (New-Unit -Name 'legacy-leftover' -Optional $true -Run $true -Alive $true -SignalAgeMin 1 -Legacy $true) }
+  @{ owner = 'legacy';  expect = 'LEGACY'
+     unit = (New-Unit -Name 'browser-legacy' -Optional $true -Run $true -Alive $true -SignalAgeMin 1 -Legacy $true) }
 
   # GH #689: the user paused the tray; it must not read as supervising.
   @{ owner = 'paused';  expect = 'PAUSED'
      unit = (New-Unit -Name 'paused-tray' -Optional $true -Run $true -Alive $true -SignalAgeMin 1 -Paused $true) }
+  @{ owner = 'paused';  expect = 'PAUSED'
+     unit = (New-Unit -Name 'browser-paused' -Optional $true -Run $true -Alive $true -SignalAgeMin 1 -Paused $true) }
+  @{ owner = 'optional'; expect = 'OFF'
+     unit = (New-Unit -Name 'browser-opted-out' -Optional $true) }
 
   @{ owner = '';        expect = 'HEALTHY'
      unit = (New-Unit -Name 'healthy-daemon' -Shim $true -Alive $true -SignalAgeMin 3) }
@@ -156,7 +162,7 @@ Assert ($baseBroken.Count -eq 0) 'T_BASELINE' "unmutated sweep misclassified: $(
 
 # The sweep must also REPORT findings, not merely compute them: a detector that
 # classifies correctly and exits 0 is invisible to run-sweeps.ps1.
-Assert ($base -and $base.findings -eq 4) 'T_FINDINGS_COUNTED' "expected 4 dormant units (ABSENT, DEAD, STALE, LEGACY), got $($base.findings)"
+Assert ($base -and $base.findings -eq 5) 'T_FINDINGS_COUNTED' "expected 5 dormant units (ABSENT, DEAD, STALE, two LEGACY), got $($base.findings)"
 
 # --- 2. Each arm, mutated alone, must break its own fixture and only its own ---------
 $arms = @(
