@@ -110,18 +110,12 @@ function Get-UnitSpecs {
       signalField = 'lastCheckUtc'
       cadence     = 15
     }
-    [ordered]@{
-      name        = 'browser-watchdog'
-      issue       = '#197/#243'
-      purpose     = 'restores a dead or stuck browser slot'
-      taskName    = 'Copilot browser watchdog'
-      shimPath    = (Join-Path $startup 'CopilotBrowserWatchdog.vbs')
-      lockPath    = ''
-      signalPath  = (Join-Path $env:LOCALAPPDATA 'playwright-mcp\browser-watchdog.log')
-      signalField = ''      # no structured field: freshness comes from the file mtime
-      cadence     = 62
-      procMatch   = 'browser-watchdog'
-    }
+    # NO browser-watchdog unit (GH #698). Browser checks have exactly one resident
+    # dispatcher now - the optional tray (oa-supervisor-tray.ps1), started by its
+    # single HKCU Run entry - and they are OFF by default. There is deliberately
+    # no 'Copilot browser watchdog' Scheduled Task or CopilotBrowserWatchdog.vbs
+    # Startup shim to expect, so listing one here would report every fresh
+    # install ABSENT forever. The tray's own heartbeat carries browser status.
   )
 }
 

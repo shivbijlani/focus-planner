@@ -109,6 +109,14 @@ try {
   Assert-True (Test-Path (Join-Path $files.home 'reliability-supervisor.mjs')) '-Enable deploys the reliability engine'
   Assert-True (Test-Path (Join-Path $files.home 'consumer-reliability-supervisor.mjs')) '-Enable deploys the consumer wrapper'
   Assert-True (Test-Path (Join-Path $files.home 'oa-user-settings.mjs')) '-Enable deploys the user-settings policy reader'
+  foreach ($browserFile in 'consumer-browser-watchdog.mjs', 'browser-watchdog.ps1', 'check-browser-slots.ps1',
+      'browser-slot-table.ps1', 'ensure-mcp-browsers.ps1') {
+    Assert-True (Test-Path (Join-Path $files.home $browserFile)) "-Enable deploys the reused browser tool $browserFile"
+  }
+  $routeFiles = @(Get-ChildItem -LiteralPath $files.home -File | Where-Object { $_.Extension -in '.vbs', '.cmd', '.bat', '.lnk', '.xml' })
+  Assert-Equal $routeFiles.Count 0 '-Enable deploys no VBS/CMD/shortcut/task-XML startup route'
+  $registered = Get-OaTrayStartup -KeyPath $testKey -ValueName 'Test entry'
+  Assert-True ($registered.command -like '*oa-supervisor-tray.ps1*' -and $registered.command -notmatch 'browser') 'the single Run entry launches the tray only - no browser-specific route'
 
   $disableJson = & $psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installer `
     -Disable -Json -TestKeyPath $testKey -TestValueName 'Test entry' 2>&1 | Out-String
@@ -119,7 +127,77 @@ try {
     -Json -TestKeyPath $testKey -TestValueName 'Test entry' 2>&1 | Out-String
   $statusResult = $statusJson | ConvertFrom-Json
   Assert-True (-not $statusResult.enabled) 'default (status-only) invocation reports disabled and changes nothing'
-} finally {
+
+  # ---- ConvertFrom-OaBrowserResult: pure view of a browser-workload result ----
+  $offDefault = ConvertFrom-OaBrowserResult ([pscustomobject]@{ status = 'disabled'; policy = [pscustomobject]@{ source = 'defaults' } })
+  Assert-Equal $offDefault.state 'DISABLED' 'browser workload with no section reads DISABLED'
+  Assert-Equal $offDefault.summary 'off (default)' 'browser status says off (default) when nothing is declared'
+  $noOptIns = ConvertFrom-OaBrowserResult ([pscustomobject]@{ status = 'no-opt-ins'; policy = [pscustomobject]@{ source = 'user-settings' } })
+  Assert-True ($noOptIns.summary -like '*nothing runs*') 'Enabled without an opt-in is shown as running nothing'
+  $refused = ConvertFrom-OaBrowserResult ([pscustomobject]@{ status = 'policy-error'; error = "'Observe' must be 'on' or 'off'" })
+  Assert-True ($refused.error -like '*Observe*') 'a refused browser row surfaces its error'
+  $ran = ConvertFrom-OaBrowserResult ([pscustomobject]@{ status = 'attention'
+    policy = [pscustomobject]@{ source = 'user-settings'; settingsPath = 'C:\u.md' }
+    outcome = [pscustomobject]@{ mode = 'observe'; summary = 'attention: 1/2 slot(s) healthy' }
+    recent = @([pscustomobject]@{ at = '2026-09-28T08:00:00.000Z'; mode = 'observe'; summary = 'attention: 1/2 slot(s) healthy' }) })
+  Assert-Equal $ran.summary 'observe - attention: 1/2 slot(s) healthy' 'a dispatched run shows its mode and outcome'
+  Assert-Equal @($ran.recent).Count 1 'recent outcomes are carried to the tray'
+  Assert-True ($ran.recent[0] -like '*observe: attention*') 'a recent outcome line names its mode and result'
+  Assert-Equal $ran.settingsPath 'C:\u.md' 'the tray learns which settings file to open'
+
+  # ---- Headless tray: browser checks are OFF by default and pause is not persisted ----
+  function Invoke-HeadlessTray([string[]]$SettingsLines, [scriptblock]$Done) {
+    $settingsPath = Join-Path $root.FullName 'user-settings.md'
+    Set-Content -LiteralPath $settingsPath -Encoding utf8 -Value $SettingsLines
+    $originalSettings = $env:OVERNIGHT_AGENT_SETTINGS
+    $env:OVERNIGHT_AGENT_SETTINGS = $settingsPath
+    try {
+      Remove-Item -LiteralPath $files.heartbeat -Force -ErrorAction SilentlyContinue
+      $trayProcess = Start-Process -FilePath $psExe -PassThru -WindowStyle Hidden -ArgumentList @(
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+        (Join-Path $checksDir 'oa-supervisor-tray.ps1'), '-NoTrayIcon', '-NoAct')
+      $null = $trayProcess.Handle
+      $heartbeat = $null
+      $deadline = (Get-Date).AddSeconds(90)
+      while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 500
+        try { $heartbeat = Get-Content -LiteralPath $files.heartbeat -Raw -ErrorAction Stop | ConvertFrom-Json } catch { continue }
+        if ($heartbeat.browser -and (& $Done $heartbeat)) { break }
+      }
+      @{ pid = $trayProcess.Id; requestedUtc = (Get-Date).ToUniversalTime().ToString('o') } |
+        ConvertTo-Json | Set-Content -LiteralPath $files.stopRequest -Encoding utf8
+      $exited = $trayProcess.WaitForExit(30000)
+      if (-not $exited) { Stop-Process -Id $trayProcess.Id -Force -ErrorAction SilentlyContinue }
+      Assert-True $exited 'headless tray exits on a stop request'
+      return $heartbeat
+    } finally {
+      if ($null -eq $originalSettings) { Remove-Item Env:\OVERNIGHT_AGENT_SETTINGS -ErrorAction SilentlyContinue }
+      else { $env:OVERNIGHT_AGENT_SETTINGS = $originalSettings }
+    }
+  }
+  $reliabilityOff = @('# settings', '', '## Tray reliability supervision', '', '| Setting | Value |',
+    '| --- | --- |', '| Enabled | `off` |', '')
+
+  $heartbeat = Invoke-HeadlessTray $reliabilityOff { param($h) $h.browser.state -eq 'DISABLED' -and -not $h.browser.running }
+  Assert-True ($heartbeat -and $heartbeat.browser) 'the tray heartbeat carries a separate browser section'
+  Assert-Equal $heartbeat.browser.state 'DISABLED' 'headless tray: browser checks are off by default'
+  Assert-Equal $heartbeat.browser.paused $false 'a fresh tray starts with browser checks unpaused (pause is not persisted)'
+  Assert-True (-not (Test-Path $files.browserState)) 'no browser state is written while browser checks are off'
+  Assert-True (-not (Test-Path (Join-Path $files.home 'browser-checks.lock'))) 'no browser lock is taken while browser checks are off'
+
+  # Opted in to Observe, but the settings file has no `## Browser slots` table, so
+  # the reused tools refuse to guess a slot list: the tray dispatches, records an
+  # ATTENTION outcome in its own state file, and no browser port is ever contacted.
+  $observeOn = $reliabilityOff + @('## Tray browser checks', '', '| Setting | Value |', '| --- | --- |',
+    '| Enabled | `on` |', '| Observe | `on` |', '')
+  $heartbeat = Invoke-HeadlessTray $observeOn { param($h) $h.browser.lastCheckUtc -and -not $h.browser.running }
+  Assert-Equal $heartbeat.browser.state 'ATTENTION' 'an opted-in check with no slot table is dispatched and needs attention'
+  $recorded = Get-Content -LiteralPath $files.browserState -Raw | ConvertFrom-Json
+  Assert-Equal @($recorded.recent)[-1].mode 'observe' 'the -NoAct tray runs the opted-in check as observe-only'
+  Assert-True (@($heartbeat.browser.recent).Count -ge 1) 'the tray shows the recent browser outcome'
+  Assert-True (Test-Path $files.browserState) 'the browser workload records outcomes in its own state file'
+  Assert-True (-not (Test-Path (Join-Path $files.home 'reliability-supervisor-state.json')) -or
+    ((Get-Content -LiteralPath (Join-Path $files.home 'reliability-supervisor-state.json') -Raw) -notmatch 'browser')) 'browser outcomes never land in reliability state'} finally {
   Remove-Item -Path $testKey -Recurse -Force -ErrorAction SilentlyContinue
   $env:LOCALAPPDATA = $originalLocalAppData
   Remove-Item -LiteralPath $root.FullName -Recurse -Force -ErrorAction SilentlyContinue
