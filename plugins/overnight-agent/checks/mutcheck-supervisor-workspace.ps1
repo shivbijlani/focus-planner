@@ -15,6 +15,7 @@ $Tmp = Join-Path ([IO.Path]::GetTempPath()) ("mutcheck-supervisor-workspace-" + 
 New-Item -ItemType Directory -Path $Tmp -Force | Out-Null
 $oldUser = $env:USERPROFILE
 $oldLocal = $env:LOCALAPPDATA
+$oldTemp = $env:TEMP
 
 function New-Subject([string]$Name, [scriptblock]$Mutate) {
   $src = $Source
@@ -57,6 +58,8 @@ function Test-Subject([string]$Subject) {
 try {
   $env:USERPROFILE = Join-Path $Tmp 'profile'
   $env:LOCALAPPDATA = Join-Path $Tmp 'local'
+  # The supervisor snapshots the app DB under %TEMP%, which Linux CI does not define.
+  $env:TEMP = $Tmp
   New-Item -ItemType Directory -Path (Join-Path $env:USERPROFILE '.copilot'), $env:LOCALAPPDATA -Force | Out-Null
 
   @{ queueLength = 0; appCpuHours = 0; appAgeHours = 1; procCount = 0 } |
@@ -134,5 +137,6 @@ db.prepare("INSERT INTO workflow_runs (task_id,status,trigger,started_at) VALUES
 finally {
   $env:USERPROFILE = $oldUser
   $env:LOCALAPPDATA = $oldLocal
+  $env:TEMP = $oldTemp
   Remove-Item -LiteralPath $Tmp -Recurse -Force -ErrorAction SilentlyContinue
 }

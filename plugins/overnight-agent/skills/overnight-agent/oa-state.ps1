@@ -4867,10 +4867,14 @@ function Get-OneDriveRoots {
 }
 
 function Get-CanonicalWorkspaceRoot {
-  if (-not $env:LOCALAPPDATA) {
+  # Non-Windows hosts (CI) have no %LOCALAPPDATA%; the .NET equivalent is still a
+  # per-user, non-synced location, so it is an acceptable canonical root there.
+  $local = $env:LOCALAPPDATA
+  if (-not $local) { $local = [Environment]::GetFolderPath('LocalApplicationData') }
+  if (-not $local) {
     throw 'session_localappdata_required: LOCALAPPDATA is required for isolated folder workspaces'
   }
-  ConvertTo-WorkspacePath (Join-Path $env:LOCALAPPDATA 'overnight-agent\workspaces')
+  ConvertTo-WorkspacePath (Join-Path $local 'overnight-agent\workspaces')
 }
 
 function Get-CanonicalTaskWorkspace([string]$taskId) {
