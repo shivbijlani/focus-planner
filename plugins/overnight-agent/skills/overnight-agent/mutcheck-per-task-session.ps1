@@ -135,9 +135,16 @@ $twoSettings = Join-Path $root 'settings-two.md'
 $modelSettings = Join-Path $root 'settings-model.md'
 $badModelSettings = Join-Path $root 'settings-bad-model.md'
 $chatSettings = Join-Path $root 'settings-chat.md'
+$chatBareSettings = Join-Path $root 'settings-chat-bare.md'
+$chatInvalidSettings = Join-Path $root 'settings-chat-invalid.md'
+$chatBadIdSettings = Join-Path $root 'settings-chat-bad-id.md'
+$chatProjectId = '50b4020e-bf7b-40bf-90f4-5261b41710bc'
 [IO.File]::WriteAllText($badSettings, "## Overnight Agent behaviour`n`n| Setting | Value |`n|---|---|`n| Overnight Agent concurrency | plenty |`n", $utf8)
 [IO.File]::WriteAllText($twoSettings, "## Overnight Agent behaviour`n`n| Setting | Value |`n|---|---|`n| Overnight Agent concurrency | 2 |`n", $utf8)
-[IO.File]::WriteAllText($chatSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | local-chat-project |`n", $utf8)
+[IO.File]::WriteAllText($chatSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | ``$chatProjectId`` — local folder project rooted at task-chats |`n", $utf8)
+[IO.File]::WriteAllText($chatBareSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | $chatProjectId — local folder project rooted at task-chats |`n", $utf8)
+[IO.File]::WriteAllText($chatInvalidSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | local folder project rooted at task-chats |`n", $utf8)
+[IO.File]::WriteAllText($chatBadIdSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | ``not-a-guid`` — local folder project |`n", $utf8)
 [IO.File]::WriteAllText($modelSettings, "| Setting | Value |`n|---|---|`n| Overnight Agent model | ``claude-sonnet-5`` |`n", $utf8)
 [IO.File]::WriteAllText($badModelSettings, "| Setting | Value |`n|---|---|`n| Overnight Agent model | banana |`n", $utf8)
 
@@ -205,7 +212,7 @@ function New-Bind {
 
 function New-ChatArgs([string]$id, [string]$sessionId) {
   return @('session', '-Id', $id, '-SessionId', $sessionId, '-SessionKind', 'chat',
-    '-SessionProject', 'local-chat-project', '-SessionWorkspace', $chatHome, '-WorkspaceType', 'folder')
+    '-SessionProject', $chatProjectId, '-SessionWorkspace', $chatHome, '-WorkspaceType', 'folder')
 }
 
 $results = [ordered]@{}
@@ -386,14 +393,32 @@ Check 'K- nothing was bound by any refusal' { (Invoke-OaJson @('session', '-Id',
 $chat = Invoke-OaJson -OaArgs ((New-ChatArgs '804' 'SESS_804') + @('-Force')) -Settings $chatSettings
 Check 'K-- a non-code task binds the configured local folder project' {
   "$($chat.session_id)" -eq 'SESS_804' -and "$($chat.kind)" -eq 'chat' -and
-    $chat.project -eq 'local-chat-project' -and $chat.workspace -eq $chatHome -and $chat.workspace_type -eq 'folder'
+    $chat.project -eq $chatProjectId -and $chat.workspace -eq $chatHome -and $chat.workspace_type -eq 'folder'
+}
+
+$chatBare = Invoke-OaJson -OaArgs (New-ChatArgs '805' 'SESS_805') -Settings $chatBareSettings
+Check 'K-- a leading GUID followed by prose binds the configured project' {
+  "$($chatBare.session_id)" -eq 'SESS_805' -and $chatBare.project -eq $chatProjectId
+}
+
+$chatInvalid = Invoke-Oa -OaArgs (New-ChatArgs '811' 'SESS_811') -Settings $chatInvalidSettings
+Check 'K-- prose-only setting names the invalid project value, not bind arguments' {
+  $script:LastOaExit -ne 0 -and
+    $chatInvalid -match 'session_chat_project_invalid' -and
+    $chatInvalid -match 'Non-code task project must be a project id' -and
+    $chatInvalid -match 'local folder project rooted at task-chats' -and
+    $chatInvalid -notmatch 'session_chat_scope'
+}
+$chatBadId = Invoke-Oa -OaArgs (New-ChatArgs '811' 'SESS_811') -Settings $chatBadIdSettings
+Check 'K-- a backticked non-ID is rejected before checking bind arguments' {
+  $script:LastOaExit -ne 0 -and $chatBadId -match 'session_chat_project_invalid: Non-code task project'
 }
 
 $chatDefault = Invoke-OaJson -OaArgs @('session', '-Id', '809', '-SessionId', 'SESS_809',
-  '-SessionProject', 'local-chat-project', '-SessionWorkspace', $chatHome, '-WorkspaceType', 'folder') -Settings $chatSettings
+  '-SessionProject', $chatProjectId, '-SessionWorkspace', $chatHome, '-WorkspaceType', 'folder') -Settings $chatSettings
 Check 'K--- an implicit chat kind binds the configured folder' {
   "$($chatDefault.session_id)" -eq 'SESS_809' -and "$($chatDefault.kind)" -eq 'chat' -and
-    $chatDefault.project -eq 'local-chat-project' -and $chatDefault.workspace -eq $chatHome
+    $chatDefault.project -eq $chatProjectId -and $chatDefault.workspace -eq $chatHome
 }
 
 $chatProject = Invoke-Oa @('session', '-Id', '810', '-SessionId', 'SESS_810',
@@ -404,7 +429,7 @@ Check 'K---- a chat cannot be bound to a different project' {
 }
 
 $chatWorkspace = Invoke-Oa @('session', '-Id', '811', '-SessionId', 'SESS_811',
-  '-SessionKind', 'chat', '-SessionProject', 'local-chat-project',
+  '-SessionKind', 'chat', '-SessionProject', $chatProjectId,
   '-SessionWorkspace', (Join-Path $root 'chat-811'), '-WorkspaceType', 'folder') -Settings $chatSettings
 Check 'K----- a chat cannot be bound outside the configured home' {
   $script:LastOaExit -ne 0 -and $chatWorkspace -match 'session_chat_home'
@@ -431,7 +456,7 @@ Remove-Item -LiteralPath $gitMarker -Force
 # A legacy folder binding remains an error unless the caller explicitly chooses its new kind.
 # Keep this fixture synthetic: no live state is read or changed.
 $legacyBind = Invoke-OaJson @('session', '-Id', '812', '-SessionId', 'SESS_LEGACY_812',
-  '-SessionKind', 'chat', '-SessionProject', 'local-chat-project',
+  '-SessionKind', 'chat', '-SessionProject', $chatProjectId,
   '-SessionWorkspace', $chatHome, '-WorkspaceType', 'folder', '-Force') -Settings $chatSettings
 $legacyPath = Join-Path $sdir 'task-812.json'
 $legacyState = Get-Content -LiteralPath $legacyPath -Raw | ConvertFrom-Json

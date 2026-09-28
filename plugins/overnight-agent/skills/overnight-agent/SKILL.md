@@ -1117,7 +1117,9 @@ start more work.
      `user-settings.md`. If absent, first follow the one-time setup in the plugin README:
      create `%LOCALAPPDATA%\overnight-agent\task-chats`, register it once with
      `create_project(path=<expanded absolute folder path>)`, and put its returned project ID
-     in that setting. Do not silently substitute a code or OneDrive project.
+     in that setting. The value may be a backticked project ID or a leading GUID
+     followed by explanatory prose; any other nonempty value fails with
+     `session_chat_project_invalid`. Do not silently substitute a code or OneDrive project.
      For each task call `create_session(project_id=<Non-code task project>)` **without
      `workspace_type` or `kickoff`**; a folder project creates a folder session automatically.
      Bind its session ID as `chat`, with `-SessionProject` set to the configured project ID,

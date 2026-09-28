@@ -699,7 +699,7 @@ function Get-UserSettingsPath {
   return $null
 }
 
-function Get-SettingRow([string]$text, [string]$name) {
+function Get-SettingRow([string]$text, [string]$name, [switch]$PreserveBackticks) {
   # One `| Setting | Value |` row, matched on the setting name at the start of the cell. Returns
   # the raw value cell, or $null. Case-insensitive, tolerant of surrounding whitespace and of the
   # backticks the template uses, because a user who copies the formatting must not be punished.
@@ -707,7 +707,9 @@ function Get-SettingRow([string]$text, [string]$name) {
   $re = '(?im)^\s*\|\s*' + [regex]::Escape($name) + '\s*\|\s*([^|\r\n]*?)\s*\|'
   $m = [regex]::Match($text, $re)
   if (-not $m.Success) { return $null }
-  return ($m.Groups[1].Value -replace '`', '').Trim()
+  $value = $m.Groups[1].Value
+  if (-not $PreserveBackticks) { $value = $value -replace '`', '' }
+  return $value.Trim()
 }
 
 function Resolve-GateSettings {
@@ -4995,11 +4997,22 @@ function Test-PathWithin([string]$path, [string]$root) {
 
 function Assert-ChatWorkspace([string]$project, [string]$workspace, [string]$wsType) {
   $settingsPath = Get-UserSettingsPath
-  $configured = if ($settingsPath -and (Test-Path -LiteralPath $settingsPath)) {
-    Get-SettingRow (Get-Content -LiteralPath $settingsPath -Raw) 'Non-code task project'
+  $setting = if ($settingsPath -and (Test-Path -LiteralPath $settingsPath)) {
+    Get-SettingRow (Get-Content -LiteralPath $settingsPath -Raw) 'Non-code task project' -PreserveBackticks
   } else { '' }
-  if (-not $configured -or $configured -match '[<>]') {
+  if (-not $setting) {
     throw 'session_chat_project_required: configure Non-code task project in user-settings.md before binding a non-code session'
+  }
+  $idPattern = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+  $match = [regex]::Match($setting, '`([^`]*)`')
+  if ($match.Success) {
+    $configured = $match.Groups[1].Value
+  } else {
+    $match = [regex]::Match($setting, "^($idPattern)(?=\s|$)")
+    $configured = if ($match.Success) { $match.Groups[1].Value } else { '' }
+  }
+  if ($configured -cnotmatch ('^' + $idPattern + '$')) {
+    throw "session_chat_project_invalid: Non-code task project must be a project id, got '$setting'"
   }
   if (-not $env:LOCALAPPDATA) {
     throw 'session_chat_home_required: LOCALAPPDATA is required for Non-code task project'
