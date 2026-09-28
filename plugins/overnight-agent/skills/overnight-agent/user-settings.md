@@ -59,25 +59,22 @@ a value here takes effect on the next run with nothing else to change.
 **Model:** `auto` is the default when the row is absent. A malformed value falls back to
 `auto` and is reported as `settings-malformed` by `scan` and `session`.
 
-**Concurrency is the drain width within each run, not a total-start quota.** At `1`, each completed
-task is followed by the next eligible prepared task; at `2`, either opening is refilled independently.
-The run stops sending at the next :00/:30 after its first prompt, **minus the start buffer**.
-At the default `5m`, a 10:30 next run means no new instruction at or after 10:25.
-Already-running tasks are left alone. Earlier tasks do not reserve the new run's openings.
-Human collect requests remain an explicit width exception, but never bypass pauses or the cutoff.
-Use a bare whole number for concurrency.
+**Concurrency is the maximum number of task-session sends in one run.** Each attempted send counts
+toward the limit; completion does not refill it. A later run may continue a task without waiting
+for earlier task sessions to finish. Use a bare whole number. A missing, unreadable or malformed
+value resolves to `1`, and the run reports `concurrency_source` so a narrowed default is visible.
 
 **Start buffer:** whole minutes from `0` to `29`, optionally followed by `m`. `0m` disables the
-buffer. A missing row/file defaults to `5m`; an invalid value or unreadable existing file is
-reported and prevents a new drain from starting. The buffer is fixed when a run enrolls:
-changing it applies to new runs, never extends a running/reloaded run. This reduces overlap;
-it is not a task timeout or proof that a task finished within five minutes.
+buffer. If the row is absent, use `5m`. Before each task-session send, the coordinator checks the
+next local :00/:30 after its first prompt, minus this buffer; a 10:30 next run means no send at or
+after 10:25. An unreadable or invalid existing value means do not send and report the problem.
+This is coordinator guidance, not an extension timer or a task timeout.
 
 **Raising the backstop makes the agent wait longer before giving up on a stuck Today task; lowering
 it makes it give up sooner.** Writing to the task *resets* the timer, so the agent can only ever
 delay this release, never trigger it.
 
-**The drain width fails narrow on purpose.** A missing row, an unreadable file or a value the agent
+**The dispatch limit fails narrow on purpose.** A missing row, an unreadable file or a value the agent
 can't parse all give you `1` — never more. If it
 falls back, it says so in the run summary rather than quietly pretending you asked for `1`.
 

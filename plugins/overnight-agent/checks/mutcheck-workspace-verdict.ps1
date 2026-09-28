@@ -30,17 +30,20 @@
     A3  a live binding whose workspace still has a checkout      -> verdict stays `reuse`
     A4  an UNREADABLE/unknown situation is never called dead     -> fail-open, verdict `reuse`
     A5  a non-worktree (folder) workspace is not judged by `.git`
-    A6  a workspace that does not exist YET is a young session, not a dead one.
-        This also covers the uninspectable case (A4): `Test-Path` answers $false for a path on a
-        disconnected drive exactly as it does for a deleted directory, so the two are
-        indistinguishable here and NEITHER is treated as evidence.
+    A6  a worktree workspace that does not exist AT ALL, under a reachable root, is a torn-down
+        one -> verdict `replace` (GH #717). `git worktree remove` leaves nothing behind, so the
+        #452 signature (empty directory, no `.git`) is only half the shape.
+    A7  `session` reports WHY: `workspace_missing: true` beside the verdict, so a run can see the
+        fact and not just its consequence.
 
   MUTANTS (each must break exactly the arm named)
     B_neverVerify      drop the workspace check           -> A1
     C_verdictCreate    return `create` instead of replace -> A2
     D_requireGitDir    test `.git` as a container         -> A3   (a worktree's .git is a FILE)
     F_judgeFolders     apply the checkout test to folders -> A5
-    G_unbornIsDead     call an uncreated workspace dead   -> A6   (also breaks A4)
+    G_unbornIsAlive    call a deleted workspace healthy   -> A6
+    H_rootNotChecked   skip the reachable-root test       -> A4   (unreadable read as deleted)
+    I_missingUnreported drop the surfaced fact            -> A7
 #>
 [CmdletBinding()]
 param([string]$ScriptPath)
@@ -124,6 +127,13 @@ function Get-Verdict {
   try { return ((($text | ConvertFrom-Json)).verdict) } catch { return "UNPARSEABLE: $text" }
 }
 
+function Get-MissingFlag {
+  param([string]$SubjectPath, [string]$StateDir)
+  $out = & pwsh -NoProfile -ExecutionPolicy Bypass -File $SubjectPath session -Id 999 -StateDir $StateDir 2>&1
+  $text = ($out | Out-String)
+  try { return [string]((($text | ConvertFrom-Json)).workspace_missing) } catch { return "UNPARSEABLE" }
+}
+
 # --- workspaces -------------------------------------------------------------------------------
 # GONE: the measured signature of a torn-down worktree -- the directory still exists (a live
 # session's cwd kept it undeletable) and is empty, with no .git.
@@ -139,12 +149,9 @@ Set-Content -Path (Join-Path $wsOk '.git') -Value 'gitdir: V:/repos/focus-planne
 # UNREADABLE: a path we cannot inspect. Never evidence the checkout is gone.
 $wsWeird = 'Z:\no-such-mount\never-created'
 
-# NOT YET CREATED: a workspace is BOUND before the session materialises it, so a path that does
-# not exist is a young session, not a torn-down one. `Test-SamePath` in the subject records the
-# same requirement -- "the guard has to work when the workspace has not been created yet, which is
-# exactly when a bind is being validated". Judging this as dead would refuse to reuse a healthy
-# session and, measured against the real #404 guard, breaks four of its arms.
-$wsUnborn = Join-Path $Tmp 'ws-never-created'
+# DELETED OUTRIGHT: `git worktree remove` leaves nothing behind, so the path itself is gone while
+# its containing root is perfectly reachable. This is the #717 shape, measured on tasks 329/466.
+$wsDeleted = Join-Path $Tmp 'ws-deleted'
 
 function Test-Verdicts {
   param([string]$SubjectPath)
@@ -153,14 +160,18 @@ function Test-Verdicts {
   $vOk    = Get-Verdict -SubjectPath $SubjectPath -StateDir (New-Store -Name ([guid]::NewGuid().ToString('N').Substring(0,6)) -Workspace $wsOk)
   $vWeird = Get-Verdict -SubjectPath $SubjectPath -StateDir (New-Store -Name ([guid]::NewGuid().ToString('N').Substring(0,6)) -Workspace $wsWeird)
   $vFold  = Get-Verdict -SubjectPath $SubjectPath -StateDir (New-Store -Name ([guid]::NewGuid().ToString('N').Substring(0,6)) -Workspace $wsGone -WsType 'folder')
-  $vUnborn= Get-Verdict -SubjectPath $SubjectPath -StateDir (New-Store -Name ([guid]::NewGuid().ToString('N').Substring(0,6)) -Workspace $wsUnborn)
+  $vDel   = Get-Verdict -SubjectPath $SubjectPath -StateDir (New-Store -Name ([guid]::NewGuid().ToString('N').Substring(0,6)) -Workspace $wsDeleted)
+  $mDel   = Get-MissingFlag -SubjectPath $SubjectPath -StateDir (New-Store -Name ([guid]::NewGuid().ToString('N').Substring(0,6)) -Workspace $wsDeleted)
+  $mOk    = Get-MissingFlag -SubjectPath $SubjectPath -StateDir (New-Store -Name ([guid]::NewGuid().ToString('N').Substring(0,6)) -Workspace $wsOk)
 
   if ($vGone -ne 'replace' -and $vGone -ne 'create') { $f += "A1: an emptied worktree returned '$vGone'" }
   if ($vGone -eq 'create')  { $f += "A2: an emptied worktree returned 'create' -- prior work would be cold-started" }
   if ($vOk    -ne 'reuse')  { $f += "A3: a healthy worktree returned '$vOk'" }
   if ($vWeird -ne 'reuse')  { $f += "A4: an uninspectable path returned '$vWeird' -- absence of evidence treated as evidence" }
   if ($vFold  -ne 'reuse')  { $f += "A5: a folder workspace returned '$vFold' -- judged by a checkout it never has" }
-  if ($vUnborn -ne 'reuse') { $f += "A6: a not-yet-created workspace returned '$vUnborn' -- a young session is not a dead one" }
+  if ($vDel   -ne 'replace'){ $f += "A6: a DELETED worktree returned '$vDel' -- the run would wake a session with no checkout" }
+  if ($mDel   -ne 'True')   { $f += "A7: a deleted worktree reported workspace_missing '$mDel'" }
+  if ($mOk    -ne 'False')  { $f += "A7: a healthy worktree reported workspace_missing '$mOk'" }
   return $f
 }
 
@@ -173,7 +184,7 @@ $baseline = Test-Verdicts -SubjectPath $baseSubject
 if ($baseline.Count) {
   foreach ($x in $baseline) { Write-Host "  FAIL  baseline  $x" -ForegroundColor Red }
 } else {
-  Write-Host '  [baseline] OK -- gone=>replace, healthy=>reuse, uninspectable=>reuse, folder=>reuse'
+  Write-Host '  [baseline] OK -- gone=>replace, deleted=>replace, healthy=>reuse, uninspectable=>reuse, folder=>reuse'
 }
 
 $mutants = @(
@@ -181,7 +192,9 @@ $mutants = @(
   @{ Name='C_verdictCreate'; Expect='A2'; Mutate={ param($s) $s.Replace("if (-not (Test-WorkspaceUsable `"`$(`$sess.workspace)`" `"`$(`$sess.workspace_type)`")) { return 'replace' }", "if (-not (Test-WorkspaceUsable `"`$(`$sess.workspace)`" `"`$(`$sess.workspace_type)`")) { return 'create' }") } }
   @{ Name='D_requireGitDir'; Expect='A3'; Mutate={ param($s) $s.Replace("if (Test-Path -LiteralPath (Join-Path `$path '.git')) { return `$true }", "if (Test-Path -LiteralPath (Join-Path `$path '.git') -PathType Container) { return `$true }") } }
   @{ Name='F_judgeFolders';  Expect='A5'; Mutate={ param($s) $s.Replace("if (`$wsType -and `$wsType -ne 'worktree') { return `$true }", "") } }
-  @{ Name='G_unbornIsDead';  Expect='A6'; Mutate={ param($s) $s.Replace("    if (-not (Test-Path -LiteralPath `$path)) { return `$true }", "    if (-not (Test-Path -LiteralPath `$path)) { return `$false }") } }
+  @{ Name='G_unbornIsAlive'; Expect='A6'; Mutate={ param($s) $s.Replace("    if (-not (Test-Path -LiteralPath `$path)) { return (-not (Test-WorkspaceMissing `$path `$wsType)) }", "    if (-not (Test-Path -LiteralPath `$path)) { return `$true }") } }
+  @{ Name='H_rootNotChecked'; Expect='A4'; Mutate={ param($s) $s.Replace("    if (-not (Test-Path -LiteralPath `$root)) { return `$false }", "") } }
+  @{ Name='I_missingUnreported'; Expect='A7'; Mutate={ param($s) $s.Replace("    workspace_missing = [bool](Test-WorkspaceMissing `"`$(`$sess.workspace)`" `"`$(`$sess.workspace_type)`")", "    workspace_missing = `$false") } }
 )
 
 Write-Host ''

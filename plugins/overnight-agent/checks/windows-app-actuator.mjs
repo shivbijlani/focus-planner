@@ -4,7 +4,7 @@ import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promi
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { classifyTerminalEvidence, readSessionEvidence } from "./session-terminal-evidence.mjs";
+import { classifyTerminalEvidence, parseLockFilename, readSessionEvidence } from "./session-terminal-evidence.mjs";
 import { HARD_RESTART_AUTHORIZATION } from "./reliability-supervisor.mjs";
 export { summariseSessionEvents } from "./session-terminal-evidence.mjs";
 
@@ -308,7 +308,11 @@ async function sessionFileEvidence(
   return evidence;
 }
 
-async function residentSessionIds(sessionStateDirectory) {
+// Only sessions whose lock names a pid in the app's process tree can become
+// plausible app owners downstream; stale locks left by long-dead processes are
+// historical and must not count toward the cap (issue #720).
+async function residentSessionIds(sessionStateDirectory, appOwnedPids) {
+  if (appOwnedPids.size === 0) return [];
   const entries = await readdir(sessionStateDirectory, { withFileTypes: true });
   const ids = [];
   for (const entry of entries) {
@@ -319,9 +323,9 @@ async function residentSessionIds(sessionStateDirectory) {
     } catch {
       continue;
     }
-    if (names.some((name) => /^inuse\.\d+\.lock$/.test(name))) ids.push(entry.name);
+    if (names.some((name) => appOwnedPids.has(parseLockFilename(name)))) ids.push(entry.name);
     if (ids.length > QUERY_LIMIT) {
-      throw new Error(`resident session count exceeds inspection cap ${QUERY_LIMIT}`);
+      throw new Error(`app-owned resident session count exceeds inspection cap ${QUERY_LIMIT}`);
     }
   }
   return ids;
@@ -599,7 +603,7 @@ export async function inspectDatabases({
       const readAnyDataSession = db.prepare(
         "SELECT id, is_running, updated_at FROM sessions WHERE id = ? LIMIT 1",
       );
-      for (const sessionId of await residentSessionIds(sessionStateDirectory)) {
+      for (const sessionId of await residentSessionIds(sessionStateDirectory, appOwnedPids)) {
         if (alreadyTracked.has(sessionId)) continue;
         alreadyTracked.add(sessionId);
         const dataSession = readAnyDataSession.get(sessionId) ?? null;

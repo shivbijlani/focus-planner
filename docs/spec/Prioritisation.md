@@ -3,8 +3,8 @@
 Prioritisation in this repository is a product behaviour, not one comparator. The durable inputs live
 in markdown (`planner.md`, journals, `agent-gate.md`, `user-settings.md`); the web app edits those
 inputs; `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1` turns them into an ordered,
-binding worklist; and dispatch then applies run-local drain width, gating, and provenance rules before any task
-runs. [Domain-overnight-agent](Domain-overnight-agent), [Reliability](Reliability), and
+binding worklist; and the coordinator directly dispatches approved tasks under its per-run cap,
+pause and provenance rules. [Domain-overnight-agent](Domain-overnight-agent), [Reliability](Reliability), and
 [Data-Formats](Data-Formats) describe adjacent parts of the system; this page describes the
 selection logic end to end.
 
@@ -206,7 +206,7 @@ The shipped template states the concurrency rationale plainly:
 <summary><strong>Show technical detail</strong></summary>
 
 ```md
-| Overnight Agent concurrency | `1` — outstanding normal requests from this run, refilled on observed completion. |
+| Overnight Agent concurrency | `1` — maximum task-session send attempts in one run. |
 ```
 
 
@@ -331,8 +331,8 @@ make sure those parked rows do not freeze the whole system.
 | Due poll / due recheck override | `Test-Workable` yields the park to `due_poll` / `due_recheck` | A recurring timer must not stop firing just because the user stopped replying. |
 | Snooze precedence | `scan` suppresses due timers when `snoozed`, but leaves the timers armed | “Not until DATE” outranks both board rank and timers, without silently disarming the timer forever. |
 | Staleness backstop | `stale_turn_backstop` based on `Today gate backstop` | A wedged Today row eventually releases Deferred instead of freezing the backlog. |
-| Code-owned drain | `oa_drain` | Saved conversations and overdue timers do not occupy openings before dispatch; completion refills automatically (**#589**). |
-| Visible send uncertainty | A marked instruction remains outstanding until its execution is observed | Unknown completion holds only its run-local opening until cutoff, never a permanent cross-run reservation. |
+| Direct dispatch cap | `Overnight Agent concurrency` | The coordinator makes no more than the configured number of send attempts in one run; a later run may continue the work. |
+| Dispatch authority | `session -ForDispatch -DispatchInput` | Fresh eligibility, user pause and task-input checks are applied immediately before a send, which stamps the wake. |
 
 The key asymmetry is deliberate: when unsure, the system usually fails toward **holding** or
 **refusing extra dispatch**, not toward silently widening work. That is why snooze suppresses
@@ -407,9 +407,8 @@ The guard pattern is consistent across all of them:
 - **replies are read from human provenance or structural position**, not from the agent's own
   summary of what happened,
 - **Today release comes from a separate declaration plus human-controlled invalidations**,
-- **dispatch honours user-originated pauses while the drain observes this run's own requests**, and
-- **dispatch exceptions are justified by provenance**: a user action may widen the run; the
-  agent's own judgement may not.
+- **dispatch honours user-originated pauses**, and
+- **the per-run cap is not widened by the agent's judgment or collection activity**.
 
 That is the causal logic behind the whole page. The system is not merely ranking tasks; it is
 choosing which signals are allowed to carry authority.
@@ -419,78 +418,38 @@ choosing which signals are allowed to carry authority.
 Pacing and ordering are related but different. Ordering answers *which row is next*; pacing answers
 *how much work may this run take on before the next scheduled run arrives*.
 
-### Enforced mechanism: continuously drain N at a time
+### Enforced mechanism: direct dispatch
 
-**Keep draining the eligible prepared queue until it is exhausted or this run's cutoff arrives.**
-`1` starts one normal instruction and starts the next after the first finishes. `2` keeps two
-outstanding, refilling either opening independently. It is not a total-attempt quota.
+The coordinator processes prepared, approved tasks in the order returned by `scan -Compact`.
+`Overnight Agent concurrency` is the maximum number of send attempts in that run: `1` permits one
+attempt, `2` permits two. Failed sends consume an attempt and are never retried against the same
+session in that run. Dispatch does not wait for task completion or refill capacity; later runs may
+continue tasks that are still working.
 
-The next run boundary is **:00 or :30 after the coordinator session's first prompt**, matching
-the agreed half-hour schedule. The launch cutoff is that boundary **minus `Overnight Agent start
-buffer`**, read from `user-settings.md`, default **`5m`**. A 10:30 next run means no new start at
-or after 10:25. Late calls and reloads never grant extra time.
-At cutoff, no further instructions are submitted; outstanding task conversations are not killed.
-The next run can nudge an old conversation or start other eligible work. This is deliberately
-not a machine-global worker limit. Five minutes is never a completion heuristic.
+Before each send, the coordinator checks the next local **:00 or :30** after its first prompt,
+minus `Overnight Agent start buffer` from `user-settings.md` (default `5m`). At 10:30, a 5-minute
+buffer means no new send at or after 10:25. Valid values are whole minutes `0`–`29`, optionally
+suffixed `m`; an unreadable or invalid existing value means send nothing and report the problem.
+This is coordinator guidance, not a saved timer or extension-enforced deadline.
 
-The buffer accepts whole minutes `0` through `29`, optionally suffixed `m`; `0m` disables it.
-A missing row/file defaults to five minutes. An invalid value or unreadable existing file reports
-an error and prevents a new drain rather than silently choosing a smaller buffer. The enrolled
-buffer and its provenance are stored alongside `next_run_at` and `cutoff`, so changing the setting
-applies to new runs and never extends a resumed run. Starting inside the buffer sends nothing,
-without rolling its deadline to the following half-hour. Existing task sessions are never killed.
+For each task, `session -Id` resolves whether to skip (`paused`), reuse, create or replace. New
+sessions are created idle and bound before dispatch. Immediately before a message, the coordinator
+calls `session -Id N -ForDispatch -DispatchInput <hash from scan>`. That command rechecks current
+eligibility, the user's pause and the exact prepared-input fingerprint, then stamps the wake. If
+it throws, no message is sent. One `send_session_message` carries the approved brief; replacement
+messages begin with the emitted `kickoff_continuation`. If a send fails, `session -Id N
+-SessionDead` records that the binding could not be woken, and the coordinator moves to the next
+eligible task without retrying it.
 
-The coordinator enrolls with `oa_drain_status`, prepares approved briefs and idle bound sessions,
-then submits the batch to `oa_drain`. Each brief carries the exact `dispatch_input` fingerprint
-from its source scan. Preparation and dispatch reject changed input rather than silently
-restamping a stale brief. The model supplies the approved work content; the code owns selection,
-priority/pause checks, width, sending, observation, refill and cutoff. Prepared Deferred work can
-become eligible after Today work finishes. Unprepared work needs a brief, not an invented plan.
-
-| Scheduler outcome | Meaning |
-| --- | --- |
-| `queued` | Prepared but not sent; fresh eligibility/input/cutoff checks still apply. |
-| `sending` / `accepted` / `unconfirmed` | Outstanding in this run. A transport error is not cancellation. |
-| `completed` | The marked interaction ran and ended, then the app reported idle. This observes the instruction ending, not independent certification of its deliverable. |
-| `waiting_for_user` | The marked interaction started and the app reports a human input/plan gate. Its opening is reusable, but this task is not nudged again in this run. |
-| `skipped` / `failed` | The reason is recorded, never silently reported as success. |
-| Run `drained` / `cutoff` / `error` | The prepared queue was processed, the fixed deadline arrived, or execution stopped with an explicit error. |
-
-Each task is attempted at most once per run. Two aliases to one actual conversation are not
-dispatched concurrently by that run. The loop runs independently of `oa_drain_wait`; waiting
-observes progress rather than asking the model to schedule the next task.
-
-**Completion is evidence, not age.** The sender marks each instruction. Observation requires the
-matching target user message, an assistant turn belonging to that interaction, its end, then a
-fresh app-idle reading. Old idle readings and unrelated completions do not refill an opening.
-Unknown activity or unreadable history holds that opening with a named error until evidence or
-cutoff; another existing opening may continue. Remote histories are unsupported and refused
-before sending. Native calls are bounded to 15 seconds or the remaining window; event reads
-are bounded to 16 MiB per request. Neither limit is a task timeout or proof of completion.
-
-The coordinator host must remain alive while draining. A native-tool hook prevents its normal
-completion while the loop is active. Closing the host interrupts the loop; reload resumes its
-persisted `files/oa-drain.json` queue and original cutoff.
-
-**Operational native-tool guard:** after enrollment, raw session messages, create-with-kickoff
-and native launch/resume shortcuts are denied. Only the scheduler's exact one-use send is
-permitted before cutoff. This is not a security sandbox against arbitrary shell/network code,
-and does not control unenrolled sessions.
-
-Task-state writes remain locked/atomic because task agents can update them concurrently.
-`session -RunLimit` and legacy `-InFlight` read the configured drain width rather than enumerate
-saved tasks into a global worker count. Old prototype state is not migrated or deleted.
-
-`mutcheck-pacing-concurrency.ps1` proves the resolver's sharp edges: the setting must be a **bare
-whole number**, an explicit `-Concurrency` argument outranks the file, malformed prose reports
-`concurrency_source: settings-malformed`, and every failure narrows to `1` rather than widening the
-run. That is the executable part of issue **#391**.
+`mutcheck-pacing-concurrency.ps1` proves the setting is a bare whole number, malformed prose is
+reported as `concurrency_source: settings-malformed`, and values that cannot be parsed narrow to
+`1`. This is the executable part of issue **#391**, now used as the direct-dispatch attempt cap.
 
 ### Finishing a run is not finishing its tasks
 
 The coordinator may finish collecting, dispatching and reporting while task sessions keep
 working. Its wrap-up must distinguish a sent instruction from a completed task. A task's result
-still needs to be verified and published where required; the drain does not weaken that
+still needs to be verified and published where required; dispatch does not weaken that
 completion standard.
 
 `plugins/overnight-agent/checks/mutcheck-deliverable-gate.mjs` and
@@ -499,7 +458,7 @@ the meaning of “done”: a stale reversible offer inside a deliverable does no
 the live journal already says that verb family was delivered, and a task written today or already
 terminal is suppressed rather than re-flagged as if unfinished.
 
-### Dispatch precedence: collect first, then execute in two waves
+### Dispatch precedence: collect, then execute in scan order
 
 The run session does **not** do task work. Issue **#404** is the concrete reason: without per-task
 sessions and workspaces, the overnight run accumulates every task's context and edits in one place,
@@ -510,26 +469,14 @@ collection:
 
 1. **COLLECT** gathers inbox messages, folded Telegram replies, doc-comment observations, and the
    `scan` worklist.
-2. **EXECUTE** dispatches work.
-3. Dispatch happens in **two waves**: the **priority wave** first, then the **collect wave**.
-4. A collect-phase wake is dispatched **in addition to** the priority selection, not instead of it.
-
-The sanctioned exception is a prepared brief's explicit **`collect_wave: true`**. It requires a
-recorded human journal reply or new doc comment. Inbox/Telegram replies must be folded first.
-The exception bypasses only the normal drain width, never a pause, ineligibility, stale input or cutoff.
-That exception does **not** raise the configured setting, compound it, or move work back into the
-run session. It changes **when** a task is woken, not **where** its work happens. The rationale is
-provenance: a mail reply, a Telegram reply, or a journal reply is explicit user action, so it may
-widen the run once. The agent's own belief that “this seems urgent” does not get the same power.
+2. **EXECUTE** dispatches work in the scan's priority order.
+3. Human replies gathered during collection update the worklist but do not widen the configured
+   per-run send limit or reorder that worklist.
 
 The executable statement of intended behaviour for this page is therefore spread across a small,
 important set of files:
 
 - `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1`
-- `plugins/overnight-agent/checks/oa-dispatch.mjs`
-- `plugins/overnight-agent/checks/oa-dispatch.test.mjs`
-- `plugins/overnight-agent/checks/mutcheck-drain.mjs`
-- `plugins/overnight-agent/skills/overnight-agent/mutcheck-parked-capacity.ps1`
 - `plugins/overnight-agent/skills/overnight-agent/mutcheck-priority-order.ps1`
 - `plugins/overnight-agent/skills/overnight-agent/mutcheck-today-served.ps1`
 - `plugins/overnight-agent/skills/overnight-agent/mutcheck-awaiting-reply.ps1`
@@ -538,4 +485,4 @@ important set of files:
 - `plugins/overnight-agent/checks/deliverable-gate-sweep.mjs`
 
 Together they define prioritisation as the product actually behaves: board order, reply interrupts,
-Today gating, liveness, a code-owned drain, and its provenance-based human collect exception.
+Today gating, liveness and the direct-dispatch cap.

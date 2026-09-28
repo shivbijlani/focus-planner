@@ -6,7 +6,7 @@ task's journal, you *approve* it (or ask for revisions), and only an **approved*
 plan gets **executed**. Approval is the safety gate.
 
 This plugin packages the `overnight-agent` skill (its `SKILL.md`, helper
-PowerShell scripts, native task-dispatch extension, and a settings template) so it can be installed with one
+PowerShell scripts, and a settings template) so it can be installed with one
 command from the Focus Planner plugin marketplace.
 
 ## What's inside
@@ -84,7 +84,7 @@ Set the **app's default model to Auto** on each computer before running the
 Overnight Agent. When creating the scheduled **Overnight Agent** automation,
 select **Auto** as its model (`model: auto` in `save_workflow`). The
 `Overnight Agent model` row in external `user-settings.md` defaults to `auto`;
-`oa-state.ps1 session -RunLimit`, `session -Id` and `scan` report the resolved
+`oa-state.ps1 session -Id` and `scan` report the resolved
 preference and whether it came from the setting or the default. At present,
 the app's idle `create_session` and `send_session_message` tools do not accept
 a model argument, so idle-created and woken task sessions inherit the **app's
@@ -94,61 +94,37 @@ overriding Auto, pass the resolved value as `model` to `save_workflow` and set
 the app default to that value separately;
 session-model enforcement requires an app API.
 
-### Continuously drain the prepared queue
+### Direct dispatch
 
-`Overnight Agent concurrency` is the number of normal instructions **from this run** that may
-be outstanding. At `1`, start one task, observe it finish, then start the next eligible task.
-At `2`, refill either opening independently. This is not a total-attempt quota: a run can finish
-many tasks. Earlier runs' tasks do not reserve this run's openings, and a later run may nudge a
-saved conversation again.
+The coordinator sends task briefs directly with `send_session_message`; it does not depend on a
+plugin extension. It processes eligible work in `scan -Compact` order and sends to at most
+`Overnight Agent concurrency` tasks per run. Each attempted send counts toward that limit; a later
+run can continue the work without waiting for earlier task sessions to finish.
 
-The implementation assumes a half-hour schedule at **:00 and :30**. The launch cutoff is the next
-such boundary after the coordinator's first prompt **minus `Overnight Agent start buffer`**
-from `user-settings.md` (default **`5m`**). A 10:30 next run therefore stops new starts at **10:25**,
-not five minutes after a late tool call. At cutoff
-the old run stops sending; its outstanding task conversations are left alone. This bounds
-dispatch time, not task runtime or machine-wide concurrency. The five-minute example is never
-used to infer completion. Buffer values are whole minutes `0` through `29`, with optional `m`;
-`0m` disables it. Missing configuration defaults to five minutes. A malformed value or unreadable
-existing file is explicit and prevents a new drain; it never silently chooses a shorter buffer.
+For each task, the coordinator reads `oa-state.ps1 session -Id <ID>` first. A `paused` verdict
+skips the task. `create` and `replace` create a new task session idle and bind it before sending;
+replacement messages begin with the returned `kickoff_continuation`. Immediately before each
+send, `session -Id <ID> -ForDispatch -DispatchInput <hash>` rechecks eligibility, user pause and
+the exact brief fingerprint, and stamps the wake. If the check throws, nothing is sent. If a send
+fails, the coordinator marks that session dead and continues to the next eligible task without
+retrying it.
 
-The normal flow is **`oa_drain_status` → prepare/bind idle task sessions → scan and prepare
-approved briefs → `oa_drain` → `oa_drain_wait` / status**. The model supplies a batch of approved
-briefs and their exact `dispatch_input` fingerprints from that scan. Code owns queue selection,
-priority and pause rechecks, sending, completion observation, refill and cutoff. Changed inputs
-are rejected, not silently attached to an old brief. Each task is attempted at most once per run;
-unprepared tasks require more preparation rather than an invented plan. Deferred prepared tasks
-can become eligible as Today work finishes.
+The coordinator checks its start cutoff before every send: the next local **:00 or :30** after its
+first prompt, minus `Overnight Agent start buffer` from `user-settings.md` (default `5m`). For a
+10:30 next run, no send starts at or after 10:25. Valid buffer values are whole minutes `0`–`29`,
+optionally suffixed `m`; if an existing value cannot be read or parsed, the coordinator sends
+nothing and reports the problem. This is coordinator guidance, not a runtime extension timer.
 
-The SDK extension runs the loop automatically; waiting/status calls do not drive it. The
-coordinator's `files/oa-drain.json` stores the queue, next run boundary, configured buffer/source,
-immutable cutoff and outcomes across tool
-reloads. An interrupted running/prepared queue resumes with the same cutoff, never a fresh window.
-Buffer edits take effect on new runs. An initial call already inside the buffer sends nothing;
-it does not roll forward to another half-hour. Old incompatible queue records are refused, not
-silently reset or migrated.
-The app must keep the coordinator host alive; its native completion tool is blocked while the
-drain is active. Closing the host stops the loop, and a restart recovers its saved state.
+**Upgrading from the earlier extension:** current installs no longer create the user-level loader
+shim. Remove any stale copy left by an earlier install with:
 
-**Accepted is not complete.** The sender adds a unique marker. Refill requires the target's
-matching interaction to have started and ended, followed by an app-idle reading. A started
-interaction at a human-input/plan gate is parked and releases its opening without another nudge.
-Unconfirmed delivery and unknown completion stay visible and hold only that run's opening until
-evidence arrives or cutoff. They do not reserve a later run's capacity. Observation is bounded to
-16 MiB per outstanding request and native app calls to 15 seconds or the remaining window.
-Remote event histories are unsupported and refused before sending. A known new local session
-may create its event log after its first instruction; absent history never means completed.
+```powershell
+$shim = Join-Path $HOME '.copilot\extensions\overnight-task-dispatch\extension.mjs'
+if (Test-Path -LiteralPath $shim) { Remove-Item -LiteralPath $shim -Force }
+```
 
-After enrollment the pre-tool hook blocks raw native messages, create-with-kickoff, native
-launch/resume shortcuts and premature coordinator completion. Only the scheduler's exact
-one-use send is permitted, before cutoff. This is an operational native-tool guard, **not a
-sandbox against arbitrary shell/network code**. Unenrolled sessions are outside its scope.
-
-Today-first rules, saved conversations and pauses remain. Explicit human collect requests are
-the separately marked width exception, but never bypass pauses, input freshness or cutoff.
-Task-state writes remain locked/atomic because task agents can update them concurrently.
-`session -RunLimit` (legacy alias `-InFlight`) reads the width, not a global occupied-worker count.
-No live settings or old prototype state is automatically migrated or deleted.
+This only removes the obsolete dispatch shim; it does not affect other extensions or task
+sessions.
 
 ### Is this issue already shipped?
 
