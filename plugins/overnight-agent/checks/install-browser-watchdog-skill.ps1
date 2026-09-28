@@ -36,6 +36,15 @@
   A missing deploy must be visible, never a silent downgrade to the behaviour
   this change exists to remove.
 
+  RESIDENT DISPATCH IS THE TRAY'S (GH #698)
+  -----------------------------------------
+  The skill stays available ON DEMAND (ask Copilot to run /browser-watchdog).
+  Scheduled, unattended browser checks now have exactly ONE dispatcher: the
+  optional tray (oa-supervisor-tray.ps1) via its single HKCU Run entry, and they
+  are OFF until opted in under `## Tray browser checks` in user-settings.md. This
+  installer registers no Scheduled Task, Startup shim or VBS launcher, and the
+  skill should not also be put on an hourly app workflow.
+
 .PARAMETER SkillPath
   Override the skill directory. Defaults to a search of the known locations.
 

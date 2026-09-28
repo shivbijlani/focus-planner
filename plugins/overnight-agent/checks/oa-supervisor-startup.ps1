@@ -35,6 +35,37 @@ function Get-OaSupervisorFiles {
     stopRequest = (Join-Path $oaHome 'supervisor-tray-stop.json')
     tray        = (Join-Path $oaHome 'oa-supervisor-tray.ps1')
     consumer    = (Join-Path $oaHome 'consumer-reliability-supervisor.mjs')
+    browserConsumer = (Join-Path $oaHome 'consumer-browser-watchdog.mjs')
+    browserState    = (Join-Path $oaHome 'browser-checks-state.json')
+  }
+}
+
+# Pure: one browser-workload result line -> what the tray shows. Kept free of UI
+# and process state so the tray tests can drive it directly.
+function ConvertFrom-OaBrowserResult {
+  param($Result)
+  $summary = switch ([string]$Result.status) {
+    'disabled'     { if ($Result.policy -and $Result.policy.source -eq 'defaults') { 'off (default)' } else { 'off (Enabled = off)' } }
+    'no-opt-ins'   { 'enabled, but no Observe/Thaw/Auto-launch opted in - nothing runs' }
+    'policy-error' { "settings refused: $($Result.error)" }
+    'busy'         { 'another browser check holds the browser-check lock' }
+    default {
+      if ($Result.outcome) { "$($Result.outcome.mode) - $($Result.outcome.summary)" } else { [string]$Result.status }
+    }
+  }
+  $recent = @()
+  foreach ($entry in @($Result.recent)) {
+    if (-not $entry) { continue }
+    $when = try { ([datetime]::Parse([string]$entry.at, $null,
+      [System.Globalization.DateTimeStyles]::RoundtripKind)).ToLocalTime().ToString('MM-dd HH:mm') } catch { '?' }
+    $recent += "$when $($entry.mode): $($entry.summary)"
+  }
+  [ordered]@{
+    state = ([string]$Result.status).ToUpperInvariant()
+    summary = $summary
+    error = $(if ($Result.status -in @('failed', 'policy-error')) { [string]$Result.error } else { $null })
+    recent = $recent
+    settingsPath = $(if ($Result.policy) { [string]$Result.policy.settingsPath } else { $null })
   }
 }
 
