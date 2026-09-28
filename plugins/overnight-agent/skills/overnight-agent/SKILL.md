@@ -136,12 +136,14 @@ already processed in this journal") lives in the **skill's own working dir**, wh
     exist". On the live corpus this is ~48 KB instead of ~507 KB.
   - **`scan -ScanOutFile <path>`** → writes the **full** worklist to a file and prints only the
     summary. Use this when you need a field `-Compact` does not carry; then grep the file.
-  - ⏱️ **`scan` is the slowest thing you run, and it is allowed to be.** Budget **up to 90 s** on
-    the live corpus and **wait for it** — it reads every journal on disk. Do **not** abandon it
-    and proceed: a run without its worklist dispatches nothing, which is the same outcome as the
-    run having failed. If your tool call would time out first, run it with `-ScanOutFile` and
-    read the file. (GH #711: a run abandoned scan twice and did no task work while reporting
-    success.)
+  - ⏱️ **`scan` is the slowest thing you run, and it is allowed to be.** Budget **up to 180 s** on
+    the live corpus and **wait for it** — it reads every journal on disk, and its wall time is
+    dominated by whatever else is using the machine (measured 2026-09-28: 96 s with the Copilot
+    window minimised, 224 s with it visible, because the WebView renderer takes ~64 % of the CPU).
+    Do **not** abandon it and proceed: a run without its worklist dispatches nothing, which is the
+    same outcome as the run having failed. If your tool call would time out first, run it with
+    `-ScanOutFile` and read the file. (GH #711: a run abandoned scan twice and did no task work
+    while reporting success.)
   - **`get -Id <id>`** → that task's full state JSON.
   - **`mark -Id <id> [-Status <s>] [-Version <n>] [-PlanId <p>]`** → call this **after you write your
     turn into a journal**. It updates the fields and re-snapshots the journal, so next run the task reads
@@ -543,14 +545,16 @@ Do the phases **in this order** every time.
 > `eligible: false` — report it, never work it (see "Reopened after close"). Don't
 > reconstruct state by eyeballing 90+ journals; let the tool point you at the handful that need work.
 >
-> ⏱️ **Give it up to 90 seconds and wait.** `scan` reads every journal on disk, so it is the
-> slowest call in the run — and the one call the run cannot proceed without. **Never** abandon it
-> and continue: a run without a worklist dispatches nothing while still looking like it
-> succeeded, which is exactly what happened on 2026-09-28 (GH #711). If your tool call cannot
-> wait that long, run `scan -ScanOutFile <path>` — it prints a short summary and leaves the full
-> worklist in a file you can read. `-Compact` exists for the same reason: the full worklist is
-> ~507 KB, which is not something you can read in one result, and `-Compact` is ~48 KB carrying
-> every row you are allowed to work plus the rows explaining why the rest are gated.
+> ⏱️ **Give it up to 180 seconds and wait.** `scan` reads every journal on disk, so it is the
+> slowest call in the run — and the one call the run cannot proceed without. Its wall time is
+> mostly **contention, not work**: measured 2026-09-28 on the same corpus, 96 s with the Copilot
+> window minimised and 224 s with it visible. **Never** abandon it and continue: a run without a
+> worklist dispatches nothing while still looking like it succeeded, which is exactly what
+> happened that night (GH #711). If your tool call cannot wait that long, run
+> `scan -ScanOutFile <path>` — it prints a short summary and leaves the full worklist in a file
+> you can read. `-Compact` exists for the same reason: the full worklist is ~507 KB, which is not
+> something you can read in one result, and `-Compact` is ~48 KB carrying every row you are
+> allowed to work plus the rows explaining why the rest are gated.
 
 > **Work the rows in the order `scan` gives you (#223).** The scan output is already sorted, and
 > ordering is **data, not judgement** — do not re-derive it in your head. Each row carries

@@ -1,4 +1,4 @@
-<#
+﻿<#
   mutcheck-scan-perf.ps1 -- performance guard for `oa-state.ps1 scan` (GH #711).
 
   WHY A PERF TEST IS A CORRECTNESS TEST HERE.
@@ -17,9 +17,13 @@
     3. `-Compact` and `-OutFile` do not change what is COMPUTED: the full array written by
        `-OutFile` is byte-identical to the array printed by a plain `scan`.
     4. The budget is being bought by the memoisation, not by a fast machine. A COPY of
-       oa-state.ps1 with the memo table disabled is timed the same way and must be measurably
-       slower -- otherwise this guard would keep passing after the optimisation was deleted,
-       which is the only way a perf test can be worse than none.
+       oa-state.ps1 is instrumented to COUNT fence-mask computations, and a second copy has the
+       memo lookup disabled too; the un-memoised copy must do at least twice the work. Counting
+       rather than timing is deliberate: the first version of this arm timed the two copies,
+       which held at 4.6x on a laptop and collapsed to 1.15x on a CI runner where the whole scan
+       takes 4 s -- i.e. it measured the runner. Without arm 4 in some form this guard would keep
+       passing after the optimisation was deleted, which is the only way a perf test can be worse
+       than none.
 
   The fixture is generated into a temp dir and the live planner folder and state store are
   never touched.
@@ -35,10 +39,6 @@ param(
   # measurement. It is wall-clock on whatever host runs it, which is the number that actually
   # decides whether a run gets its worklist.
   [double]$BudgetSeconds = 30,
-  # How much slower the un-memoised copy must be before arm 4 accepts that the memoisation is
-  # load-bearing. Deliberately modest: the point is to catch the optimisation being DELETED, not
-  # to pin a speedup ratio that varies with the host.
-  [double]$MutantMinRatio = 1.2,
   [switch]$SkipMutant
 )
 
@@ -137,6 +137,19 @@ function Measure-Scan([string]$script, [string[]]$extra) {
   return [pscustomobject]@{ Seconds = $sw.Elapsed.TotalSeconds; Text = $out }
 }
 
+function Measure-MaskCalls([string]$script) {
+  # Runs an instrumented copy and returns how many times it had to compute a fence mask.
+  $out = & $PsExe -NoProfile -ExecutionPolicy Bypass -File $script scan -Compact `
+    -JournalDir $jdir -StateDir $sdir -PlannerBoard $board `
+    -PlannerCompleted (Join-Path $root 'planner-completed.md') `
+    -SnoozeStore (Join-Path $root 'snooze.json') `
+    -GatePath (Join-Path $root 'agent-gate.md') `
+    -UserSettings (Join-Path $root 'user-settings.md') 2>&1
+  $line = @($out | Where-Object { "$_" -match '^MASKCORE=(\d+)$' }) | Select-Object -First 1
+  if (-not $line) { throw 'instrumented scan did not report MASKCORE' }
+  return [int]([regex]::Match("$line", '^MASKCORE=(\d+)$').Groups[1].Value)
+}
+
 $pass = 0; $fail = 0
 function Assert([bool]$ok, [string]$what) {
   if ($ok) { $script:pass++; Write-Host "  PASS  $what" }
@@ -196,17 +209,42 @@ try {
   Assert ($viaFile.Text.Length -lt 2000) '-ScanOutFile stdout is small enough for one tool result'
 
   # --- arm 4: the budget is bought by the memoisation -------------------------------------
+  #
+  # DETERMINISTIC, not a stopwatch ratio. The first version of this arm timed a copy with the
+  # memo disabled and required it to be N times slower -- which held on a laptop (4.6x) and
+  # collapsed to 1.15x on a CI runner where the whole scan takes 4 s, i.e. it measured the
+  # runner more than the code. So it counts the thing that actually changed instead: how many
+  # times the fence masker has to do its work. With the memo, the same journal text is masked
+  # once; without it, every reader re-masks it. A count cannot flake.
   if ($SkipMutant) { Write-Host '  (mutant arm skipped)' }
   else {
-    $mutantPath = Join-Path $root 'oa-state-mutant.ps1'
     $src = [IO.File]::ReadAllText($ScriptPath)
-    $find = '  if ($t.TryGetValue($key, [ref]$hit)) { return $hit }'
-    if (-not $src.Contains($find)) { throw 'mutant anchor not found: Get-Memoised no longer looks up its cache (#711)' }
-    [IO.File]::WriteAllText($mutantPath, $src.Replace($find, '  if ($false) { return $hit }'), [Text.UTF8Encoding]::new($false))
-    $mutant = Measure-Scan $mutantPath @('-Compact')
-    $ratio = if ($compact.Seconds -gt 0) { $mutant.Seconds / $compact.Seconds } else { 0 }
-    Write-Host ("  un-memoised:  {0:N1}s ({1:N2}x)" -f $mutant.Seconds, $ratio)
-    Assert ($ratio -ge $MutantMinRatio) ("removing the memo table makes scan at least {0}x slower (measured {1:N2}x)" -f $MutantMinRatio, $ratio)
+    $lookup = '  if ($t.TryGetValue($key, [ref]$hit)) { return $hit }'
+    $coreDecl = 'function Get-FenceMaskedTextCore([string]$text) {'
+    $emitAt = '  if ($Compact) { (New-CompactScan $rows $seconds) | ConvertTo-Json -Depth 8; return }'
+    foreach ($anchor in @($lookup, $coreDecl, $emitAt)) {
+      if (-not $src.Contains($anchor)) { throw "instrumentation anchor not found, the memo path has moved (#711): $anchor" }
+    }
+    $instrumented = $src.Replace($coreDecl, $coreDecl + "`n  `$script:MaskCoreCalls++").
+                         Replace($emitAt, '  if ($Compact) { [Console]::Error.WriteLine("MASKCORE=" + $script:MaskCoreCalls); ' +
+                                          '(New-CompactScan $rows $seconds) | ConvertTo-Json -Depth 8; return }')
+
+    $memoPath = Join-Path $root 'oa-state-counted.ps1'
+    $mutantPath = Join-Path $root 'oa-state-mutant.ps1'
+    [IO.File]::WriteAllText($memoPath, $instrumented, [Text.UTF8Encoding]::new($true))
+    [IO.File]::WriteAllText($mutantPath, $instrumented.Replace($lookup, '  if ($false) { return $hit }'), [Text.UTF8Encoding]::new($true))
+
+    $withMemo = Measure-MaskCalls $memoPath
+    $without = Measure-MaskCalls $mutantPath
+    Write-Host ("  fence-mask recomputations: memoised {0}, un-memoised {1}" -f $withMemo, $without)
+    Assert ($withMemo -gt 0) 'the instrumented copy actually reached the fence masker'
+    Assert ($without -ge ($withMemo * 2)) ("removing the memo at least doubles fence-mask work ({0} -> {1})" -f $withMemo, $without)
+    # Per journal rather than in total, so the assertion means the same thing at any fixture
+    # size. The floor is not 1: a journal legitimately yields several DISTINCT strings to mask
+    # (the whole file, the agent-left region, the newest turn, the above-sentinel region), and
+    # the memo's job is to mask each of those once rather than once per reader. Measured on this
+    # fixture: ~3 per journal memoised against ~9 un-memoised.
+    Assert ($withMemo -le ($Journals * 4)) ("each journal is masked a bounded number of times ({0:N2} per journal)" -f ($withMemo / $Journals))
   }
 
   Write-Host ''
