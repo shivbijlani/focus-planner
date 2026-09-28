@@ -1076,7 +1076,15 @@ start more work.
    waiting, skipped or failed request. The code owns the loop, not a prose instruction to keep going.
    **Do not use raw `send_session_message`, a kickoff on `create_session`, or hand-written
    `-ForDispatch` / `-SessionWoken` calls for task dispatch.** If these plugin tools are missing,
-   report the missing capability and stop dispatch rather than bypassing the scheduler.
+   **call `extensions_reload` once and check again** before concluding anything (#713). A missing
+   tool is usually a startup race, not a missing plugin: a scheduled session starts every MCP
+   server and the dispatch extension at once, and on a contended 4-core box the extension misses
+   the host's 30-second ready window. The extension log then ends in `=== ready-timeout ===`
+   (under `~\.copilot\logs\extensions\`), whereas a reload after startup settles is ready at
+   once. This was measured on 2026-09-28: all three scheduled coordinator sessions that night
+   timed out, while a reload in an already-running session became ready immediately. Only if the
+   tools are still absent after that one reload, report the missing capability and stop dispatch
+   rather than bypassing the scheduler. Say in the wrap-up whether a reload was needed.
 
    **Do not wait for tasks from earlier runs to become idle.** This run can nudge them or start
    different work. Within this run, accepted/unconfirmed requests remain outstanding until the
