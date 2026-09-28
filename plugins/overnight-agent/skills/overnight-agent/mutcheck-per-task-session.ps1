@@ -138,13 +138,14 @@ $chatSettings = Join-Path $root 'settings-chat.md'
 $chatBareSettings = Join-Path $root 'settings-chat-bare.md'
 $chatInvalidSettings = Join-Path $root 'settings-chat-invalid.md'
 $chatBadIdSettings = Join-Path $root 'settings-chat-bad-id.md'
+$emDash = [char]0x2014  # the template's separator, kept out of the source so it stays ASCII
 $chatProjectId = '50b4020e-bf7b-40bf-90f4-5261b41710bc'
 [IO.File]::WriteAllText($badSettings, "## Overnight Agent behaviour`n`n| Setting | Value |`n|---|---|`n| Overnight Agent concurrency | plenty |`n", $utf8)
 [IO.File]::WriteAllText($twoSettings, "## Overnight Agent behaviour`n`n| Setting | Value |`n|---|---|`n| Overnight Agent concurrency | 2 |`n", $utf8)
-[IO.File]::WriteAllText($chatSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | ``$chatProjectId`` — local folder project rooted at task-chats |`n", $utf8)
-[IO.File]::WriteAllText($chatBareSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | $chatProjectId — local folder project rooted at task-chats |`n", $utf8)
+[IO.File]::WriteAllText($chatSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | ``$chatProjectId`` $emDash local folder project rooted at task-chats |`n", $utf8)
+[IO.File]::WriteAllText($chatBareSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | $chatProjectId $emDash local folder project rooted at task-chats |`n", $utf8)
 [IO.File]::WriteAllText($chatInvalidSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | local folder project rooted at task-chats |`n", $utf8)
-[IO.File]::WriteAllText($chatBadIdSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | ``not-a-guid`` — local folder project |`n", $utf8)
+[IO.File]::WriteAllText($chatBadIdSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | ``not-a-guid`` $emDash local folder project |`n", $utf8)
 [IO.File]::WriteAllText($modelSettings, "| Setting | Value |`n|---|---|`n| Overnight Agent model | ``claude-sonnet-5`` |`n", $utf8)
 [IO.File]::WriteAllText($badModelSettings, "| Setting | Value |`n|---|---|`n| Overnight Agent model | banana |`n", $utf8)
 
