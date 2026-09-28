@@ -109,6 +109,11 @@
                                 nothing pending. SKIPS any journal with trailing user content,
                                 so a real unanswered reply is never baselined away. Never
                                 writes to a journal.
+  whoami [-SessionId <sid>]     #727: this session's ROLE. Matches the id (default:
+                                $env:COPILOT_AGENT_SESSION_ID) against every task binding,
+                                current or replaced. `role: task` + `task_id` means do only that
+                                task; `coordinator` means no task is bound to it; `unknown`
+                                means no id was available. Read-only.
 
 .POLLING (why this exists)
   `scan` only flags journals the USER has touched, so a purely time-triggered job (e.g. #400's
@@ -469,7 +474,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract', 'doc', 'session')]
+  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract', 'doc', 'session', 'whoami')]
   [string]$Command = 'scan',
 
   [string]$Id,
@@ -5194,6 +5199,44 @@ function Get-KickoffContinuation([string]$taskId, [string]$priorId) {
   "Read the task journal for what has already been done before doing anything new."
 }
 
+function Get-TaskRoleLine([string]$taskId) {
+  # #727: a task session that received "overnight dispatch for task #228" matched the brief to the
+  # overnight-agent skill by name and loaded the coordinator. The brief now states the role first,
+  # emitted here so the coordinator pastes it rather than paraphrasing it away.
+  "You are the task session for planner task #$taskId. Do this task only. Do not run " +
+  "``/overnight-agent`` or load the overnight-agent skill, and do not dispatch, create or wake " +
+  "other sessions."
+}
+
+function Cmd-Whoami {
+  # #727: which role is THIS session? Answers the guard at the top of SKILL.md cheaply, by
+  # matching the session id against every task binding (current or replaced). Read-only.
+  $sid = if ($SessionId) { $SessionId } elseif ($env:COPILOT_AGENT_SESSION_ID) { $env:COPILOT_AGENT_SESSION_ID } else { '' }
+  $hits = @()
+  if ($sid -and (Test-Path $StateDir)) {
+    foreach ($f in (Get-ChildItem $StateDir -Filter 'task-*.json' -File -ErrorAction SilentlyContinue)) {
+      try { $obj = Get-Content -Raw $f.FullName | ConvertFrom-Json } catch { continue }
+      $s = Get-SessionState $obj
+      if (-not $s) { continue }
+      $match = if ("$($s.session_id)" -eq $sid) { 'session_id' }
+      elseif ("$($s.prior_session_id)" -eq $sid) { 'prior_session_id' }
+      else { $null }
+      if ($match) { $hits += [pscustomobject]@{ id = "$($obj.id)"; match = $match; state = "$($s.state)" } }
+    }
+  }
+  $role = if (-not $sid) { 'unknown' } elseif ($hits.Count) { 'task' } else { 'coordinator' }
+  $taskId = if ($hits.Count) { $hits[0].id } else { $null }
+  [pscustomobject]@{
+    session_id = if ($sid) { $sid } else { $null }
+    session_id_source = if ($SessionId) { 'parameter' } elseif ($sid) { 'COPILOT_AGENT_SESSION_ID' } else { $null }
+    # task | coordinator | unknown. `task` means: do only that task's work.
+    role       = $role
+    task_id    = $taskId
+    tasks      = @($hits)
+    role_line  = if ($taskId) { (Get-TaskRoleLine $taskId) } else { $null }
+  } | ConvertTo-Json -Depth 4
+}
+
 function Cmd-Session {
   $agentModel = Get-AgentModelSettings
   if (($CheckDispatch -or $ForDispatch) -and (-not $Id -or
@@ -5410,8 +5453,10 @@ function Cmd-Session {
     # Tuesday?", which is the difference between waiting and being stuck. Null on a task paused
     # before this field shipped: an unknown age is reported as unknown, never as "not paused".
     paused_at      = if ($st -and $st.PSObject.Properties['paused_at'] -and $st.paused_at) { (ConvertTo-IsoText $st.paused_at) } else { $null }
+    # #727: the first line of every brief sent to this task's session, emitted verbatim.
+    role_line      = (Get-TaskRoleLine $Id)
     # Present ONLY on a `replace` verdict, and emitted ready to paste. See Get-KickoffContinuation.
-    kickoff_continuation = if ($verdict -eq 'replace') { (Get-KickoffContinuation $Id "$($sess.session_id)") } else { $null }
+    kickoff_continuation =  if ($verdict -eq 'replace') { (Get-KickoffContinuation $Id "$($sess.session_id)") } else { $null }
     # Emitted, never executed (#321): the raw `git worktree remove --force` deletes THROUGH a
     # node_modules junction, so the safe teardown is named here rather than performed here.
     teardown_command = if ($sess -and "$($sess.workspace_type)" -eq 'worktree' -and "$($sess.workspace)") {
@@ -5778,6 +5823,7 @@ try {
     'extract' { Cmd-Extract }
     'doc' { Cmd-Doc }
     'session' { Cmd-Session }
+    'whoami' { Cmd-Whoami }
   }
 }
 finally {
