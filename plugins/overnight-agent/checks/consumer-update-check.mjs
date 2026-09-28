@@ -16,7 +16,8 @@
  *   copilot plugin marketplace list --json            is focus-planner registered?
  *   copilot plugin list --json                        is overnight-agent installed, which version?
  *   copilot plugin marketplace update focus-planner   refresh that catalog (best effort)
- *   copilot plugin marketplace browse focus-planner --json   catalog version
+ *   %LOCALAPPDATA%\copilot\marketplaces\...\marketplace.json catalog version
+ *   copilot plugin marketplace browse focus-planner --json   catalog membership
  *   copilot plugin install overnight-agent@focus-planner     apply (Auto apply only)
  *   copilot plugin list --json                        re-verify the installed version
  *
@@ -66,7 +67,7 @@ export const CLI_COMMANDS = Object.freeze({
 
 // Results that mean "the check itself completed", so the interval restarts.
 const COMPLETED = new Set([
-  'up-to-date', 'update-available', 'applied', 'version-unknown',
+  'up-to-date', 'update-available', 'applied', 'capability-gap',
   'marketplace-missing', 'not-installed', 'not-marketplace-install',
 ]);
 
@@ -191,6 +192,36 @@ function cliFailure(run, what) {
   return `${what} failed: ${detail.slice(0, 300)}`;
 }
 
+export function marketplaceManifestPath(marketplace, env = process.env) {
+  const source = String(marketplace?.source ?? '').trim();
+  const match = /^GitHub:\s*([^/\\\s]+)\/([^/\\\s]+?)(?:\.git)?$/i.exec(source);
+  if (!match || !env.LOCALAPPDATA) return null;
+  const cacheName = `${match[1]}-${match[2]}`.toLowerCase();
+  return join(env.LOCALAPPDATA, 'copilot', 'marketplaces', cacheName, '.github', 'plugin', 'marketplace.json');
+}
+
+async function readCachedCatalogVersion(marketplace, { env, readText }) {
+  const manifestPath = marketplaceManifestPath(marketplace, env);
+  if (!manifestPath) {
+    return { error: `the Copilot CLI does not expose a readable cache location for marketplace source ` +
+      `'${marketplace?.source || 'unknown'}'` };
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse((await readText(manifestPath, 'utf8')).replace(/^\uFEFF/, ''));
+  } catch (error) {
+    return { error: `the refreshed marketplace cache could not be read at '${manifestPath}': ` +
+      String(error?.message ?? error) };
+  }
+  const listed = Array.isArray(manifest?.plugins) &&
+    manifest.plugins.find(item => item?.name === PLUGIN_NAME);
+  if (!listed) return { error: `${PLUGIN_NAME} is absent from the refreshed marketplace manifest at '${manifestPath}'` };
+  if (!isVersion(listed.version)) {
+    return { error: `${PLUGIN_NAME} has no comparable version in the refreshed marketplace manifest at '${manifestPath}'` };
+  }
+  return { version: listed.version.trim(), manifestPath };
+}
+
 async function readInstalled(runCli) {
   const run = await runCli(CLI_COMMANDS.pluginList, { timeoutMs: CLI_TIMEOUT_MS });
   const list = run.exitCode === 0 ? parseJsonArray(run.stdout) : null;
@@ -201,13 +232,16 @@ async function readInstalled(runCli) {
 }
 
 /** The check itself. Pure over `runCli`, so tests drive it with a recorder. */
-export async function performUpdateCheck({ plan, runCli = runCopilotCli }) {
+export async function performUpdateCheck({
+  plan, runCli = runCopilotCli, env = process.env, readText = readFile,
+}) {
   const result = { installedVersion: null, availableVersion: null, applied: false, notes: [] };
 
   const markets = await runCli(CLI_COMMANDS.marketplaceList, { timeoutMs: CLI_TIMEOUT_MS });
   const marketList = markets.exitCode === 0 ? parseJsonArray(markets.stdout) : null;
   if (!marketList) return { ...result, status: 'failed', error: cliFailure(markets, '`copilot plugin marketplace list --json`') };
-  if (!marketList.some(item => item?.name === MARKETPLACE_NAME)) {
+  const marketplace = marketList.find(item => item?.name === MARKETPLACE_NAME);
+  if (!marketplace) {
     return { ...result, status: 'marketplace-missing',
       error: `marketplace '${MARKETPLACE_NAME}' is not registered with the Copilot CLI` };
   }
@@ -235,9 +269,19 @@ export async function performUpdateCheck({ plan, runCli = runCopilotCli }) {
     return { ...result, status: 'failed', error: `${PLUGIN_NAME} is not listed in the ${MARKETPLACE_NAME} catalog` };
   }
   result.availableVersion = isVersion(listed.version) ? listed.version.trim() : null;
+  if (!result.availableVersion) {
+    const cached = await readCachedCatalogVersion(marketplace, { env, readText });
+    if (cached.version) {
+      result.availableVersion = cached.version;
+      result.notes.push(`catalog version read from refreshed marketplace cache: ${cached.manifestPath}`);
+    } else {
+      return { ...result, status: 'capability-gap',
+        error: `catalog version unavailable: browse output has no version, and ${cached.error}` };
+    }
+  }
   if (!result.availableVersion || !result.installedVersion) {
-    return { ...result, status: 'version-unknown',
-      error: 'the marketplace did not report comparable versions; nothing to do' };
+    return { ...result, status: 'capability-gap',
+      error: 'the Copilot CLI did not report a comparable installed plugin version' };
   }
   if (compareVersions(result.availableVersion, result.installedVersion) <= 0) {
     return { ...result, status: 'up-to-date', error: null };
@@ -329,7 +373,7 @@ function lastView(state) {
 
 export async function runUpdateWorkload({
   paths = updateWorkloadPaths(), reportOnly = false, force = false, clock = { now: () => Date.now() },
-  policy: suppliedPolicy, runCli = runCopilotCli,
+  policy: suppliedPolicy, runCli = runCopilotCli, env = process.env, readText = readFile,
 } = {}) {
   const nowMs = clock.now();
   const recheck = new Date(nowMs + POLICY_RECHECK_MINUTES * 60_000).toISOString();
@@ -359,7 +403,7 @@ export async function runUpdateWorkload({
     return { status: 'busy', dispatched: false, plan, policy, last: lastView(state), recent: [], nextEvaluationAt: recheck };
   }
   try {
-    const outcome = await performUpdateCheck({ plan, runCli });
+    const outcome = await performUpdateCheck({ plan, runCli, env, readText });
     const endMs = clock.now();
     const at = new Date(endMs).toISOString();
     outcome.summary = summarizeResult(outcome);

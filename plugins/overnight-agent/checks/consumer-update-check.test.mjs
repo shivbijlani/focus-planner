@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,7 @@ import {
   UPDATE_CHECKS_DEFAULTS, UPDATE_CHECKS_SECTION_HEADING,
 } from './oa-user-settings.mjs';
 import {
-  CLI_COMMANDS, compareVersions, isCheckDue, PLUGIN_SPEC, readUpdateStatus, resolveUpdatePlan,
+  CLI_COMMANDS, compareVersions, isCheckDue, marketplaceManifestPath, PLUGIN_SPEC, readUpdateStatus, resolveUpdatePlan,
   runCopilotCli, runUpdateWorkload, staleCheckNote, updateWorkloadPaths,
 } from './consumer-update-check.mjs';
 
@@ -183,6 +183,51 @@ test('with Auto apply off an available update is only reported, never installed'
   assert.equal(existsSync(paths.lock), false, 'the lock is released');
 });
 
+test('the real browse shape gets its version from the refreshed marketplace cache', async t => {
+  const browse = JSON.parse(await readFile(join(here, 'fixtures', 'marketplace-browse.json'), 'utf8'));
+  const localAppData = await home(t);
+  const marketplace = {
+    name: 'focus-planner',
+    source: 'GitHub: shivbijlani/focus-planner',
+  };
+  const manifestPath = marketplaceManifestPath(marketplace, { LOCALAPPDATA: localAppData });
+  await mkdir(dirname(manifestPath), { recursive: true });
+  await writeFile(manifestPath, JSON.stringify({
+    name: 'focus-planner',
+    plugins: [{ name: 'overnight-agent', version: '1.54.0' }],
+  }), 'utf8');
+
+  const cli = fakeCli({ marketplaces: [marketplace], catalog: browse });
+  const result = await runUpdateWorkload({
+    paths: updateWorkloadPaths(await home(t)),
+    policy: policyOf({}),
+    runCli: cli.run,
+    env: { LOCALAPPDATA: localAppData },
+    clock: clockAt(NOW),
+  });
+  assert.equal(result.status, 'update-available');
+  assert.equal(result.outcome.availableVersion, '1.54.0');
+  assert.match(result.outcome.notes.at(-1), /refreshed marketplace cache/);
+});
+
+test('a missing marketplace version source is reported as a capability gap', async t => {
+  const browse = JSON.parse(await readFile(join(here, 'fixtures', 'marketplace-browse.json'), 'utf8'));
+  const cli = fakeCli({
+    marketplaces: [{ name: 'focus-planner', source: 'Local: C:\\catalog' }],
+    catalog: browse,
+  });
+  const result = await runUpdateWorkload({
+    paths: updateWorkloadPaths(await home(t)),
+    policy: policyOf({}),
+    runCli: cli.run,
+    env: { LOCALAPPDATA: await home(t) },
+    clock: clockAt(NOW),
+  });
+  assert.equal(result.status, 'capability-gap');
+  assert.match(result.error, /browse output has no version/);
+  assert.match(result.error, /does not expose a readable cache location/);
+});
+
 test('only the marketplace CLI commands are ever run: never git, never a deploy script', async t => {
   const cli = fakeCli({ catalog: [{ name: 'overnight-agent', version: '2.0.0' }], installTo: '2.0.0' });
   await runUpdateWorkload({ paths: updateWorkloadPaths(await home(t)), policy: policyOf({ autoApply: true }),
@@ -248,7 +293,7 @@ test('idempotency guards: marketplace registered, plugin installed from it, vers
     [{ installed: { name: 'overnight-agent', marketplace: 'local', version: '1.0.0' } }, 'not-marketplace-install'],
     [{ catalog: [{ name: 'overnight-agent', version: '1.53.0' }] }, 'up-to-date'],
     [{ catalog: [{ name: 'overnight-agent', version: '1.52.9' }] }, 'up-to-date'],
-    [{ catalog: [{ name: 'overnight-agent' }] }, 'version-unknown'],
+    [{ catalog: [{ name: 'overnight-agent' }] }, 'capability-gap'],
     [{ failOn: 'plugin marketplace list' }, 'failed'],
   ];
   for (const [options, expected] of cases) {
