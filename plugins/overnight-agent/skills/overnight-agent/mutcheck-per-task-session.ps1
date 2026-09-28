@@ -369,6 +369,26 @@ Check 'K----- a chat cannot be bound to a workspace' {
   $script:LastOaExit -ne 0 -and $chatWorkspace -match 'session_chat_scope'
 }
 
+# A legacy folder binding remains an error unless the caller explicitly chooses its new kind.
+# Keep this fixture synthetic: no live state is read or changed.
+$legacyBind = Invoke-OaJson @('session', '-Id', '812', '-SessionId', 'SESS_LEGACY_812',
+  '-SessionKind', 'chat', '-Force')
+$legacyPath = Join-Path $sdir 'task-812.json'
+$legacyState = Get-Content -LiteralPath $legacyPath -Raw | ConvertFrom-Json
+$legacyState.session.kind = 'folder'
+$legacyState.session.state = 'dead'
+[IO.File]::WriteAllText($legacyPath, ($legacyState | ConvertTo-Json -Depth 20), $utf8)
+$legacyReplace = Invoke-Oa @('session', '-Id', '812', '-SessionId', 'SESS_REPLACEMENT_812')
+$legacyMessage = $legacyReplace -replace '\s+', ' '
+Check 'K------ the legacy folder binding fixture was persisted' {
+  $legacyBind.bound -eq $true -and "$($legacyState.session.kind)" -eq 'folder'
+}
+Check 'K------ a legacy folder replacement explains the required explicit kind' {
+  $script:LastOaExit -ne 0 -and $legacyMessage -match 'session_kind_invalid' -and
+    $legacyMessage -match 'pass -SessionKind chat' -and
+    $legacyMessage -match '-SessionKind code with its worktree'
+}
+
 # --- L/M/N: the concurrency setting (#391), and its fail-safe direction ----------------
 $l = Invoke-OaJson -OaArgs @('session', '-InFlight') -Settings $noSettings
 Check 'L absent settings file -> concurrency 1' { $l.concurrency -eq 1 }

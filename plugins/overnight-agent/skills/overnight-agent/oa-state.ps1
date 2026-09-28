@@ -5091,7 +5091,8 @@ function Cmd-Session {
 
     $kind = if ($SessionKind) { $SessionKind } elseif ($sess) { "$($sess.kind)" } else { 'chat' }
     if ($kind -notin @('code', 'chat')) {
-      throw "session_kind_invalid: '$kind' is not a supported task session kind"
+      throw ("session_kind_invalid: '$kind' is not a supported task session kind; pass " +
+        '-SessionKind chat for a non-code task or -SessionKind code with its worktree')
     }
     if ($kind -eq 'chat') {
       if ($SessionProject -or $SessionWorkspace -or $WorkspaceType) {
