@@ -49,6 +49,10 @@ $store = Join-Path $root 'snooze.json'
 [IO.File]::WriteAllText($store, '{}', $utf8)
 $runWs = Join-Path $root 'run-ws'
 New-Item -ItemType Directory -Path $runWs -Force | Out-Null
+$taskWs = Join-Path $root 'wt-901'
+New-Item -ItemType Directory -Path $taskWs -Force | Out-Null
+Set-Content -Path (Join-Path $taskWs '.git') -Value 'gitdir: /repo/.git/worktrees/x' -Encoding utf8
+$bindArgs = @('-SessionKind', 'code', '-SessionProject', 'focus-planner', '-SessionWorkspace', $taskWs, '-WorkspaceType', 'worktree')
 
 function Invoke-OaJson {
   param([string[]]$OaArgs, [string]$EnvSessionId = '')
@@ -92,7 +96,7 @@ Check 'B whoami: unbound id -> coordinator' {
   "$($w.role)" -eq 'coordinator' -and -not $w.task_id
 }
 
-[void](Invoke-OaJson @('session', '-Id', '901', '-SessionId', 'SESS_A', '-SessionKind', 'chat'))
+[void](Invoke-OaJson (@('session', '-Id', '901', '-SessionId', 'SESS_A') + $bindArgs))
 Check 'C whoami: bound id -> task 901' {
   $w = Invoke-OaJson @('whoami', '-SessionId', 'SESS_A')
   "$($w.role)" -eq 'task' -and "$($w.task_id)" -eq '901' -and "$($w.role_line)" -match '#901'
@@ -103,7 +107,7 @@ Check 'D whoami defaults to COPILOT_AGENT_SESSION_ID' {
 }
 
 [void](Invoke-OaJson @('session', '-Id', '901', '-SessionDead'))
-[void](Invoke-OaJson @('session', '-Id', '901', '-SessionId', 'SESS_B', '-SessionKind', 'chat'))
+[void](Invoke-OaJson (@('session', '-Id', '901', '-SessionId', 'SESS_B') + $bindArgs))
 Check 'E whoami: replaced and replacement ids -> task 901' {
   $old = Invoke-OaJson @('whoami', '-SessionId', 'SESS_A')
   $new = Invoke-OaJson @('whoami', '-SessionId', 'SESS_B')
