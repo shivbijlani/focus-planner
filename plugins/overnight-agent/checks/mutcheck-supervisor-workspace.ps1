@@ -43,15 +43,15 @@ function Test-Subject([string]$Subject) {
   $bad = Invoke-Subject $Subject (Join-Path $Tmp 'workspace-bad.json')
   if ($bad -is [string]) { $failures += "A1 bad fixture failed: $bad" }
   elseif ($bad.state -ne 'WORKSPACE-ONEDRIVE' -or $bad.workspace.state -ne 'WORKSPACE-ONEDRIVE' -or
-      $bad.workspace.activeOneDriveCount -ne 1 -or $bad.workspace.migrationComplete) {
+      $bad.workspace.activeOneDriveCount -ne 1) {
     $failures += 'A1 active OneDrive binding was not promoted to the visible high-priority fault'
   }
 
   $good = Invoke-Subject $Subject (Join-Path $Tmp 'workspace-good.json')
   if ($good -is [string]) { $failures += "A2 good fixture failed: $good" }
   elseif ($good.state -eq 'WORKSPACE-ONEDRIVE' -or $good.workspace.state -ne 'HEALTHY' -or
-      -not $good.workspace.migrationComplete -or -not $good.workspace.defenderExclusionReady) {
-    $failures += 'A2 cleared bindings did not report healthy migration/Defender readiness'
+      $good.workspace.activeOneDriveCount -ne 0) {
+    $failures += 'A2 cleared bindings did not report a clean workspace audit'
   }
   return $failures
 }
@@ -69,18 +69,12 @@ try {
   @{ queueLength = 0; appCpuHours = 0; appAgeHours = 1; procCount = 0 } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Tmp 'resource.json') -Encoding utf8
   @{
-    canonical_root = 'C:\fixture\local\overnight-agent\workspaces'
     active_onedrive_count = 1
     active_onedrive = @(@{ id = '251'; workspace = 'C:\fixture\OneDrive\overnight-agent\task-workspaces\task-251' })
-    migration_complete = $false
-    defender_exclusion_ready = $false
   } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Tmp 'workspace-bad.json') -Encoding utf8
   @{
-    canonical_root = 'C:\fixture\local\overnight-agent\workspaces'
     active_onedrive_count = 0
     active_onedrive = @()
-    migration_complete = $true
-    defender_exclusion_ready = $true
   } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Tmp 'workspace-good.json') -Encoding utf8
 
   $db = Join-Path $env:USERPROFILE '.copilot\data.db'

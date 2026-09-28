@@ -1105,18 +1105,9 @@ start more work.
      Chats are stored locally under `~/.copilot/chats`; do not create a folder project or pass a
      workspace. Bind it as `chat`. Relative-output tools such as Playwright therefore write to
      chat-local storage rather than the planner folder or a task folder.
-   - **Legacy OneDrive binding** → run
-     `oa-state.ps1 session -MigrateOneDriveBindings`. This does not move or delete workspace data;
-     it marks each unsafe live binding dead so the ordinary `replace` verdict preserves the prior
-     session id and emits `kickoff_continuation`. For an old non-code `folder` binding, create the
-     replacement as a global chat, then bind it as `chat` without a project or workspace. For an old
-     code binding, create a fresh repository worktree from fetched `origin/main`, outside OneDrive,
-     then bind it as `code`.
-   - **Migration / Defender gate** → run `oa-state.ps1 session -WorkspaceHealth`. Only
-     `defender_exclusion_ready: true` proves that no active binding is under OneDrive and any
-     retained legacy folder binding is beneath the single canonical root reported as
-     `canonical_root`. New non-code tasks do not use that folder root. Use the exact reported root,
-     not a broader parent, if a Defender exclusion for retained legacy workspaces is later approved.
+   - **Existing task bindings** → run `oa-state.ps1 session -WorkspaceHealth` to check whether any
+     active task session still points into OneDrive. If one is reported, do not wake it; resolve the
+     binding explicitly before dispatch. The check is read-only and does not move or delete data.
 
    ```powershell
    oa-state.ps1 session -Id <ID> -SessionId <new session id> `

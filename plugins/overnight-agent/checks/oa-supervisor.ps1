@@ -596,13 +596,10 @@ $result = @{
     replayed    = [bool]$ResourceFactsJson
   }
   workspace      = @{
-    state                     = $workspaceVerdict.state
-    detail                    = $workspaceVerdict.detail
-    activeOneDriveCount       = $(if ($workspaceHealth) { [int]$workspaceHealth.active_onedrive_count } else { $null })
-    migrationComplete         = $(if ($workspaceHealth) { [bool]$workspaceHealth.migration_complete } else { $false })
-    defenderExclusionReady    = $(if ($workspaceHealth) { [bool]$workspaceHealth.defender_exclusion_ready } else { $false })
-    canonicalRoot             = $(if ($workspaceHealth) { "$($workspaceHealth.canonical_root)" } else { $null })
-    replayed                  = [bool]$WorkspaceFactsJson
+    state               = $workspaceVerdict.state
+    detail              = $workspaceVerdict.detail
+    activeOneDriveCount = $(if ($workspaceHealth) { [int]$workspaceHealth.active_onedrive_count } else { $null })
+    replayed            = [bool]$WorkspaceFactsJson
   }
   thresholds     = @{ stuckMin = $StuckMinutes; deadMin = $DeadMinutes; restartCooldownMin = $RestartCooldownMinutes }
 }

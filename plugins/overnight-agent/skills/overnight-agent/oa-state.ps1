@@ -107,11 +107,7 @@
           [-DispatchInput hash] Refuse a brief prepared against changed journal/task inputs.
           [-SessionRelease]     Retire the binding (task finished, workspace torn down). Prints
                                 the teardown command; never runs it.
-          [-WorkspaceHealth]    Audit active bindings. Reports OneDrive violations and whether
-                                migration/Defender-exclusion gates are clear.
-          [-MigrateOneDriveBindings]
-                                Mark active OneDrive bindings dead so the normal replacement path
-                                preserves their prior session id. Never moves or deletes files.
+          [-WorkspaceHealth]    Read-only audit of active bindings under OneDrive.
           [-RunLimit]           Omit -Id to read this run's maximum outstanding normal requests.
           [-InFlight]           Legacy alias for -RunLimit. Reports no in-flight count.
           [-Concurrency <n>]    Override the `Overnight Agent concurrency` setting for one call.
@@ -597,7 +593,6 @@ param(
   # so the next verdict is `replace` rather than `reuse` at a workspace that is gone (#452).
   [string]$WorkspaceGone,
   [switch]$WorkspaceHealth,
-  [switch]$MigrateOneDriveBindings,
   [switch]$InFlight,
   # Overrides the `Overnight Agent concurrency` settings row for one invocation. -1 is the
   # "not specified" sentinel; see Resolve-PacingSettings for the precedence.
@@ -4865,17 +4860,6 @@ function Get-OneDriveRoots {
     Where-Object { $_ } | Sort-Object -Unique)
 }
 
-function Get-CanonicalWorkspaceRoot {
-  # Non-Windows hosts (CI) have no %LOCALAPPDATA%; the .NET equivalent is still a
-  # per-user, non-synced location, so it is an acceptable canonical root there.
-  $local = $env:LOCALAPPDATA
-  if (-not $local) { $local = [Environment]::GetFolderPath('LocalApplicationData') }
-  if (-not $local) {
-    throw 'session_localappdata_required: LOCALAPPDATA is required to audit retained legacy folder bindings'
-  }
-  ConvertTo-WorkspacePath (Join-Path $local 'overnight-agent\workspaces')
-}
-
 function Get-OneDriveRootForPath([string]$path) {
   foreach ($root in @(Get-OneDriveRoots)) {
     if (Test-PathUnderRoot $path $root) { return $root }
@@ -4884,9 +4868,7 @@ function Get-OneDriveRootForPath([string]$path) {
 }
 
 function Get-WorkspaceBindingHealth {
-  $canonicalRoot = Get-CanonicalWorkspaceRoot
   $active = @()
-  $retiredLegacy = @()
   if (Test-Path -LiteralPath $StateDir) {
     foreach ($f in (Get-ChildItem -LiteralPath $StateDir -Filter 'task-*.json' -File -ErrorAction SilentlyContinue)) {
       try { $obj = Get-Content -Raw -LiteralPath $f.FullName | ConvertFrom-Json } catch { continue }
@@ -4900,29 +4882,15 @@ function Get-WorkspaceBindingHealth {
         state = "$($s.state)"
         workspace = (ConvertTo-WorkspacePath "$($s.workspace)")
         oneDrive_root = $oneDriveRoot
-        canonical_folder = [bool]("$($s.kind)" -eq 'folder' -and
-          (Test-PathUnderRoot "$($s.workspace)" $canonicalRoot))
       }
       if ("$($s.state)" -eq 'live') { $active += $row }
-      elseif ($oneDriveRoot) { $retiredLegacy += $row }
     }
   }
   $oneDriveActive = @($active | Where-Object { $_.oneDrive_root })
-  $activeChats = @($active | Where-Object { $_.kind -eq 'chat' })
-  $nonCanonicalFolders = @($active | Where-Object { $_.kind -eq 'folder' -and -not $_.canonical_folder })
   [pscustomobject]@{
-    canonical_root = $canonicalRoot
     active_bindings = $active.Count
-    active_chat_count = $activeChats.Count
     active_onedrive_count = $oneDriveActive.Count
     active_onedrive = $oneDriveActive
-    active_noncanonical_folder_count = $nonCanonicalFolders.Count
-    active_noncanonical_folders = $nonCanonicalFolders
-    retired_legacy_count = $retiredLegacy.Count
-    migration_complete = [bool]($oneDriveActive.Count -eq 0)
-    # A Defender exclusion for this one narrow root is only complete when every active folder
-    # binding is actually covered by it. Code worktrees remain outside this root by design.
-    defender_exclusion_ready = [bool]($oneDriveActive.Count -eq 0 -and $nonCanonicalFolders.Count -eq 0)
   }
 }
 
@@ -5137,47 +5105,10 @@ function Cmd-Session {
     return (Get-WorkspaceBindingHealth | ConvertTo-Json -Depth 8)
   }
 
-  if ($MigrateOneDriveBindings) {
-    $migrated = @()
-    if (Test-Path -LiteralPath $StateDir) {
-      foreach ($f in (Get-ChildItem -LiteralPath $StateDir -Filter 'task-*.json' -File -ErrorAction SilentlyContinue)) {
-        try { $obj = Get-Content -Raw -LiteralPath $f.FullName | ConvertFrom-Json } catch { continue }
-        $s = Get-SessionState $obj
-        if (-not $s -or "$($s.state)" -ne 'live') { continue }
-        $oneDriveRoot = Get-OneDriveRootForPath "$($s.workspace)"
-        if (-not $oneDriveRoot) { continue }
-        $replacementKind = if ("$($s.kind)" -eq 'folder') { 'chat' } else { "$($s.kind)" }
-        $newSess = New-SessionObject -SessionIdValue "$($s.session_id)" -Kind "$($s.kind)" `
-          -Project "$($s.project)" -Workspace "$($s.workspace)" -WsType "$($s.workspace_type)" `
-          -CreatedAt $s.created_at -LastWokenAt $s.last_woken_at -SessionState 'dead' `
-          -PriorSessionId "$($s.prior_session_id)" -ReplacedAt $s.replaced_at
-        Set-Member $obj 'session' $newSess
-        Set-Member $obj 'updated' (Now-Iso)
-        Write-State $obj
-        $migrated += [pscustomobject]@{
-          id = "$($obj.id)"
-          session_id = "$($s.session_id)"
-          legacy_workspace = (ConvertTo-WorkspacePath "$($s.workspace)")
-          replacement_kind = $replacementKind
-          replacement_workspace = $null
-          verdict = 'replace'
-          kickoff_continuation = (Get-KickoffContinuation "$($obj.id)" "$($s.session_id)")
-        }
-      }
-    }
-    return ([pscustomobject]@{
-      migrated_count = $migrated.Count
-      migrated = $migrated
-      files_moved = 0
-      files_deleted = 0
-      health = Get-WorkspaceBindingHealth
-    } | ConvertTo-Json -Depth 8)
-  }
-
   # No task/session enumeration: this is drain width, not a global occupancy estimate.
   if (-not $Id) {
     if (-not ($RunLimit -or $InFlight)) {
-      throw 'session requires -Id (or -RunLimit, -WorkspaceGone, -WorkspaceHealth, or -MigrateOneDriveBindings)'
+      throw 'session requires -Id (or -RunLimit, -WorkspaceGone, or -WorkspaceHealth)'
     }
     return (Get-RunLimit | ConvertTo-Json -Depth 4)
   }
@@ -5204,7 +5135,7 @@ function Cmd-Session {
   if ($SessionRelease) {
     $sess = $null
     Set-Member $st 'session' $null
-    Set-Member $st 'updated' (Now-Iso)
+    $st.updated = Now-Iso
     Write-State $st
     $released = $true
   }
@@ -5318,7 +5249,7 @@ function Cmd-Session {
 
   if ($dirty) {
     Set-Member $st 'session' $sess
-    Set-Member $st 'updated' (Now-Iso)
+    $st.updated = Now-Iso
     Write-State $st
   }
 

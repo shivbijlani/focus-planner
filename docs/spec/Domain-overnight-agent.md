@@ -190,15 +190,9 @@ for every workspace-backed task session when an explicit workspace resolves equa
 detected OneDrive root. This boundary protects the planner database and old OneDrive scratch roots
 from tools that write relative to their current working directory.
 
-Legacy bindings are retired with `oa-state.ps1 session -MigrateOneDriveBindings`. Retirement is a
-state-only operation: it moves and deletes zero files, marks the unsafe session dead, and lets the
-existing replacement flow preserve the prior session id and continuation brief. A legacy non-code
-folder binding is replaced by a global chat; an old code binding is replaced by a new repository
-worktree. The read-only
-`session -WorkspaceHealth` command reports active violations, `migration_complete`, and the stricter
-`defender_exclusion_ready` gate. The latter is true only when no active binding is under OneDrive
-and every retained active folder binding is covered by the reported canonical root. New non-code
-sessions no longer use that folder root; the gate only applies if legacy folder sessions remain.
+The read-only `session -WorkspaceHealth` command reports any active bindings under OneDrive. It
+does not alter binding state or move workspace data. If a violation is reported, the operator must
+resolve that binding explicitly before waking the task.
 
 The out-of-process supervisor reads the same health verdict every tick. Any active OneDrive-backed
 binding is logged and surfaced as `WORKSPACE-ONEDRIVE`; it is never silently collapsed into the
