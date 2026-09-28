@@ -305,3 +305,69 @@ one is due. `node consumer-update-check.mjs --stale-note` is read-only and non-b
 runs no CLI, writes nothing, and prints a note when the last completed check is older than
 the interval (or when an update is already known to be available).
 
+### Uninstalling the tray
+
+```powershell
+powershell -File plugins\overnight-agent\checks\install-oa-reliability-tray.ps1 -Disable
+```
+
+`-Disable` (alias `-Uninstall`) stops the running tray process (graceful stop request, then a
+bounded verified force) and removes the single `HKCU\...\Run\Overnight Agent supervisor`
+value. It does **not** delete the deployed files under `%LOCALAPPDATA%\overnight-agent\` or
+your `user-settings.md` policy — re-running `-Enable` later picks the same policy back up.
+Running the installer with **no switch** at any time only reports status (enabled? running?
+PID?) and changes nothing.
+
+### Troubleshooting the tray
+
+- **Is it installed and running?** `powershell -File plugins\overnight-agent\checks\install-oa-reliability-tray.ps1` (no
+  switch) prints `startup at sign-in: ENABLED/off`, `running: yes/no (PID ...)`, and the
+  signed-in-user limitation. Add `-Json` for a machine-readable version.
+- **Is it the only resident dispatcher?** It must be. Check
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (or Task Manager → Startup apps) for
+  exactly one `Overnight Agent supervisor` value, and confirm there is no Scheduled Task, no
+  Startup-folder `.vbs`/`.cmd`/`.lnk`, and no separate browser-watchdog or update-check
+  process. (The unrelated GH #226 stuck-run supervisor below is the one intentional
+  exception — see that section.)
+- **Pause didn't survive a restart.** That's correct, not a bug: every tray **Pause** menu
+  item (reliability, browser checks, update checks) is **in-memory only** and always clears
+  back to normal supervision on the next tray start. There is no persisted "stay paused"
+  option.
+- **A workload looks off and you expected it on (or vice versa).** Each workload reads its own
+  `##` section in `user-settings.md` independently; a missing section means product defaults
+  apply (reliability supervision on, browser checks off, update checks on). A row the reader
+  cannot understand is **refused by name**, and the tray's own status menu for that workload
+  shows the refusal rather than silently falling back to a guessed policy.
+- **Browser checks appear to do nothing.** Confirm `Enabled = on` **and** at least one of
+  `Observe` / `Thaw stuck slots` / `Auto-launch closed slots` is also `on` — enabling the
+  workload with no opt-in intentionally runs nothing.
+- **Nothing is supervised after signing out, or overnight on a locked machine.** Expected: the
+  tray is a per-user `HKCU` Run entry, so it only runs while that user is signed in, exactly
+  like the app it supervises. There is no logged-out or multi-user coverage.
+- **Full reset:** `-Disable` then `-Enable` redeploys every tray file fresh from the plugin and
+  re-registers the one Run entry; it never migrates old state.
+
+### Related but separate: the GH #226 stuck-run supervisor
+
+`install-oa-supervisor.ps1` / `oa-supervisor.ps1` / `oa-supervisor-daemon.ps1` are an
+**older, unrelated** mechanism that predates this tray and is **not superseded by it** — it
+answers a different question the tray cannot: is the Overnight Agent's own `*/30` schedule
+itself stuck or dead (a `running` workflow row that never clears, or no run starting at all),
+and separately, is the app tree leaking CPU on a contended machine? Both are read straight out
+of the app's own SQLite run history, which the tray's time-based M/N preventive restart never
+inspects.
+
+It therefore keeps its own, deliberately different dispatch route: the preferred **Windows
+Scheduled Task** (`Overnight Agent supervisor`, registered by `install-oa-supervisor.ps1`),
+falling back to a **Startup-folder** shim (`oa-supervisor-daemon.ps1`) only when registering a
+scheduled task is denied without elevation. `supervisor-liveness-sweep.ps1` watches that these
+watchers themselves have not gone dormant. This is intentionally **not** merged into the
+tray's single `HKCU` Run entry: an out-of-band supervisor that shares a startup mechanism with
+the thing (or the other supervisor) it is meant to catch failing is a weaker supervisor. The
+same display name (`Overnight Agent supervisor`) appearing in two different Windows
+mechanisms — a Scheduled Task / Startup shim here, an `HKCU` Run value for the tray — is a
+naming coincidence, not a shared or conflicting registration; see
+`docs/spec/Reliability.md` for the full design rationale. Install/uninstall for this mechanism
+is unchanged: `install-oa-supervisor.ps1` (status/install) and `install-oa-supervisor.ps1
+-Uninstall`.
+

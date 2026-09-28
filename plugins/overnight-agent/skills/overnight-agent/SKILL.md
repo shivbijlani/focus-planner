@@ -101,6 +101,15 @@ leaves an index of every archived heading.
   journals also lands in Telegram (see "PHASE 3 — Mirror to Telegram"). The bot token is **never** stored
   in a file — it's read from the OS credential vault at run time.
 
+- **Optional reliability tray (not part of this run loop):** `plugins/overnight-agent/checks/oa-supervisor-tray.ps1`,
+  opt-in via `plugins/overnight-agent/checks/install-oa-reliability-tray.ps1 -Enable`, is a separate
+  Windows tray app that supervises the desktop Copilot app itself, browser-automation slots, and
+  plugin updates — three independent, individually opt-in workloads, each with its own `## Tray ...`
+  section in `user-settings.md`. It shares that settings file but not this skill's run flow: it runs
+  continuously in the background from its own single startup entry, is never started by an agent run,
+  and this skill never reads or writes its `## Tray ...` sections. Full behavior, configuration and
+  troubleshooting: `plugins/overnight-agent/README.md`.
+
 ## The agent's memory (skill-owned state — invisible to the user)
 
 **The journal `.md` is pure prose. It carries no machine metadata the user has to understand or
