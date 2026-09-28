@@ -5204,7 +5204,7 @@ function Cmd-Session {
   if ($SessionRelease) {
     $sess = $null
     Set-Member $st 'session' $null
-    $st.updated = Now-Iso
+    Set-Member $st 'updated' (Now-Iso)
     Write-State $st
     $released = $true
   }
@@ -5318,7 +5318,7 @@ function Cmd-Session {
 
   if ($dirty) {
     Set-Member $st 'session' $sess
-    $st.updated = Now-Iso
+    Set-Member $st 'updated' (Now-Iso)
     Write-State $st
   }
 

@@ -54,7 +54,9 @@ function New-LegacyStore(
   [string]$Name,
   [string]$Workspace,
   [string]$TaskId = '900',
-  [string]$Kind = 'folder'
+  [string]$Kind = 'folder',
+  [string]$SessionState = 'live',
+  [string]$PriorSessionId = ''
 ) {
   $dir = Join-Path $Tmp "state-$Name"
   New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -75,8 +77,8 @@ function New-LegacyStore(
       workspace_type = if ($Kind -eq 'code') { 'worktree' } else { 'folder' }
       created_at = '2026-09-01T10:00:00-07:00'
       last_woken_at = '2026-09-25T10:00:00-07:00'
-      state = 'live'
-      prior_session_id = ''
+      state = $SessionState
+      prior_session_id = $PriorSessionId
       replaced_at = ''
     }
   }
@@ -153,14 +155,18 @@ function Test-Subject([string]$Subject) {
   $legacyState = New-LegacyStore $case $legacy
   $missingLegacy = Join-Path $env:OneDrive 'overnight-agent\task-workspaces\task-901-missing'
   $missingCodeWorkspace = Join-Path $env:OneDrive 'overnight-agent\task-workspaces\task-902-code'
-  if ((Test-Path -LiteralPath $missingLegacy) -or (Test-Path -LiteralPath $missingCodeWorkspace)) {
+  $alreadyDeadLegacy = Join-Path $env:OneDrive 'overnight-agent\task-workspaces\task-903-dead'
+  if ((Test-Path -LiteralPath $missingLegacy) -or (Test-Path -LiteralPath $missingCodeWorkspace) -or
+      (Test-Path -LiteralPath $alreadyDeadLegacy)) {
     $failures += 'A7 missing-workspace fixtures unexpectedly exist before migration'
   }
   [void](New-LegacyStore $case $missingLegacy '901')
   [void](New-LegacyStore $case $missingCodeWorkspace '902' 'code')
+  [void](New-LegacyStore $case $alreadyDeadLegacy '903' 'folder' 'dead' 'earlier-session-903')
 
   $before = Invoke-Session $Subject $legacyState @('-WorkspaceHealth')
-  if ($before.exit -ne 0 -or ($before.text | ConvertFrom-Json).active_onedrive_count -ne 3) {
+  if ($before.exit -ne 0 -or ($before.text | ConvertFrom-Json).active_onedrive_count -ne 3 -or
+      ($before.text | ConvertFrom-Json).retired_legacy_count -ne 1) {
     $failures += 'A8 health did not expose all active OneDrive bindings, including missing workspaces'
   }
 
@@ -180,29 +186,64 @@ function Test-Subject([string]$Subject) {
     if (-not (Test-Path -LiteralPath $evidence)) {
       $failures += 'A9 migration touched legacy workspace data'
     }
-    if ((Test-Path -LiteralPath $missingLegacy) -or (Test-Path -LiteralPath $missingCodeWorkspace)) {
+    if ((Test-Path -LiteralPath $missingLegacy) -or (Test-Path -LiteralPath $missingCodeWorkspace) -or
+        (Test-Path -LiteralPath $alreadyDeadLegacy)) {
       $failures += 'A9 migration recreated a missing legacy workspace'
     }
   }
 
+  $deadBeforeRepeat = Get-Content -Raw -LiteralPath (Join-Path $legacyState 'task-903.json') | ConvertFrom-Json
+  $repeatMigration = Invoke-Session $Subject $legacyState @('-MigrateOneDriveBindings')
+  if ($repeatMigration.exit -ne 0) { $failures += "A10 repeated migration failed: $($repeatMigration.text)" }
+  else {
+    $repeat = $repeatMigration.text | ConvertFrom-Json
+    $deadAfterRepeat = Get-Content -Raw -LiteralPath (Join-Path $legacyState 'task-903.json') | ConvertFrom-Json
+    if ($repeat.migrated_count -ne 0 -or $deadAfterRepeat.session.state -ne 'dead' -or
+        $deadAfterRepeat.session.session_id -ne $deadBeforeRepeat.session.session_id -or
+        $deadAfterRepeat.session.prior_session_id -ne 'earlier-session-903' -or
+        $deadAfterRepeat.session.replaced_at -ne $deadBeforeRepeat.session.replaced_at) {
+      $failures += 'A10 repeated migration changed an already-dead binding or its continuity metadata'
+    }
+  }
+
   $retired = Invoke-Session $Subject $legacyState @('-Id', '900')
-  if ($retired.exit -ne 0) { $failures += "A10 retired binding read failed: $($retired.text)" }
+  if ($retired.exit -ne 0) { $failures += "A11 retired binding read failed: $($retired.text)" }
   else {
     $o = $retired.text | ConvertFrom-Json
     if ($o.verdict -ne 'replace' -or $o.session_id -ne 'aaaaaaaa-1111-2222-3333-444444444444' -or
         $o.kickoff_continuation -notmatch [regex]::Escape($o.session_id)) {
-      $failures += 'A10 migration lost the replace verdict or prior-session continuity'
+      $failures += 'A11 migration lost the replace verdict or prior-session continuity'
     }
   }
 
   $replacement = Invoke-Session $Subject $legacyState @(
     '-Id', '900', '-SessionId', '99999999-9999-9999-9999-999999999999', '-SessionKind', 'chat')
-  if ($replacement.exit -ne 0) { $failures += "A11 replacement bind failed: $($replacement.text)" }
+  if ($replacement.exit -ne 0) { $failures += "A12 replacement bind failed: $($replacement.text)" }
   else {
     $o = $replacement.text | ConvertFrom-Json
     if ($o.kind -ne 'chat' -or $o.project -or $o.workspace -or $o.workspace_type -or
         $o.prior_session_id -ne 'aaaaaaaa-1111-2222-3333-444444444444') {
-      $failures += 'A11 replacement did not bind a workspace-free chat and preserve prior session id'
+      $failures += 'A12 replacement did not bind a workspace-free chat and preserve prior session id'
+    }
+  }
+
+  $deadFolder = Invoke-Session $Subject $legacyState @('-Id', '903')
+  if ($deadFolder.exit -ne 0) { $failures += "A13 pre-dead binding read failed: $($deadFolder.text)" }
+  else {
+    $o = $deadFolder.text | ConvertFrom-Json
+    if ($o.verdict -ne 'replace' -or $o.kickoff_continuation -notmatch 'legacy-session-903') {
+      $failures += 'A13 an already-dead OneDrive binding did not remain replaceable'
+    }
+  }
+
+  $deadFolderReplacement = Invoke-Session $Subject $legacyState @(
+    '-Id', '903', '-SessionId', 'new-chat-session-903', '-SessionKind', 'chat')
+  if ($deadFolderReplacement.exit -ne 0) {
+    $failures += "A14 already-dead chat replacement bind failed: $($deadFolderReplacement.text)"
+  } else {
+    $o = $deadFolderReplacement.text | ConvertFrom-Json
+    if ($o.kind -ne 'chat' -or $o.prior_session_id -ne 'legacy-session-903') {
+      $failures += 'A14 already-dead chat replacement lost the prior session id'
     }
   }
 
@@ -210,23 +251,23 @@ function Test-Subject([string]$Subject) {
     '-Id', '902', '-SessionId', 'new-code-worktree-session', '-SessionKind', 'code',
     '-SessionProject', 'repo', '-SessionWorkspace', (Join-Path $Tmp 'fresh-code-worktree-902'),
     '-WorkspaceType', 'worktree')
-  if ($codeReplacement.exit -ne 0) { $failures += "A12 code replacement bind failed: $($codeReplacement.text)" }
+  if ($codeReplacement.exit -ne 0) { $failures += "A15 code replacement bind failed: $($codeReplacement.text)" }
   else {
     $o = $codeReplacement.text | ConvertFrom-Json
     if ($o.kind -ne 'code' -or $o.prior_session_id -ne 'legacy-session-902' -or
         $o.workspace -ne (Join-Path $Tmp 'fresh-code-worktree-902')) {
-      $failures += 'A12 code replacement lost its kind, worktree, or prior session id'
+      $failures += 'A15 code replacement lost its kind, worktree, or prior session id'
     }
   }
 
   $after = Invoke-Session $Subject $legacyState @('-WorkspaceHealth')
-  if ($after.exit -ne 0) { $failures += "A13 final health failed: $($after.text)" }
+  if ($after.exit -ne 0) { $failures += "A16 final health failed: $($after.text)" }
   else {
     $h = $after.text | ConvertFrom-Json
     if (-not $h.migration_complete -or -not $h.defender_exclusion_ready -or
         $h.active_onedrive_count -ne 0 -or $h.active_noncanonical_folder_count -ne 0 -or
-        $h.active_chat_count -ne 1 -or $h.active_bindings -ne 2) {
-      $failures += 'A13 migration/health gate reported the active chat and code bindings incorrectly'
+        $h.active_chat_count -ne 2 -or $h.active_bindings -ne 3) {
+      $failures += 'A16 migration/health gate reported the active chat and code bindings incorrectly'
     }
   }
   return $failures
@@ -289,7 +330,7 @@ try {
     },
     @{
       name = 'migration-retirement-removed'
-      expect = 'A9|A10|A11|A12|A13'
+      expect = 'A9|A10|A11|A12|A13|A14|A15|A16'
       mutate = {
         param($s)
         $s.Replace("if (-not `$s -or `"`$(`$s.state)`" -ne 'live') { continue }", 'if ($true) { continue }')
@@ -297,11 +338,19 @@ try {
     },
     @{
       name = 'migration-kind-regressed'
-      expect = 'A9|A11'
+      expect = 'A9|A12'
       mutate = {
         param($s)
         $s.Replace("`$replacementKind = if (`"`$(`$s.kind)`" -eq 'folder') { 'chat' }",
           "`$replacementKind = if (`"`$(`$s.kind)`" -eq 'folder') { 'folder' }")
+      }
+    },
+    @{
+      name = 'dead-binding-migrated-again'
+      expect = 'A9|A10'
+      mutate = {
+        param($s)
+        $s.Replace('"$($s.state)" -ne ''live''', '"$($s.state)" -ne ''never-live''')
       }
     }
   )
