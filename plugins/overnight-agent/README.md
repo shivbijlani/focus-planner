@@ -156,6 +156,7 @@ plugins/overnight-agent/checks/
 ├── windows-app-actuator.mjs                # process identity + graceful/bounded-force actuation
 ├── session-terminal-evidence.mjs           # "quiet evidence" for the M/N window
 ├── consumer-reliability-supervisor.mjs     # wires the policy engine to the real desktop app
+├── consumer-browser-watchdog.mjs           # browser-check workload (off by default, GH #698)
 ├── oa-user-settings.mjs                    # the ONE reader for tray policy in user-settings.md
 ├── oa-supervisor-tray.ps1                  # the tray app itself
 ├── oa-supervisor-startup.ps1               # shared HKCU Run + lock-ownership helpers
@@ -168,7 +169,7 @@ plugins/overnight-agent/checks/
 powershell -File plugins\overnight-agent\checks\install-oa-reliability-tray.ps1 -Enable
 ```
 
-This deploys the seven files above to `%LOCALAPPDATA%\overnight-agent`, registers **one**
+This deploys the files above — plus the existing browser tools the browser-check workload reuses (`browser-watchdog.ps1`, `check-browser-slots.ps1`, `browser-slot-table.ps1`, `ensure-mcp-browsers.ps1`) — to `%LOCALAPPDATA%\overnight-agent`, registers **one**
 per-user startup entry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Overnight Agent
 supervisor`), and starts the tray immediately. `-Disable` (alias `-Uninstall`) stops it and
 removes the entry; running the installer with no switch only reports status.
@@ -223,8 +224,37 @@ shim, or service. Updating the *deployed* copy of these files (e.g. after a plug
 is a separate, maintainer/host-side concern — `auto-deploy-plugin.ps1` / `sync-oa-home.ps1`
 are one such maintainer adapter for keeping a local checkout's deployed copy current. The
 tray itself never fetches `origin/main` or any other remote source; it only ever executes
-whatever copy is already deployed to its own home directory. Browser-watchdog tray
-ownership (#696-adjacent) and the tray update check (#701) are tracked as separate follow-up
-work: each will add its own sibling section to `user-settings.md`, and neither is part of
-this tray.
+whatever copy is already deployed to its own home directory. The tray update check (#701) is
+tracked as separate follow-up work and will add its own sibling section to `user-settings.md`.
+
+### Browser checks in the tray (GH #698)
+
+The same tray is the **only** resident dispatcher for browser-watchdog checks — an
+**independent workload** with its own `## Tray browser checks` section in `user-settings.md`,
+its own schedule, its own in-memory **Pause browser checks**, its own state file
+(`browser-checks-state.json`) and its own lock (`browser-checks.lock`). It shares no M/N state,
+cooldown or action lock with reliability supervision. There is no separate Scheduled Task,
+Startup shim or VBS launcher for browser checks; `/browser-watchdog` stays available on demand.
+
+It is **completely off by default, including observation**. Each action is a separate opt-in:
+
+```markdown
+## Tray browser checks
+
+| Setting | Value |
+| --- | --- |
+| Enabled | `on` |
+| Observe | `on` |
+| Thaw stuck slots | `off` |
+| Auto-launch closed slots | `off` |
+| Check interval | `60m` |
+```
+
+`Observe` runs a read-only CDP work probe; `Thaw stuck slots` allows the non-destructive
+in-place thaw; `Auto-launch closed slots` allows starting a closed slot. **Observe and Thaw
+never imply Auto-launch** — the tray passes `-NoLaunch` to `browser-watchdog.ps1` unless
+Auto-launch is explicitly `on`. The slots are always the existing `## Browser slots` table. The
+workload reuses `browser-watchdog.ps1` / `check-browser-slots.ps1` / `browser-slot-table.ps1` /
+`ensure-mcp-browsers.ps1` rather than reimplementing them, and never kills or reparents a browser or MCP
+worker process. The tray's **Browser checks** menu shows the current status and recent outcomes.
 

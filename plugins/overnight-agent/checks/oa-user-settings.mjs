@@ -18,8 +18,9 @@
  * ONE HOST, MANY WORKLOADS, SIBLING SECTIONS
  * ------------------------------------------
  * Each workload owns its own H2 section with a two-column `| Setting | Value |`
- * table. The reliability workload's section is `## Tray reliability supervision`.
- * A later workload (browser watchdog #696-adjacent, update check #701) adds a
+ * table. The reliability workload's section is `## Tray reliability supervision`;
+ * the browser-check workload's is `## Tray browser checks` (GH #698). A later
+ * workload (update check #701) adds a
  * SIBLING section and its own value map -- it never extends this one, because
  * separate workloads must have separate, independently-missing policies.
  *
@@ -60,6 +61,28 @@ const RELIABILITY_ROWS = new Map([
   ['hard deadline n', { key: 'hardIntervalHours', kind: 'hours', min: 1, max: 170 }],
   ['quiet window', { key: 'quietWindowMinutes', kind: 'minutes', min: 5, max: 240 }],
   ['restart cooldown', { key: 'cooldownMinutes', kind: 'minutes', min: 1, max: 1440 }],
+]);
+
+// The browser-check workload (GH #698) is a SIBLING section with its own map.
+// Everything is OFF by default -- including observation -- and each action is a
+// separate opt-in. Nothing here shares a row, a default or a state file with the
+// reliability workload above.
+export const BROWSER_CHECKS_SECTION_HEADING = 'Tray browser checks';
+
+export const BROWSER_CHECKS_DEFAULTS = Object.freeze({
+  enabled: false,
+  observe: false,
+  thaw: false,
+  autoLaunch: false,
+  intervalMinutes: 60,
+});
+
+const BROWSER_CHECKS_ROWS = new Map([
+  ['enabled', { key: 'enabled', kind: 'switch' }],
+  ['observe', { key: 'observe', kind: 'switch' }],
+  ['thaw stuck slots', { key: 'thaw', kind: 'switch' }],
+  ['auto launch closed slots', { key: 'autoLaunch', kind: 'switch' }],
+  ['check interval', { key: 'intervalMinutes', kind: 'minutes', min: 15, max: 1440 }],
 ]);
 
 function normalizeName(text) {
@@ -148,21 +171,20 @@ function readDuration(token, { unit, min, max }, context) {
 }
 
 /**
- * Declared reliability policy: only the rows the user actually wrote. An absent
- * row is absent from the result, so the caller can tell "user chose the default"
- * from "user chose nothing" -- which is what lets N derive from a raised M.
+ * One workload's declared rows under `## <heading>`, read against that workload's
+ * own row map. Shared by every workload so there is one parser, never a copy.
  */
-export function parseReliabilityPolicy(text, { settingsPath = '(memory)' } = {}) {
-  const rows = readSettingsSection(text, RELIABILITY_SECTION_HEADING);
+export function parseSectionPolicy(text, heading, rowSpecs, { settingsPath = '(memory)' } = {}) {
+  const rows = readSettingsSection(text, heading);
   if (rows === null) return { source: 'defaults', settingsPath, values: {} };
   const values = {};
   for (const row of rows) {
-    const spec = RELIABILITY_ROWS.get(row.name);
-    const context = `'${row.rawName}' in '## ${RELIABILITY_SECTION_HEADING}' (${settingsPath})`;
+    const spec = rowSpecs.get(row.name);
+    const context = `'${row.rawName}' in '## ${heading}' (${settingsPath})`;
     if (!spec) {
       throw new Error(
         `${context} is not a supported setting. Supported: ` +
-        `${[...RELIABILITY_ROWS.keys()].join(', ')}.`);
+        `${[...rowSpecs.keys()].join(', ')}.`);
     }
     if (Object.hasOwn(values, spec.key)) {
       throw new Error(`${context} is declared twice; keep one row per setting.`);
@@ -171,13 +193,33 @@ export function parseReliabilityPolicy(text, { settingsPath = '(memory)' } = {})
       ? readSwitch(row.value, context)
       : readDuration(row.value, { unit: spec.kind, min: spec.min, max: spec.max }, context);
   }
+  return { source: Object.keys(values).length ? 'user-settings' : 'user-settings-empty', settingsPath, values };
+}
+
+/**
+ * Declared reliability policy: only the rows the user actually wrote. An absent
+ * row is absent from the result, so the caller can tell "user chose the default"
+ * from "user chose nothing" -- which is what lets N derive from a raised M.
+ */
+export function parseReliabilityPolicy(text, { settingsPath = '(memory)' } = {}) {
+  const parsed = parseSectionPolicy(text, RELIABILITY_SECTION_HEADING, RELIABILITY_ROWS, { settingsPath });
+  const { values } = parsed;
   if (values.hardIntervalHours !== undefined && values.targetIntervalHours !== undefined &&
       values.hardIntervalHours <= values.targetIntervalHours) {
     throw new Error(
       `'Hard deadline (N)' must exceed 'Quiet opportunity (M)' in '## ${RELIABILITY_SECTION_HEADING}' ` +
       `(${settingsPath}): read N=${values.hardIntervalHours}h, M=${values.targetIntervalHours}h.`);
   }
-  return { source: Object.keys(values).length ? 'user-settings' : 'user-settings-empty', settingsPath, values };
+  return parsed;
+}
+
+/**
+ * Declared browser-check policy (GH #698): only the rows the user wrote. Every
+ * switch is OFF when absent, and `Auto-launch closed slots` is never implied by
+ * any other row -- see resolveBrowserPlan in consumer-browser-watchdog.mjs.
+ */
+export function parseBrowserChecksPolicy(text, { settingsPath = '(memory)' } = {}) {
+  return parseSectionPolicy(text, BROWSER_CHECKS_SECTION_HEADING, BROWSER_CHECKS_ROWS, { settingsPath });
 }
 
 /**
@@ -228,6 +270,18 @@ export async function resolveUserSettingsPath(options = {}) {
  * section yields `{ source: 'defaults', values: {} }` -- never an error.
  */
 export async function loadReliabilityPolicy(options = {}) {
+  return loadSectionPolicy(parseReliabilityPolicy, options);
+}
+
+/**
+ * Canonical browser-check policy for the tray workload (GH #698). A missing file
+ * or section means every switch is off -- no browser is probed at all.
+ */
+export async function loadBrowserChecksPolicy(options = {}) {
+  return loadSectionPolicy(parseBrowserChecksPolicy, options);
+}
+
+async function loadSectionPolicy(parse, options = {}) {
   const resolved = options.settingsPath
     ? { path: options.settingsPath, tried: [options.settingsPath], skippedTemplate: [] }
     : await resolveUserSettingsPath(options);
@@ -244,7 +298,7 @@ export async function loadReliabilityPolicy(options = {}) {
     throw error;
   }
   return {
-    ...parseReliabilityPolicy(text.replace(/^\uFEFF/, ''), { settingsPath: resolved.path }),
+    ...parse(text.replace(/^\uFEFF/, ''), { settingsPath: resolved.path }),
     tried: resolved.tried,
   };
 }

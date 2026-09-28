@@ -189,9 +189,33 @@ to act rather than acting on a guessed policy.
 The tray's **Pause** menu item is deliberately *not* a setting: it lives in memory for the
 lifetime of that tray process only, so restarting the tray always resumes supervision.
 
-Each tray workload owns its **own** `##` section here (later ones for the browser watchdog
-and the tray update check are separate, sibling sections). One tray host, independent
-workloads, separate policies — a missing section for one workload never affects another.
+Each tray workload owns its **own** `##` section here (the browser checks below, and later the
+tray update check, are separate, sibling sections). One tray host, independent workloads,
+separate policies — a missing section for one workload never affects another.
+
+## Tray browser checks
+
+*(Optional — the whole section can be omitted.)* Policy for the **browser-check workload** of
+the same optional tray. The tray is the **only** resident dispatcher for browser checks (no
+Scheduled Task, Startup shim or VBS launcher); `/browser-watchdog` stays available on demand.
+The slots it checks are always the **`## Browser slots`** table above — nothing here lists a slot.
+
+**Completely off by default, including observation.** Omit the section, omit a row, or set
+`Enabled = off` and no browser is probed at all. `Enabled = on` by itself still runs nothing:
+each action below is its own, separate opt-in.
+
+| Setting | Value |
+| --- | --- |
+| Enabled | `off` — master switch for tray browser checks. |
+| Observe | `off` — read-only health probe of every slot; status shows in the tray. |
+| Thaw stuck slots | `off` — non-destructive thaw of frozen pages in place (closes nothing). |
+| Auto-launch closed slots | `off` — start a closed slot from the table. **Never implied by Observe or Thaw.** |
+| Check interval | `60m` — minutes between checks (15m to 24h). |
+
+Switches accept `on`/`off`; a row that cannot be read is **refused by name** and no browser
+check runs. This workload shares **no** state, lock, pause or cooldown with the reliability
+workload above. The tray never kills, closes or restarts a browser or MCP worker process, and
+its **Pause browser checks** menu item lives in memory only — restarting the tray clears it.
 
 ## Where your real settings live
 
