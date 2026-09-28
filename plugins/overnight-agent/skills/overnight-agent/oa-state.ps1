@@ -109,6 +109,11 @@
                                 nothing pending. SKIPS any journal with trailing user content,
                                 so a real unanswered reply is never baselined away. Never
                                 writes to a journal.
+  whoami [-SessionId <sid>]     #727: this session's ROLE. Matches the id (default:
+                                $env:COPILOT_AGENT_SESSION_ID) against every task binding,
+                                current or replaced. `role: task` + `task_id` means do only that
+                                task; `coordinator` means no task is bound to it; `unknown`
+                                means no id was available. Read-only.
 
 .POLLING (why this exists)
   `scan` only flags journals the USER has touched, so a purely time-triggered job (e.g. #400's
@@ -469,7 +474,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract', 'doc', 'session')]
+  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract', 'doc', 'session', 'whoami')]
   [string]$Command = 'scan',
 
   [string]$Id,
@@ -593,6 +598,7 @@ param(
   # Overridable so the skill stays shareable; defaults match user-settings.md.
   [string]$JournalDir = "$env:USERPROFILE\OneDrive\Apps\Focus Planner\journal",
   [string]$StateDir = "$env:LOCALAPPDATA\overnight-agent\state",
+  [string]$SessionStateDir = "$HOME/.copilot/session-state",
   # The board, so `scan` can tell the agent which tasks are currently snoozed
   # (<!-- snooze:YYYY-MM-DD --> markers, from the #353 snooze feature). Sits next to the
   # journal dir by default; override to match a non-standard planner layout.
@@ -3191,6 +3197,7 @@ function Get-ScanRows {
     $docFacts = Get-DocState $st $f.FullName $facts.Content
     # #404: the per-task session binding, read-only.
     $sessFacts = Get-SessionState $st
+    $sessionProcessDead = [bool](Test-SessionProcessDead "$($sessFacts.session_id)")
     [pscustomobject]@{
       id            = $facts.Id
       dispatch_input = (Get-DispatchInput $st $facts)
@@ -3310,13 +3317,15 @@ function Get-ScanRows {
       # rather than create a second one.
       session_id      = if ($sessFacts) { "$($sessFacts.session_id)" } else { $null }
       session_state   = if ($sessFacts) { "$($sessFacts.state)" } else { $null }
-      session_verdict = (Get-SessionVerdict $sessFacts $st $facts)
+      session_verdict = (Get-SessionVerdict $sessFacts $st $facts $sessionProcessDead)
       model           = $agentModel.model
       model_source    = $agentModel.source
       session_workspace = if ($sessFacts -and "$($sessFacts.workspace)") { "$($sessFacts.workspace)" } else { $null }
       # #717: the workspace is GONE, derived at read time, on the worklist itself. Without it a
       # row that needs a replacement is indistinguishable from a healthy one until the wake fails.
       session_workspace_missing = [bool](Test-WorkspaceMissing "$($sessFacts.workspace)" "$($sessFacts.workspace_type)")
+      # #728: process death is read from the session host's lock plus its stale event log.
+      session_process_dead = $sessionProcessDead
       # #540: the user said NOT NOW, as a column rather than something a caller must re-derive
       # from `status` + `status_by`. It is emitted for every row, bound or not, because a paused
       # task with no session must not be answered with `create` either.
@@ -3562,6 +3571,7 @@ $script:CompactFields = @(
   'tracked', 'work_priority', 'urgency', 'board_pos', 'priorities_rank', 'linked',
   'holds_today_gate', 'today_release_reason', 'has_open_ask', 'awaiting_reply', 'consent_ok',
   'doc_id', 'doc_new_comments', 'doc_channel', 'session_id', 'session_verdict', 'session_paused',
+  'session_process_dead',
   'session_workspace_missing',
   'dispatch_input', 'no_journal_reason'
 )
@@ -5050,6 +5060,46 @@ function Get-SessionState($st) {
   return $null
 }
 
+function Test-SessionProcessDead([string]$sessionId) {
+  # Is this bound session's CLI process gone? (GH #728)
+  #
+  # Measured 2026-09-28: task #228's session host (PID 18728) exited at 08:42 without a shutdown
+  # line, the binding still read `live`, and the 10:00 run spent its only dispatch slot on it.
+  # Derived at read time from the host's own `inuse.<pid>.lock` (the signal stuck-run-sweep and
+  # zero-writer-sweep already trust) AND a quiet events.jsonl, so a recycled PID or a host that is
+  # still writing cannot be read as dead. Any missing or unreadable evidence answers $false:
+  # replacing a live session discards its continuity, the expensive direction.
+  try { return [bool](Test-SessionProcessDeadCore $sessionId) } catch { return $false }
+}
+
+function Test-SessionProcessDeadCore([string]$sessionId) {
+  if (-not $sessionId -or $sessionId -match '[\\/]' -or $sessionId -in '.', '..') { return $false }
+  $sessionDir = Join-Path $SessionStateDir $sessionId
+  if (-not (Test-Path -LiteralPath $sessionDir -PathType Container)) { return $false }
+  $locks = @(Get-ChildItem -LiteralPath $sessionDir -Filter 'inuse.*.lock' -File -ErrorAction Stop)
+  if (-not $locks.Count) { return $false }
+
+  foreach ($lock in $locks) {
+    if ($lock.Name -notmatch '^inuse\.(\d+)\.lock$') { return $false }
+    $pidValue = 0
+    if (-not [int]::TryParse($Matches[1], [ref]$pidValue) -or $pidValue -le 0) { return $false }
+    $process = $null
+    try {
+      $process = [System.Diagnostics.Process]::GetProcessById($pidValue)
+      if (-not $process.HasExited) { return $false }
+    } catch [ArgumentException] {
+      # GetProcessById's not-found result is positive evidence that this lock's owner is gone.
+    } finally {
+      if ($process) { $process.Dispose() }
+    }
+  }
+
+  $eventsPath = Join-Path $sessionDir 'events.jsonl'
+  if (-not (Test-Path -LiteralPath $eventsPath -PathType Leaf)) { return $false }
+  $staleBefore = [datetime]::UtcNow.AddMinutes(-15)
+  return ((Get-Item -LiteralPath $eventsPath -ErrorAction Stop).LastWriteTimeUtc -le $staleBefore)
+}
+
 function Test-WorkspaceMissing([string]$path, [string]$wsType) {
   # Is this code workspace GONE? (GH #717)
   #
@@ -5124,7 +5174,7 @@ function Test-WorkspaceUsable([string]$path, [string]$wsType) {
   }
 }
 
-function Get-SessionVerdict($sess, $row, $journalFacts) {
+function Get-SessionVerdict($sess, $row, $journalFacts, $sessionProcessDead = $null) {
   # The whole decision, in one place. `create` and `replace` both mean "make a new session", but
   # they are NOT the same instruction: `replace` carries a continuation the new session must be
   # told about, and collapsing them is how continuity is lost while the code still looks correct.
@@ -5154,6 +5204,13 @@ function Get-SessionVerdict($sess, $row, $journalFacts) {
   if (Test-UserPaused $row $journalFacts) { return 'paused' }
   if (-not $sess) { return 'create' }
   if ("$($sess.state)" -eq 'dead') { return 'replace' }
+  if ($null -eq $sessionProcessDead) {
+    $sessionProcessDead = Test-SessionProcessDead "$($sess.session_id)"
+  }
+  # #728: the binding can remain `live` after its CLI process exits. Require both its dead
+  # inuse PID and a quiet event log before replacing, so an incomplete/unreadable session record
+  # cannot discard a session that may still be writing.
+  if ($sessionProcessDead) { return 'replace' }
   # A live binding whose workspace no longer holds a checkout is `replace`, never `create` (#452).
   # The distinction is the whole point: this task HAS prior work, and `create` would cold-start it
   # -- losing exactly the continuity the binding exists to provide. `replace` re-creates the
@@ -5205,6 +5262,44 @@ function Get-KickoffContinuation([string]$taskId, [string]$priorId) {
   "This session continues work on planner task #$taskId. The previous session for this task " +
   "($priorId) could not be woken, so this one replaces it -- you are not starting from scratch. " +
   "Read the task journal for what has already been done before doing anything new."
+}
+
+function Get-TaskRoleLine([string]$taskId) {
+  # #727: a task session that received "overnight dispatch for task #228" matched the brief to the
+  # overnight-agent skill by name and loaded the coordinator. The brief now states the role first,
+  # emitted here so the coordinator pastes it rather than paraphrasing it away.
+  "You are the task session for planner task #$taskId. Do this task only. Do not run " +
+  "``/overnight-agent`` or load the overnight-agent skill, and do not dispatch, create or wake " +
+  "other sessions."
+}
+
+function Cmd-Whoami {
+  # #727: which role is THIS session? Answers the guard at the top of SKILL.md cheaply, by
+  # matching the session id against every task binding (current or replaced). Read-only.
+  $sid = if ($SessionId) { $SessionId } elseif ($env:COPILOT_AGENT_SESSION_ID) { $env:COPILOT_AGENT_SESSION_ID } else { '' }
+  $hits = @()
+  if ($sid -and (Test-Path $StateDir)) {
+    foreach ($f in (Get-ChildItem $StateDir -Filter 'task-*.json' -File -ErrorAction SilentlyContinue)) {
+      try { $obj = Get-Content -Raw $f.FullName | ConvertFrom-Json } catch { continue }
+      $s = Get-SessionState $obj
+      if (-not $s) { continue }
+      $match = if ("$($s.session_id)" -eq $sid) { 'session_id' }
+      elseif ("$($s.prior_session_id)" -eq $sid) { 'prior_session_id' }
+      else { $null }
+      if ($match) { $hits += [pscustomobject]@{ id = "$($obj.id)"; match = $match; state = "$($s.state)" } }
+    }
+  }
+  $role = if (-not $sid) { 'unknown' } elseif ($hits.Count) { 'task' } else { 'coordinator' }
+  $taskId = if ($hits.Count) { $hits[0].id } else { $null }
+  [pscustomobject]@{
+    session_id = if ($sid) { $sid } else { $null }
+    session_id_source = if ($SessionId) { 'parameter' } elseif ($sid) { 'COPILOT_AGENT_SESSION_ID' } else { $null }
+    # task | coordinator | unknown. `task` means: do only that task's work.
+    role       = $role
+    task_id    = $taskId
+    tasks      = @($hits)
+    role_line  = if ($taskId) { (Get-TaskRoleLine $taskId) } else { $null }
+  } | ConvertTo-Json -Depth 4
 }
 
 function Cmd-Session {
@@ -5392,7 +5487,8 @@ function Cmd-Session {
     Write-State $st
   }
 
-  $verdict = Get-SessionVerdict $sess $st $pauseFacts
+  $sessionProcessDead = [bool](Test-SessionProcessDead "$($sess.session_id)")
+  $verdict = Get-SessionVerdict $sess $st $pauseFacts $sessionProcessDead
   [pscustomobject]@{
     id             = $Id
     model          = $agentModel.model
@@ -5410,6 +5506,8 @@ function Cmd-Session {
     workspace_type = if ($sess) { "$($sess.workspace_type)" } else { $null }
     # #717: why a bound code session reads `replace`. Derived from the filesystem on every call.
     workspace_missing = [bool](Test-WorkspaceMissing "$($sess.workspace)" "$($sess.workspace_type)")
+    # #728: why a bound session reads `replace`. Derived from session-state on each call.
+    process_dead = $sessionProcessDead
     prior_session_id = if ($sess -and "$($sess.prior_session_id)") { "$($sess.prior_session_id)" } else { $null }
     created_at     = if ($sess) { (ConvertTo-IsoText $sess.created_at) } else { $null }
     last_woken_at  = if ($sess -and $sess.last_woken_at) { (ConvertTo-IsoText $sess.last_woken_at) } else { $null }
@@ -5423,8 +5521,10 @@ function Cmd-Session {
     # Tuesday?", which is the difference between waiting and being stuck. Null on a task paused
     # before this field shipped: an unknown age is reported as unknown, never as "not paused".
     paused_at      = if ($st -and $st.PSObject.Properties['paused_at'] -and $st.paused_at) { (ConvertTo-IsoText $st.paused_at) } else { $null }
+    # #727: the first line of every brief sent to this task's session, emitted verbatim.
+    role_line      = (Get-TaskRoleLine $Id)
     # Present ONLY on a `replace` verdict, and emitted ready to paste. See Get-KickoffContinuation.
-    kickoff_continuation = if ($verdict -eq 'replace') { (Get-KickoffContinuation $Id "$($sess.session_id)") } else { $null }
+    kickoff_continuation =  if ($verdict -eq 'replace') { (Get-KickoffContinuation $Id "$($sess.session_id)") } else { $null }
     # Emitted, never executed (#321): the raw `git worktree remove --force` deletes THROUGH a
     # node_modules junction, so the safe teardown is named here rather than performed here.
     teardown_command = if ($sess -and "$($sess.workspace_type)" -eq 'worktree' -and "$($sess.workspace)") {
@@ -5791,6 +5891,7 @@ try {
     'extract' { Cmd-Extract }
     'doc' { Cmd-Doc }
     'session' { Cmd-Session }
+    'whoami' { Cmd-Whoami }
   }
 }
 finally {
