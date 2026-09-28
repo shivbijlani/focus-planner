@@ -30,12 +30,14 @@
   installer remains the recommended path and this prints how to upgrade.
 
 .PARAMETER IntervalMinutes
-  Seconds between checks. Default 15 minutes.
+  Maximum minutes between checks (default 15); the supervisor also wakes at
+  M/N boundaries and cooldown expiry, with a heartbeat every 15 seconds.
 #>
 [CmdletBinding()]
 param(
   [int]$IntervalMinutes = 15,
-  [switch]$Once
+  [switch]$Once,
+  [switch]$NoAct
 )
 
 $ErrorActionPreference = 'Continue'
@@ -46,43 +48,68 @@ $beatPath   = Join-Path $oaHome 'supervisor-daemon-heartbeat.json'
 
 if (-not (Test-Path $oaHome)) { New-Item -ItemType Directory -Path $oaHome -Force | Out-Null }
 
-# --- single instance: a stale lock from a crashed daemon must not block a new one ----
-if (Test-Path $lockPath) {
-  try {
-    $prior = (Get-Content $lockPath -Raw | ConvertFrom-Json).pid
-    if ($prior -and (Get-Process -Id $prior -ErrorAction SilentlyContinue)) {
-      Write-Host "[oa-daemon] already running as pid $prior - exiting."
-      exit 0
-    }
-  } catch { }   # unreadable lock == stale lock
+# Holding the file open denies a second writer even if a PID is reused; a stale
+# file from a crashed daemon is reclaimable as soon as its handle is closed.
+try {
+  $lockHandle = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate,
+    [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+} catch [IO.IOException] {
+  Write-Host '[oa-daemon] another supervisor owns the daemon lock - exiting.'
+  exit 0
 }
-@{ pid = $PID; startedUtc = (Get-Date).ToUniversalTime().ToString('o') } |
-  ConvertTo-Json | Set-Content -Path $lockPath -Encoding utf8
+try {
+  $record = @{ pid = $PID; startedUtc = (Get-Date).ToUniversalTime().ToString('o') } |
+    ConvertTo-Json
+  $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($record)
+  $lockHandle.SetLength(0)
+  $lockHandle.Write($bytes, 0, $bytes.Length)
+  $lockHandle.Flush($true)
+} catch {
+  $lockHandle.Dispose()
+  throw
+}
 
 try {
   do {
     $state = 'SUPERVISOR-MISSING'
+    $nextEvaluationAt = (Get-Date).ToUniversalTime().AddMinutes($IntervalMinutes)
+    $overdue = $null
     try {
       if (Test-Path $supervisor) {
         # Child process on purpose: a crash inside the checker must not kill the loop
         # that is supposed to outlive everything.
-        $out = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $supervisor 2>&1 | Out-String
+        $args = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $supervisor)
+        if ($NoAct) { $args += '-NoAct' }
+        $out = & powershell.exe @args 2>&1 | Out-String
         $line = ($out -split "`n" | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1)
-        if ($line) { $state = ($line | ConvertFrom-Json).state }
+        if ($line) {
+          $result = $line | ConvertFrom-Json
+          $state = $result.state
+          $overdue = $result.actResult.overdue
+          $candidate = $result.actResult.nextEvaluationAt
+          if ($candidate) {
+            $date = [datetime]::Parse($candidate, $null,
+              [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+            if ($date -lt $nextEvaluationAt) { $nextEvaluationAt = $date }
+          }
+        }
       }
     } catch { $state = "DAEMON-ERROR: $_" }
 
-    # The daemon's OWN heartbeat. Without it the supervisor is unsupervised, which is
-    # the same recursion #226 is about; this at least makes its absence observable.
-    try {
-      @{ pid = $PID; lastCheckUtc = (Get-Date).ToUniversalTime().ToString('o')
-         lastState = $state; intervalMinutes = $IntervalMinutes } |
-        ConvertTo-Json | Set-Content -Path $beatPath -Encoding utf8
-    } catch { }
-
     if ($Once) { break }
-    Start-Sleep -Seconds ($IntervalMinutes * 60)
+    do {
+      $now = (Get-Date).ToUniversalTime()
+      try {
+        @{ pid = $PID; lastCheckUtc = $now.ToString('o')
+           lastState = $state; intervalMinutes = $IntervalMinutes
+           nextEvaluationAt = $nextEvaluationAt.ToString('o'); overdue = $overdue } |
+          ConvertTo-Json | Set-Content -Path $beatPath -Encoding utf8
+      } catch { Write-Error "supervisor heartbeat failed: $_" }
+      $remainingMs = ($nextEvaluationAt - $now).TotalMilliseconds
+      if ($remainingMs -gt 0) { Start-Sleep -Milliseconds ([int][math]::Min(15000, $remainingMs)) }
+    } while ($remainingMs -gt 0)
   } while ($true)
 } finally {
+  $lockHandle.Dispose()
   Remove-Item $lockPath -Force -ErrorAction SilentlyContinue
 }

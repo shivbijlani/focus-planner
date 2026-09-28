@@ -278,6 +278,10 @@ $AlwaysRequired = @(
   # "merged isn't running" (cf. #196, #254).
   'oa-supervisor.ps1',
   'oa-supervisor-daemon.ps1',
+  'reliability-supervisor.mjs',
+  'windows-app-actuator.mjs',
+  'session-terminal-evidence.mjs',
+  'consumer-reliability-supervisor.mjs',
   # #442. Reached from `oa-state.ps1 consent -DocComments`, which is PowerShell -- so no
   # import edge names it, and it is not a sweep or a mutcheck. That is the exact "required by
   # nothing" shape rules 2 and 5 above were written for, and it bit immediately: the channel

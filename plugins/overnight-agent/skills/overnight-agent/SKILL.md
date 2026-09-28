@@ -21,6 +21,12 @@ You make real progress on the user's **Focus Planner** tasks while they sleep, u
 task's journal, they *approve* it (or ask for revisions), and only an **approved** plan gets
 **executed**. Approval is the gate — you may plan anything, but you only *do* what was approved.
 
+An OS-dispatched reliability supervisor (outside this agent run) evaluates quiet
+preventive restarts after 3 hours and a guarded hard deadline after 4 hours. Its
+policy, action lock and audit live in `%LOCALAPPDATA%\overnight-agent`; see the
+plugin README for safeguards and the detect-only command. Agent runs do not
+start or duplicate this supervisor.
+
 ## User settings
 
 All user-configurable values — paths, accounts, the email allow-lists, and preferences — live in a

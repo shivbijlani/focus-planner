@@ -14,6 +14,13 @@ command from the Focus Planner plugin marketplace.
 ```
 overnight-agent/
 ├── plugin.json                 # Plugin manifest
+├── checks/
+│   ├── oa-supervisor.ps1       # Existing OS-dispatched health check
+│   ├── oa-supervisor-daemon.ps1 # OS-owned loop, heartbeat and boundary wakeups
+│   ├── consumer-reliability-supervisor.mjs
+│   ├── reliability-supervisor.mjs  # Shared M/N policy and transaction core
+│   ├── windows-app-actuator.mjs     # Enterprise activity/process adapter
+│   └── session-terminal-evidence.mjs # Enterprise session event evidence
 └── skills/
     └── overnight-agent/
         ├── SKILL.md            # The skill instructions
@@ -67,6 +74,52 @@ Ask Copilot to "run the overnight agent", "propose plans for my tasks", or
 "execute approved plans". The skill's `SKILL.md` documents the full run flow
 (inbox check → execute approved plans → propose new plans behind the approval
 gate).
+
+### Reliability supervisor (Windows)
+
+The existing out-of-band supervisor now runs as a single OS-dispatched daemon
+with a 15-second heartbeat between checks. It evaluates at most every 15 minutes, but wakes
+early at M/N boundaries or the cooldown expiry. The default **M=3 hours** is a
+quiet opportunity: the enterprise snapshot adapter reads the GUI process,
+both app/session SQLite stores, workflow and session projections, process
+locks, and session events. Evidence must remain unchanged and continuously
+quiet for **15 minutes**. Unknown activity postpones M. At
+**N=4 hours**, active or unknown *activity* no longer postpones an attempt, but
+unknown or changed **process identity**, another action owner, and the **60-minute
+attempt cooldown** still prevent termination. The age is anchored to the GUI
+process start time; a failed attempt does not reset it. N bounds an attempt,
+not successful recovery or uninterrupted operation. An absent app is not launched
+by the preventive timer; the existing schedule-dead check can still launch it.
+
+The action lock and policy, cycle state, snapshot, heartbeat, and JSONL audit
+live under `%LOCALAPPDATA%\overnight-agent\` (`reliability-supervisor-action.lock`,
+`reliability-supervisor.json`, `reliability-supervisor-state.json`,
+`reliability-supervisor-snapshot.json`, `supervisor-daemon-heartbeat.json`,
+`reliability-supervisor-audit.jsonl`). The
+policy is created with defaults on the first check and can be edited to change
+M/N, the quiet window, cooldown, or `supervisor.enabled`. Invalid policy fails
+closed. The same action lock protects the existing stuck-run/schedule-dead/
+resource-leak **restart** and schedule-dead launch paths; no restart kills by process name. A quiet
+opportunity requests `CloseMainWindow` first, with a bounded wait before
+verified-PID force. N goes directly to verified-PID force. Each destructive
+step rechecks PID, executable path and process start time; only the verified GUI
+root and descendants of its process tree are eligible. A failed attempt is
+audited and holds the cooldown.
+
+**Node.js 24+ is required** for the enterprise `node:sqlite` evidence adapter;
+the installer refuses an older runtime before changing the installed supervisor.
+This machine's default Node 21 must be upgraded before installing/running this
+change. Install/update using `checks/install-oa-supervisor.ps1`; updating the repo alone
+does **not** update an existing OS task's flat-home copy. To inspect a check
+without restarting anything, run
+`node plugins/overnight-agent/checks/consumer-reliability-supervisor.mjs --no-act`.
+The Windows desktop GUI and its local session/workflow evidence must be readable
+for a quiet restart; if resident activity cannot be proven quiet, it waits for N.
+After launch the enterprise adapter requires a distinct GUI identity and fresh
+scheduled/catch-up dispatch for work that was due (no due work requires readiness
+only). Unknown scheduler evidence does not count as a successful recovery.
+Enterprise Dev Box bootstrap, managed-app setup, MCP/profile seeding, ADO logic,
+and multi-machine announcements are intentionally not included.
 
 ### Continuously drain the prepared queue
 

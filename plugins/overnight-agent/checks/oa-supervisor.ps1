@@ -58,8 +58,8 @@
       the schedule can resume even if the relaunch does not reconcile it. A restart is
       only added on top when there is a live process to reclaim (hung-alive) or the
       scheduler itself is wedged (schedule-dead while the app is up).
-    * One incident drives at most one restart per -RestartCooldownMinutes, so a bad state
-      cannot become a reboot loop.
+    * Restart and launch attempts share the reliability supervisor's durable 60-minute
+      cooldown and exclusive action lock; no app restart kills by process name.
     * Fully silent: no Telegram, ever. Every decision is still written to supervisor-log.jsonl.
 
 .PARAMETER StuckMinutes
@@ -74,8 +74,8 @@
   i.e. three consecutive missed */30 ticks, so one skipped tick is never an alarm.
 
 .PARAMETER RestartCooldownMinutes
-  Do not restart the same incident more than once inside this window. Default 20, so a
-  state that keeps looking stuck cannot drive a reboot loop.
+  Legacy compatibility parameter. The durable reliability-supervisor.json
+  appRestart.minIntervalMinutes setting controls all restart/launch cooldowns (default 60).
 
 .PARAMETER NoAct
   Classify, run the sweep in DETECT-ONLY mode, and log the decision, but never kill or
@@ -94,8 +94,8 @@ param(
   [int]$StuckMinutes   = 45,
   [int]$DeadMinutes    = 90,
   [int]$ReAlertMinutes = 240,
-  # Don't restart the same incident more than once inside this window (anti-loop).
-  [int]$RestartCooldownMinutes = 20,
+  # Legacy compatibility: the shared action policy owns cooldown.
+  [int]$RestartCooldownMinutes = 60,
   [string]$WorkflowName = 'Overnight Agent',
   # Detect + log only; never kill or launch anything. For testing/replay.
   [switch]$NoAct,
@@ -117,7 +117,6 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $OaHome    = Join-Path $env:LOCALAPPDATA 'overnight-agent'
-$StatePath = Join-Path $OaHome 'supervisor-state.json'
 $LogPath   = Join-Path $OaHome 'supervisor-log.jsonl'
 $Db        = Join-Path $env:USERPROFILE '.copilot\data.db'
 $NowUtc    = (Get-Date).ToUniversalTime()
@@ -364,39 +363,17 @@ console.log(JSON.stringify({ run: r ?? null }));
   }
 }
 
-# The app we supervise is the desktop GUI process 'github.exe'; its children are the
-# 'copilot.exe --server' backends. Resolve its exe from the live process when we can
-# (survives version bumps), else the stable per-user install path.
-function Resolve-AppExe {
-  $p = Get-Process -Name 'github' -ErrorAction SilentlyContinue |
-         Where-Object { $_.Path } | Select-Object -First 1
-  if ($p -and $p.Path) { return $p.Path }
-  $stable = Join-Path $env:LOCALAPPDATA 'Programs\GitHub Copilot\github.exe'
-  if (Test-Path $stable) { return $stable }
-  return $null
-}
-
-# Kill the app process tree (GUI + server backends) by explicit PID, then relaunch it.
-function Restart-App {
-  $exe = Resolve-AppExe
-  $killed = @()
-  foreach ($name in @('github', 'copilot')) {
-    foreach ($proc in (Get-Process -Name $name -ErrorAction SilentlyContinue)) {
-      try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop; $killed += "$name#$($proc.Id)" } catch { }
-    }
-  }
-  Start-Sleep -Seconds 3
-  $launched = $false
-  if ($exe) { try { Start-Process -FilePath $exe | Out-Null; $launched = $true } catch { } }
-  return @{ exe = $exe; killed = $killed; launched = $launched }
-}
-
-# Schedule-dead with the app DOWN: nothing to kill, just launch it.
-function Start-App {
-  $exe = Resolve-AppExe
-  $launched = $false
-  if ($exe) { try { Start-Process -FilePath $exe | Out-Null; $launched = $true } catch { } }
-  return @{ exe = $exe; killed = @(); launched = $launched }
+function Invoke-ReliabilitySupervisor([string]$Reason, [switch]$LaunchMissing) {
+  $script = Join-Path $PSScriptRoot 'consumer-reliability-supervisor.mjs'
+  if (-not (Test-Path $script)) { $script = Join-Path $OaHome 'consumer-reliability-supervisor.mjs' }
+  if (-not (Test-Path $script)) { throw "reliability supervisor not deployed: $script" }
+  $arguments = @($script)
+  if ($NoAct) { $arguments += '--no-act' }
+  if ($Reason) { $arguments += @('--recovery', $Reason) }
+  if ($LaunchMissing) { $arguments += '--launch-missing' }
+  $output = & node @arguments 2>&1 | Out-String
+  if ($LASTEXITCODE -ne 0) { throw "reliability supervisor failed: $output" }
+  return ($output | ConvertFrom-Json)
 }
 
 if ($TestAlert) {
@@ -416,7 +393,14 @@ try {
   if (-not (Test-Path $Db)) { throw "app database not found at $Db" }
   $newest = Get-NewestWorkflowRun -Db $Db -WorkflowName $WorkflowName
 } catch {
-  $err = @{ state = 'SUPERVISOR-FAILED'; error = "$_" }
+  $dbError = "$_"
+  # The preventive hard deadline can be attempted despite unreadable activity data.
+  # The Node supervisor still requires a verified GUI identity and exclusive action lock.
+  $reliability = $null
+  try { $reliability = Invoke-ReliabilitySupervisor '' } catch {
+    Write-Log @{ state = 'RELIABILITY-FAILED'; error = "$_" }
+  }
+  $err = @{ state = 'SUPERVISOR-FAILED'; error = $dbError; actResult = $reliability }
   Write-Log $err
   ($err | ConvertTo-Json -Compress)
   exit 2
@@ -477,41 +461,18 @@ if ($verdict.state -eq 'HEALTHY' -and $resVerdict.state -ne 'HEALTHY') {
               -HasHungAlive $false -AppRunning $appRunning
 }
 
-# ---------------------------------------------------------------- anti-loop cooldown --
-# One incident (state + the run it is about) may drive at most one restart per cooldown,
-# so a state that keeps looking stuck cannot become a reboot loop.
-$incidentKey = '{0}:{1}' -f $verdict.state, ($(if ($newest) { $newest.started_at } else { 'none' }))
-$state = @{}
-if (Test-Path $StatePath) {
-  try { $state = Get-Content $StatePath -Raw | ConvertFrom-Json -AsHashtable } catch { $state = @{} }
-}
-$onCooldown = $false
-if ($action -in @('restart','launch') -and $state.lastActionKey -eq $incidentKey -and $state.lastActionUtc) {
-  $since = ($NowUtc - [datetime]::Parse($state.lastActionUtc, $null, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()).TotalMinutes
-  if ($since -lt $RestartCooldownMinutes) { $onCooldown = $true }
-}
-
 # ----------------------------------------------------------------------- act (silent) --
 $acted     = $false
 $actResult = $null
 $actError  = $null
-if ($action -in @('restart','launch') -and -not $onCooldown -and -not $NoAct) {
-  try {
-    $actResult = if ($action -eq 'restart') { Restart-App } else { Start-App }
-    $acted = [bool]$actResult.launched
-    if (-not $acted) { $actError = 'app exe not found or relaunch failed' }
-  } catch {
-    $actError = "$_"
-  }
-  # Record the incident so the cooldown holds even if the relaunch itself failed - a
-  # failing restart must not become a hot loop.
-  $state.lastActionKey = $incidentKey
-  $state.lastActionUtc = $NowUtc.ToString('o')
-  try {
-    if (-not (Test-Path $OaHome)) { New-Item -ItemType Directory -Path $OaHome -Force | Out-Null }
-    ($state | ConvertTo-Json -Depth 6) | Set-Content -Path $StatePath -Encoding utf8
-  } catch { }
-}
+$onCooldown = $false
+try {
+  $actResult = Invoke-ReliabilitySupervisor $(if ($action -eq 'restart') { $verdict.state } else { '' }) `
+                 -LaunchMissing:($action -eq 'launch')
+  $acted = ($actResult.status -in @('restarted', 'launched'))
+  $onCooldown = ($actResult.status -eq 'cooldown')
+  if ($actResult.status -eq 'failed') { $actError = $actResult.error }
+} catch { $actError = "$_" }
 
 $result = @{
   state          = $verdict.state

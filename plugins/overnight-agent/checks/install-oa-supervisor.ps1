@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-  Registers (or removes) the OS-level Windows Scheduled Task that runs oa-supervisor.ps1.
+  Registers (or removes) the OS-level Windows Scheduled Task that runs
+  oa-supervisor-daemon.ps1, which calls oa-supervisor.ps1 at policy boundaries.
 
 .DESCRIPTION
   This script is the actual fix for GH #226. `oa-supervisor.ps1` is only a checker;
@@ -16,8 +17,8 @@
   REVERSIBLE: `-Uninstall` removes it completely. That is the whole rollback.
 
 .PARAMETER IntervalMinutes
-  How often the supervisor runs. Default 15 - fast enough that the worst case exposure
-  is a quarter hour rather than the 3.8 days the worst recorded stall actually ran.
+  Maximum interval between checks. Default 15 minutes; the daemon also wakes
+  at the 3h/4h policy boundaries and cooldown expiry.
 
 .PARAMETER Uninstall
   Remove the scheduled task and exit.
@@ -34,6 +35,36 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Stop-InstalledDaemon {
+  $lock = Join-Path (Join-Path $env:LOCALAPPDATA 'overnight-agent') 'supervisor-daemon.lock'
+  if (-not (Test-Path $lock)) { return }
+  $record = Get-Content $lock -Raw | ConvertFrom-Json
+  if (-not $record.pid -or -not $record.startedUtc) {
+    throw "Cannot validate supervisor daemon ownership: $lock"
+  }
+  $daemonPath = Join-Path (Join-Path $env:LOCALAPPDATA 'overnight-agent') 'oa-supervisor-daemon.ps1'
+  $process = Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$record.pid)"
+  if (-not $process) {
+    Remove-Item $lock -Force
+    return
+  }
+  $started = [datetime]::Parse($record.startedUtc, $null,
+    [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+  $native = Get-Process -Id $record.pid -ErrorAction Stop
+  if ($process.Name -notin @('powershell.exe', 'pwsh.exe') -or
+      -not $process.CommandLine -or
+      $process.CommandLine.IndexOf($daemonPath, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or
+      [math]::Abs(($process.CreationDate.ToUniversalTime() - $started).TotalMinutes) -gt 2 -or
+      [math]::Abs(($native.StartTime.ToUniversalTime() -
+        $process.CreationDate.ToUniversalTime()).TotalSeconds) -gt 2) {
+    throw "Refusing to stop unverified supervisor daemon PID $($record.pid)"
+  }
+  Stop-Process -InputObject $native -Force -ErrorAction Stop
+  Write-Host "[oa-supervisor] stopped verified daemon PID $($record.pid)."
+  Start-Sleep -Milliseconds 250
+  if (Test-Path $lock) { Remove-Item $lock -Force }
+}
+
 if ($Uninstall) {
   $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   if ($existing) {
@@ -46,20 +77,16 @@ if ($Uninstall) {
   # supervisor running and the rollback claim in the docs would be false.
   $shim = Join-Path ([Environment]::GetFolderPath('Startup')) 'Overnight Agent supervisor.cmd'
   if (Test-Path $shim) { Remove-Item $shim -Force; Write-Host "[oa-supervisor] removed Startup shim $shim." }
-  $lock = Join-Path (Join-Path $env:LOCALAPPDATA 'overnight-agent') 'supervisor-daemon.lock'
-  if (Test-Path $lock) {
-    try {
-      $p = (Get-Content $lock -Raw | ConvertFrom-Json).pid
-      if ($p -and (Get-Process -Id $p -ErrorAction SilentlyContinue)) {
-        Stop-Process -Id $p -Force
-        Write-Host "[oa-supervisor] stopped running daemon (pid $p)."
-      }
-    } catch { }
-    Remove-Item $lock -Force -ErrorAction SilentlyContinue
-  }
+  Stop-InstalledDaemon
   Write-Host "[oa-supervisor] uninstall complete."
   return
 }
+
+$nodeMajor = & node -p "process.versions.node.split('.')[0]"
+if ($LASTEXITCODE -ne 0 -or -not $nodeMajor -or [int]$nodeMajor -lt 24) {
+  throw 'Reliability supervisor requires Node.js 24+ for enterprise-parity SQLite session evidence.'
+}
+Stop-InstalledDaemon
 
 # Prefer the deployed copy in the OA home: the scheduled task must keep working when
 # a worktree is deleted, so it must not point into one.
@@ -71,12 +98,20 @@ if (-not (Test-Path $oaHome)) { New-Item -ItemType Directory -Path $oaHome -Forc
 # pick up the new supervisor. (sync-oa-home also keeps this copy current on every run now
 # that oa-supervisor.ps1 is in its required set - this covers a manual/one-off install.)
 Copy-Item $repoCopy $deployed -Force
+foreach ($name in @('reliability-supervisor.mjs', 'windows-app-actuator.mjs',
+                   'session-terminal-evidence.mjs', 'consumer-reliability-supervisor.mjs',
+                   'oa-supervisor-daemon.ps1')) {
+  $source = Join-Path $PSScriptRoot $name
+  if (-not (Test-Path $source)) { throw "required reliability module missing: $source" }
+  Copy-Item $source (Join-Path $oaHome $name) -Force
+}
 Write-Host "[oa-supervisor] deployed $deployed from the repo copy."
 # stuck-run-sweep.mjs is resolved by the supervisor from the OA home too; sync-oa-home.ps1
 # keeps both current on every run, so nothing here needs to pin a repo path.
 
 $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-$argLine = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$deployed`""
+$daemonDst = Join-Path $oaHome 'oa-supervisor-daemon.ps1'
+$argLine = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$daemonDst`" -IntervalMinutes $IntervalMinutes"
 if ($NoAct) { $argLine += ' -NoAct' }
 
 $action = New-ScheduledTaskAction -Execute $psExe -Argument $argLine
@@ -109,12 +144,12 @@ $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" 
 $settings = New-ScheduledTaskSettingsSet `
               -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
               -StartWhenAvailable `
-              -ExecutionTimeLimit (New-TimeSpan -Minutes 10) `
+              -ExecutionTimeLimit ([TimeSpan]::Zero) `
               -MultipleInstances IgnoreNew `
               -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5)
 
 $desc = "GH #226: out-of-band supervisor for the Overnight Agent. Runs every $IntervalMinutes min, " +
-        "dispatched by the OS rather than by an agent run, so it can observe the agent NOT running. " +
+        "or sooner at M/N boundaries; dispatched by the OS rather than an agent run. " +
         "Read-only classification against the app database; on a genuine hang it silently RESTARTS " +
         "the app (no Telegram). Remove with: " +
         "powershell -File `"$PSCommandPath`" -Uninstall"
@@ -138,25 +173,23 @@ try {
 }
 
 if (-not $registered) {
-  $daemonSrc  = Join-Path $PSScriptRoot 'oa-supervisor-daemon.ps1'
-  $daemonDst  = Join-Path $oaHome 'oa-supervisor-daemon.ps1'
-  if (Test-Path $daemonSrc) { Copy-Item $daemonSrc $daemonDst -Force }
-
   $startup = [Environment]::GetFolderPath('Startup')
   $shim    = Join-Path $startup 'Overnight Agent supervisor.cmd'
+  $fallbackNoAct = if ($NoAct) { ' -NoAct' } else { '' }
 @"
 @echo off
 rem GH #226 - out-of-band supervisor for the Overnight Agent.
 rem Launched by Explorer at logon, so it is dispatched by the OS rather than by the
 rem agent or the app scheduler. Remove this file to uninstall.
-start "" /min "$psExe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "$daemonDst" -IntervalMinutes $IntervalMinutes
+start "" /min "$psExe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "$daemonDst" -IntervalMinutes $IntervalMinutes$fallbackNoAct
 "@ | Set-Content -Path $shim -Encoding ascii
 
   Write-Host "[oa-supervisor] installed Startup shim: $shim"
   Write-Host "[oa-supervisor] starting the daemon now so supervision does not wait for a reboot..."
-  Start-Process -FilePath $psExe `
-    -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-WindowStyle','Hidden',
-                    '-File', $daemonDst, '-IntervalMinutes', $IntervalMinutes) `
+  $daemonArgs = @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-WindowStyle','Hidden',
+                  '-File', $daemonDst, '-IntervalMinutes', $IntervalMinutes)
+  if ($NoAct) { $daemonArgs += '-NoAct' }
+  Start-Process -FilePath $psExe -ArgumentList $daemonArgs `
     -WindowStyle Hidden | Out-Null
   Start-Sleep -Seconds 3
   Write-Host "[oa-supervisor] UNDO: delete `"$shim`" and stop the oa-supervisor-daemon powershell process."
@@ -166,6 +199,8 @@ start "" /min "$psExe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Windo
   return
 }
 
+$oldShim = Join-Path ([Environment]::GetFolderPath('Startup')) 'Overnight Agent supervisor.cmd'
+if (Test-Path $oldShim) { Remove-Item $oldShim -Force }
 $t = Get-ScheduledTask -TaskName $TaskName
 Write-Host "[oa-supervisor] registered '$TaskName' (state=$($t.State), every $IntervalMinutes min, logon type $logonType)."
 if ($logonType -eq 'Interactive') {
