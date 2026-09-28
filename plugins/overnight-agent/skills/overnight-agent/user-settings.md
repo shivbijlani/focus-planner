@@ -20,6 +20,7 @@ preferences.
 | Journals folder | `<path to>\journal\` |
 | Agent state store | `%LOCALAPPDATA%\overnight-agent\state\` (per-task JSON; **local, not cloud-synced**). Skill-owned memory — the user never edits it. Managed via `oa-state.ps1`. |
 | Dev drive (repos) | `<path to your repos, e.g. V:\repos\>` (worktrees in `<...>.worktrees\`, packages in `<...>\packages\`) |
+| Non-code task project | `<project ID from create_project>` — local folder project rooted at `%LOCALAPPDATA%\overnight-agent\task-chats`; required before dispatching non-code tasks. |
 | GitHub owner | `github.com/<your-github-username>` |
 | Agent email account | `<agent-inbox@example.com>` (the name of this account as it appears in the email MCP) |
 | Google account (Tasks) | `<your.name@example.com>` — the Google account whose **Tasks** the PHASE 2 collect step reads (must be consented in the Google Workspace MCP). Leave blank / omit to disable Google-Tasks collection. |

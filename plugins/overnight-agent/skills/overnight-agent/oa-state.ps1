@@ -88,8 +88,8 @@
                                 DIFFERENT id over a LIVE one throws `session_bind_conflict`;
                                 binding over a DEAD one is the replacement path and records the
                                 prior id. `-Force` overrides.
-          [-SessionKind <k>]    `code` or `chat`; defaults to `chat`. `code` REQUIRES
-                                -SessionProject and -SessionWorkspace. `chat` has neither.
+          [-SessionKind <k>]    `code` or `chat`; defaults to `chat`. Both require a
+                                project and workspace; chat uses the configured local folder.
           [-SessionProject <p>] The project the session must be created in -- the repository
                                 project for a code task, NOT the run session's project.
           [-SessionWorkspace <p>] The worktree/branch/folder path the session works in.
@@ -109,6 +109,11 @@
                                 nothing pending. SKIPS any journal with trailing user content,
                                 so a real unanswered reply is never baselined away. Never
                                 writes to a journal.
+  whoami [-SessionId <sid>]     #727: this session's ROLE. Matches the id (default:
+                                $env:COPILOT_AGENT_SESSION_ID) against every task binding,
+                                current or replaced. `role: task` + `task_id` means do only that
+                                task; `coordinator` means no task is bound to it; `unknown`
+                                means no id was available. Read-only.
 
 .POLLING (why this exists)
   `scan` only flags journals the USER has touched, so a purely time-triggered job (e.g. #400's
@@ -469,7 +474,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract', 'doc', 'session')]
+  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract', 'doc', 'session', 'whoami')]
   [string]$Command = 'scan',
 
   [string]$Id,
@@ -4990,6 +4995,51 @@ function Test-SamePath([string]$a, [string]$b) {
   return [string]::Equals($na, $nb, [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Test-PathWithin([string]$path, [string]$root) {
+  if (-not $path -or -not $root) { return $false }
+  $full = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($path)).TrimEnd('\', '/')
+  $base = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($root)).TrimEnd('\', '/')
+  return [string]::Equals($full, $base, [StringComparison]::OrdinalIgnoreCase) -or
+    $full.StartsWith($base + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-ChatWorkspace([string]$project, [string]$workspace, [string]$wsType) {
+  $settingsPath = Get-UserSettingsPath
+  $configured = if ($settingsPath -and (Test-Path -LiteralPath $settingsPath)) {
+    Get-SettingRow (Get-Content -LiteralPath $settingsPath -Raw) 'Non-code task project'
+  } else { '' }
+  if (-not $configured -or $configured -match '[<>]') {
+    throw 'session_chat_project_required: configure Non-code task project in user-settings.md before binding a non-code session'
+  }
+  if (-not $env:LOCALAPPDATA) {
+    throw 'session_chat_home_required: LOCALAPPDATA is required for Non-code task project'
+  }
+  $chatHome = Join-Path $env:LOCALAPPDATA 'overnight-agent\task-chats'
+  if (-not $project -or $project -ne $configured -or -not $workspace -or $wsType -ne 'folder') {
+    throw 'session_chat_scope: bind the configured Non-code task project with its folder workspace (-SessionProject, -SessionWorkspace, -WorkspaceType folder)'
+  }
+  $oneDriveRoots = @($env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial)
+  if ($env:USERPROFILE) { $oneDriveRoots += Join-Path $env:USERPROFILE 'OneDrive' }
+  foreach ($root in $oneDriveRoots) {
+    if ($root -and (Test-PathWithin $workspace $root)) {
+      throw 'session_chat_onedrive: Non-code task project must be outside OneDrive'
+    }
+  }
+  $folder = [IO.DirectoryInfo]::new([IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($workspace)))
+  while ($folder) {
+    if ($folder.Parent -and $folder.Parent.FullName -eq $env:USERPROFILE -and $folder.Name -like 'OneDrive*') {
+      throw 'session_chat_onedrive: Non-code task project must be outside OneDrive'
+    }
+    if (Test-Path -LiteralPath (Join-Path $folder.FullName '.git') -PathType Leaf) {
+      throw 'session_chat_worktree: Non-code task project cannot be inside a code worktree'
+    }
+    $folder = $folder.Parent
+  }
+  if (-not (Test-SamePath ([IO.Path]::GetFullPath($workspace)) ([IO.Path]::GetFullPath($chatHome)))) {
+    throw 'session_chat_home: Non-code task project must use %LOCALAPPDATA%\overnight-agent\task-chats'
+  }
+}
+
 function Get-SessionState($st) {
   if ($st -and $st.PSObject.Properties['session'] -and $st.session -and "$($st.session.session_id)") {
     return $st.session
@@ -5189,6 +5239,44 @@ function Get-KickoffContinuation([string]$taskId, [string]$priorId) {
   "Read the task journal for what has already been done before doing anything new."
 }
 
+function Get-TaskRoleLine([string]$taskId) {
+  # #727: a task session that received "overnight dispatch for task #228" matched the brief to the
+  # overnight-agent skill by name and loaded the coordinator. The brief now states the role first,
+  # emitted here so the coordinator pastes it rather than paraphrasing it away.
+  "You are the task session for planner task #$taskId. Do this task only. Do not run " +
+  "``/overnight-agent`` or load the overnight-agent skill, and do not dispatch, create or wake " +
+  "other sessions."
+}
+
+function Cmd-Whoami {
+  # #727: which role is THIS session? Answers the guard at the top of SKILL.md cheaply, by
+  # matching the session id against every task binding (current or replaced). Read-only.
+  $sid = if ($SessionId) { $SessionId } elseif ($env:COPILOT_AGENT_SESSION_ID) { $env:COPILOT_AGENT_SESSION_ID } else { '' }
+  $hits = @()
+  if ($sid -and (Test-Path $StateDir)) {
+    foreach ($f in (Get-ChildItem $StateDir -Filter 'task-*.json' -File -ErrorAction SilentlyContinue)) {
+      try { $obj = Get-Content -Raw $f.FullName | ConvertFrom-Json } catch { continue }
+      $s = Get-SessionState $obj
+      if (-not $s) { continue }
+      $match = if ("$($s.session_id)" -eq $sid) { 'session_id' }
+      elseif ("$($s.prior_session_id)" -eq $sid) { 'prior_session_id' }
+      else { $null }
+      if ($match) { $hits += [pscustomobject]@{ id = "$($obj.id)"; match = $match; state = "$($s.state)" } }
+    }
+  }
+  $role = if (-not $sid) { 'unknown' } elseif ($hits.Count) { 'task' } else { 'coordinator' }
+  $taskId = if ($hits.Count) { $hits[0].id } else { $null }
+  [pscustomobject]@{
+    session_id = if ($sid) { $sid } else { $null }
+    session_id_source = if ($SessionId) { 'parameter' } elseif ($sid) { 'COPILOT_AGENT_SESSION_ID' } else { $null }
+    # task | coordinator | unknown. `task` means: do only that task's work.
+    role       = $role
+    task_id    = $taskId
+    tasks      = @($hits)
+    role_line  = if ($taskId) { (Get-TaskRoleLine $taskId) } else { $null }
+  } | ConvertTo-Json -Depth 4
+}
+
 function Cmd-Session {
   $agentModel = Get-AgentModelSettings
   if (($CheckDispatch -or $ForDispatch) -and (-not $Id -or
@@ -5314,21 +5402,13 @@ function Cmd-Session {
       throw ("session_kind_invalid: '$kind' is not a supported task session kind; pass " +
         '-SessionKind chat for a non-code task or -SessionKind code with its worktree')
     }
-    if ($kind -eq 'chat') {
-      if ($SessionProject -or $SessionWorkspace -or $WorkspaceType) {
-        throw 'session_chat_scope: a chat task session must be global, with no project or workspace'
-      }
-      $project = ''
-      $workspace = ''
-      $wsType = ''
-    } else {
-      $project = if ($SessionProject) { $SessionProject } elseif ($sess) { "$($sess.project)" } else { '' }
-      $workspace = if ($SessionWorkspace) { $SessionWorkspace }
-        elseif ($sess) { "$($sess.workspace)" }
-        else { '' }
-      $wsType = if ($WorkspaceType) { $WorkspaceType } elseif ($sess -and "$($sess.workspace_type)") { "$($sess.workspace_type)" }
-      else { 'worktree' }
-    }
+    $project = if ($SessionProject) { $SessionProject } elseif ($sess) { "$($sess.project)" } else { '' }
+    $workspace = if ($SessionWorkspace) { $SessionWorkspace }
+      elseif ($sess) { "$($sess.workspace)" }
+      else { '' }
+    $wsType = if ($WorkspaceType) { $WorkspaceType } elseif ($sess -and "$($sess.workspace_type)") { "$($sess.workspace_type)" }
+    elseif ($kind -eq 'chat') { 'folder' } else { 'worktree' }
+    if ($kind -eq 'chat') { Assert-ChatWorkspace $project $workspace $wsType }
 
     if ($kind -eq 'code') {
       # A code task without a named project is the inheritance trap: every session API defaults
@@ -5416,8 +5496,10 @@ function Cmd-Session {
     # Tuesday?", which is the difference between waiting and being stuck. Null on a task paused
     # before this field shipped: an unknown age is reported as unknown, never as "not paused".
     paused_at      = if ($st -and $st.PSObject.Properties['paused_at'] -and $st.paused_at) { (ConvertTo-IsoText $st.paused_at) } else { $null }
+    # #727: the first line of every brief sent to this task's session, emitted verbatim.
+    role_line      = (Get-TaskRoleLine $Id)
     # Present ONLY on a `replace` verdict, and emitted ready to paste. See Get-KickoffContinuation.
-    kickoff_continuation = if ($verdict -eq 'replace') { (Get-KickoffContinuation $Id "$($sess.session_id)") } else { $null }
+    kickoff_continuation =  if ($verdict -eq 'replace') { (Get-KickoffContinuation $Id "$($sess.session_id)") } else { $null }
     # Emitted, never executed (#321): the raw `git worktree remove --force` deletes THROUGH a
     # node_modules junction, so the safe teardown is named here rather than performed here.
     teardown_command = if ($sess -and "$($sess.workspace_type)" -eq 'worktree' -and "$($sess.workspace)") {
@@ -5784,6 +5866,7 @@ try {
     'extract' { Cmd-Extract }
     'doc' { Cmd-Doc }
     'session' { Cmd-Session }
+    'whoami' { Cmd-Whoami }
   }
 }
 finally {

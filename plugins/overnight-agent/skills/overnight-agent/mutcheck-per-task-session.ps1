@@ -105,6 +105,9 @@ User notes at the top.
 
 # --- isolated sandbox ---------------------------------------------------------------
 $root = Join-Path ([IO.Path]::GetTempPath()) ("oa-session-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$env:LOCALAPPDATA = $root
+$chatHome = Join-Path $root 'overnight-agent\task-chats'
+New-Item -ItemType Directory -Path $chatHome -Force | Out-Null
 $jdir = Join-Path $root 'journal'
 $sdir = Join-Path $root 'state'
 New-Item -ItemType Directory -Path $jdir -Force | Out-Null
@@ -131,8 +134,10 @@ $badSettings = Join-Path $root 'settings-bad.md'
 $twoSettings = Join-Path $root 'settings-two.md'
 $modelSettings = Join-Path $root 'settings-model.md'
 $badModelSettings = Join-Path $root 'settings-bad-model.md'
+$chatSettings = Join-Path $root 'settings-chat.md'
 [IO.File]::WriteAllText($badSettings, "## Overnight Agent behaviour`n`n| Setting | Value |`n|---|---|`n| Overnight Agent concurrency | plenty |`n", $utf8)
 [IO.File]::WriteAllText($twoSettings, "## Overnight Agent behaviour`n`n| Setting | Value |`n|---|---|`n| Overnight Agent concurrency | 2 |`n", $utf8)
+[IO.File]::WriteAllText($chatSettings, "| Setting | Value |`n|---|---|`n| Non-code task project | local-chat-project |`n", $utf8)
 [IO.File]::WriteAllText($modelSettings, "| Setting | Value |`n|---|---|`n| Overnight Agent model | ``claude-sonnet-5`` |`n", $utf8)
 [IO.File]::WriteAllText($badModelSettings, "| Setting | Value |`n|---|---|`n| Overnight Agent model | banana |`n", $utf8)
 
@@ -196,6 +201,11 @@ function New-Bind {
     '-SessionWorkspace', $ws, '-WorkspaceType', 'worktree')
   if ($WithForce) { $a += '-Force' }
   return (Invoke-OaJson -OaArgs $a -Settings $Settings)
+}
+
+function New-ChatArgs([string]$id, [string]$sessionId) {
+  return @('session', '-Id', $id, '-SessionId', $sessionId, '-SessionKind', 'chat',
+    '-SessionProject', 'local-chat-project', '-SessionWorkspace', $chatHome, '-WorkspaceType', 'folder')
 }
 
 $results = [ordered]@{}
@@ -372,35 +382,57 @@ Check 'K code bind with a folder workspace is REFUSED' { $script:LastOaExit -ne 
 
 Check 'K- nothing was bound by any refusal' { (Invoke-OaJson @('session', '-Id', '803')).bound -eq $false }
 
-# A non-code task gets its own global chat, with no project or workspace.
-$chat = Invoke-OaJson @('session', '-Id', '804', '-SessionId', 'SESS_804', '-SessionKind', 'chat', '-Force')
-Check 'K-- a non-code task gets a workspace-free chat' {
+# A non-code task gets its own session in the configured local folder project.
+$chat = Invoke-OaJson -OaArgs ((New-ChatArgs '804' 'SESS_804') + @('-Force')) -Settings $chatSettings
+Check 'K-- a non-code task binds the configured local folder project' {
   "$($chat.session_id)" -eq 'SESS_804' -and "$($chat.kind)" -eq 'chat' -and
-    -not $chat.project -and -not $chat.workspace
+    $chat.project -eq 'local-chat-project' -and $chat.workspace -eq $chatHome -and $chat.workspace_type -eq 'folder'
 }
 
-$chatDefault = Invoke-OaJson @('session', '-Id', '809', '-SessionId', 'SESS_809')
-Check 'K--- non-code sessions default to a workspace-free chat' {
+$chatDefault = Invoke-OaJson -OaArgs @('session', '-Id', '809', '-SessionId', 'SESS_809',
+  '-SessionProject', 'local-chat-project', '-SessionWorkspace', $chatHome, '-WorkspaceType', 'folder') -Settings $chatSettings
+Check 'K--- an implicit chat kind binds the configured folder' {
   "$($chatDefault.session_id)" -eq 'SESS_809' -and "$($chatDefault.kind)" -eq 'chat' -and
-    -not $chatDefault.project -and -not $chatDefault.workspace
+    $chatDefault.project -eq 'local-chat-project' -and $chatDefault.workspace -eq $chatHome
 }
 
 $chatProject = Invoke-Oa @('session', '-Id', '810', '-SessionId', 'SESS_810',
-  '-SessionKind', 'chat', '-SessionProject', 'focus-planner')
-Check 'K---- a chat cannot be bound to a project' {
+  '-SessionKind', 'chat', '-SessionProject', 'focus-planner', '-SessionWorkspace', $chatHome,
+  '-WorkspaceType', 'folder') -Settings $chatSettings
+Check 'K---- a chat cannot be bound to a different project' {
   $script:LastOaExit -ne 0 -and $chatProject -match 'session_chat_scope'
 }
 
 $chatWorkspace = Invoke-Oa @('session', '-Id', '811', '-SessionId', 'SESS_811',
-  '-SessionKind', 'chat', '-SessionWorkspace', (Join-Path $root 'chat-811'))
-Check 'K----- a chat cannot be bound to a workspace' {
-  $script:LastOaExit -ne 0 -and $chatWorkspace -match 'session_chat_scope'
+  '-SessionKind', 'chat', '-SessionProject', 'local-chat-project',
+  '-SessionWorkspace', (Join-Path $root 'chat-811'), '-WorkspaceType', 'folder') -Settings $chatSettings
+Check 'K----- a chat cannot be bound outside the configured home' {
+  $script:LastOaExit -ne 0 -and $chatWorkspace -match 'session_chat_home'
 }
+
+$missingSetting = Invoke-Oa -OaArgs (New-ChatArgs '811' 'SESS_811')
+Check 'K----- a missing Non-code task project setting refuses binding' {
+  $script:LastOaExit -ne 0 -and $missingSetting -match 'Non-code task project'
+}
+$env:OneDrive = Join-Path $root 'overnight-agent'
+$inOneDrive = Invoke-Oa -OaArgs (New-ChatArgs '811' 'SESS_811') -Settings $chatSettings
+Check 'K----- a OneDrive-rooted folder refuses binding' {
+  $script:LastOaExit -ne 0 -and $inOneDrive -match 'session_chat_onedrive'
+}
+Remove-Item Env:\OneDrive
+$gitMarker = Join-Path $root '.git'
+[IO.File]::WriteAllText($gitMarker, 'gitdir: synthetic', $utf8)
+$inWorktree = Invoke-Oa -OaArgs (New-ChatArgs '811' 'SESS_811') -Settings $chatSettings
+Check 'K----- a code worktree containing the folder refuses binding' {
+  $script:LastOaExit -ne 0 -and $inWorktree -match 'session_chat_worktree'
+}
+Remove-Item -LiteralPath $gitMarker -Force
 
 # A legacy folder binding remains an error unless the caller explicitly chooses its new kind.
 # Keep this fixture synthetic: no live state is read or changed.
 $legacyBind = Invoke-OaJson @('session', '-Id', '812', '-SessionId', 'SESS_LEGACY_812',
-  '-SessionKind', 'chat', '-Force')
+  '-SessionKind', 'chat', '-SessionProject', 'local-chat-project',
+  '-SessionWorkspace', $chatHome, '-WorkspaceType', 'folder', '-Force') -Settings $chatSettings
 $legacyPath = Join-Path $sdir 'task-812.json'
 $legacyState = Get-Content -LiteralPath $legacyPath -Raw | ConvertFrom-Json
 $legacyState.session.kind = 'folder'
@@ -429,15 +461,15 @@ Check 'N the settings row is actually read' { $n.concurrency -eq 2 }
 foreach ($id in $ids) { [void](Invoke-Oa @('session', '-Id', "$id", '-SessionRelease')) }
 
 [void](New-Bind -Id '805' -SessionId 'SESS_805')
-$o = Invoke-Oa @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'chat')
+$o = Invoke-Oa -OaArgs (New-ChatArgs '806' 'SESS_806') -Settings $chatSettings
 Check 'O a second idle conversation can be bound without starting work' { $script:LastOaExit -eq 0 -and $o -match 'SESS_806' }
 
-$p = Invoke-OaJson @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'chat', '-Force')
+$p = Invoke-OaJson -OaArgs ((New-ChatArgs '806' 'SESS_806') + @('-Force')) -Settings $chatSettings
 Check 'P an explicit rebind still preserves the requested conversation' { "$($p.session_id)" -eq 'SESS_806' }
 
 # Changing the concurrency setting does not change the identity operation.
 [void](Invoke-Oa @('session', '-Id', '806', '-SessionRelease'))
-$n2 = Invoke-OaJson -OaArgs @('session', '-Id', '806', '-SessionId', 'SESS_806', '-SessionKind', 'chat') -Settings $twoSettings
+$n2 = Invoke-OaJson -OaArgs (New-ChatArgs '806' 'SESS_806') -Settings $chatSettings
 Check 'N-- concurrency 2 admits the second item' { "$($n2.session_id)" -eq 'SESS_806' }
 [void](Invoke-Oa @('session', '-Id', '806', '-SessionRelease'))
 

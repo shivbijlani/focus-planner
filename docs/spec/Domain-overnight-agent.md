@@ -177,14 +177,17 @@ and eligibility; `Cmd-Doc`, `Cmd-Session`, `Cmd-Extract`, and `Cmd-Mark` handle 
 `user-settings.md` is equally concrete. Its `## Overnight Agent behaviour` table exposes `Today gate
 backstop`, `Today gate strict`, `Overnight Agent concurrency`, and the coordinator start buffer; its settings table also names
 `Planner board`, `Completed board`, `Journals folder`, `Agent state store`, `Dev drive (repos)`,
-`Google account (Tasks)`, and Telegram settings. The template is explicit that the real settings
+`Non-code task project`, `Google account (Tasks)`, and Telegram settings. The template is explicit that the real settings
 live outside the plugin and that the bundled copy is overwritten on update.
 
 ### Per-task session isolation
 
-Every non-code task uses a dedicated global chat session, with no project and no folder workspace.
-Chats are stored locally under `~/.copilot/chats`; the binder stores the session identity without a
-workspace path. Code tasks continue to use their repository worktrees under `V:\repos`.
+Every non-code task uses a dedicated session in one registered local folder project rooted at
+`%LOCALAPPDATA%\overnight-agent\task-chats`. The project ID is stored as `Non-code task project`
+in the external settings file. The coordinator names that project on `create_session` and binds
+the ID with kind `chat`, its project ID and the folder workspace. The binder rejects paths under
+OneDrive or inside a code worktree, and rejects a different project or folder. Code tasks
+continue to use their repository worktrees under `V:\repos`.
 
 The PowerShell-side mutchecks parallel the JS ones. Files such as
 `plugins/overnight-agent/skills/overnight-agent/mutcheck-priority-order.ps1`,
