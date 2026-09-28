@@ -1099,12 +1099,27 @@ finish before the next coordinator run can start more work.
      missing project (`session_project_required`), a missing workspace
      (`session_workspace_required`), a `folder` workspace (`session_workspace_type`) and — the one
      that catches the trap — a workspace equal to the run session's (`session_workspace_inherited`).
-   - **Non-code task** → `-SessionKind folder` is fine; it still gets its own session.
+   - **Non-code task** → bind `-SessionKind folder`. Its workspace defaults to
+     `%LOCALAPPDATA%\overnight-agent\workspaces\task-<ID>` and is created during bind. Do not pass
+     the planner folder, the legacy `OneDrive\overnight-agent\task-workspaces` root, or any other
+     path under a resolved OneDrive root: `session_workspace_onedrive` refuses every task kind.
+     Relative-output tools such as Playwright therefore write into task-local disposable storage.
+   - **Legacy OneDrive binding** → run
+     `oa-state.ps1 session -MigrateOneDriveBindings`. This does not move or delete workspace data;
+     it marks each unsafe live binding dead so the ordinary `replace` verdict preserves the prior
+     session id and emits `kickoff_continuation`. Create the replacement session, then bind it
+     without `-SessionWorkspace` to select the canonical local task folder.
+   - **Migration / Defender gate** → run `oa-state.ps1 session -WorkspaceHealth`. Only
+     `defender_exclusion_ready: true` proves that no active binding is under OneDrive and every
+     active folder binding is beneath the single canonical root reported as `canonical_root`.
+     Use that exact root—not a broader parent—if a Defender exclusion is later approved.
 
    ```powershell
    oa-state.ps1 session -Id <ID> -SessionId <new session id> `
      -SessionKind code -SessionProject <repo project> `
      -SessionWorkspace <worktree path> -WorkspaceType worktree
+
+   oa-state.ps1 session -Id <ID> -SessionId <new session id> -SessionKind folder
    ```
 
 5. **Prepare each approved brief for `oa_drain`.** Its `message` must carry: the task id and title, the approved plan,

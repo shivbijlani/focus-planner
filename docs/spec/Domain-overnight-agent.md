@@ -180,6 +180,27 @@ backstop`, `Today gate strict`, and `Overnight Agent concurrency`; its settings 
 `Google account (Tasks)`, and Telegram settings. The template is explicit that the real settings
 live outside the plugin and that the bundled copy is overwritten on update.
 
+### Task workspace isolation
+
+Every non-code task session has a local, per-task working directory at
+`%LOCALAPPDATA%\overnight-agent\workspaces\task-<ID>`. The session binder creates that directory
+and refuses the nameable error `session_workspace_onedrive` for every task kind when an explicit
+workspace resolves equal to or beneath any detected OneDrive root. This boundary protects the
+planner database and legacy OneDrive scratch roots from tools that write relative to their current
+working directory.
+
+Legacy bindings are retired with `oa-state.ps1 session -MigrateOneDriveBindings`. Retirement is a
+state-only operation: it moves and deletes zero files, marks the unsafe session dead, and lets the
+existing replacement flow preserve the prior session id and continuation brief. The read-only
+`session -WorkspaceHealth` command reports active violations, `migration_complete`, and the stricter
+`defender_exclusion_ready` gate. The latter is true only when no active binding is under OneDrive
+and every active folder binding is covered by the reported canonical root, making it suitable
+evidence before approving a narrow Defender exclusion for that exact root.
+
+The out-of-process supervisor reads the same health verdict every tick. Any active OneDrive-backed
+binding is logged and surfaced as `WORKSPACE-ONEDRIVE`; it is never silently collapsed into the
+schedule's `HEALTHY` state and never causes the supervisor to move or delete workspace data.
+
 The PowerShell-side mutchecks parallel the JS ones. Files such as
 `plugins/overnight-agent/skills/overnight-agent/mutcheck-priority-order.ps1`,
 `plugins/overnight-agent/skills/overnight-agent/mutcheck-pacing-concurrency.ps1`,

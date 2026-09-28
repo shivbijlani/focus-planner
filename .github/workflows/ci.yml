@@ -173,6 +173,9 @@ jobs:
       - name: Mutation check (the session verdict verifies its workspace)
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-workspace-verdict.ps1
+      - name: Mutation check (folder task workspace isolation and migration)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-task-workspace.ps1
       # The write side of the same field (GH #532). `session.last_woken_at` was maintained by
       # nothing but a sentence of prose in PHASE 1, and a run that skipped it broke two guards in
       # opposite directions: the turn guard refused every author, and the capacity view parked a
@@ -1403,6 +1406,9 @@ jobs:
       - name: Mutation check (a real leak fires; a busy-but-healthy machine stays quiet)
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-supervisor-resource.ps1
+      - name: Mutation check (supervisor flags active OneDrive task bindings)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-supervisor-workspace.ps1
   # session-state has never been pruned (GH #481).
   #
   # Measured 2026-09-04: 4,120 directories, 2.56 GB, oldest file 27 April, and 500

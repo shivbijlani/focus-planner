@@ -93,6 +93,8 @@
           [-SessionProject <p>] The project the session must be created in -- the repository
                                 project for a code task, NOT the run session's project.
           [-SessionWorkspace <p>] The worktree/branch/folder path the session works in.
+                                Folder sessions default to
+                                `%LOCALAPPDATA%\overnight-agent\workspaces\task-<id>`.
           [-WorkspaceType <t>]  `worktree` | `branch` | `folder`. Defaults from -SessionKind.
           [-RunWorkspace <p>]   This run session's own workspace, so a bind that would reuse it
                                 can be refused. Defaults to the current directory.
@@ -105,6 +107,11 @@
           [-DispatchInput hash] Refuse a brief prepared against changed journal/task inputs.
           [-SessionRelease]     Retire the binding (task finished, workspace torn down). Prints
                                 the teardown command; never runs it.
+          [-WorkspaceHealth]    Audit active bindings. Reports OneDrive violations and whether
+                                migration/Defender-exclusion gates are clear.
+          [-MigrateOneDriveBindings]
+                                Mark active OneDrive bindings dead so the normal replacement path
+                                preserves their prior session id. Never moves or deletes files.
           [-RunLimit]           Omit -Id to read this run's maximum outstanding normal requests.
           [-InFlight]           Legacy alias for -RunLimit. Reports no in-flight count.
           [-Concurrency <n>]    Override the `Overnight Agent concurrency` setting for one call.
@@ -590,6 +597,8 @@ param(
   # The path of a workspace that has just been REMOVED. Marks any binding pointing at it dead,
   # so the next verdict is `replace` rather than `reuse` at a workspace that is gone (#452).
   [string]$WorkspaceGone,
+  [switch]$WorkspaceHealth,
+  [switch]$MigrateOneDriveBindings,
   [switch]$InFlight,
   # Overrides the `Overnight Agent concurrency` settings row for one invocation. -1 is the
   # "not specified" sentinel; see Resolve-PacingSettings for the precedence.
@@ -4823,6 +4832,99 @@ function Test-SamePath([string]$a, [string]$b) {
   return [string]::Equals($na, $nb, [StringComparison]::OrdinalIgnoreCase)
 }
 
+function ConvertTo-WorkspacePath([string]$path) {
+  if (-not $path) { return '' }
+  $expanded = [Environment]::ExpandEnvironmentVariables($path)
+  try {
+    if (Test-Path -LiteralPath $expanded) {
+      return (Resolve-Path -LiteralPath $expanded -ErrorAction Stop).Path.TrimEnd('\')
+    }
+  } catch { }
+  try { return [IO.Path]::GetFullPath($expanded).TrimEnd('\') }
+  catch { return ($expanded -replace '/', '\').TrimEnd('\') }
+}
+
+function Test-PathUnderRoot([string]$path, [string]$root) {
+  $candidate = ConvertTo-WorkspacePath $path
+  $parent = ConvertTo-WorkspacePath $root
+  if (-not $candidate -or -not $parent) { return $false }
+  if ([string]::Equals($candidate, $parent, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  return $candidate.StartsWith(($parent + '\'), [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-OneDriveRoots {
+  $candidates = @(
+    $env:OneDrive,
+    $env:OneDriveConsumer,
+    $env:OneDriveCommercial
+  )
+  if ($env:USERPROFILE -and (Test-Path -LiteralPath $env:USERPROFILE -PathType Container)) {
+    $candidates += @(Get-ChildItem -LiteralPath $env:USERPROFILE -Directory -Filter 'OneDrive*' `
+      -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+  }
+  @($candidates | Where-Object { $_ } | ForEach-Object { ConvertTo-WorkspacePath "$_" } |
+    Where-Object { $_ } | Sort-Object -Unique)
+}
+
+function Get-CanonicalWorkspaceRoot {
+  if (-not $env:LOCALAPPDATA) {
+    throw 'session_localappdata_required: LOCALAPPDATA is required for isolated folder workspaces'
+  }
+  ConvertTo-WorkspacePath (Join-Path $env:LOCALAPPDATA 'overnight-agent\workspaces')
+}
+
+function Get-CanonicalTaskWorkspace([string]$taskId) {
+  Join-Path (Get-CanonicalWorkspaceRoot) "task-$taskId"
+}
+
+function Get-OneDriveRootForPath([string]$path) {
+  foreach ($root in @(Get-OneDriveRoots)) {
+    if (Test-PathUnderRoot $path $root) { return $root }
+  }
+  return $null
+}
+
+function Get-WorkspaceBindingHealth {
+  $canonicalRoot = Get-CanonicalWorkspaceRoot
+  $active = @()
+  $retiredLegacy = @()
+  if (Test-Path -LiteralPath $StateDir) {
+    foreach ($f in (Get-ChildItem -LiteralPath $StateDir -Filter 'task-*.json' -File -ErrorAction SilentlyContinue)) {
+      try { $obj = Get-Content -Raw -LiteralPath $f.FullName | ConvertFrom-Json } catch { continue }
+      $s = Get-SessionState $obj
+      if (-not $s -or -not "$($s.workspace)") { continue }
+      $oneDriveRoot = Get-OneDriveRootForPath "$($s.workspace)"
+      $row = [pscustomobject]@{
+        id = "$($obj.id)"
+        session_id = "$($s.session_id)"
+        kind = "$($s.kind)"
+        state = "$($s.state)"
+        workspace = (ConvertTo-WorkspacePath "$($s.workspace)")
+        oneDrive_root = $oneDriveRoot
+        canonical_folder = [bool]("$($s.kind)" -eq 'folder' -and
+          (Test-PathUnderRoot "$($s.workspace)" $canonicalRoot))
+      }
+      if ("$($s.state)" -eq 'live') { $active += $row }
+      elseif ($oneDriveRoot) { $retiredLegacy += $row }
+    }
+  }
+  $oneDriveActive = @($active | Where-Object { $_.oneDrive_root })
+  $nonCanonicalFolders = @($active | Where-Object { $_.kind -eq 'folder' -and -not $_.canonical_folder })
+  [pscustomobject]@{
+    canonical_root = $canonicalRoot
+    active_bindings = $active.Count
+    active_onedrive_count = $oneDriveActive.Count
+    active_onedrive = $oneDriveActive
+    active_noncanonical_folder_count = $nonCanonicalFolders.Count
+    active_noncanonical_folders = $nonCanonicalFolders
+    retired_legacy_count = $retiredLegacy.Count
+    migration_complete = [bool]($oneDriveActive.Count -eq 0)
+    # A Defender exclusion for this one narrow root is only complete when every active folder
+    # binding is actually covered by it. Code worktrees remain outside this root by design.
+    defender_exclusion_ready = [bool]($oneDriveActive.Count -eq 0 -and $nonCanonicalFolders.Count -eq 0)
+  }
+}
+
 function Get-SessionState($st) {
   if ($st -and $st.PSObject.Properties['session'] -and $st.session -and "$($st.session.session_id)") {
     return $st.session
@@ -5031,9 +5133,51 @@ function Cmd-Session {
       } | ConvertTo-Json -Depth 4)
   }
 
+  if ($WorkspaceHealth) {
+    return (Get-WorkspaceBindingHealth | ConvertTo-Json -Depth 8)
+  }
+
+  if ($MigrateOneDriveBindings) {
+    $migrated = @()
+    if (Test-Path -LiteralPath $StateDir) {
+      foreach ($f in (Get-ChildItem -LiteralPath $StateDir -Filter 'task-*.json' -File -ErrorAction SilentlyContinue)) {
+        try { $obj = Get-Content -Raw -LiteralPath $f.FullName | ConvertFrom-Json } catch { continue }
+        $s = Get-SessionState $obj
+        if (-not $s -or "$($s.state)" -ne 'live') { continue }
+        $oneDriveRoot = Get-OneDriveRootForPath "$($s.workspace)"
+        if (-not $oneDriveRoot) { continue }
+        $target = if ("$($s.kind)" -eq 'folder') { Get-CanonicalTaskWorkspace "$($obj.id)" } else { $null }
+        $newSess = New-SessionObject -SessionIdValue "$($s.session_id)" -Kind "$($s.kind)" `
+          -Project "$($s.project)" -Workspace "$($s.workspace)" -WsType "$($s.workspace_type)" `
+          -CreatedAt $s.created_at -LastWokenAt $s.last_woken_at -SessionState 'dead' `
+          -PriorSessionId "$($s.prior_session_id)" -ReplacedAt $s.replaced_at
+        Set-Member $obj 'session' $newSess
+        Set-Member $obj 'updated' (Now-Iso)
+        Write-State $obj
+        $migrated += [pscustomobject]@{
+          id = "$($obj.id)"
+          session_id = "$($s.session_id)"
+          legacy_workspace = (ConvertTo-WorkspacePath "$($s.workspace)")
+          replacement_workspace = $target
+          verdict = 'replace'
+          kickoff_continuation = (Get-KickoffContinuation "$($obj.id)" "$($s.session_id)")
+        }
+      }
+    }
+    return ([pscustomobject]@{
+      migrated_count = $migrated.Count
+      migrated = $migrated
+      files_moved = 0
+      files_deleted = 0
+      health = Get-WorkspaceBindingHealth
+    } | ConvertTo-Json -Depth 8)
+  }
+
   # No task/session enumeration: this is drain width, not a global occupancy estimate.
   if (-not $Id) {
-    if (-not ($RunLimit -or $InFlight)) { throw 'session requires -Id (or -RunLimit, or -WorkspaceGone for teardown)' }
+    if (-not ($RunLimit -or $InFlight)) {
+      throw 'session requires -Id (or -RunLimit, -WorkspaceGone, -WorkspaceHealth, or -MigrateOneDriveBindings)'
+    }
     return (Get-RunLimit | ConvertTo-Json -Depth 4)
   }
 
@@ -5091,7 +5235,10 @@ function Cmd-Session {
 
     $kind = if ($SessionKind) { $SessionKind } elseif ($sess) { "$($sess.kind)" } else { 'folder' }
     $project = if ($SessionProject) { $SessionProject } elseif ($sess) { "$($sess.project)" } else { '' }
-    $workspace = if ($SessionWorkspace) { $SessionWorkspace } elseif ($sess) { "$($sess.workspace)" } else { '' }
+    $workspace = if ($SessionWorkspace) { $SessionWorkspace }
+      elseif ($kind -eq 'folder') { Get-CanonicalTaskWorkspace $Id }
+      elseif ($sess) { "$($sess.workspace)" }
+      else { '' }
     $wsType = if ($WorkspaceType) { $WorkspaceType } elseif ($sess -and "$($sess.workspace_type)") { "$($sess.workspace_type)" }
     elseif ($kind -eq 'code') { 'worktree' } else { 'folder' }
 
@@ -5118,6 +5265,21 @@ function Cmd-Session {
           'workspace. One task, one workspace -- sharing one deadlocks the sessions and reproduces ' +
           'the very isolation failure #404 exists to prevent.')
       }
+    }
+
+    if (-not $workspace) {
+      throw 'session_workspace_required: every task session must have an isolated workspace'
+    }
+    $oneDriveRoot = Get-OneDriveRootForPath $workspace
+    if ($oneDriveRoot) {
+      throw ("session_workspace_onedrive: workspace '$workspace' resolves under OneDrive root " +
+        "'$oneDriveRoot'. Task workspaces must be local-only; use " +
+        "'$(Get-CanonicalTaskWorkspace $Id)' for a folder task.")
+    }
+    if ($kind -eq 'folder') {
+      try { New-Item -ItemType Directory -Path $workspace -Force -ErrorAction Stop | Out-Null }
+      catch { throw "session_workspace_create_failed: could not create '$workspace': $_" }
+      $workspace = ConvertTo-WorkspacePath $workspace
     }
 
     # Binding is identity, not admission. New/replacement sessions are created idle and sent

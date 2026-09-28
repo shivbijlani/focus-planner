@@ -111,6 +111,10 @@ param(
   # mutcheck-supervisor.ps1 predates this and reimplements the classifier, which is exactly the
   # weakness this avoids.
   [string]$ResourceFactsJson,
+  # Fixture/replay input for the task-workspace safety arm (GH #547). When omitted, the
+  # supervisor asks oa-state.ps1 for a read-only audit of the live binding store.
+  [string]$WorkspaceFactsJson,
+  [string]$WorkspaceStateDir,
   [switch]$Json
 )
 
@@ -128,6 +132,48 @@ function Write-Log([hashtable]$Record) {
     $Record['ts'] = $NowUtc.ToString('o')
     ($Record | ConvertTo-Json -Compress -Depth 6) | Add-Content -Path $LogPath -Encoding utf8
   } catch { }   # logging must never be the reason supervision fails
+}
+
+function Get-WorkspaceSafetyVerdict($Health) {
+  if ($null -eq $Health) {
+    return @{ state = 'WORKSPACE-UNKNOWN'; detail = 'task workspace binding audit unavailable' }
+  }
+  $count = [int]$Health.active_onedrive_count
+  if ($count -gt 0) {
+    $tasks = @($Health.active_onedrive | ForEach-Object { "#$($_.id)" }) -join ', '
+    return @{
+      state = 'WORKSPACE-ONEDRIVE'
+      detail = "$count active task binding(s) resolve under OneDrive: $tasks"
+    }
+  }
+  return @{
+    state = 'HEALTHY'
+    detail = 'no active task binding resolves under OneDrive'
+  }
+}
+
+function Read-WorkspaceBindingHealth {
+  if ($WorkspaceFactsJson) {
+    if (-not (Test-Path -LiteralPath $WorkspaceFactsJson)) {
+      throw "workspace facts file not found: $WorkspaceFactsJson"
+    }
+    return ([IO.File]::ReadAllText($WorkspaceFactsJson, (New-Object Text.UTF8Encoding($false))) |
+      ConvertFrom-Json)
+  }
+
+  $candidates = @(
+    (Join-Path $PSScriptRoot '..\skills\overnight-agent\oa-state.ps1'),
+    (Join-Path $PSScriptRoot 'oa-state.ps1'),
+    (Join-Path $OaHome 'oa-state.ps1'),
+    (Join-Path $env:USERPROFILE '.copilot\installed-plugins\focus-planner\overnight-agent\skills\overnight-agent\oa-state.ps1')
+  )
+  $subject = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+  if (-not $subject) { throw 'oa-state.ps1 not found for workspace binding audit' }
+  $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $subject, 'session', '-WorkspaceHealth')
+  if ($WorkspaceStateDir) { $args += @('-StateDir', $WorkspaceStateDir) }
+  $text = (& pwsh @args 2>&1 | Out-String)
+  if ($LASTEXITCODE -ne 0) { throw "workspace binding audit failed: $text" }
+  return ($text | ConvertFrom-Json)
 }
 
 # --- the classifier is a pure function of (newest run, now) so it is unit-testable ---
@@ -477,6 +523,16 @@ if ($verdict.state -eq 'HEALTHY' -and $resVerdict.state -ne 'HEALTHY') {
               -HasHungAlive $false -AppRunning $appRunning
 }
 
+# A schedule can be firing perfectly while every browser artifact is still being written into
+# OneDrive. Keep this as an independent health arm: it never restarts the app or mutates bindings,
+# but an active unsafe binding outranks a green schedule in the visible/logged state.
+$workspaceHealth = $null
+try { $workspaceHealth = Read-WorkspaceBindingHealth } catch { }
+$workspaceVerdict = Get-WorkspaceSafetyVerdict $workspaceHealth
+if ($workspaceVerdict.state -eq 'WORKSPACE-ONEDRIVE') {
+  $verdict = @{ state = $workspaceVerdict.state; detail = $workspaceVerdict.detail; ageMin = $verdict.ageMin }
+}
+
 # ---------------------------------------------------------------- anti-loop cooldown --
 # One incident (state + the run it is about) may drive at most one restart per cooldown,
 # so a state that keeps looking stuck cannot become a reboot loop.
@@ -538,6 +594,15 @@ $result = @{
     queueLength = $resVerdict.queue
     sampled     = [bool]($null -ne $resSample)
     replayed    = [bool]$ResourceFactsJson
+  }
+  workspace      = @{
+    state                     = $workspaceVerdict.state
+    detail                    = $workspaceVerdict.detail
+    activeOneDriveCount       = $(if ($workspaceHealth) { [int]$workspaceHealth.active_onedrive_count } else { $null })
+    migrationComplete         = $(if ($workspaceHealth) { [bool]$workspaceHealth.migration_complete } else { $false })
+    defenderExclusionReady    = $(if ($workspaceHealth) { [bool]$workspaceHealth.defender_exclusion_ready } else { $false })
+    canonicalRoot             = $(if ($workspaceHealth) { "$($workspaceHealth.canonical_root)" } else { $null })
+    replayed                  = [bool]$WorkspaceFactsJson
   }
   thresholds     = @{ stuckMin = $StuckMinutes; deadMin = $DeadMinutes; restartCooldownMin = $RestartCooldownMinutes }
 }
