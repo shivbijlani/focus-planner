@@ -162,7 +162,15 @@
     reuse    bound and live. Wake THAT session. Do not create a second one.
     replace  bound but marked dead by a previous `-SessionDead`. Create a fresh session whose
              kickoff is `kickoff_continuation` (emitted verbatim), which names the task and the
-             prior session id, then bind it -- which records `prior_session_id`.
+             prior session id, then bind it -- which records `prior_session_id` and appends the
+             outgoing session to the `prior_session_ids` lineage.
+
+  A BIND MAY ONLY MOVE FORWARD (#562). Replacement is a chain, never a cycle: a session id this
+  task has already retired can never become its binding again. Measured on task #471, where the
+  chain b94abe44 -> 42d1a304 -> 9294bd58 was written back onto 42d1a304 with 9294bd58 recorded as
+  its PRIOR -- the successor filed as the ancestor's predecessor, nine minutes after the successor
+  already existed. The newest session was orphaned while still charged against capacity (#345),
+  and every subsequent `replace` could flip the binding instead of advancing it.
 
   TWO REFUSALS CARRY THE WEIGHT, and both fail closed.
 
@@ -170,6 +178,11 @@
                             persisted session" is a suggestion: the second session gets created
                             anyway and simply overwrites the pointer to the first, which then
                             leaks (#345) with nothing recording that it ever existed.
+
+    session_bind_backwards  Binding an id already present in the task's retired lineage. Unlike
+                            the conflict above this is NOT overridable by -Force: a conflict can
+                            be a legitimate operator override, whereas re-binding a retired
+                            ancestor has no correct use. Recover with -SessionRelease.
 
     session_workspace_inherited   A `code` bind whose workspace is the RUN SESSION's own. This is
                             not hypothetical: the first attempt to delegate #404 called the
@@ -5075,7 +5088,7 @@ function New-SessionObject {
   param(
     [string]$SessionIdValue, [string]$Kind, [string]$Project, [string]$Workspace,
     [string]$WsType, $CreatedAt, $LastWokenAt, [string]$SessionState,
-    [string]$PriorSessionId, $ReplacedAt
+    [string]$PriorSessionId, $ReplacedAt, [string[]]$PriorSessionIds
   )
   [pscustomobject]@{
     session_id       = $SessionIdValue
@@ -5096,8 +5109,29 @@ function New-SessionObject {
     # without it the replacement is indistinguishable from a first-ever session, which is the
     # cold start the whole binding exists to remove.
     prior_session_id = $PriorSessionId
+    # #562: the WHOLE lineage, oldest first, not just the immediate predecessor. A single slot
+    # cannot answer "has this id already been retired?" -- after 1 -> 2 -> 3 it remembers only 2,
+    # so a bind back onto 1 (or, as measured on task #471, back onto 2) looks like an ordinary
+    # replacement. Keeping the full chain is what makes the forward-only rule decidable at all.
+    prior_session_ids = @($PriorSessionIds | Where-Object { "$_" })
     replaced_at      = (ConvertTo-IsoText $ReplacedAt)
   }
+}
+
+function Get-SessionLineage($sess) {
+  # Every session id this task has already retired, oldest first. Records written before #562
+  # carry only `prior_session_id`; that single id is the lineage we can still prove, so it is
+  # used rather than treating the absent array as "no history" -- which would re-open the cycle
+  # on exactly the tasks that already have one.
+  if (-not $sess) { return @() }
+  $ids = @()
+  if ($sess.PSObject.Properties['prior_session_ids'] -and $sess.prior_session_ids) {
+    $ids += @($sess.prior_session_ids | ForEach-Object { "$_" } | Where-Object { $_ })
+  }
+  if ("$($sess.prior_session_id)" -and $ids -notcontains "$($sess.prior_session_id)") {
+    $ids += "$($sess.prior_session_id)"
+  }
+  return @($ids)
 }
 
 function Test-SamePath([string]$a, [string]$b) {
@@ -5485,7 +5519,8 @@ function Cmd-Session {
         $newSess = New-SessionObject -SessionIdValue "$($s.session_id)" -Kind "$($s.kind)" `
           -Project "$($s.project)" -Workspace "$($s.workspace)" -WsType "$($s.workspace_type)" `
           -CreatedAt $s.created_at -LastWokenAt $s.last_woken_at -SessionState 'dead' `
-          -PriorSessionId "$($s.prior_session_id)" -ReplacedAt $s.replaced_at
+          -PriorSessionId "$($s.prior_session_id)" -ReplacedAt $s.replaced_at `
+          -PriorSessionIds (Get-SessionLineage $s)
         Set-Member $obj 'session' $newSess
         # Set-Member, not a direct assignment: a state object written by an older version (or a
         # hand-built one) may not carry `updated` at all, and assigning to an absent property
@@ -5541,11 +5576,29 @@ function Cmd-Session {
     $sess = New-SessionObject -SessionIdValue "$($sess.session_id)" -Kind "$($sess.kind)" `
       -Project "$($sess.project)" -Workspace "$($sess.workspace)" -WsType "$($sess.workspace_type)" `
       -CreatedAt $sess.created_at -LastWokenAt $sess.last_woken_at -SessionState 'dead' `
-      -PriorSessionId "$($sess.prior_session_id)" -ReplacedAt $sess.replaced_at
+      -PriorSessionId "$($sess.prior_session_id)" -ReplacedAt $sess.replaced_at `
+      -PriorSessionIds (Get-SessionLineage $sess)
     $dirty = $true
   }
   elseif ($SessionId) {
     $prior = ''
+    $lineage = @(Get-SessionLineage $sess)
+    if ($sess -and "$($sess.session_id)" -ne $SessionId -and $lineage -contains $SessionId) {
+      # #562: a bind may only move FORWARD. Measured on task #471: the chain ran
+      # b94abe44 -> 42d1a304 -> 9294bd58, and then the binding was written back onto 42d1a304
+      # with 9294bd58 recorded as its PRIOR -- the successor filed as the ancestor's predecessor.
+      # That is a cycle, not a chain: the newest session is orphaned, its slot stays charged, and
+      # the next `replace` can flip it straight back.
+      #
+      # Deliberately NOT overridable by -Force. -Force exists to escape a binding that is merely
+      # inconvenient; there is no state of the world in which re-binding an already-retired
+      # ancestor is the right answer, so an escape hatch here would only make the cycle reachable
+      # again. Recover by releasing the task (-SessionRelease) and binding a genuinely new session.
+      throw ("session_bind_backwards: task $Id already retired session $SessionId " +
+        "(lineage: $($lineage -join ' -> ')); refusing to re-bind it over $($sess.session_id). " +
+        'A replacement must be a session this task has never used. If the current binding is ' +
+        'genuinely finished, release it with -SessionRelease and bind a new session.')
+    }
     if ($sess -and "$($sess.session_id)" -ne $SessionId) {
       if ("$($sess.state)" -ne 'dead' -and -not $Force) {
         # The refusal that makes "reuse the persisted session" a rule rather than an intention.
@@ -5557,8 +5610,10 @@ function Cmd-Session {
           'cannot be woken, record that with -SessionDead first -- that is the replacement path, ' +
           'and it is what carries the continuation into the new session.')
       }
-      # Replacing a dead one: the prior id is the continuity record.
+      # Replacing a dead one: the prior id is the continuity record, and the outgoing id joins
+      # the lineage so it can never be re-bound to this task (#562).
       $prior = "$($sess.session_id)"
+      if ($lineage -notcontains $prior) { $lineage = @($lineage) + $prior }
     }
     elseif ($sess) { $prior = "$($sess.prior_session_id)" }
 
@@ -5607,7 +5662,8 @@ function Cmd-Session {
     $sess = New-SessionObject -SessionIdValue $SessionId -Kind $kind -Project $project `
       -Workspace $workspace -WsType $wsType -CreatedAt $created `
       -LastWokenAt $(if ($sess -and "$($sess.session_id)" -eq $SessionId) { $sess.last_woken_at } else { '' }) `
-      -SessionState 'live' -PriorSessionId $prior -ReplacedAt $replacedAt
+      -SessionState 'live' -PriorSessionId $prior -ReplacedAt $replacedAt `
+      -PriorSessionIds $lineage
     $dirty = $true
   }
 
@@ -5617,7 +5673,8 @@ function Cmd-Session {
     $sess = New-SessionObject -SessionIdValue "$($sess.session_id)" -Kind "$($sess.kind)" `
       -Project "$($sess.project)" -Workspace "$($sess.workspace)" -WsType "$($sess.workspace_type)" `
       -CreatedAt $sess.created_at -LastWokenAt (Now-Iso) -SessionState 'live' `
-      -PriorSessionId "$($sess.prior_session_id)" -ReplacedAt $sess.replaced_at
+      -PriorSessionId "$($sess.prior_session_id)" -ReplacedAt $sess.replaced_at `
+      -PriorSessionIds (Get-SessionLineage $sess)
     $dirty = $true
   }
 
@@ -5649,6 +5706,9 @@ function Cmd-Session {
     # #728: why a bound session reads `replace`. Derived from session-state on each call.
     process_dead = $sessionProcessDead
     prior_session_id = if ($sess -and "$($sess.prior_session_id)") { "$($sess.prior_session_id)" } else { $null }
+    # #562: every id this task has retired, oldest first. Emitted so a caller can see WHY a bind
+    # was refused without opening the state file, and so the cycle is visible if one ever recurs.
+    prior_session_ids = @(Get-SessionLineage $sess)
     created_at     = if ($sess) { (ConvertTo-IsoText $sess.created_at) } else { $null }
     last_woken_at  = if ($sess -and $sess.last_woken_at) { (ConvertTo-IsoText $sess.last_woken_at) } else { $null }
     released       = [bool]$released
