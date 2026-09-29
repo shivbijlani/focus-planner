@@ -95,6 +95,15 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-set-playwright-browser-profiles.ps1
 
+  machine-hygiene:
+    name: Opt-in machine hygiene
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: WhatIf and cache-only exclusion mutcheck
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-machine-hygiene.ps1
+
   # PHASE 0's mandated inbox check (GH #346) is the user's out-of-band channel into an
   # overnight run, and its old implementation could not fail: a search on an unhealthy
   # email client returns `[]`, which is byte-identical to a genuinely empty mailbox. This
