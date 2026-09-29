@@ -155,25 +155,19 @@ Assert ($f.out -match '\[mirror\] digest=') 'BANNER2' 'and on the recovering run
 Write-Host ''
 Write-Host 'THE PIN -- run-sweeps.ps1 reads this file by regex, so the line must stay readable'
 
-# MEASURED REGRESSION, 2026-09-24. This fix (#613) originally rewrote the bridge assignment
-# as `$Bridge = if ($BridgePath) { ... } else { '...' }` to add a test seam. That is correct
-# PowerShell and completely invisible to run-sweeps.ps1, which derives BRIDGE_SRC from this
-# exact file with `^\s*\$Bridge\s*=\s*'([^']+)'`.
-#
-# Nothing failed. run-sweeps.ps1 fell through to its built-in default, which points at a
-# RETIRED worktree that still exists on disk, so the preflight passed and every sweep ran
-# against a stale bridge source and reported normally. A wrong answer shaped exactly like a
-# right one -- the class this whole suite exists to catch, introduced by a change made to
-# improve testability.
-#
-# The lesson is the one this codebase keeps relearning: a rule that lives only in a comment
-# is prose. So the coupling is asserted here, against the REAL reader's REAL pattern, rather
-# than described above the line.
+# Keep the deployed OA-home path as a literal, rather than a calculated default, because
+# run-sweeps.ps1 reads it from this file to measure the same bridge build as PHASE 3.
 $mirrorSrc = Get-Content $ScriptPath -Raw
 $pinRe = "(?m)^\s*\`$Bridge\s*=\s*'([^']+)'"
 $pinMatch = [regex]::Match($mirrorSrc, $pinRe)
 Assert $pinMatch.Success 'PIN' 'the bridge pin is a plain literal run-sweeps.ps1 can still read by regex' ($(if ($pinMatch.Success) { $pinMatch.Value.Trim() } else { 'NO MATCH -- run-sweeps.ps1 would silently use a retired worktree' }))
-Assert ($pinMatch.Success -and $pinMatch.Groups[1].Value -match 'telegram-bridge') 'PIN2' 'and it resolves to a telegram-bridge path, not to something else entirely' ($(if ($pinMatch.Success) { $pinMatch.Groups[1].Value } else { '(no pin)' }))
+Assert ($pinMatch.Success -and $pinMatch.Groups[1].Value -eq '%LOCALAPPDATA%\overnight-agent\telegram-bridge\bin\telegram-bridge.js') `
+  'PIN2' 'the default is the deployed package path, not a development checkout' `
+  ($(if ($pinMatch.Success) { $pinMatch.Groups[1].Value } else { '(no pin)' }))
+$settings = Join-Path $PSScriptRoot '..\skills\overnight-agent\user-settings.md'
+$settingsContent = Get-Content $settings -Raw
+Assert ($settingsContent -match '\| Bridge CLI \| `%LOCALAPPDATA%\\overnight-agent\\telegram-bridge\\bin\\telegram-bridge\.js`') `
+  'PIN_SETTINGS' 'the documented Bridge CLI default matches the deployed runtime path' ''
 
 # Paired with the arms above: the override must STILL work, or the readable form was bought
 # by giving up the testability the parameter exists for.
@@ -193,6 +187,8 @@ if (Test-Path $sweeps) {
   else {
     Assert $false 'PIN4' "could not locate run-sweeps.ps1's pin reader -- the coupling is unverified" ''
   }
+  Assert ($sweepSrc -match '\[Environment\]::ExpandEnvironmentVariables') `
+    'PIN5' 'the sweep reader expands the deployed path using this Windows profile' ''
 }
 
 Write-Host ''

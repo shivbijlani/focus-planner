@@ -51,8 +51,8 @@ if (-not (Test-Path $PlannerPath)) { throw "Planner folder not found: $PlannerPa
 
 # The CLI ships in the repo, not in the deployed plugin tree: it imports the app's
 # journal reader and the bridge's status/ask parsers, so it has to run from a checkout
-# where those exist. Resolving it here (rather than hard-coding) keeps a pinned or
-# worktree checkout working, the same way the Telegram "Bridge CLI" row does.
+# where those exist. Resolving it here (rather than hard-coding) keeps a configured
+# repository or worktree checkout working.
 if (-not $Repo) {
   $Repo = if ($env:FOCUS_PLANNER_REPO) { $env:FOCUS_PLANNER_REPO } else { 'V:\repos\focus-planner' }
 }

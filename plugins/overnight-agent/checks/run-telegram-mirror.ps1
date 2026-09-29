@@ -25,14 +25,9 @@
   the pre-scan fold still goes through this wrapper rather than a hand-rolled command
   line (which is exactly how the General-thread flood keeps happening).
 
-  WHY $Bridge POINTS AT main, NOT AT A WORKTREE
-  --------------------------------------------
-  This used to pin the bridge to the `oa-block-stray-marker` worktree, because that
-  branch carried digest/ordering fixes that `main` did not have. Those fixes are now
-  merged: `git diff origin/main oa-block-stray-marker -- packages/telegram-bridge/src`
-  is EMPTY, so the pin bought nothing and cost a second, invisible deploy target — a
-  merge into `main` (e.g. the #210/#211 ask-truncation split, #219) would not reach the
-  running bridge at all. Keep this pointed at the checkout so "merged" means "running".
+  The bridge package is deployed by PHASE 0 from origin/main into the OA home.
+  Running it from that copy means a dirty or stale development checkout cannot affect
+  phone replies, and the deployed code has already passed the sync's write verification.
 #>
 [CmdletBinding()]
 param(
@@ -55,25 +50,18 @@ $Settings    = if ($SettingsPath) { $SettingsPath } else { Join-Path $PlannerPat
 $ChatId      = '-1004310604015'
 $SecretTool  = if ($SecretToolPath) { $SecretToolPath } else { Join-Path $env:LOCALAPPDATA 'overnight-agent\secrets\telegram-secret.ps1' }
 
-# THE PINNED BRIDGE -- A PLAIN SINGLE-QUOTED LITERAL ON ONE LINE. DO NOT MAKE THIS
-# CONDITIONAL.
+# THE DEPLOYED BRIDGE -- KEEP A PLAIN SINGLE-QUOTED LITERAL ON ONE LINE.
 #
 # `run-sweeps.ps1` treats this line as the single source of truth for the bridge pin and
-# reads it OUT OF THIS FILE BY REGEX: `^\s*\$Bridge\s*=\s*'([^']+)'`. Deriving it that way
-# is deliberate -- it means a rollback of the pin applies to the sweep suite automatically
-# instead of drifting into a second copy.
+# reads it OUT OF THIS FILE BY REGEX: `^\s*\$Bridge\s*=\s*'([^']+)'`. It expands
+# `%LOCALAPPDATA%` before running the CLI.
 #
-# MEASURED 2026-09-24, and it is the reason this comment exists. #613 briefly rewrote this
-# as `$Bridge = if ($BridgePath) { ... } else { '...' }`, which is correct PowerShell and
-# invisible to that regex. run-sweeps.ps1 then fell through to its built-in default, which
-# points at `focus-planner.worktrees\oa-block-stray-marker` -- a RETIRED worktree that still
-# exists on disk. So the preflight did not throw: the whole sweep suite simply ran against a
-# stale bridge source and reported normally. A wrong answer that looks exactly like a right
-# one, which is the defect class this repo keeps recording.
+# Keep this as a literal so the sweep suite measures the same deployed package PHASE 3 runs.
 #
-# The override still exists for tests; it is applied on the NEXT line so this one stays
-# machine-readable.
-$Bridge = 'V:\repos\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js'
+# The override still exists for tests; it is applied after expansion so this line stays
+# machine-readable and the deployed default follows the current Windows profile.
+$Bridge = '%LOCALAPPDATA%\overnight-agent\telegram-bridge\bin\telegram-bridge.js'
+$Bridge = [Environment]::ExpandEnvironmentVariables($Bridge)
 if ($BridgePath) { $Bridge = $BridgePath }
 
 if (-not (Test-Path $Settings)) { throw "user-settings.md not found at $Settings" }

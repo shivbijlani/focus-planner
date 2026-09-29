@@ -7,18 +7,11 @@
 
       escalate      a live fix refused on consecutive cycles
       -not verified a file on the ref is still absent from the installed tree
-      oaHomeExit    the OA home sync could not finish clean
-      checkoutExit  the BRIDGE CHECKOUT is dirty or not on the ref
+      oaHomeExit    the OA-home commands sync did not finish cleanly
+      bridgeExit    the Telegram bridge package did not finish its verified sync
 
-  Only the first three are about DEPLOYMENT. The fourth is about a third working tree that
-  this script fast-forwards but does not deploy into. They shared one exit code and one
-  sentence -- "merged code may not be running" -- so a dirty checkout was reported, live and
-  to every coordinator for days, as a deployment failure while both copied targets read
-  `verified-current True`, residual drift 0, `0 to write, 283 already current`.
-
-  The code WAS installed and running. The only true fact was that another session had
-  uncommitted supervisor work in the shared checkout, which the script rightly refused to
-  fast-forward over.
+  The development checkout is not a deploy target and is never inspected or modified.
+  Deployment status is based only on the installed plugin and the two OA-home copies.
 
   WHY THE QUIET DIRECTION IS THE DANGEROUS ONE, AND IS ARMED HARDEST
 
@@ -77,17 +70,18 @@ $src = [IO.File]::ReadAllText($ScriptPath)
 $script:CanRunSubject = ($env:OS -eq 'Windows_NT') -or ($PSVersionTable.Platform -eq 'Win32NT') -or ($null -eq $PSVersionTable.Platform)
 
 Write-Host ''
-Write-Host 'SHAPE -- the verdict must be a separate fact from "does a human need to look?"'
+Write-Host 'SHAPE -- the deployment verdict covers every deployed target'
 
 # Asserted against the SOURCE, not only behaviour: these two questions being one variable
 # is the defect itself, so the separation has to be structural rather than incidental.
 Assert ($src -match '\$deploymentOk\s*=') 'SPLIT' 'a deployment-only verdict exists, distinct from needsAttention' ''
-Assert ($src -match '\$deploymentOk\s*=\s*\$verified\s*-and') 'SCOPE' 'and it is built from the copied targets' ''
-Assert ($src -notmatch '\$deploymentOk\s*=[^\r\n]*checkoutExit') 'EXCLUDES' 'while deliberately EXCLUDING the bridge checkout, which it does not deploy into' ''
+Assert ($src -match '\$deploymentOk\s*=\s*\$verified\s*-and') 'SCOPE' 'and it starts with verified installed-plugin state' ''
+Assert ($src -match '\$deploymentOk\s*=[^\r\n]*\$bridgeExit') 'BRIDGE' 'and includes the deployed Telegram package result' ''
+Assert ($src -notmatch 'checkoutExit|bridge checkout fast-forward') 'NO_CHECKOUT' 'the development checkout is not treated as a deploy target' ''
 Assert ($src -match 'deploymentOk\s*=\s*\$deploymentOk') 'JSON' 'and it is exposed in the JSON a consumer can quote' ''
 
 Write-Host ''
-Write-Host 'BENIGN -- a dirty third checkout must not be called a deployment failure'
+Write-Host 'BENIGN -- the development checkout is outside the deployment verdict'
 
 if (-not $script:CanRunSubject) {
   Write-Host '  SKIP  BENIGN / GENUINE  -- auto-deploy needs a real OA home and installed tree'
@@ -137,9 +131,7 @@ $live = Run $ScriptPath
 if ($live.out -match 'DEPLOYMENT OK') {
   Assert ($live.out -notmatch 'DEPLOYMENT NOT VERIFIED') 'BENIGN' 'a healthy deploy does not also print the failure sentence' (D $live)
   Assert ($live.out -match 'merged code IS installed') 'BENIGN2' 'and states plainly that the code is installed' (D $live)
-  if ($live.code -ne 0) {
-    Assert ($live.out -match 'ATTENTION is about the BRIDGE CHECKOUT') 'POINTS' 'exit 2 with a healthy deploy names the checkout as the reason' (D $live)
-  }
+  Assert ($live.out -notmatch 'BRIDGE CHECKOUT') 'NO_CHECKOUT_WARNING' 'deployment output does not warn about the dev checkout' (D $live)
 }
 else {
   Write-Host '  SKIP  BENIGN  -- this machine did not reach the verdict (budget or real drift); nothing to assert'
@@ -157,10 +149,9 @@ Write-Host 'GENUINE -- a real deploy failure must still say so, in the same word
 # are found beside the script), so it dies before reaching the verdict and the arm proves
 # nothing -- which is exactly the vacuous arm this suite exists to avoid. The restore is
 # unconditional so an interrupted run cannot leave a forced failure on disk.
-$forced = $src.Replace(
-  '$deploymentOk = $verified -and ($oaHomeExit -eq 0) -and ($escalate.Count -eq 0)',
-  '$deploymentOk = $false')
-if ($forced -eq $src) { throw 'anchor not found: the deploymentOk assignment moved' }
+$failureAnchor = '$needsAttention = ($escalate.Count -gt 0) -or (-not $verified) -or ($oaHomeExit -ne 0) -or ($bridgeExit -ne 0)'
+$forced = $src.Replace($failureAnchor, ('$verified = $false' + "`r`n" + $failureAnchor))
+if ($forced -eq $src) { throw 'anchor not found: the deployment failure predicate moved' }
 
 $bad = $null
 try {
@@ -207,6 +198,6 @@ if ($script:fail -gt 0) {
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
   exit 1
 }
-Write-Host ("OK: {0} arms agreed. The benign case is quiet and the real alarm is unchanged." -f $script:pass) -ForegroundColor Green
+Write-Host ("OK: {0} arms agreed. The dev checkout is irrelevant and a failed deploy stays loud." -f $script:pass) -ForegroundColor Green
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 exit 0

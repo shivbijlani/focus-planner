@@ -62,20 +62,16 @@ $MirrorPs1   = Join-Path $OA 'run-telegram-mirror.ps1'
 $InstalledOaState = Join-Path $env:USERPROFILE '.copilot\installed-plugins\focus-planner\overnight-agent\skills\overnight-agent\oa-state.ps1'
 
 # --- Resolve the bridge pin from run-telegram-mirror.ps1 (single source of truth) ---
-# That wrapper holds the pinned worktree; deriving from it means a rollback of the
-# pin automatically applies here too, instead of drifting into a second copy.
+# That wrapper holds the deployed package path; deriving from it means the sweeps
+# measure the exact source PHASE 3 executes.
 $BridgeJs = $null
 if (Test-Path $MirrorPs1) {
   $m = Select-String -Path $MirrorPs1 -Pattern "^\s*\`$Bridge\s*=\s*'([^']+)'" | Select-Object -First 1
-  if ($m) { $BridgeJs = $m.Matches[0].Groups[1].Value }
+  if ($m) { $BridgeJs = [Environment]::ExpandEnvironmentVariables($m.Matches[0].Groups[1].Value) }
 }
 if (-not $BridgeJs) {
-  # THE PIN COULD NOT BE READ. This used to fall through to a hard-coded default and carry
-  # on with a warning, and that is not safe: the default points at
-  # `focus-planner.worktrees\oa-block-stray-marker`, a RETIRED worktree that still exists on
-  # disk. So the preflight below passed and the whole suite ran against a stale bridge
-  # source, reporting normally -- measured 2026-09-24, after #613 made the assignment in
-  # run-telegram-mirror.ps1 conditional and therefore invisible to the regex above.
+  # THE PIN COULD NOT BE READ. Carrying on against any other copy would make the sweeps
+  # measure code different from the deployed bridge, so fail before running them.
   #
   # A warning is not enough for this, because nothing downstream fails: every sweep still
   # runs, still prints, and still exits 0. The only symptom is that the answers came from
@@ -92,8 +88,7 @@ That line is the single source of truth for BRIDGE_SRC. It must stay a PLAIN
 single-quoted literal on one line -- a conditional assignment is valid PowerShell and
 invisible to this reader, which silently redirects every sweep at a retired worktree.
 
-Refusing rather than falling back to the built-in default, because that default resolves
-to a retired worktree that still exists on disk, so nothing downstream would fail.
+Refusing rather than guessing a different bridge source.
 "@
 }
 

@@ -218,9 +218,9 @@ console.log(rows.length)
 }
 
 function Invoke-Subject {
-  param([string]$ScriptPath, $Fx, [switch]$WhatIf, [string[]]$ExtraArgs = @())
+  param([string]$ScriptPath, $Fx, [switch]$WhatIf, [string[]]$ExtraArgs = @(), [string]$OaHome)
   $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath,
-            '-Ref', 'main', '-Repo', $Fx.Repo, '-OaHome', $Fx.Home,
+            '-Ref', 'main', '-Repo', $Fx.Repo, '-OaHome', $(if ($OaHome) { $OaHome } else { $Fx.Home }),
             '-StatePath', (Join-Path $Fx.Base 'state.json'), '-SkipFetch', '-SkipBackup', '-Json')
   if ($WhatIf) { $args += '-WhatIf' }
   if ($ExtraArgs) { $args += $ExtraArgs }
@@ -849,6 +849,48 @@ Set-Content -LiteralPath (Join-Path $fxM18.Home 'probe-manifest.json') -Value '[
 $rM18 = Invoke-Subject $m18 $fxM18
 $afterM18 = Get-Content -LiteralPath (Join-Path $fxM18.Home 'probe-manifest.json') -Raw
 Assert ($afterM18 -notmatch 'locally mutated') 'M18' 'without the refusal, genuinely local data IS overwritten (this is the whole point)'
+
+# --- T_BRIDGE_TREE: deploy the bridge package by ref without touching its live state ---
+function Add-BridgePackage {
+  param([string]$Repo)
+  $package = Join-Path $Repo 'packages/telegram-bridge'
+  New-Item -ItemType Directory -Path (Join-Path $package 'bin') -Force | Out-Null
+  New-Item -ItemType Directory -Path (Join-Path $package 'src') -Force | Out-Null
+  Set-Content -LiteralPath (Join-Path $package 'package.json') -Value '{"name":"telegram-bridge"}' -NoNewline -Encoding utf8
+  Set-Content -LiteralPath (Join-Path $package 'bin/telegram-bridge.js') -Value "import '../src/state.js'`n" -NoNewline -Encoding utf8
+  Set-Content -LiteralPath (Join-Path $package 'src/state.js') -Value "export const revision = 'v1'`n" -NoNewline -Encoding utf8
+  Push-Location $Repo
+  try {
+    & git add -A 2>&1 | Out-Null
+    & git commit --quiet -m 'bridge v1' 2>&1 | Out-Null
+    Set-Content -LiteralPath (Join-Path $package 'src/state.js') -Value "export const revision = 'v2'`n" -NoNewline -Encoding utf8
+    & git add -A 2>&1 | Out-Null
+    & git commit --quiet -m 'bridge v2' 2>&1 | Out-Null
+    & git branch -f main HEAD 2>&1 | Out-Null
+  } finally { Pop-Location }
+}
+
+$fxBridge = New-Fixture 'bridge-tree'
+Add-BridgePackage $fxBridge.Repo
+$bridgeHome = Join-Path $fxBridge.Base 'oahome/telegram-bridge'
+New-Item -ItemType Directory -Path (Join-Path $bridgeHome 'src') -Force | Out-Null
+Set-Content -LiteralPath (Join-Path $bridgeHome 'src/state.js') -Value "export const revision = 'v1'`n" -NoNewline -Encoding utf8
+$stateJson = '{"version":1,"updateOffset":731,"tasks":{"42":{"topicId":9}}}'
+Set-Content -LiteralPath (Join-Path $bridgeHome 'state.json') -Value $stateJson -NoNewline -Encoding utf8
+$bridgeArgs = @('-RepoPrefix','packages/telegram-bridge','-PreserveRelativePaths')
+$rBridge = Invoke-Subject $Script $fxBridge -ExtraArgs $bridgeArgs -OaHome $bridgeHome
+Assert ((Get-Class $rBridge 'src/state.js') -eq 'BEHIND') 'T_BRIDGE_TREE_BEHIND' 'a nested bridge file is classified against its exact ref path'
+Assert ((Get-Content -LiteralPath (Join-Path $bridgeHome 'src/state.js') -Raw) -match "'v2'") 'T_BRIDGE_TREE_WRITE' 'the verified ref version lands at the matching nested destination'
+Assert (Test-Path -LiteralPath (Join-Path $bridgeHome 'bin/telegram-bridge.js')) 'T_BRIDGE_TREE_MISSING' 'the deployed package includes the CLI at bin/telegram-bridge.js'
+Assert ((Get-Content -LiteralPath (Join-Path $bridgeHome 'state.json') -Raw) -eq $stateJson) 'T_BRIDGE_STATE_PRESERVED' 'the existing Telegram topic map and update offset are untouched'
+Assert ($rBridge.Json.verifiedCurrent -eq $true) 'T_BRIDGE_TREE_VERIFIED' 'the package sync verifies the deployed tree against the ref'
+
+$fxBridgeWhatIf = New-Fixture 'bridge-tree-whatif'
+Add-BridgePackage $fxBridgeWhatIf.Repo
+$bridgeWhatIfHome = Join-Path $fxBridgeWhatIf.Base 'oahome/telegram-bridge'
+$rBridgeWhatIf = Invoke-Subject $Script $fxBridgeWhatIf -WhatIf -ExtraArgs $bridgeArgs -OaHome $bridgeWhatIfHome
+Assert (-not (Test-Path -LiteralPath $bridgeWhatIfHome)) 'T_BRIDGE_TREE_WHATIF' 'WhatIf reports but never writes the package tree'
+Assert ($rBridgeWhatIf.Json.verifiedCurrent -eq $false) 'T_BRIDGE_TREE_PENDING' 'the missing package is not claimed current during WhatIf'
 
 Write-Host ''
 Write-Host ("[mutcheck-sync-oa-home] {0} passed, {1} failed" -f $script:pass, $script:fail)
