@@ -1343,6 +1343,37 @@ function Test-TurnBody {
     }
   }
 
+  # --- G19: a proposed plan must start with an explicitly gated step (#739) --------
+  # A blocking proposal of entirely reversible work parks the task before it can be
+  # dispatched. Require the first numbered step's classification rather than trying to
+  # infer reversibility from arbitrary prose. Older turns are not rewritten by this guard.
+  if (& $on 'G19') {
+    $proposedLine = -1
+    $firstStep = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+      if ($inFence[$i]) { continue }
+      if ($lines[$i] -match '^[ \t]*\*\*Status:\*\*[ \t]*Proposed\b') { $proposedLine = $i }
+      if ($proposedLine -ge 0 -and $firstStep -lt 0 -and
+          $lines[$i] -match '^[ \t]*1\.[ \t]+') { $firstStep = $i }
+    }
+    if ($proposedLine -ge 0) {
+      if ($Ask -ne 'blocking' -or $firstStep -lt 0 -or
+          $lines[$firstStep] -notmatch '^[ \t]*1\.[ \t]+\[gated\][ \t]+') {
+        $findings += New-Finding 'G19' ($proposedLine + 1) $lines[$proposedLine].Trim() (
+          'proposed parks the task: its first numbered step must be [gated] and -Ask blocking. ' +
+          'For reversible or gate-allowed first steps, dispatch them this wake and write the ' +
+          'outcome as in-progress/done (or blocked only when gated work remains)')
+      }
+      for ($i = $proposedLine + 1; $i -lt $lines.Count; $i++) {
+        if ($inFence[$i] -or $lines[$i] -notmatch '^[ \t]*[1-9][0-9]*\.[ \t]+') { continue }
+        if ($lines[$i] -notmatch '^[ \t]*[1-9][0-9]*\.[ \t]+\[(reversible|gate-allowed|gated)\][ \t]+') {
+          $findings += New-Finding 'G19' ($i + 1) $lines[$i].Trim() (
+            'classify each proposed plan step as [reversible], [gate-allowed] or [gated]')
+        }
+      }
+    }
+  }
+
   # --- G13: the turn must DECLARE its ask (#560) -----------------------------------
   # Not a property of the text at all, which is the point. Every other guard reads the
   # body; this one reads what the AUTHOR SAID ABOUT the body, because that is the fact

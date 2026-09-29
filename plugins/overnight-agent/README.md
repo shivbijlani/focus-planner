@@ -1,9 +1,10 @@
 # Overnight Agent (Copilot CLI plugin)
 
-Autonomously makes progress on your **Focus Planner** tasks overnight using a
-per-task **plan → approve → execute** loop. The agent *proposes* a plan inside a
-task's journal, you *approve* it (or ask for revisions), and only an **approved**
-plan gets **executed**. Approval is the safety gate.
+Autonomously makes progress on your **Focus Planner** tasks overnight. Each
+step is classified: reversible and standing-rule-allowed work goes to the
+task's session in the same run; actions that need approval wait behind one
+specific question in its journal. A plan is proposed for approval only when
+its first step is gated.
 
 This plugin packages the `overnight-agent` skill (its `SKILL.md`, helper
 PowerShell scripts, and a settings template) so it can be installed with one
@@ -73,10 +74,9 @@ local folder project. The binding command refuses either unsafe location.
 
 ## Usage
 
-Ask Copilot to "run the overnight agent", "propose plans for my tasks", or
-"execute approved plans". The skill's `SKILL.md` documents the full run flow
-(inbox check → execute approved plans → propose new plans behind the approval
-gate).
+Ask Copilot to "run the overnight agent" or "work on my tasks". The skill's
+`SKILL.md` documents the full run flow (inbox check → dispatch approved and
+reversible work → ask only for gated actions).
 
 Set the **app's default model to Auto** on each computer before running the
 Overnight Agent. When creating the scheduled **Overnight Agent** automation,

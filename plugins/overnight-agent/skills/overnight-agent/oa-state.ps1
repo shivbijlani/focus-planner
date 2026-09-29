@@ -101,6 +101,8 @@
           [-CheckDispatch]      Check eligibility and pauses without recording a wake.
           [-ForDispatch]        Recheck eligibility and stamp the wake immediately before the
                                 coordinator sends its start/continue instruction.
+          [-PlanDispatch]       With -ForDispatch, admit a review-due agent proposal only;
+                                still checks the Today gate, pause and exact input hash.
           [-DispatchInput hash] Required with -ForDispatch; exact scan fingerprint, refusing stale input.
           [-SessionRelease]     Retire the binding (task finished, workspace torn down). Prints
                                 the teardown command; never runs it.
@@ -590,6 +592,9 @@ param(
   # Inspection is read-only; -ForDispatch is the only dispatch-authorising wake stamp.
   [switch]$CheckDispatch,
   [switch]$ForDispatch,
+  # An agent-authored legacy proposal can be sent for classified, non-gated work without
+  # fabricating a human approval or writing a second turn in the same wake.
+  [switch]$PlanDispatch,
   [string]$DispatchInput,
   [switch]$SessionRelease,
   # The path of a workspace that has just been REMOVED. Marks any binding pointing at it dead,
@@ -3562,6 +3567,13 @@ function Get-ScanRows {
     $v = $verdicts["$($r.id)"]
     Add-Member -InputObject $r -NotePropertyName 'order' -NotePropertyValue $order -Force
     Add-Member -InputObject $r -NotePropertyName 'eligible' -NotePropertyValue $eligible -Force
+    # Review is not dispatch authority. Preserve the Today gate and human pause even for
+    # legacy proposals; a caller must opt into -PlanDispatch with this exact scan input.
+    $planReview = [bool]($r.status -eq 'proposed' -and $r.status_by -eq 'agent' -and
+      $r.on_board -and -not $r.snoozed -and -not $r.session_paused -and
+      -not $r.reopened -and -not $r.unanswered_user -and
+      ($r.section -eq 'today' -or $todayHolding -eq 0))
+    Add-Member -InputObject $r -NotePropertyName 'plan_review_due' -NotePropertyValue $planReview -Force
     # Auditable: which Today rows are actually holding the backlog shut this run (#223 is
     # explicit that selection must be data, not the agent's judgement).
     Add-Member -InputObject $r -NotePropertyName 'holds_today_gate' `
@@ -3645,7 +3657,7 @@ $script:CompactFields = @(
   'doc_id', 'doc_new_comments', 'doc_channel', 'session_id', 'session_verdict', 'session_paused',
   'session_process_dead',
   'session_workspace_missing',
-  'dispatch_input', 'no_journal_reason'
+  'plan_review_due', 'dispatch_input', 'no_journal_reason'
 )
 
 function Test-CompactRowNeeded($r) {
@@ -3665,6 +3677,7 @@ function Test-CompactRowNeeded($r) {
   # An ineligible, quiet, unchanged row is the case this mode exists to drop -- it is counted in
   # the summary and nothing reads its fields.
   if ($r.eligible) { return $true }
+  if ($r.plan_review_due) { return $true }
   if ($r.holds_today_gate) { return $true }
   if ($r.reopened_closed) { return $true }
   if ($r.unanswered_user) { return $true }
@@ -5325,8 +5338,11 @@ function Assert-TaskDispatch($st, $sess, $facts) {
     throw 'session_input_required: -ForDispatch requires the exact dispatch_input from scan'
   }
   $row = @(Get-ScanRows | Where-Object { "$($_.id)" -eq "$($st.id)" }) | Select-Object -First 1
-  if (-not $row -or -not $row.eligible -or $row.session_paused) {
+  if (-not $row -or (-not $row.eligible -and -not ($PlanDispatch -and $row.plan_review_due)) -or $row.session_paused) {
     throw 'session_not_eligible: follow the current Today-first worklist and user pauses'
+  }
+  if ($PlanDispatch -and -not $row.plan_review_due) {
+    throw 'session_plan_not_reviewable: -PlanDispatch only applies to an agent-authored proposal'
   }
   if ($DispatchInput -and $DispatchInput -ne $row.dispatch_input) {
     throw 'session_input_changed: the prepared task brief is stale'
@@ -5385,6 +5401,9 @@ function Cmd-Whoami {
 
 function Cmd-Session {
   $agentModel = Get-AgentModelSettings
+  if ($PlanDispatch -and (-not $ForDispatch -or $Force)) {
+    throw 'session_plan_dispatch_flags: -PlanDispatch requires -ForDispatch and cannot use -Force'
+  }
   if (($CheckDispatch -or $ForDispatch) -and (-not $Id -or
       ($CheckDispatch -and $ForDispatch) -or $SessionId -or $SessionDead -or $SessionRelease -or $WorkspaceGone)) {
     throw 'session_dispatch_flags_conflict: use -Id with exactly one dispatch-check flag'

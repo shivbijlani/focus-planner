@@ -1030,6 +1030,15 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-declared-ask.ps1
 
+  plan-dispatch:
+    name: Reversible plan dispatch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (old proposals re-evaluated, gated steps still wait)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-plan-dispatch.ps1
+
   # THE SAFETY FLOOR ITSELF, AND IT HAS NEVER RUN IN CI (GH #302).
   #
   # `mutcheck-agent-gate.ps1` is the suite that proves the floor outranks the allow list and
