@@ -507,9 +507,10 @@ user has spoken after your last turn:
 
 Do the phases **in this order** every time.
 
-> **Dispatch — one direct path.** `Overnight Agent concurrency` is the maximum number of task
-> sessions this run may be sent to; every attempted send counts, and there is no completion-based
-> refill. Resolve tasks in `scan -Compact` order and stop at the limit.
+> **Dispatch — one direct path.** `Overnight Agent concurrency` is the maximum number of
+> accepted task-session sends still active at once, not a lifetime send cap for the run. Fill
+> openings in `scan -Compact` order, then refill when a task session goes idle until the start
+> cutoff. A failed send, refusal or pause frees its opening; never send twice to a task in one run.
 >
 > Before every send, check the run's start cutoff: the next local **:00 or :30** after this
 > session's first prompt, minus **`Overnight Agent start buffer`** (default **`5m`**). For a 10:30
@@ -520,7 +521,7 @@ Do the phases **in this order** every time.
 > Read `concurrency` and `concurrency_source` from the task's `session -Id` result. The setting
 > must be a bare whole number; absent, unreadable or malformed values narrow to 1. Report
 > `settings-malformed` rather than presenting that default as the user's choice. A later run may
-> send to the same task again; do not wait for earlier task sessions to finish.
+> send to the same task again; do not wait for running task sessions at the end of this run.
 
 > **Telegram mirror runs last.** PHASE 3 mirrors the journals to Telegram *after* PHASE 1/2 have written
 > your turns, so a task's thread reflects the work you just did. It's gated on `user-settings.md → Telegram`.
@@ -1062,15 +1063,18 @@ start more work.
    **Also pick up any row with `due_poll: true`** — a time-triggered recurring check that's now due
    (see "Polling"). Run its check, then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone`.
 
-2. **Dispatch directly, in `scan -Compact` order, up to the configured concurrency limit.**
+2. **Dispatch directly, in `scan -Compact` order, with at most `concurrency` active sends.**
    Count only sends accepted by `send_session_message` toward the limit; a failed delivery does
-   not consume a slot. Do not dispatch an ineligible row or invent a brief for work that was not
+   not consume a slot. Track the task IDs attempted this run (including failed sends and
+   refusals), plus any row whose dispatch check throws, and the session IDs of accepted sends
+   still active. Do not dispatch an ineligible row or invent a brief for work that was not
    approved or classified reversible/gate-allowed in PHASE 2. For an existing proposal use
    `-PlanDispatch` with `-ForDispatch` and the scan's exact `dispatch_input` only if
    `plan_review_due: true`; all other tasks use ordinary `-ForDispatch`. If the row
    fails that check (including the Today gate), leave it for a later run; never bypass dispatch authority to meet the
    same-wake goal. Before each send, check the local :00/:30 cutoff in the pacing rule above. Replies
-   collected during this run do not widen the limit or reorder the worklist.
+   collected during this run do not widen the limit; each fresh scan determines the current
+   eligible order.
 
    For each task with work to hand over:
 
@@ -1088,7 +1092,7 @@ start more work.
       Put `kickoff_continuation` next when replacing a dead session.
    4. If sending fails, run `oa-state.ps1 session -Id <ID> -SessionDead`, do not retry that task
       or session in this run, and continue to the next eligible row while the number of accepted
-      sends is under the limit and before cutoff. A failed send does not count toward the limit.
+      active sends is under the limit and before cutoff. A failed send does not count toward the limit.
    5. **One send per task per run, and a refusal ends that task for the run.** If the task
       session answers with a refusal — a user opt-out, a pause, or a blocker it cannot clear —
       that is the answer. **Do not send a follow-up**: not "write the required turn now", not
@@ -1103,9 +1107,22 @@ start more work.
       appeared" is what a refusal *looks like*, not evidence the session failed to hear you.
       A refused task is retried in a LATER run only if he resumes it.
 
-   Stop after the accepted-send count reaches the limit, when no eligible prepared work remains,
-   or at cutoff. Do not wait for a task to finish before proceeding, and do not use an alternate
-   dispatch mechanism.
+   Fill openings from the current scan until the accepted-send count reaches the limit of active
+   sends or the prepared worklist is exhausted. While accepted sends remain active and before
+   cutoff, call the native app tool **`get_sessions_status`** about every 60 seconds, **once per
+   interval**. Inspect only the tracked session IDs' `activity.status` (`busy` or `idle`); an
+   `idle` session has finished and frees one opening. A reported refusal or user pause also frees
+   its opening immediately; never resend that task. Missing or unknown status is not evidence of
+   completion: leave its opening occupied and report it if the cutoff arrives. Do not poll journals,
+   re-run `scan` or call `get_session` for every task on each tick. When an opening frees, re-run
+   `oa-state.ps1 scan -Compact`, skip every task ID already attempted this run, and send the next
+   eligible prepared task in that fresh scan's order, with the same `-ForDispatch -DispatchInput`
+   check immediately before each send. If no candidate remains but sessions are active, keep
+   polling: a completed task can change eligibility. Stop when no eligible work and no active
+   sends remain, or at the cutoff; **start no send at or after the cutoff**. Do not wait for
+   running sessions at the end, cancel them, or use an alternate dispatch mechanism. In the
+   wrap-up, report the number of tasks started (accepted sends) and whether dispatch stopped
+   because of cutoff or nothing eligible.
 
 3. **For each task, resolve its session before doing anything else** — never create one on a hunch:
 
