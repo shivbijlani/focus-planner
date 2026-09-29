@@ -357,10 +357,15 @@ Check 'N once he has replied the pause is over, so the agent may mark normally a
 # same reason the `mark` refusal is -- a caller that cannot tell "paused" from "binding broken"
 # will try to repair the binding and dispatch anyway.
 function Measure-Dispatch([string]$Build, $World) {
+  $snapshot = Join-Path $World.State 'sessions-status.json'
+  [IO.File]::WriteAllText($snapshot,
+    ('{"sessions":[{"id":"S-' + $World.Id + '","activity":{"status":"idle"}}]}'),
+    [Text.UTF8Encoding]::new($false))
   $prevEap = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $Build session -Id $World.Id `
-    -ForDispatch -DispatchInput 'deadbeef' -StateDir $World.State -JournalDir $World.Journal 2>&1
+    -ForDispatch -DispatchInput 'deadbeef' -SessionsStatusFile $snapshot `
+    -StateDir $World.State -JournalDir $World.Journal 2>&1
   $code = $LASTEXITCODE
   $ErrorActionPreference = $prevEap
   $text = ($out | Out-String)

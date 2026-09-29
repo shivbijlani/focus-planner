@@ -849,6 +849,8 @@ jobs:
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-session-bind-backwards.ps1
       - name: Mutation check (failed dispatch does not consume concurrency)
         run: node ./plugins/overnight-agent/checks/mutcheck-direct-dispatch-budget.mjs
+      - name: Removed scheduler tools cannot return anywhere in shipped plugin
+        run: node ./scripts/check-removed-dispatch-tools.mjs
       - name: Mutation check (busy bound session skips without starving next task)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-busy-bound-session.ps1

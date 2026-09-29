@@ -37,9 +37,6 @@ function failures(text) {
   if (!phase.includes('Sessions busy before this run are not in\n   the tracked active-send set and do not occupy its openings.')) {
     out.push('E_previous-run-not-capacity: previous sends do not occupy this run')
   }
-  if (text.includes('oa_drain_status') || text.includes('oa_drain_wait') || text.includes('`oa_drain`')) {
-    out.push('F_no_stale_drain: only direct dispatch is documented')
-  }
   return out;
 }
 
@@ -107,8 +104,4 @@ for (const mutant of mutants) {
 }
 
 if (failed) process.exit(1);
-if (!failures(`${source}\noa_drain_status`).some((failure) => failure.startsWith('F_no_stale_drain'))) {
-  console.error('  [SURVIVED] stale drain instructions');
-  process.exit(1);
-}
 console.log('  All declared mutations killed.');
