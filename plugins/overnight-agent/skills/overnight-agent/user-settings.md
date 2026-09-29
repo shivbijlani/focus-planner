@@ -104,65 +104,70 @@ falls back, it says so in the run summary rather than quietly pretending you ask
 slot list is hard-coded in any of them.** Add a row to add a browser; delete a row to remove one. No
 script needs editing either way.
 
-**One row = one slot = one identity.** A slot is a browser the agent drives on your behalf, running its
-own dedicated profile directory on its own CDP debug port. Two slots that share a profile are the same
-identity twice over and are pure cost (~6 processes and ~400 MB each at startup, plus ~24 duplicate tool
-schemas each in the agent's context), so only add a slot when it represents an account the others
-cannot stand in for.
+**One row = one slot = one identity.** A slot is a browser the agent drives on your behalf. Each slot's
+MCP server launches its **own** dedicated profile directory directly (`--browser msedge --user-data-dir
+<dir>`, GH #738) — it does not attach to anything else, and nothing else attaches to it. Two slots that
+share a profile are the same identity twice over and are pure cost (~6 processes and ~400 MB each at
+startup, plus ~24 duplicate tool schemas each in the agent's context), so only add a slot when it
+represents an account the others cannot stand in for.
 
-| Slot | Port | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Desktop shortcut |
+| Slot | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Signed into | Desktop shortcut |
 | --- | --- | --- | --- | --- |
-| `edge-cdp-1` (regular) | 9225 | `edge1` | `<your main account>` | MCP Edge 1 (CDP 9225) |
+| `edge-cdp-1` (regular) | `edge1` | `<your main account>` | *(sites this profile is signed into)* | Browser – Regular |
 
 **The columns**
 
 | Column | Required | What it means |
 | --- | --- | --- |
 | **Slot** | **yes** | The MCP server name, so it must match the key in `~\.copilot\mcp-config.json`. A trailing `(alias)` is optional and gives you a friendly second name to select by. |
-| **Port** | **yes** | The CDP debug port. Must be unique across rows and otherwise unused on your machine. |
 | **Profile dir** | **yes** | **This is the identity.** A bare name (`edge1`) is resolved under the base folder named in this column's own header; a full path (`D:\browsers\work`) or one with `%VARS%` is used as-is. Must be unique across rows. |
 | **Account** | no | A label for you and for the agent to select by (e.g. `work`, `personal`). Purely descriptive. |
-| **Desktop shortcut** | no | The shortcut name to tell you to open if an automatic launch fails. Defaults to the slot name. |
+| **Signed into** | no | Which sites this profile is already signed into (e.g. `Amazon, WhatsApp Web`), so a task can pick the right slot for the site it needs without guessing or discovering it by trial and error. |
+| **Desktop shortcut** | no | The shortcut name to open for a one-time sign-in. Defaults to the slot name. |
+| ~~Port~~ | *(retired)* | GH #738 removed CDP-attach mode, so a slot no longer needs a debug port. A table carried over from before that change may still have a Port column — it is tolerated for backward compatibility, but a new slot does not need one. |
 
-Only **Slot**, **Port** and **Profile dir** are required, and the column **order does not matter** —
-columns are found by name. The profile base folder is taken from the Profile column's header, so
-changing `%LOCALAPPDATA%\playwright-mcp\` there moves every bare-name slot at once. A slot whose name or
-profile contains `chrome` launches Chrome; anything else launches Edge.
+Only **Slot** and **Profile dir** are required, and the column **order does not matter** — columns are
+found by name. The profile base folder is taken from the Profile column's header, so changing
+`%LOCALAPPDATA%\playwright-mcp\` there moves every bare-name slot at once. A slot whose name or profile
+contains `chrome` launches Chrome; anything else launches Edge.
 
 **Adding more identities** — one row each. For example, a three-identity setup:
 
 ```
-| Slot | Port | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Desktop shortcut |
+| Slot | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Signed into | Desktop shortcut |
 | --- | --- | --- | --- | --- |
-| `edge-cdp-1` (regular) | 9225 | `edge1`      | personal | MCP Edge 1 (CDP 9225) |
-| `edge-cdp-work`        | 9228 | `edge-work`  | work     | MCP Edge work (CDP 9228) |
-| `edge-cdp-client`      | 9229 | `edge-client`| client   | MCP Edge client (CDP 9229) |
+| `edge-cdp-1` (regular) | `edge1`      | personal | Amazon                | Browser – Regular |
+| `edge-cdp-work`        | `edge-work`  | work     | (not yet signed in)   | Browser – Work |
+| `edge-cdp-client`      | `edge-client`| client   | (not yet signed in)   | Browser – Client |
 ```
 
-The table is **refused rather than guessed at** if it is missing, has no Slot/Port/Profile columns, has
-no rows, or has two rows sharing a port or a profile dir. A silent fallback to a stale built-in list is
-exactly how this drifts out of date without anyone noticing, so the scripts fail loudly instead.
+The table is **refused rather than guessed at** if it is missing, has no Slot/Profile columns, has no
+rows, or has two rows sharing a profile dir (or, for a legacy table that still carries one, a port). A
+silent fallback to a stale built-in list is exactly how this drifts out of date without anyone noticing,
+so the scripts fail loudly instead.
 
 **Rules for the agent:**
 
-1. **Resolve the *profile*, not the slot name.** Pick the slot by which account the task needs. Never
-   substitute a different account's profile for the requested one — that produces actions taken as the
-   wrong identity, which is worse than failing.
-2. **Launch on demand.** A closed slot answers `ECONNREFUSED`. That is **not** a task failure — run
-   `ensure-mcp-browsers.ps1 -Slot <name|account|profile|port>`, wait for the port, then continue. Only if
-   the launch fails, or the profile needs an interactive sign-in the agent cannot perform, set `blocked`
-   with that one ask.
+1. **Resolve the *profile*, not the slot name.** Pick the slot by which account (and, from the
+   **Signed into** column, which site) the task needs. Never substitute a different account's profile for
+   the requested one — that produces actions taken as the wrong identity, which is worse than failing.
+2. **Profile already in use → stop, don't retry.** Launching a profile that is already open (by you, or
+   by another task session) fails with "profile is already in use" (proven 2026-09-28, test session
+   905cc615) — this is not a task failure to route around. Stop the run for this task, report "profile in
+   use (you, or another task)", and set `blocked` with that one ask. Never retry-loop, and never fall back
+   to a different profile.
 3. **Sign-in is one-time per profile, by you.** Chrome/Edge 127+ bind cookies to the profile directory
    (App-Bound Encryption), so a newly created or copied profile carries the password vault but starts
-   **logged out**. The agent must never type a master password.
-4. **Preflight before browser work:** `check-browser-slots.ps1` (`-Json`; exit 0 = ok, 2 = attention). It
-   derives its slot list from **this table** and is strictly **read-only** — it never launches or kills
-   one of your windows, because they may hold in-flight state.
-5. **Zombie slot after a browser auto-update:** port open and `/json/version` answering, but every *new*
-   tab dies with `Target crashed`, because the running process is pinned to the pre-update version
-   directory. Detected by comparing the build at `/json/version` with the installed browser's version.
-   Fix: close that window and reopen its shortcut — sign-ins persist, since the cookies live with the
-   profile directory, not the process.
+   **logged out**. The agent must never type a master password. Use the profile's desktop shortcut for a
+   one-time interactive sign-in — it opens with **no** debug port, so it is a normal browser window.
+4. **Preflight before browser work:** `check-browser-slots.ps1` (`-Json`). It derives its slot list from
+   **this table** and is strictly **read-only** — it never launches or kills one of your windows, because
+   they may hold in-flight state. It reports which profiles exist and which are currently in use.
+5. **Per-task windows, and reopening on the next run.** Each task's browser work opens in its **own
+   window** (not a shared one), and the task saves the URLs it was working on to its own state when its
+   turn ends. A relaunch restores **no** previous tabs on its own (there is no CDP session to reattach to),
+   so the next run reopens those saved URLs in a fresh window. Real tab groups are extension-only (GH
+   #383) and out of scope.
 
 ## Tray reliability supervision
 
@@ -202,21 +207,24 @@ the same optional tray. The tray is the **only** resident dispatcher for browser
 Scheduled Task, Startup shim or VBS launcher); `/browser-watchdog` stays available on demand.
 The slots it checks are always the **`## Browser slots`** table above — nothing here lists a slot.
 
+GH #738 switched every Playwright MCP slot from attach-only (`--cdp-endpoint`) to launching its
+own profile directly, so there is no shared browser left for this workload to launch or thaw on
+your behalf — each MCP server owns its browser for the length of one session.
+
 **Completely off by default, including observation.** Omit the section, omit a row, or set
-`Enabled = off` and no browser is probed at all. `Enabled = on` by itself still runs nothing:
-each action below is its own, separate opt-in.
+`Enabled = off` and no profile is checked at all. `Enabled = on` by itself still runs nothing:
+`Observe` is the one remaining opt-in.
 
 | Setting | Value |
 | --- | --- |
 | Enabled | `off` — master switch for tray browser checks. |
-| Observe | `off` — read-only health probe of every slot; status shows in the tray. |
-| Thaw stuck slots | `off` — non-destructive thaw of frozen pages in place (closes nothing). |
-| Auto-launch closed slots | `off` — start a closed slot from the table. **Never implied by Observe or Thaw.** |
+| Observe | `off` — read-only check of every slot: which profiles exist, and whether each is currently in use. Status shows in the tray. |
 | Check interval | `60m` — minutes between checks (15m to 24h). |
 
 Switches accept `on`/`off`; a row that cannot be read is **refused by name** and no browser
 check runs. This workload shares **no** state, lock, pause or cooldown with the reliability
-workload above. The tray never kills, closes or restarts a browser or MCP worker process, and
+workload above. The tray never launches, kills, closes or restarts a browser or MCP worker
+process, and
 its **Pause browser checks** menu item lives in memory only — restarting the tray clears it.
 
 ## Tray update checks

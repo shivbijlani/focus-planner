@@ -63,25 +63,27 @@ const RELIABILITY_ROWS = new Map([
   ['restart cooldown', { key: 'cooldownMinutes', kind: 'minutes', min: 1, max: 1440 }],
 ]);
 
-// The browser-check workload (GH #698) is a SIBLING section with its own map.
-// Everything is OFF by default -- including observation -- and each action is a
-// separate opt-in. Nothing here shares a row, a default or a state file with the
+// The browser-check workload (GH #698, simplified by GH #738) is a SIBLING
+// section with its own map. Everything is OFF by default -- including
+// observation. Nothing here shares a row, a default or a state file with the
 // reliability workload above.
+//
+// GH #738 removed `Thaw stuck slots` and `Auto-launch closed slots`: each
+// Playwright MCP server now launches its own profile directly and closes with
+// the session that opened it, so there is no shared slot left for a tray
+// workload to launch or thaw on anyone's behalf. `Observe` is the only action,
+// and it is strictly read-only (see check-browser-slots.ps1).
 export const BROWSER_CHECKS_SECTION_HEADING = 'Tray browser checks';
 
 export const BROWSER_CHECKS_DEFAULTS = Object.freeze({
   enabled: false,
   observe: false,
-  thaw: false,
-  autoLaunch: false,
   intervalMinutes: 60,
 });
 
 const BROWSER_CHECKS_ROWS = new Map([
   ['enabled', { key: 'enabled', kind: 'switch' }],
   ['observe', { key: 'observe', kind: 'switch' }],
-  ['thaw stuck slots', { key: 'thaw', kind: 'switch' }],
-  ['auto launch closed slots', { key: 'autoLaunch', kind: 'switch' }],
   ['check interval', { key: 'intervalMinutes', kind: 'minutes', min: 15, max: 1440 }],
 ]);
 

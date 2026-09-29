@@ -217,17 +217,20 @@ function Get-BrowserSlotTable {
         if ($lines[$i] -match '^##\s+') { $end = $i; break }
     }
 
-    # First table in the section whose header names both a slot and a port.
+    # First table in the section whose header names a slot and (a port OR a
+    # profile). Port used to be required here too, but GH #738 made it optional:
+    # a slot's identity is now its profile directory, not a CDP port.
     $hdrIdx = -1
     for ($i = $start + 1; $i -lt $end - 1; $i++) {
         if ($lines[$i] -notmatch '^\s*\|') { continue }
         if (-not (Test-OaMarkdownSeparatorRow $lines[$i + 1])) { continue }
         $cells = @(Split-OaMarkdownRow $lines[$i] | ForEach-Object { (ConvertTo-OaPlainCell $_).ToLowerInvariant() })
-        if (($cells -join '|') -match 'slot' -and ($cells -join '|') -match 'port') { $hdrIdx = $i; break }
+        $joined = $cells -join '|'
+        if ($joined -match 'slot' -and ($joined -match 'port' -or $joined -match 'profile')) { $hdrIdx = $i; break }
     }
     if ($hdrIdx -lt 0) {
         throw ("Browser slot table: found '## $SectionHeading' in $SettingsPath but no table with " +
-               "'Slot' and 'Port' columns under it. Refusing to guess a slot list.")
+               "a 'Slot' column (and a 'Port' or 'Profile' column) under it. Refusing to guess a slot list.")
     }
 
     $rawHeader = @(Split-OaMarkdownRow $lines[$hdrIdx])
@@ -245,9 +248,16 @@ function Get-BrowserSlotTable {
     $iProfile  = Get-ColumnIndex $header @('profile')
     $iAccount  = Get-ColumnIndex $header @('account')
     $iShortcut = Get-ColumnIndex $header @('shortcut')
+    $iSignedInto = Get-ColumnIndex $header @('signed into', 'signed-in', 'signed')
 
-    if ($iSlot -lt 0 -or $iPort -lt 0) {
-        throw "Browser slot table: header row in $SettingsPath is missing a Slot or Port column."
+    # GH #738: each slot now launches its OWN Edge/Chrome profile directly
+    # (--browser msedge --user-data-dir <dir>) instead of attaching over CDP to
+    # a port someone else opened first. Port is therefore no longer part of a
+    # slot's identity -- the PROFILE DIRECTORY is -- so a table with no Port
+    # column at all is valid. A table that STILL has one (older tables, or a
+    # transition period) keeps working exactly as before, ports and all.
+    if ($iSlot -lt 0) {
+        throw "Browser slot table: header row in $SettingsPath is missing a Slot column."
     }
     if ($iProfile -lt 0) {
         throw ("Browser slot table: header row in $SettingsPath has no Profile column. " +
@@ -270,7 +280,7 @@ function Get-BrowserSlotTable {
         if (Test-OaMarkdownSeparatorRow $line) { continue }
 
         $raw = @(Split-OaMarkdownRow $line)
-        if ($raw.Count -le [Math]::Max($iSlot, $iPort)) { continue }
+        if ($raw.Count -le [Math]::Max($iSlot, $iProfile)) { continue }
 
         $slotRaw = $raw[$iSlot]
         if ([string]::IsNullOrWhiteSpace((ConvertTo-OaPlainCell $slotRaw))) { continue }
@@ -282,13 +292,21 @@ function Get-BrowserSlotTable {
         else { $slot = (ConvertTo-OaPlainCell $slotRaw) -replace '\s*\(.*$', '' }
         if ($slotRaw -match '\(([^)]+)\)') { $alias = $Matches[1].Trim() }
 
-        $portCell = ConvertTo-OaPlainCell $raw[$iPort]
-        if ($portCell -notmatch '(\d{2,5})') {
-            throw "Browser slot table: slot '$slot' in $SettingsPath has no numeric port (cell: '$portCell')."
-        }
-        $port = [int]$Matches[1]
-        if ($port -lt 1 -or $port -gt 65535) {
-            throw "Browser slot table: slot '$slot' has out-of-range port $port in $SettingsPath."
+        # Port is optional (GH #738 -- profile launch, not CDP attach). Only
+        # parse and validate it when the table still carries a Port column and
+        # the row has a value in it; otherwise the slot simply has no port.
+        $port = $null
+        if ($iPort -ge 0 -and $raw.Count -gt $iPort) {
+            $portCell = ConvertTo-OaPlainCell $raw[$iPort]
+            if (-not [string]::IsNullOrWhiteSpace($portCell)) {
+                if ($portCell -notmatch '(\d{2,5})') {
+                    throw "Browser slot table: slot '$slot' in $SettingsPath has no numeric port (cell: '$portCell')."
+                }
+                $port = [int]$Matches[1]
+                if ($port -lt 1 -or $port -gt 65535) {
+                    throw "Browser slot table: slot '$slot' has out-of-range port $port in $SettingsPath."
+                }
+            }
         }
 
         $profileDir = ConvertTo-OaPlainCell $raw[$iProfile]
@@ -309,6 +327,12 @@ function Get-BrowserSlotTable {
         if ($iShortcut -ge 0 -and $raw.Count -gt $iShortcut) { $shortcut = ConvertTo-OaPlainCell $raw[$iShortcut] }
         if (-not $shortcut) { $shortcut = $slot }
 
+        # Which sites this profile is already signed into (GH #738), so a task
+        # can pick the right slot for the site it needs without guessing. Purely
+        # descriptive -- a blank cell just means "not recorded yet".
+        $signedInto = ''
+        if ($iSignedInto -ge 0 -and $raw.Count -gt $iSignedInto) { $signedInto = ConvertTo-OaPlainCell $raw[$iSignedInto] }
+
         $slots.Add([pscustomobject]@{
             Slot        = $slot
             Alias       = $alias
@@ -317,6 +341,7 @@ function Get-BrowserSlotTable {
             ProfilePath = $profilePath
             Account     = $account
             Shortcut    = $shortcut
+            SignedInto  = $signedInto
             Source      = $SettingsPath
         })
     }
@@ -328,8 +353,9 @@ function Get-BrowserSlotTable {
 
     # Integrity: two slots on one port, or two slots on one profile dir, means the
     # table cannot say which identity a port carries. That ambiguity is the whole
-    # bug class here, so it is a hard error rather than a warning.
-    $dupPort = @($slots | Group-Object Port | Where-Object { $_.Count -gt 1 })
+    # bug class here, so it is a hard error rather than a warning. Port is only
+    # checked for slots that HAVE one -- a blank/absent port is never "duplicate".
+    $dupPort = @($slots | Group-Object Port | Where-Object { $_.Count -gt 1 -and $_.Name -ne '' })
     if ($dupPort.Count -gt 0) {
         throw ("Browser slot table: duplicate port(s) in $SettingsPath -- " +
                (($dupPort | ForEach-Object { $_.Name }) -join ', '))

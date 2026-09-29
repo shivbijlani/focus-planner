@@ -1,36 +1,38 @@
 /*
- * consumer-browser-watchdog.mjs -- the tray's browser-check WORKLOAD (GH #698).
+ * consumer-browser-watchdog.mjs -- the tray's browser-check WORKLOAD (GH #698,
+ * simplified for GH #738).
  *
  * The optional tray (oa-supervisor-tray.ps1) is the ONE resident dispatcher for
  * browser checks. It runs this file as a child process; this file reads the
  * policy from `## Tray browser checks` in the external user-settings.md (via
- * oa-user-settings.mjs, the one reader) and, only if the user opted in, runs the
- * existing browser-watchdog.ps1 with flags that permit exactly the opted-in
- * actions. It does not reimplement any browser logic:
+ * oa-user-settings.mjs, the one reader) and, only if the user opted in, runs
+ * browser-watchdog.ps1 -- a read-only status check. It does not reimplement any
+ * browser logic:
  *
- *   browser-watchdog.ps1    ASSESS / THAW / LAUNCH / CONFIRM
- *   check-browser-slots.ps1 the CDP work probe and the non-destructive thaw
- *   ensure-mcp-browsers.ps1 launching a closed slot
+ *   browser-watchdog.ps1    thin wrapper: run the checker, report the result
+ *   check-browser-slots.ps1 which profiles exist and whether each is in use
+ *                            (a `SingletonLock` file check, never a CDP port)
  *   browser-slot-table.ps1  the `## Browser slots` table (source of truth)
  *
  * POLICY, DETERMINISTICALLY (resolveBrowserPlan):
- *   * OFF BY DEFAULT, INCLUDING OBSERVATION. A missing file, a missing section or
- *     `Enabled = off` runs nothing: no probe, no port touched, no state written.
- *   * `Enabled = on` alone still runs nothing; each action is its own opt-in:
- *       Observe                   read-only probe  (-ReportOnly)
- *       Thaw stuck slots          non-destructive thaw of frozen pages
- *       Auto-launch closed slots  start a closed slot from the slot table
- *   * Observe and Thaw NEVER imply Auto-launch: -NoLaunch is passed unless
- *     Auto-launch is explicitly on.
+ *   * OFF BY DEFAULT, INCLUDING OBSERVATION. A missing file, a missing section
+ *     or `Enabled = off` runs nothing: no probe, no state written.
+ *   * `Enabled = on` alone still runs nothing: `Observe` is the one remaining
+ *     opt-in, and it is strictly read-only.
+ *
+ *   GH #738 removed `Thaw stuck slots` and `Auto-launch closed slots`: each
+ *   Playwright MCP server now launches its own profile directly and closes
+ *   with the session that opened it, so there is no shared slot left for a
+ *   tray workload to launch or thaw on anyone's behalf.
  *
  * INDEPENDENT OF THE RELIABILITY WORKLOAD: its own section, its own state file
  * (browser-checks-state.json), its own lock (browser-checks.lock), its own
  * interval. It shares no M/N state, no action lock and no cooldown with
  * reliability-supervisor.mjs, and never imports it.
  *
- * NEVER KILLS A BROWSER: the only process this file can stop is the watchdog
+ * NEVER TOUCHES A BROWSER: the only process this file can stop is the checker
  * script it started itself, on an overall timeout. Browser and MCP worker
- * processes are never killed or reparented.
+ * processes are never launched, killed or reparented.
  */
 
 import { open, readFile, rename, unlink, writeFile } from 'node:fs/promises';
@@ -56,26 +58,22 @@ export function browserWorkloadPaths(home = process.env.LOCALAPPDATA &&
 
 /**
  * Pure: the declared values -> exactly what may run. `reportOnly` is the tray's
- * host-level -NoAct diagnostic; it can only REMOVE actions, never add them.
+ * host-level -NoAct diagnostic; observation is already read-only, so it has
+ * nothing left to remove, but it still never turns a disabled workload on.
  */
 export function resolveBrowserPlan(values = {}, { reportOnly = false } = {}) {
   const policy = { ...BROWSER_CHECKS_DEFAULTS, ...values };
-  const base = { intervalMinutes: policy.intervalMinutes, observe: false, thaw: false, autoLaunch: false };
+  const base = { intervalMinutes: policy.intervalMinutes, observe: false };
   if (!policy.enabled) return { ...base, dispatch: false, mode: 'off', reason: 'disabled', watchdogArgs: [] };
-  if (!policy.observe && !policy.thaw && !policy.autoLaunch) {
+  if (!policy.observe) {
     return { ...base, dispatch: false, mode: 'off', reason: 'no-opt-ins', watchdogArgs: [] };
   }
-  const thaw = policy.thaw && !reportOnly;
-  const autoLaunch = policy.autoLaunch === true && !reportOnly;
-  const watchdogArgs = ['-Json', '-Quiet'];
-  if (!thaw && !autoLaunch) {
-    watchdogArgs.push('-ReportOnly');
-  } else {
-    if (!autoLaunch) watchdogArgs.push('-NoLaunch');
-    if (!thaw) watchdogArgs.push('-NoRepair');
-  }
-  const mode = [thaw && 'thaw', autoLaunch && 'auto-launch'].filter(Boolean).join('+') || 'observe';
-  return { ...base, dispatch: true, mode, reason: null, observe: policy.observe, thaw, autoLaunch, watchdogArgs };
+  // reportOnly is the tray's host-level -NoAct diagnostic. Observation is
+  // already read-only (browser-watchdog.ps1 never launches, closes or thaws
+  // anything), so it can only be a no-op here -- kept as a parameter so a
+  // caller does not need to know that.
+  void reportOnly;
+  return { ...base, dispatch: true, mode: 'observe', reason: null, observe: true, watchdogArgs: ['-Json', '-Quiet'] };
 }
 
 function windowsPowerShell() {
@@ -122,12 +120,11 @@ export function summarizeOutcome(plan, run, nowMs) {
     mode: plan.mode,
     exitCode: run.exitCode,
     status: 'failed',
-    launched: Number(report?.launched ?? 0),
-    repaired: Number(report?.repaired ?? 0),
     unhealthy: Number(report?.unhealthy ?? 0),
     slots: slots.map(slot => ({
-      slot: slot.mcp ?? null, port: slot.port ?? null, before: slot.state_before ?? null,
-      action: slot.action ?? null, after: slot.state_after ?? null, healthy: Boolean(slot.healthy),
+      slot: slot.slot ?? slot.mcp ?? null, account: slot.account ?? null,
+      profileDir: slot.profile_dir ?? null, state: slot.state ?? null,
+      healthy: Boolean(slot.healthy), detail: slot.detail ?? null,
     })),
     error: null,
   };
@@ -146,9 +143,7 @@ export function summarizeOutcome(plan, run, nowMs) {
   const total = outcome.slots.length;
   outcome.summary = outcome.status === 'failed'
     ? `failed: ${outcome.error}`
-    : `${outcome.status}: ${total - outcome.unhealthy}/${total} slot(s) healthy` +
-      (outcome.repaired ? `, thawed ${outcome.repaired}` : '') +
-      (outcome.launched ? `, launched ${outcome.launched}` : '');
+    : `${outcome.status}: ${total - outcome.unhealthy}/${total} profile(s) reported on`;
   return outcome;
 }
 
@@ -202,8 +197,6 @@ function describePolicy(declared, plan) {
     valid: true, source: declared.source, settingsPath: declared.settingsPath,
     enabled: declared.values.enabled ?? BROWSER_CHECKS_DEFAULTS.enabled,
     observe: declared.values.observe ?? BROWSER_CHECKS_DEFAULTS.observe,
-    thaw: declared.values.thaw ?? BROWSER_CHECKS_DEFAULTS.thaw,
-    autoLaunch: declared.values.autoLaunch ?? BROWSER_CHECKS_DEFAULTS.autoLaunch,
     intervalMinutes: plan.intervalMinutes,
   };
 }

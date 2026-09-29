@@ -37,15 +37,18 @@
   ONE ACTIVE SUPERVISOR: a second tray (or a stale lock from a crashed one) makes
   a new instance exit immediately rather than compete for the same checks.
 
-  BROWSER-CHECK WORKLOAD (GH #698): the tray is also the ONE resident dispatcher
-  for browser checks. It is an INDEPENDENT workload with its own policy
-  (`## Tray browser checks` in user-settings.md), its own schedule, its own
-  in-memory pause, its own state file and its own lock; it shares no M/N state,
-  cooldown or action lock with reliability. It runs consumer-browser-watchdog.mjs
-  as an ASYNCHRONOUS child so a slow browser probe never delays reliability. It
-  is COMPLETELY OFF by default - including observation - and Observe, Thaw and
-  Auto-launch are separate opt-ins; enabling checks never launches a closed
-  browser slot unless Auto-launch is explicitly on. The tray never kills or
+  BROWSER-CHECK WORKLOAD (GH #698, simplified by GH #738): the tray is also
+  the ONE resident dispatcher for browser checks. It is an INDEPENDENT workload
+  with its own policy (`## Tray browser checks` in user-settings.md), its own
+  schedule, its own in-memory pause, its own state file and its own lock; it
+  shares no M/N state, cooldown or action lock with reliability. It runs
+  consumer-browser-watchdog.mjs as an ASYNCHRONOUS child so a slow status check
+  never delays reliability. It is COMPLETELY OFF by default - including
+  observation - and Observe is the one remaining opt-in. GH #738 removed the
+  launch and thaw phases entirely: each Playwright MCP server now launches its
+  own profile and closes with the session that opened it, so there is nothing
+  left to launch or thaw on its behalf. Observe is strictly read-only (which
+  profiles exist, which are in use), and the tray never launches, kills or
   reparents a browser or MCP worker process.
 
   UPDATE-CHECK WORKLOAD (GH #701): a third INDEPENDENT workload with its own
@@ -63,9 +66,9 @@
 
 .PARAMETER NoAct
   Pass --no-act to the reliability checker (classify and log only, never restart
-  or launch) and --report-only to the browser workload (it can then only observe,
-  and only if the user enabled browser checks at all) and to the update-check
-  workload (it can then only report, never apply).
+  or launch) and --report-only to the browser workload (a no-op: Observe is
+  already read-only) and to the update-check workload (it can then only report,
+  never apply).
 
 .PARAMETER NoTrayIcon
   Diagnostic/test mode: run the same scheduler loop without creating a

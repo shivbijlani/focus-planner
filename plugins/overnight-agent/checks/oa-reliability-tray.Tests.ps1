@@ -110,7 +110,7 @@ try {
   Assert-True (Test-Path (Join-Path $files.home 'consumer-reliability-supervisor.mjs')) '-Enable deploys the consumer wrapper'
   Assert-True (Test-Path (Join-Path $files.home 'oa-user-settings.mjs')) '-Enable deploys the user-settings policy reader'
   foreach ($browserFile in 'consumer-browser-watchdog.mjs', 'browser-watchdog.ps1', 'check-browser-slots.ps1',
-      'browser-slot-table.ps1', 'ensure-mcp-browsers.ps1') {
+      'browser-slot-table.ps1') {
     Assert-True (Test-Path (Join-Path $files.home $browserFile)) "-Enable deploys the reused browser tool $browserFile"
   }
   $routeFiles = @(Get-ChildItem -LiteralPath $files.home -File | Where-Object { $_.Extension -in '.vbs', '.cmd', '.bat', '.lnk', '.xml' })

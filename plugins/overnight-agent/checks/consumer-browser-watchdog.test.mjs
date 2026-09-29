@@ -20,9 +20,9 @@ const settings = rows => [
   '',
   '## Browser slots',
   '',
-  '| Slot | Port | Profile dir |',
-  '| --- | --- | --- |',
-  '| `edge-cdp-1` | 9225 | `edge1` |',
+  '| Slot | Profile dir |',
+  '| --- | --- |',
+  '| `edge-cdp-1` | `edge1` |',
   '',
   `## ${RELIABILITY_SECTION_HEADING}`,
   '',
@@ -52,7 +52,7 @@ async function settingsFile(t, rows) {
   return path;
 }
 
-function recordingWatchdog(report = { slots: [], launched: 0, repaired: 0, unhealthy: 0, healthy: true }, exitCode = 0) {
+function recordingWatchdog(report = { slots: [], unhealthy: 0, healthy: true }, exitCode = 0) {
   const calls = [];
   const run = async invocation => {
     calls.push(invocation);
@@ -64,8 +64,7 @@ function recordingWatchdog(report = { slots: [], launched: 0, repaired: 0, unhea
 const has = (plan, flag) => plan.watchdogArgs.includes(flag);
 
 test('browser checks are completely off by default, including observation', async t => {
-  assert.deepEqual(BROWSER_CHECKS_DEFAULTS,
-    { enabled: false, observe: false, thaw: false, autoLaunch: false, intervalMinutes: 60 });
+  assert.deepEqual(BROWSER_CHECKS_DEFAULTS, { enabled: false, observe: false, intervalMinutes: 60 });
   assert.equal(resolveBrowserPlan({}).dispatch, false);
   assert.equal(resolveBrowserPlan({}).reason, 'disabled');
 
@@ -84,17 +83,14 @@ test('browser checks are completely off by default, including observation', asyn
     const result = await runBrowserWorkload({ paths, policy, runWatchdog: watchdog.run });
     assert.equal(result.dispatched, false);
     assert.equal(result.status, 'disabled');
-    assert.equal(watchdog.calls.length, 0, 'no browser probe of any kind');
+    assert.equal(watchdog.calls.length, 0, 'no browser status check of any kind');
     assert.equal(existsSync(paths.state), false, 'nothing is written while off');
     assert.equal(existsSync(paths.lock), false, 'no lock is taken while off');
   }
 });
 
-test('Enabled = off wins over every advanced opt-in', async t => {
-  const path = await settingsFile(t, [
-    '| Enabled | `off` |', '| Observe | `on` |', '| Thaw stuck slots | `on` |',
-    '| Auto-launch closed slots | `on` |',
-  ]);
+test('Enabled = off wins over Observe', async t => {
+  const path = await settingsFile(t, ['| Enabled | `off` |', '| Observe | `on` |']);
   const policy = await loadBrowserChecksPolicy({ settingsPath: path });
   const watchdog = recordingWatchdog();
   const result = await runBrowserWorkload({ paths: browserWorkloadPaths(await home(t)), policy,
@@ -103,54 +99,25 @@ test('Enabled = off wins over every advanced opt-in', async t => {
   assert.equal(watchdog.calls.length, 0);
 });
 
-test('Enabled = on alone still runs nothing: every action is its own opt-in', () => {
+test('Enabled = on alone still runs nothing: Observe is its own opt-in', () => {
   const plan = resolveBrowserPlan({ enabled: true });
   assert.equal(plan.dispatch, false);
   assert.equal(plan.reason, 'no-opt-ins');
 });
 
-test('Observe alone is a read-only probe that can neither thaw nor launch', () => {
+test('Observe is a read-only status check', () => {
   const plan = resolveBrowserPlan({ enabled: true, observe: true });
   assert.equal(plan.dispatch, true);
   assert.equal(plan.mode, 'observe');
-  assert.ok(has(plan, '-ReportOnly'));
-  assert.equal(plan.thaw, false);
-  assert.equal(plan.autoLaunch, false);
-});
-
-test('Thaw alone repairs stuck slots but never launches a closed one', () => {
-  const plan = resolveBrowserPlan({ enabled: true, thaw: true });
-  assert.equal(plan.mode, 'thaw');
-  assert.ok(has(plan, '-NoLaunch'), 'auto-launch is not implied by thaw');
-  assert.ok(!has(plan, '-NoRepair'));
-  assert.ok(!has(plan, '-ReportOnly'));
-});
-
-test('Observe + Thaw still never implies Auto-launch', () => {
-  const plan = resolveBrowserPlan({ enabled: true, observe: true, thaw: true });
-  assert.ok(has(plan, '-NoLaunch'));
-  assert.equal(plan.autoLaunch, false);
-});
-
-test('Auto-launch alone launches closed slots but does not thaw', () => {
-  const plan = resolveBrowserPlan({ enabled: true, autoLaunch: true });
-  assert.equal(plan.mode, 'auto-launch');
-  assert.ok(has(plan, '-NoRepair'));
-  assert.ok(!has(plan, '-NoLaunch'));
-  assert.ok(!has(plan, '-ReportOnly'));
-});
-
-test('all opt-ins together allow both actions; host -NoAct can only remove them', () => {
-  const all = { enabled: true, observe: true, thaw: true, autoLaunch: true };
-  const plan = resolveBrowserPlan(all);
-  assert.equal(plan.mode, 'thaw+auto-launch');
+  assert.ok(has(plan, '-Json'));
+  assert.ok(has(plan, '-Quiet'));
+  // No launch/thaw flags exist any more -- GH #738 removed both actions.
   assert.ok(!has(plan, '-NoLaunch') && !has(plan, '-NoRepair') && !has(plan, '-ReportOnly'));
 
-  const reportOnly = resolveBrowserPlan(all, { reportOnly: true });
-  assert.ok(has(reportOnly, '-ReportOnly'));
-  assert.equal(reportOnly.autoLaunch, false);
-  assert.equal(resolveBrowserPlan({}, { reportOnly: true }).dispatch, false,
-    'report-only never turns a disabled workload on');
+  // The host-level -NoAct diagnostic can never turn a disabled workload on,
+  // and observation is already read-only so it has nothing left to remove.
+  assert.deepEqual(resolveBrowserPlan({ enabled: true, observe: true }, { reportOnly: true }), plan);
+  assert.equal(resolveBrowserPlan({}, { reportOnly: true }).dispatch, false);
 });
 
 test('the browser section is parsed by the shared reader and refuses what it cannot read', async t => {
@@ -165,7 +132,8 @@ test('the browser section is parsed by the shared reader and refuses what it can
   for (const [rows, expected] of [
     [['| Observe | `maybe` |'], /must be 'on' or 'off'/],
     [['| Check interval | `5m` |'], /must be from 15 to 1440 minutes/],
-    [['| Auto launch | `on` |'], /not a supported setting/],
+    [['| Thaw stuck slots | `on` |'], /not a supported setting/],
+    [['| Auto launch closed slots | `on` |'], /not a supported setting/],
     [['| Observe | `on` |', '| Observe | `off` |'], /declared twice/],
   ]) {
     assert.throws(() => parseBrowserChecksPolicy(settings(rows), { settingsPath: 'U.md' }), expected);
@@ -198,31 +166,42 @@ test('a dispatched run uses its own state file, its own interval, and the same s
   assert.ok(!/reliability/i.test(paths.state) && !/reliability/i.test(paths.lock),
     'no shared state or lock with the reliability workload');
   const report = { slots: [
-    { mcp: 'edge-cdp-1', port: 9225, state_before: 'stuck', action: 'would-repair', state_after: 'stuck', healthy: false },
-    { mcp: 'edge-cdp-2', port: 9226, state_before: 'down', action: 'would-launch', state_after: 'down', healthy: false },
-  ], launched: 0, repaired: 0, unhealthy: 2, healthy: false };
-  const watchdog = recordingWatchdog(report, 2);
+    { slot: 'edge-cdp-1', account: 'primary', profile_dir: 'edge1', state: 'in-use', healthy: true, detail: 'profile is open' },
+    { slot: 'edge-cdp-2', account: 'second', profile_dir: 'edge2', state: 'not-signed-in', healthy: true, detail: 'no profile yet' },
+  ], unhealthy: 0, healthy: true };
+  const watchdog = recordingWatchdog(report, 0);
   const nowMs = Date.parse('2026-09-28T08:00:00.000Z');
   const result = await runBrowserWorkload({ paths, policy, runWatchdog: watchdog.run, clock: { now: () => nowMs } });
 
-  assert.equal(result.status, 'attention');
+  assert.equal(result.status, 'healthy');
   assert.equal(watchdog.calls.length, 1);
   assert.equal(watchdog.calls[0].script, paths.watchdog);
   const args = watchdog.calls[0].args;
-  assert.ok(args.includes('-ReportOnly'));
+  assert.ok(args.includes('-Json') && args.includes('-Quiet'));
   assert.equal(args[args.indexOf('-SettingsPath') + 1], path, 'the slot table comes from the same file');
   assert.equal(result.nextEvaluationAt, '2026-09-28T08:30:00.000Z');
-  assert.equal(result.outcome.summary, 'attention: 0/2 slot(s) healthy');
+  assert.equal(result.outcome.summary, 'healthy: 2/2 profile(s) reported on');
   assert.equal(existsSync(paths.lock), false, 'the lock is released');
 
   const state = JSON.parse(await readFile(paths.state, 'utf8'));
   assert.equal(state.recent.length, 1);
   assert.equal(state.recent[0].mode, 'observe');
+  assert.equal(state.recent[0].slots[0].state, 'in-use');
 
   const status = await readBrowserStatus({ paths, policy });
   assert.equal(status.policy.observe, true);
-  assert.equal(status.policy.autoLaunch, false);
-  assert.equal(status.recent[0].status, 'attention');
+  assert.equal(status.recent[0].status, 'healthy');
+});
+
+test('a report that surfaces attention (e.g. an unreadable slot table) is never called "healthy"', async t => {
+  const path = await settingsFile(t, ['| Enabled | `on` |', '| Observe | `on` |']);
+  const policy = await loadBrowserChecksPolicy({ settingsPath: path });
+  const paths = browserWorkloadPaths(await home(t));
+  const report = { slots: [{ slot: null, state: 'error', healthy: false, detail: 'slot table unreadable' }], unhealthy: 1, healthy: false };
+  const watchdog = recordingWatchdog(report, 2);
+  const result = await runBrowserWorkload({ paths, policy, runWatchdog: watchdog.run });
+  assert.equal(result.status, 'attention');
+  assert.equal(result.outcome.unhealthy, 1);
 });
 
 test('a live lock owned by another run makes this run step aside', async t => {
@@ -236,56 +215,32 @@ test('a live lock owned by another run makes this run step aside', async t => {
   assert.equal(watchdog.calls.length, 0);
 });
 
-// End to end through the REAL browser-watchdog.ps1 with fixture probe/launch
-// tools (the same fixtures mutcheck-browser-watchdog.ps1 uses): a closed slot is
-// launched only when Auto-launch is on.
-const fixtureChecker = `param([switch]$Json, [switch]$Repair, [string]$SettingsPath)
-$mode = (Get-Content -LiteralPath $env:OABW_STATE -Raw).Trim()
-Add-Content -LiteralPath $env:OABW_CALLS -Value ("check:{0}:{1}" -f $mode, [bool]$Repair)
-if ($mode -eq 'healthy') { $state='up'; $healthy=$true } else { $state='down'; $healthy=$false }
-@([pscustomobject]@{ port=9999; mcp='fixture-slot'; state=$state; healthy=$healthy; repaired=0; detail=$mode }) | ConvertTo-Json -Depth 4
-exit 0
-`;
-const fixtureEnsure = `param([string]$Slot='all', [string]$SettingsPath)
-Add-Content -LiteralPath $env:OABW_CALLS -Value ("ensure:{0}" -f $Slot)
-Set-Content -LiteralPath $env:OABW_STATE -Value 'healthy' -NoNewline
+// End to end through the REAL browser-watchdog.ps1 with a fixture checker (the
+// same shape mutcheck-browser-watchdog.ps1 uses): a read-only status check never
+// launches or closes anything, regardless of what state the fixture reports.
+const fixtureChecker = `param([switch]$Json, [string]$SettingsPath)
+Add-Content -LiteralPath $env:OABW_CALLS -Value 'checked'
+ConvertTo-Json -InputObject @([pscustomobject]@{ slot='fixture-slot'; account='fixture'; profile_dir='fixture-dir'; state='in-use'; healthy=$true; detail='fixture' }) -Depth 4
 exit 0
 `;
 
-test('end to end: a closed slot is launched only when Auto-launch is explicitly on',
+test('end to end: Observe runs the checker and reports status; nothing is ever launched',
   { skip: process.platform !== 'win32' && 'needs Windows PowerShell' }, async t => {
     const dir = await home(t);
     const checker = join(dir, 'fixture-check.ps1');
-    const ensure = join(dir, 'fixture-ensure.ps1');
     await writeFile(checker, fixtureChecker, 'utf8');
-    await writeFile(ensure, fixtureEnsure, 'utf8');
     const paths = { ...browserWorkloadPaths(dir), watchdog: join(here, 'browser-watchdog.ps1') };
-    const saved = { state: process.env.OABW_STATE, calls: process.env.OABW_CALLS };
-    t.after(() => {
-      for (const [key, value] of [['OABW_STATE', saved.state], ['OABW_CALLS', saved.calls]]) {
-        if (value === undefined) delete process.env[key]; else process.env[key] = value;
-      }
-    });
+    process.env.OABW_CALLS = join(dir, 'calls.txt');
+    await writeFile(process.env.OABW_CALLS, '', 'utf8');
+    t.after(() => { delete process.env.OABW_CALLS; });
 
-    const cases = [
-      [{ enabled: true, observe: true }, false],
-      [{ enabled: true, thaw: true }, false],
-      [{ enabled: true, observe: true, thaw: true }, false],
-      [{ enabled: true, autoLaunch: true }, true],
-    ];
-    for (const [values, expectLaunch] of cases) {
-      process.env.OABW_STATE = join(dir, 'state.txt');
-      process.env.OABW_CALLS = join(dir, 'calls.txt');
-      await writeFile(process.env.OABW_STATE, 'down', 'utf8');
-      await writeFile(process.env.OABW_CALLS, '', 'utf8');
-      const result = await runBrowserWorkload({
-        paths, policy: { source: 'user-settings', settingsPath: join(dir, 'user-settings.md'), values },
-        extraWatchdogArgs: ['-CheckerPath', checker, '-EnsurePath', ensure],
-      });
-      const calls = await readFile(process.env.OABW_CALLS, 'utf8');
-      assert.equal(result.dispatched, true);
-      assert.equal(/ensure:/.test(calls), expectLaunch,
-        `${JSON.stringify(values)} launch=${expectLaunch}; calls: ${calls}`);
-      assert.equal(result.outcome.slots[0].action, expectLaunch ? 'launched' : 'would-launch');
-    }
+    const result = await runBrowserWorkload({
+      paths, policy: { source: 'user-settings', settingsPath: join(dir, 'user-settings.md'), values: { enabled: true, observe: true } },
+      extraWatchdogArgs: ['-CheckerPath', checker],
+    });
+    const calls = await readFile(process.env.OABW_CALLS, 'utf8');
+    assert.equal(result.dispatched, true);
+    assert.equal(calls.trim(), 'checked');
+    assert.equal(result.outcome.slots[0].state, 'in-use');
+    assert.equal(result.outcome.status, 'healthy');
   });
