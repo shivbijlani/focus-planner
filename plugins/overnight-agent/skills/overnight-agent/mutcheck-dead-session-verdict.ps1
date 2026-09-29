@@ -50,6 +50,7 @@ function New-Fixture {
     status = 'in-progress'
     status_by = 'agent'
     version = 1
+    updated = '2026-09-01T12:00:00Z'
     session = [ordered]@{
       session_id = $id
       kind = 'chat'
@@ -76,16 +77,65 @@ function New-Fixture {
 }
 
 function Get-Session {
-  param($Fixture, [string]$Build)
-  $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Build, 'session', '-Id', '900',
+  param($Fixture, [string]$Build, [string[]]$Action = @('session', '-Id', '900'))
+  $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Build) + $Action +
+    @(
     '-JournalDir', $script:JournalDir, '-StateDir', $Fixture.stateDir,
     '-SessionStateDir', $Fixture.sessionStateDir, '-PlannerBoard', $script:Board, '-SnoozeStore', $script:Store)
   $old = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  try { $out = & $script:PsExe @args 2>$null }
+  try { $out = & $script:PsExe @args 2>&1 }
   finally { $ErrorActionPreference = $old }
+  $script:LastCommandOutput = ($out -join "`n")
   if ($LASTEXITCODE -ne 0 -or -not $out) { return $null }
   try { return (($out -join "`n") | ConvertFrom-Json) } catch { return $null }
+}
+
+function Test-AliveMarkRefused {
+  param([string]$Build)
+  $fixture = New-Fixture
+  Add-Lock $fixture $PID
+  Add-Events $fixture 20
+  $dead = Get-Session $fixture $Build @('session', '-Id', '900', '-SessionDead')
+  $after = Get-Session $fixture $Build
+  if ($dead -or "$($after.verdict)" -ne 'reuse' -or "$($after.state)" -ne 'live') {
+    return 'E_idle-alive: a silent session with a live host must refuse -SessionDead and remain reusable'
+  }
+  return $null
+}
+
+function Test-ReplacementCount {
+  param([string]$Build)
+  $fixture = New-Fixture
+  $statePath = Join-Path $fixture.stateDir 'task-900.json'
+  $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+  $old = [datetimeoffset]::UtcNow.AddHours(-25).ToString('o')
+  $recent = [datetimeoffset]::UtcNow.AddMinutes(-84).ToString('o')
+  Add-Member -InputObject $state -NotePropertyName session_replacements -NotePropertyValue @(
+    [pscustomobject]@{ session_id = 'old'; at = $old },
+    [pscustomobject]@{ session_id = 'previous'; at = $recent }
+  )
+  [IO.File]::WriteAllText($statePath, ($state | ConvertTo-Json -Depth 8), $utf8)
+  $row = @(Get-Session $fixture $Build @('scan') | Where-Object { "$($_.id)" -eq '900' })
+  if ($row.Count -ne 1 -or $row[0].replacements_24h -ne 1) {
+    return 'F_rolling-window: scan must count only the replacement within 24 hours'
+  }
+  $marked = Get-Session $fixture $Build @('session', '-Id', '900', '-SessionDead')
+  $markOutput = $script:LastCommandOutput
+  $bind = Get-Session $fixture $Build @('session', '-Id', '900', '-SessionId', ([guid]::NewGuid().ToString()),
+    '-SessionKind', 'code', '-SessionProject', 'focus-planner', '-SessionWorkspace', $fixture.sessionDir,
+    '-WorkspaceType', 'branch', '-RunWorkspace', $script:Root)
+  $script:LastBindError = $script:LastCommandOutput
+  $row = @(Get-Session $fixture $Build @('scan') | Where-Object { "$($_.id)" -eq '900' })
+  if ($row.Count -ne 1 -or $row[0].replacements_24h -ne 2) {
+    return "F_rolling-window: binding a replacement must increment the 24-hour count (mark=$($marked.state), markOutput=$markOutput, bind=$($bind.verdict), count=$($row[0].replacements_24h), error=$($script:LastBindError))"
+  }
+  $compact = Get-Session $fixture $Build @('scan', '-Compact')
+  $compactRow = @($compact.rows | Where-Object { "$($_.id)" -eq '900' })
+  if ($compactRow.Count -ne 1 -or $compactRow[0].replacements_24h -ne 2) {
+    return 'F_rolling-window: compact scan must retain a churned task and its count'
+  }
+  return $null
 }
 
 function Add-Lock {
@@ -94,9 +144,11 @@ function Add-Lock {
 }
 
 function Add-Events {
-  param($Fixture, [int]$AgeMinutes)
+  param($Fixture, [int]$AgeMinutes, [switch]$RoutineShutdown)
   $path = Join-Path $Fixture.sessionDir 'events.jsonl'
-  [IO.File]::WriteAllText($path, '{"type":"assistant.turn_start"}' + "`n", $utf8)
+  $event = if ($RoutineShutdown) { '{"type":"session.shutdown","data":{"shutdownType":"routine"}}' }
+    else { '{"type":"assistant.turn_start"}' }
+  [IO.File]::WriteAllText($path, $event + "`n", $utf8)
   if ($AgeMinutes -gt 0) {
     $item = Get-Item -LiteralPath $path
     $item.LastWriteTimeUtc = [datetime]::UtcNow.AddMinutes(-$AgeMinutes)
@@ -120,6 +172,10 @@ function Test-OneCase {
       Add-Events $fixture 0
     }
     'D_missing-events' { Add-Lock $fixture $script:DeadPid }
+    'G_routine-shutdown' {
+      Add-Lock $fixture $script:DeadPid
+      Add-Events $fixture 20 -RoutineShutdown
+    }
   }
   $result = Get-Session $fixture $Build
   switch ($Case) {
@@ -143,6 +199,11 @@ function Test-OneCase {
         return 'D_missing-events: a missing event log is not proof of staleness'
       }
     }
+    'G_routine-shutdown' {
+      if ("$($result.verdict)" -ne 'reuse' -or "$($result.process_dead)" -ne 'False') {
+        return 'G_routine-shutdown: an idle resumable CLI must not read replace'
+      }
+    }
   }
   return $null
 }
@@ -150,10 +211,12 @@ function Test-OneCase {
 function Test-Cases {
   param([string]$Build)
   $failures = @()
-  foreach ($case in 'A_dead-stale', 'B_live-owner', 'C_recent-events', 'D_missing-events') {
+  foreach ($case in 'A_dead-stale', 'B_live-owner', 'C_recent-events', 'D_missing-events', 'G_routine-shutdown') {
     $failure = Test-OneCase $Build $case
     if ($failure) { $failures += $failure }
   }
+  $failures += @(Test-AliveMarkRefused $Build | Where-Object { $_ })
+  $failures += @(Test-ReplacementCount $Build | Where-Object { $_ })
   return $failures
 }
 
@@ -168,8 +231,8 @@ $mutants = @(
   @{
     Name = 'M2_ignore-event-freshness'
     Expect = 'C_recent-events'
-    Find = '  return ((Get-Item -LiteralPath $eventsPath -ErrorAction Stop).LastWriteTimeUtc -le $staleBefore)'
-    Replace = '  return $true'
+    Find = '  if ((Get-Item -LiteralPath $eventsPath -ErrorAction Stop).LastWriteTimeUtc -gt $staleBefore) { return $false }'
+    Replace = '  if ($false) { return $false }'
   }
   @{
     Name = 'M3_ignore-live-lock-owner'
@@ -177,10 +240,28 @@ $mutants = @(
     Find = '      if (-not $process.HasExited) { return $false }'
     Replace = '      if ($false) { return $false }'
   }
+  @{
+    Name = 'M4_mark-live-session-dead'
+    Expect = 'E_idle-alive'
+    Find = '    if (Test-SessionProcessAlive "$($sess.session_id)") {'
+    Replace = '    if ($false) {'
+  }
+  @{
+    Name = 'M5_drop-replacement-count'
+    Expect = 'F_rolling-window'
+    Find = '      replacements_24h = (Get-Replacements24h $st)'
+    Replace = '      replacements_24h = 0'
+  }
+  @{
+    Name = 'M6_routine-shutdown-means-dead'
+    Expect = 'G_routine-shutdown'
+    Find = '  if ("$($lastEvent.type)" -eq ''session.shutdown'' -and "$($lastEvent.data.shutdownType)" -eq ''routine'') {'
+    Replace = '  if ($false) {'
+  }
 )
 
 Write-Host ''
-Write-Host 'mutcheck-dead-session-verdict -- GH #728 dead bound sessions read replace'
+Write-Host 'mutcheck-dead-session-verdict -- GH #728 and #761 liveness and replacement count'
 Write-Host ''
 
 $baseline = Test-Cases $ScriptPath
@@ -188,7 +269,7 @@ if ($baseline.Count) {
   foreach ($failure in $baseline) { Write-Host "  FAIL  baseline  $failure" -ForegroundColor Red }
   exit 1
 }
-Write-Host '  [baseline] OK -- dead+stale=>replace, live or uncertain=>reuse'
+Write-Host '  [baseline] OK -- dead+stale=>replace, idle-alive=>reuse, rolling replacements counted'
 
 $survived = @()
 foreach ($mutant in $mutants) {
@@ -205,7 +286,11 @@ foreach ($mutant in $mutants) {
   }
   $path = Join-Path $script:Root ($mutant.Name + '.ps1')
   [IO.File]::WriteAllText($path, $mutated, $utf8)
-  $failure = Test-OneCase $path $mutant.Expect
+  $failure = switch ($mutant.Expect) {
+    'E_idle-alive' { Test-AliveMarkRefused $path }
+    'F_rolling-window' { Test-ReplacementCount $path }
+    default { Test-OneCase $path $mutant.Expect }
+  }
   $failures = if ($failure) { @($failure) } else { @() }
   if (@($failures | Where-Object { $_ -like "$($mutant.Expect)*" }).Count -gt 0) {
     Write-Host "  [KILLED ] $($mutant.Name) by $($mutant.Expect)"

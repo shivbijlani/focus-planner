@@ -1153,9 +1153,18 @@ an earlier phase or perform any follow-up.
    3. Send exactly one `send_session_message` to that task session with the approved brief and
       `delivery_mode: immediate`. The brief's first line is the emitted `role_line`, verbatim.
       Put `kickoff_continuation` next when replacing a dead session.
-   4. If sending fails, run `oa-state.ps1 session -Id <ID> -SessionDead`, do not retry that task
-      or session in this run, and continue to the next eligible row while the number of accepted
-      active sends is under the limit and before cutoff. A failed send does not count toward the limit.
+   4. **Silence is not death (#761).** If delivery is definitively rejected because the target
+      session is unavailable, run `oa-state.ps1 session -Id <ID> -SessionDead`; if it refuses with
+      `session_still_alive`, keep the binding and report the conflicting evidence. A delivery that
+      **could not be confirmed** is not a rejection: report uncertainty, keep the binding, and do
+      not retry that task in this run. Do not infer death from unchanged `updated_at`, journal mtime,
+      lack of a turn, or elapsed time: a no-change task can legitimately write nothing, and the
+      app can resume an idle CLI after routine shutdown. The read-time dead-process check also
+      excludes a log ending in `session.shutdown` with `shutdownType: routine`; a stale dead-PID
+      lock after normal idle shutdown is not evidence that the session cannot resume.
+      Do not retry any failed or uncertain
+      delivery in this run; continue to the next eligible row before cutoff. Only accepted sends
+      count toward the active-send limit.
    5. **One send per task per run, and a refusal ends that task for the run.** If the task
       session answers with a refusal — a user opt-out, a pause, or a blocker it cannot clear —
       that is the answer. **Do not send a follow-up**: not "write the required turn now", not
@@ -1210,6 +1219,9 @@ an earlier phase or perform any follow-up.
      names the task and the prior session id, so the replacement knows it is continuing work rather
      than starting clean. Then bind it — which records `prior_session_id`, and appends the
      outgoing session to `prior_session_ids`.
+     `scan` reports `replacements_24h` for every task (including quiet tasks in `-Compact`);
+     it counts bind events in the last 24 hours, not failed attempts. A nonzero count is a
+     churn signal to inspect, never an automatic cap or permission to retire the current session.
    - **A replacement may only move forward.** Binding a session id that appears anywhere in the
      task's `prior_session_ids` lineage is refused (`session_bind_backwards`), and **`-Force`
      does not override it** — there is no state of the world in which re-binding an already
@@ -1220,9 +1232,11 @@ an earlier phase or perform any follow-up.
      used.
    - **`create`** — no session yet. Create one **idle, without a kickoff**, then bind it before
      sending. Creating or binding an idle session is not work.
-   - If a session will not wake, record that fact rather than retrying blindly:
-     `oa-state.ps1 session -Id <ID> -SessionDead`. That is what turns the next verdict into
-     `replace` and arms the continuation.
+   - Mark a session dead only after a definite unavailable-target delivery rejection (or the
+     read-time dead-process/workspace verdict above). Silence, an idle status, a completed
+     no-change run, and unconfirmed delivery are not non-wakeability evidence. On definite
+     rejection use `oa-state.ps1 session -Id <ID> -SessionDead`; a live process refuses it with
+     `session_still_alive`. Otherwise preserve the binding and report uncertainty, not `replace`.
    - **If the user tells a sub-session to stop, record it on the spot** —
      `oa-state.ps1 mark -Id <ID> -Status blocked -StatusBy user`. That single write is what every
      reader derives from: `scan` reports `session_paused` and `eligible: false`, and this verdict

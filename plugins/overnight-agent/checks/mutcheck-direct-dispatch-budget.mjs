@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Mutation check for the PHASE 1 direct-dispatch concurrency rule (#728).
+ * Mutation check for the PHASE 1 direct-dispatch concurrency and liveness rules (#728, #761).
  *
  * The dispatcher is an instruction protocol rather than executable coordinator code. Pin the
  * active accepted-send counter and failure behavior in the actual skill text, then mutate each
@@ -12,22 +12,27 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const skillPath = join(resolve(here, '..'), 'skills', 'overnight-agent', 'SKILL.md');
-const source = readFileSync(skillPath, 'utf8');
+const source = readFileSync(skillPath, 'utf8').replace(/\r\n/g, '\n');
 const start = source.indexOf("### PHASE 1 — Dispatch approved plans to each task's own session");
 const end = source.indexOf('\n### PHASE 2', start);
 
 function failures(text) {
   if (start < 0 || end < 0) return ['phase1-section: direct-dispatch section not found'];
-  const phase = text.slice(start, end);
+  const phase = text.slice(start, end).replace(/\r\n/g, '\n');
   const out = [];
   if (!phase.includes('Count only sends accepted by `send_session_message` toward the limit; a failed delivery does')) {
     out.push('A_accepted-send-count: only accepted sends consume concurrency')
   }
-  if (!phase.includes('A failed send does not count toward the limit.')) {
+  if (!phase.includes('Only accepted sends\n      count toward the active-send limit.')) {
     out.push('B_failed-send-does-not-count: failed delivery leaves budget available')
   }
   if (!phase.includes('Fill openings from the current scan until the accepted-send count reaches the limit of active')) {
     out.push('C_fill-on-accepted-count: capacity counts active accepted sends')
+  }
+  if (!phase.includes('Silence is not death (#761)') ||
+      !phase.includes('A delivery that\n      **could not be confirmed** is not a rejection: report uncertainty, keep the binding') ||
+      !phase.includes('Do not infer death from unchanged `updated_at`, journal mtime,')) {
+    out.push('D_silence-not-death: silence and unconfirmed delivery preserve the binding')
   }
   return out;
 }
@@ -50,7 +55,7 @@ const mutants = [
   {
     name: 'M2_failed-send-consumes-slot',
     expect: 'B_failed-send-does-not-count',
-    find: 'A failed send does not count toward the limit.',
+    find: 'Only accepted sends\n      count toward the active-send limit.',
     replace: 'A failed send consumes one attempt.',
   },
   {
@@ -58,6 +63,18 @@ const mutants = [
     expect: 'C_fill-on-accepted-count',
     find: 'Fill openings from the current scan until the accepted-send count reaches the limit of active',
     replace: 'Fill openings from the current scan until the send-attempt count reaches the limit of active',
+  },
+  {
+    name: 'M4_unconfirmed-means-dead',
+    expect: 'D_silence-not-death',
+    find: 'A delivery that\n      **could not be confirmed** is not a rejection: report uncertainty, keep the binding',
+    replace: 'A delivery that could not be confirmed marks the binding dead',
+  },
+  {
+    name: 'M5_silence-means-dead',
+    expect: 'D_silence-not-death',
+    find: 'Do not infer death from unchanged `updated_at`, journal mtime,',
+    replace: 'Infer death from unchanged `updated_at`, journal mtime,',
   },
 ];
 
