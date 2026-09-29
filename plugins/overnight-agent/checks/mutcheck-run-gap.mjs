@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  detectRunGap, gapForAlert, gapHeadline, readRunLedger, recordRunStart,
+  detectRunGap, gapForAlert, gapHeadline, lastRunStart, readRunLedger, recordRunStart,
 } from '../skills/overnight-agent/run-ledger.mjs';
 
 const temp = mkdtempSync(path.join(tmpdir(), 'oa-run-gap-'));
@@ -32,6 +32,17 @@ try {
   assert.equal(gapForAlert({ runId: 'run-4' }, { ...pending, alertedAt: '2026-09-29T04:00:01Z' }), null);
   assert.throws(() => detectRunGap({ startedAt: 'bad' }, '2026-09-29T05:00:00Z'), /valid and increasing/);
 
+  // #561: the ledger also carries per-run DECISION lines. Cadence is a property of run STARTS,
+  // so a decision appended between two runs must not be read as the previous start -- that would
+  // make every gap invisible from the first decision onward.
+  appendFileSync(ledger, `${JSON.stringify({ kind: 'decision', runId: 'run-3', at: '2026-09-29T04:05:00Z' })}\n`);
+  assert.equal(lastRunStart(readRunLedger(ledger)).runId, 'run-3');
+  const afterDecision = recordRunStart(ledger, {
+    now: new Date('2026-09-29T07:00:00Z'), trigger: 'schedule', runId: 'run-5',
+  });
+  assert.equal(afterDecision.gap.missedSlots, 5);
+  assert.equal(afterDecision.gap.from, '2026-09-29T04:00:00.000Z');
+
   const sourcePath = path.join(path.dirname(fileURLToPath(import.meta.url)),
     '..', 'skills', 'overnight-agent', 'run-ledger.mjs');
   const source = readFileSync(sourcePath, 'utf8');
@@ -40,6 +51,7 @@ try {
     ['slot-count', 'Math.floor((toMs - fromMs) / cadenceMs) - 1',
       'Math.floor((toMs - fromMs) / cadenceMs)'],
     ['persistence', 'appendFileSync(file, `${JSON.stringify(entry)}\\n`, \'utf8\');', ''],
+    ['run-start-filter', 'detectRunGap(lastRunStart(entries)', 'detectRunGap(entries.at(-1)'],
   ];
   for (const [name, find, replacement] of mutations) {
     assert.equal(source.split(find).length, 2, `${name}: mutation target`);
@@ -62,6 +74,12 @@ try {
       const rows = module.readRunLedger(mutantLedger);
       assert.equal(rows.length, 3);
       assert.equal(detected.gap.missedSlots, 4);
+      appendFileSync(mutantLedger,
+        `${JSON.stringify({ kind: 'decision', runId: `${name}-d`, at: '2026-09-29T04:05:00Z' })}\n`);
+      const afterDecisionLine = module.recordRunStart(mutantLedger, {
+        now: new Date('2026-09-29T07:00:00Z'), runId: `${name}-4`,
+      });
+      assert.equal(afterDecisionLine.gap.missedSlots, 5);
     } catch {
       killed = true;
     }

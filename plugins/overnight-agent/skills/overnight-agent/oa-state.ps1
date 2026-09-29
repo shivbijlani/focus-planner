@@ -29,6 +29,12 @@
   scan                          Emit the per-run worklist as JSON (what changed / reopened /
                                 due_poll).
   get    -Id <id>               Print one task's state JSON.
+  decisions -RunId <id> -ScanFile <compact-scan.json> [-Outcomes <json|file>]
+                                Append this run's DECISION RECORD to the coordinator run ledger
+                                (%LOCALAPPDATA%\overnight-agent\run-ledger.jsonl): the ordered
+                                worklist with a one-word reason per row, every Today row even
+                                when ineligible, and what was dispatched, with times. Retains
+                                -RetainDays (default 7) of both ledger line kinds.
   consent -Id <id>              Print the CONSENT verdict for one task's journal as it stands
                                 now: has the HUMAN provably authorized something? Fail-CLOSED
                                 (see .CONSENT below). Ask this before any irreversible action.
@@ -489,7 +495,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract', 'doc', 'session', 'whoami', 'critical-tools')]
+  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract', 'doc', 'session', 'whoami', 'critical-tools', 'decisions')]
   [string]$Command = 'scan',
 
   [string]$Id,
@@ -537,6 +543,35 @@ param(
   # wants every field and can grep it.
   [switch]$Compact,
   [string]$ScanOutFile,
+
+  # --- the decision record (#561) ---------------------------------------------------------
+  #
+  # WHY THIS IS A COMMAND HERE AND NOT JSON THE COORDINATOR WRITES. The ordered worklist, each
+  # row's eligibility and the reason a higher-ranked row was skipped exist only in memory during
+  # a run, so "why did this run pick #362 while Today #245 sat there?" was answerable only by
+  # re-deriving the decision afterwards -- and only while the state happened not to have moved.
+  # A run that hand-wrote its own record would be doing the same self-reporting SKILL.md's
+  # wrap-up paragraph already does; this way the record is DERIVED from the same `scan -Compact`
+  # output the run acted on, and the outcome vocabulary is a closed enum rather than prose.
+  #
+  # It appends to the EXISTING coordinator run ledger (#762), not a second log, so one file
+  # answers both "did the run start?" and "what did it decide?".
+  [string]$RunId,
+  # The `scan -Compact` output the run selected from -- a file, so the record cites the same
+  # bytes the run read. A full (array) scan is refused: it carries no summary to quote.
+  [string]$ScanFile,
+  # What became of each row, as JSON or a file holding it:
+  # `[{ "id": "362", "outcome": "dispatched", "at": "...", "sessionId": "..." }]`.
+  # `-Outcome` words are a CLOSED ENUM for the same reason `-Action` is: a free-text reason is
+  # prose about the run written by the run, which is exactly what this record replaces.
+  [string]$Outcomes,
+  [string]$RunLedger = "$env:LOCALAPPDATA\overnight-agent\run-ledger.jsonl",
+  # The stated ceiling (#262's lesson): a week of 30-minute runs, both line kinds, is retained
+  # and everything older is dropped on the next append.
+  [int]$RetainDays = 7,
+  [int]$MaxDecisionRows = 50,
+  # Injected clock, so the record and the retention window are testable without waiting a week.
+  [string]$DecisionNow,
 
   # The agent gate (#297). `-Action` is a CLOSED ENUM on purpose: free text would put the
   # matcher's input under the control of whatever prose the agent happened to generate, which is
@@ -764,6 +799,210 @@ function Cmd-CriticalTools {
     if ($configured -notcontains $name) { throw "Critical tools: unknown MCP server '$name' in $McpConfig" }
   }
   [pscustomobject]@{ tools = @($names | Select-Object -Unique); settingsPath = $settingsPath } | ConvertTo-Json -Depth 3
+}
+
+function Cmd-Decisions {
+  if (-not $RunId) { throw 'decisions requires -RunId' }
+  if (-not $ScanFile) { throw 'decisions requires -ScanFile (the `scan -Compact` output)' }
+  if (-not (Test-Path -LiteralPath $ScanFile)) { throw "decisions_scan_missing: $ScanFile" }
+  $scan = Get-Content -LiteralPath $ScanFile -Raw | ConvertFrom-Json
+  if (-not ($scan.PSObject.Properties['summary'] -and $scan.PSObject.Properties['rows'])) {
+    throw 'decisions_requires_compact_scan: pass the output of `scan -Compact`, which carries summary + rows'
+  }
+  $now = Get-DecisionNow
+  $outcomes = Get-DecisionOutcomeMap
+
+  $scanRows = @($scan.rows)
+  $seen = @{}
+  $candidates = @()
+  foreach ($r in $scanRows) {
+    $id = "$($r.id)"
+    $section = "$($r.section)".ToLowerInvariant()
+    # WHICH ROWS ARE RECORDED. Every row with an outcome (it was acted on), every eligible row
+    # (the worklist the run chose from), and every TODAY row even when ineligible -- the last one
+    # because "nothing was eligible" with no named cause is the failure this record exists to
+    # make impossible. A quiet, ineligible, non-Today row is counted and not listed.
+    if (-not ($outcomes.ContainsKey($id) -or $r.eligible -or $section -eq 'today')) { continue }
+    $seen[$id] = $true
+    $candidates += [pscustomobject]@{
+      id       = $id
+      order    = if ($null -ne $r.order) { [int]$r.order } else { [int]::MaxValue }
+      section  = "$($r.section)"
+      eligible = [bool]$r.eligible
+      reason   = Get-DecisionReason $r $outcomes
+      today    = ($section -eq 'today')
+    }
+  }
+  # An outcome naming a row the compact scan omitted is still recorded: dropping it would hide
+  # the one class of decision that had a real effect.
+  foreach ($id in $outcomes.Keys) {
+    if ($seen[$id]) { continue }
+    $candidates += [pscustomobject]@{
+      id = "$id"; order = [int]::MaxValue; section = 'unlisted'; eligible = $false
+      reason = "$($outcomes[$id].outcome)"; today = $false
+    }
+  }
+
+  $ordered = @($candidates | Sort-Object -Property @{ Expression = 'order' }, @{ Expression = { '{0,10}' -f $_.id } })
+  # The cap never drops a row that was acted on or a Today row: those are the record's contract.
+  $must = @($ordered | Where-Object { $_.today -or $outcomes.ContainsKey($_.id) })
+  $rest = @($ordered | Where-Object { -not ($_.today -or $outcomes.ContainsKey($_.id)) })
+  $room = [Math]::Max(0, $MaxDecisionRows - $must.Count)
+  $keptIds = @{}
+  foreach ($r in ($must + @($rest | Select-Object -First $room))) { $keptIds[$r.id] = $true }
+  $kept = @($ordered | Where-Object { $keptIds[$_.id] } | ForEach-Object {
+      [ordered]@{
+        id = $_.id; order = if ($_.order -eq [int]::MaxValue) { $null } else { $_.order }
+        section = $_.section; eligible = $_.eligible; reason = $_.reason
+      }
+    })
+
+  $dispatched = @()
+  foreach ($r in $kept) {
+    if ($r.reason -ne 'dispatched') { continue }
+    $o = $outcomes[$r.id]
+    $stamp = $null
+    if ($o.PSObject.Properties['at'] -and "$($o.at)") {
+      # ConvertFrom-Json turns an ISO timestamp into a [datetime] in the HOST's zone; re-rendering
+      # it with "$x" would write the host's locale format into a durable record.
+      $stamp = ConvertTo-DecisionStamp $o.at
+    }
+    $dispatched += [ordered]@{
+      id = $r.id
+      at = if ($stamp) { $stamp } else { ConvertTo-DecisionStamp $now }
+      sessionId = if ($o.PSObject.Properties['sessionId']) { "$($o.sessionId)" } else { $null }
+    }
+  }
+
+  $s = $scan.summary
+  $record = [ordered]@{
+    schema     = 'oa-decisions/1'
+    kind       = 'decision'
+    runId      = $RunId
+    at         = ConvertTo-DecisionStamp $now
+    summary    = [ordered]@{
+      scan_seconds  = $s.scan_seconds
+      rows_total    = $s.rows_total
+      rows_eligible = $s.rows_eligible
+      rows_returned = $s.rows_returned
+      rows_omitted  = $s.rows_omitted
+      today_holding = $s.today_holding
+      rows_recorded = $kept.Count
+      rows_dropped  = ($ordered.Count - $kept.Count)
+    }
+    rows       = $kept
+    dispatched = $dispatched
+  }
+
+  $line = ConvertTo-Json -InputObject $record -Depth 6 -Compress
+  $dir = Split-Path -Parent $RunLedger
+  if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+  [IO.File]::AppendAllText($RunLedger, "$line`n", (New-Object Text.UTF8Encoding($false)))
+  Limit-RunLedger $RunLedger $now $RetainDays
+  $line
+}
+
+function Get-DecisionNow {
+  if (-not $DecisionNow) { return [datetimeoffset]::Now }
+  $parsed = [datetimeoffset]::MinValue
+  if (-not [datetimeoffset]::TryParse($DecisionNow, [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) {
+    throw "decisions_now_invalid: -DecisionNow must be an ISO timestamp, got '$DecisionNow'"
+  }
+  return $parsed
+}
+
+function ConvertTo-DecisionStamp($value) {
+  # EVERY timestamp in the record is UTC, in the same shape the run ledger's own `startedAt`
+  # already uses. A record is read on a machine other than the one that wrote it -- two lines in
+  # two different local offsets would make "which run came first?" a question about the writers'
+  # time zones rather than about the runs.
+  if ($null -eq $value) { return $null }
+  if ($value -is [datetimeoffset]) { return $value.ToUniversalTime().UtcDateTime.ToString('o') }
+  if ($value -is [datetime]) { return ([datetimeoffset]$value).ToUniversalTime().UtcDateTime.ToString('o') }
+  $parsed = [datetimeoffset]::MinValue
+  if ([datetimeoffset]::TryParse("$value", [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) {
+    return $parsed.ToUniversalTime().UtcDateTime.ToString('o')
+  }
+  return "$value"
+}
+
+# The closed outcome vocabulary. One word per row, so the record is queryable rather than
+# readable-only: "the Today gate has released on not_workable for 20 consecutive runs" is a grep.
+$script:DecisionOutcomeWords = @('dispatched', 'paused', 'cutoff', 'capacity', 'refused', 'failed_send')
+
+function Get-DecisionOutcomeMap {
+  $map = @{}
+  if (-not $Outcomes) { return $map }
+  $raw = if (Test-Path -LiteralPath $Outcomes) { Get-Content -LiteralPath $Outcomes -Raw } else { $Outcomes }
+  $parsed = $null
+  try { $parsed = $raw | ConvertFrom-Json } catch {
+    throw 'decisions_outcomes_json: -Outcomes must be a JSON array, or a file holding one'
+  }
+  foreach ($o in @($parsed)) {
+    $id = "$($o.id)"
+    if (-not $id) { throw 'decisions_outcome_id: every outcome must name a row id' }
+    $word = "$($o.outcome)"
+    if ($script:DecisionOutcomeWords -notcontains $word) {
+      throw "decisions_outcome_word: '$word' is not one of $($script:DecisionOutcomeWords -join ', ')"
+    }
+    $map[$id] = $o
+  }
+  return $map
+}
+
+function Get-DecisionReason($row, $outcomes) {
+  $id = "$($row.id)"
+  if ($outcomes.ContainsKey($id)) { return "$($outcomes[$id].outcome)" }
+  if (-not $row.eligible) {
+    # `ineligible:<cause>` keeps the deciding fact rather than the bare verdict -- the exact
+    # distinction that made #501 (`done` -> `not_workable` -> gate released) a live inference.
+    $cause = ''
+    foreach ($field in @('today_release_reason', 'no_journal_reason', 'status')) {
+      if ($row.PSObject.Properties[$field] -and "$($row.$field)") { $cause = "$($row.$field)"; break }
+    }
+    if (-not $cause) { $cause = 'unknown' }
+    return 'ineligible:' + (ConvertTo-DecisionWord $cause)
+  }
+  return 'not_dispatched'
+}
+
+function ConvertTo-DecisionWord([string]$text) {
+  # ONE WORD, always. A reason carrying spaces would re-open the prose channel this closes.
+  $word = ($text.Trim().ToLowerInvariant() -replace '[^a-z0-9:_-]+', '_').Trim('_')
+  if (-not $word) { return 'unknown' }
+  if ($word.Length -gt 40) { return $word.Substring(0, 40) }
+  return $word
+}
+
+function Limit-RunLedger([string]$path, [datetimeoffset]$now, [int]$retainDays) {
+  # BOUNDED BY AGE, over BOTH line kinds, so the ledger cannot grow without bound. A line whose
+  # timestamp does not parse is KEPT: this rewrites a file another writer appends to, and
+  # discarding what it cannot read would be a silent data loss worse than the growth.
+  if ($retainDays -le 0) { return }
+  if (-not (Test-Path -LiteralPath $path)) { return }
+  $cutoff = $now.AddDays(-$retainDays)
+  $lines = @(Get-Content -LiteralPath $path -ErrorAction SilentlyContinue | Where-Object { "$_".Trim() })
+  $kept = @()
+  foreach ($line in $lines) {
+    $stamp = $null
+    try {
+      $entry = $line | ConvertFrom-Json
+      foreach ($field in @('startedAt', 'at')) {
+        if ($entry.PSObject.Properties[$field] -and "$($entry.$field)") { $stamp = "$($entry.$field)"; break }
+      }
+    }
+    catch { $stamp = $null }
+    $when = [datetimeoffset]::MinValue
+    if ($stamp -and [datetimeoffset]::TryParse($stamp, [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::None, [ref]$when) -and $when -lt $cutoff) {
+      continue
+    }
+    $kept += $line
+  }
+  if ($kept.Count -eq $lines.Count) { return }
+  [IO.File]::WriteAllText($path, (($kept -join "`n") + "`n"), (New-Object Text.UTF8Encoding($false)))
 }
 
 function Resolve-GateSettings {
@@ -6166,6 +6405,7 @@ try {
     'session' { Cmd-Session }
     'whoami' { Cmd-Whoami }
     'critical-tools' { Cmd-CriticalTools }
+    'decisions' { Cmd-Decisions }
   }
 }
 finally {
