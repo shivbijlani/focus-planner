@@ -73,51 +73,194 @@
 //   node ensure-catchup-doc.mjs                    create + bind, up to --limit
 //   node ensure-catchup-doc.mjs --task 468         one task
 //   node ensure-catchup-doc.mjs --limit 1          tighter blast radius
+//
+// RECOVERY (#763)
+//   OA_STATE_DIR/doc-creation/task-<id>.json records intent before the external create and
+//   the confirmed ID before binding. A retry reuses that ID. A "creating" receipt means the
+//   outcome is uncertain (or another creator is running): reconcile it against Google before
+//   retrying, never delete it just to unblock a run. A *.confirmed file retains the ID if the
+//   atomic receipt replacement failed. Receipts are local, retained, and never delete docs.
+//   Reusing a task ID or moving its planner requires explicit receipt reconciliation too.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-
-const argv = process.argv.slice(2);
-const flag = (name) => argv.includes(`--${name}`);
-const opt = (name, dflt) => {
-  const i = argv.indexOf(`--${name}`);
-  return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt;
-};
-
-const DRY = flag('dry-run');
-const ONLY = opt('task', '');
-const LIMIT = Number(opt('limit', '5')) || 5;
-const EMAIL = process.env.OA_GOOGLE_EMAIL || 'shiv@bijlanis.com';
-
-const PLANNER = process.env.PLANNER_PATH;
-if (!PLANNER) {
-  console.error('PLANNER_PATH is not set. Run via run-sweeps.ps1, which exports it.');
-  process.exit(2);
-}
-
-// Same Linux-safety shape as catchup-doc-sweep.mjs: explicit parameter first, Windows default
-// only as a fallback, because `path.join(undefined, …)` throws on the CI runner.
-const STATE_DIR =
-  process.env.OA_STATE_DIR ||
-  (process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'overnight-agent', 'state') : '');
-if (!STATE_DIR) {
-  console.error('No state dir: set OA_STATE_DIR (or run on Windows, where LOCALAPPDATA is set).');
-  process.exit(2);
-}
-
-const readJson = (file) => {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-  } catch {
-    return null;
-  }
-};
+import { fileURLToPath } from 'node:url';
 
 const TERMINAL = new Set(['done', 'skip']);
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) main();
 
-// PURE. No I/O, no clock, no environment — so the mutation check can drive every branch from a
-// fixture. Everything that can fail lives on the other side of this function.
+function main() {
+  const argv = process.argv.slice(2);
+  const flag = (name) => argv.includes(`--${name}`);
+  const opt = (name, dflt) => {
+    const i = argv.indexOf(`--${name}`);
+    return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt;
+  };
+
+  const DRY = flag('dry-run');
+  const ONLY = opt('task', '');
+  const LIMIT = Number(opt('limit', '5')) || 5;
+  const EMAIL = process.env.OA_GOOGLE_EMAIL || 'shiv@bijlanis.com';
+
+  const PLANNER = process.env.PLANNER_PATH;
+  if (!PLANNER) {
+    console.error('PLANNER_PATH is not set. Run via run-sweeps.ps1, which exports it.');
+    process.exit(2);
+  }
+
+  // Same Linux-safety shape as catchup-doc-sweep.mjs: explicit parameter first, Windows default
+  // only as a fallback, because `path.join(undefined, …)` throws on the CI runner.
+  const STATE_DIR =
+    process.env.OA_STATE_DIR ||
+    (process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'overnight-agent', 'state') : '');
+  if (!STATE_DIR) {
+    console.error('No state dir: set OA_STATE_DIR (or run on Windows, where LOCALAPPDATA is set).');
+    process.exit(2);
+  }
+
+  const readJson = (file) => {
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    }
+  };
+
+  // The board is the universe of live tasks, same as every other sweep. Row shape is
+  // `| id | icon | title | …`, so the title is the third cell.
+  const boardFile = path.join(PLANNER, 'planner.md');
+  const board = fs.existsSync(boardFile) ? fs.readFileSync(boardFile, 'utf8') : '';
+  const rows = [];
+  for (const line of board.split(/\r?\n/)) {
+    const m = /^\|\s*(\d+)[,\s|]/.exec(line);
+    if (!m) continue;
+    const cells = line.split('|').map((c) => c.trim());
+    rows.push({ id: m[1], title: cells[3] || `Task ${m[1]}` });
+  }
+
+  const probe = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-probe.mjs');
+
+  function createDoc(title, id, taskTitle) {
+    // Seeded, not empty. An empty document bound to a task is worse than no document: it looks
+    // like a page that lost its contents, and Shiv has no way to tell "created, awaiting its first
+    // wake" from "written and then wiped". The stub says which it is.
+    const content = [
+      `Catch-up: Task ${id} — ${taskTitle}`,
+      '',
+      'This page was created automatically when the task was bound to a catch-up doc, and has not',
+      'been written yet. Its first wake replaces this text with the current state of the work.',
+      '',
+      'Comments on this page are the primary channel for this task. The agent never comments here —',
+      'it answers by editing the page — so every comment on it is yours.',
+    ].join('\n');
+    const args = JSON.stringify({ user_google_email: EMAIL, title, content });
+    const r = spawnSync(process.execPath, [probe, 'google-workspace', 'call', 'create_doc', args], {
+      encoding: 'utf8',
+    });
+    const out = `${r.stdout || ''}${r.stderr || ''}`;
+    if (r.status !== 0) {
+      throw new Error(`create result uncertain (exit ${r.status}): ${out.trim() || r.error?.message || 'no response'}`);
+    }
+    return parseCreatedDoc(r.stdout);
+  }
+
+  function bind(id, docId) {
+    const oa = path.join(
+      process.env.OA_SKILL_DIR ||
+        path.join(
+          process.env.USERPROFILE || '',
+          '.copilot',
+          'installed-plugins',
+          'focus-planner',
+          'overnight-agent',
+          'skills',
+          'overnight-agent',
+        ),
+      'oa-state.ps1',
+    );
+    // -DocUrl is not decoration. The journal stamp carries it, and write-turn.ps1's G10 accepts a
+    // turn that names the doc by URL as well as by id; binding without it leaves the stamp id-only
+    // and quietly narrows what counts as a valid pointer turn.
+    const url = `https://docs.google.com/document/d/${docId}/edit`;
+    const r = spawnSync(
+      'powershell',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', oa, 'doc', '-Id', id, '-DocId', docId, '-DocUrl', url,
+        '-StateDir', STATE_DIR, '-JournalDir', path.join(PLANNER, 'journal'), '-PlannerBoard', boardFile],
+      { encoding: 'utf8' },
+    );
+    if (r.status !== 0) {
+      throw new Error(`binding refused for ${docId}: ${(r.stderr || r.stdout || r.error?.message || `exit ${r.status}`).trim()}`);
+    }
+  }
+
+  let created = 0;
+  let recovered = 0;
+  let attempts = 0;
+  let contd = 0;
+  let skipped = 0;
+  let failed = 0;
+  const capped = [];
+
+  for (const row of rows) {
+    if (ONLY && row.id !== ONLY) continue;
+    try {
+      const readState = () => readJson(path.join(STATE_DIR, `task-${row.id}.json`));
+      const st = readState();
+      const d = decide(st);
+
+      if (DRY) {
+        if (d.action === 'CONTINUE') contd++;
+        else if (d.action === 'SKIP') skipped++;
+        else if (created >= LIMIT) capped.push(row.id);
+        else {
+          console.log(`CREATE ${row.id} ${row.title}`);
+          created++;
+        }
+        continue;
+      }
+
+      const title = `Catch-up: Task ${row.id} — ${row.title}`;
+      const result = ensureBinding({
+        id: row.id,
+        planner: PLANNER,
+        receiptDir: path.join(STATE_DIR, 'doc-creation'),
+        readState,
+        create: () => createDoc(title, row.id, row.title),
+        bind: (docId) => bind(row.id, docId),
+        allowCreate: () => attempts < LIMIT,
+        onAttempt: () => { attempts++; },
+      });
+      if (result.action === 'DEFER') capped.push(row.id);
+      else if (result.action === 'CONTINUE') contd++;
+      else if (result.action === 'SKIP') skipped++;
+      else {
+        console.log(`${result.created ? 'CREATE' : 'RECOVER'} ${row.id} ${result.docId}`);
+        if (result.created) created++;
+        else recovered++;
+      }
+    } catch (error) {
+      console.log(`FAILED ${row.id} ${error.message}`);
+      failed++;
+    }
+  }
+
+  console.log(
+    `ensure-catchup-doc: created ${created}, continued ${contd}, skipped ${skipped}, failed ${failed}${
+      capped.length ? `, deferred ${capped.length} to a later run (limit ${LIMIT})` : ''
+    }, recovered ${recovered}${DRY ? ' [dry-run]' : ''}`,
+  );
+
+  // Exit non-zero only on a real failure. An unbound task is not an error here — it is the work,
+  // and this run either did it or deferred it under the limit. Reporting deferral as failure would
+  // make the check red on every run until coverage completed, which is the always-firing detector
+  // this file's header argues against.
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// PURE. Shared by the dry-run and the effectful recovery path.
 export function decide(state) {
   if (!state) return { action: 'SKIP', reason: 'no-state' }; // gate NO STATE
   if (TERMINAL.has(String(state.status))) return { action: 'SKIP', reason: 'terminal' }; // gate TERMINAL
@@ -126,125 +269,99 @@ export function decide(state) {
   return { action: 'CREATE', reason: 'unbound' };
 }
 
-// The board is the universe of live tasks, same as every other sweep. Row shape is
-// `| id | icon | title | …`, so the title is the third cell.
-const boardFile = path.join(PLANNER, 'planner.md');
-const board = fs.existsSync(boardFile) ? fs.readFileSync(boardFile, 'utf8') : '';
-const rows = [];
-for (const line of board.split(/\r?\n/)) {
-  const m = /^\|\s*(\d+)[,\s|]/.exec(line);
-  if (!m) continue;
-  const cells = line.split('|').map((c) => c.trim());
-  rows.push({ id: m[1], title: cells[3] || `Task ${m[1]}` });
+export function parseCreatedDoc(output) {
+  const result = JSON.parse(output);
+  if (!result || result.error || result.isError) {
+    throw new Error(`create result uncertain: ${output}`);
+  }
+  const text = (result.content || []).filter((part) => part.type === 'text').map((part) => part.text).join('\n');
+  const match = /document\/d\/([A-Za-z0-9_-]{25,})/.exec(text) || /["'\s]([A-Za-z0-9_-]{40,})["'\s]/.exec(text);
+  if (!match) throw new Error(`create result has no confirmed document ID: ${output}`);
+  return match[1];
 }
 
-const probe = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), 'mcp-probe.mjs');
-
-function createDoc(title, id, taskTitle) {
-  // Seeded, not empty. An empty document bound to a task is worse than no document: it looks
-  // like a page that lost its contents, and Shiv has no way to tell "created, awaiting its first
-  // wake" from "written and then wiped". The stub says which it is.
-  const content = [
-    `Catch-up: Task ${id} — ${taskTitle}`,
-    '',
-    'This page was created automatically when the task was bound to a catch-up doc, and has not',
-    'been written yet. Its first wake replaces this text with the current state of the work.',
-    '',
-    'Comments on this page are the primary channel for this task. The agent never comments here —',
-    'it answers by editing the page — so every comment on it is yours.',
-  ].join('\n');
-  const args = JSON.stringify({ user_google_email: EMAIL, title, content });
-  const r = spawnSync(process.execPath, [probe, 'google-workspace', 'call', 'create_doc', args], {
-    encoding: 'utf8',
-  });
-  const out = `${r.stdout || ''}${r.stderr || ''}`;
-  // The id is echoed back in the result prose; a doc id is the long opaque Drive key.
-  const m = /document\/d\/([A-Za-z0-9_-]{25,})/.exec(out) || /["'\s]([A-Za-z0-9_-]{40,})["'\s]/.exec(out);
-  return m ? m[1] : null;
+function writeReceipt(file, receipt) {
+  const fd = fs.openSync(file, 'wx');
+  try {
+    fs.writeFileSync(fd, JSON.stringify(receipt), 'utf8');
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
-function bind(id, docId) {
-  const oa = path.join(
-    process.env.OA_SKILL_DIR ||
-      path.join(
-        process.env.USERPROFILE || '',
-        '.copilot',
-        'installed-plugins',
-        'focus-planner',
-        'overnight-agent',
-        'skills',
-        'overnight-agent',
-      ),
-    'oa-state.ps1',
-  );
-  // -DocUrl is not decoration. The journal stamp carries it, and write-turn.ps1's G10 accepts a
-  // turn that names the doc by URL as well as by id; binding without it leaves the stamp id-only
-  // and quietly narrows what counts as a valid pointer turn.
-  const url = `https://docs.google.com/document/d/${docId}/edit`;
-  const r = spawnSync(
-    'powershell',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', oa, 'doc', '-Id', id, '-DocId', docId, '-DocUrl', url],
-    { encoding: 'utf8' },
-  );
-  return r.status === 0;
+// #763: a durable intent prevents a second create after an ambiguous result or process crash.
+// A confirmed receipt is retained even after binding, so a stale reader cannot create again.
+export function ensureBinding({
+  id, planner, receiptDir, readState, create, bind,
+  allowCreate = () => true, onAttempt = () => {},
+}) {
+  if (!/^\d+$/.test(id)) throw new Error('Invalid task ID');
+  const file = path.join(receiptDir, `task-${id}.json`);
+  const plannerRoot = path.resolve(planner);
+  let state = readState();
+  let decision = decide(state);
+  if (decision.action === 'SKIP') return decision;
+  let receipt;
+  try {
+    receipt = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw new Error(`Cannot read creation receipt ${file}: ${error.message}`);
+  }
+  if (receipt && (receipt.version !== 1 || receipt.taskId !== id || receipt.planner !== plannerRoot ||
+    !['creating', 'created'].includes(receipt.status) ||
+    (receipt.status === 'created' && !/^[A-Za-z0-9_-]{25,}$/.test(receipt.docId || '')))) {
+    throw new Error(`Invalid creation receipt ${file}; reconcile before retrying`);
+  }
+  if (decision.action === 'CONTINUE') {
+    if (receipt?.status === 'created' && receipt.docId !== state.doc.doc_id) {
+      throw new Error(`Binding conflict: receipt ${receipt.docId}, current ${state.doc.doc_id}; retained ${file}`);
+    }
+    return decision;
+  }
+  let created = false;
+  if (!receipt) {
+    if (!allowCreate()) return { action: 'DEFER' };
+    fs.mkdirSync(receiptDir, { recursive: true });
+    receipt = { version: 1, taskId: id, planner: plannerRoot, status: 'creating' };
+    // Exclusive creation is also the concurrent-creator guard. Never remove this intent on error.
+    writeReceipt(file, receipt);
+    onAttempt();
+    let docId;
+    try {
+      docId = create();
+    } catch (error) {
+      throw new Error(`${error.message}; creation outcome uncertain, retained ${file}`);
+    }
+    if (typeof docId !== 'string' || !/^[A-Za-z0-9_-]{25,}$/.test(docId)) {
+      throw new Error(`Create result uncertain; retained ${file}. Reconcile before retrying`);
+    }
+    receipt = { ...receipt, status: 'created', docId };
+    const pending = `${file}.${process.pid}.confirmed`;
+    try {
+      writeReceipt(pending, receipt);
+      fs.renameSync(pending, file);
+    } catch (error) {
+      throw new Error(`Created ${docId}, but receipt confirmation failed: ${error.message}; reconcile ${file} and ${pending}`);
+    }
+    created = true;
+  }
+  if (receipt.status !== 'created') {
+    throw new Error(`Create result uncertain or still in progress; retained ${file}. Reconcile before retrying`);
+  }
+
+  state = readState();
+  decision = decide(state);
+  if (decision.action === 'SKIP') return decision;
+  if (decision.action === 'CONTINUE') {
+    if (state.doc.doc_id !== receipt.docId) {
+      throw new Error(`Binding conflict: receipt ${receipt.docId}, current ${state.doc.doc_id}; retained ${file}`);
+    }
+    return { action: 'CONTINUE', docId: receipt.docId };
+  }
+  bind(receipt.docId);
+  if (readState()?.doc?.doc_id !== receipt.docId) {
+    throw new Error(`Binding not verified for ${receipt.docId}; retained ${file}`);
+  }
+  return { action: 'BOUND', created, docId: receipt.docId };
 }
-
-let created = 0;
-let contd = 0;
-let skipped = 0;
-let failed = 0;
-const capped = [];
-
-for (const row of rows) {
-  if (ONLY && row.id !== ONLY) continue;
-  const st = readJson(path.join(STATE_DIR, `task-${row.id}.json`));
-  const d = decide(st);
-
-  if (d.action === 'CONTINUE') {
-    contd++;
-    continue;
-  }
-  if (d.action === 'SKIP') {
-    skipped++;
-    continue;
-  }
-
-  // gate LIMIT — decided CREATE, but this run has already created its allowance.
-  if (created >= LIMIT) {
-    capped.push(row.id);
-    continue;
-  }
-
-  if (DRY) {
-    console.log(`CREATE ${row.id} ${row.title}`);
-    created++;
-    continue;
-  }
-
-  const title = `Catch-up: Task ${row.id} — ${row.title}`;
-  const docId = createDoc(title, row.id, row.title);
-  if (!docId) {
-    console.log(`FAILED ${row.id} could not create doc`);
-    failed++;
-    continue;
-  }
-  if (!bind(row.id, docId)) {
-    console.log(`FAILED ${row.id} created ${docId} but binding refused`);
-    failed++;
-    continue;
-  }
-  console.log(`CREATE ${row.id} ${docId}`);
-  created++;
-}
-
-console.log(
-  `ensure-catchup-doc: created ${created}, continued ${contd}, skipped ${skipped}, failed ${failed}${
-    capped.length ? `, deferred ${capped.length} to a later run (limit ${LIMIT})` : ''
-  }${DRY ? ' [dry-run]' : ''}`,
-);
-
-// Exit non-zero only on a real failure. An unbound task is not an error here — it is the work,
-// and this run either did it or deferred it under the limit. Reporting deferral as failure would
-// make the check red on every run until coverage completed, which is the always-firing detector
-// this file's header argues against.
-process.exit(failed > 0 ? 1 : 0);
