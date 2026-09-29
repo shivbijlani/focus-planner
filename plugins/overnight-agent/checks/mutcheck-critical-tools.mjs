@@ -78,6 +78,7 @@ try {
 
   const helper = path.join(here, 'oa-supervisor-startup.ps1');
   const capabilities = path.join(temp, 'capabilities.json');
+  const ledger = path.join(temp, 'run-ledger.jsonl');
   writeFileSync(capabilities, JSON.stringify(first));
   const tray = spawnSync(shell, ['-NoProfile', '-Command',
     `. '${helper}'; Get-OaCriticalStatus -Path '${capabilities}' | ConvertTo-Json`],
@@ -122,23 +123,35 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   writeFileSync(settings, '| Critical tools | email, google-workspace |\n' +
     '| Agent email account | self@example.test |\n| Google account (Tasks) | self@example.test |\n');
   writeFileSync(googleDown, '1');
-  const check = () => spawnSync(process.execPath, [
+  const check = (now) => spawnSync(process.execPath, [
     path.join(here, '..', 'skills', 'overnight-agent', 'check-critical-tools.mjs'),
-    '--settings', settings, '--mcp-config', config, '--state', capabilities,
+    '--settings', settings, '--mcp-config', config, '--state', capabilities, '--ledger', ledger,
+    '--now', now,
   ], { encoding: 'utf8', timeout: 90000 });
-  const run1 = check();
+  const run1 = check('2026-09-29T10:00:00Z');
   assert.equal(run1.status, 2, run1.stderr);
   assert.equal(JSON.parse(run1.stdout).status, 'degraded');
   assert.equal(readFileSync(sends, 'utf8').trim().split('\n').length, 1);
-  const run2 = check();
+  const run2 = check('2026-09-29T10:30:00Z');
   assert.equal(run2.status, 2, run2.stderr);
   assert.equal(readFileSync(sends, 'utf8').trim().split('\n').length, 1);
   rmSync(googleDown);
-  const run3 = check();
+  const run3 = check('2026-09-29T11:00:00Z');
   assert.equal(run3.status, 0, run3.stderr);
   assert.equal(JSON.parse(run3.stdout).status, 'completed');
   assert.equal(readFileSync(sends, 'utf8').trim().split('\n').length, 2);
-  console.log('PASS critical-tool settings, real-call probe, outage/daily/recovery, skip, tray');
+  const run4 = check('2026-09-29T13:00:00Z');
+  assert.equal(run4.status, 2, run4.stderr);
+  const afterGap = JSON.parse(run4.stdout);
+  assert.match(afterGap.headline,
+    /^⚠ GAP: no runs from 2026-09-29T11:00:00.000Z to 2026-09-29T13:00:00.000Z \(3 slots\)/);
+  assert.equal(afterGap.run.trigger, null);
+  assert.equal(afterGap.runGap.missedSlots, 3);
+  assert.equal(readFileSync(sends, 'utf8').trim().split('\n').length, 3);
+  const run5 = check('2026-09-29T13:30:00Z');
+  assert.equal(run5.status, 0, run5.stderr);
+  assert.equal(readFileSync(sends, 'utf8').trim().split('\n').length, 3);
+  console.log('PASS critical-tool settings, real-call probe, outage/daily/recovery, gap alert, skip, tray');
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }

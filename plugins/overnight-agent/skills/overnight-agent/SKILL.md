@@ -674,6 +674,15 @@ Do the phases **in this order** every time.
 of every coordinator run (before accepting or dispatching tasks). It reads `Critical tools`
 through `oa-state.ps1`, refuses names absent from the configured MCP servers, performs
 a real read for each, and writes `%LOCALAPPDATA%\overnight-agent\capabilities.json`.
+The same command records the coordinator start in
+`%LOCALAPPDATA%\overnight-agent\run-ledger.jsonl` (`startedAt`, trigger when known, and
+`runId`). It compares consecutive starts against the 30-minute cadence. If more than two
+scheduled slots were missed, put its exact `⚠ GAP: no runs from <t1> to <t2> (<n> slots)`
+headline as the **first line** of the wrap-up. This remains a degraded run even when a
+`catch_up` trigger successfully resumes work: catch-up proves recovery, not coverage of
+the blind interval. The preflight sends the gap once through the same critical-alert
+channel and persists its delivery state in `capabilities.json`; a failed send remains
+pending and is retried without duplicating a successful alert.
 The default is `email, google-workspace`. Email tests the account; Google reads one
 task from `@default` using the consented `Google account (Tasks)` address. An arbitrary
 server needs a zero-argument read-shaped tool or the probe fails closed. A configured
@@ -1678,7 +1687,9 @@ Report back to the user a short summary:
   capability read as an empty inbox (GH #346).
 - **Other tool failures:** one named line for each non-critical tool that failed during
   this run, without a push notification. A critical-tool headline is the first line
-  of the entire wrap-up, before this section, and keeps the run status `degraded`.
+  of the entire wrap-up, before this section, and keeps the run status `degraded`. A
+  run-gap headline precedes even a critical-tool headline so the blind window cannot
+  look like a quiet night after a successful catch-up.
 - **Executed:** which tasks, what got done, links to deliverables.
 - **Already done:** tasks you found were complete (with how you knew) — for the user to confirm.
 - **Waiting on you:** which tasks now have a plan to approve (and any that are `blocked` with a
