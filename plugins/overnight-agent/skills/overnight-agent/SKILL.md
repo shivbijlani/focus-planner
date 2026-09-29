@@ -1199,7 +1199,16 @@ an earlier phase or perform any follow-up.
    - **`replace`** — a previous run recorded the bound session as non-wakeable. Create a fresh one
      **idle, without a kickoff**, and use the emitted **`kickoff_continuation`** *verbatim* as the opening of its prepared brief: it
      names the task and the prior session id, so the replacement knows it is continuing work rather
-     than starting clean. Then bind it — which records `prior_session_id`.
+     than starting clean. Then bind it — which records `prior_session_id`, and appends the
+     outgoing session to `prior_session_ids`.
+   - **A replacement may only move forward.** Binding a session id that appears anywhere in the
+     task's `prior_session_ids` lineage is refused (`session_bind_backwards`), and **`-Force`
+     does not override it** — there is no state of the world in which re-binding an already
+     retired ancestor is right. Measured on task #471: the chain `b94abe44 → 42d1a304 →
+     9294bd58` was rewritten back onto `42d1a304` with `9294bd58` recorded as its *prior*, which
+     orphaned the newest session while still charging its capacity slot. If a binding is
+     genuinely finished, release it (`-SessionRelease`) and bind a session this task has never
+     used.
    - **`create`** — no session yet. Create one **idle, without a kickoff**, then bind it before
      sending. Creating or binding an idle session is not work.
    - If a session will not wake, record that fact rather than retrying blindly:

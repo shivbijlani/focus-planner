@@ -351,6 +351,7 @@ Source-faithful sample built from `Cmd-Seed`, `Cmd-Mark`, `New-PollObject`, `New
     "last_woken_at": "2026-09-07T01:30:00+00:00",
     "state": "live",
     "prior_session_id": "old456",
+    "prior_session_ids": ["old123", "old456"],
     "replaced_at": "2026-09-06T18:05:00+00:00"
   },
   "today_exhausted": {
