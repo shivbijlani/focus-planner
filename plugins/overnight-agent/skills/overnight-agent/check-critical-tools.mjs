@@ -15,11 +15,12 @@
 // back to, and therefore no timeout/slow class. A tool the caller did not record for is treated
 // as absent from the session, which is also `down`.
 import { execFileSync } from 'node:child_process';
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readSettingRow } from '../../checks/settings-value.mjs';
+import { acquireFileLock, releaseFileLock, withFileLock } from './file-lock.mjs';
 import { gapForAlert, recordRunStart } from './run-ledger.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -215,16 +216,18 @@ export async function main(args = process.argv.slice(2)) {
   if (args.includes('--run') && !runId) throw new Error('--run requires a runId');
   mkdirSync(path.dirname(file), { recursive: true });
   mkdirSync(path.dirname(ledger), { recursive: true });
-  const lock = `${file}.lock`;
-  let handle;
-  try { handle = openSync(lock, 'wx'); } catch (e) { throw new Error(`capabilities lock unavailable: ${e.message}`); }
+  // GH #778: capabilities.json has its OWN short lock, taken independently of `oa-state.ps1`'s
+  // state lock, and the caller WAITS for it rather than being told to retry. It used to fail on
+  // the first collision (`openSync(lock, 'wx')` with no retry), which turned two coordinator
+  // steps landing in the same second into a hand-retried failure.
+  const held = acquireFileLock(file);
   try {
     const prior = readState(file);
     // GH #772: no `--run` means no ledger line, full stop -- read the tool health below, but
     // never write a coordinator run that did not happen. gapForAlert on an empty entry falls
     // through to its own "surface any still-unalerted prior gap" branch, so a manual run can
     // still report a gap the last real coordinator run detected, without minting a new one.
-    const run = runId ? recordRunStart(ledger, { now, trigger, runId }) : null;
+    const run = runId ? withFileLock(ledger, () => recordRunStart(ledger, { now, trigger, runId })) : null;
     const runGap = gapForAlert(run ?? {}, prior.runGap);
     const stateScript = firstExisting(path.join(here, 'oa-state.ps1'));
     if (!stateScript) throw new Error('oa-state.ps1 not found');
@@ -257,8 +260,7 @@ export async function main(args = process.argv.slice(2)) {
     console.log(JSON.stringify(output));
     process.exitCode = output.status === 'degraded' ? 2 : 0;
   } finally {
-    closeSync(handle);
-    unlinkSync(lock);
+    releaseFileLock(held);
   }
 }
 
