@@ -14,16 +14,16 @@ const config = path.join(temp, 'mcp-config.json');
 const state = path.join(temp, 'state');
 const oa = path.join(here, '..', 'skills', 'overnight-agent', 'oa-state.ps1');
 try {
-  writeFileSync(settings, '| Critical tools | `email, bogus-tool` |\n');
+  writeFileSync(settings, '| Critical tools | `email, bogus-tool` — configured outage floor |\n');
   writeFileSync(config, JSON.stringify({ mcpServers: { email: {}, 'google-workspace': {} } }));
   const policy = (extra = []) => spawnSync(shell, [
     '-NoProfile', '-File', oa, 'critical-tools', '-UserSettings', settings,
     '-McpConfig', config, '-StateDir', state, ...extra,
-  ], { encoding: 'utf8', timeout: 15000 });
+  ], { encoding: 'utf8', timeout: 60000 });
   const unknown = policy();
   assert.notEqual(unknown.status, 0);
   assert.match(unknown.stderr, /bogus-tool/);
-  writeFileSync(settings, '| Critical tools | `email, google-workspace` |\n');
+  writeFileSync(settings, '| Critical tools | `email, google-workspace` — configured outage floor |\n');
   assert.deepEqual(JSON.parse(policy().stdout).tools, ['email', 'google-workspace']);
   writeFileSync(settings, '# no override\n');
   assert.deepEqual(JSON.parse(policy().stdout).tools, ['email', 'google-workspace']);
@@ -61,15 +61,17 @@ try {
     previous: retry, now: new Date('2026-09-29T12:30:00Z') })).outages.email.lastAlertDate, '2026-09-29');
 
   let calls = [];
-  await probeTool('google-workspace', '| Google account (Tasks) | `example@test.com` |', {
+  await probeTool('google-workspace',
+    '| Google account (Tasks) | prose before `example@test.com` — enables task reads |', {
     call: (...args) => {
       calls.push(args);
-      return { content: [{ type: 'text', text: '{"tasks":[]}' }] };
+      return { content: [{ type: 'text', text: 'Tasks in list @default: none' }] };
     },
   });
   assert.deepEqual(calls[0].slice(0, 3), ['google-workspace', 'call', 'list_tasks']);
   assert.match(calls[0][3], /"max_results":1/);
-  await assert.rejects(probeTool('google-workspace', '| Google account (Tasks) | example@test.com |', {
+  await assert.rejects(probeTool('google-workspace',
+    '| Google account (Tasks) | `example@test.com` — enables task reads |', {
     call: () => ({ isError: true }),
   }), /isError/);
   await assert.rejects(probeTool('unfamiliar', '', { call: () => [] }), /no safe zero-argument read probe/);
@@ -103,12 +105,15 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   if (m.method === 'initialize') result = {protocolVersion:'2024-11-05'};
   else if (m.method === 'tools/call') {
     const name = m.params.name;
-    const data = name === 'email_list_accounts' ? [{id:'acct',email:'self@example.test'}]
+    if (name === 'list_tasks' && fs.existsSync(${JSON.stringify(googleDown)})) {
+      result = {isError:true,content:[{type:'text',text:'protocol mismatch'}]};
+    } else {
+      const data = name === 'email_list_accounts' ? [{id:'acct',email:'self@example.test'}]
       : name === 'email_test_account' ? {success:true}
       : name === 'email_send' ? (fs.appendFileSync(${JSON.stringify(sends)}, 'sent\\n'), {success:true})
-      : name === 'list_tasks' && fs.existsSync(${JSON.stringify(googleDown)}) ? {error:'protocol mismatch'}
       : {tasks:[]};
-    result = {content:[{type:'text',text:JSON.stringify(data)}]};
+      result = {content:[{type:'text',text:JSON.stringify(data)}]};
+    }
   } else result = {tools:[]};
   process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');
 });`);

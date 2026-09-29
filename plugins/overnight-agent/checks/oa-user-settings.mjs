@@ -1,3 +1,5 @@
+import { settingsValue } from './settings-value.mjs';
+
 /*
  * oa-user-settings.mjs -- the ONE reader for tray-workload policy in the
  * EXTERNAL `user-settings.md` (GH #696).
@@ -132,18 +134,6 @@ function isSeparatorRow(line) {
   return /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line) && line.includes('-');
 }
 
-/**
- * The value cell is written for humans: "`3h` -- how long ...". The value is the
- * first code span when there is one, otherwise the text before the first dash
- * comment. Never guess past that.
- */
-function valueToken(cell) {
-  const raw = String(cell ?? '');
-  const fenced = raw.match(/`([^`]+)`/);
-  if (fenced) return fenced[1].trim();
-  return plainCell(raw.split(/\s+(?:--|—|–)\s+/)[0]);
-}
-
 /** Every `| Setting | Value |` row under `## <heading>`, in file order. */
 export function readSettingsSection(text, heading) {
   const lines = String(text ?? '').split(/\r?\n/);
@@ -163,7 +153,7 @@ export function readSettingsSection(text, heading) {
     if (cells.length < 2) continue;
     const name = normalizeName(cells[0]);
     if (!name || name === 'setting') continue;
-    rows.push({ name, value: valueToken(cells[1]), rawName: plainCell(cells[0]), rawValue: cells[1] });
+    rows.push({ name, value: settingsValue(cells[1]), rawName: plainCell(cells[0]), rawValue: cells[1] });
   }
   return rows;
 }
