@@ -1,4 +1,4 @@
-<#
+﻿<#
   mutcheck-google-tasks.ps1 -- prove that collect-google-tasks.ps1 can tell a backlog it
   only PARTLY READ from a backlog that is genuinely small, and that each guard doing so is
   load-bearing rather than decorative.
