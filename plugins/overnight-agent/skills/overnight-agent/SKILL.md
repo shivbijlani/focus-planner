@@ -2013,8 +2013,9 @@ See PHASE 0.
     a brand-new (or copied) profile starts **logged out** even though it carries the **password-manager
     vault + saved passwords**. So the one-time setup is cheap.
 
-**Opening a signed-in browser by hand:** double-click the desktop shortcut named in the slot table's
-    **Desktop shortcut** column. Each shortcut launches its **dedicated, persistent** profile under
+**Opening a signed-in browser by hand:** double-click the desktop shortcut named
+    `Browser - <account label>` from the slot table's **Account** column. Each
+    shortcut launches its **dedicated, persistent** profile under
     `%LOCALAPPDATA%\playwright-mcp\` with **no debug port** — it is a completely normal browser window, not
     something an MCP can attach to. **One-time per profile**, the **user** must sign in inside that window
     (unlock your password manager → it autofills the saved login → sign into your account/any needed site).

@@ -114,9 +114,9 @@ share a profile are the same identity twice over and are pure cost (~6 processes
 startup, plus ~24 duplicate tool schemas each in the agent's context), so only add a slot when it
 represents an account the others cannot stand in for.
 
-| Slot | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Signed into | Desktop shortcut |
-| --- | --- | --- | --- | --- |
-| `edge-cdp-1` (regular) | `edge1` | `<your main account>` | *(sites this profile is signed into)* | Browser – Regular |
+| Slot | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Signed into |
+| --- | --- | --- | --- |
+| `edge-cdp-1` (regular) | `edge1` | `<your main account>` | *(sites this profile is signed into)* |
 
 **The columns**
 
@@ -126,7 +126,7 @@ represents an account the others cannot stand in for.
 | **Profile dir** | **yes** | **This is the identity.** A bare name (`edge1`) is resolved under the base folder named in this column's own header; a full path (`D:\browsers\work`) or one with `%VARS%` is used as-is. Must be unique across rows. |
 | **Account** | no | A label for you and for the agent to select by (e.g. `work`, `personal`). Purely descriptive. |
 | **Signed into** | no | Which sites this profile is already signed into (e.g. `Amazon, WhatsApp Web`), so a task can pick the right slot for the site it needs without guessing or discovering it by trial and error. |
-| **Desktop shortcut** | no | The shortcut name to open for a one-time sign-in. Defaults to the slot name. |
+| **Desktop shortcut** | legacy | Kept only for reading older tables; ignored by the installer. Shortcuts are named `Browser - <Account>`; if Account is blank, the slot name is used. |
 | ~~Port~~ | *(retired)* | GH #738 removed CDP-attach mode, so a slot no longer needs a debug port. A table carried over from before that change may still have a Port column — it is tolerated for backward compatibility, but a new slot does not need one. |
 
 Only **Slot** and **Profile dir** are required, and the column **order does not matter** — columns are
@@ -137,11 +137,11 @@ contains `chrome` launches Chrome; anything else launches Edge.
 **Adding more identities** — one row each. For example, a three-identity setup:
 
 ```
-| Slot | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Signed into | Desktop shortcut |
-| --- | --- | --- | --- | --- |
-| `edge-cdp-1` (regular) | `edge1`      | personal | Amazon                | Browser – Regular |
-| `edge-cdp-work`        | `edge-work`  | work     | (not yet signed in)   | Browser – Work |
-| `edge-cdp-client`      | `edge-client`| client   | (not yet signed in)   | Browser – Client |
+| Slot | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Signed into |
+| --- | --- | --- | --- |
+| `edge-cdp-1` (regular) | `edge1` | personal | Amazon |
+| `edge-cdp-work` | `edge-work` | work | (not yet signed in) |
+| `edge-cdp-client` | `edge-client` | client | (not yet signed in) |
 ```
 
 The table is **refused rather than guessed at** if it is missing, has no Slot/Profile columns, has no
