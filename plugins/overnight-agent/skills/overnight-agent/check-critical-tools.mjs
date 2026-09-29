@@ -199,7 +199,11 @@ export async function main(args = process.argv.slice(2)) {
   const file = args.includes('--state') ? option('--state') : statePath;
   const ledger = args.includes('--ledger') ? option('--ledger') : ledgerPath;
   const trigger = args.includes('--trigger') ? option('--trigger') : undefined;
-  const runId = args.includes('--run-id') ? option('--run-id') : undefined;
+  // GH #772: this is the ONE explicit flag that turns a run of this script into a coordinator
+  // run. Omit it -- as any manual or diagnostic invocation does -- and the script is read-only:
+  // it still evaluates tool health and updates capabilities.json, but never appends to the run
+  // ledger, so a manual check can never fake a coordinator run into it.
+  const runId = args.includes('--run') ? option('--run') : undefined;
   const now = args.includes('--now') ? new Date(option('--now')) : new Date();
   const taskFile = args.includes('--tasks') ? option('--tasks') : null;
   // One path in: the caller (the coordinator, which already made the real calls with its own
@@ -208,6 +212,7 @@ export async function main(args = process.argv.slice(2)) {
   // the session and is treated as down.
   const records = args.flatMap((arg, i) => (arg === '--record' ? [args[i + 1]] : []));
   if (Number.isNaN(now.valueOf())) throw new Error('--now must be an ISO timestamp');
+  if (args.includes('--run') && !runId) throw new Error('--run requires a runId');
   mkdirSync(path.dirname(file), { recursive: true });
   mkdirSync(path.dirname(ledger), { recursive: true });
   const lock = `${file}.lock`;
@@ -215,8 +220,12 @@ export async function main(args = process.argv.slice(2)) {
   try { handle = openSync(lock, 'wx'); } catch (e) { throw new Error(`capabilities lock unavailable: ${e.message}`); }
   try {
     const prior = readState(file);
-    const run = recordRunStart(ledger, { now, trigger, runId });
-    const runGap = gapForAlert(run, prior.runGap);
+    // GH #772: no `--run` means no ledger line, full stop -- read the tool health below, but
+    // never write a coordinator run that did not happen. gapForAlert on an empty entry falls
+    // through to its own "surface any still-unalerted prior gap" branch, so a manual run can
+    // still report a gap the last real coordinator run detected, without minting a new one.
+    const run = runId ? recordRunStart(ledger, { now, trigger, runId }) : null;
+    const runGap = gapForAlert(run ?? {}, prior.runGap);
     const stateScript = firstExisting(path.join(here, 'oa-state.ps1'));
     if (!stateScript) throw new Error('oa-state.ps1 not found');
     const command = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', stateScript, 'critical-tools'];

@@ -74,6 +74,44 @@ Then call `create_project` with `path` set to `%LOCALAPPDATA%\overnight-agent\ta
 folder or a repository project: each non-code task gets a session in this fixed
 local folder project. The binding command refuses either unsafe location.
 
+### Optional machine hygiene (Windows)
+
+Run `checks/setup-machine-hygiene.ps1 -WhatIf` first. It reports whether Windows
+Widgets are installed, whether the `Dev drive (repos)` in your **external**
+`user-settings.md` is a trusted Dev Drive, and the Defender state of
+`%LOCALAPPDATA%\npm-cache`, `%LOCALAPPDATA%\uv\cache`, and
+`%LOCALAPPDATA%\overnight-agent\task-chats`. `-WhatIf` does not prompt, write a
+log, or change settings. A non-Dev Drive is reported with Microsoft's
+[Dev Drive guide](https://learn.microsoft.com/windows/dev-drive/); the script
+does not create one. If settings are not found, pass `-SettingsPath` explicitly.
+
+Run `checks/setup-machine-hygiene.ps1` without `-WhatIf` only if you want to
+review the offers. It asks separately before removing Widgets for your user
+(undo: reinstall **Windows Web Experience Pack** from Microsoft Store), trusting
+an existing Dev Drive, or excluding each regenerable/non-code folder. It combines
+selected Defender/Dev Drive changes into **one UAC prompt** and writes a log to
+`%TEMP%\overnight-agent-machine-hygiene.log` (override with `-LogPath`). After
+trusting a volume, remount or reboot before assuming Defender performance mode
+fully applies. It never excludes the plugin, OA-home scripts, or executable
+code. The `task-chats` folder is non-code only; do not put scripts there.
+This optional offer is separate from the [onboarding installer (#694)](https://github.com/shivbijlani/focus-planner/issues/694);
+integrate its entry point there rather than creating a second installer.
+The live devbox steps and adjacent setup (Truthifi disabled, browser profiles
+and account-labeled shortcuts, non-code task project) are recorded in
+[#733](https://github.com/shivbijlani/focus-planner/issues/733#issuecomment-5883956307);
+this script does **not** change those other configurations.
+
+For Google Workspace MCP compatibility on a new machine, install the proven
+pair from [#747](https://github.com/shivbijlani/focus-planner/issues/747):
+
+```powershell
+uv tool install workspace-mcp==1.30.0 --with "fastmcp<4" --force
+```
+
+A plain `uv tool upgrade workspace-mcp` **drops the FastMCP pin** and can break
+the Copilot MCP handshake; rerun the pinned command instead until the host
+supports the newer protocol.
+
 ## Usage
 
 Ask Copilot to "run the overnight agent" or "work on my tasks". The skill's

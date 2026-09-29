@@ -148,12 +148,17 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     .map((name) => [name, { type: 'stdio', command: process.execPath, args: [server] }])) }));
   writeFileSync(settings, '| Critical tools | email, google-workspace |\n' +
     '| Agent email account | self@example.test |\n| Google account (Tasks) | self@example.test |\n');
-  const check = (now, recordArgs, mcpConfig = config) => spawnSync(process.execPath, [
-    path.join(here, '..', 'skills', 'overnight-agent', 'check-critical-tools.mjs'),
-    '--settings', settings, '--mcp-config', mcpConfig, '--state', capabilities, '--ledger', ledger,
-    '--state-dir', state, '--now', now,
-    ...recordArgs.flatMap((r) => ['--record', r]),
-  ], { encoding: 'utf8', timeout: 90000 });
+  // GH #772: default every existing test call to a coordinator run (`--run <runId>`) -- what
+  // follows already exercises the ledger-dependent gap detection above this line, and that
+  // behavior must be unchanged for a real coordinator run.
+  const check = (now, recordArgs, mcpConfig = config, extraArgs = ['--run', 'coordinator-run']) => spawnSync(
+    process.execPath, [
+      path.join(here, '..', 'skills', 'overnight-agent', 'check-critical-tools.mjs'),
+      '--settings', settings, '--mcp-config', mcpConfig, '--state', capabilities, '--ledger', ledger,
+      '--state-dir', state, '--now', now, ...extraArgs,
+      ...recordArgs.flatMap((r) => ['--record', r]),
+    ], { encoding: 'utf8', timeout: 90000 },
+  );
   const run1 = check('2026-09-29T10:00:00Z', ['email=ok', 'google-workspace=down:protocol mismatch']);
   assert.equal(run1.status, 2, run1.stderr);
   assert.equal(JSON.parse(run1.stdout).status, 'degraded');
@@ -198,7 +203,28 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   const connectedRun = check('2026-09-29T15:00:00Z', ['email=ok', 'google-workspace=ok'], disconnectedConfig);
   assert.equal(connectedRun.status, 0, connectedRun.stderr);
   assert.equal(JSON.parse(connectedRun.stdout).status, 'completed');
-  console.log('PASS settings, --record, immediate down, absent-tool-is-down, outage/recovery, gap, skip, tray');
+
+  // GH #772: `--run <runId>` is the ONE flag that turns an invocation into a coordinator run
+  // that writes the ledger. Manual/diagnostic invocations omit it and must be read-only: they
+  // still evaluate tool health, but append zero lines, however many times they are run.
+  const ledgerLineCount = () => readFileSync(ledger, 'utf8').trim().split('\n').filter(Boolean).length;
+  const beforeManual = ledgerLineCount();
+  const manual1 = check('2026-09-29T15:30:00Z', ['email=ok', 'google-workspace=ok'], config, []);
+  assert.equal(manual1.status, 0, manual1.stderr);
+  assert.equal(JSON.parse(manual1.stdout).run, null, 'a manual run (no --run) records no run object');
+  assert.equal(ledgerLineCount(), beforeManual, 'a manual run (no --run) must not append to the ledger');
+  const manual2 = check('2026-09-29T15:31:00Z', ['email=ok', 'google-workspace=ok'], config, []);
+  assert.equal(manual2.status, 0, manual2.stderr);
+  assert.equal(ledgerLineCount(), beforeManual, 'repeated manual runs still write zero ledger lines');
+  const coordinated = check('2026-09-29T15:32:00Z', ['email=ok', 'google-workspace=ok'], config,
+    ['--run', 'coordinator-run-2']);
+  assert.equal(coordinated.status, 0, coordinated.stderr);
+  assert.equal(JSON.parse(coordinated.stdout).run.runId, 'coordinator-run-2');
+  assert.equal(ledgerLineCount(), beforeManual + 1,
+    'a coordinator run (--run present) writes exactly one ledger line');
+
+  console.log('PASS settings, --record, immediate down, absent-tool-is-down, outage/recovery, gap, skip, tray, ' +
+    'ledger-write-gated-on---run');
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }

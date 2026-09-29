@@ -1,5 +1,4 @@
 import { appendFileSync, readFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
 
 export const RUN_CADENCE_MINUTES = 30;
 export const MISSED_SLOT_THRESHOLD = 2;
@@ -46,12 +45,19 @@ export function detectRunGap(previous, startedAt, cadenceMinutes = RUN_CADENCE_M
   return { from: previous.startedAt, to: startedAt, missedSlots };
 }
 
+// GH #772: this is the ONLY function that appends a run start, and it refuses to guess a runId.
+// The old default (`OA_RUN_ID` -> `COPILOT_AGENT_SESSION_ID` -> a fresh `randomUUID()`) meant
+// ANY session -- a manual chat, a diagnostics run, anything with an ambient session id or none
+// at all -- produced a plausible-looking runId and got a real line in the ledger. There is no
+// implicit path: a caller must name the run explicitly, which in practice means only the
+// coordinator (see check-critical-tools.mjs's `--run <runId>`) ever reaches this function.
 export function recordRunStart(file, {
   now = new Date(),
   trigger = process.env.OA_RUN_TRIGGER || process.env.COPILOT_WORKFLOW_TRIGGER || null,
-  runId = process.env.OA_RUN_ID || process.env.COPILOT_AGENT_SESSION_ID || randomUUID(),
+  runId,
   cadenceMinutes = RUN_CADENCE_MINUTES,
 } = {}) {
+  if (!runId) throw new Error('recordRunStart requires an explicit runId; there is no ambient fallback (GH #772)');
   const entries = readRunLedger(file);
   const startedAt = now.toISOString();
   const gap = detectRunGap(lastRunStart(entries), startedAt, cadenceMinutes);

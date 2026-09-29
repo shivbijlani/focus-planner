@@ -705,7 +705,7 @@ them anyway for the inbox check and doc comments -- so it makes the real calls *
    the default two needs its own zero-argument, read-shaped tool call; a configured
    server or a successful `tools/list` is **not** a real-call probe.)
 
-Then run `node "<skill>\check-critical-tools.mjs" --record <name>=ok` or
+Then run `node "<skill>\check-critical-tools.mjs" --run <runId> --record <name>=ok` or
 `--record <name>=down:<error>` once per name in `Critical tools` (repeatable flag), at
 the start of every coordinator run, before accepting or dispatching tasks. A call that
 succeeded is `ok`; an MCP error from a call is `down` with that error; a critical tool
@@ -715,12 +715,23 @@ session) is `down` too -- omit `--record` for it and the script records
 class: a down tool is declared, and alerted on, immediately, never after a second
 "quiet" run.
 
+**`--run <runId>` is the one flag that makes this a coordinator run (GH #772).** Pass
+your own session id (or any stable id for this run) as `<runId>`. It is the only path
+that appends to the run ledger: **omit it and the invocation is read-only** -- tool
+health is still evaluated and `capabilities.json` still updated, but nothing is written
+to `run-ledger.jsonl`. That is deliberate: a manual or diagnostic run of this script (for
+example, checking tool health from a non-coordinator chat session) must never fabricate a
+coordinator run in the ledger that gap detection and decision records rely on. Always
+pass `--run <runId>` here; never invoke this script without it during a real
+coordinator run.
+
 The script reads `Critical tools` through `oa-state.ps1`, refuses names absent from the
 configured MCP servers, and writes `%LOCALAPPDATA%\overnight-agent\capabilities.json`.
 The default is `email, google-workspace`. The same command records the coordinator start
 in `%LOCALAPPDATA%\overnight-agent\run-ledger.jsonl` (`startedAt`, trigger when known, and
-`runId`). It compares consecutive starts against the 30-minute cadence. If more than two
-scheduled slots were missed, put its exact `⚠ GAP: no runs from <t1> to <t2> (<n> slots)`
+`runId`) -- only when `--run` was passed. It compares consecutive starts against the
+30-minute cadence. If more than two scheduled slots were missed, put its exact
+`⚠ GAP: no runs from <t1> to <t2> (<n> slots)`
 headline as the **first line** of the wrap-up. This remains a degraded run even when a
 `catch_up` trigger successfully resumes work: catch-up proves recovery, not coverage of
 the blind interval. The preflight sends the gap once through the same critical-alert
