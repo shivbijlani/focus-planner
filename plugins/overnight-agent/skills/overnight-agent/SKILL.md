@@ -691,6 +691,27 @@ Do the phases **in this order** every time.
 
 ### PHASE 0 — Check the agent inbox (do this before everything)
 
+**What may run at the same time (GH #778).** PHASE 0's steps are independent, and running
+them in parallel is correct — it is what keeps the preflight to one wall-clock minute
+instead of four. Only the state store is serialized, and only the commands that read or
+write it take that lock:
+
+| Step | Lock | Runs in parallel with |
+| --- | --- | --- |
+| `check-critical-tools.mjs --run … --record …` | its own short capabilities + ledger lock | everything, including a running `scan` |
+| `oa-state.ps1 scan -Compact -ScanOutFile …` | the state lock, for its whole 60–90 s | everything except another state command |
+| `collect-google-tasks.ps1` | none | everything |
+| `run-telegram-mirror.ps1 -SyncDownOnly` | none | everything |
+| `oa-state.ps1 decisions -RunId …` | the short ledger lock | everything, including a running `scan` |
+| any other `oa-state.ps1` command (`mark`, `get`, `session`, `seed`, …) | the state lock | non-state steps only |
+
+**Do not serialize PHASE 0 by hand, and do not retry on a busy lock.** A command that needs
+the state lock now **waits** up to 180 s (the scan's own budget) for it; `-LockWaitSeconds`
+or `OA_STATE_LOCK_WAIT_SECONDS` changes that. `state_lock_timeout` therefore no longer means
+"busy, try again" — it means the holder is **stuck** for longer than any honest scan, which
+is worth reporting rather than retrying. `critical-tools` and `decisions` never take the
+state lock at all, so a capability record cannot queue behind a scan the way it did before.
+
 **Critical-tool preflight:** ONE PATH, no cold-started probe subprocess (GH #768). A
 cold-started MCP server measures machine load, not tool health -- at a coordinator's
 start the PC is at its busiest (the host is starting the coordinator's OWN copies of

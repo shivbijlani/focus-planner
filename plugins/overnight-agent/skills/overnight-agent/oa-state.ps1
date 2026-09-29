@@ -573,6 +573,15 @@ param(
   # Injected clock, so the record and the retention window are testable without waiting a week.
   [string]$DecisionNow,
 
+  # How long to WAIT for a lock before giving up (#778). PHASE 0 runs several steps at once, and
+  # the old 10 s fail-fast turned an ordinary queue behind a 60-90 s `scan` into
+  # `state_lock_timeout`, which the model then had to retry by hand -- a whole turn spent on
+  # "wait your turn". Waiting is the correct answer to a held lock; failing is only correct when
+  # the holder is stuck. The default (see $script:DefaultLockWaitSeconds) is the scan's own
+  # budget, so a queued caller outlasts the longest legitimate holder. Zero means "use the
+  # default"; `OA_STATE_LOCK_WAIT_SECONDS` overrides it for a whole run.
+  [int]$LockWaitSeconds = 0,
+
   # The agent gate (#297). `-Action` is a CLOSED ENUM on purpose: free text would put the
   # matcher's input under the control of whatever prose the agent happened to generate, which is
   # the same self-authored-permission hole #227 closed one level down. A caller that cannot name
@@ -974,6 +983,46 @@ function ConvertTo-DecisionWord([string]$text) {
   if (-not $word) { return 'unknown' }
   if ($word.Length -gt 40) { return $word.Substring(0, 40) }
   return $word
+}
+
+function Enter-OaFileLock([string]$target, [int]$timeoutSeconds, [string]$code) {
+  # A SHORT, FILE-SCOPED lock (#778), deliberately not the state mutex. The run ledger and
+  # capabilities.json are small files with their own writers -- one of them is Node
+  # (check-critical-tools.mjs), which cannot take a Windows named mutex -- so the lock they share
+  # has to be a lock file both runtimes can create exclusively. Holding the state lock for these
+  # writes is what made a capability record queue behind a 90 s `scan` and fail.
+  $lockPath = "$target.lock"
+  $dir = Split-Path -Parent $lockPath
+  if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+  $deadline = (Get-Date).AddSeconds([Math]::Max(1, $timeoutSeconds))
+  while ($true) {
+    try {
+      $stream = [IO.File]::Open($lockPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+      $bytes = [Text.Encoding]::UTF8.GetBytes("$PID")
+      $stream.Write($bytes, 0, $bytes.Length)
+      $stream.Flush()
+      return $stream
+    }
+    catch [IO.IOException] {
+      # A lock file left behind by a killed writer must not wedge the ledger for ever: past the
+      # stale age nobody can still be inside a write that takes milliseconds.
+      $age = $null
+      try { $age = ((Get-Date) - ([IO.File]::GetLastWriteTime($lockPath))).TotalSeconds } catch { $age = $null }
+      if ($null -ne $age -and $age -gt $script:LockStaleSeconds) {
+        try { Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop; continue } catch { }
+      }
+      if ((Get-Date) -ge $deadline) {
+        throw "${code}: waited $timeoutSeconds s for $lockPath"
+      }
+      Start-Sleep -Milliseconds 50
+    }
+  }
+}
+
+function Exit-OaFileLock($stream, [string]$target) {
+  if (-not $stream) { return }
+  try { $stream.Dispose() } catch { }
+  Remove-Item -LiteralPath "$target.lock" -Force -ErrorAction SilentlyContinue
 }
 
 function Limit-RunLedger([string]$path, [datetimeoffset]$now, [int]$retainDays) {
@@ -6376,20 +6425,57 @@ function Cmd-Mark {
 # Task agents can still update state during a coordinator run. Serialize state read/modify/write
 # so their marks and doc observations cannot erase a binding. This is file integrity, not a
 # lock or reservation against starting work in another run.
+#
+# SCOPE THE LOCK TO WHAT IT PROTECTS (#778). Every command used to take the state mutex, so a
+# PHASE 0 that (correctly) runs its steps at once -- `scan`, the capability record, Google Tasks,
+# the Telegram sync-down -- had `critical-tools` and `decisions` queue behind a 60-90 s scan of
+# the state store they never read. With a 10 s fail-fast that surfaced as `state_lock_timeout`
+# and cost the model a retry turn per collision. Neither command touches the state store:
+#
+#   critical-tools  reads user-settings.md and the MCP config. Nothing to serialize: NO LOCK.
+#   decisions       appends one line to the run ledger, a separate file with its own writers
+#                   (Node's check-critical-tools.mjs is one). It takes the SHORT LEDGER LOCK.
+#
+# Everything else genuinely reads/modifies/writes the state store and still takes the mutex --
+# but it now WAITS for it (see -LockWaitSeconds) instead of telling the caller to retry.
 if (($CheckDispatch -or $ForDispatch) -and $Command -ne 'session') {
   throw 'session_flag_command: dispatch checks belong to the session command'
 }
-$lockPath = [IO.Path]::GetFullPath($StateDir).TrimEnd([char[]]'\/')
-if ($env:OS -eq 'Windows_NT') { $lockPath = $lockPath.ToLowerInvariant() }
-$sha = [Security.Cryptography.SHA256]::Create()
-try { $lockKey = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($lockPath)))).Replace('-', '') }
-finally { $sha.Dispose() }
-$mutex = New-Object Threading.Mutex($false, "oa-state-$lockKey")
+# The scan's own budget: a queued caller outlasts the longest legitimate holder rather than
+# reporting a false "still running" while that holder is halfway through normal work.
+$script:DefaultLockWaitSeconds = 180
+# Past this age, a lock FILE (not the mutex, which the OS releases when its holder dies) belongs
+# to a writer that was killed mid-write; it is reclaimed rather than left to wedge the ledger.
+$script:LockStaleSeconds = 300
+$lockWaitSeconds = $script:DefaultLockWaitSeconds
+if ($LockWaitSeconds -gt 0) { $lockWaitSeconds = $LockWaitSeconds }
+elseif ($env:OA_STATE_LOCK_WAIT_SECONDS) {
+  $parsedWait = 0
+  if ([int]::TryParse("$env:OA_STATE_LOCK_WAIT_SECONDS", [ref]$parsedWait) -and $parsedWait -gt 0) {
+    $lockWaitSeconds = $parsedWait
+  }
+}
+$needsStateLock = @('critical-tools', 'decisions') -notcontains $Command
+$mutex = $null
 $locked = $false
+$ledgerLock = $null
 try {
-  try { $locked = $mutex.WaitOne(10000) }
-  catch [Threading.AbandonedMutexException] { $locked = $true }
-  if (-not $locked) { throw 'state_lock_timeout: another state operation is still running; retry rather than bypassing admission' }
+  if ($needsStateLock) {
+    $lockPath = [IO.Path]::GetFullPath($StateDir).TrimEnd([char[]]'\/')
+    if ($env:OS -eq 'Windows_NT') { $lockPath = $lockPath.ToLowerInvariant() }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $lockKey = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($lockPath)))).Replace('-', '') }
+    finally { $sha.Dispose() }
+    $mutex = New-Object Threading.Mutex($false, "oa-state-$lockKey")
+    try { $locked = $mutex.WaitOne($lockWaitSeconds * 1000) }
+    catch [Threading.AbandonedMutexException] { $locked = $true }
+    if (-not $locked) {
+      throw "state_lock_timeout: another state operation held the lock for the whole $lockWaitSeconds s wait; it is stuck, not merely busy"
+    }
+  }
+  elseif ($Command -eq 'decisions') {
+    $ledgerLock = Enter-OaFileLock $RunLedger $lockWaitSeconds 'ledger_lock_timeout'
+  }
   Resolve-GateSettings
   Resolve-PacingSettings
   switch ($Command) {
@@ -6409,6 +6495,7 @@ try {
   }
 }
 finally {
+  if ($ledgerLock) { Exit-OaFileLock $ledgerLock $RunLedger }
   if ($locked) { $mutex.ReleaseMutex() }
-  $mutex.Dispose()
+  if ($mutex) { $mutex.Dispose() }
 }
