@@ -691,18 +691,34 @@ Do the phases **in this order** every time.
 
 ### PHASE 0 — Check the agent inbox (do this before everything)
 
-**Critical-tool preflight:** run `node "<skill>\check-critical-tools.mjs"` at the start
-of every coordinator run (before accepting or dispatching tasks). It reads `Critical tools`
-through `oa-state.ps1`, refuses names absent from the configured MCP servers, performs
-a real read for each, and writes `%LOCALAPPDATA%\overnight-agent\capabilities.json`. Prefer the
-coordinator's already-connected MCP tools where available: make the same safe health call described
-below and pass outcomes through `--connected-probes <json-file>`, using
-`{"email":{"status":"ok"}}` for success, `{"email":{"status":"error","error":"..."}}` for an MCP
-error, or `{"email":{"status":"slow","error":"..."}}` for a timeout. Omit servers the coordinator
-cannot call; those fall back to the spawned MCP probe. Keep this JSON in a run-scoped temporary
-file and remove it after the preflight.
-The same command records the coordinator start in
-`%LOCALAPPDATA%\overnight-agent\run-ledger.jsonl` (`startedAt`, trigger when known, and
+**Critical-tool preflight:** ONE PATH, no cold-started probe subprocess (GH #768). A
+cold-started MCP server measures machine load, not tool health -- at a coordinator's
+start the PC is at its busiest (the host is starting the coordinator's OWN copies of
+the same servers, plus the WebView and task sessions), so a cold start took 56-90+s on
+a 4-core box and healthy tools were marked slow, then escalated to down one run later.
+The coordinator already has live, connected tools for every critical server -- it calls
+them anyway for the inbox check and doc comments -- so it makes the real calls **itself**:
+
+1. `email_test_account` for the account named by `Agent email account`.
+2. `google-workspace`'s `list_tasks` with `max_results: 1` against `@default`, using the
+   consented `Google account (Tasks)` address. (An arbitrary configured server beyond
+   the default two needs its own zero-argument, read-shaped tool call; a configured
+   server or a successful `tools/list` is **not** a real-call probe.)
+
+Then run `node "<skill>\check-critical-tools.mjs" --record <name>=ok` or
+`--record <name>=down:<error>` once per name in `Critical tools` (repeatable flag), at
+the start of every coordinator run, before accepting or dispatching tasks. A call that
+succeeded is `ok`; an MCP error from a call is `down` with that error; a critical tool
+the coordinator has **no connected tool for at all** (the server failed to start in this
+session) is `down` too -- omit `--record` for it and the script records
+`"absent from session"` itself. There is no subprocess and therefore no timeout/slow
+class: a down tool is declared, and alerted on, immediately, never after a second
+"quiet" run.
+
+The script reads `Critical tools` through `oa-state.ps1`, refuses names absent from the
+configured MCP servers, and writes `%LOCALAPPDATA%\overnight-agent\capabilities.json`.
+The default is `email, google-workspace`. The same command records the coordinator start
+in `%LOCALAPPDATA%\overnight-agent\run-ledger.jsonl` (`startedAt`, trigger when known, and
 `runId`). It compares consecutive starts against the 30-minute cadence. If more than two
 scheduled slots were missed, put its exact `⚠ GAP: no runs from <t1> to <t2> (<n> slots)`
 headline as the **first line** of the wrap-up. This remains a degraded run even when a
@@ -710,24 +726,17 @@ headline as the **first line** of the wrap-up. This remains a degraded run even 
 the blind interval. The preflight sends the gap once through the same critical-alert
 channel and persists its delivery state in `capabilities.json`; a failed send remains
 pending and is retried without duplicating a successful alert.
-The default is `email, google-workspace`. Email tests the account; Google reads one
-task from `@default` using the consented `Google account (Tasks)` address. An arbitrary
-server needs a zero-argument read-shaped tool or the probe fails closed. A configured
-server or a successful `tools/list` is **not** a successful real-call probe. Each spawned
-probe uses `Critical tool probe timeout` from `user-settings.md` (default `90s`). A timeout
-is `slow`/unknown, gets one quiet wrap-up line, and neither alerts nor degrades the run;
-two consecutive timeouts for that tool escalate to `down`. An MCP error is `down` immediately.
 
 Exit `2` means **degraded**, not completed: put the emitted `headline` as the **first
 line** of the wrap-up, before "From your inbox". Its `tools` map carries each exact error
-and first-seen timestamp. Slow critical tools get one quiet wrap-up line and do not block
-tasks; only `down` tools block tasks that require them. A configured non-critical tool failure
-still gets one line in the wrap-up but no push. The script sends one push per outage start, at most one
-reminder on each subsequent UTC day, and one recovered message, using a private
-Telegram DM or email to yourself if that channel works. A failed send is reported and
-retried; it is never marked delivered. The optional tray reads the same file and shows
-a red error icon and the same headline. If preflight itself errors (exit `1`), stop
-dispatch and report the error rather than declaring the run healthy.
+and first-seen timestamp; only `down` tools block tasks that require them. A configured
+non-critical tool failure still gets one line in the wrap-up but no push. The script sends
+one push per outage start, at most one reminder on each subsequent UTC day, and one
+recovered message, using a private Telegram DM or email to yourself if that channel
+works. A failed send is reported and retried; it is never marked delivered. The optional
+tray reads the same file and shows a red error icon and the same headline. If preflight
+itself errors (exit `1`), stop dispatch and report the error rather than declaring the
+run healthy.
 
 For each candidate task, check its required MCP servers against `tools`. Do not send
 or start one requiring a down tool: report `blocked: <server> down` under Skipped
