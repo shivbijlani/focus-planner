@@ -25,6 +25,14 @@ export function readRunLedger(file) {
   });
 }
 
+// The ledger carries two line kinds: run STARTS (#762) and per-run DECISION records (#561).
+// Cadence is a property of starts alone, so a decision line appended between two runs must not
+// be mistaken for the previous start -- that would make every gap invisible after the first
+// decision was recorded, which is the exact failure the gap detector exists to prevent.
+export function lastRunStart(entries) {
+  return [...entries].reverse().find((entry) => entry?.startedAt) ?? null;
+}
+
 export function detectRunGap(previous, startedAt, cadenceMinutes = RUN_CADENCE_MINUTES) {
   if (!previous?.startedAt) return null;
   const fromMs = Date.parse(previous.startedAt);
@@ -46,7 +54,7 @@ export function recordRunStart(file, {
 } = {}) {
   const entries = readRunLedger(file);
   const startedAt = now.toISOString();
-  const gap = detectRunGap(entries.at(-1), startedAt, cadenceMinutes);
+  const gap = detectRunGap(lastRunStart(entries), startedAt, cadenceMinutes);
   const entry = { startedAt, trigger, runId };
   if (gap) entry.gap = gap;
   appendFileSync(file, `${JSON.stringify(entry)}\n`, 'utf8');
