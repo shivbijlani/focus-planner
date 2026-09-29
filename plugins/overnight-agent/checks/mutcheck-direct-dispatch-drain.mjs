@@ -22,7 +22,7 @@ const rules = [
   ['no-repeat', 'skip every task ID already attempted this run'],
   ['cutoff', '**start no send at or after the cutoff**'],
   ['do-not-wait', 'Do not wait for\n   running sessions at the end'],
-  ['failed-send-frees', 'A failed send does not count toward the limit.'],
+  ['failed-send-frees', 'Only accepted sends\n      count toward the active-send limit.'],
   ['refusal-frees', 'A reported refusal or user pause also frees\n   its opening immediately'],
 ];
 
