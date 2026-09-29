@@ -148,6 +148,24 @@ jobs:
       - name: Real-call probe, outage transitions, settings and tray
         run: node ./plugins/overnight-agent/checks/mutcheck-critical-tools.mjs
 
+  # Scheduling decisions must outlive the run that made them (GH #561). The ordered worklist,
+  # each row's eligibility and the reason a higher-ranked row was skipped used to exist only in
+  # memory, so "why did this run pick Deferred #362 while Today #245 sat there?" was a multi-hour
+  # reconstruction that only worked while the state happened not to have moved.
+  decision-record:
+    name: Per-run scheduling decision record
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mutation check (the record is appended, bounded, and names every Today row)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-decision-record.ps1
+      - name: Mutation check (run-gap detection reads run starts, not decision lines)
+        run: node ./plugins/overnight-agent/checks/mutcheck-run-gap.mjs
+
   # A truncated Google Tasks read must not read as a small backlog (GH #524).
   # The Tasks API silently caps a bare list_tasks at a 20-item first page, and a
   # short page is byte-identical to a short backlog -- so a run read 9 open tasks
