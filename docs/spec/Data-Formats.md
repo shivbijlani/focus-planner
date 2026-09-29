@@ -279,7 +279,7 @@ Real sample excerpt from `plugins/overnight-agent/skills/overnight-agent/user-se
 
 | Slot | Port | Profile dir (`%LOCALAPPDATA%\playwright-mcp\`) | Account | Desktop shortcut |
 | --- | --- | --- | --- | --- |
-| `edge-cdp-1` (regular) | 9225 | `edge1` | `<your main account>` | MCP Edge 1 (CDP 9225) |
+| `edge-cdp-1` (regular) | 9225 | `edge1` | `<your main account>` | `Browser - <account label>` |
 ```
 
 

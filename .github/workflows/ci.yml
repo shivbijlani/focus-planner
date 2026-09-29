@@ -74,6 +74,15 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-browser-slots.ps1
 
+  browser-profile-shortcuts:
+    name: Browser profile shortcuts
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (account names and profile-target cleanup)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-browser-profile-shortcuts.ps1
+
   # GH #738: each Playwright MCP slot launches its OWN profile directly
   # (`--browser msedge --user-data-dir <dir>`) instead of attaching to a shared
   # CDP debug port. set-playwright-browser-profiles.ps1 is the one script that
