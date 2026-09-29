@@ -124,6 +124,20 @@ test('the section reader ignores the other workloads sharing the file', () => {
   assert.deepEqual(readSettingsSection(sibling, 'Tray update check').map(row => row.value), ['off']);
 });
 
+test('settings values use the first code span, otherwise the whole cell', () => {
+  const annotated = readSettingsSection(
+    section(['| Enabled | prose before `off` — notes after it |']),
+    RELIABILITY_SECTION_HEADING,
+  );
+  assert.equal(annotated[0].value, 'off');
+
+  const plain = readSettingsSection(
+    section(['| Enabled | off — notes remain part of an unquoted value |']),
+    RELIABILITY_SECTION_HEADING,
+  );
+  assert.equal(plain[0].value, 'off — notes remain part of an unquoted value');
+});
+
 test('resolution prefers the external copy and skips the template shipped in the plugin', async t => {
   const root = await mkdtemp(join(tmpdir(), 'oa-resolve-'));
   t.after(() => rm(root, { recursive: true, force: true }));

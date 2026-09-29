@@ -111,8 +111,8 @@ leaves an index of every archived heading.
 - **Telegram mirror (optional): `%LOCALAPPDATA%\overnight-agent\telegram-bridge\`** — a small,
   dependency-free Node CLI that mirrors each task journal into its own **Telegram forum topic**
   (1 task = 1 topic) and folds phone replies back into the journals. It's enabled and configured in
-  `user-settings.md` → "Telegram". You run it at the **end of every run** so the work you just wrote into
-  journals also lands in Telegram (see "PHASE 3 — Mirror to Telegram"). The bot token is **never** stored
+  `user-settings.md` → "Telegram". Run it after preparation and before the terminal dispatch drain
+  (see "PHASE 3 — Mirror to Telegram"). The bot token is **never** stored
   in a file — it's read from the OS credential vault at run time.
 
 - **Optional reliability tray (not part of this run loop):** `plugins/overnight-agent/checks/oa-supervisor-tray.ps1`,
@@ -507,6 +507,21 @@ user has spoken after your last turn:
 
 Do the phases **in this order** every time.
 
+> **Run order — dispatch drains last.** Complete PHASE 0, PHASE 0.7, PHASE 2,
+> PHASE 2.5 and PHASE 3 before entering PHASE 1. PHASE 2 classifies and prepares
+> dispatchable work, but does not send it yet. PHASE 1 is the final phase: once its
+> drain loop starts, do no inbox follow-up, closed-task reply review, Google Tasks
+> collection, paper generation, Telegram mirroring, email marking or other
+> coordinator work. At the dispatch cutoff, write the wrap-up and end the run.
+>
+> **Hard end — one minute before the next run.** At the start, derive
+> `hard_end = next_run - 1 minute`, where `next_run` is the next local :00 or :30
+> after this session's first prompt. Check the wall clock before and after every
+> tool call and before starting each step. At or past `hard_end`, stop immediately:
+> make no further tool calls except the minimum needed to write the one-line
+> wrap-up `cut short at <step>`, then exit. This deadline outranks every phase,
+> retry, cleanup, email mark-read, mirror and ordinary wrap-up requirement.
+
 > **Dispatch — one direct path.** `Overnight Agent concurrency` is the maximum number of
 > accepted task-session sends still active at once, not a lifetime send cap for the run. Fill
 > openings in `scan -Compact` order, then refill when a task session goes idle until the start
@@ -523,8 +538,9 @@ Do the phases **in this order** every time.
 > `settings-malformed` rather than presenting that default as the user's choice. A later run may
 > send to the same task again; do not wait for running task sessions at the end of this run.
 
-> **Telegram mirror runs last.** PHASE 3 mirrors the journals to Telegram *after* PHASE 1/2 have written
-> your turns, so a task's thread reflects the work you just did. It's gated on `user-settings.md → Telegram`.
+> **Telegram mirror runs before the drain.** PHASE 3 mirrors journals after preparation and before
+> PHASE 1's terminal dispatch drain. A task-session turn written during the drain is mirrored by the
+> next coordinator run. Nothing is lost: the bridge deduplicates journal turns by turn hash.
 
 > **Scan first (applies to PHASE 1 *and* PHASE 2):** before judging any task, run
 > **`oa-state.ps1 scan -Compact`** once and use its JSON as your worklist. Each row tells you what
@@ -657,16 +673,35 @@ Do the phases **in this order** every time.
 **Critical-tool preflight:** run `node "<skill>\check-critical-tools.mjs"` at the start
 of every coordinator run (before accepting or dispatching tasks). It reads `Critical tools`
 through `oa-state.ps1`, refuses names absent from the configured MCP servers, performs
-a real read for each, and writes `%LOCALAPPDATA%\overnight-agent\capabilities.json`.
+a real read for each, and writes `%LOCALAPPDATA%\overnight-agent\capabilities.json`. Prefer the
+coordinator's already-connected MCP tools where available: make the same safe health call described
+below and pass outcomes through `--connected-probes <json-file>`, using
+`{"email":{"status":"ok"}}` for success, `{"email":{"status":"error","error":"..."}}` for an MCP
+error, or `{"email":{"status":"slow","error":"..."}}` for a timeout. Omit servers the coordinator
+cannot call; those fall back to the spawned MCP probe. Keep this JSON in a run-scoped temporary
+file and remove it after the preflight.
+The same command records the coordinator start in
+`%LOCALAPPDATA%\overnight-agent\run-ledger.jsonl` (`startedAt`, trigger when known, and
+`runId`). It compares consecutive starts against the 30-minute cadence. If more than two
+scheduled slots were missed, put its exact `⚠ GAP: no runs from <t1> to <t2> (<n> slots)`
+headline as the **first line** of the wrap-up. This remains a degraded run even when a
+`catch_up` trigger successfully resumes work: catch-up proves recovery, not coverage of
+the blind interval. The preflight sends the gap once through the same critical-alert
+channel and persists its delivery state in `capabilities.json`; a failed send remains
+pending and is retried without duplicating a successful alert.
 The default is `email, google-workspace`. Email tests the account; Google reads one
 task from `@default` using the consented `Google account (Tasks)` address. An arbitrary
 server needs a zero-argument read-shaped tool or the probe fails closed. A configured
-server or a successful `tools/list` is **not** a successful real-call probe.
+server or a successful `tools/list` is **not** a successful real-call probe. Each spawned
+probe uses `Critical tool probe timeout` from `user-settings.md` (default `90s`). A timeout
+is `slow`/unknown, gets one quiet wrap-up line, and neither alerts nor degrades the run;
+two consecutive timeouts for that tool escalate to `down`. An MCP error is `down` immediately.
 
 Exit `2` means **degraded**, not completed: put the emitted `headline` as the **first
 line** of the wrap-up, before "From your inbox". Its `tools` map carries each exact error
-and first-seen timestamp. A configured non-critical tool failure still gets one line
-in the wrap-up but no push. The script sends one push per outage start, at most one
+and first-seen timestamp. Slow critical tools get one quiet wrap-up line and do not block
+tasks; only `down` tools block tasks that require them. A configured non-critical tool failure
+still gets one line in the wrap-up but no push. The script sends one push per outage start, at most one
 reminder on each subsequent UTC day, and one recovered message, using a private
 Telegram DM or email to yourself if that channel works. A failed send is reported and
 retried; it is never marked delivered. The optional tray reads the same file and shows
@@ -1083,8 +1118,15 @@ task gets a **dedicated session** so its history persists across runs. Code task
 repository worktree; non-code tasks use their own sessions in the fixed local folder project
 named by `user-settings.md` → `Non-code task project`. Never put non-code work in the planner's
 OneDrive folder or a code repository.
+The coordinator never loads, invokes or inspects a task's skill. Build every dispatch brief from
+the task's journal extract and linked-task context; the task session loads any skill its work needs.
 Isolation does not require previous task sessions to finish before the next coordinator run can
 start more work.
+
+⛔ **This is the terminal phase.** Enter it only after PHASE 0, PHASE 0.7, PHASE 2,
+PHASE 2.5 and PHASE 3 are complete. The send/refill loop below is the coordinator's
+last work. When it reaches the dispatch cutoff, write the wrap-up and end; do not resume
+an earlier phase or perform any follow-up.
 
 1. From the `scan` worklist — **taken in the order it returned, skipping `eligible: false` rows** —
    collect tasks whose stored `status` is `approved` (also continue any
@@ -1121,9 +1163,18 @@ start more work.
    3. Send exactly one `send_session_message` to that task session with the approved brief and
       `delivery_mode: immediate`. The brief's first line is the emitted `role_line`, verbatim.
       Put `kickoff_continuation` next when replacing a dead session.
-   4. If sending fails, run `oa-state.ps1 session -Id <ID> -SessionDead`, do not retry that task
-      or session in this run, and continue to the next eligible row while the number of accepted
-      active sends is under the limit and before cutoff. A failed send does not count toward the limit.
+   4. **Silence is not death (#761).** If delivery is definitively rejected because the target
+      session is unavailable, run `oa-state.ps1 session -Id <ID> -SessionDead`; if it refuses with
+      `session_still_alive`, keep the binding and report the conflicting evidence. A delivery that
+      **could not be confirmed** is not a rejection: report uncertainty, keep the binding, and do
+      not retry that task in this run. Do not infer death from unchanged `updated_at`, journal mtime,
+      lack of a turn, or elapsed time: a no-change task can legitimately write nothing, and the
+      app can resume an idle CLI after routine shutdown. The read-time dead-process check also
+      excludes a log ending in `session.shutdown` with `shutdownType: routine`; a stale dead-PID
+      lock after normal idle shutdown is not evidence that the session cannot resume.
+      Do not retry any failed or uncertain
+      delivery in this run; continue to the next eligible row before cutoff. Only accepted sends
+      count toward the active-send limit.
    5. **One send per task per run, and a refusal ends that task for the run.** If the task
       session answers with a refusal — a user opt-out, a pause, or a blocker it cannot clear —
       that is the answer. **Do not send a follow-up**: not "write the required turn now", not
@@ -1176,12 +1227,26 @@ start more work.
    - **`replace`** — a previous run recorded the bound session as non-wakeable. Create a fresh one
      **idle, without a kickoff**, and use the emitted **`kickoff_continuation`** *verbatim* as the opening of its prepared brief: it
      names the task and the prior session id, so the replacement knows it is continuing work rather
-     than starting clean. Then bind it — which records `prior_session_id`.
+     than starting clean. Then bind it — which records `prior_session_id`, and appends the
+     outgoing session to `prior_session_ids`.
+     `scan` reports `replacements_24h` for every task (including quiet tasks in `-Compact`);
+     it counts bind events in the last 24 hours, not failed attempts. A nonzero count is a
+     churn signal to inspect, never an automatic cap or permission to retire the current session.
+   - **A replacement may only move forward.** Binding a session id that appears anywhere in the
+     task's `prior_session_ids` lineage is refused (`session_bind_backwards`), and **`-Force`
+     does not override it** — there is no state of the world in which re-binding an already
+     retired ancestor is right. Measured on task #471: the chain `b94abe44 → 42d1a304 →
+     9294bd58` was rewritten back onto `42d1a304` with `9294bd58` recorded as its *prior*, which
+     orphaned the newest session while still charging its capacity slot. If a binding is
+     genuinely finished, release it (`-SessionRelease`) and bind a session this task has never
+     used.
    - **`create`** — no session yet. Create one **idle, without a kickoff**, then bind it before
      sending. Creating or binding an idle session is not work.
-   - If a session will not wake, record that fact rather than retrying blindly:
-     `oa-state.ps1 session -Id <ID> -SessionDead`. That is what turns the next verdict into
-     `replace` and arms the continuation.
+   - Mark a session dead only after a definite unavailable-target delivery rejection (or the
+     read-time dead-process/workspace verdict above). Silence, an idle status, a completed
+     no-change run, and unconfirmed delivery are not non-wakeability evidence. On definite
+     rejection use `oa-state.ps1 session -Id <ID> -SessionDead`; a live process refuses it with
+     `session_still_alive`. Otherwise preserve the binding and report uncertainty, not `replace`.
    - **If the user tells a sub-session to stop, record it on the spot** —
      `oa-state.ps1 mark -Id <ID> -Status blocked -StatusBy user`. That single write is what every
      reader derives from: `scan` reports `session_paused` and `eligible: false`, and this verdict
@@ -1494,9 +1559,9 @@ rather than merely incomplete, which makes it the more dangerous of the two.
    with `-Ask blocking`, one short question for the gated actions naming the exact action
    and its cost or recipient; record `oa-state.ps1 mark -Id <ID> -Status proposed -Version <n>
    -PlanId t<ID>-v<n>`. Do not dispatch. Otherwise **do not write a coordinator turn**:
-   hand the classified reversible and gate-allowed steps to the task session via PHASE 1's
-   normal `session -ForDispatch` path **in this wake**, subject to ordering, concurrency
-   and cutoff. Pass `-PlanDispatch` only for an existing agent-authored proposal with
+   leave the classified reversible and gate-allowed step prepared for PHASE 1's terminal
+   drain **in this wake**, subject to ordering, concurrency and cutoff. PHASE 2 sends
+   nothing. Pass `-PlanDispatch` only for an existing agent-authored proposal with
    `plan_review_due: true` and its exact `dispatch_input`; a fresh eligible task needs no
    exception. Recheck action-specific consent at execution time. The coordinator never
    does task work or writes the task's outcome turn (G12 permits one author per wake).
@@ -1505,7 +1570,7 @@ rather than merely incomplete, which makes it the more dangerous of the two.
    and **one** short question if only gated steps remain. Never ask for approval of work
    already performed or a blanket approval of the plan.
 
-### PHASE 2.5 — Generate the task papers (after journals, before Telegram)
+### PHASE 2.5 — Generate the task papers (before Telegram and the dispatch drain)
 
 A journal is a chronological log, and a log is the wrong shape for understanding a complicated
 task: the current state is scattered across every turn that ever touched it, newest last,
@@ -1514,7 +1579,7 @@ read. Same with telegram… What helps is one doc that assumes I have little con
 read and comment on… It should be a paper. No talk about corrections and mistakes you made. That
 could go into appendix."*
 
-So once PHASE 1/2 have written your turns, regenerate the per-task papers:
+After PHASE 2 has prepared work and before PHASE 3 mirrors it, regenerate the per-task papers:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\..\..\checks\generate-task-papers.ps1"
@@ -1538,12 +1603,13 @@ exactly what the issue asks for, and it is done structurally, so nothing is rewr
   Telegram. Do not invite the user to reply there until the comment channel in #286 actually exists.
 - A failure here must never abort the run — note it in the wrap-up and carry on.
 
-### PHASE 3 — Mirror to Telegram (do this after you've finished writing journals)
+### PHASE 3 — Mirror to Telegram (after preparation, before the dispatch drain)
 
-If **Telegram** is enabled in `user-settings.md` (→ "Telegram", `Enabled = on`), then **as the last step of
-every run** — after PHASE 1 and PHASE 2 have written all your journal turns — mirror those journals into
-Telegram. This is what gives every worked task its own phone-readable thread; skipping it means the user
-sees nothing new in Telegram even though the journals updated.
+If **Telegram** is enabled in `user-settings.md` (→ "Telegram", `Enabled = on`), mirror journals
+after PHASE 2 preparation and before entering PHASE 1's terminal dispatch drain. This gives every
+already-written task turn a phone-readable thread. A task-session turn written during the drain is
+mirrored on the next coordinator run; the bridge deduplicates by turn hash, so delaying that mirror
+does not lose or duplicate the turn.
 
 Run the bundled bridge **once** (it posts new agent turns to each task's forum topic, creates the topic +
 stamps a `<!-- tg-meta … -->` deep-link marker into the journal the first time it sees a task, and folds any
@@ -1645,7 +1711,9 @@ Report back to the user a short summary:
   capability read as an empty inbox (GH #346).
 - **Other tool failures:** one named line for each non-critical tool that failed during
   this run, without a push notification. A critical-tool headline is the first line
-  of the entire wrap-up, before this section, and keeps the run status `degraded`.
+  of the entire wrap-up, before this section, and keeps the run status `degraded`. A
+  run-gap headline precedes even a critical-tool headline so the blind window cannot
+  look like a quiet night after a successful catch-up.
 - **Executed:** which tasks, what got done, links to deliverables.
 - **Already done:** tasks you found were complete (with how you knew) — for the user to confirm.
 - **Waiting on you:** which tasks now have a plan to approve (and any that are `blocked` with a
@@ -1922,7 +1990,7 @@ See PHASE 0.
 
 ## Notes
 
-- This skill composes with the others: it may call the dance-church, daily-planner, or other skills
-  when a task's approved plan calls for them.
+- The coordinator never loads or calls another task's skill. It dispatches journal-derived context;
+  the dedicated task session loads dance-church, daily-planner or any other skill its work needs.
 - Keep plans small and high-signal — match the style of the user's existing journals (concrete
   steps, named deliverables, real links, clear recommendations).

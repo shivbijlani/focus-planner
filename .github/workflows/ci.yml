@@ -779,6 +779,15 @@ jobs:
       - name: Mutation check (dead session process reads replace)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-dead-session-verdict.ps1
+      # GH #562: the binding may only move FORWARD. Measured on task #471, where the chain
+      # b94abe44 -> 42d1a304 -> 9294bd58 was rewritten back onto 42d1a304 with 9294bd58 recorded
+      # as its PRIOR -- a cycle, which orphans the newest session while still charging its
+      # capacity slot and lets each wake flip the binding instead of advancing it. The arms use
+      # #471's own three-session shape, and the mutant arm reproduces that exact recorded state
+      # once the guard is deleted.
+      - name: Mutation check (session replacement cannot go backwards)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-session-bind-backwards.ps1
       - name: Mutation check (failed dispatch does not consume concurrency)
         run: node ./plugins/overnight-agent/checks/mutcheck-direct-dispatch-budget.mjs
       - name: Mutation check (refill openings until the start cutoff)

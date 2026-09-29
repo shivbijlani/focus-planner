@@ -162,7 +162,15 @@
     reuse    bound and live. Wake THAT session. Do not create a second one.
     replace  bound but marked dead by a previous `-SessionDead`. Create a fresh session whose
              kickoff is `kickoff_continuation` (emitted verbatim), which names the task and the
-             prior session id, then bind it -- which records `prior_session_id`.
+             prior session id, then bind it -- which records `prior_session_id` and appends the
+             outgoing session to the `prior_session_ids` lineage.
+
+  A BIND MAY ONLY MOVE FORWARD (#562). Replacement is a chain, never a cycle: a session id this
+  task has already retired can never become its binding again. Measured on task #471, where the
+  chain b94abe44 -> 42d1a304 -> 9294bd58 was written back onto 42d1a304 with 9294bd58 recorded as
+  its PRIOR -- the successor filed as the ancestor's predecessor, nine minutes after the successor
+  already existed. The newest session was orphaned while still charged against capacity (#345),
+  and every subsequent `replace` could flip the binding instead of advancing it.
 
   TWO REFUSALS CARRY THE WEIGHT, and both fail closed.
 
@@ -170,6 +178,11 @@
                             persisted session" is a suggestion: the second session gets created
                             anyway and simply overwrites the pointer to the first, which then
                             leaks (#345) with nothing recording that it ever existed.
+
+    session_bind_backwards  Binding an id already present in the task's retired lineage. Unlike
+                            the conflict above this is NOT overridable by -Force: a conflict can
+                            be a legitimate operator override, whereas re-binding a retired
+                            ancestor has no correct use. Recover with -SessionRelease.
 
     session_workspace_inherited   A `code` bind whose workspace is the RUN SESSION's own. This is
                             not hypothetical: the first attempt to delegate #404 called the
@@ -666,6 +679,16 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$settingsValueScript = Join-Path $PSScriptRoot 'settings-value.ps1'
+if (Test-Path -LiteralPath $settingsValueScript) {
+  . $settingsValueScript
+} else {
+  function ConvertFrom-SettingCell([string]$Cell) {
+    $match = [regex]::Match([string]$Cell, '`([^`]*)`')
+    if ($match.Success) { return $match.Groups[1].Value.Trim() }
+    return ([string]$Cell).Trim()
+  }
+}
 
 # --- The gate tunables, resolved from user-settings.md (#310 follow-up) --------------------
 #
@@ -713,17 +736,14 @@ function Get-UserSettingsPath {
   return $null
 }
 
-function Get-SettingRow([string]$text, [string]$name, [switch]$PreserveBackticks) {
+function Get-SettingRow([string]$text, [string]$name) {
   # One `| Setting | Value |` row, matched on the setting name at the start of the cell. Returns
-  # the raw value cell, or $null. Case-insensitive, tolerant of surrounding whitespace and of the
-  # backticks the template uses, because a user who copies the formatting must not be punished.
+  # the shared value interpretation, or $null: first backtick span, otherwise the whole cell.
   if (-not $text) { return $null }
   $re = '(?im)^\s*\|\s*' + [regex]::Escape($name) + '\s*\|\s*([^|\r\n]*?)\s*\|'
   $m = [regex]::Match($text, $re)
   if (-not $m.Success) { return $null }
-  $value = $m.Groups[1].Value
-  if (-not $PreserveBackticks) { $value = $value -replace '`', '' }
-  return $value.Trim()
+  return ConvertFrom-SettingCell $m.Groups[1].Value
 }
 
 function Cmd-CriticalTools {
@@ -3426,6 +3446,8 @@ function Get-ScanRows {
       session_workspace_missing = [bool](Test-WorkspaceMissing "$($sessFacts.workspace)" "$($sessFacts.workspace_type)")
       # #728: process death is read from the session host's lock plus its stale event log.
       session_process_dead = $sessionProcessDead
+      # Rolling count from persisted bind events, not from the current session's age.
+      replacements_24h = (Get-Replacements24h $st)
       # #540: the user said NOT NOW, as a column rather than something a caller must re-derive
       # from `status` + `status_by`. It is emitted for every row, bound or not, because a paused
       # task with no session must not be answered with `create` either.
@@ -3470,6 +3492,7 @@ function Get-ScanRows {
   foreach ($bid in @($board.Keys)) {
     if ($seenScanIds.ContainsKey("$bid")) { continue }
     $b = $board[$bid]
+    $boardState = Read-State "$bid"
     $rows += [pscustomobject]@{
       id                    = "$bid"
       status                = 'none'
@@ -3496,6 +3519,7 @@ function Get-ScanRows {
       unanswered_user       = $false
       unanswered_user_where = ''
       session_paused        = $false
+      replacements_24h      = (Get-Replacements24h $boardState)
       paused_at             = $null
       exhaustion            = $null
       # Why this row exists at all, in the row itself: a verdict a reader can audit beats one
@@ -3678,7 +3702,7 @@ $script:CompactFields = @(
   'tracked', 'work_priority', 'urgency', 'board_pos', 'priorities_rank', 'linked',
   'holds_today_gate', 'today_release_reason', 'has_open_ask', 'awaiting_reply', 'consent_ok',
   'doc_id', 'doc_new_comments', 'doc_channel', 'session_id', 'session_verdict', 'session_paused',
-  'session_process_dead',
+  'session_process_dead', 'replacements_24h',
   'session_workspace_missing',
   'plan_review_due', 'dispatch_input', 'no_journal_reason'
 )
@@ -3704,6 +3728,7 @@ function Test-CompactRowNeeded($r) {
   if ($r.holds_today_gate) { return $true }
   if ($r.reopened_closed) { return $true }
   if ($r.unanswered_user) { return $true }
+  if ($r.replacements_24h -gt 0) { return $true }
   if ($r.due_poll -or $r.due_recheck) { return $true }
   if ($r.PSObject.Properties['has_journal'] -and -not $r.has_journal) { return $true }
   return $false
@@ -5068,7 +5093,7 @@ function New-SessionObject {
   param(
     [string]$SessionIdValue, [string]$Kind, [string]$Project, [string]$Workspace,
     [string]$WsType, $CreatedAt, $LastWokenAt, [string]$SessionState,
-    [string]$PriorSessionId, $ReplacedAt
+    [string]$PriorSessionId, $ReplacedAt, [string[]]$PriorSessionIds
   )
   [pscustomobject]@{
     session_id       = $SessionIdValue
@@ -5089,8 +5114,29 @@ function New-SessionObject {
     # without it the replacement is indistinguishable from a first-ever session, which is the
     # cold start the whole binding exists to remove.
     prior_session_id = $PriorSessionId
+    # #562: the WHOLE lineage, oldest first, not just the immediate predecessor. A single slot
+    # cannot answer "has this id already been retired?" -- after 1 -> 2 -> 3 it remembers only 2,
+    # so a bind back onto 1 (or, as measured on task #471, back onto 2) looks like an ordinary
+    # replacement. Keeping the full chain is what makes the forward-only rule decidable at all.
+    prior_session_ids = @($PriorSessionIds | Where-Object { "$_" })
     replaced_at      = (ConvertTo-IsoText $ReplacedAt)
   }
+}
+
+function Get-SessionLineage($sess) {
+  # Every session id this task has already retired, oldest first. Records written before #562
+  # carry only `prior_session_id`; that single id is the lineage we can still prove, so it is
+  # used rather than treating the absent array as "no history" -- which would re-open the cycle
+  # on exactly the tasks that already have one.
+  if (-not $sess) { return @() }
+  $ids = @()
+  if ($sess.PSObject.Properties['prior_session_ids'] -and $sess.prior_session_ids) {
+    $ids += @($sess.prior_session_ids | ForEach-Object { "$_" } | Where-Object { $_ })
+  }
+  if ("$($sess.prior_session_id)" -and $ids -notcontains "$($sess.prior_session_id)") {
+    $ids += "$($sess.prior_session_id)"
+  }
+  return @($ids)
 }
 
 function Test-SamePath([string]$a, [string]$b) {
@@ -5116,19 +5162,14 @@ function Test-PathWithin([string]$path, [string]$root) {
 function Assert-ChatWorkspace([string]$project, [string]$workspace, [string]$wsType) {
   $settingsPath = Get-UserSettingsPath
   $setting = if ($settingsPath -and (Test-Path -LiteralPath $settingsPath)) {
-    Get-SettingRow (Get-Content -LiteralPath $settingsPath -Raw) 'Non-code task project' -PreserveBackticks
+    Get-SettingRow (Get-Content -LiteralPath $settingsPath -Raw) 'Non-code task project'
   } else { '' }
   if (-not $setting) {
     throw 'session_chat_project_required: configure Non-code task project in user-settings.md before binding a non-code session'
   }
   $idPattern = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
-  $match = [regex]::Match($setting, '`([^`]*)`')
-  if ($match.Success) {
-    $configured = $match.Groups[1].Value
-  } else {
-    $match = [regex]::Match($setting, "^($idPattern)(?=\s|$)")
-    $configured = if ($match.Success) { $match.Groups[1].Value } else { '' }
-  }
+  $match = [regex]::Match($setting, "^($idPattern)(?=\s|$)")
+  $configured = if ($match.Success) { $match.Groups[1].Value } else { '' }
   if ($configured -cnotmatch ('^' + $idPattern + '$')) {
     throw "session_chat_project_invalid: Non-code task project must be a project id, got '$setting'"
   }
@@ -5168,6 +5209,27 @@ function Get-SessionState($st) {
   return $null
 }
 
+function Get-Replacements24h($st) {
+  if (-not $st) { return 0 }
+  $events = @()
+  if ($st.PSObject.Properties['session_replacements'] -and $st.session_replacements) {
+    $events = @($st.session_replacements)
+  } elseif ($st.session -and "$($st.session.prior_session_id)" -and "$($st.session.replaced_at)") {
+    # Legacy records retained only the most recent replacement timestamp.
+    $events = @([pscustomobject]@{ at = $st.session.replaced_at })
+  }
+  $since = [datetimeoffset]::UtcNow.AddHours(-24)
+  $count = 0
+  foreach ($event in $events) {
+    $at = [datetimeoffset]::MinValue
+    if ([datetimeoffset]::TryParse("$($event.at)", [ref]$at) -and
+        $at.ToUniversalTime() -ge $since -and $at.ToUniversalTime() -le [datetimeoffset]::UtcNow) {
+      $count++
+    }
+  }
+  return $count
+}
+
 function Test-SessionProcessDead([string]$sessionId) {
   # Is this bound session's CLI process gone? (GH #728)
   #
@@ -5178,6 +5240,29 @@ function Test-SessionProcessDead([string]$sessionId) {
   # still writing cannot be read as dead. Any missing or unreadable evidence answers $false:
   # replacing a live session discards its continuity, the expensive direction.
   try { return [bool](Test-SessionProcessDeadCore $sessionId) } catch { return $false }
+}
+
+function Test-SessionProcessAlive([string]$sessionId) {
+  if (-not $sessionId -or $sessionId -match '[\\/]' -or $sessionId -in '.', '..') { return $false }
+  try {
+    $sessionDir = Join-Path $SessionStateDir $sessionId
+    if (-not (Test-Path -LiteralPath $sessionDir -PathType Container)) { return $false }
+    foreach ($lock in @(Get-ChildItem -LiteralPath $sessionDir -Filter 'inuse.*.lock' -File -ErrorAction Stop)) {
+      if ($lock.Name -notmatch '^inuse\.(\d+)\.lock$') { continue }
+      $pidValue = 0
+      if (-not [int]::TryParse($Matches[1], [ref]$pidValue) -or $pidValue -le 0) { continue }
+      $process = $null
+      try {
+        $process = [System.Diagnostics.Process]::GetProcessById($pidValue)
+        if (-not $process.HasExited) { return $true }
+      } catch [ArgumentException] {
+        # A missing lock owner is not positive evidence of a live host.
+      } finally {
+        if ($process) { $process.Dispose() }
+      }
+    }
+  } catch { return $false }
+  return $false
 }
 
 function Test-SessionProcessDeadCore([string]$sessionId) {
@@ -5205,7 +5290,14 @@ function Test-SessionProcessDeadCore([string]$sessionId) {
   $eventsPath = Join-Path $sessionDir 'events.jsonl'
   if (-not (Test-Path -LiteralPath $eventsPath -PathType Leaf)) { return $false }
   $staleBefore = [datetime]::UtcNow.AddMinutes(-15)
-  return ((Get-Item -LiteralPath $eventsPath -ErrorAction Stop).LastWriteTimeUtc -le $staleBefore)
+  if ((Get-Item -LiteralPath $eventsPath -ErrorAction Stop).LastWriteTimeUtc -gt $staleBefore) { return $false }
+  # A routine CLI shutdown is idle, not an unresumable session. Task #289's first host
+  # resumed after replacement, and its successor ended with session.shutdown/routine.
+  $lastEvent = Get-Content -LiteralPath $eventsPath -Tail 1 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  if ("$($lastEvent.type)" -eq 'session.shutdown' -and "$($lastEvent.data.shutdownType)" -eq 'routine') {
+    return $false
+  }
+  return $true
 }
 
 function Test-WorkspaceMissing([string]$path, [string]$wsType) {
@@ -5483,7 +5575,8 @@ function Cmd-Session {
         $newSess = New-SessionObject -SessionIdValue "$($s.session_id)" -Kind "$($s.kind)" `
           -Project "$($s.project)" -Workspace "$($s.workspace)" -WsType "$($s.workspace_type)" `
           -CreatedAt $s.created_at -LastWokenAt $s.last_woken_at -SessionState 'dead' `
-          -PriorSessionId "$($s.prior_session_id)" -ReplacedAt $s.replaced_at
+          -PriorSessionId "$($s.prior_session_id)" -ReplacedAt $s.replaced_at `
+          -PriorSessionIds (Get-SessionLineage $s)
         Set-Member $obj 'session' $newSess
         # Set-Member, not a direct assignment: a state object written by an older version (or a
         # hand-built one) may not carry `updated` at all, and assigning to an absent property
@@ -5536,14 +5629,37 @@ function Cmd-Session {
   }
   elseif ($SessionDead) {
     if (-not $sess) { throw "session_not_bound: task $Id has no session to mark dead" }
+    # Silence is not death (#761). A confirmed live lock owner outranks a caller's inference
+    # from missing journal output or a delivery acknowledgement that could not be confirmed.
+    if (Test-SessionProcessAlive "$($sess.session_id)") {
+      throw "session_still_alive: task $Id has a live session host; do not replace it for silence"
+    }
     $sess = New-SessionObject -SessionIdValue "$($sess.session_id)" -Kind "$($sess.kind)" `
       -Project "$($sess.project)" -Workspace "$($sess.workspace)" -WsType "$($sess.workspace_type)" `
       -CreatedAt $sess.created_at -LastWokenAt $sess.last_woken_at -SessionState 'dead' `
-      -PriorSessionId "$($sess.prior_session_id)" -ReplacedAt $sess.replaced_at
+      -PriorSessionId "$($sess.prior_session_id)" -ReplacedAt $sess.replaced_at `
+      -PriorSessionIds (Get-SessionLineage $sess)
     $dirty = $true
   }
   elseif ($SessionId) {
     $prior = ''
+    $lineage = @(Get-SessionLineage $sess)
+    if ($sess -and "$($sess.session_id)" -ne $SessionId -and $lineage -contains $SessionId) {
+      # #562: a bind may only move FORWARD. Measured on task #471: the chain ran
+      # b94abe44 -> 42d1a304 -> 9294bd58, and then the binding was written back onto 42d1a304
+      # with 9294bd58 recorded as its PRIOR -- the successor filed as the ancestor's predecessor.
+      # That is a cycle, not a chain: the newest session is orphaned, its slot stays charged, and
+      # the next `replace` can flip it straight back.
+      #
+      # Deliberately NOT overridable by -Force. -Force exists to escape a binding that is merely
+      # inconvenient; there is no state of the world in which re-binding an already-retired
+      # ancestor is the right answer, so an escape hatch here would only make the cycle reachable
+      # again. Recover by releasing the task (-SessionRelease) and binding a genuinely new session.
+      throw ("session_bind_backwards: task $Id already retired session $SessionId " +
+        "(lineage: $($lineage -join ' -> ')); refusing to re-bind it over $($sess.session_id). " +
+        'A replacement must be a session this task has never used. If the current binding is ' +
+        'genuinely finished, release it with -SessionRelease and bind a new session.')
+    }
     if ($sess -and "$($sess.session_id)" -ne $SessionId) {
       if ("$($sess.state)" -ne 'dead' -and -not $Force) {
         # The refusal that makes "reuse the persisted session" a rule rather than an intention.
@@ -5555,8 +5671,10 @@ function Cmd-Session {
           'cannot be woken, record that with -SessionDead first -- that is the replacement path, ' +
           'and it is what carries the continuation into the new session.')
       }
-      # Replacing a dead one: the prior id is the continuity record.
+      # Replacing a dead one: the prior id is the continuity record, and the outgoing id joins
+      # the lineage so it can never be re-bound to this task (#562).
       $prior = "$($sess.session_id)"
+      if ($lineage -notcontains $prior) { $lineage = @($lineage) + $prior }
     }
     elseif ($sess) { $prior = "$($sess.prior_session_id)" }
 
@@ -5602,10 +5720,23 @@ function Cmd-Session {
 
     $created = if ($sess -and "$($sess.session_id)" -eq $SessionId -and $sess.created_at) { $sess.created_at } else { Now-Iso }
     $replacedAt = if ($prior -and "$($sess.session_id)" -ne $SessionId) { Now-Iso } elseif ($sess) { $sess.replaced_at } else { '' }
+    if ($prior) {
+      $history = @()
+      if ($st.PSObject.Properties['session_replacements'] -and $st.session_replacements) {
+        $history = @($st.session_replacements)
+      } elseif ($sess -and "$($sess.prior_session_id)" -and "$($sess.replaced_at)") {
+        $history = @([pscustomobject]@{ session_id = "$($sess.prior_session_id)"; at = (ConvertTo-IsoText $sess.replaced_at) })
+      }
+      if ("$($sess.session_id)" -ne $SessionId) {
+        $history += [pscustomobject]@{ session_id = $prior; at = $replacedAt }
+        Set-Member $st 'session_replacements' $history
+      }
+    }
     $sess = New-SessionObject -SessionIdValue $SessionId -Kind $kind -Project $project `
       -Workspace $workspace -WsType $wsType -CreatedAt $created `
       -LastWokenAt $(if ($sess -and "$($sess.session_id)" -eq $SessionId) { $sess.last_woken_at } else { '' }) `
-      -SessionState 'live' -PriorSessionId $prior -ReplacedAt $replacedAt
+      -SessionState 'live' -PriorSessionId $prior -ReplacedAt $replacedAt `
+      -PriorSessionIds $lineage
     $dirty = $true
   }
 
@@ -5615,7 +5746,8 @@ function Cmd-Session {
     $sess = New-SessionObject -SessionIdValue "$($sess.session_id)" -Kind "$($sess.kind)" `
       -Project "$($sess.project)" -Workspace "$($sess.workspace)" -WsType "$($sess.workspace_type)" `
       -CreatedAt $sess.created_at -LastWokenAt (Now-Iso) -SessionState 'live' `
-      -PriorSessionId "$($sess.prior_session_id)" -ReplacedAt $sess.replaced_at
+      -PriorSessionId "$($sess.prior_session_id)" -ReplacedAt $sess.replaced_at `
+      -PriorSessionIds (Get-SessionLineage $sess)
     $dirty = $true
   }
 
@@ -5647,6 +5779,9 @@ function Cmd-Session {
     # #728: why a bound session reads `replace`. Derived from session-state on each call.
     process_dead = $sessionProcessDead
     prior_session_id = if ($sess -and "$($sess.prior_session_id)") { "$($sess.prior_session_id)" } else { $null }
+    # #562: every id this task has retired, oldest first. Emitted so a caller can see WHY a bind
+    # was refused without opening the state file, and so the cycle is visible if one ever recurs.
+    prior_session_ids = @(Get-SessionLineage $sess)
     created_at     = if ($sess) { (ConvertTo-IsoText $sess.created_at) } else { $null }
     last_woken_at  = if ($sess -and $sess.last_woken_at) { (ConvertTo-IsoText $sess.last_woken_at) } else { $null }
     released       = [bool]$released
