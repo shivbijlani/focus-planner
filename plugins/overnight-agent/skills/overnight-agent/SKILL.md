@@ -667,6 +667,27 @@ Do the phases **in this order** every time.
 >   `Work Priority` (P0 > P1 > P2 > unset), then urgency icon, then the `## Priorities` list,
 >   then board row order, then task id.
 > - **Report the order you worked in** in the wrap-up, so the selection is auditable afterwards.
+> - **Record the decision durably before the wrap-up (#561).** The wrap-up is a paragraph the run
+>   writes about itself, and only for the rows it chose to mention, so the selection stopped being
+>   auditable the moment the run ended. Once dispatch is finished, append the run's decision record
+>   to the coordinator run ledger:
+>
+>   ```powershell
+>   pwsh oa-state.ps1 decisions -RunId <runId from the preflight> `
+>        -ScanFile <the scan -Compact output you selected from> `
+>        -Outcomes '[{"id":"362","outcome":"dispatched","at":"...","sessionId":"..."},
+>                    {"id":"400","outcome":"capacity"}]'
+>   ```
+>
+>   Keep the `scan -Compact` output in a run-scoped file (`-ScanOutFile`) and pass that same file,
+>   so the record cites the bytes you actually read. `-Outcomes` words are a closed set —
+>   `dispatched`, `paused`, `cutoff`, `capacity`, `refused`, `failed_send` — and a row you do not
+>   name gets its reason derived: `ineligible:<today_release_reason>` when the scan found it
+>   ineligible, otherwise `not_dispatched`. The record lists the ordered worklist, **every Today
+>   row even when ineligible**, and what was dispatched with times; it lands as one
+>   `{"kind":"decision"}` line in `%LOCALAPPDATA%\overnight-agent\run-ledger.jsonl` beside the run
+>   starts, retaining 7 days of both line kinds. Never hand-write that JSON: the command derives
+>   it from the scan so the record cannot disagree with the worklist the run used.
 
 ### PHASE 0 — Check the agent inbox (do this before everything)
 
