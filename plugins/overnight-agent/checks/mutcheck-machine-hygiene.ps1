@@ -73,3 +73,4 @@ try {
     Remove-Item -LiteralPath $fixture -Recurse -Force
 }
 Write-Host 'PASS: machine hygiene guard and WhatIf fixtures'
+exit 0
