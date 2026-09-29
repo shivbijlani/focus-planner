@@ -310,6 +310,13 @@ observation**, and read-only:
 reparents a browser or MCP worker process. The tray's **Browser checks** menu shows the current
 status and recent outcomes.
 
+The installer and `sync-oa-home.ps1` share `checks/reliability-tray-files.json` as the
+tray's deployed-file roster. Sync reads the roster from the Git ref, so newly added
+tray files are deployed with the existing historical-byte safety checks. When sync
+writes a tray file, it reports `TRAY RESTART NEEDED` (`trayRestartNeeded` in JSON).
+Sync does **not** restart the running tray: restart it separately when safe to load
+the new files. A clean repeated sync does not request another restart.
+
 ### Plugin update checks in the tray (GH #701)
 
 A third **independent workload** asks whether a newer `overnight-agent` is available. It has
