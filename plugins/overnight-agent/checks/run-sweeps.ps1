@@ -601,6 +601,11 @@ $Suite = @(
   # `plugin-version-bump` blocks the merge instead. This entry stays because the nightly
   # run is what catches drift committed by any path CI does not see.
   @{ n = 'version-bump-sweep';       bridge = $false }
+  # GH #771: prose did not keep the coordinator inside its hard end or stop a second
+  # send to one task. The native guard records every tool attempt in the existing run
+  # ledger; this verifies the latest run actually produced guard records, permitted no
+  # duplicate target send, and permitted no ordinary tool at/after its hard end.
+  @{ n = 'coordinator-guard-sweep';   bridge = $false }
   # journal-encoding-invariant (added 2026-08-27 12:50 PT) — the COMPLEMENT of the line
   # above. installed-skill-drift-sweep asks "does the live file differ from a git ref?",
   # which is a PROXY for danger, and measured this run it is the wrong way round:
