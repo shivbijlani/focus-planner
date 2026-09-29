@@ -26,11 +26,14 @@
   table in user-settings.md, via browser-slot-table.ps1 -- the one parser for
   that table.
 
+  Shortcut names are `Browser - <account label>` from the table's Account
+  column. If Account is blank, the slot name is used as the label.
+
   THIS SCRIPT DOES NOT TOUCH ANY EXISTING SHORTCUT ON ITS OWN. Pass -RemoveOld
   to also delete the retired CDP-labelled shortcuts (`MCP Edge * (CDP *).lnk`
-  and any `Edge bijlanis.lnk`-style duplicate) from the target folder; without
-  it, this script only ever ADDS the new shortcuts, so it is safe to preview
-  with -WhatIf before removing anything.
+  and shortcuts that point to retired profiles or duplicate a current profile)
+  from the target folder; without it, this script only ever ADDS the new
+  shortcuts, so it is safe to preview with -WhatIf before removing anything.
 
 .PARAMETER SettingsPath
   Override the resolved user-settings.md (for the mutation check's fixtures).
@@ -40,8 +43,8 @@
 
 .PARAMETER RemoveOld
   Also delete shortcuts matching `MCP Edge*(CDP*).lnk` / `MCP Chrome*(CDP*).lnk`
-  and any `Edge *.lnk` duplicate that does not match a current slot's shortcut
-  name, from -DesktopPath.
+  and shortcuts that point to a profile no longer in the slot table or duplicate
+  a current profile, from -DesktopPath.
 
 .PARAMETER WhatIf
   Show what would be created/removed without writing anything.
@@ -89,14 +92,38 @@ if (-not (Test-Path -LiteralPath $DesktopPath -PathType Container)) {
 
 $wshShell = New-Object -ComObject WScript.Shell
 
+function Get-ShortcutName {
+    param([object]$Slot)
+    $label = if ([string]::IsNullOrWhiteSpace([string]$Slot.Account)) { $Slot.Slot } else { $Slot.Account.Trim() }
+    $name = "Browser - $label"
+    if ($name -notmatch '\.lnk$') { $name = "$name.lnk" }
+    return $name
+}
+
+function Normalize-ProfilePath {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    $expanded = [Environment]::ExpandEnvironmentVariables($Path.Trim().Trim('"'))
+    $fullPath = [IO.Path]::GetFullPath($expanded)
+    $root = [IO.Path]::GetPathRoot($fullPath)
+    if ($fullPath.Length -gt $root.Length) { $fullPath = $fullPath.TrimEnd([char[]]@('\', '/')) }
+    return $fullPath
+}
+
+$currentShortcutByProfile = @{}
+foreach ($slot in $slots) {
+    if (-not $slot.ProfilePath) { continue }
+    $profileKey = Normalize-ProfilePath -Path $slot.ProfilePath
+    $currentShortcutByProfile[$profileKey] = Get-ShortcutName -Slot $slot
+}
+
 $created = @()
 foreach ($slot in $slots) {
     if (-not $slot.ProfilePath) {
         Write-Host "install-browser-profile-shortcuts: [$($slot.Slot)] no profile path resolved from the table - skipping." -ForegroundColor Yellow
         continue
     }
-    $name = if ($slot.Shortcut) { $slot.Shortcut } else { "Browser – $($slot.Account)" }
-    if ($name -notmatch '\.lnk$') { $name = "$name.lnk" }
+    $name = Get-ShortcutName -Slot $slot
     $lnkPath = Join-Path $DesktopPath $name
     $exe = Resolve-SlotBrowserExe -Slot $slot
 
@@ -114,17 +141,31 @@ foreach ($slot in $slots) {
 }
 
 if ($RemoveOld) {
-    $currentNames = @($slots | ForEach-Object { if ($_.Shortcut) { $_.Shortcut } else { "Browser – $($_.Account)" } } |
-        ForEach-Object { if ($_ -notmatch '\.lnk$') { "$_.lnk" } else { $_ } })
     $retired = @(Get-ChildItem -LiteralPath $DesktopPath -Filter '*.lnk' -ErrorAction SilentlyContinue |
         Where-Object {
-            ($_.Name -match '^MCP (Edge|Chrome).*\(CDP \d+\)\.lnk$') -or
-            ($_.Name -match '^Edge .*\.lnk$' -and $_.Name -notin $currentNames)
+            $legacyName = $_.Name -match '^(?:MCP (?:Edge|Chrome).*\(CDP \d+\)|Edge .*)\.lnk$'
+            $shortcut = $wshShell.CreateShortcut($_.FullName)
+            $profileMatch = [regex]::Match(
+                $shortcut.Arguments,
+                '(?i)(?:^|\s)--user-data-dir(?:=|\s+)(?:"([^"]+)"|(\S+))'
+            )
+            $profilePath = $null
+            if ($profileMatch.Success) {
+                $profilePath = Normalize-ProfilePath -Path $(if ($profileMatch.Groups[1].Success) {
+                    $profileMatch.Groups[1].Value
+                } else {
+                    $profileMatch.Groups[2].Value
+                })
+            }
+            $isCurrentProfile = $null -ne $profilePath -and $currentShortcutByProfile.ContainsKey($profilePath)
+            $retiredProfile = $null -ne $profilePath -and -not $isCurrentProfile
+            $duplicateProfile = $isCurrentProfile -and $_.Name -ine $currentShortcutByProfile[$profilePath]
+            $legacyName -or $retiredProfile -or $duplicateProfile
         })
     foreach ($r in $retired) {
-        if ($PSCmdlet.ShouldProcess($r.FullName, 'remove retired CDP-labelled shortcut')) {
+        if ($PSCmdlet.ShouldProcess($r.FullName, 'remove stale or duplicate browser shortcut')) {
             Remove-Item -LiteralPath $r.FullName -Force
-            Write-Host "removed retired shortcut: $($r.Name)" -ForegroundColor DarkYellow
+            Write-Host "removed stale or duplicate shortcut: $($r.Name)" -ForegroundColor DarkYellow
         }
     }
 }
