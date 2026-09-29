@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Creates one desktop shortcut per browser profile slot (GH #738) — no CDP
   debug port, just a normal browser window for a one-time sign-in.
