@@ -141,6 +141,7 @@ function Write-Heartbeat {
       lastState = $tray.state; paused = $tray.paused; intervalMinutes = $IntervalMinutes
       nextEvaluationAt = $tray.nextEvaluationAt.ToString('o'); evaluating = $tray.evaluating
       error = $tray.error
+      critical = (Get-OaCriticalStatus -Path $files.capabilities)
       browser = [ordered]@{
         state = $browser.state; summary = $browser.summary; paused = $browser.paused
         running = [bool]$browser.process; error = $browser.error
@@ -424,6 +425,9 @@ $startupItem.Checked = (Get-OaTrayStartup).enabled
 [void]$menu.Items.Add('-')
 $exitItem = $menu.Items.Add('Exit')
 $icon.ContextMenuStrip = $menu
+$criticalItem = New-Object System.Windows.Forms.ToolStripMenuItem('Critical tools: checking')
+$criticalItem.Enabled = $false
+[void]$menu.Items.Insert(0, $criticalItem)
 
 function Limit-Text([string]$Text, [int]$Max) {
   if ($Text.Length -le $Max) { return $Text }
@@ -431,11 +435,16 @@ function Limit-Text([string]$Text, [int]$Max) {
 }
 
 function Update-TrayIcon {
+  $critical = Get-OaCriticalStatus -Path $files.capabilities
+  $criticalItem.Text = if ($critical.down) { Limit-Text $critical.headline 120 } else { 'Critical tools: OK' }
+  $icon.Icon = if ($critical.down) { [System.Drawing.SystemIcons]::Error } else { [System.Drawing.SystemIcons]::Application }
   $status = if ($tray.paused) { 'paused' } else { $tray.state.ToLowerInvariant() }
   $browserStatus = if ($browser.paused) { 'paused' } elseif ($browser.process) { 'checking' } else { $browser.state.ToLowerInvariant() }
   # NotifyIcon.Text is limited to 63 characters.
-  $icon.Text = Limit-Text ("OA reliability: {0} (next {1:HH:mm}); browser: {2}" -f $status,
-    $tray.nextEvaluationAt.ToLocalTime(), $browserStatus) 63
+  $icon.Text = if ($critical.down) { Limit-Text $critical.headline 63 } else {
+    Limit-Text ("OA reliability: {0} (next {1:HH:mm}); browser: {2}" -f $status,
+      $tray.nextEvaluationAt.ToLocalTime(), $browserStatus) 63
+  }
   $pauseItem.Text = if ($tray.paused) { 'Resume reliability' } else { 'Pause reliability' }
   $browserPauseItem.Text = if ($browser.paused) { 'Resume browser checks' } else { 'Pause browser checks' }
   $browserCheckNowItem.Enabled = (-not $browser.paused) -and (-not $browser.process)
@@ -501,6 +510,14 @@ $timer.add_Tick({
   }
   if (Step-BrowserWorkload) { Update-TrayIcon }
   if (Step-UpdateWorkload) { Update-TrayIcon }
+  if ($script:lastCriticalStamp -ne (if (Test-Path -LiteralPath $files.capabilities) {
+    (Get-Item -LiteralPath $files.capabilities).LastWriteTimeUtc.Ticks
+  } else { 0 })) {
+    $script:lastCriticalStamp = if (Test-Path -LiteralPath $files.capabilities) {
+      (Get-Item -LiteralPath $files.capabilities).LastWriteTimeUtc.Ticks
+    } else { 0 }
+    Update-TrayIcon
+  }
 })
 $timer.Start()
 

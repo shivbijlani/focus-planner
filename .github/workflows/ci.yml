@@ -137,6 +137,17 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-inbox-check.ps1
 
+  critical-tools:
+    name: Critical tool outage guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Real-call probe, outage transitions, settings and tray
+        run: node ./plugins/overnight-agent/checks/mutcheck-critical-tools.mjs
+
   # A truncated Google Tasks read must not read as a small backlog (GH #524).
   # The Tasks API silently caps a bare list_tasks at a 20-item first page, and a
   # short page is byte-identical to a short backlog -- so a run read 9 open tasks

@@ -10,6 +10,7 @@
  *
  * Usage:
  *   node mcp-probe.mjs <serverName> list
+ *   node mcp-probe.mjs <serverName> describe
  *   node mcp-probe.mjs <serverName> call <toolName> '<jsonArgs>'
  *   node mcp-probe.mjs <serverName> calls '[{"name":"t1","arguments":{}},{"name":"t2"}]'
  *
@@ -25,7 +26,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-const CONFIG = path.join(homedir(), '.copilot', 'mcp-config.json');
+const CONFIG = process.env.MCP_PROBE_CONFIG || path.join(homedir(), '.copilot', 'mcp-config.json');
 
 function loadServer(name) {
   const cfg = JSON.parse(readFileSync(CONFIG, 'utf8'));
@@ -87,11 +88,14 @@ function runSession(server, steps, timeoutMs = Number(process.env.MCP_PROBE_TIME
     child.on('error', (e) => { clearTimeout(timer); reject(e); });
 
     (async () => {
-      await send('initialize', {
+      const initialized = await send('initialize', {
         protocolVersion: '2024-11-05',
         capabilities: {},
         clientInfo: { name: 'overnight-agent-probe', version: '1.0.0' },
       });
+      if (initialized.error || !initialized.result?.protocolVersion) {
+        throw new Error(`MCP initialize failed: ${JSON.stringify(initialized.error ?? initialized.result)}`);
+      }
       notify('notifications/initialized', {});
       for (const step of steps) {
         results.push(await send(step.method, step.params));
@@ -105,7 +109,7 @@ function runSession(server, steps, timeoutMs = Number(process.env.MCP_PROBE_TIME
 
 const [, , serverName, action, toolName, toolArgs] = process.argv;
 if (!serverName || !action) {
-  console.error('usage: mcp-probe.mjs <server> list | call <tool> <jsonArgs> | calls <jsonSteps>');
+  console.error('usage: mcp-probe.mjs <server> list | describe | call <tool> <jsonArgs> | calls <jsonSteps>');
   process.exit(2);
 }
 
@@ -122,7 +126,7 @@ const callSteps =
     : [];
 
 const steps =
-  action === 'list'
+  action === 'list' || action === 'describe'
     ? [{ method: 'tools/list', params: {} }]
     : action === 'calls'
       ? callSteps
@@ -142,6 +146,8 @@ runSession(server, steps)
       if (r.error) { console.log(JSON.stringify({ error: r.error }, null, 2)); continue; }
       if (action === 'list') {
         console.log(JSON.stringify((r.result?.tools ?? []).map((t) => t.name), null, 2));
+      } else if (action === 'describe') {
+        console.log(JSON.stringify(r.result?.tools ?? [], null, 2));
       } else {
         console.log(JSON.stringify(r.result, null, 2));
       }

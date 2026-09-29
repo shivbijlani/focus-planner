@@ -654,6 +654,37 @@ Do the phases **in this order** every time.
 
 ### PHASE 0 — Check the agent inbox (do this before everything)
 
+**Critical-tool preflight:** run `node "<skill>\check-critical-tools.mjs"` at the start
+of every coordinator run (before accepting or dispatching tasks). It reads `Critical tools`
+through `oa-state.ps1`, refuses names absent from the configured MCP servers, performs
+a real read for each, and writes `%LOCALAPPDATA%\overnight-agent\capabilities.json`.
+The default is `email, google-workspace`. Email tests the account; Google reads one
+task from `@default` using the consented `Google account (Tasks)` address. An arbitrary
+server needs a zero-argument read-shaped tool or the probe fails closed. A configured
+server or a successful `tools/list` is **not** a successful real-call probe.
+
+Exit `2` means **degraded**, not completed: put the emitted `headline` as the **first
+line** of the wrap-up, before "From your inbox". Its `tools` map carries each exact error
+and first-seen timestamp. A configured non-critical tool failure still gets one line
+in the wrap-up but no push. The script sends one push per outage start, at most one
+reminder on each subsequent UTC day, and one recovered message, using a private
+Telegram DM or email to yourself if that channel works. A failed send is reported and
+retried; it is never marked delivered. The optional tray reads the same file and shows
+a red error icon and the same headline. If preflight itself errors (exit `1`), stop
+dispatch and report the error rather than declaring the run healthy.
+
+For each candidate task, check its required MCP servers against `tools`. Do not send
+or start one requiring a down tool: report `blocked: <server> down` under Skipped
+instead of marking PARTIAL, while continuing independent tasks. The optional
+`--tasks <json-file>` argument accepts `[{"id":"123","requires":["google-workspace"]}]`
+and emits the deterministic `skipped` reasons. Include the capability verdict and
+the blocked-tool instruction in task-session kickoffs so dependent task sessions
+cannot proceed using a tool the coordinator found down. Pass the task's required
+server names as `-RequiresTools google-workspace,email` to `oa-state.ps1 session
+-CheckDispatch` and `-ForDispatch`; these refuse an unprobed, stale or down tool
+before stamping the wake. Preserve the run's
+`degraded` status in its final report even if independent work succeeded.
+
 **First, reap stale MCP servers.** Every scheduled run starts its own set of stdio MCP servers, and
 finished sessions don't always reap them. They pile up (~6 per run, 75–150 MB each) until the box runs
 out of memory and the *next* run's MCP servers die on startup — which silently breaks the inbox check
@@ -1617,6 +1648,9 @@ Report back to the user a short summary:
   reason, and is an **ask** — the user's out-of-band channel was down and he needs to know a mail he
   sent may never have been seen. Never write these two the same way, and never let a missing
   capability read as an empty inbox (GH #346).
+- **Other tool failures:** one named line for each non-critical tool that failed during
+  this run, without a push notification. A critical-tool headline is the first line
+  of the entire wrap-up, before this section, and keeps the run status `degraded`.
 - **Executed:** which tasks, what got done, links to deliverables.
 - **Already done:** tasks you found were complete (with how you knew) — for the user to confirm.
 - **Waiting on you:** which tasks now have a plan to approve (and any that are `blocked` with a

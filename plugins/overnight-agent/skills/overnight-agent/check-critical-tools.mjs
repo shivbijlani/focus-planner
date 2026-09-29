@@ -1,0 +1,213 @@
+#!/usr/bin/env node
+// PHASE 0: real reads, persistent outage transitions, and a single alert per transition/day.
+import { execFileSync } from 'node:child_process';
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const plugin = path.resolve(here, '..', '..');
+const firstExisting = (...paths) => paths.find((p) => {
+  try { readFileSync(p); return true; } catch { return false; }
+});
+const prober = firstExisting(path.join(here, 'mcp-probe.mjs'), path.join(plugin, 'checks', 'mcp-probe.mjs'));
+const statePath = process.env.OA_CAPABILITIES_PATH ??
+  path.join(process.env.LOCALAPPDATA || tmpdir(), 'overnight-agent', 'capabilities.json');
+const shell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
+
+function call(server, action, ...args) {
+  if (!prober) throw new Error('mcp-probe.mjs not found');
+  const raw = execFileSync(process.execPath, [prober, server, action, ...args], {
+    encoding: 'utf8', timeout: 45000, maxBuffer: 1024 * 1024, windowsHide: true,
+  });
+  const result = JSON.parse(raw);
+  if (result.error || result.isError) throw new Error(JSON.stringify(result.error ?? result));
+  return result;
+}
+
+function row(text, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const found = text.match(new RegExp(`^\\s*\\|\\s*${escaped}\\s*\\|\\s*([^|\\r\\n]*)\\|`, 'im'));
+  return found?.[1].replaceAll('`', '').trim() ?? '';
+}
+
+function payload(result) {
+  if (result.error || result.isError) throw new Error(`MCP tool error: ${JSON.stringify(result.error ?? result)}`);
+  const text = result.content?.find((c) => c.type === 'text')?.text;
+  if (!text) throw new Error('tool returned no text payload');
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { throw new Error(`tool returned non-JSON payload: ${text.slice(0, 200)}`); }
+  if (parsed.error || parsed.success === false) throw new Error(JSON.stringify(parsed));
+  return parsed;
+}
+
+export async function probeTool(name, settings, deps = { call }) {
+  if (name === 'email') {
+    const accounts = payload(deps.call(name, 'call', 'email_list_accounts', '{}'));
+    const account = accounts.find((a) => a.email === row(settings, 'Agent email account')) ??
+      (accounts.length === 1 ? accounts[0] : null);
+    if (!account?.id) throw new Error('email account not uniquely identified');
+    const health = payload(deps.call(name, 'call', 'email_test_account',
+      JSON.stringify({ accountId: account.id })));
+    if (health.success !== true) throw new Error('email_test_account did not report success=true');
+    return;
+  }
+  if (name === 'google-workspace') {
+    const address = row(settings, 'Google account (Tasks)');
+    if (!address || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) {
+      throw new Error('Google account (Tasks) must name the consented account for the real-call probe');
+    }
+    payload(deps.call(name, 'call', 'list_tasks', JSON.stringify({
+      user_google_email: address, task_list_id: '@default', max_results: 1,
+    })));
+    return;
+  }
+  // Never treat tools/list itself as proof of a working server. A generic zero-argument,
+  // read-shaped tool is the only safe automatic probe for an arbitrary configured server.
+  const tools = deps.call(name, 'describe');
+  const read = tools.find((t) => /^(list|get|search|status|health|test)_/i.test(t.name) &&
+    !t.inputSchema?.required?.length);
+  if (!read) throw new Error(`no safe zero-argument read probe for '${name}'`);
+  payload(deps.call(name, 'call', read.name, '{}'));
+}
+
+function headline(name, error, since) {
+  return `⛔ CRITICAL TOOL DOWN: ${name}. ${error}. Since ${since}.`;
+}
+
+export async function evaluate({ names, settings = '', previous = {}, now = new Date(), probe = probeTool,
+  notify = async () => false, tasks = [] }) {
+  const outages = { ...previous.outages };
+  const results = {};
+  const lines = [];
+  const day = now.toISOString().slice(0, 10);
+  for (const name of names) {
+    let error = null;
+    try { await probe(name, settings); } catch (e) { error = e.message; }
+    const before = outages[name];
+    if (error) {
+      const entry = before?.status === 'down' ? before : {
+        firstSeenAt: now.toISOString(), lastAlertDate: null, status: 'down',
+      };
+      entry.error = error;
+      outages[name] = entry;
+      results[name] = { status: 'down', error, firstSeenAt: entry.firstSeenAt };
+      lines.push(headline(name, error, entry.firstSeenAt));
+      if (entry.lastAlertDate !== day) {
+        const kind = entry.lastAlertDate ? 'reminder' : 'outage';
+        if (await notify(headline(name, error, entry.firstSeenAt), kind, name)) {
+          entry.lastAlertDate = day;
+        }
+      }
+    } else {
+      results[name] = { status: 'ok', checkedAt: now.toISOString() };
+      if (before) {
+        const text = `✅ CRITICAL TOOL RECOVERED: ${name}. Outage since ${before.firstSeenAt}.`;
+        if (await notify(text, 'recovered', name)) delete outages[name];
+        else outages[name] = { ...before, status: 'recovered' };
+      }
+    }
+  }
+  const down = Object.entries(results).filter(([, value]) => value.status === 'down').map(([name]) => name);
+  const skipped = tasks.filter((task) => task.requires?.some((name) => down.includes(name)))
+    .map((task) => ({ id: task.id, reason: `blocked: ${task.requires.find((name) => down.includes(name))} down` }));
+  return {
+    schema: 'oa-capabilities/1', checkedAt: now.toISOString(),
+    status: down.length ? 'degraded' : 'completed',
+    headline: lines[0] ?? '', wrapUp: lines.join('\n'), tools: results, outages, skipped,
+  };
+}
+
+function readState(file) {
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    if (parsed.schema !== 'oa-capabilities/1') throw new Error(`unexpected schema ${parsed.schema}`);
+    return parsed;
+  } catch (e) {
+    if (e.code === 'ENOENT') return {};
+    throw e;
+  }
+}
+
+function store(file, data) {
+  const temporary = `${file}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(data, null, 2)}\n`);
+  renameSync(temporary, file);
+}
+
+function settingsFrom(pathname) {
+  if (!pathname) return '';
+  return readFileSync(pathname, 'utf8');
+}
+
+async function sendAlert(text, settings, down) {
+  // An alert is acknowledged only after a successful send, never after an attempted call.
+  const dm = row(settings, 'Critical alert Telegram DM');
+  if (dm && !down.includes('telegram')) {
+    try {
+      payload(call('telegram', 'call', 'message', JSON.stringify({
+        action: 'send', chat_id: dm, text,
+      })));
+      return true;
+    } catch (e) { console.error(`Telegram alert failed: ${e.message}`); }
+  }
+  const address = row(settings, 'Critical alert email') || row(settings, 'Agent email account');
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) && !down.includes('email')) {
+    try {
+      const accounts = payload(call('email', 'call', 'email_list_accounts', '{}'));
+      const account = accounts.find((a) => a.email === row(settings, 'Agent email account')) ??
+        (accounts.length === 1 ? accounts[0] : null);
+      if (!account?.id) throw new Error('email account not uniquely identified');
+      payload(call('email', 'call', 'email_send', JSON.stringify({
+        accountId: account.id, to: [{ email: address }], subject: text.slice(0, 120),
+        body: { text },
+      })));
+      return true;
+    } catch (e) { console.error(`Email alert failed: ${e.message}`); }
+  }
+  console.error('Critical alert undelivered: configure Critical alert Telegram DM or a working Critical alert email');
+  return false;
+}
+
+export async function main(args = process.argv.slice(2)) {
+  const option = (key) => args[args.indexOf(key) + 1];
+  const settingsPath = args.includes('--settings') ? option('--settings') : undefined;
+  const configPath = args.includes('--mcp-config') ? option('--mcp-config') : undefined;
+  const file = args.includes('--state') ? option('--state') : statePath;
+  const taskFile = args.includes('--tasks') ? option('--tasks') : null;
+  const stateScript = firstExisting(path.join(here, 'oa-state.ps1'));
+  if (!stateScript) throw new Error('oa-state.ps1 not found');
+  const command = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', stateScript, 'critical-tools'];
+  if (settingsPath) command.push('-UserSettings', settingsPath);
+  if (configPath) command.push('-McpConfig', configPath);
+  const policy = JSON.parse(execFileSync(shell, command, { encoding: 'utf8', timeout: 20000 }));
+  if (configPath) process.env.MCP_PROBE_CONFIG = configPath;
+  const settings = settingsFrom(policy.settingsPath);
+  const tasks = taskFile ? JSON.parse(readFileSync(taskFile, 'utf8')) : [];
+  mkdirSync(path.dirname(file), { recursive: true });
+  const lock = `${file}.lock`;
+  let handle;
+  try { handle = openSync(lock, 'wx'); } catch (e) { throw new Error(`capabilities lock unavailable: ${e.message}`); }
+  try {
+    const prior = readState(file);
+    const down = [];
+    const output = await evaluate({
+      names: policy.tools, settings, previous: prior, tasks,
+      probe: async (name) => {
+        try { await probeTool(name, settings); } catch (e) { down.push(name); throw e; }
+      },
+      notify: (text) => sendAlert(text, settings, down),
+    });
+    store(file, output);
+    console.log(JSON.stringify(output));
+    process.exitCode = output.status === 'degraded' ? 2 : 0;
+  } finally {
+    closeSync(handle);
+    unlinkSync(lock);
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((e) => { console.error(`critical tools: ${e.message}`); process.exitCode = 1; });
+}
