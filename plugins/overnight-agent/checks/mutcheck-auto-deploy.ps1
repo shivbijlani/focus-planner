@@ -807,7 +807,14 @@ Assert ($out -match 'NOT FOUND' -or $out -match '"oaHomeExit":\s*2') `
 # --- #519/#622: deploy from origin/main without touching the dev checkout ------------
 Section 'G-BRIDGE: the verified OA-home package is the runtime target'
 $sBridge = New-Sandbox
-& git -C $sBridge.Repo reset --hard --quiet HEAD~1 2>&1 | Out-Null
+# The OA-home sync reads the tray roster from the ref even though this fixture
+# primarily checks the independent Telegram bridge destination.
+$bridgeRoster = Join-Path $sBridge.Repo 'plugins\overnight-agent\checks\reliability-tray-files.json'
+Set-Content -LiteralPath $bridgeRoster -Value '["livefix.ps1"]' -NoNewline -Encoding UTF8
+& git -C $sBridge.Repo add -- $bridgeRoster 2>&1 | Out-Null
+& git -C $sBridge.Repo commit --quiet -m 'tray roster' 2>&1 | Out-Null
+& git -C $sBridge.Repo update-ref refs/remotes/origin/main HEAD 2>&1 | Out-Null
+& git -C $sBridge.Repo reset --hard --quiet HEAD~2 2>&1 | Out-Null
 Set-Content -Path (Join-Path $sBridge.Repo 'dirty-local-work.txt') -Value 'leave this untouched' -Encoding UTF8
 $headBeforeBridge = (& git -C $sBridge.Repo rev-parse HEAD).Trim()
 $statusBeforeBridge = (& git -C $sBridge.Repo status --porcelain | Out-String).Trim()
