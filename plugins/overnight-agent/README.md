@@ -95,9 +95,10 @@ session-model enforcement requires an app API.
 ### Direct dispatch
 
 The coordinator sends task briefs directly with `send_session_message`; it does not depend on a
-plugin extension. It processes eligible work in `scan -Compact` order and sends to at most
-`Overnight Agent concurrency` tasks per run. Each attempted send counts toward that limit; a later
-run can continue the work without waiting for earlier task sessions to finish.
+plugin extension. `Overnight Agent concurrency` limits accepted sends still active at once, not
+the total tasks started during a run. It fills openings in `scan -Compact` order, checks tracked
+sessions with one `get_sessions_status` call about every 60 seconds, and re-scans to refill an
+opening when a session goes idle. It never sends twice to the same task in one run.
 
 For each task, the coordinator reads `oa-state.ps1 session -Id <ID>` first. A `paused` verdict
 skips the task. `create` and `replace` create a new task session idle and bind it before sending;
@@ -106,12 +107,15 @@ send, `session -Id <ID> -ForDispatch -DispatchInput <hash>` rechecks eligibility
 the exact brief fingerprint, and stamps the wake. If the check throws, nothing is sent. If a send
 fails, the coordinator marks that session dead and continues to the next eligible task without
 retrying it.
+Failed sends, refusals and pauses release the opening; a refusal is never overridden with a
+follow-up message in the same run. A task still running at the end continues independently.
 
 The coordinator checks its start cutoff before every send: the next local **:00 or :30** after its
 first prompt, minus `Overnight Agent start buffer` from `user-settings.md` (default `5m`). For a
 10:30 next run, no send starts at or after 10:25. Valid buffer values are whole minutes `0`–`29`,
 optionally suffixed `m`; if an existing value cannot be read or parsed, the coordinator sends
 nothing and reports the problem. This is coordinator guidance, not a runtime extension timer.
+The coordinator stops starting tasks at that cutoff, without waiting for active tasks to finish.
 
 **Upgrading from the earlier extension:** current installs no longer create the user-level loader
 shim. Remove any stale copy left by an earlier install with:

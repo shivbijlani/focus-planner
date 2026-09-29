@@ -3,8 +3,8 @@
  * Mutation check for the PHASE 1 direct-dispatch concurrency rule (#728).
  *
  * The dispatcher is an instruction protocol rather than executable coordinator code. Pin the
- * accepted-send counter and failure behavior in the actual skill text, then mutate each rule back
- * to the former attempt-count behavior and require the corresponding assertion to fail.
+ * active accepted-send counter and failure behavior in the actual skill text, then mutate each
+ * rule back to attempt-count behavior and require the corresponding assertion to fail.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -26,8 +26,8 @@ function failures(text) {
   if (!phase.includes('A failed send does not count toward the limit.')) {
     out.push('B_failed-send-does-not-count: failed delivery leaves budget available')
   }
-  if (!phase.includes('Stop after the accepted-send count reaches the limit')) {
-    out.push('C_stop-on-accepted-count: stop condition uses accepted sends')
+  if (!phase.includes('Fill openings from the current scan until the accepted-send count reaches the limit of active')) {
+    out.push('C_fill-on-accepted-count: capacity counts active accepted sends')
   }
   return out;
 }
@@ -54,10 +54,10 @@ const mutants = [
     replace: 'A failed send consumes one attempt.',
   },
   {
-    name: 'M3_stop-on-attempt-count',
-    expect: 'C_stop-on-accepted-count',
-    find: 'Stop after the accepted-send count reaches the limit',
-    replace: 'Stop after the send-attempt count reaches the limit',
+    name: 'M3_fill-on-attempt-count',
+    expect: 'C_fill-on-accepted-count',
+    find: 'Fill openings from the current scan until the accepted-send count reaches the limit of active',
+    replace: 'Fill openings from the current scan until the send-attempt count reaches the limit of active',
   },
 ];
 

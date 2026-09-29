@@ -52,7 +52,7 @@ a value here takes effect on the next run with nothing else to change.
 | --- | --- |
 | Today gate backstop | `6h` — if **nothing** has been written to a Today task for this long, the agent stops waiting on it and works the backlog. Guards against a run that jams. Accepts `6`, `6h`, or `off` to disable. |
 | Today gate strict | `off` — set to `on` to make a workable Today task block the backlog **always**, with no release at all. The one-switch rollback if the agent starts leaving Today too readily. |
-| Overnight Agent concurrency | `1` |
+| Overnight Agent concurrency | `1` — maximum accepted task-session sends active at once; refill an opening until the start cutoff. |
 | Overnight Agent start buffer | `5m` |
 | Overnight Agent model | `auto` |
 

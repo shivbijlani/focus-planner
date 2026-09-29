@@ -206,7 +206,7 @@ The shipped template states the concurrency rationale plainly:
 <summary><strong>Show technical detail</strong></summary>
 
 ```md
-| Overnight Agent concurrency | `1` — maximum task-session send attempts in one run. |
+| Overnight Agent concurrency | `1` — maximum accepted task-session sends active at once; refill openings before the start cutoff. |
 ```
 
 
@@ -331,7 +331,7 @@ make sure those parked rows do not freeze the whole system.
 | Due poll / due recheck override | `Test-Workable` yields the park to `due_poll` / `due_recheck` | A recurring timer must not stop firing just because the user stopped replying. |
 | Snooze precedence | `scan` suppresses due timers when `snoozed`, but leaves the timers armed | “Not until DATE” outranks both board rank and timers, without silently disarming the timer forever. |
 | Staleness backstop | `stale_turn_backstop` based on `Today gate backstop` | A wedged Today row eventually releases Deferred instead of freezing the backlog. |
-| Direct dispatch cap | `Overnight Agent concurrency` | The coordinator makes no more than the configured number of send attempts in one run; a later run may continue the work. |
+| Direct dispatch capacity | `Overnight Agent concurrency` | The coordinator keeps at most this many accepted sends active; an idle session frees an opening before cutoff. |
 | Dispatch authority | `session -ForDispatch -DispatchInput` | Fresh eligibility, user pause and task-input checks are applied immediately before a send, which stamps the wake. |
 
 The key asymmetry is deliberate: when unsure, the system usually fails toward **holding** or
@@ -421,16 +421,20 @@ Pacing and ordering are related but different. Ordering answers *which row is ne
 ### Enforced mechanism: direct dispatch
 
 The coordinator processes prepared, approved tasks in the order returned by `scan -Compact`.
-`Overnight Agent concurrency` is the maximum number of send attempts in that run: `1` permits one
-attempt, `2` permits two. Failed sends consume an attempt and are never retried against the same
-session in that run. Dispatch does not wait for task completion or refill capacity; later runs may
-continue tasks that are still working.
+`Overnight Agent concurrency` caps accepted sends still active at once: `1` permits one active
+task session, `2` permits two. Failed sends do not occupy an opening, and neither failed sends nor
+refusals are retried for that task in the same run. Once a session goes idle, the coordinator
+re-scans and refills its opening with the next eligible task not already sent to this run. One
+native `get_sessions_status` call about every 60 seconds reads the tracked sessions' busy/idle
+activity; polling does not repeatedly read journals or scan the board.
 
 Before each send, the coordinator checks the next local **:00 or :30** after its first prompt,
 minus `Overnight Agent start buffer` from `user-settings.md` (default `5m`). At 10:30, a 5-minute
 buffer means no new send at or after 10:25. Valid values are whole minutes `0`–`29`, optionally
 suffixed `m`; an unreadable or invalid existing value means send nothing and report the problem.
 This is coordinator guidance, not a saved timer or extension-enforced deadline.
+At cutoff, the coordinator stops new sends without waiting for active sessions; later runs can
+continue them.
 
 For each task, `session -Id` resolves whether to skip (`paused`), reuse, create or replace. New
 sessions are created idle and bound before dispatch. Immediately before a message, the coordinator
@@ -443,7 +447,9 @@ eligible task without retrying it.
 
 `mutcheck-pacing-concurrency.ps1` proves the setting is a bare whole number, malformed prose is
 reported as `concurrency_source: settings-malformed`, and values that cannot be parsed narrow to
-`1`. This is the executable part of issue **#391**, now used as the direct-dispatch attempt cap.
+`1`. This is the executable part of issue **#391**, now used as the active-send capacity limit.
+`mutcheck-direct-dispatch-drain.mjs` pins refill, cutoff and single-status-poll instructions in
+PHASE 1.
 
 ### Finishing a run is not finishing its tasks
 
@@ -471,7 +477,7 @@ collection:
    `scan` worklist.
 2. **EXECUTE** dispatches work in the scan's priority order.
 3. Human replies gathered during collection update the worklist but do not widen the configured
-   per-run send limit or reorder that worklist.
+   active-send capacity; fresh scans determine eligibility and order for each refill.
 
 The executable statement of intended behaviour for this page is therefore spread across a small,
 important set of files:

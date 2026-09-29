@@ -21,6 +21,10 @@ approved work into per-task sessions, proposes new plans for eligible work, gene
 and mirrors results to Telegram. `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1`
 implements the machine-readable state layer behind that loop: board ordering, reopen detection,
 doc bindings, session bindings, consent, gates, timers, and journal snapshots.
+The coordinator fills up to `Overnight Agent concurrency` active sends, polls tracked sessions
+with the native `get_sessions_status` tool about once per minute, and re-scans to refill idle
+openings until the next half-hour start cutoff minus the configured buffer. Running tasks continue
+after cutoff; the coordinator does not require a drain extension.
 
 The check suite exists because the agent runs while nobody watches it. The doc comments in
 `plugins/overnight-agent/checks/mutcheck-doc-comments.mjs`,
