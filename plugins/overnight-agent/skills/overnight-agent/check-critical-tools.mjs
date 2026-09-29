@@ -1,5 +1,19 @@
 #!/usr/bin/env node
 // PHASE 0: real reads, persistent outage transitions, and a single alert per transition/day.
+//
+// GH #768: this used to cold-start a fresh copy of each MCP server (mcp-probe.mjs) to test it.
+// At a coordinator's start the PC is at its busiest -- the host is starting the coordinator's
+// OWN copies of the same servers, plus the WebView and task sessions -- so a cold start took
+// 56-90+s on a 4-core box. That measures machine load, not tool health, and escalating two slow
+// cold-starts to `down` only moved the false alarm one run later.
+//
+// The coordinator already has live, connected tools for the critical servers (it calls them
+// anyway for the inbox check and doc comments), so it makes the two real calls itself --
+// `email_test_account` for the Agent email account, `list_tasks` (max 1) for the Google account
+// (Tasks) setting -- and records the outcome with `--record name=ok` or
+// `--record name=down:<error>`. This is the ONE path: there is no subprocess probe left to fall
+// back to, and therefore no timeout/slow class. A tool the caller did not record for is treated
+// as absent from the session, which is also `down`.
 import { execFileSync } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,6 +27,9 @@ const plugin = path.resolve(here, '..', '..');
 const firstExisting = (...paths) => paths.find((p) => {
   try { readFileSync(p); return true; } catch { return false; }
 });
+// Alert delivery (Telegram/email) is the one remaining subprocess call: a standalone script has
+// no live MCP connection to reuse, unlike the health probe above which the coordinator now does
+// itself. See `sendAlert` below.
 const prober = firstExisting(path.join(here, 'mcp-probe.mjs'), path.join(plugin, 'checks', 'mcp-probe.mjs'));
 const statePath = process.env.OA_CAPABILITIES_PATH ??
   path.join(process.env.LOCALAPPDATA || tmpdir(), 'overnight-agent', 'capabilities.json');
@@ -20,46 +37,19 @@ const ledgerPath = process.env.OA_RUN_LEDGER_PATH ??
   path.join(process.env.LOCALAPPDATA || tmpdir(), 'overnight-agent', 'run-ledger.jsonl');
 const shell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
 
-export class ProbeTimeoutError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = 'ProbeTimeoutError';
-  }
-}
-
-function callWithTimeout(timeoutMs, server, action, ...args) {
+function call(server, action, ...args) {
   if (!prober) throw new Error('mcp-probe.mjs not found');
   let raw;
   try {
     raw = execFileSync(process.execPath, [prober, server, action, ...args], {
-      encoding: 'utf8', timeout: timeoutMs + 5000, maxBuffer: 1024 * 1024, windowsHide: true,
-      env: { ...process.env, MCP_PROBE_TIMEOUT_MS: String(timeoutMs) },
+      encoding: 'utf8', timeout: 95000, maxBuffer: 1024 * 1024, windowsHide: true,
     });
   } catch (e) {
-    const details = String(e.stderr ?? '').trim() || e.message;
-    if (e.code === 'ETIMEDOUT' || /timeout after \d+ms/i.test(details)) {
-      throw new ProbeTimeoutError(`timed out after ${Math.ceil(timeoutMs / 1000)}s`);
-    }
-    throw new Error(details);
+    throw new Error(String(e.stderr ?? '').trim() || e.message);
   }
   const result = JSON.parse(raw);
   if (result.error || result.isError) throw new Error(JSON.stringify(result.error ?? result));
   return result;
-}
-
-function call(server, action, ...args) {
-  return callWithTimeout(90000, server, action, ...args);
-}
-
-export function probeTimeoutMs(settings) {
-  const value = readSettingRow(settings, 'Critical tool probe timeout');
-  if (!value) return 90000;
-  const match = value.match(/^(\d+)\s*s$/i);
-  const seconds = match ? Number(match[1]) : NaN;
-  if (!Number.isSafeInteger(seconds) || seconds < 1 || seconds > 600) {
-    throw new Error('Critical tool probe timeout must be a whole number of seconds from 1s to 600s');
-  }
-  return seconds * 1000;
 }
 
 function payload(result) {
@@ -72,122 +62,79 @@ function payload(result) {
   return parsed;
 }
 
-function successfulCall(result) {
-  if (result.error || result.isError) {
-    throw new Error(`MCP tool error: ${JSON.stringify(result.error ?? result)}`);
-  }
-  return result;
-}
-
-export async function probeTool(name, settings, deps = { call }) {
-  if (name === 'email') {
-    const accounts = payload(deps.call(name, 'call', 'email_list_accounts', '{}'));
-    const account = accounts.find((a) => a.email === readSettingRow(settings, 'Agent email account')) ??
-      (accounts.length === 1 ? accounts[0] : null);
-    if (!account?.id) throw new Error('email account not uniquely identified');
-    const health = payload(deps.call(name, 'call', 'email_test_account',
-      JSON.stringify({ accountId: account.id })));
-    if (health.success !== true) throw new Error('email_test_account did not report success=true');
-    return;
-  }
-  if (name === 'google-workspace') {
-    const address = readSettingRow(settings, 'Google account (Tasks)');
-    if (!address || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) {
-      throw new Error('Google account (Tasks) must name the consented account for the real-call probe');
-    }
-    successfulCall(deps.call(name, 'call', 'list_tasks', JSON.stringify({
-      user_google_email: address, task_list_id: '@default', max_results: 1,
-    })));
-    return;
-  }
-  // Never treat tools/list itself as proof of a working server. A generic zero-argument,
-  // read-shaped tool is the only safe automatic probe for an arbitrary configured server.
-  const tools = deps.call(name, 'describe');
-  const read = tools.find((t) => /^(list|get|search|status|health|test)_/i.test(t.name) &&
-    !t.inputSchema?.required?.length);
-  if (!read) throw new Error(`no safe zero-argument read probe for '${name}'`);
-  successfulCall(deps.call(name, 'call', read.name, '{}'));
+// Parses one `--record` argument: `name=ok` for a successful call, or `name=down:<error>` for a
+// call the caller already made and failed (an MCP error) or a tool absent from the session (the
+// caller reports its own host startup error). There is no third status: with no subprocess there
+// is nothing left to time out.
+export function parseRecord(value) {
+  const eq = value.indexOf('=');
+  if (eq < 1) throw new Error(`--record must be 'name=ok' or 'name=down:<error>', got '${value}'`);
+  const name = value.slice(0, eq).trim();
+  const rest = value.slice(eq + 1);
+  if (rest === 'ok') return [name, { status: 'ok' }];
+  const colon = rest.indexOf(':');
+  const status = colon < 0 ? rest : rest.slice(0, colon);
+  if (status !== 'down') throw new Error(`--record: unknown status '${status}' for '${name}'; use ok or down`);
+  const error = (colon < 0 ? '' : rest.slice(colon + 1)).trim();
+  if (!error) throw new Error(`--record: 'down' requires an error, e.g. --record ${name}=down:timed out`);
+  return [name, { status: 'down', error }];
 }
 
 function headline(name, error, since) {
   return `⛔ CRITICAL TOOL DOWN: ${name}. ${error}. Since ${since}.`;
 }
 
-function slowLine(name, error, consecutiveSlowRuns) {
-  return `⚠️ CRITICAL TOOL SLOW: ${name}. ${error}. ` +
-    `${consecutiveSlowRuns}/2 consecutive timeouts; no outage declared yet.`;
-}
-
-export async function evaluate({ names, settings = '', previous = {}, now = new Date(), probe = probeTool,
+// Mutcheck (GH #768): a recorded `ok` stays `ok`, a recorded `down` (an MCP error the caller
+// already hit) is `down`, and a tool absent from `results` (missing from the session entirely)
+// is also `down`. There is no third, slow/unknown state: with no subprocess there is nothing to
+// time out, so a down tool is declared -- and alerted on -- immediately, not on a second run.
+export async function evaluate({ names, previous = {}, now = new Date(), results = {},
   notify = async () => false, tasks = [] }) {
   const outages = { ...previous.outages };
-  const results = {};
-  const lines = [];
+  const toolResults = {};
   const headlines = [];
   const day = now.toISOString().slice(0, 10);
   for (const name of names) {
-    let error = null;
-    let timedOut = false;
-    try { await probe(name, settings); } catch (e) {
-      error = e.message;
-      timedOut = e instanceof ProbeTimeoutError;
-    }
+    const recorded = results[name];
+    const ok = recorded?.status === 'ok';
     const before = outages[name];
-    if (error) {
-      const previousResult = previous.tools?.[name];
-      const consecutiveSlowRuns = timedOut
-        ? (previousResult?.status === 'slow' || previousResult?.errorType === 'timeout'
-          ? (previousResult.consecutiveSlowRuns ?? 0) + 1
-          : 1)
-        : 0;
-      if (timedOut && consecutiveSlowRuns < 2) {
-        results[name] = {
-          status: 'slow', error, errorType: 'timeout', consecutiveSlowRuns,
-          checkedAt: now.toISOString(),
-        };
-        lines.push(slowLine(name, error, consecutiveSlowRuns));
-      } else {
-        const downError = timedOut ? 'timed out on two consecutive runs' : error;
-        const entry = before?.status === 'down' ? before : {
-          firstSeenAt: now.toISOString(), lastAlertDate: null, status: 'down',
-        };
-        entry.error = downError;
-        outages[name] = entry;
-        results[name] = {
-          status: 'down', error: downError, firstSeenAt: entry.firstSeenAt,
-          errorType: timedOut ? 'timeout' : 'mcp', consecutiveSlowRuns,
-        };
-        const text = headline(name, downError, entry.firstSeenAt);
-        lines.push(text);
-        headlines.push(text);
-        if (entry.lastAlertDate !== day) {
-          const kind = entry.lastAlertDate ? 'reminder' : 'outage';
-          const unavailable = [...Object.entries(results)
-            .filter(([, value]) => value.status !== 'ok').map(([tool]) => tool), name];
-          if (await notify(text, kind, name, [...new Set(unavailable)])) {
-            entry.lastAlertDate = day;
-          }
+    if (!ok) {
+      const error = recorded?.status === 'down' && recorded.error ? recorded.error : 'absent from session';
+      const entry = before?.status === 'down' ? before : {
+        firstSeenAt: now.toISOString(), lastAlertDate: null, status: 'down',
+      };
+      entry.error = error;
+      outages[name] = entry;
+      toolResults[name] = { status: 'down', error, firstSeenAt: entry.firstSeenAt };
+      const text = headline(name, error, entry.firstSeenAt);
+      headlines.push(text);
+      if (entry.lastAlertDate !== day) {
+        const kind = entry.lastAlertDate ? 'reminder' : 'outage';
+        const unavailable = [...Object.entries(toolResults)
+          .filter(([, value]) => value.status !== 'ok').map(([tool]) => tool), name];
+        if (await notify(text, kind, name, [...new Set(unavailable)])) {
+          entry.lastAlertDate = day;
         }
       }
     } else {
-      results[name] = { status: 'ok', checkedAt: now.toISOString() };
+      toolResults[name] = { status: 'ok', checkedAt: now.toISOString() };
       if (before) {
         const text = `✅ CRITICAL TOOL RECOVERED: ${name}. Outage since ${before.firstSeenAt}.`;
-        const unavailable = Object.entries(results)
+        const unavailable = Object.entries(toolResults)
           .filter(([, value]) => value.status !== 'ok').map(([tool]) => tool);
         if (await notify(text, 'recovered', name, unavailable)) delete outages[name];
         else outages[name] = { ...before, status: 'recovered' };
       }
     }
   }
-  const down = Object.entries(results).filter(([, value]) => value.status === 'down').map(([name]) => name);
+  const down = Object.entries(toolResults).filter(([, value]) => value.status === 'down').map(([name]) => name);
   const skipped = tasks.filter((task) => task.requires?.some((name) => down.includes(name)))
     .map((task) => ({ id: task.id, reason: `blocked: ${task.requires.find((name) => down.includes(name))} down` }));
-  const wrapUp = [...headlines, ...lines.filter((line) => !headlines.includes(line))].join('\n');
+  const wrapUp = headlines.join('\n');
   return {
     schema: 'oa-capabilities/1', checkedAt: now.toISOString(),
     status: down.length ? 'degraded' : 'completed',
-    headline: headlines[0] ?? '', wrapUp, tools: results, outages, skipped,
+    headline: headlines[0] ?? '', wrapUp, tools: toolResults, outages, skipped,
   };
 }
 
@@ -211,21 +158,6 @@ function store(file, data) {
 function settingsFrom(pathname) {
   if (!pathname) return '';
   return readFileSync(pathname, 'utf8');
-}
-
-function connectedProbesFrom(pathname) {
-  if (!pathname) return {};
-  const parsed = JSON.parse(readFileSync(pathname, 'utf8'));
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('--connected-probes must contain a JSON object');
-  }
-  for (const [name, result] of Object.entries(parsed)) {
-    if (!result || !['ok', 'slow', 'error'].includes(result.status) ||
-      (result.status !== 'ok' && (typeof result.error !== 'string' || !result.error))) {
-      throw new Error(`invalid connected probe result for '${name}'`);
-    }
-  }
-  return parsed;
 }
 
 async function sendAlert(text, settings, unavailable) {
@@ -263,7 +195,6 @@ export async function main(args = process.argv.slice(2)) {
   const option = (key) => args[args.indexOf(key) + 1];
   const settingsPath = args.includes('--settings') ? option('--settings') : undefined;
   const configPath = args.includes('--mcp-config') ? option('--mcp-config') : undefined;
-  const connectedProbesPath = args.includes('--connected-probes') ? option('--connected-probes') : undefined;
   const stateDir = args.includes('--state-dir') ? option('--state-dir') : undefined;
   const file = args.includes('--state') ? option('--state') : statePath;
   const ledger = args.includes('--ledger') ? option('--ledger') : ledgerPath;
@@ -271,6 +202,11 @@ export async function main(args = process.argv.slice(2)) {
   const runId = args.includes('--run-id') ? option('--run-id') : undefined;
   const now = args.includes('--now') ? new Date(option('--now')) : new Date();
   const taskFile = args.includes('--tasks') ? option('--tasks') : null;
+  // One path in: the caller (the coordinator, which already made the real calls with its own
+  // connected tools) reports each outcome as its own `--record name=ok` or
+  // `--record name=down:<error>`. Repeatable; a critical tool the caller omits is absent from
+  // the session and is treated as down.
+  const records = args.flatMap((arg, i) => (arg === '--record' ? [args[i + 1]] : []));
   if (Number.isNaN(now.valueOf())) throw new Error('--now must be an ISO timestamp');
   mkdirSync(path.dirname(file), { recursive: true });
   mkdirSync(path.dirname(ledger), { recursive: true });
@@ -290,19 +226,10 @@ export async function main(args = process.argv.slice(2)) {
     const policy = JSON.parse(execFileSync(shell, command, { encoding: 'utf8', timeout: 60000 }));
     if (configPath) process.env.MCP_PROBE_CONFIG = configPath;
     const settings = settingsFrom(policy.settingsPath);
-    const timeoutMs = probeTimeoutMs(settings);
-    const probeCall = (...callArgs) => callWithTimeout(timeoutMs, ...callArgs);
-    const connectedProbes = connectedProbesFrom(connectedProbesPath);
+    const results = Object.fromEntries(records.map(parseRecord));
     const tasks = taskFile ? JSON.parse(readFileSync(taskFile, 'utf8')) : [];
     const output = await evaluate({
-      names: policy.tools, settings, previous: prior, tasks, now,
-      probe: async (name) => {
-        const direct = connectedProbes[name];
-        if (!direct) return probeTool(name, settings, { call: probeCall });
-        if (direct.status === 'ok') return;
-        if (direct.status === 'slow') throw new ProbeTimeoutError(direct.error);
-        throw new Error(direct.error);
-      },
+      names: policy.tools, previous: prior, tasks, now, results,
       notify: (text, _kind, _name, unavailable = []) => sendAlert(text, settings, unavailable),
     });
     if (runGap) {

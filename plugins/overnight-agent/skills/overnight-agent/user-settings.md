@@ -24,17 +24,12 @@ preferences.
 | GitHub owner | `github.com/<your-github-username>` |
 | Agent email account | `<agent-inbox@example.com>` (the name of this account as it appears in the email MCP) |
 | Critical tools | `email, google-workspace` — comma-separated MCP server names from `~\.copilot\mcp-config.json`. Unknown names are refused by name. Browser slots are deliberately not critical by default. |
-| Critical tool probe timeout | `90s` — time budget for each cold-start MCP probe. A timeout is reported as slow/unknown; two consecutive timeouts for the same tool are treated as down. |
 | Critical alert Telegram DM | *(optional)* your private chat ID, not the mirror's forum-group ID. Used for outage alerts, especially when email is down. |
 | Critical alert email | *(optional)* your own email address; defaults to Agent email account when that is an address. Used when Telegram is not configured or is down. |
 | Google account (Tasks) | `<your.name@example.com>` — the Google account whose **Tasks** the PHASE 2 collect step reads (must be consented in the Google Workspace MCP). Leave blank / omit to disable Google-Tasks collection. |
 | Google Tasks lists | *(optional)* `default only` — set this if `@default` **is** your whole Google Tasks backlog. The Google Workspace MCP exposes no way to enumerate task lists (GH #554), so without this the collector reports `partial` and refuses a total every night. With it, the same read counts as complete. Leave blank if you keep tasks in more than one list. |
 | Authorized sender addresses | `<addr1@example.com>`, `<addr2@example.com>` (only act on instruction emails **from** these) |
 | Auto-send (email) allow-list | `<addr1@example.com>`, `<addr2@example.com>` — you may **send/reply** email to these without extra approval. Emailing anyone **not** on this list still needs explicit approval. |
-
-`Critical tool probe timeout` accepts whole seconds from `1s` to `600s`; if the row is absent,
-the probe budget is `90s`. An invalid value stops the preflight rather than silently changing the
-requested budget.
 
 ## Telegram (optional — mirror journals to a Telegram forum group)
 

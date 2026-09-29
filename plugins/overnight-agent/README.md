@@ -15,6 +15,8 @@ command from the Focus Planner plugin marketplace.
 ```
 overnight-agent/
 ├── plugin.json                 # Plugin manifest
+├── extensions/
+│   └── coordinator-guard/      # Mechanical cutoff and one-send enforcement
 └── skills/
     └── overnight-agent/
         ├── SKILL.md            # The skill instructions
@@ -94,8 +96,12 @@ session-model enforcement requires an app API.
 
 ### Direct dispatch
 
-The coordinator sends task briefs directly with `send_session_message`; it does not depend on a
-plugin extension. `Overnight Agent concurrency` limits accepted sends still active at once, not
+The coordinator sends task briefs directly with `send_session_message`; the plugin extension only
+guards that path. It records each coordinator tool attempt in the existing run ledger, refuses a
+second send to the same target session in one run, refuses waits that cross the hard end, and after
+that hard end permits only `task_complete`. It activates only when the skill preflight has recorded
+the current coordinator session in the ledger, so it is inert in task and ordinary chat sessions.
+`Overnight Agent concurrency` limits accepted sends still active at once, not
 the total tasks started during a run. It fills openings in `scan -Compact` order, checks tracked
 sessions with one `get_sessions_status` call about every 60 seconds, and re-scans to refill an
 opening when a session goes idle. It never sends twice to the same task in one run.
@@ -114,7 +120,8 @@ The coordinator checks its start cutoff before every send: the next local **:00 
 first prompt, minus `Overnight Agent start buffer` from `user-settings.md` (default `5m`). For a
 10:30 next run, no send starts at or after 10:25. Valid buffer values are whole minutes `0`–`29`,
 optionally suffixed `m`; if an existing value cannot be read or parsed, the coordinator sends
-nothing and reports the problem. This is coordinator guidance, not a runtime extension timer.
+nothing and reports the problem. The start buffer remains coordinator guidance; the extension
+mechanically enforces the separate one-minute hard end.
 The coordinator stops starting tasks at that cutoff, without waiting for active tasks to finish.
 
 **Upgrading from the earlier extension:** current installs no longer create the user-level loader
