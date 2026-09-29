@@ -181,6 +181,7 @@ export async function main(args = process.argv.slice(2)) {
   const option = (key) => args[args.indexOf(key) + 1];
   const settingsPath = args.includes('--settings') ? option('--settings') : undefined;
   const configPath = args.includes('--mcp-config') ? option('--mcp-config') : undefined;
+  const stateDir = args.includes('--state-dir') ? option('--state-dir') : undefined;
   const file = args.includes('--state') ? option('--state') : statePath;
   const ledger = args.includes('--ledger') ? option('--ledger') : ledgerPath;
   const trigger = args.includes('--trigger') ? option('--trigger') : undefined;
@@ -202,6 +203,7 @@ export async function main(args = process.argv.slice(2)) {
     const command = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', stateScript, 'critical-tools'];
     if (settingsPath) command.push('-UserSettings', settingsPath);
     if (configPath) command.push('-McpConfig', configPath);
+    if (stateDir) command.push('-StateDir', stateDir);
     const policy = JSON.parse(execFileSync(shell, command, { encoding: 'utf8', timeout: 20000 }));
     if (configPath) process.env.MCP_PROBE_CONFIG = configPath;
     const settings = settingsFrom(policy.settingsPath);

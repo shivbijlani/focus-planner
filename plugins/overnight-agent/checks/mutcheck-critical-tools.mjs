@@ -126,7 +126,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   const check = (now) => spawnSync(process.execPath, [
     path.join(here, '..', 'skills', 'overnight-agent', 'check-critical-tools.mjs'),
     '--settings', settings, '--mcp-config', config, '--state', capabilities, '--ledger', ledger,
-    '--now', now,
+    '--state-dir', state, '--now', now,
   ], { encoding: 'utf8', timeout: 90000 });
   const run1 = check('2026-09-29T10:00:00Z');
   assert.equal(run1.status, 2, run1.stderr);
