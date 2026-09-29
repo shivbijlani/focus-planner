@@ -91,13 +91,14 @@ function Test-Record {
   $rowsById = @{}
   foreach ($r in $record.rows) { $rowsById["$($r.id)"] = $r }
 
-  # 1 -- appended, and quoting the scan it read. Timestamps are asserted on the RAW line: a
-  # record read back through ConvertFrom-Json arrives as [datetime], so comparing the parsed
-  # value would assert the host's locale rather than what was written.
+  # 1 -- appended, quoting the scan it read, with UTC timestamps. Timestamps are asserted on the
+  # RAW line: a record read back through ConvertFrom-Json arrives as [datetime] in the host's
+  # zone, so comparing the parsed value would assert the runner's time zone. The record itself is
+  # zone-independent by construction -- 11:10 -07:00 is written as 18:10Z on any host.
   $ok1 = ($record.runId -eq 'run-1') -and ($record.summary.rows_total -eq 244) -and
-         ($record.summary.rows_eligible -eq 2) -and ($raw -match '"at":"2026-09-29T11:10')
+         ($record.summary.rows_eligible -eq 2) -and ($raw -match '"at":"2026-09-29T18:10:00\.0000000Z"')
   $ok1 = $ok1 -and (@($record.dispatched).Count -eq 1) -and ("$($record.dispatched[0].id)" -eq '362') -and
-         ($raw -match '"dispatched":\[\{"id":"362","at":"2026-09-29T11:09')
+         ($raw -match '"dispatched":\[\{"id":"362","at":"2026-09-29T18:09:00\.0000000Z"')
 
   # 2 -- every Today row named, ineligible or not, with its deciding cause.
   $ok2 = $rowsById.ContainsKey('245') -and $rowsById.ContainsKey('246') -and
@@ -166,7 +167,10 @@ try {
        Replace = '  if ($false) {' },
     @{ Name = 'persistence'; Property = 'Appended'
        Find = '  [IO.File]::AppendAllText($RunLedger, "$line`n", (New-Object Text.UTF8Encoding($false)))'
-       Replace = '' }
+       Replace = '' },
+    @{ Name = 'local-timestamps'; Property = 'Appended'
+       Find = "  if (`$value -is [datetimeoffset]) { return `$value.ToUniversalTime().UtcDateTime.ToString('o') }"
+       Replace = "  if (`$value -is [datetimeoffset]) { return `$value.ToString('o') }" }
   )
 
   foreach ($m in $mutations) {

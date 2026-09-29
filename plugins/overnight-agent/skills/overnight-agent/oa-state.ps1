@@ -863,13 +863,13 @@ function Cmd-Decisions {
     $o = $outcomes[$r.id]
     $stamp = $null
     if ($o.PSObject.Properties['at'] -and "$($o.at)") {
-      # ConvertFrom-Json turns an ISO timestamp into a [datetime]; re-rendering it with "$x"
-      # would write the host's locale format into a durable record.
-      $stamp = if ($o.at -is [datetime]) { ([datetimeoffset]$o.at).ToString('o') } else { "$($o.at)" }
+      # ConvertFrom-Json turns an ISO timestamp into a [datetime] in the HOST's zone; re-rendering
+      # it with "$x" would write the host's locale format into a durable record.
+      $stamp = ConvertTo-DecisionStamp $o.at
     }
     $dispatched += [ordered]@{
       id = $r.id
-      at = if ($stamp) { $stamp } else { $now.ToString('o') }
+      at = if ($stamp) { $stamp } else { ConvertTo-DecisionStamp $now }
       sessionId = if ($o.PSObject.Properties['sessionId']) { "$($o.sessionId)" } else { $null }
     }
   }
@@ -879,7 +879,7 @@ function Cmd-Decisions {
     schema     = 'oa-decisions/1'
     kind       = 'decision'
     runId      = $RunId
-    at         = $now.ToString('o')
+    at         = ConvertTo-DecisionStamp $now
     summary    = [ordered]@{
       scan_seconds  = $s.scan_seconds
       rows_total    = $s.rows_total
@@ -906,10 +906,26 @@ function Get-DecisionNow {
   if (-not $DecisionNow) { return [datetimeoffset]::Now }
   $parsed = [datetimeoffset]::MinValue
   if (-not [datetimeoffset]::TryParse($DecisionNow, [Globalization.CultureInfo]::InvariantCulture,
-      [Globalization.DateTimeStyles]::None, [ref]$parsed)) {
+      [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) {
     throw "decisions_now_invalid: -DecisionNow must be an ISO timestamp, got '$DecisionNow'"
   }
   return $parsed
+}
+
+function ConvertTo-DecisionStamp($value) {
+  # EVERY timestamp in the record is UTC, in the same shape the run ledger's own `startedAt`
+  # already uses. A record is read on a machine other than the one that wrote it -- two lines in
+  # two different local offsets would make "which run came first?" a question about the writers'
+  # time zones rather than about the runs.
+  if ($null -eq $value) { return $null }
+  if ($value -is [datetimeoffset]) { return $value.ToUniversalTime().UtcDateTime.ToString('o') }
+  if ($value -is [datetime]) { return ([datetimeoffset]$value).ToUniversalTime().UtcDateTime.ToString('o') }
+  $parsed = [datetimeoffset]::MinValue
+  if ([datetimeoffset]::TryParse("$value", [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) {
+    return $parsed.ToUniversalTime().UtcDateTime.ToString('o')
+  }
+  return "$value"
 }
 
 # The closed outcome vocabulary. One word per row, so the record is queryable rather than
