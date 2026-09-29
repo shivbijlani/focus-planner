@@ -3446,6 +3446,8 @@ function Get-ScanRows {
       session_workspace_missing = [bool](Test-WorkspaceMissing "$($sessFacts.workspace)" "$($sessFacts.workspace_type)")
       # #728: process death is read from the session host's lock plus its stale event log.
       session_process_dead = $sessionProcessDead
+      # Rolling count from persisted bind events, not from the current session's age.
+      replacements_24h = (Get-Replacements24h $st)
       # #540: the user said NOT NOW, as a column rather than something a caller must re-derive
       # from `status` + `status_by`. It is emitted for every row, bound or not, because a paused
       # task with no session must not be answered with `create` either.
@@ -3490,6 +3492,7 @@ function Get-ScanRows {
   foreach ($bid in @($board.Keys)) {
     if ($seenScanIds.ContainsKey("$bid")) { continue }
     $b = $board[$bid]
+    $boardState = Read-State "$bid"
     $rows += [pscustomobject]@{
       id                    = "$bid"
       status                = 'none'
@@ -3516,6 +3519,7 @@ function Get-ScanRows {
       unanswered_user       = $false
       unanswered_user_where = ''
       session_paused        = $false
+      replacements_24h      = (Get-Replacements24h $boardState)
       paused_at             = $null
       exhaustion            = $null
       # Why this row exists at all, in the row itself: a verdict a reader can audit beats one
@@ -3698,7 +3702,7 @@ $script:CompactFields = @(
   'tracked', 'work_priority', 'urgency', 'board_pos', 'priorities_rank', 'linked',
   'holds_today_gate', 'today_release_reason', 'has_open_ask', 'awaiting_reply', 'consent_ok',
   'doc_id', 'doc_new_comments', 'doc_channel', 'session_id', 'session_verdict', 'session_paused',
-  'session_process_dead',
+  'session_process_dead', 'replacements_24h',
   'session_workspace_missing',
   'plan_review_due', 'dispatch_input', 'no_journal_reason'
 )
@@ -3724,6 +3728,7 @@ function Test-CompactRowNeeded($r) {
   if ($r.holds_today_gate) { return $true }
   if ($r.reopened_closed) { return $true }
   if ($r.unanswered_user) { return $true }
+  if ($r.replacements_24h -gt 0) { return $true }
   if ($r.due_poll -or $r.due_recheck) { return $true }
   if ($r.PSObject.Properties['has_journal'] -and -not $r.has_journal) { return $true }
   return $false
@@ -5204,6 +5209,27 @@ function Get-SessionState($st) {
   return $null
 }
 
+function Get-Replacements24h($st) {
+  if (-not $st) { return 0 }
+  $events = @()
+  if ($st.PSObject.Properties['session_replacements'] -and $st.session_replacements) {
+    $events = @($st.session_replacements)
+  } elseif ($st.session -and "$($st.session.prior_session_id)" -and "$($st.session.replaced_at)") {
+    # Legacy records retained only the most recent replacement timestamp.
+    $events = @([pscustomobject]@{ at = $st.session.replaced_at })
+  }
+  $since = [datetimeoffset]::UtcNow.AddHours(-24)
+  $count = 0
+  foreach ($event in $events) {
+    $at = [datetimeoffset]::MinValue
+    if ([datetimeoffset]::TryParse("$($event.at)", [ref]$at) -and
+        $at.ToUniversalTime() -ge $since -and $at.ToUniversalTime() -le [datetimeoffset]::UtcNow) {
+      $count++
+    }
+  }
+  return $count
+}
+
 function Test-SessionProcessDead([string]$sessionId) {
   # Is this bound session's CLI process gone? (GH #728)
   #
@@ -5214,6 +5240,29 @@ function Test-SessionProcessDead([string]$sessionId) {
   # still writing cannot be read as dead. Any missing or unreadable evidence answers $false:
   # replacing a live session discards its continuity, the expensive direction.
   try { return [bool](Test-SessionProcessDeadCore $sessionId) } catch { return $false }
+}
+
+function Test-SessionProcessAlive([string]$sessionId) {
+  if (-not $sessionId -or $sessionId -match '[\\/]' -or $sessionId -in '.', '..') { return $false }
+  try {
+    $sessionDir = Join-Path $SessionStateDir $sessionId
+    if (-not (Test-Path -LiteralPath $sessionDir -PathType Container)) { return $false }
+    foreach ($lock in @(Get-ChildItem -LiteralPath $sessionDir -Filter 'inuse.*.lock' -File -ErrorAction Stop)) {
+      if ($lock.Name -notmatch '^inuse\.(\d+)\.lock$') { continue }
+      $pidValue = 0
+      if (-not [int]::TryParse($Matches[1], [ref]$pidValue) -or $pidValue -le 0) { continue }
+      $process = $null
+      try {
+        $process = [System.Diagnostics.Process]::GetProcessById($pidValue)
+        if (-not $process.HasExited) { return $true }
+      } catch [ArgumentException] {
+        # A missing lock owner is not positive evidence of a live host.
+      } finally {
+        if ($process) { $process.Dispose() }
+      }
+    }
+  } catch { return $false }
+  return $false
 }
 
 function Test-SessionProcessDeadCore([string]$sessionId) {
@@ -5241,7 +5290,14 @@ function Test-SessionProcessDeadCore([string]$sessionId) {
   $eventsPath = Join-Path $sessionDir 'events.jsonl'
   if (-not (Test-Path -LiteralPath $eventsPath -PathType Leaf)) { return $false }
   $staleBefore = [datetime]::UtcNow.AddMinutes(-15)
-  return ((Get-Item -LiteralPath $eventsPath -ErrorAction Stop).LastWriteTimeUtc -le $staleBefore)
+  if ((Get-Item -LiteralPath $eventsPath -ErrorAction Stop).LastWriteTimeUtc -gt $staleBefore) { return $false }
+  # A routine CLI shutdown is idle, not an unresumable session. Task #289's first host
+  # resumed after replacement, and its successor ended with session.shutdown/routine.
+  $lastEvent = Get-Content -LiteralPath $eventsPath -Tail 1 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  if ("$($lastEvent.type)" -eq 'session.shutdown' -and "$($lastEvent.data.shutdownType)" -eq 'routine') {
+    return $false
+  }
+  return $true
 }
 
 function Test-WorkspaceMissing([string]$path, [string]$wsType) {
@@ -5573,6 +5629,11 @@ function Cmd-Session {
   }
   elseif ($SessionDead) {
     if (-not $sess) { throw "session_not_bound: task $Id has no session to mark dead" }
+    # Silence is not death (#761). A confirmed live lock owner outranks a caller's inference
+    # from missing journal output or a delivery acknowledgement that could not be confirmed.
+    if (Test-SessionProcessAlive "$($sess.session_id)") {
+      throw "session_still_alive: task $Id has a live session host; do not replace it for silence"
+    }
     $sess = New-SessionObject -SessionIdValue "$($sess.session_id)" -Kind "$($sess.kind)" `
       -Project "$($sess.project)" -Workspace "$($sess.workspace)" -WsType "$($sess.workspace_type)" `
       -CreatedAt $sess.created_at -LastWokenAt $sess.last_woken_at -SessionState 'dead' `
@@ -5659,6 +5720,18 @@ function Cmd-Session {
 
     $created = if ($sess -and "$($sess.session_id)" -eq $SessionId -and $sess.created_at) { $sess.created_at } else { Now-Iso }
     $replacedAt = if ($prior -and "$($sess.session_id)" -ne $SessionId) { Now-Iso } elseif ($sess) { $sess.replaced_at } else { '' }
+    if ($prior) {
+      $history = @()
+      if ($st.PSObject.Properties['session_replacements'] -and $st.session_replacements) {
+        $history = @($st.session_replacements)
+      } elseif ($sess -and "$($sess.prior_session_id)" -and "$($sess.replaced_at)") {
+        $history = @([pscustomobject]@{ session_id = "$($sess.prior_session_id)"; at = (ConvertTo-IsoText $sess.replaced_at) })
+      }
+      if ("$($sess.session_id)" -ne $SessionId) {
+        $history += [pscustomobject]@{ session_id = $prior; at = $replacedAt }
+        Set-Member $st 'session_replacements' $history
+      }
+    }
     $sess = New-SessionObject -SessionIdValue $SessionId -Kind $kind -Project $project `
       -Workspace $workspace -WsType $wsType -CreatedAt $created `
       -LastWokenAt $(if ($sess -and "$($sess.session_id)" -eq $SessionId) { $sess.last_woken_at } else { '' }) `
