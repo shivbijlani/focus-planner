@@ -73,7 +73,7 @@ $script:DeployedFiles = @(
   'session-terminal-evidence.mjs', 'consumer-reliability-supervisor.mjs',
   'oa-user-settings.mjs',
   'consumer-browser-watchdog.mjs', 'browser-watchdog.ps1', 'check-browser-slots.ps1',
-  'browser-slot-table.ps1', '..\skills\overnight-agent\ensure-mcp-browsers.ps1',
+  'browser-slot-table.ps1',
   'consumer-update-check.mjs'
 )
 

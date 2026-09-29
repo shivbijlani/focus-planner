@@ -16,8 +16,10 @@
      registry round-trip is removed entirely (which is the actual failure mode).
 
   Safety: this is version-IDENTICAL (registry @latest 0.0.79 == global 0.0.79), it
-  changes only the launcher, and it does NOT touch the browsers or their profiles --
-  every slot stays attach-only via the same --cdp-endpoint argument.
+  changes only the launcher, and it does NOT touch the browser launch mode (GH #738's
+  set-playwright-browser-profiles.ps1 owns whether a slot attaches via CDP or launches
+  its own profile) -- this script only ever rewrites the leading command/args that
+  start the MCP process, never the browser-launch flags after them.
 
   This script backs up, applies, re-validates each patched slot with a real MCP
   initialize handshake, and AUTO-ROLLS BACK if any slot fails.

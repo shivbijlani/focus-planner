@@ -1780,49 +1780,51 @@ See PHASE 0.
   built-in browser. The Playwright MCP slots are the user's controlled, sign-in-capable browsers; the
   built-in browser is off-limits for this skill. If no Playwright slot is available, set `blocked`
   rather than falling back to the built-in browser.
-- **CDP-attach only (no auto-launch).** The live config uses \*\*attach-only `--cdp-endpoint` slots\*\* —
-    one per dedicated profile. They **never launch a browser themselves**; they only attach to one the user
-    already opened (via its desktop shortcut) and signed into. This guarantees no MCP ever opens an
-    un-signed-in profile. If a cdp slot returns `ECONNREFUSED`, that profile's browser simply isn't running
-    yet — **launch it on demand** (below), don't fall back to anything else.
+- **Each slot launches its own profile directly (GH #738 — ONE path, no CDP fallback).** The live
+    config sets each Playwright MCP server's args to `--browser msedge --user-data-dir <profile dir>` —
+    there is no `--cdp-endpoint`, and no attach mode to fall back to. The MCP server launches that
+    profile itself, on first use, and the browser closes with the session that opened it. This means
+    (a) every slot is usable without anyone having opened its browser first, and (b) **a profile can
+    have only one owner at a time.**
 
-    **The slot → port → profile map lives in `user-settings.md` under `## Browser slots`.** It is not
-    restated here: this table was stale for a week (it advertised `chrome-cdp-1`, which had been in
-    `disabledMcpServers` since 2026-08-21, plus two retired clones, and omitted one live slot
-    entirely), which is exactly why #180 moved it to one home. Read the live list with:
-
-    ```
-    powershell -NoProfile -File <oa-home>\check-browser-slots.ps1 -Json     # state of each slot
-    powershell -NoProfile -File <skill>\ensure-mcp-browsers.ps1 -List       # the table itself
-    ```
-
-    **Launch on demand (this is the important part).** `ECONNREFUSED` on a slot is **not** a task
-    failure — that profile's browser is simply closed:
+    **The slot → profile map lives in `user-settings.md` under `## Browser slots`.** It is not restated
+    here — that is the one home #180 moved it to, and it now also records (in the **Signed into**
+    column) which sites each profile is already signed into, so you can pick the right slot for the
+    site a task needs. Read the live list with:
 
     ```
-    powershell -NoProfile -File <skill>\ensure-mcp-browsers.ps1 -Slot <slot|account|profile|port>
+    powershell -NoProfile -File <oa-home>\check-browser-slots.ps1 -Json     # which profiles exist / are in use (read-only)
     ```
 
-    It resolves the **profile** from the table, launches only that slot, waits for the port, and exits
-    non-zero only if the launch genuinely failed. An unmatched name is an **error**, never a near-miss:
-    never substitute a different account's profile for the requested one — wrong-identity actions are
-    worse than failing. Only if the launch fails, or the profile needs an interactive sign-in you
-    cannot perform, set `blocked` with that one ask.
+    **"Profile is already in use" is not a task failure to route around — it means STOP.** Proven
+    2026-09-28 (test session 905cc615): launching a profile that is already open (by you, or by another
+    task session) fails with "Opening in existing browser session… profile is already in use", and the
+    window that already has it stays completely fine. On that error: **stop the run for this task**,
+    report "profile in use (you, or another task)", and set `blocked` with that one ask. Never retry-loop,
+    and never fall back to a different profile — substituting a different account's identity for the
+    requested one is worse than failing.
 
-  **⚠️ Each profile must be signed in ONCE by the user — clones do NOT inherit a live login.** Chrome/Edge
+    **Per-task windows, and reopening on the next run.** Open a task's pages in a **new window**
+    (`browser_tabs` with a fresh window, not a tab in whatever the MCP happened to have open), so one
+    task's work is never mixed into another's. Before your turn ends, if you had browser tabs open for
+    this task, save their URLs into this task's own state (see `oa-state.ps1`) so the **next** run can
+    reopen them — a relaunch restores **no** previous tabs on its own, since there is no CDP session to
+    reattach to. Real tab groups are extension-only (GH #383) and out of scope here.
+
+  **⚠️ Each profile must be signed in ONCE by the user — a fresh profile is NOT signed in.** Chrome/Edge
     127+ use **App-Bound Encryption (ABE)**: every session cookie is bound to the original install + path, so
-    copying a profile to a new `--user-data-dir` leaves it **logged out** (the cookies physically copy but
-    can't be decrypted — this is a deliberate anti-cookie-theft feature, not a bug). What the clone *does*
-    carry: the **password-manager vault + saved passwords**. So the one-time setup is cheap.
+    a brand-new (or copied) profile starts **logged out** even though it carries the **password-manager
+    vault + saved passwords**. So the one-time setup is cheap.
 
 **Opening a signed-in browser by hand:** double-click the desktop shortcut named in the slot table's
     **Desktop shortcut** column. Each shortcut launches its **dedicated, persistent** profile under
-    `%LOCALAPPDATA%\playwright-mcp\` on its debug port, so one click =
-    browser **and** MCP-attachable. **One-time per profile**, the **user** must sign in inside that window
+    `%LOCALAPPDATA%\playwright-mcp\` with **no debug port** — it is a completely normal browser window, not
+    something an MCP can attach to. **One-time per profile**, the **user** must sign in inside that window
     (unlock your password manager → it autofills the saved login → sign into your account/any needed site).
-    Cookies written *inside* the clone are ABE-bound to that dir, so they **persist** for every later attach.
-    The agent cannot enter your password manager's master password — if a profile lacks a needed sign-in, set `blocked`
-    with that one ask.
+    Cookies written *inside* the profile are ABE-bound to that dir, so they **persist** for every later
+    launch. **A profile open from its shortcut is unavailable to tasks until it is closed** — it is the
+    same one-owner-at-a-time rule as above. The agent cannot enter your password manager's master
+    password — if a profile lacks a needed sign-in, set `blocked` with that one ask.
 
 - **Sign-ins / credentials:** if a step needs the user's account and the Playwright browser isn't
   signed in, set `blocked` with that ask. Never store credentials. The agent has its own email account

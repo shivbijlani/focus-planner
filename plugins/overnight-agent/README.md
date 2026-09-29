@@ -19,9 +19,7 @@ overnight-agent/
         ├── SKILL.md            # The skill instructions
         ├── user-settings.md    # Template — fill in your own values after install
         ├── oa-state.ps1        # Skill-owned per-task state (local, not synced)
-        ├── check-google-token.ps1
-        ├── ensure-mcp-browsers.ps1
-        └── launch-signed-in-browser.ps1
+        └── check-google-token.ps1
 ```
 
 ## Install
@@ -172,7 +170,7 @@ plugins/overnight-agent/checks/
 powershell -File plugins\overnight-agent\checks\install-oa-reliability-tray.ps1 -Enable
 ```
 
-This deploys the files above — plus the existing browser tools the browser-check workload reuses (`browser-watchdog.ps1`, `check-browser-slots.ps1`, `browser-slot-table.ps1`, `ensure-mcp-browsers.ps1`) — to `%LOCALAPPDATA%\overnight-agent`, registers **one**
+This deploys the files above — plus the existing browser tools the browser-check workload reuses (`browser-watchdog.ps1`, `check-browser-slots.ps1`, `browser-slot-table.ps1`) — to `%LOCALAPPDATA%\overnight-agent`, registers **one**
 per-user startup entry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Overnight Agent
 supervisor`), and starts the tray immediately. `-Disable` (alias `-Uninstall`) stops it and
 removes the entry; running the installer with no switch only reports status.
@@ -231,16 +229,20 @@ whatever copy is already deployed to its own home directory. The only update act
 can take is the separate update-check workload below, which goes through the Copilot plugin
 marketplace CLI, never git.
 
-### Browser checks in the tray (GH #698)
+### Browser checks in the tray (GH #698, simplified by GH #738)
 
-The same tray is the **only** resident dispatcher for browser-watchdog checks — an
+The same tray is the **only** resident dispatcher for browser status checks — an
 **independent workload** with its own `## Tray browser checks` section in `user-settings.md`,
 its own schedule, its own in-memory **Pause browser checks**, its own state file
 (`browser-checks-state.json`) and its own lock (`browser-checks.lock`). It shares no M/N state,
 cooldown or action lock with reliability supervision. There is no separate Scheduled Task,
 Startup shim or VBS launcher for browser checks; `/browser-watchdog` stays available on demand.
 
-It is **completely off by default, including observation**. Each action is a separate opt-in:
+GH #738 switched every Playwright MCP slot from attach-only (`--cdp-endpoint`) to launching
+its own profile directly (`--browser msedge --user-data-dir <dir>`), so there is no longer a
+shared browser to launch or thaw on this workload's behalf — each MCP server owns its browser
+for the length of one session. What remains is **completely off by default, including
+observation**, and read-only:
 
 ```markdown
 ## Tray browser checks
@@ -249,18 +251,15 @@ It is **completely off by default, including observation**. Each action is a sep
 | --- | --- |
 | Enabled | `on` |
 | Observe | `on` |
-| Thaw stuck slots | `off` |
-| Auto-launch closed slots | `off` |
 | Check interval | `60m` |
 ```
 
-`Observe` runs a read-only CDP work probe; `Thaw stuck slots` allows the non-destructive
-in-place thaw; `Auto-launch closed slots` allows starting a closed slot. **Observe and Thaw
-never imply Auto-launch** — the tray passes `-NoLaunch` to `browser-watchdog.ps1` unless
-Auto-launch is explicitly `on`. The slots are always the existing `## Browser slots` table. The
-workload reuses `browser-watchdog.ps1` / `check-browser-slots.ps1` / `browser-slot-table.ps1` /
-`ensure-mcp-browsers.ps1` rather than reimplementing them, and never kills or reparents a browser or MCP
-worker process. The tray's **Browser checks** menu shows the current status and recent outcomes.
+`Observe` runs a read-only check of which profiles exist and which are currently in use (a
+`SingletonLock` file check, never a CDP port). The slots are always the existing
+`## Browser slots` table. The workload reuses `browser-watchdog.ps1` / `check-browser-slots.ps1`
+/ `browser-slot-table.ps1` rather than reimplementing them, and never launches, kills or
+reparents a browser or MCP worker process. The tray's **Browser checks** menu shows the current
+status and recent outcomes.
 
 ### Plugin update checks in the tray (GH #701)
 
@@ -343,9 +342,8 @@ PID?) and changes nothing.
   apply (reliability supervision on, browser checks off, update checks on). A row the reader
   cannot understand is **refused by name**, and the tray's own status menu for that workload
   shows the refusal rather than silently falling back to a guessed policy.
-- **Browser checks appear to do nothing.** Confirm `Enabled = on` **and** at least one of
-  `Observe` / `Thaw stuck slots` / `Auto-launch closed slots` is also `on` — enabling the
-  workload with no opt-in intentionally runs nothing.
+- **Browser checks appear to do nothing.** Confirm `Enabled = on` **and** `Observe` is also
+  `on` — enabling the workload with no opt-in intentionally runs nothing.
 - **Nothing is supervised after signing out, or overnight on a locked machine.** Expected: the
   tray is a per-user `HKCU` Run entry, so it only runs while that user is signed in, exactly
   like the app it supervises. There is no logged-out or multi-user coverage.

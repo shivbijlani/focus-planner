@@ -74,6 +74,27 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/checks/mutcheck-browser-slots.ps1
 
+  # GH #738: each Playwright MCP slot launches its OWN profile directly
+  # (`--browser msedge --user-data-dir <dir>`) instead of attaching to a shared
+  # CDP debug port. set-playwright-browser-profiles.ps1 is the one script that
+  # rewrites mcp-config.json for that switch, and this proves it is a one-way
+  # door: no `--cdp-endpoint` survives on a switched server, the safety gates
+  # (BOM preservation, a strict Node JSON.parse before accepting the write) are
+  # load-bearing, and a second run is idempotent. Pure text + a Node parse
+  # probe, so it runs on the Linux runner; the real mcp-config.json is never
+  # read or written.
+  playwright-browser-profiles:
+    name: Playwright MCP profile-launch config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mutation check (one path, no CDP fallback)
+        shell: pwsh
+        run: ./plugins/overnight-agent/checks/mutcheck-set-playwright-browser-profiles.ps1
+
   # PHASE 0's mandated inbox check (GH #346) is the user's out-of-band channel into an
   # overnight run, and its old implementation could not fail: a search on an unhealthy
   # email client returns `[]`, which is byte-identical to a genuinely empty mailbox. This
@@ -762,10 +783,12 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-task-session-role.ps1
 
-  # GH #698: tray browser checks are OFF by default (including observation), and
-  # Observe / Thaw / Auto-launch are separate opt-ins -- Auto-launch is never
-  # implied. The end-to-end case drives the real browser-watchdog.ps1 with fixture
-  # tools and runs on Windows only.
+  # GH #698, simplified by GH #738: tray browser checks are OFF by default
+  # (including observation), and Observe is the one remaining opt-in -- it is
+  # strictly read-only (which profiles exist, which are in use), since each
+  # Playwright MCP server now launches its own profile and there is nothing
+  # left to launch or thaw on its behalf. The end-to-end case drives the real
+  # browser-watchdog.ps1 with a fixture checker and runs on Windows only.
   tray-browser-checks:
     name: Tray browser checks (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -779,8 +802,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Default-off policy and independent opt-ins
+      - name: Default-off policy and read-only Observe
         run: node --test plugins/overnight-agent/checks/consumer-browser-watchdog.test.mjs
+
+  # GH #738: a relaunched profile restores no previous tabs on its own, so a
+  # task saves the URLs it was working on and reopens them next run; and a
+  # second launch of an already-open profile must be recognized and stop the
+  # run rather than retry-looping or falling back to a different profile.
+  # Pure, filesystem-only unit tests, so this runs cross-platform.
+  browser-profile-state:
+    name: Browser profile state (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Task window save/restore and profile-in-use classification
+        run: node --test plugins/overnight-agent/checks/browser-profile-state.test.mjs
 
   # GH #701: tray plugin update checks are ON by default, daily (hourly selectable),
   # and report-only unless Auto apply is on. The only source is the Copilot plugin
