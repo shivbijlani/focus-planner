@@ -115,3 +115,4 @@ try {
 finally {
   Remove-Item -LiteralPath $root -Recurse -Force
 }
+exit 0
