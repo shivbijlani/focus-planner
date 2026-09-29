@@ -111,8 +111,8 @@ leaves an index of every archived heading.
 - **Telegram mirror (optional): `%LOCALAPPDATA%\overnight-agent\telegram-bridge\`** — a small,
   dependency-free Node CLI that mirrors each task journal into its own **Telegram forum topic**
   (1 task = 1 topic) and folds phone replies back into the journals. It's enabled and configured in
-  `user-settings.md` → "Telegram". You run it at the **end of every run** so the work you just wrote into
-  journals also lands in Telegram (see "PHASE 3 — Mirror to Telegram"). The bot token is **never** stored
+  `user-settings.md` → "Telegram". Run it after preparation and before the terminal dispatch drain
+  (see "PHASE 3 — Mirror to Telegram"). The bot token is **never** stored
   in a file — it's read from the OS credential vault at run time.
 
 - **Optional reliability tray (not part of this run loop):** `plugins/overnight-agent/checks/oa-supervisor-tray.ps1`,
@@ -507,6 +507,21 @@ user has spoken after your last turn:
 
 Do the phases **in this order** every time.
 
+> **Run order — dispatch drains last.** Complete PHASE 0, PHASE 0.7, PHASE 2,
+> PHASE 2.5 and PHASE 3 before entering PHASE 1. PHASE 2 classifies and prepares
+> dispatchable work, but does not send it yet. PHASE 1 is the final phase: once its
+> drain loop starts, do no inbox follow-up, closed-task reply review, Google Tasks
+> collection, paper generation, Telegram mirroring, email marking or other
+> coordinator work. At the dispatch cutoff, write the wrap-up and end the run.
+>
+> **Hard end — one minute before the next run.** At the start, derive
+> `hard_end = next_run - 1 minute`, where `next_run` is the next local :00 or :30
+> after this session's first prompt. Check the wall clock before and after every
+> tool call and before starting each step. At or past `hard_end`, stop immediately:
+> make no further tool calls except the minimum needed to write the one-line
+> wrap-up `cut short at <step>`, then exit. This deadline outranks every phase,
+> retry, cleanup, email mark-read, mirror and ordinary wrap-up requirement.
+
 > **Dispatch — one direct path.** `Overnight Agent concurrency` is the maximum number of
 > accepted task-session sends still active at once, not a lifetime send cap for the run. Fill
 > openings in `scan -Compact` order, then refill when a task session goes idle until the start
@@ -523,8 +538,9 @@ Do the phases **in this order** every time.
 > `settings-malformed` rather than presenting that default as the user's choice. A later run may
 > send to the same task again; do not wait for running task sessions at the end of this run.
 
-> **Telegram mirror runs last.** PHASE 3 mirrors the journals to Telegram *after* PHASE 1/2 have written
-> your turns, so a task's thread reflects the work you just did. It's gated on `user-settings.md → Telegram`.
+> **Telegram mirror runs before the drain.** PHASE 3 mirrors journals after preparation and before
+> PHASE 1's terminal dispatch drain. A task-session turn written during the drain is mirrored by the
+> next coordinator run. Nothing is lost: the bridge deduplicates journal turns by turn hash.
 
 > **Scan first (applies to PHASE 1 *and* PHASE 2):** before judging any task, run
 > **`oa-state.ps1 scan -Compact`** once and use its JSON as your worklist. Each row tells you what
@@ -1083,8 +1099,15 @@ task gets a **dedicated session** so its history persists across runs. Code task
 repository worktree; non-code tasks use their own sessions in the fixed local folder project
 named by `user-settings.md` → `Non-code task project`. Never put non-code work in the planner's
 OneDrive folder or a code repository.
+The coordinator never loads, invokes or inspects a task's skill. Build every dispatch brief from
+the task's journal extract and linked-task context; the task session loads any skill its work needs.
 Isolation does not require previous task sessions to finish before the next coordinator run can
 start more work.
+
+⛔ **This is the terminal phase.** Enter it only after PHASE 0, PHASE 0.7, PHASE 2,
+PHASE 2.5 and PHASE 3 are complete. The send/refill loop below is the coordinator's
+last work. When it reaches the dispatch cutoff, write the wrap-up and end; do not resume
+an earlier phase or perform any follow-up.
 
 1. From the `scan` worklist — **taken in the order it returned, skipping `eligible: false` rows** —
    collect tasks whose stored `status` is `approved` (also continue any
@@ -1494,9 +1517,9 @@ rather than merely incomplete, which makes it the more dangerous of the two.
    with `-Ask blocking`, one short question for the gated actions naming the exact action
    and its cost or recipient; record `oa-state.ps1 mark -Id <ID> -Status proposed -Version <n>
    -PlanId t<ID>-v<n>`. Do not dispatch. Otherwise **do not write a coordinator turn**:
-   hand the classified reversible and gate-allowed steps to the task session via PHASE 1's
-   normal `session -ForDispatch` path **in this wake**, subject to ordering, concurrency
-   and cutoff. Pass `-PlanDispatch` only for an existing agent-authored proposal with
+   leave the classified reversible and gate-allowed step prepared for PHASE 1's terminal
+   drain **in this wake**, subject to ordering, concurrency and cutoff. PHASE 2 sends
+   nothing. Pass `-PlanDispatch` only for an existing agent-authored proposal with
    `plan_review_due: true` and its exact `dispatch_input`; a fresh eligible task needs no
    exception. Recheck action-specific consent at execution time. The coordinator never
    does task work or writes the task's outcome turn (G12 permits one author per wake).
@@ -1505,7 +1528,7 @@ rather than merely incomplete, which makes it the more dangerous of the two.
    and **one** short question if only gated steps remain. Never ask for approval of work
    already performed or a blanket approval of the plan.
 
-### PHASE 2.5 — Generate the task papers (after journals, before Telegram)
+### PHASE 2.5 — Generate the task papers (before Telegram and the dispatch drain)
 
 A journal is a chronological log, and a log is the wrong shape for understanding a complicated
 task: the current state is scattered across every turn that ever touched it, newest last,
@@ -1514,7 +1537,7 @@ read. Same with telegram… What helps is one doc that assumes I have little con
 read and comment on… It should be a paper. No talk about corrections and mistakes you made. That
 could go into appendix."*
 
-So once PHASE 1/2 have written your turns, regenerate the per-task papers:
+After PHASE 2 has prepared work and before PHASE 3 mirrors it, regenerate the per-task papers:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\..\..\checks\generate-task-papers.ps1"
@@ -1538,12 +1561,13 @@ exactly what the issue asks for, and it is done structurally, so nothing is rewr
   Telegram. Do not invite the user to reply there until the comment channel in #286 actually exists.
 - A failure here must never abort the run — note it in the wrap-up and carry on.
 
-### PHASE 3 — Mirror to Telegram (do this after you've finished writing journals)
+### PHASE 3 — Mirror to Telegram (after preparation, before the dispatch drain)
 
-If **Telegram** is enabled in `user-settings.md` (→ "Telegram", `Enabled = on`), then **as the last step of
-every run** — after PHASE 1 and PHASE 2 have written all your journal turns — mirror those journals into
-Telegram. This is what gives every worked task its own phone-readable thread; skipping it means the user
-sees nothing new in Telegram even though the journals updated.
+If **Telegram** is enabled in `user-settings.md` (→ "Telegram", `Enabled = on`), mirror journals
+after PHASE 2 preparation and before entering PHASE 1's terminal dispatch drain. This gives every
+already-written task turn a phone-readable thread. A task-session turn written during the drain is
+mirrored on the next coordinator run; the bridge deduplicates by turn hash, so delaying that mirror
+does not lose or duplicate the turn.
 
 Run the bundled bridge **once** (it posts new agent turns to each task's forum topic, creates the topic +
 stamps a `<!-- tg-meta … -->` deep-link marker into the journal the first time it sees a task, and folds any
@@ -1922,7 +1946,7 @@ See PHASE 0.
 
 ## Notes
 
-- This skill composes with the others: it may call the dance-church, daily-planner, or other skills
-  when a task's approved plan calls for them.
+- The coordinator never loads or calls another task's skill. It dispatches journal-derived context;
+  the dedicated task session loads dance-church, daily-planner or any other skill its work needs.
 - Keep plans small and high-signal — match the style of the user's existing journals (concrete
   steps, named deliverables, real links, clear recommendations).
