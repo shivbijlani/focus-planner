@@ -404,6 +404,29 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-cadence-rearm.ps1
 
+  # PHASE 0 runs in parallel, so the lock must not serialize it (GH #778).
+  #
+  # Measured live 2026-09-29 (v1.57.19). The coordinator starts its PHASE 0 steps together by
+  # design; at 13:02:06 the capability record, `scan -Compact`, the Google Tasks collection and
+  # the Telegram sync-down all landed in the same second. Every `oa-state.ps1` command took the
+  # single state mutex with a 10 s fail-fast, so `check-critical-tools.mjs --record` queued behind
+  # a 60-90 s traversal of a store it never reads and died with `state_lock_timeout`. It failed
+  # twice and succeeded on the third try; the 12:00 run lost `decisions -RunId ...` the same way.
+  # Every retry is a model turn, and one more would have been a false "couldn't record".
+  #
+  # The guard holds the REAL state lock (same key derivation) and proves the scoping both ways:
+  # `critical-tools` and `decisions` complete while it is held, a genuine state command WAITS and
+  # then succeeds rather than handing back a retry, and that wait is still bounded so a stuck
+  # holder is reported. Hermetic: its own temp state dir, settings, MCP config and ledger.
+  phase0-lock-scope:
+    name: PHASE 0 lock scope
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mutation check (a capability record must not queue behind the scan)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-phase0-lock-scope.ps1
+
   # Only the USER closes a task, and an unanswered message survives a re-snapshot (GH #501).
   #
   # Two defects, one root cause, and both were measured on the live board on 2026-09-04. Task #245
