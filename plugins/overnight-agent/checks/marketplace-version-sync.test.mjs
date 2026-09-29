@@ -22,9 +22,11 @@ test('the repo as committed is in sync', () => {
   assert.equal(r.ok, true, r.reason);
 });
 
-test('the plugin no longer declares or ships the drain extension', () => {
+test('the plugin ships only the coordinator guard extension', () => {
   const manifest = JSON.parse(realPlugin);
-  assert.equal(Object.hasOwn(manifest, 'extensions'), false);
+  assert.equal(manifest.extensions, 'extensions/');
+  assert.equal(existsSync(join(root, 'plugins', 'overnight-agent', 'extensions',
+    'coordinator-guard', 'extension.mjs')), true);
   assert.equal(existsSync(join(root, 'plugins', 'overnight-agent', 'extensions', 'task-dispatch', 'extension.mjs')), false);
 });
 
