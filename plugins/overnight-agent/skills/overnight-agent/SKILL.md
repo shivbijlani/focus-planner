@@ -673,7 +673,13 @@ Do the phases **in this order** every time.
 **Critical-tool preflight:** run `node "<skill>\check-critical-tools.mjs"` at the start
 of every coordinator run (before accepting or dispatching tasks). It reads `Critical tools`
 through `oa-state.ps1`, refuses names absent from the configured MCP servers, performs
-a real read for each, and writes `%LOCALAPPDATA%\overnight-agent\capabilities.json`.
+a real read for each, and writes `%LOCALAPPDATA%\overnight-agent\capabilities.json`. Prefer the
+coordinator's already-connected MCP tools where available: make the same safe health call described
+below and pass outcomes through `--connected-probes <json-file>`, using
+`{"email":{"status":"ok"}}` for success, `{"email":{"status":"error","error":"..."}}` for an MCP
+error, or `{"email":{"status":"slow","error":"..."}}` for a timeout. Omit servers the coordinator
+cannot call; those fall back to the spawned MCP probe. Keep this JSON in a run-scoped temporary
+file and remove it after the preflight.
 The same command records the coordinator start in
 `%LOCALAPPDATA%\overnight-agent\run-ledger.jsonl` (`startedAt`, trigger when known, and
 `runId`). It compares consecutive starts against the 30-minute cadence. If more than two
@@ -686,12 +692,16 @@ pending and is retried without duplicating a successful alert.
 The default is `email, google-workspace`. Email tests the account; Google reads one
 task from `@default` using the consented `Google account (Tasks)` address. An arbitrary
 server needs a zero-argument read-shaped tool or the probe fails closed. A configured
-server or a successful `tools/list` is **not** a successful real-call probe.
+server or a successful `tools/list` is **not** a successful real-call probe. Each spawned
+probe uses `Critical tool probe timeout` from `user-settings.md` (default `90s`). A timeout
+is `slow`/unknown, gets one quiet wrap-up line, and neither alerts nor degrades the run;
+two consecutive timeouts for that tool escalate to `down`. An MCP error is `down` immediately.
 
 Exit `2` means **degraded**, not completed: put the emitted `headline` as the **first
 line** of the wrap-up, before "From your inbox". Its `tools` map carries each exact error
-and first-seen timestamp. A configured non-critical tool failure still gets one line
-in the wrap-up but no push. The script sends one push per outage start, at most one
+and first-seen timestamp. Slow critical tools get one quiet wrap-up line and do not block
+tasks; only `down` tools block tasks that require them. A configured non-critical tool failure
+still gets one line in the wrap-up but no push. The script sends one push per outage start, at most one
 reminder on each subsequent UTC day, and one recovered message, using a private
 Telegram DM or email to yourself if that channel works. A failed send is reported and
 retried; it is never marked delivered. The optional tray reads the same file and shows

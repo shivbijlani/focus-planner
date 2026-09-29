@@ -20,14 +20,46 @@ const ledgerPath = process.env.OA_RUN_LEDGER_PATH ??
   path.join(process.env.LOCALAPPDATA || tmpdir(), 'overnight-agent', 'run-ledger.jsonl');
 const shell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
 
-function call(server, action, ...args) {
+export class ProbeTimeoutError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ProbeTimeoutError';
+  }
+}
+
+function callWithTimeout(timeoutMs, server, action, ...args) {
   if (!prober) throw new Error('mcp-probe.mjs not found');
-  const raw = execFileSync(process.execPath, [prober, server, action, ...args], {
-    encoding: 'utf8', timeout: 45000, maxBuffer: 1024 * 1024, windowsHide: true,
-  });
+  let raw;
+  try {
+    raw = execFileSync(process.execPath, [prober, server, action, ...args], {
+      encoding: 'utf8', timeout: timeoutMs + 5000, maxBuffer: 1024 * 1024, windowsHide: true,
+      env: { ...process.env, MCP_PROBE_TIMEOUT_MS: String(timeoutMs) },
+    });
+  } catch (e) {
+    const details = String(e.stderr ?? '').trim() || e.message;
+    if (e.code === 'ETIMEDOUT' || /timeout after \d+ms/i.test(details)) {
+      throw new ProbeTimeoutError(`timed out after ${Math.ceil(timeoutMs / 1000)}s`);
+    }
+    throw new Error(details);
+  }
   const result = JSON.parse(raw);
   if (result.error || result.isError) throw new Error(JSON.stringify(result.error ?? result));
   return result;
+}
+
+function call(server, action, ...args) {
+  return callWithTimeout(90000, server, action, ...args);
+}
+
+export function probeTimeoutMs(settings) {
+  const value = readSettingRow(settings, 'Critical tool probe timeout');
+  if (!value) return 90000;
+  const match = value.match(/^(\d+)\s*s$/i);
+  const seconds = match ? Number(match[1]) : NaN;
+  if (!Number.isSafeInteger(seconds) || seconds < 1 || seconds > 600) {
+    throw new Error('Critical tool probe timeout must be a whole number of seconds from 1s to 600s');
+  }
+  return seconds * 1000;
 }
 
 function payload(result) {
@@ -81,35 +113,69 @@ function headline(name, error, since) {
   return `⛔ CRITICAL TOOL DOWN: ${name}. ${error}. Since ${since}.`;
 }
 
+function slowLine(name, error, consecutiveSlowRuns) {
+  return `⚠️ CRITICAL TOOL SLOW: ${name}. ${error}. ` +
+    `${consecutiveSlowRuns}/2 consecutive timeouts; no outage declared yet.`;
+}
+
 export async function evaluate({ names, settings = '', previous = {}, now = new Date(), probe = probeTool,
   notify = async () => false, tasks = [] }) {
   const outages = { ...previous.outages };
   const results = {};
   const lines = [];
+  const headlines = [];
   const day = now.toISOString().slice(0, 10);
   for (const name of names) {
     let error = null;
-    try { await probe(name, settings); } catch (e) { error = e.message; }
+    let timedOut = false;
+    try { await probe(name, settings); } catch (e) {
+      error = e.message;
+      timedOut = e instanceof ProbeTimeoutError;
+    }
     const before = outages[name];
     if (error) {
-      const entry = before?.status === 'down' ? before : {
-        firstSeenAt: now.toISOString(), lastAlertDate: null, status: 'down',
-      };
-      entry.error = error;
-      outages[name] = entry;
-      results[name] = { status: 'down', error, firstSeenAt: entry.firstSeenAt };
-      lines.push(headline(name, error, entry.firstSeenAt));
-      if (entry.lastAlertDate !== day) {
-        const kind = entry.lastAlertDate ? 'reminder' : 'outage';
-        if (await notify(headline(name, error, entry.firstSeenAt), kind, name)) {
-          entry.lastAlertDate = day;
+      const previousResult = previous.tools?.[name];
+      const consecutiveSlowRuns = timedOut
+        ? (previousResult?.status === 'slow' || previousResult?.errorType === 'timeout'
+          ? (previousResult.consecutiveSlowRuns ?? 0) + 1
+          : 1)
+        : 0;
+      if (timedOut && consecutiveSlowRuns < 2) {
+        results[name] = {
+          status: 'slow', error, errorType: 'timeout', consecutiveSlowRuns,
+          checkedAt: now.toISOString(),
+        };
+        lines.push(slowLine(name, error, consecutiveSlowRuns));
+      } else {
+        const downError = timedOut ? 'timed out on two consecutive runs' : error;
+        const entry = before?.status === 'down' ? before : {
+          firstSeenAt: now.toISOString(), lastAlertDate: null, status: 'down',
+        };
+        entry.error = downError;
+        outages[name] = entry;
+        results[name] = {
+          status: 'down', error: downError, firstSeenAt: entry.firstSeenAt,
+          errorType: timedOut ? 'timeout' : 'mcp', consecutiveSlowRuns,
+        };
+        const text = headline(name, downError, entry.firstSeenAt);
+        lines.push(text);
+        headlines.push(text);
+        if (entry.lastAlertDate !== day) {
+          const kind = entry.lastAlertDate ? 'reminder' : 'outage';
+          const unavailable = [...Object.entries(results)
+            .filter(([, value]) => value.status !== 'ok').map(([tool]) => tool), name];
+          if (await notify(text, kind, name, [...new Set(unavailable)])) {
+            entry.lastAlertDate = day;
+          }
         }
       }
     } else {
       results[name] = { status: 'ok', checkedAt: now.toISOString() };
       if (before) {
         const text = `✅ CRITICAL TOOL RECOVERED: ${name}. Outage since ${before.firstSeenAt}.`;
-        if (await notify(text, 'recovered', name)) delete outages[name];
+        const unavailable = Object.entries(results)
+          .filter(([, value]) => value.status !== 'ok').map(([tool]) => tool);
+        if (await notify(text, 'recovered', name, unavailable)) delete outages[name];
         else outages[name] = { ...before, status: 'recovered' };
       }
     }
@@ -117,10 +183,11 @@ export async function evaluate({ names, settings = '', previous = {}, now = new 
   const down = Object.entries(results).filter(([, value]) => value.status === 'down').map(([name]) => name);
   const skipped = tasks.filter((task) => task.requires?.some((name) => down.includes(name)))
     .map((task) => ({ id: task.id, reason: `blocked: ${task.requires.find((name) => down.includes(name))} down` }));
+  const wrapUp = [...headlines, ...lines.filter((line) => !headlines.includes(line))].join('\n');
   return {
     schema: 'oa-capabilities/1', checkedAt: now.toISOString(),
     status: down.length ? 'degraded' : 'completed',
-    headline: lines[0] ?? '', wrapUp: lines.join('\n'), tools: results, outages, skipped,
+    headline: headlines[0] ?? '', wrapUp, tools: results, outages, skipped,
   };
 }
 
@@ -146,10 +213,25 @@ function settingsFrom(pathname) {
   return readFileSync(pathname, 'utf8');
 }
 
-async function sendAlert(text, settings, down) {
+function connectedProbesFrom(pathname) {
+  if (!pathname) return {};
+  const parsed = JSON.parse(readFileSync(pathname, 'utf8'));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('--connected-probes must contain a JSON object');
+  }
+  for (const [name, result] of Object.entries(parsed)) {
+    if (!result || !['ok', 'slow', 'error'].includes(result.status) ||
+      (result.status !== 'ok' && (typeof result.error !== 'string' || !result.error))) {
+      throw new Error(`invalid connected probe result for '${name}'`);
+    }
+  }
+  return parsed;
+}
+
+async function sendAlert(text, settings, unavailable) {
   // An alert is acknowledged only after a successful send, never after an attempted call.
   const dm = readSettingRow(settings, 'Critical alert Telegram DM');
-  if (dm && !down.includes('telegram')) {
+  if (dm && !unavailable.includes('telegram')) {
     try {
       payload(call('telegram', 'call', 'message', JSON.stringify({
         action: 'send', chat_id: dm, text,
@@ -159,7 +241,7 @@ async function sendAlert(text, settings, down) {
   }
   const address = readSettingRow(settings, 'Critical alert email') ||
     readSettingRow(settings, 'Agent email account');
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) && !down.includes('email')) {
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) && !unavailable.includes('email')) {
     try {
       const accounts = payload(call('email', 'call', 'email_list_accounts', '{}'));
       const account = accounts.find((a) =>
@@ -181,6 +263,7 @@ export async function main(args = process.argv.slice(2)) {
   const option = (key) => args[args.indexOf(key) + 1];
   const settingsPath = args.includes('--settings') ? option('--settings') : undefined;
   const configPath = args.includes('--mcp-config') ? option('--mcp-config') : undefined;
+  const connectedProbesPath = args.includes('--connected-probes') ? option('--connected-probes') : undefined;
   const stateDir = args.includes('--state-dir') ? option('--state-dir') : undefined;
   const file = args.includes('--state') ? option('--state') : statePath;
   const ledger = args.includes('--ledger') ? option('--ledger') : ledgerPath;
@@ -204,20 +287,28 @@ export async function main(args = process.argv.slice(2)) {
     if (settingsPath) command.push('-UserSettings', settingsPath);
     if (configPath) command.push('-McpConfig', configPath);
     if (stateDir) command.push('-StateDir', stateDir);
-    const policy = JSON.parse(execFileSync(shell, command, { encoding: 'utf8', timeout: 20000 }));
+    const policy = JSON.parse(execFileSync(shell, command, { encoding: 'utf8', timeout: 60000 }));
     if (configPath) process.env.MCP_PROBE_CONFIG = configPath;
     const settings = settingsFrom(policy.settingsPath);
+    const timeoutMs = probeTimeoutMs(settings);
+    const probeCall = (...callArgs) => callWithTimeout(timeoutMs, ...callArgs);
+    const connectedProbes = connectedProbesFrom(connectedProbesPath);
     const tasks = taskFile ? JSON.parse(readFileSync(taskFile, 'utf8')) : [];
-    const down = [];
     const output = await evaluate({
       names: policy.tools, settings, previous: prior, tasks, now,
       probe: async (name) => {
-        try { await probeTool(name, settings); } catch (e) { down.push(name); throw e; }
+        const direct = connectedProbes[name];
+        if (!direct) return probeTool(name, settings, { call: probeCall });
+        if (direct.status === 'ok') return;
+        if (direct.status === 'slow') throw new ProbeTimeoutError(direct.error);
+        throw new Error(direct.error);
       },
-      notify: (text) => sendAlert(text, settings, down),
+      notify: (text, _kind, _name, unavailable = []) => sendAlert(text, settings, unavailable),
     });
     if (runGap) {
-      if (await sendAlert(runGap.headline, settings, down)) {
+      const unavailable = Object.entries(output.tools)
+        .filter(([, result]) => result.status !== 'ok').map(([name]) => name);
+      if (await sendAlert(runGap.headline, settings, unavailable)) {
         runGap.alertedAt = now.toISOString();
       }
       output.status = 'degraded';
