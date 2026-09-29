@@ -20,19 +20,25 @@ function failures(text) {
   if (start < 0 || end < 0) return ['phase1-section: direct-dispatch section not found'];
   const phase = text.slice(start, end).replace(/\r\n/g, '\n');
   const out = [];
-  if (!phase.includes('Count only sends accepted by `send_session_message` toward the limit; a failed delivery does')) {
+  if (!phase.includes("Count only this run's sends accepted by `send_session_message` toward the limit; a failed delivery does")) {
     out.push('A_accepted-send-count: only accepted sends consume concurrency')
   }
   if (!phase.includes('Only accepted sends\n      count toward the active-send limit.')) {
     out.push('B_failed-send-does-not-count: failed delivery leaves budget available')
   }
-  if (!phase.includes('Fill openings from the current scan until the accepted-send count reaches the limit of active')) {
+  if (!phase.includes('Fill openings from the current scan until the accepted-send count **from this run** reaches the limit of active')) {
     out.push('C_fill-on-accepted-count: capacity counts active accepted sends')
   }
   if (!phase.includes('Silence is not death (#761)') ||
       !phase.includes('A delivery that\n      **could not be confirmed** is not a rejection: report uncertainty, keep the binding') ||
       !phase.includes('Do not infer death from unchanged `updated_at`, journal mtime,')) {
     out.push('D_silence-not-death: silence and unconfirmed delivery preserve the binding')
+  }
+  if (!phase.includes('Sessions busy before this run are not in\n   the tracked active-send set and do not occupy its openings.')) {
+    out.push('E_previous-run-not-capacity: previous sends do not occupy this run')
+  }
+  if (text.includes('oa_drain_status') || text.includes('oa_drain_wait') || text.includes('`oa_drain`')) {
+    out.push('F_no_stale_drain: only direct dispatch is documented')
   }
   return out;
 }
@@ -49,7 +55,7 @@ const mutants = [
   {
     name: 'M1_count-send-attempts',
     expect: 'A_accepted-send-count',
-    find: 'Count only sends accepted by `send_session_message` toward the limit; a failed delivery does',
+    find: "Count only this run's sends accepted by `send_session_message` toward the limit; a failed delivery does",
     replace: 'Count each send attempt toward the limit.',
   },
   {
@@ -61,7 +67,7 @@ const mutants = [
   {
     name: 'M3_fill-on-attempt-count',
     expect: 'C_fill-on-accepted-count',
-    find: 'Fill openings from the current scan until the accepted-send count reaches the limit of active',
+    find: 'Fill openings from the current scan until the accepted-send count **from this run** reaches the limit of active',
     replace: 'Fill openings from the current scan until the send-attempt count reaches the limit of active',
   },
   {
@@ -75,6 +81,12 @@ const mutants = [
     expect: 'D_silence-not-death',
     find: 'Do not infer death from unchanged `updated_at`, journal mtime,',
     replace: 'Infer death from unchanged `updated_at`, journal mtime,',
+  },
+  {
+    name: 'M6_previous-run-holds-slot',
+    expect: 'E_previous-run-not-capacity',
+    find: 'Sessions busy before this run are not in\n   the tracked active-send set and do not occupy its openings.',
+    replace: 'Sessions busy before this run occupy its openings.',
   },
 ];
 
@@ -95,4 +107,8 @@ for (const mutant of mutants) {
 }
 
 if (failed) process.exit(1);
+if (!failures(`${source}\noa_drain_status`).some((failure) => failure.startsWith('F_no_stale_drain'))) {
+  console.error('  [SURVIVED] stale drain instructions');
+  process.exit(1);
+}
 console.log('  All declared mutations killed.');

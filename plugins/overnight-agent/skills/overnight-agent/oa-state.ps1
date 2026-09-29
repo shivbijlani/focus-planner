@@ -201,8 +201,8 @@
 
   DIRECT DISPATCH (#716). The coordinator owns the sequence: resolve each session, skip paused
   tasks, then use -ForDispatch with the exact scan fingerprint immediately before sending.
-  `Overnight Agent concurrency` limits total send attempts in that run; earlier task sessions do
-  not reserve capacity. The start cutoff is coordinator guidance, not an extension timer.
+  `Overnight Agent concurrency` limits accepted sends still active from this run; earlier task
+  sessions do not reserve capacity. The start cutoff is coordinator guidance, not an extension timer.
 
   CLEANUP is emitted, never performed. `-SessionRelease` prints the teardown command
   (`scripts/remove-worktree.ps1`), because the raw `git worktree remove --force` deletes THROUGH a
@@ -653,6 +653,8 @@ param(
   # fabricating a human approval or writing a second turn in the same wake.
   [switch]$PlanDispatch,
   [string]$DispatchInput,
+  # JSON response from the native get_sessions_status tool, saved by the coordinator.
+  [string]$SessionsStatusFile,
   [string[]]$RequiresTools,
   [string]$CapabilitiesPath = "$env:LOCALAPPDATA\overnight-agent\capabilities.json",
   [switch]$SessionRelease,
@@ -939,7 +941,7 @@ function ConvertTo-DecisionStamp($value) {
 
 # The closed outcome vocabulary. One word per row, so the record is queryable rather than
 # readable-only: "the Today gate has released on not_workable for 20 consecutive runs" is a grep.
-$script:DecisionOutcomeWords = @('dispatched', 'paused', 'cutoff', 'capacity', 'refused', 'failed_send')
+$script:DecisionOutcomeWords = @('dispatched', 'paused', 'cutoff', 'capacity', 'refused', 'failed_send', 'busy_from_earlier_run')
 
 function Get-DecisionOutcomeMap {
   $map = @{}
@@ -964,6 +966,9 @@ function Get-DecisionOutcomeMap {
 function Get-DecisionReason($row, $outcomes) {
   $id = "$($row.id)"
   if ($outcomes.ContainsKey($id)) { return "$($outcomes[$id].outcome)" }
+  if ($row.eligible -and $row.PSObject.Properties['dispatch_skip_reason'] -and "$($row.dispatch_skip_reason)") {
+    return "$($row.dispatch_skip_reason)"
+  }
   if (-not $row.eligible) {
     # `ineligible:<cause>` keeps the deciding fact rather than the bare verdict -- the exact
     # distinction that made #501 (`done` -> `not_workable` -> gate released) a live inference.
@@ -3503,7 +3508,32 @@ function Test-ExhaustionClaim($ex, $row, [string]$todayHash) {
   return 'declared_exhausted'
 }
 
+function Get-SessionActivities {
+  if (-not $SessionsStatusFile) { return $null }
+  if (-not (Test-Path -LiteralPath $SessionsStatusFile -PathType Leaf)) {
+    throw "session_status_missing: $SessionsStatusFile"
+  }
+  try {
+    $snapshot = Get-Content -LiteralPath $SessionsStatusFile -Raw -Encoding UTF8 -ErrorAction Stop |
+      ConvertFrom-Json -ErrorAction Stop
+  }
+  catch { throw "session_status_invalid: cannot read get_sessions_status snapshot: $_" }
+  if (-not $snapshot.PSObject.Properties['sessions'] -or $null -eq $snapshot.sessions) {
+    throw 'session_status_invalid: get_sessions_status snapshot must contain sessions'
+  }
+  $activities = @{}
+  foreach ($session in @($snapshot.sessions)) {
+    $sid = "$($session.id)"
+    if (-not $sid -or $activities.ContainsKey($sid)) {
+      throw 'session_status_invalid: session IDs must be nonempty and unique'
+    }
+    $activities[$sid] = "$($session.activity.status)"
+  }
+  return ,$activities
+}
+
 function Get-ScanRows {
+  $activities = Get-SessionActivities
   $agentModel = Get-AgentModelSettings
   $snooze = Get-SnoozeMap
   $board = Get-BoardMap
@@ -3606,6 +3636,7 @@ function Get-ScanRows {
     # #404: the per-task session binding, read-only.
     $sessFacts = Get-SessionState $st
     $sessionProcessDead = [bool](Test-SessionProcessDead "$($sessFacts.session_id)")
+    $activity = if ($null -ne $activities -and $sessFacts) { "$($activities["$($sessFacts.session_id)"])" } else { $null }
     [pscustomobject]@{
       id            = $facts.Id
       dispatch_input = (Get-DispatchInput $st $facts)
@@ -3724,6 +3755,12 @@ function Get-ScanRows {
       # `session` command writes. A run that sees `session_verdict: reuse` must wake THAT session
       # rather than create a second one.
       session_id      = if ($sessFacts) { "$($sessFacts.session_id)" } else { $null }
+      session_activity = $activity
+      dispatch_skip_reason = if ($activity -eq 'busy') {
+        'busy_from_earlier_run'
+      } elseif ($null -ne $activities -and $sessFacts -and $activity -ne 'idle') {
+        'session_status_unknown'
+      } else { $null }
       session_state   = if ($sessFacts) { "$($sessFacts.state)" } else { $null }
       session_verdict = (Get-SessionVerdict $sessFacts $st $facts $sessionProcessDead)
       model           = $agentModel.model
@@ -3990,6 +4027,7 @@ $script:CompactFields = @(
   'tracked', 'work_priority', 'urgency', 'board_pos', 'priorities_rank', 'linked',
   'holds_today_gate', 'today_release_reason', 'has_open_ask', 'awaiting_reply', 'consent_ok',
   'doc_id', 'doc_new_comments', 'doc_channel', 'session_id', 'session_verdict', 'session_paused',
+  'session_activity', 'dispatch_skip_reason',
   'session_process_dead', 'replacements_24h',
   'session_workspace_missing',
   'plan_review_due', 'dispatch_input', 'no_journal_reason'
@@ -4012,6 +4050,7 @@ function Test-CompactRowNeeded($r) {
   # An ineligible, quiet, unchanged row is the case this mode exists to drop -- it is counted in
   # the summary and nothing reads its fields.
   if ($r.eligible) { return $true }
+  if ($r.dispatch_skip_reason) { return $true }
   if ($r.plan_review_due) { return $true }
   if ($r.holds_today_gate) { return $true }
   if ($r.reopened_closed) { return $true }
@@ -5756,6 +5795,9 @@ function Assert-TaskDispatch($st, $sess, $facts) {
     throw 'session_input_required: -ForDispatch requires the exact dispatch_input from scan'
   }
   $row = @(Get-ScanRows | Where-Object { "$($_.id)" -eq "$($st.id)" }) | Select-Object -First 1
+  if ($row.dispatch_skip_reason) {
+    throw "$($row.dispatch_skip_reason): bound session $($sess.session_id) cannot be dispatched"
+  }
   if (-not $row -or (-not $row.eligible -and -not ($PlanDispatch -and $row.plan_review_due)) -or $row.session_paused) {
     throw 'session_not_eligible: follow the current Today-first worklist and user pauses'
   }
@@ -5819,6 +5861,9 @@ function Cmd-Whoami {
 
 function Cmd-Session {
   $agentModel = Get-AgentModelSettings
+  if ($ForDispatch -and -not $SessionsStatusFile) {
+    throw 'session_status_required: -ForDispatch requires a fresh get_sessions_status snapshot'
+  }
   if ($PlanDispatch -and (-not $ForDispatch -or $Force)) {
     throw 'session_plan_dispatch_flags: -PlanDispatch requires -ForDispatch and cannot use -Force'
   }
