@@ -213,6 +213,8 @@
     sync-oa-home.ps1                 # fetch, deploy the safe class, verify
     sync-oa-home.ps1 -WhatIf         # report only; writes nothing, no state change
     sync-oa-home.ps1 -Json           # machine-readable summary on stdout
+    sync-oa-home.ps1 -RepoPrefix packages/telegram-bridge -PreserveRelativePaths
+                                     # deploy a complete nested package tree
 #>
 [CmdletBinding()]
 param(
@@ -225,6 +227,8 @@ param(
   [int]$EscalateAfterCycles = 2,
   [string]$StatePath = "$env:LOCALAPPDATA\overnight-agent\sync-oa-home-state.json",
   [string]$RosterPath = 'plugins/overnight-agent/checks/run-sweeps.ps1',
+  # Use a recursive, path-preserving target and require every tracked file under RepoPrefix.
+  [switch]$PreserveRelativePaths,
   [switch]$NoForward,
   [switch]$SkipFetch,
   [switch]$SkipBackup,
@@ -255,48 +259,75 @@ $ErrorActionPreference = 'Stop'
 # Rule for editing this list: add a name only when user-settings.md (or another operative
 # doc) invokes `%LOCALAPPDATA%\overnight-agent\<name>` as a COMMAND. Not because the file
 # happens to be present, and not because it seems related.
-$AlwaysRequired = @(
-  'run-sweeps.ps1',
-  'write-turn.ps1',
-  'reap-stale-mcp.ps1',
-  'auto-deploy-plugin.ps1',
-  'deploy-installed-plugin.ps1',
-  'check-browser-slots.ps1',
-  # The one entry here that is a LIBRARY rather than a command, and the reason it
-  # earns a place: check-browser-slots.ps1 (above) dot-sources it, so a home that
-  # has the command but not this file has a command that cannot run. The rule is
-  # "restorable from a wiped home", and a listed command with a missing dependency
-  # is not restorable. Added with #180, which moved the slot table into
-  # user-settings.md and gave it a single reader.
-  'browser-slot-table.ps1',
-  # The #226 supervisor and its daemon are dispatched by the OS (a Windows scheduled task
-  # or the Startup-folder shim) as `%LOCALAPPDATA%\overnight-agent\<name>` - the same
-  # absolute-path-from-the-flat-home contract as the entries above. They are named by no
-  # roster (not sweeps), reached by no import edge (.ps1), and the installer only SEEDS
-  # them when absent - so without this line a merged supervisor fix lands in
-  # installed-plugins and never reaches the copy the daemon actually runs. Classic
-  # "merged isn't running" (cf. #196, #254).
-  'oa-supervisor.ps1',
-  'oa-supervisor-daemon.ps1',
-  # #442. Reached from `oa-state.ps1 consent -DocComments`, which is PowerShell -- so no
-  # import edge names it, and it is not a sweep or a mutcheck. That is the exact "required by
-  # nothing" shape rules 2 and 5 above were written for, and it bit immediately: the channel
-  # deployed to installed-plugins, the flat home got `oa-state.ps1` WITHOUT its bridge, and
-  # the feature was dead in the only home that runs it -- refusing correctly, which is why it
-  # would have stayed quiet. A consent channel that silently never grants is not a safe
-  # default; it is an unnoticed outage of something Shiv explicitly asked for.
-  'doc-consent.mjs',
-  # Its library. doc-consent.mjs imports it, so the closure rule (2) covers it once the file
-  # above is rostered -- listed anyway because the closure only runs for .mjs REACHED from the
-  # roster, and a future refactor that inlined the import would silently drop it.
-  'lib-doc-comments.mjs'
-)
+$AlwaysRequired = @()
+if (-not $PreserveRelativePaths) {
+  $AlwaysRequired = @(
+    'run-sweeps.ps1',
+    'write-turn.ps1',
+    'reap-stale-mcp.ps1',
+    'auto-deploy-plugin.ps1',
+    'deploy-installed-plugin.ps1',
+    'check-browser-slots.ps1',
+    # The one entry here that is a LIBRARY rather than a command, and the reason it
+    # earns a place: check-browser-slots.ps1 (above) dot-sources it, so a home that
+    # has the command but not this file has a command that cannot run. The rule is
+    # "restorable from a wiped home", and a listed command with a missing dependency
+    # is not restorable. Added with #180, which moved the slot table into
+    # user-settings.md and gave it a single reader.
+    'browser-slot-table.ps1',
+    # The #226 supervisor and its daemon are dispatched by the OS (a Windows scheduled task
+    # or the Startup-folder shim) as `%LOCALAPPDATA%\overnight-agent\<name>` - the same
+    # absolute-path-from-the-flat-home contract as the entries above. They are named by no
+    # roster (not sweeps), reached by no import edge (.ps1), and the installer only SEEDS
+    # them when absent - so without this line a merged supervisor fix lands in
+    # installed-plugins and never reaches the copy the daemon actually runs. Classic
+    # "merged isn't running" (cf. #196, #254).
+    'oa-supervisor.ps1',
+    'oa-supervisor-daemon.ps1',
+    # #442. Reached from `oa-state.ps1 consent -DocComments`, which is PowerShell -- so no
+    # import edge names it, and it is not a sweep or a mutcheck. That is the exact "required by
+    # nothing" shape rules 2 and 5 above were written for, and it bit immediately: the channel
+    # deployed to installed-plugins, the flat home got `oa-state.ps1` WITHOUT its bridge, and
+    # the feature was dead in the only home that runs it -- refusing correctly, which is why it
+    # would have stayed quiet. A consent channel that silently never grants is not a safe
+    # default; it is an unnoticed outage of something Shiv explicitly asked for.
+    'doc-consent.mjs',
+    # Its library. doc-consent.mjs imports it, so the closure rule (2) covers it once the file
+    # above is rostered -- listed anyway because the closure only runs for .mjs REACHED from the
+    # roster, and a future refactor that inlined the import would silently drop it.
+    'lib-doc-comments.mjs'
+  )
+}
 
-# Subdirectories of the OA home that are data, not code. Never walked.
+# Runtime/data subtrees never belong to the recursive package inventory. The ordinary
+# OA-home sync remains flat and does not recurse into child directories.
 $SkipDirs = @('sweep-runs', 'state', 'node_modules', 'telegram-bridge', 'backups',
               'logs', 'secrets', 'runs', 'tmp')
 
 function Write-Line { param([string]$m) if (-not $Json) { Write-Host $m } }
+
+function Get-TargetKeyFromRepoPath {
+  param([string]$Path)
+  if ($PreserveRelativePaths) {
+    return $Path.Substring($RepoPrefix.TrimEnd('/').Length + 1).Replace('\', '/')
+  }
+  return (Split-Path $Path -Leaf)
+}
+
+function Get-TargetKeyFromLiveFile {
+  param([System.IO.FileInfo]$File)
+  if ($PreserveRelativePaths) {
+    $root = [IO.Path]::GetFullPath($OaHome).TrimEnd([char[]]@('\', '/'))
+    $relative = $File.FullName.Substring($root.Length).TrimStart([char[]]@('\', '/'))
+    return $relative.Replace('\', '/')
+  }
+  return $File.Name
+}
+
+function Get-TargetPath {
+  param([string]$RelativePath)
+  return (Join-Path $OaHome $RelativePath)
+}
 
 function Get-NormalizedText {
   param([string]$Path)
@@ -651,7 +682,14 @@ function Get-HereDataRefs {
 
 # --- preconditions ------------------------------------------------------------------
 if (-not (Test-Path $Repo))   { Write-Error "repo not found: $Repo";      exit 1 }
-if (-not (Test-Path $OaHome)) { Write-Error "OA home not found: $OaHome"; exit 1 }
+if (-not (Test-Path $OaHome)) {
+  if ($PreserveRelativePaths -and -not $WhatIf) {
+    New-Item -ItemType Directory -Path $OaHome -Force | Out-Null
+  } elseif (-not $PreserveRelativePaths) {
+    Write-Error "OA home not found: $OaHome"
+    exit 1
+  }
+}
 
 Write-Line "[sync-oa-home] ref     = $Ref"
 Write-Line "[sync-oa-home] repo    = $Repo"
@@ -687,12 +725,14 @@ if ($NoPrefetch) {
 
 # --- index the ref's files under the prefix, by basename ----------------------------
 $tracked = Invoke-Git @('ls-tree', '-r', '--name-only', $refSha, "$RepoPrefix/")
+$tracked = @($tracked | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+if ($PreserveRelativePaths -and $tracked.Count -eq 0) {
+  throw "no tracked files found under '$RepoPrefix' at $Ref"
+}
 $byName = @{}
 $dataByName = @{}
 foreach ($p in $tracked) {
-  $p = "$p".Trim()
-  if (-not $p) { continue }
-  $n = Split-Path $p -Leaf
+  $n = Get-TargetKeyFromRepoPath $p
   if ($p -notmatch '\.(ps1|mjs|js)$') {
     # DATA (rule 6): non-code files are indexed SEPARATELY and are only ever handled in
     # the MISSING direction below. Keeping them out of $byName is what makes the data
@@ -707,14 +747,24 @@ foreach ($p in $tracked) {
   $byName[$n] += $p
 }
 
-# --- collect live OA-home scripts (top level only; subdirs are data or vendored) -----
-$live = Get-ChildItem -Path (Join-Path $OaHome '*') -File |
-        Where-Object { $_.Extension -in '.ps1', '.mjs', '.js' } |
-        Sort-Object Name
+# --- collect live files ---------------------------------------------------------------
+if ($PreserveRelativePaths -and (Test-Path -LiteralPath $OaHome)) {
+  $live = @(Get-ChildItem -LiteralPath $OaHome -File -Recurse |
+    Where-Object {
+      $relative = Get-TargetKeyFromLiveFile $_
+      -not (($relative -split '/') | Where-Object { $_ -in $SkipDirs })
+    } | Sort-Object FullName)
+} elseif ($PreserveRelativePaths) {
+  $live = @()
+} else {
+  $live = @(Get-ChildItem -Path (Join-Path $OaHome '*') -File |
+    Where-Object { $_.Extension -in '.ps1', '.mjs', '.js' } |
+    Sort-Object Name)
+}
 
 $results = @()
 foreach ($f in $live) {
-  $name = $f.Name
+  $name = Get-TargetKeyFromLiveFile $f
   if (-not $byName.ContainsKey($name)) {
     $results += [pscustomobject]@{ file = $name; class = 'LOCAL-ONLY'; repoPath = $null; matchCommit = $null }
     continue
@@ -769,6 +819,10 @@ if (-not $NoForward) {
   $required = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
   foreach ($n in (Get-RosterNames $refSha)) { [void]$required.Add($n) }
   foreach ($n in $AlwaysRequired)           { [void]$required.Add($n) }
+  if ($PreserveRelativePaths) {
+    foreach ($n in $byName.Keys) { [void]$required.Add($n) }
+    foreach ($n in $dataByName.Keys) { [void]$required.Add($n) }
+  }
 
   # MUTCHECKS (rule 4): `run-sweeps.ps1 -IncludeMutchecks` finds mutation checks by
   # globbing the flat home, so a guard that is not HERE cannot run, no matter that it is
@@ -833,7 +887,7 @@ if (-not $NoForward) {
 
   $requiredCount = $required.Count
   $liveNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-  foreach ($f in $live) { [void]$liveNames.Add($f.Name) }
+  foreach ($f in $live) { [void]$liveNames.Add((Get-TargetKeyFromLiveFile $f)) }
 
   foreach ($n in ($required | Sort-Object)) {
     if ($liveNames.Contains($n)) { continue }        # already classified by the live walk
@@ -863,7 +917,7 @@ if (-not $NoForward) {
       # a human, because only a human can bless overwriting genuinely local state.
       if ($dataByName.ContainsKey($n)) {
         $dPaths = $dataByName[$n]
-        $dst = Join-Path $OaHome $n
+        $dst = Get-TargetPath $n
         if (-not (Test-Path -LiteralPath $dst)) {
           if ($dPaths.Count -gt 1) {
             $missingRefused += [pscustomobject]@{ file = $n; class = 'MISSING-AMBIGUOUS'; repoPath = ($dPaths -join ' | '); matchCommit = $null }
@@ -953,10 +1007,15 @@ if ($toWrite.Count -gt 0 -and -not $WhatIf) {
     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
   }
   foreach ($r in $toWrite) {
-    $dst = Join-Path $OaHome $r.file
+    $dst = Get-TargetPath $r.file
     try {
       # Only an existing file needs backing up; a MISSING one has nothing to preserve.
-      if ($backupDir -and (Test-Path $dst)) { Copy-Item $dst (Join-Path $backupDir $r.file) -Force }
+      if ($backupDir -and (Test-Path $dst)) {
+        $backupTarget = Join-Path $backupDir $r.file
+        $backupParent = Split-Path $backupTarget -Parent
+        if (-not (Test-Path $backupParent)) { New-Item -ItemType Directory -Path $backupParent -Force | Out-Null }
+        Copy-Item $dst $backupTarget -Force
+      }
 
       # ALWAYS take the bytes from the REF. Never from the working tree.
       #
@@ -981,6 +1040,10 @@ if ($toWrite.Count -gt 0 -and -not $WhatIf) {
       try {
         & cmd /c "git -C `"$Repo`" show ${refSha}:$($r.repoPath) > `"$tmp`"" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "git show ${refSha}:$($r.repoPath) failed (exit $LASTEXITCODE)" }
+        $destinationParent = Split-Path $dst -Parent
+        if (-not (Test-Path $destinationParent)) {
+          New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
+        }
         Copy-Item $tmp $dst -Force
       }
       finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
@@ -1016,7 +1079,7 @@ if ($toWrite.Count -gt 0 -and -not $WhatIf) {
 $residual = 0
 if (-not $WhatIf) {
   foreach ($r in $toWrite) {
-    $dst = Join-Path $OaHome $r.file
+    $dst = Get-TargetPath $r.file
     if (-not (Test-Path $dst)) { $residual++; continue }
     $headRaw = Get-RefText $refSha $r.repoPath
     if ($null -eq $headRaw) { $residual++; continue }

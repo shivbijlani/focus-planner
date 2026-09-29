@@ -57,15 +57,26 @@ function New-Sandbox {
   $sb  = Join-Path $root ('sb-' + [guid]::NewGuid().ToString('N').Substring(0,6))
   $repo = Join-Path $sb 'repo'
   $inst = Join-Path $sb 'installed'
+  $oaHome = Join-Path $sb 'oahome'
+  $bridgeHome = Join-Path $oaHome 'telegram-bridge'
   $chk  = Join-Path $repo 'plugins\overnight-agent\checks'
   New-Item -ItemType Directory -Force -Path $chk  | Out-Null
   New-Item -ItemType Directory -Force -Path $inst | Out-Null
+  New-Item -ItemType Directory -Force -Path $oaHome | Out-Null
+
+  $bridgeSrc = Join-Path $repo 'packages/telegram-bridge/src'
+  $bridgeBin = Join-Path $repo 'packages/telegram-bridge/bin'
+  New-Item -ItemType Directory -Force -Path $bridgeSrc | Out-Null
+  New-Item -ItemType Directory -Force -Path $bridgeBin | Out-Null
+  Set-Content -Path (Join-Path $bridgeBin 'telegram-bridge.js') -Value "import '../src/state.js'`n" -Encoding UTF8 -NoNewline
+  Set-Content -Path (Join-Path $bridgeSrc 'state.js') -Value "export const revision = 'v1'`n" -Encoding UTF8 -NoNewline
 
   Push-Location $repo
   try {
     & git init --quiet -b main 2>&1 | Out-Null
     & git config user.email 'mut@test'  2>&1 | Out-Null
     & git config user.name  'mut'       2>&1 | Out-Null
+    & git config core.autocrlf false   2>&1 | Out-Null
 
     Set-Content -Path (Join-Path $chk 'livefix.ps1')   -Value '# v1 live fix' -Encoding UTF8 -NoNewline
     Set-Content -Path (Join-Path $chk 'divergent.ps1') -Value '# main v1'     -Encoding UTF8 -NoNewline
@@ -86,6 +97,7 @@ function New-Sandbox {
     Set-Content -Path (Join-Path $chk 'divergent.ps1') -Value '# main v2'      -Encoding UTF8 -NoNewline
     Set-Content -Path (Join-Path $chk 'newguard.ps1')  -Value '# merged but not deployed' -Encoding UTF8 -NoNewline
     Set-Content -Path (Join-Path $chk 'current.ps1')   -Value '# already current' -Encoding UTF8 -NoNewline
+    Set-Content -Path (Join-Path $bridgeSrc 'state.js') -Value "export const revision = 'v2'`n" -Encoding UTF8 -NoNewline
     # main DELETES gone.ps1 - the case that crashed the deploy on 2026-08-29 (#253)
     & git rm --quiet (Join-Path $chk 'gone.ps1') 2>&1 | Out-Null
     & git add -A 2>&1 | Out-Null
@@ -122,6 +134,8 @@ function New-Sandbox {
   [pscustomobject]@{
     Repo      = $repo
     Installed = $inst
+    OaHome    = $oaHome
+    Bridge    = $bridgeHome
     State     = (Join-Path $sb 'state.json')
     LiveFix   = (Join-Path $idst 'livefix.ps1')
     Divergent = (Join-Path $idst 'divergent.ps1')
@@ -169,14 +183,13 @@ function Invoke-SUT {
         [int]$BudgetSeconds = 120, [string]$HistoryHelper,
         [switch]$WithFetch, [int]$FetchBudgetSeconds = 0, [switch]$NoHelperOverride)
   # -NoOaHome by default: these assertions are about the plugin-deploy contract
-  # (classification, refusal, streaks, hand-off). The OA-home sync is a separate
-  # subsystem with its own mutcheck, and letting it run here would fold its exit code
-  # into $needsAttention and mask the escalation mutants - which is exactly what it
-  # did on first wiring: M3 ("streak never accumulates") survived because the run
-  # exited 2 for an unrelated reason. Isolate the unit; cover the seam separately.
+  # (classification, refusal, streaks, hand-off). The OA-home and Telegram package
+  # syncs are separate subsystems with their own checks, and letting them run here
+  # would fold their exit codes into $needsAttention and mask the escalation mutants.
+  # Isolate the unit; cover the integrated deploy seam separately.
   $a = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$Script,
          '-Repo',$Sandbox.Repo,'-Installed',$Sandbox.Installed,
-         '-StatePath',$Sandbox.State,
+         '-StatePath',$Sandbox.State,'-OaHome',$Sandbox.OaHome,'-BridgeHome',$Sandbox.Bridge,
          '-BudgetSeconds',$BudgetSeconds,
          '-ClassifierPath',$Sandbox.Classifier)
   # -SkipFetch by default. The fetch arms need the real fetch path, because the whole
@@ -785,49 +798,35 @@ Copy-Item $SUT $copy -Force
 $s2 = New-Sandbox
 $a = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$copy,
        '-Repo',$s2.Repo,'-Installed',$s2.Installed,'-StatePath',$s2.State,
+       '-OaHome',$s2.OaHome,'-BridgeHome',$s2.Bridge,
        '-SkipFetch','-Json')
 $out = & powershell @a 2>&1 | Out-String
 Assert ($out -match 'NOT FOUND' -or $out -match '"oaHomeExit":\s*2') `
        'G8b an unresolvable sub-tool is reported, never silently skipped'
 
-# --- #622: the checkout the bridge RUNS from is a third deploy target -----------------
-# PHASE 3 executes the telegram bridge directly out of the repo working tree, which the
-# deploy never moves - it copies blobs read out of the ref into two OTHER trees. So both
-# copied targets can report verified-current while the bridge runs arbitrarily old code,
-# and the failure is not merely silent, it is success-shaped.
-#
-# The arm worth having is not "the check is missing". It is the DANGEROUS direction: a
-# check that advances a tree it was supposed to refuse. Fast-forwarding over uncommitted
-# work is how real local work gets carried onto a new base without anyone asking for it,
-# and it would be reported as a clean deploy.
-Section '#622 baseline: a dirty bridge checkout is refused, not advanced'
-# The checkout must be BEHIND as well as dirty. A sandbox that is merely dirty sits on
-# the ref, takes the on-ref branch, and never reaches the refusal at all - so the arm
-# below would pass without executing its own subject. An arm that cannot reach what it
-# mutates reports zero failures, which is indistinguishable from a guard that works.
-function Set-BehindAndDirty {
-  param($Sandbox)
-  & git -C $Sandbox.Repo reset --hard --quiet HEAD~1 2>&1 | Out-Null
-  Set-Content -Path (Join-Path $Sandbox.Repo 'dirty-local-work.txt') -Value 'uncommitted' -Encoding UTF8
-}
-$sDirty = New-Sandbox
-Set-BehindAndDirty -Sandbox $sDirty
-$baseDirty = Invoke-SUT -Script $SUT -Sandbox $sDirty
-if (-not $baseDirty.Json) { Write-Host ("  diagnostic: " + $baseDirty.Raw) }
-Assert ($baseDirty.Json.checkout -eq 'diverged') `
-       "G-BRIDGE a dirty bridge checkout is refused, not advanced (got '$($baseDirty.Json.checkout)')"
-Assert ($baseDirty.Json.checkoutExit -eq 2) `
-       'G-BRIDGE a refused bridge checkout is escalated, not folded into a clean report'
-
-Test-Mutant -Name 'M-BRIDGE: bridge refusal removed (a dirty checkout is advanced anyway)' `
-  -Find 'if ($ahead -gt 0 -or $dirty) {' -Replace 'if ($false) {' -Check {
-    param($mut)
-    $s = New-Sandbox
-    Set-BehindAndDirty -Sandbox $s
-    $r = Invoke-SUT -Script $mut -Sandbox $s
-    Assert ($r.Json.checkout -ne 'diverged') `
-           'killed: uncommitted work in the bridge checkout would be fast-forwarded over'
-  }
+# --- #519/#622: deploy from origin/main without touching the dev checkout ------------
+Section 'G-BRIDGE: the verified OA-home package is the runtime target'
+$sBridge = New-Sandbox
+& git -C $sBridge.Repo reset --hard --quiet HEAD~1 2>&1 | Out-Null
+Set-Content -Path (Join-Path $sBridge.Repo 'dirty-local-work.txt') -Value 'leave this untouched' -Encoding UTF8
+$headBeforeBridge = (& git -C $sBridge.Repo rev-parse HEAD).Trim()
+$statusBeforeBridge = (& git -C $sBridge.Repo status --porcelain | Out-String).Trim()
+New-Item -ItemType Directory -Path (Join-Path $sBridge.Bridge 'src') -Force | Out-Null
+Set-Content -Path (Join-Path (Join-Path $sBridge.Bridge 'src') 'state.js') `
+  -Value "export const revision = 'v1'`n" -Encoding UTF8 -NoNewline
+$bridgeState = '{"version":1,"updateOffset":731,"tasks":{"42":{"topicId":9}}}'
+Set-Content -Path (Join-Path $sBridge.Bridge 'state.json') -Value $bridgeState -Encoding UTF8 -NoNewline
+$rBridge = Invoke-SUT -Script $SUT -Sandbox $sBridge -WithOaHome
+$headAfterBridge = (& git -C $sBridge.Repo rev-parse HEAD).Trim()
+$statusAfterBridge = (& git -C $sBridge.Repo status --porcelain | Out-String).Trim()
+Assert ($rBridge.Json.bridgeExit -eq 0 -and $rBridge.Json.deploymentOk) `
+       'G-BRIDGE the deployed bridge package is included in deployment verification'
+Assert ((Get-Content (Join-Path (Join-Path $sBridge.Bridge 'src') 'state.js') -Raw) -match "'v2'") `
+       'G-BRIDGE_SOURCE files are read from origin/main, not the stale checkout'
+Assert ((Get-Content (Join-Path $sBridge.Bridge 'state.json') -Raw) -eq $bridgeState) `
+       'G-BRIDGE_STATE Telegram offset and topic-map data are preserved'
+Assert ($headAfterBridge -eq $headBeforeBridge -and $statusAfterBridge -eq $statusBeforeBridge) `
+       'G-BRIDGE_CHECKOUT a dirty checkout behind origin/main is never modified'
 
 Section 'RESULT'
 if (-not $KeepSandbox) { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }

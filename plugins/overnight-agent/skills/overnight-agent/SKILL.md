@@ -108,7 +108,7 @@ leaves an index of every archived heading.
   MCP). This is how the user drops you new instructions out-of-band. Check it at the \*\*start of every
   run\*\* (see "PHASE 0 — Check the agent inbox"). Credentials live in the email MCP's own store, not in
   this repo.
-- **Telegram mirror (optional): `<dev drive>\focus-planner\packages\telegram-bridge\`** — a small,
+- **Telegram mirror (optional): `%LOCALAPPDATA%\overnight-agent\telegram-bridge\`** — a small,
   dependency-free Node CLI that mirrors each task journal into its own **Telegram forum topic**
   (1 task = 1 topic) and folds phone replies back into the journals. It's enabled and configured in
   `user-settings.md` → "Telegram". You run it at the **end of every run** so the work you just wrote into
@@ -1571,16 +1571,14 @@ $env:TELEGRAM_BRIDGE_DIGEST = '<on|off — from user-settings.md>'
 # to 'off' when that row says off; otherwise leave it unset so the default holds.
 # $env:TELEGRAM_BRIDGE_ARCHIVE = 'off'
 
-# ⚠️ RESOLVE THIS FROM user-settings.md → "Bridge CLI" — do NOT assume the default
-# repo path below. That row exists so the bridge can be PINNED (e.g. to a worktree)
-# while the main checkout sits on an unrelated or known-buggy branch. Using the
-# default path when the row names another one runs a DIFFERENT BUILD than the one
-# the user validated — and `sync-down` on a stale build can silently destroy the
-# user's phone replies (it reads an update, skips it, and still advances the
-# Telegram offset, which is not redeliverable).
+# ⚠️ RESOLVE THIS FROM user-settings.md → "Bridge CLI" — it points to the OA-home
+# package that PHASE 0 syncs from origin/main and verifies before PHASE 3 runs it.
+# Do not fall back to a development checkout: the checkout may be dirty or stale,
+# and `sync-down` on stale code can silently destroy phone replies by advancing the
+# Telegram offset after skipping an update.
 $bridge = "<path from user-settings.md -> Bridge CLI; fall back to the line below>"
 # Fallback only when no Bridge CLI row exists:
-# $bridge = "<dev drive>\focus-planner\packages\telegram-bridge\bin\telegram-bridge.js"
+# $bridge = "$env:LOCALAPPDATA\overnight-agent\telegram-bridge\bin\telegram-bridge.js"
 
 # FIRST-TIME SETUP ONLY: if the bridge has never run (no state.json yet), baseline
 # so it starts from "now" and does NOT backfill a topic for every historical task.
@@ -1611,14 +1609,11 @@ Rules:
   unset, so a new toggle is a README row + a `user-settings.md` row — **no change here**. ⚠️ **One
   documented exception: `TELEGRAM_BRIDGE_DIGEST` is fail-OPEN**, so "unset" is *not* its default-safe
   state — see the digest bullet below and always export it explicitly.
-- ⚠️ **Resolve the bridge path from `user-settings.md` → "Bridge CLI"; never hard-code the repo default.**
-  That row is how a user pins the bridge to a *specific, validated* build — typically a worktree, while the
-  main checkout sits on some other branch. Running the default path in that situation executes a **different
-  build** than the one they verified. This is not hypothetical: it is the same "an operative line told the
-  agent to do the dangerous thing while the warning lived elsewhere" shape as the fail-open gate above, and
-  it bites hardest on `sync-down`, because a stale build can **permanently destroy the user's phone replies**
-  — it reads a batched update, skips it, and still advances the Telegram offset, and Telegram never
-  redelivers a confirmed update. **If a wrapper script is configured, prefer it for `sync-down` too** (it
+- ⚠️ **Resolve the bridge path from `user-settings.md` → "Bridge CLI"; it points to the verified OA-home copy.**
+  PHASE 0 deploys that package from `origin/main`, so neither the shared development checkout nor a stale
+  worktree is in the runtime path. This matters most on `sync-down`: stale code can **permanently destroy the
+  user's phone replies** by skipping a batched update and advancing the Telegram offset, after which Telegram
+  never redelivers it. **If a wrapper script is configured, prefer it for `sync-down` too** (it
   pins the path *and* sets the fail-open digest flag), rather than hand-rolling `node "$bridge" sync-down`.
 - ⚠️ **Fold phone replies BEFORE `oa-state.ps1 scan`, not just before `once`.** The `sync-down` in the block
   above protects *this* phase, but the scan in PHASE 1/2 has already run by then. `oa-state.ps1 mark`
