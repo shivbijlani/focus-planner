@@ -476,7 +476,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract', 'doc', 'session', 'whoami')]
+  [ValidateSet('seed', 'scan', 'get', 'mark', 'resnapshot', 'consent', 'gate', 'extract', 'doc', 'session', 'whoami', 'critical-tools')]
   [string]$Command = 'scan',
 
   [string]$Id,
@@ -596,6 +596,8 @@ param(
   # fabricating a human approval or writing a second turn in the same wake.
   [switch]$PlanDispatch,
   [string]$DispatchInput,
+  [string[]]$RequiresTools,
+  [string]$CapabilitiesPath = "$env:LOCALAPPDATA\overnight-agent\capabilities.json",
   [switch]$SessionRelease,
   # The path of a workspace that has just been REMOVED. Marks any binding pointing at it dead,
   # so the next verdict is `replace` rather than `reuse` at a workspace that is gone (#452).
@@ -653,6 +655,7 @@ param(
   # override it to point at a sandbox copy (which is the only way to test the resolution without
   # touching the live planner folder).
   [string]$UserSettings,
+  [string]$McpConfig = (Join-Path $HOME '.copilot/mcp-config.json'),
   # The exhaustion DECLARATION itself (#310). See .EXHAUSTION in the header and
   # Set-ExhaustionDeclaration below. Value is the list of things the run examined; it is
   # REQUIRED to be non-empty, because a declaration that names nothing is indistinguishable
@@ -721,6 +724,26 @@ function Get-SettingRow([string]$text, [string]$name, [switch]$PreserveBackticks
   $value = $m.Groups[1].Value
   if (-not $PreserveBackticks) { $value = $value -replace '`', '' }
   return $value.Trim()
+}
+
+function Cmd-CriticalTools {
+  $names = @('email', 'google-workspace')
+  $settingsPath = Get-UserSettingsPath
+  if ($settingsPath -and (Test-Path -LiteralPath $settingsPath)) {
+    $row = Get-SettingRow (Get-Content -LiteralPath $settingsPath -Raw -ErrorAction Stop) 'Critical tools'
+    if ($null -ne $row) {
+      $names = @($row -split ',' | ForEach-Object { $_.Trim() })
+      if (-not $names.Count -or @($names | Where-Object { -not $_ }).Count) {
+        throw 'Critical tools: empty tool name refused'
+      }
+    }
+  }
+  $config = Get-Content -LiteralPath $McpConfig -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  $configured = @($config.mcpServers.PSObject.Properties.Name)
+  foreach ($name in $names) {
+    if ($configured -notcontains $name) { throw "Critical tools: unknown MCP server '$name' in $McpConfig" }
+  }
+  [pscustomobject]@{ tools = @($names | Select-Object -Unique); settingsPath = $settingsPath } | ConvertTo-Json -Depth 3
 }
 
 function Resolve-GateSettings {
@@ -5322,6 +5345,21 @@ function Get-DispatchInput($st, $facts) {
 }
 
 function Assert-TaskDispatch($st, $sess, $facts) {
+  if ($RequiresTools.Count) {
+    if (-not (Test-Path -LiteralPath $CapabilitiesPath)) {
+      throw 'session_capabilities_missing: run the critical-tool preflight before dispatch'
+    }
+    $capabilities = Get-Content -LiteralPath $CapabilitiesPath -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    if ($capabilities.schema -ne 'oa-capabilities/1' -or
+        ([datetime]::UtcNow - [datetime]::Parse([string]$capabilities.checkedAt).ToUniversalTime()).TotalMinutes -gt 60) {
+      throw 'session_capabilities_stale: rerun the critical-tool preflight'
+    }
+    foreach ($name in $RequiresTools) {
+      $tool = $capabilities.tools.PSObject.Properties[$name]
+      if (-not $tool) { throw "session_capability_unknown: '$name' was not probed" }
+      if ($tool.Value.status -ne 'ok') { throw "blocked: $name down" }
+    }
+  }
   # #734: a pause is named, not folded into the generic refusal. `session_not_dispatchable` reads
   # as "the binding needs attention" and invites a caller to fix the binding and try again, which
   # is exactly the wrong move here -- so the refusal says WHO stopped this and uses the same token
@@ -5992,6 +6030,7 @@ try {
     'doc' { Cmd-Doc }
     'session' { Cmd-Session }
     'whoami' { Cmd-Whoami }
+    'critical-tools' { Cmd-CriticalTools }
   }
 }
 finally {

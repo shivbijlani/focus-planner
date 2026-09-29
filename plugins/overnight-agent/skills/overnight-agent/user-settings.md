@@ -23,6 +23,9 @@ preferences.
 | Non-code task project | `<project ID from create_project>` — local folder project rooted at `%LOCALAPPDATA%\overnight-agent\task-chats`; required before dispatching non-code tasks. |
 | GitHub owner | `github.com/<your-github-username>` |
 | Agent email account | `<agent-inbox@example.com>` (the name of this account as it appears in the email MCP) |
+| Critical tools | `email, google-workspace` — comma-separated MCP server names from `~\.copilot\mcp-config.json`. Unknown names are refused by name. Browser slots are deliberately not critical by default. |
+| Critical alert Telegram DM | *(optional)* your private chat ID, not the mirror's forum-group ID. Used for outage alerts, especially when email is down. |
+| Critical alert email | *(optional)* your own email address; defaults to Agent email account when that is an address. Used when Telegram is not configured or is down. |
 | Google account (Tasks) | `<your.name@example.com>` — the Google account whose **Tasks** the PHASE 2 collect step reads (must be consented in the Google Workspace MCP). Leave blank / omit to disable Google-Tasks collection. |
 | Google Tasks lists | *(optional)* `default only` — set this if `@default` **is** your whole Google Tasks backlog. The Google Workspace MCP exposes no way to enumerate task lists (GH #554), so without this the collector reports `partial` and refuses a total every night. With it, the same read counts as complete. Leave blank if you keep tasks in more than one list. |
 | Authorized sender addresses | `<addr1@example.com>`, `<addr2@example.com>` (only act on instruction emails **from** these) |

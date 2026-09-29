@@ -39,6 +39,25 @@ function Get-OaSupervisorFiles {
     browserState    = (Join-Path $oaHome 'browser-checks-state.json')
     updateConsumer  = (Join-Path $oaHome 'consumer-update-check.mjs')
     updateState     = (Join-Path $oaHome 'update-check-state.json')
+    capabilities    = (Join-Path $oaHome 'capabilities.json')
+  }
+}
+
+function Get-OaCriticalStatus {
+  param([string]$Path = (Get-OaSupervisorFiles).capabilities)
+  if (-not (Test-Path -LiteralPath $Path)) { return [ordered]@{ down = $false; headline = '' } }
+  try {
+    $record = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    if ($record.schema -ne 'oa-capabilities/1') { throw "unrecognized capabilities schema: $($record.schema)" }
+    $down = @($record.tools.PSObject.Properties | Where-Object { $_.Value.status -eq 'down' })
+    if (-not $down.Count) { return [ordered]@{ down = $false; headline = '' } }
+    $first = $down[0]
+    return [ordered]@{
+      down = $true
+      headline = "$([char]0x26D4) CRITICAL TOOL DOWN: $($first.Name). $($first.Value.error). Since $($first.Value.firstSeenAt)."
+    }
+  } catch {
+    return [ordered]@{ down = $true; headline = "Critical tool status unreadable: $_" }
   }
 }
 

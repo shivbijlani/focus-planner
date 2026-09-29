@@ -7,7 +7,7 @@
     "error at the point of use, because an absent tool is not a failing tool. The email row",
     "is the load-bearing one -- PHASE 0 mandates an inbox read, and an unhealthy email client",
     "answers a search with [], which is byte-identical to a genuinely empty inbox.",
-    "Read by check-agent-inbox.ps1. Add a row here rather than a sentence in SKILL.md."
+    "Read by check-agent-inbox.ps1; the critical-tool preflight additionally uses a real call."
   ],
   "capabilities": [
     {
