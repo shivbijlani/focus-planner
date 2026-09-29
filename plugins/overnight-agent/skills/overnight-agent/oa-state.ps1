@@ -666,6 +666,16 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$settingsValueScript = Join-Path $PSScriptRoot 'settings-value.ps1'
+if (Test-Path -LiteralPath $settingsValueScript) {
+  . $settingsValueScript
+} else {
+  function ConvertFrom-SettingCell([string]$Cell) {
+    $match = [regex]::Match([string]$Cell, '`([^`]*)`')
+    if ($match.Success) { return $match.Groups[1].Value.Trim() }
+    return ([string]$Cell).Trim()
+  }
+}
 
 # --- The gate tunables, resolved from user-settings.md (#310 follow-up) --------------------
 #
@@ -713,17 +723,14 @@ function Get-UserSettingsPath {
   return $null
 }
 
-function Get-SettingRow([string]$text, [string]$name, [switch]$PreserveBackticks) {
+function Get-SettingRow([string]$text, [string]$name) {
   # One `| Setting | Value |` row, matched on the setting name at the start of the cell. Returns
-  # the raw value cell, or $null. Case-insensitive, tolerant of surrounding whitespace and of the
-  # backticks the template uses, because a user who copies the formatting must not be punished.
+  # the shared value interpretation, or $null: first backtick span, otherwise the whole cell.
   if (-not $text) { return $null }
   $re = '(?im)^\s*\|\s*' + [regex]::Escape($name) + '\s*\|\s*([^|\r\n]*?)\s*\|'
   $m = [regex]::Match($text, $re)
   if (-not $m.Success) { return $null }
-  $value = $m.Groups[1].Value
-  if (-not $PreserveBackticks) { $value = $value -replace '`', '' }
-  return $value.Trim()
+  return ConvertFrom-SettingCell $m.Groups[1].Value
 }
 
 function Cmd-CriticalTools {
@@ -5116,19 +5123,14 @@ function Test-PathWithin([string]$path, [string]$root) {
 function Assert-ChatWorkspace([string]$project, [string]$workspace, [string]$wsType) {
   $settingsPath = Get-UserSettingsPath
   $setting = if ($settingsPath -and (Test-Path -LiteralPath $settingsPath)) {
-    Get-SettingRow (Get-Content -LiteralPath $settingsPath -Raw) 'Non-code task project' -PreserveBackticks
+    Get-SettingRow (Get-Content -LiteralPath $settingsPath -Raw) 'Non-code task project'
   } else { '' }
   if (-not $setting) {
     throw 'session_chat_project_required: configure Non-code task project in user-settings.md before binding a non-code session'
   }
   $idPattern = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
-  $match = [regex]::Match($setting, '`([^`]*)`')
-  if ($match.Success) {
-    $configured = $match.Groups[1].Value
-  } else {
-    $match = [regex]::Match($setting, "^($idPattern)(?=\s|$)")
-    $configured = if ($match.Success) { $match.Groups[1].Value } else { '' }
-  }
+  $match = [regex]::Match($setting, "^($idPattern)(?=\s|$)")
+  $configured = if ($match.Success) { $match.Groups[1].Value } else { '' }
   if ($configured -cnotmatch ('^' + $idPattern + '$')) {
     throw "session_chat_project_invalid: Non-code task project must be a project id, got '$setting'"
   }

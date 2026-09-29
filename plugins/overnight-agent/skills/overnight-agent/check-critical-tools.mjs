@@ -5,6 +5,7 @@ import { closeSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, w
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readSettingRow } from '../../checks/settings-value.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const plugin = path.resolve(here, '..', '..');
@@ -26,12 +27,6 @@ function call(server, action, ...args) {
   return result;
 }
 
-function row(text, name) {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const found = text.match(new RegExp(`^\\s*\\|\\s*${escaped}\\s*\\|\\s*([^|\\r\\n]*)\\|`, 'im'));
-  return found?.[1].replaceAll('`', '').trim() ?? '';
-}
-
 function payload(result) {
   if (result.error || result.isError) throw new Error(`MCP tool error: ${JSON.stringify(result.error ?? result)}`);
   const text = result.content?.find((c) => c.type === 'text')?.text;
@@ -42,10 +37,17 @@ function payload(result) {
   return parsed;
 }
 
+function successfulCall(result) {
+  if (result.error || result.isError) {
+    throw new Error(`MCP tool error: ${JSON.stringify(result.error ?? result)}`);
+  }
+  return result;
+}
+
 export async function probeTool(name, settings, deps = { call }) {
   if (name === 'email') {
     const accounts = payload(deps.call(name, 'call', 'email_list_accounts', '{}'));
-    const account = accounts.find((a) => a.email === row(settings, 'Agent email account')) ??
+    const account = accounts.find((a) => a.email === readSettingRow(settings, 'Agent email account')) ??
       (accounts.length === 1 ? accounts[0] : null);
     if (!account?.id) throw new Error('email account not uniquely identified');
     const health = payload(deps.call(name, 'call', 'email_test_account',
@@ -54,11 +56,11 @@ export async function probeTool(name, settings, deps = { call }) {
     return;
   }
   if (name === 'google-workspace') {
-    const address = row(settings, 'Google account (Tasks)');
+    const address = readSettingRow(settings, 'Google account (Tasks)');
     if (!address || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) {
       throw new Error('Google account (Tasks) must name the consented account for the real-call probe');
     }
-    payload(deps.call(name, 'call', 'list_tasks', JSON.stringify({
+    successfulCall(deps.call(name, 'call', 'list_tasks', JSON.stringify({
       user_google_email: address, task_list_id: '@default', max_results: 1,
     })));
     return;
@@ -69,7 +71,7 @@ export async function probeTool(name, settings, deps = { call }) {
   const read = tools.find((t) => /^(list|get|search|status|health|test)_/i.test(t.name) &&
     !t.inputSchema?.required?.length);
   if (!read) throw new Error(`no safe zero-argument read probe for '${name}'`);
-  payload(deps.call(name, 'call', read.name, '{}'));
+  successfulCall(deps.call(name, 'call', read.name, '{}'));
 }
 
 function headline(name, error, since) {
@@ -143,7 +145,7 @@ function settingsFrom(pathname) {
 
 async function sendAlert(text, settings, down) {
   // An alert is acknowledged only after a successful send, never after an attempted call.
-  const dm = row(settings, 'Critical alert Telegram DM');
+  const dm = readSettingRow(settings, 'Critical alert Telegram DM');
   if (dm && !down.includes('telegram')) {
     try {
       payload(call('telegram', 'call', 'message', JSON.stringify({
@@ -152,11 +154,13 @@ async function sendAlert(text, settings, down) {
       return true;
     } catch (e) { console.error(`Telegram alert failed: ${e.message}`); }
   }
-  const address = row(settings, 'Critical alert email') || row(settings, 'Agent email account');
+  const address = readSettingRow(settings, 'Critical alert email') ||
+    readSettingRow(settings, 'Agent email account');
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) && !down.includes('email')) {
     try {
       const accounts = payload(call('email', 'call', 'email_list_accounts', '{}'));
-      const account = accounts.find((a) => a.email === row(settings, 'Agent email account')) ??
+      const account = accounts.find((a) =>
+        a.email === readSettingRow(settings, 'Agent email account')) ??
         (accounts.length === 1 ? accounts[0] : null);
       if (!account?.id) throw new Error('email account not uniquely identified');
       payload(call('email', 'call', 'email_send', JSON.stringify({

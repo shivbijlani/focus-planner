@@ -181,8 +181,8 @@ $Mutants = [ordered]@{
   'M3 backticks-not-stripped' = @{
     kills = 'C'
     edits = @(@{
-        find  = "-replace '``', ''"
-        with  = "-replace 'THIS_NEVER_MATCHES', ''"
+        find  = 'if ($match.Success) { return $match.Groups[1].Value.Trim() }'
+        with  = 'if ($false) { return $match.Groups[1].Value.Trim() }'
         count = 1
       })
   }
