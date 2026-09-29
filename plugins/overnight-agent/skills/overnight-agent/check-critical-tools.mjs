@@ -2,10 +2,11 @@
 // PHASE 0: real reads, persistent outage transitions, and a single alert per transition/day.
 import { execFileSync } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readSettingRow } from '../../checks/settings-value.mjs';
+import { gapForAlert, recordRunStart } from './run-ledger.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const plugin = path.resolve(here, '..', '..');
@@ -15,6 +16,8 @@ const firstExisting = (...paths) => paths.find((p) => {
 const prober = firstExisting(path.join(here, 'mcp-probe.mjs'), path.join(plugin, 'checks', 'mcp-probe.mjs'));
 const statePath = process.env.OA_CAPABILITIES_PATH ??
   path.join(process.env.LOCALAPPDATA || tmpdir(), 'overnight-agent', 'capabilities.json');
+const ledgerPath = process.env.OA_RUN_LEDGER_PATH ??
+  path.join(process.env.LOCALAPPDATA || tmpdir(), 'overnight-agent', 'run-ledger.jsonl');
 const shell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
 
 function call(server, action, ...args) {
@@ -178,31 +181,51 @@ export async function main(args = process.argv.slice(2)) {
   const option = (key) => args[args.indexOf(key) + 1];
   const settingsPath = args.includes('--settings') ? option('--settings') : undefined;
   const configPath = args.includes('--mcp-config') ? option('--mcp-config') : undefined;
+  const stateDir = args.includes('--state-dir') ? option('--state-dir') : undefined;
   const file = args.includes('--state') ? option('--state') : statePath;
+  const ledger = args.includes('--ledger') ? option('--ledger') : ledgerPath;
+  const trigger = args.includes('--trigger') ? option('--trigger') : undefined;
+  const runId = args.includes('--run-id') ? option('--run-id') : undefined;
+  const now = args.includes('--now') ? new Date(option('--now')) : new Date();
   const taskFile = args.includes('--tasks') ? option('--tasks') : null;
-  const stateScript = firstExisting(path.join(here, 'oa-state.ps1'));
-  if (!stateScript) throw new Error('oa-state.ps1 not found');
-  const command = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', stateScript, 'critical-tools'];
-  if (settingsPath) command.push('-UserSettings', settingsPath);
-  if (configPath) command.push('-McpConfig', configPath);
-  const policy = JSON.parse(execFileSync(shell, command, { encoding: 'utf8', timeout: 20000 }));
-  if (configPath) process.env.MCP_PROBE_CONFIG = configPath;
-  const settings = settingsFrom(policy.settingsPath);
-  const tasks = taskFile ? JSON.parse(readFileSync(taskFile, 'utf8')) : [];
+  if (Number.isNaN(now.valueOf())) throw new Error('--now must be an ISO timestamp');
   mkdirSync(path.dirname(file), { recursive: true });
+  mkdirSync(path.dirname(ledger), { recursive: true });
   const lock = `${file}.lock`;
   let handle;
   try { handle = openSync(lock, 'wx'); } catch (e) { throw new Error(`capabilities lock unavailable: ${e.message}`); }
   try {
     const prior = readState(file);
+    const run = recordRunStart(ledger, { now, trigger, runId });
+    const runGap = gapForAlert(run, prior.runGap);
+    const stateScript = firstExisting(path.join(here, 'oa-state.ps1'));
+    if (!stateScript) throw new Error('oa-state.ps1 not found');
+    const command = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', stateScript, 'critical-tools'];
+    if (settingsPath) command.push('-UserSettings', settingsPath);
+    if (configPath) command.push('-McpConfig', configPath);
+    if (stateDir) command.push('-StateDir', stateDir);
+    const policy = JSON.parse(execFileSync(shell, command, { encoding: 'utf8', timeout: 20000 }));
+    if (configPath) process.env.MCP_PROBE_CONFIG = configPath;
+    const settings = settingsFrom(policy.settingsPath);
+    const tasks = taskFile ? JSON.parse(readFileSync(taskFile, 'utf8')) : [];
     const down = [];
     const output = await evaluate({
-      names: policy.tools, settings, previous: prior, tasks,
+      names: policy.tools, settings, previous: prior, tasks, now,
       probe: async (name) => {
         try { await probeTool(name, settings); } catch (e) { down.push(name); throw e; }
       },
       notify: (text) => sendAlert(text, settings, down),
     });
+    if (runGap) {
+      if (await sendAlert(runGap.headline, settings, down)) {
+        runGap.alertedAt = now.toISOString();
+      }
+      output.status = 'degraded';
+      output.headline = [runGap.headline, output.headline].filter(Boolean).join('\n');
+      output.wrapUp = [runGap.headline, output.wrapUp].filter(Boolean).join('\n');
+    }
+    output.run = run;
+    output.runGap = runGap ?? prior.runGap ?? null;
     store(file, output);
     console.log(JSON.stringify(output));
     process.exitCode = output.status === 'degraded' ? 2 : 0;
