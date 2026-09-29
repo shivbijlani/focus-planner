@@ -184,6 +184,11 @@
                    baseline.json) was there by hand, required by nothing, one `rm` from
                    the same fate.
 
+    7. TRAY      - reliability-tray-files.json is the installer's deployed-file roster.
+                   Read it from the ref so a new tray file is required on the first sync.
+                   A successful tray write reports that a running tray needs restarting;
+                   sync itself never stops or starts the tray.
+
   Anything else in the repo stays out, and any file already live keeps its existing
   classification - so legitimately local-only files and deliberately excluded
   diagnostics generate no new noise.
@@ -227,6 +232,7 @@ param(
   [int]$EscalateAfterCycles = 2,
   [string]$StatePath = "$env:LOCALAPPDATA\overnight-agent\sync-oa-home-state.json",
   [string]$RosterPath = 'plugins/overnight-agent/checks/run-sweeps.ps1',
+  [string]$TrayRosterPath = 'plugins/overnight-agent/checks/reliability-tray-files.json',
   # Use a recursive, path-preserving target and require every tracked file under RepoPrefix.
   [switch]$PreserveRelativePaths,
   [switch]$NoForward,
@@ -627,6 +633,22 @@ function Get-RosterNames {
   return $names
 }
 
+function Get-TrayRosterNames {
+  param([string]$Sha)
+  $text = Get-RefText $Sha $TrayRosterPath
+  if (-not $text) { throw "tray roster missing from $Ref`: $TrayRosterPath" }
+  try { $names = ConvertFrom-Json -InputObject $text -ErrorAction Stop }
+  catch { throw "invalid tray roster at $Ref`: $TrayRosterPath - $_" }
+  if ($names -isnot [array] -or $names.Count -eq 0) { throw "tray roster must be a nonempty array at $Ref`: $TrayRosterPath" }
+  $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+  foreach ($name in $names) {
+    if ($name -isnot [string] -or $name -notmatch '^[\w.-]+\.(ps1|mjs|js)$' -or -not $seen.Add($name)) {
+      throw "invalid or duplicate tray filename in $TrayRosterPath`: $name"
+    }
+  }
+  return $names
+}
+
 function Get-RelativeImports {
   # CLOSURE (rule 2): relative import/require specifiers of one JS/MJS source. Static
   # text scan - these are ES modules with static imports, and a dependency that only
@@ -747,6 +769,14 @@ foreach ($p in $tracked) {
   $byName[$n] += $p
 }
 
+$trayFiles = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+if (-not $PreserveRelativePaths) {
+  foreach ($n in (Get-TrayRosterNames $refSha)) {
+    if (-not $byName.ContainsKey($n)) { throw "tray file $n is listed in $TrayRosterPath but absent from $Ref" }
+    [void]$trayFiles.Add($n)
+  }
+}
+
 # --- collect live files ---------------------------------------------------------------
 if ($PreserveRelativePaths -and (Test-Path -LiteralPath $OaHome)) {
   $live = @(Get-ChildItem -LiteralPath $OaHome -File -Recurse |
@@ -819,6 +849,7 @@ if (-not $NoForward) {
   $required = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
   foreach ($n in (Get-RosterNames $refSha)) { [void]$required.Add($n) }
   foreach ($n in $AlwaysRequired)           { [void]$required.Add($n) }
+  foreach ($n in $trayFiles)                 { [void]$required.Add($n) }
   if ($PreserveRelativePaths) {
     foreach ($n in $byName.Keys) { [void]$required.Add($n) }
     foreach ($n in $dataByName.Keys) { [void]$required.Add($n) }
@@ -1000,6 +1031,7 @@ $toWrite = @($behind) + @($dataBehind) + @($missing)
 $deployed = 0
 $failed   = 0
 $backupDir = $null
+$trayRestartNeeded = $false
 
 if ($toWrite.Count -gt 0 -and -not $WhatIf) {
   if (-not $SkipBackup -and ($behind.Count + $dataBehind.Count) -gt 0) {
@@ -1058,6 +1090,7 @@ if ($toWrite.Count -gt 0 -and -not $WhatIf) {
       }
 
       $deployed++
+      if ($trayFiles.Contains($r.file)) { $trayRestartNeeded = $true }
       Write-Line ("  WROTE      {0}" -f $r.file)
     } catch {
       $failed++
@@ -1131,11 +1164,16 @@ $pending = if ($WhatIf) { $toWrite.Count } else { 0 }
 # structurally unable to see it. Without this term the line would keep printing True over
 # exactly the drift that made #336's guard inert -- the same false claim, one file class
 # over.
-$verifiedCurrent = ($residual -eq 0 -and $pending -eq 0 -and $dataStale.Count -eq 0)
+$trayRefused = @($divergent + $ambiguous + $missingRefused |
+  Where-Object { $trayFiles.Contains($_.file) }).Count
+$verifiedCurrent = ($residual -eq 0 -and $pending -eq 0 -and $dataStale.Count -eq 0 -and $trayRefused -eq 0)
 
 Write-Line ""
 Write-Line ("[sync-oa-home] deployed {0}, refused {1}, residual drift {2}, verified-current {3}" -f `
             $deployed, ($divergent.Count + $ambiguous.Count + $missingRefused.Count + $dataStale.Count), $residual, $verifiedCurrent)
+if ($trayRestartNeeded) {
+  Write-Line '[sync-oa-home] TRAY RESTART NEEDED: deployed tray files changed; restart the tray to load them (sync did not restart it).'
+}
 foreach ($r in $dataStale) { Write-Line "[sync-oa-home] NEEDS A HUMAN: $($r.file) is a required data file whose live copy differs from $Ref. It was NOT overwritten (it may be local state). Reconcile it by hand, then re-run." }
 foreach ($e in $escalate) { Write-Line "[sync-oa-home] NEEDS A HUMAN: $e" }
 
@@ -1157,6 +1195,7 @@ if ($Json) {
     residualDrift    = $residual
     pending          = $pending
     verifiedCurrent  = $verifiedCurrent
+    trayRestartNeeded = $trayRestartNeeded
     escalate         = $escalate
     whatIf           = [bool]$WhatIf
     files            = $results

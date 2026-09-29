@@ -63,19 +63,9 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'oa-supervisor-startup.ps1')
 
-# Fixed, reviewed set: adding a file here never adds another startup route. Only
-# the files this tray actually needs to run standalone from its deployed home.
-# The browser-check workload (GH #698) reuses the existing browser tools, deployed
-# flat beside it so browser-watchdog.ps1 resolves them as siblings.
-$script:DeployedFiles = @(
-  'oa-supervisor-tray.ps1', 'oa-supervisor-startup.ps1',
-  'reliability-supervisor.mjs', 'windows-app-actuator.mjs',
-  'session-terminal-evidence.mjs', 'consumer-reliability-supervisor.mjs',
-  'oa-user-settings.mjs',
-  'consumer-browser-watchdog.mjs', 'browser-watchdog.ps1', 'check-browser-slots.ps1',
-  'browser-slot-table.ps1',
-  'consumer-update-check.mjs'
-)
+# Fixed, reviewed set shared with sync-oa-home.ps1. Adding a file to this
+# roster never adds another startup route.
+$script:DeployedFiles = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'reliability-tray-files.json') -Raw | ConvertFrom-Json
 
 function Get-ReliabilityTrayStatus {
   $startup = if ($TestKeyPath) { Get-OaTrayStartup -KeyPath $TestKeyPath -ValueName $TestValueName } else { Get-OaTrayStartup }
