@@ -1,7 +1,7 @@
 {
   "name": "overnight-agent",
-  "description": "Autonomously makes progress on your planner tasks overnight using a per-task plan -> approve -> execute loop. Proposes plans inside each task's journal, waits for your approval, then executes only what was approved.",
-  "version": "1.57.0",
+  "description": "Autonomously makes progress on your planner tasks overnight. Dispatches reversible or standing-rule-allowed steps immediately and asks only before gated actions.",
+  "version": "1.57.1",
   "author": {
     "name": "Shiv Bijlani",
     "url": "https://github.com/shivbijlani"

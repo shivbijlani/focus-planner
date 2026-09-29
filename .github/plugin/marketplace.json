@@ -11,8 +11,8 @@
   "plugins": [
     {
       "name": "overnight-agent",
-      "description": "Autonomously makes progress on your planner tasks overnight using a per-task plan -> approve -> execute loop.",
-      "version": "1.57.0",
+      "description": "Autonomously makes progress on your planner tasks overnight, dispatching allowed steps immediately and asking only before gated actions.",
+      "version": "1.57.1",
       "source": "./plugins/overnight-agent",
       "author": {
         "name": "Shiv Bijlani",

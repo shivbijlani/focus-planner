@@ -297,23 +297,23 @@ In each task journal, your loop lives in a sentinel-delimited block appended at 
 
 ## 🌙 Overnight Agent
 
-**Status:** Proposed · plan v1 · <YYYY-MM-DD>
+**Status:** Proposed · plan v1 · <YYYY-MM-DD> (only if step 1 is gated)
 
 **Context:** <linked journals consulted, e.g. read #231 (parent), #240 — or "none linked">
 
 ### Proposed plan (v1)
-1. <concrete step>
-2. <concrete step>
-3. <concrete step>
+1. [gated] <exact action requiring approval, including cost or recipient>
+2. [reversible] <concrete step>
 
-**Deliverables if approved:** <what will exist when done — a draft, doc, research, code, list…>
+**Deliverables after approval:** <what will exist when done>
 **Risks / assumptions:** <anything that could go wrong; what I'm assuming>
-**Needs from you:** approval to run this — reply in plain English: "approve" / "go ahead",
-"revise: <what to change>", or "skip". (No boxes to tick, nothing to edit up here.)
+**Needs from you:** <one short question naming the gated action and its cost or recipient>.
 ```
 
-**Write this block with `-Ask blocking`** — a proposed plan genuinely waits on him, and that is what
-`awaiting_reply` should say. **Do not append a bare `**Your call:** reply below in plain English`.**
+**Use `proposed` and `-Ask blocking` only when the first step is gated.** Classify every numbered
+step as `[reversible]`, `[gate-allowed]` or `[gated]` before writing. When the first step is
+reversible or allowed, dispatch it in this wake instead (PHASE 2); do not use this template or
+ask for approval of the whole plan. **Do not append a bare `**Your call:** reply below in plain English`.**
 That exact sentence used to be printed here, and it is in 81 journals; before #560 the gate recovered
 `awaiting_reply` by regex from it and parked every one of those tasks, including turns that had just
 said they needed nothing. The declaration is now what the gate reads (see `-Ask`, below), but the
@@ -334,7 +334,7 @@ offer is `-Ask offer` and should read like one ("say the word and I'll pick it u
 
 ### Status values
 
-- `proposed` — plan posted, waiting on the user. **Do not execute.**
+- `proposed` — first plan step is gated; waiting on the user. **Do not execute.**
 - `approved` — user approved. **Execute this run.**
 - `revise` — user asked for changes. Re-plan in place (see "Revise → replace").
 - `in-progress` — multi-night work, partially done. Continue or propose the next step.
@@ -548,7 +548,10 @@ Do the phases **in this order** every time.
 > `order` (its rank this run), `section` (`today`/`deferred`/`other`), `work_priority`, `urgency`,
 > `priorities_rank`, and — the one that actually gates you — **`eligible`**.
 >
-> - **Never work a row with `eligible: false`.** A Deferred row stays ineligible while a
+> - **Never dispatch a row with `eligible: false`**, except an agent-authored proposal with
+>   `plan_review_due: true`, classified for allowed steps and rechecked by `session -ForDispatch
+>   -PlanDispatch`. Re-evaluation alone grants no permission to execute gated steps. A Deferred
+>   row stays ineligible while a
 >   Today row still **holds the gate** — which is what stops a P2 Deferred item eating a run
 >   while a Today item sits untouched.
 > - ⚠️ **"Holds the gate" is narrower than "is workable", and this has been got wrong TWICE, in
@@ -1053,7 +1056,7 @@ start more work.
 
 1. From the `scan` worklist — **taken in the order it returned, skipping `eligible: false` rows** —
    collect tasks whose stored `status` is `approved` (also continue any
-   `in-progress` whose next step is approved), **plus any `reopened` task whose newest user message is an
+   `in-progress` with reversible or gate-allowed work), **plus any `reopened` task whose newest user message is an
    approval** (e.g. "approve", "go ahead" appended at the bottom — interpret per "Reading the user's
    decision"). Use `oa-state.ps1 get -Id <ID>` if you need a task's full state.
    **Also pick up any row with `due_poll: true`** — a time-triggered recurring check that's now due
@@ -1062,7 +1065,11 @@ start more work.
 2. **Dispatch directly, in `scan -Compact` order, up to the configured concurrency limit.**
    Count only sends accepted by `send_session_message` toward the limit; a failed delivery does
    not consume a slot. Do not dispatch an ineligible row or invent a brief for work that was not
-   approved. Before each send, check the local :00/:30 cutoff in the pacing rule above. Replies
+   approved or classified reversible/gate-allowed in PHASE 2. For an existing proposal use
+   `-PlanDispatch` with `-ForDispatch` and the scan's exact `dispatch_input` only if
+   `plan_review_due: true`; all other tasks use ordinary `-ForDispatch`. If the row
+   fails that check (including the Today gate), leave it for a later run; never bypass dispatch authority to meet the
+   same-wake goal. Before each send, check the local :00/:30 cutoff in the pacing rule above. Replies
    collected during this run do not widen the limit or reorder the worklist.
 
    For each task with work to hand over:
@@ -1185,6 +1192,12 @@ start more work.
    the **distilled linked-task context** from "Gather linked-task context FIRST" (never just the
    task's own journal), the `kickoff_continuation` line when the verdict was `replace`, and — when
    it gets a worktree — the standing worktree clause in PHASE 1.5 §5, **unedited**.
+   For a newly classified plan, send only its reversible and gate-allowed steps; name gated
+   actions explicitly as out of scope until approved. The task session independently checks
+   `consent -Id <ID> -Action <kind> -Repo <repo>` immediately before each consequential
+   action, and stops if the floor blocks or a human has spoken. The coordinator writes no
+   plan turn before dispatch: G12 reserves this wake's sole turn for the task session's
+   actual outcome.
 
    After creating/binding idle sessions, scan again and prepare from that snapshot. Pass the
    exact `dispatch_input` from this scan to `session -ForDispatch`; never copy a newer hash onto
@@ -1225,9 +1238,11 @@ start more work.
      ```
 
    - Update the visible `**Status:**` line and record it with `oa-state.ps1 mark -Id <ID> -Status <s>`:
-     `done` if the approved scope is finished; `in-progress` if more nights are needed (then add a fresh
-     **Proposed plan** for the next step, status `proposed`); `blocked` if you hit something only the
-     user can resolve (write the exact ask in **Needs from you**). `mark` re-snapshots the journal so the
+     `done` if the task's scope is finished; `in-progress` if more nights are needed (classify
+     and continue the next steps without proposing again); `blocked` if you hit a gated step
+     after completing allowed work (write one short ask naming the exact action and its cost
+     or recipient in **Needs from you**, with `-Ask blocking`). Only use `proposed` for a plan
+     whose first step is gated. `mark` re-snapshots the journal so the
      task goes quiet until the user replies again.
    - **Keep the session bound while the task is `in-progress`** — that binding *is* the continuity
      that stops tomorrow's run cold-starting. Release it only when the task is finished:
@@ -1297,11 +1312,15 @@ Do **not** rely on `git log --grep "#N"`: a commit subject names the PR, not the
 landed under "(#592)"), so the log returns 0 where `git grep` returns 14. It is assertively wrong
 rather than merely incomplete, which makes it the more dangerous of the two.
 
-### PHASE 2 — Propose plans (for tasks without a current one)
+### PHASE 2 — Classify and dispatch plans (including old proposals)
 
 1. Choose candidate tasks **in the order `scan` returned them** (see "Work the rows in the order
-   `scan` gives you" above). Skip any row with `eligible: false` — that is the Today-before-Deferred
-   gate, and it is computed for you. Do **not** restate the heuristic from the board yourself; the
+   `scan` gives you" above). Skip any row with `eligible: false` **except agent-authored
+   `proposed` rows surfaced with `plan_review_due: true` for read-only plan re-evaluation**.
+   They are dispatchable only through `session -ForDispatch -PlanDispatch` after classification
+   shows an allowed first step; this rechecks the Today gate and any human pause or reply.
+   Never revisit user-paused or snoozed proposals. The Today-before-Deferred
+   gate is computed for you. Do **not** restate the heuristic from the board yourself; the
    scan already joined `section`, `work_priority`, `urgency` and the `## Priorities` list into a
    single `order`, so the board and the worklist cannot drift apart.
 2. **Also collect from Google Tasks (if a Google account is connected).** If `user-settings.md` names a
@@ -1369,13 +1388,17 @@ rather than merely incomplete, which makes it the more dangerous of the two.
      turn, on open work. Pick it up exactly like `reopened`. **Re-`mark`ing will not clear it** — only
      a turn written under his message does (GH issue #501).
    - **`has_agent_block: false`** → no plan yet; propose if it's a board candidate.
-   - **stored status `proposed`, `done`, or `skip` with `reopened: false`** → leave it alone (waiting on
-     the user or settled); don't spam a new plan. ⚠️ **Unless `unanswered_user: true`** — a `done` you
-     declared yourself does not close his task.
+   - **stored status `proposed` with `status_by: agent`, no reply and no pause** → re-evaluate
+     the current plan step by step under the new rule on the next scan, including legacy
+     proposals. If the first remaining step is gated, leave the existing ask alone; otherwise
+     dispatch allowed steps and have the task session write the outcome turn, replacing the
+     obsolete approval ask. No one-off state migration or duplicate turn for an unchanged gated plan.
+   - **stored status `done` or `skip` with `reopened: false`** → leave it alone (settled).
+     ⚠️ **Unless `unanswered_user: true`** — a `done` you declared yourself does not close his task.
    - **stored status `revise`** → (re)propose, overwriting in place + bumping version per "Revise →
      replace".
 4. **Assess current status BEFORE planning (do this for every candidate).** A task may already be
-   handled, partly handled, or obsolete — don't propose work that's already done. Read the evidence:
+   handled, partly handled, or obsolete — don't schedule work that's already done. Read the evidence:
 
    - The user's notes at the **top** of the journal (they may say "done", "bought it", "fixed",
      "decided", or describe an outcome).
@@ -1391,29 +1414,48 @@ rather than merely incomplete, which makes it the more dangerous of the two.
      noting how you determined it's complete ("user note says bought 2026-06-10"). **Do not move the
      row to `planner-completed.md`** — leave it in `planner.md` for the user to complete in the app.
      Surface it under **Already done** in the wrap-up so the user can confirm.
-   - **Partially done / superseded** → propose only the *remaining* work, and say in the plan what's
+   - **Partially done / superseded** → plan only the *remaining* work, and say in the plan what's
      already handled and what you're skipping because of it.
-   - **Genuinely not started** → propose normally.
-   - **Can't tell** → propose a short **first step that verifies status** (and, if needed, set
+   - **Genuinely not started** → plan and classify each step.
+   - **Can't tell** → start with a short **reversible first step that verifies status** (and, if needed, set
      `blocked` with a one-line question instead of guessing).
 
 5. **Gather linked-task context, then plan.** For each task you *do* plan, first pull in its upstream
    context per "Gather linked-task context FIRST" (read the linked journal(s) + their deliverables).
-   Then write a concrete, right-sized plan into the agent block (status `proposed`) that **explicitly
-   builds on those upstream decisions** and adds a one-line **Context:** trace. A good plan:
+   Then write a concrete, right-sized plan that **explicitly builds on those upstream
+   decisions** and adds a one-line **Context:** trace. For each step label it `[reversible]`,
+   `[gate-allowed]` or `[gated]`. For any action kind that the safety floor or standing
+   permission could cover, run `oa-state.ps1 consent -Id <ID> -Action <kind> -Repo <repo>`
+   (omit `-Repo` when irrelevant). Only `consent_ok: true, reason: gate-allowed`
+   qualifies as gate-allowed without fresh approval; `gate-floor-blocks`, unread human
+   input, missing/unknown gate and a non-affirmative verdict never do. A safety-floor
+   block cannot be unlocked by a plain approval reply; explain that constraint instead
+   of promising to proceed on `approve`. A good plan:
 
    - 2–6 concrete steps you can actually execute, not vague intentions.
    - Names the deliverable, the assumptions, and exactly what (if anything) you need from the user.
    - For tasks you can't fully finish autonomously (physical-world, purchases, anything needing the
      user), plan the part you *can* do — research, comparisons, drafts, links, a decision-ready
      recommendation — and call out the human step.
-   - **Code tasks:** find the repo under your repos root (see `user-settings.md`), and do the easily-reversible work *now* as part
-     of the proposal — branch, commit, push, and open a **draft PR** — then link that PR as the
-     deliverable for the user to review. Leave the irreversible finish (**merging**) for the approved
-     EXECUTE run.
+   - **Code tasks:** find the repo under your repos root (see `user-settings.md`), and
+     dispatch the reversible work *now* — branch, commit, push and open a **draft PR** —
+     then link that PR for review. Leave merging gated unless the action-specific consent
+     verdict explicitly allows it.
 
-6. After writing a plan, record it: `oa-state.ps1 mark -Id <ID> -Status proposed -Version <n> -PlanId
-   t<ID>-v<n>`. No checkboxes, no notes field — the user just replies in plain English under your block.
+6. **Act on the classification in this wake.** If the first step is gated, write `proposed`
+   with `-Ask blocking`, one short question for the gated actions naming the exact action
+   and its cost or recipient; record `oa-state.ps1 mark -Id <ID> -Status proposed -Version <n>
+   -PlanId t<ID>-v<n>`. Do not dispatch. Otherwise **do not write a coordinator turn**:
+   hand the classified reversible and gate-allowed steps to the task session via PHASE 1's
+   normal `session -ForDispatch` path **in this wake**, subject to ordering, concurrency
+   and cutoff. Pass `-PlanDispatch` only for an existing agent-authored proposal with
+   `plan_review_due: true` and its exact `dispatch_input`; a fresh eligible task needs no
+   exception. Recheck action-specific consent at execution time. The coordinator never
+   does task work or writes the task's outcome turn (G12 permits one author per wake).
+   The task session executes allowed steps first, then writes one outcome turn: `done`
+   if complete, `in-progress` if more allowed work remains, or `blocked` with `-Ask blocking`
+   and **one** short question if only gated steps remain. Never ask for approval of work
+   already performed or a blanket approval of the plan.
 
 ### PHASE 2.5 — Generate the task papers (after journals, before Telegram)
 
