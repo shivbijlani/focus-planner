@@ -7,7 +7,7 @@
 import { enqueue, peekAll } from './queue.js'
 import { getTokens, clearTokens } from './auth/tokenStore.js'
 import { idbSet, idbGet, idbKeys, idbDel } from './idb.js'
-import { isConsumerVisibleMirrorPath, mtimeKeysForProvider, planMirrorSync } from './reconcile.js'
+import { isConsumerVisibleMirrorPath, syncStateKeysForProvider, planMirrorSync } from './reconcile.js'
 import { diag } from '../../diagnostics/src/index.js'
 
 const CHANNEL = 'folder-sync'
@@ -55,13 +55,14 @@ async function mirrorRead(name) {
   return r && !r.deleted ? r.content : null
 }
 
-// Clear a provider's per-file remote-mtime tracking (keys `mtime:<id>:<name>`).
-// Called on disconnect so a later reconnect re-compares against the remote from
-// scratch instead of trusting stale mtimes left over from the previous session.
+// Clear a provider's sync state: per-file remote mtimes (`mtime:<id>:<name>`),
+// its pending push list and its first-contact seed marker. Called on disconnect
+// so a later reconnect re-compares against the remote from scratch (and re-seeds
+// a full backup) instead of trusting stale state from the previous session.
 async function clearProviderSyncMeta(providerId) {
   try {
     const keys = await idbKeys(META_STORE)
-    for (const k of mtimeKeysForProvider(keys, providerId)) {
+    for (const k of syncStateKeysForProvider(keys, providerId)) {
       await idbDel(META_STORE, k)
     }
   } catch { /* ignore */ }
