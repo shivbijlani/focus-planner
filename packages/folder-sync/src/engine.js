@@ -14,6 +14,17 @@ const CHANNEL = 'folder-sync'
 const META_STORE = 'meta'
 const INTENDED_KEY = 'folder-sync:intended-providers'
 const AUTO_RECONNECT_FLAG = 'folder-sync:auto-reconnected'
+const AUTO_RECONNECT_LOG = 'folder-sync:auto-reconnect-log'
+const AUTO_RECONNECT_WINDOW_MS = 10 * 60_000
+const AUTO_RECONNECT_MAX = 2
+
+export function recentAutoReconnects(providerId, now = Date.now()) {
+  try {
+    const raw = sessionStorage.getItem(`${AUTO_RECONNECT_LOG}:${providerId}`)
+    const list = raw ? JSON.parse(raw) : []
+    return Array.isArray(list) ? list.filter(t => now - t < AUTO_RECONNECT_WINDOW_MS) : []
+  } catch { return [] }
+}
 
 function readIntended() {
   if (typeof localStorage === 'undefined') return new Set()
@@ -54,6 +65,36 @@ async function clearProviderSyncMeta(providerId) {
       await idbDel(META_STORE, k)
     }
   } catch { /* ignore */ }
+}
+
+// Parse an OAuth redirect response from the current URL. Auth-code flows put
+// `code` + `state` in the query string; the token model (Google) puts
+// `access_token` or `error` + `state` in the fragment. Returns a
+// URLSearchParams (with a `fromFragment` flag) or null when there is none.
+export function readAuthResponseParams(location) {
+  if (!location) return null
+  const query = new URLSearchParams(location.search || '')
+  if (query.has('code') && query.has('state')) {
+    query.fromFragment = false
+    return query
+  }
+  const hash = (location.hash || '').replace(/^#/, '')
+  if (!hash) return null
+  const frag = new URLSearchParams(hash)
+  if (frag.has('state') && (frag.has('access_token') || frag.has('error'))) {
+    frag.fromFragment = true
+    return frag
+  }
+  return null
+}
+
+function isEditingText() {
+  if (typeof document === 'undefined') return false
+  const el = document.activeElement
+  if (!el || el === document.body) return false
+  if (el.isContentEditable) return true
+  const tag = (el.tagName || '').toLowerCase()
+  return tag === 'textarea' || tag === 'input' || tag === 'select'
 }
 
 export function createSyncEngine({ localAdapter, providers = [], redirectUri = (typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '') }) {
@@ -219,15 +260,19 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     emit()
   }
 
-  // Handle OAuth redirect: if URL contains code+state and we recognise it, complete auth.
+  // Handle OAuth redirect: if the URL carries an auth response (query-string
+  // `code` for the auth-code flow, or a fragment `access_token`/`error` for the
+  // token model) plus `state`, let the provider that owns the state consume it.
   async function maybeCompleteOAuthRedirect() {
     if (typeof window === 'undefined') return
-    const params = new URLSearchParams(window.location.search)
-    if (!params.has('code') || !params.has('state')) return
+    const params = readAuthResponseParams(window.location)
+    if (!params) return
+    let consumed = false
     for (const p of providers) {
       try {
         const ok = await p.completeAuth(params, redirectUri)
         if (ok) {
+          consumed = true
           window.history.replaceState({}, document.title, window.location.pathname)
           addIntended(p.id)
           // Allow auto-reconnect to fire again on future breakages this session.
@@ -240,25 +285,39 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
         console.error(`[folder-sync] ${p.id} completeAuth failed:`, e)
       }
     }
+    // Never leave an unconsumed auth response (e.g. a failed silent renewal's
+    // `#error=interaction_required`, or a token for a stale state) in the URL.
+    if (!consumed && params.fromFragment) {
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.search)
+    }
   }
 
   // If a provider the user previously connected is reporting it can no
   // longer sync (token expired / refresh revoked / tokens missing), redirect
   // them to sign in on page load. This prevents the user from editing data
   // locally while sync is broken — those edits would later clobber changes
-  // made on another device once sync resumes.
+  // made on another device once sync resumes. Providers that support silent
+  // auth (Google's token model, whose access tokens last about an hour) are
+  // renewed with a no-UI redirect instead, which returns straight back to the
+  // app while the user is still signed in to the IdP.
   //
   // Skipped when:
   //   - offline (can't reach the IdP),
-  //   - returning from an OAuth redirect (URL has code/state),
+  //   - returning from an OAuth redirect (URL has code/state/token),
   //   - the user voluntarily disconnected (provider not in intended set),
   //   - we already auto-redirected this session (avoid loops if the user
-  //     cancels the sign-in screen).
+  //     cancels the sign-in screen or silent renewal needs interaction),
+  //   - it already auto-redirected twice in the last 10 minutes, even if both
+  //     sign-ins "succeeded" (e.g. the IdP issues tokens the API then rejects),
+  //     so a success-then-reject cycle can never become a redirect loop.
+  // Deferred (retried on blur / tab switch) while the user is typing in an
+  // editable field, so a renewal never navigates away mid-edit.
   let autoReconnectAttempted = false
   function maybeAutoReconnect() {
     if (autoReconnectAttempted) return
     if (typeof window === 'undefined' || typeof navigator === 'undefined') return
     if (!navigator.onLine) return
+    if (readAuthResponseParams(window.location)) return
     const params = new URLSearchParams(window.location.search)
     if (params.has('code') || params.has('state') || params.has('error')) return
     const intended = readIntended()
@@ -269,9 +328,16 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
       if (!ps || ps.state !== 'reconnect-required') continue
       const flagKey = `${AUTO_RECONNECT_FLAG}:${p.id}`
       try { if (sessionStorage.getItem(flagKey)) continue } catch { /* ignore */ }
+      const recent = recentAutoReconnects(p.id)
+      if (recent.length >= AUTO_RECONNECT_MAX) continue
+      if (isEditingText()) return
       autoReconnectAttempted = true
-      try { sessionStorage.setItem(flagKey, '1') } catch { /* ignore */ }
-      Promise.resolve(p.startAuth(redirectUri)).catch(err => {
+      try {
+        sessionStorage.setItem(flagKey, '1')
+        sessionStorage.setItem(`${AUTO_RECONNECT_LOG}:${p.id}`, JSON.stringify([...recent, Date.now()]))
+      } catch { /* ignore */ }
+      const opts = p.supportsSilentAuth ? { silent: true } : undefined
+      Promise.resolve(p.startAuth(redirectUri, opts)).catch(err => {
         console.warn('[folder-sync] auto-reconnect failed:', err)
       })
       return
@@ -283,6 +349,10 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     window.addEventListener('online', () => nudgeSW('online'))
     document.addEventListener?.('visibilitychange', () => {
       if (document.visibilityState === 'visible') nudgeSW('visibility')
+      maybeAutoReconnect()
+    })
+    document.addEventListener?.('focusout', () => {
+      setTimeout(maybeAutoReconnect, 0)
     })
   }
 

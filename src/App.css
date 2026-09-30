@@ -4078,6 +4078,12 @@ tr.highlight-flash {
   color: #34d399;
 }
 
+.settings-link-btn {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
 .settings-diagnostics-output {
   width: 100%;
   box-sizing: border-box;

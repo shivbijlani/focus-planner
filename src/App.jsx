@@ -5579,6 +5579,22 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged,
                   />
                 )}
               </div>
+              <div className="settings-update-row settings-diagnostics-row">
+                <div className="settings-update-info">
+                  <span className="settings-update-build">Privacy</span>
+                  <span className="settings-update-hint">
+                    Your data stays in your browser and the storage you connect. No servers, no analytics.
+                  </span>
+                </div>
+                <a
+                  className="storage-footer-btn sync-target-action settings-link-btn"
+                  href={`${import.meta.env.BASE_URL}privacy.html`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Privacy policy
+                </a>
+              </div>
             </div>
 
             {error && <div className="storage-footer-error">⚠️ {error}</div>}

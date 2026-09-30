@@ -21,7 +21,7 @@ The `storage` domain gives the rest of the planner one filesystem-like API while
 | `src/storage/indexeddb-provider.js` | Default local provider. | Replaces the older localStorage store with async, larger-quota IndexedDB. |
 | `src/storage/fsa.js` | File System Access helpers. | Persists a picked directory handle and operates on real local files. |
 | `src/storage/onedrive-provider.js` | OneDrive App Folder provider. | Uses Microsoft Graph + PKCE with sandboxed scope. |
-| `src/storage/google-drive-provider.js` | Google Drive provider. | Uses Drive API v3 + PKCE under a named root folder. |
+| `src/storage/google-drive-provider.js` | Google Drive provider (legacy source). | Uses Drive API v3 under a named root folder, with the OAuth 2.0 token model (no client secret): about 1-hour access tokens from the redirect fragment, and one silent `prompt=none` renewal per tab session. The shipped Backups path is the folder-sync `googleDrive.js` provider (appDataFolder). |
 | `src/storage/diagnostics.js` | Storage/sync diagnostics snapshot. | Produces a safe report for debugging missing journals, quota, and stale sync. |
 | `src/storage/taskSettings.js` | Per-task JSON sidecar. | Stores planner-owned AI toggles separately from human journal prose. |
 

@@ -66,9 +66,9 @@ export function StoragePicker({ onReady }) {
   useEffect(() => {
     const savedId = localStorage.getItem('fp-storage-provider')
     const hasODCode = new URLSearchParams(window.location.search).get('code') && sessionStorage.getItem('onedrive_verifier')
-    const hasGDCode = new URLSearchParams(window.location.search).get('code') && sessionStorage.getItem('gd_verifier')
+    const hasGDToken = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('state') && sessionStorage.getItem('gd_state')
 
-    const targetId = hasODCode ? PROVIDERS.ONEDRIVE : hasGDCode ? PROVIDERS.GOOGLE_DRIVE : savedId
+    const targetId = hasODCode ? PROVIDERS.ONEDRIVE : hasGDToken ? PROVIDERS.GOOGLE_DRIVE : savedId
     if (targetId) {
       setTimeout(() => tryConnect(targetId, true), 0)
     }
