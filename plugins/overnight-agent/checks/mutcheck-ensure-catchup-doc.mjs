@@ -10,9 +10,8 @@
 // The mutation direction is "unleash or silence": switch a gate off and the decision for a
 // fixture must change. Each gate below is switched off in turn, and the check must then fail.
 //
-// The whole check runs on `--dry-run`, so it performs no document creation and needs neither the
-// capability probe nor PowerShell. That is what lets it run on the Linux CI runner, and it is why
-// the decision in ensure-catchup-doc.mjs is a pure function with the effects on the other side.
+// The gate checks run on `--dry-run`; recovery checks inject synthetic create/bind effects.
+// Neither calls Google or PowerShell, so both can run on the Linux CI runner.
 //
 //   node mutcheck-ensure-catchup-doc.mjs
 //   OA_ENSURE=<abs path> node mutcheck-ensure-catchup-doc.mjs
@@ -21,6 +20,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import assert from 'node:assert/strict';
 
 const CHECKS = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 
@@ -153,8 +154,8 @@ const MUTATIONS = [
   },
   {
     name: 'gate LIMIT removed',
-    find: '  if (created >= LIMIT) {',
-    repl: '  if (false) {',
+    find: "    else if (created >= LIMIT) capped.push(row.id);",
+    repl: "    else if (false) capped.push(row.id);",
     expect: (r) => {
       const l = run(mutPathRef.current, '2');
       return l.counts && l.counts.created > 2;
@@ -205,6 +206,211 @@ console.log('\nWIRING');
     suiteNames ? `suite = ${suiteNames.join(', ')}` : 'could not parse $Suite in run-sweeps.ps1',
   );
 }
+
+// These exercise the real create/receipt/bind sequence with filesystem state, not just decide().
+console.log('\nRECOVERY EFFECTS (#763)');
+const { ensureBinding, parseCreatedDoc } = await import(pathToFileURL(ENSURE).href);
+let caseNumber = 0;
+const effectCase = (name, runCase) => {
+  const dir = path.join(root, `effects-${++caseNumber}`);
+  fs.mkdirSync(dir);
+  const statePath = path.join(dir, 'state.json');
+  const id = '900001';
+  const docId = 'synthetic_document_000000000000000000000000000001';
+  const otherId = 'synthetic_document_000000000000000000000000000002';
+  const readState = () => JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  const setState = (st) => fs.writeFileSync(statePath, JSON.stringify(st));
+  setState({ id, status: 'in-progress' });
+  let creates = 0;
+  let binds = 0;
+  const receiptDir = path.join(dir, 'receipts');
+  const receiptPath = path.join(receiptDir, `task-${id}.json`);
+  const readReceipt = () => JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+  const opts = {
+    id, planner: dir, receiptDir, readState,
+    create: () => { creates++; return docId; },
+    bind: (value) => {
+      binds++;
+      assert.equal(readReceipt().docId, value, 'confirmed ID persisted before bind');
+      setState({ ...readState(), doc: { doc_id: value } });
+    },
+  };
+  try {
+    runCase({
+      opts, dir, id, docId, otherId, readState, setState, receiptPath, readReceipt,
+      counts: () => ({ creates, binds }),
+    });
+    check(name, true);
+  } catch (error) {
+    check(name, false, error.stack);
+  }
+};
+
+effectCase('two failed binds and a successful retry create exactly one doc', (f) => {
+  for (let i = 0; i < 2; i++) {
+    assert.throws(() => ensureBinding({ ...f.opts, bind: () => { throw new Error('bind failed'); } }), /bind failed/);
+    assert.equal(f.readReceipt().docId, f.docId);
+  }
+  assert.equal(ensureBinding(f.opts).created, false);
+  assert.equal(f.readState().doc.doc_id, f.docId);
+  assert.equal(ensureBinding(f.opts).action, 'CONTINUE');
+  assert.deepEqual(f.counts(), { creates: 1, binds: 1 });
+});
+
+effectCase('only successful MCP content can confirm the created document', (f) => {
+  const content = [{ type: 'text', text: `Created https://docs.google.com/document/d/${f.docId}/edit` }];
+  assert.equal(parseCreatedDoc(JSON.stringify({ content })), f.docId);
+  assert.throws(() => parseCreatedDoc(JSON.stringify({ error: { message: content[0].text } })), /uncertain/);
+  assert.throws(() => parseCreatedDoc(JSON.stringify({ isError: true, content })), /uncertain/);
+  assert.throws(() => parseCreatedDoc('{}'), /no confirmed document ID/);
+  assert.throws(() => parseCreatedDoc('not JSON'));
+});
+
+effectCase('process interruption after confirmed receipt recovers without create', (f) => {
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { ensureBinding } from ${JSON.stringify(pathToFileURL(ENSURE).href)};
+    ensureBinding({
+      id: ${JSON.stringify(f.id)}, planner: ${JSON.stringify(f.dir)},
+      receiptDir: ${JSON.stringify(f.opts.receiptDir)},
+      readState: () => ({status: 'in-progress'}),
+      create: () => ${JSON.stringify(f.docId)},
+      bind: () => process.exit(23)
+    });
+  `], { encoding: 'utf8' });
+  assert.equal(child.status, 23, child.stderr);
+  assert.equal(f.readReceipt().status, 'created');
+  assert.equal(ensureBinding(f.opts).created, false);
+  assert.deepEqual(f.counts(), { creates: 0, binds: 1 });
+});
+
+effectCase('ambiguous create persists intent and never retries creation', (f) => {
+  let calls = 0;
+  const opts = { ...f.opts, create: () => { calls++; throw new Error('response lost'); } };
+  assert.throws(() => ensureBinding(opts), /response lost.*uncertain/);
+  assert.throws(() => ensureBinding(opts), /uncertain/);
+  assert.equal(calls, 1);
+  assert.equal(f.readReceipt().status, 'creating');
+});
+
+effectCase('interruption during creation leaves a non-retryable intent', (f) => {
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { ensureBinding } from ${JSON.stringify(pathToFileURL(ENSURE).href)};
+    ensureBinding({
+      id: ${JSON.stringify(f.id)}, planner: ${JSON.stringify(f.dir)},
+      receiptDir: ${JSON.stringify(f.opts.receiptDir)},
+      readState: () => ({status: 'in-progress'}),
+      create: () => process.exit(24),
+      bind: () => { throw new Error('must not bind'); }
+    });
+  `], { encoding: 'utf8' });
+  assert.equal(child.status, 24, child.stderr);
+  assert.throws(() => ensureBinding(f.opts), /uncertain/);
+  assert.deepEqual(f.counts(), { creates: 0, binds: 0 });
+});
+
+effectCase('another creator cannot send while the first create is in flight', (f) => {
+  ensureBinding({
+    ...f.opts,
+    create: () => {
+      assert.throws(() => ensureBinding(f.opts), /uncertain/);
+      return f.opts.create();
+    },
+  });
+  assert.deepEqual(f.counts(), { creates: 1, binds: 1 });
+});
+
+effectCase('binding established during creation is never overwritten', (f) => {
+  assert.throws(() => ensureBinding({
+    ...f.opts,
+    create: () => {
+      f.setState({ status: 'in-progress', doc: { doc_id: f.otherId } });
+      return f.opts.create();
+    },
+  }), /Binding conflict/);
+  assert.equal(f.readState().doc.doc_id, f.otherId);
+  assert.equal(f.readReceipt().docId, f.docId);
+  assert.throws(() => ensureBinding(f.opts), /Binding conflict/);
+  assert.deepEqual(f.counts(), { creates: 1, binds: 0 });
+});
+
+effectCase('bind returning success without persisted binding fails visibly', (f) => {
+  assert.throws(() => ensureBinding({ ...f.opts, bind: () => {} }), /not verified/);
+  assert.equal(ensureBinding(f.opts).created, false);
+  assert.deepEqual(f.counts(), { creates: 1, binds: 1 });
+});
+
+effectCase('closed, missing-state and already-bound tasks retain their protections', (f) => {
+  for (const st of [null, { status: 'done' }, { status: 'skip' }]) {
+    f.setState(st);
+    assert.equal(ensureBinding(f.opts).action, 'SKIP');
+  }
+  f.setState({ status: 'in-progress', doc: { doc_id: f.docId } });
+  assert.equal(ensureBinding(f.opts).action, 'CONTINUE');
+  assert.equal(fs.existsSync(f.receiptPath), false);
+  assert.deepEqual(f.counts(), { creates: 0, binds: 0 });
+});
+
+effectCase('a task closed while creating is not bound and retains recovery evidence', (f) => {
+  const result = ensureBinding({
+    ...f.opts,
+    create: () => { f.setState({ status: 'done' }); return f.opts.create(); },
+  });
+  assert.equal(result.action, 'SKIP');
+  assert.equal(f.readReceipt().docId, f.docId);
+  assert.deepEqual(f.counts(), { creates: 1, binds: 0 });
+});
+
+effectCase('creation cap does not block recovery of an already-created document', (f) => {
+  assert.equal(ensureBinding({ ...f.opts, allowCreate: () => false }).action, 'DEFER');
+  assert.equal(fs.existsSync(f.receiptPath), false);
+  assert.throws(() => ensureBinding({ ...f.opts, bind: () => { throw new Error('bind failed'); } }), /bind failed/);
+  assert.equal(ensureBinding({ ...f.opts, allowCreate: () => false }).created, false);
+  assert.deepEqual(f.counts(), { creates: 1, binds: 1 });
+});
+
+effectCase('failed binds consume the creation cap but not the recovery allowance', (f) => {
+  let attempts = 0;
+  const opts = {
+    ...f.opts, allowCreate: () => attempts < 1, onAttempt: () => { attempts++; },
+    bind: () => { throw new Error('bind failed'); },
+  };
+  assert.throws(() => ensureBinding(opts), /bind failed/);
+  assert.equal(ensureBinding({ ...opts, id: '900002' }).action, 'DEFER');
+  assert.equal(ensureBinding({ ...opts, bind: f.opts.bind }).created, false);
+  assert.equal(attempts, 1);
+  assert.deepEqual(f.counts(), { creates: 1, binds: 1 });
+});
+
+effectCase('confirmed-receipt write failure reports the ID without creating again', (f) => {
+  const pending = `${f.receiptPath}.${process.pid}.confirmed`;
+  assert.throws(() => ensureBinding({
+    ...f.opts,
+    create: () => {
+      fs.mkdirSync(pending);
+      return f.opts.create();
+    },
+  }), new RegExp(`Created ${f.docId}, but receipt confirmation failed`));
+  assert.equal(f.readReceipt().status, 'creating');
+  assert.throws(() => ensureBinding(f.opts), /uncertain/);
+  assert.deepEqual(f.counts(), { creates: 1, binds: 0 });
+});
+
+effectCase('corrupt and wrong-planner receipts fail closed without creating', (f) => {
+  fs.mkdirSync(f.opts.receiptDir);
+  fs.writeFileSync(f.receiptPath, '{');
+  assert.throws(() => ensureBinding(f.opts), /Cannot read creation receipt/);
+  fs.writeFileSync(f.receiptPath, JSON.stringify({
+    version: 1, taskId: f.id, planner: 'different-root', status: 'created', docId: f.docId,
+  }));
+  assert.throws(() => ensureBinding(f.opts), /Invalid creation receipt/);
+  assert.deepEqual(f.counts(), { creates: 0, binds: 0 });
+});
+
+effectCase('receipt persistence failure prevents external creation', (f) => {
+  fs.writeFileSync(f.opts.receiptDir, 'not a directory');
+  assert.throws(() => ensureBinding(f.opts));
+  assert.deepEqual(f.counts(), { creates: 0, binds: 0 });
+});
 
 console.log(`\n${pass} passed, ${fail} failed`);
 try {
