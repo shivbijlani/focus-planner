@@ -43,6 +43,7 @@
 param([string]$Target)
 
 $ErrorActionPreference = 'Stop'
+$psExe = (Get-Process -Id $PID).Path
 
 # Resolve write-turn.ps1 by SEARCH and PRINT what was measured (#251): a guard that is
 # absent and a guard that is passing look identical from the outside.
@@ -141,7 +142,41 @@ foreach ($nl in @("`n", "`r`n")) {
   $r3 = Test-Scenario $writeTurn $nl $true
   Assert ($r3.Count -eq 1)  "[$label] existing sentinel is preserved, not duplicated (got $($r3.Count))"
   Assert ($r3.Preserved)    "[$label] append-only holds on an already-blocked journal"
+
+  $r4 = Test-Scenario $writeTurn $nl $true -Twice
+  Assert ($r4.Count -eq 1)  "[$label] repeated writes to a marked journal keep exactly one sentinel (got $($r4.Count))"
 }
+
+# A task body cannot supply its own structural marker, and an already-duplicated journal is
+# refused rather than being made harder to repair by appending another turn.
+$bodyWithSentinel = $body + "`n$SENTINEL; the agent manages everything below it -->"
+[IO.File]::WriteAllText($bodyFile, $bodyWithSentinel, (New-Object Text.UTF8Encoding($false)))
+$bodyDir = Join-Path $tmp ([guid]::NewGuid().ToString('N').Substring(0, 6))
+New-Item -ItemType Directory -Path $bodyDir -Force | Out-Null
+$bodyBefore = New-Journal $bodyDir '999' "`n" $false
+$bodyExit = Invoke-WriteTurn $writeTurn $bodyDir '999'
+$bodyAfter = [IO.File]::ReadAllText((Join-Path $bodyDir 'task-999.md'), (New-Object Text.UTF8Encoding($false)))
+Assert ($bodyExit -ne 0 -and $bodyAfter -ceq $bodyBefore) 'a turn body containing a sentinel is refused without writing'
+
+[IO.File]::WriteAllText($bodyFile, $body, (New-Object Text.UTF8Encoding($false)))
+$duplicateDir = Join-Path $tmp ([guid]::NewGuid().ToString('N').Substring(0, 6))
+New-Item -ItemType Directory -Path $duplicateDir -Force | Out-Null
+$duplicateBefore = New-Journal $duplicateDir '999' "`n" $true
+$duplicateBefore += "`n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->`n"
+[IO.File]::WriteAllText((Join-Path $duplicateDir 'task-999.md'), $duplicateBefore, (New-Object Text.UTF8Encoding($false)))
+$duplicateExit = Invoke-WriteTurn $writeTurn $duplicateDir '999'
+$duplicateAfter = [IO.File]::ReadAllText((Join-Path $duplicateDir 'task-999.md'), (New-Object Text.UTF8Encoding($false)))
+Assert ($duplicateExit -ne 0 -and $duplicateAfter -ceq $duplicateBefore) 'a journal with duplicate sentinels is refused without another append'
+
+$bodyWithSentinel = $body + "`n$SENTINEL; the agent manages everything below it -->"
+[IO.File]::WriteAllText($bodyFile, $bodyWithSentinel, (New-Object Text.UTF8Encoding($false)))
+$guarded = & $psExe -NoProfile -ExecutionPolicy Bypass -File $writeTurn `
+  -BodyFile $bodyFile -Ask none -Validate -Json | ConvertFrom-Json
+Assert (@($guarded.findings | Where-Object { $_.guard -eq 'G20' }).Count -eq 1) 'G20 refuses a turn body that tries to write its own sentinel'
+$unguarded = & $psExe -NoProfile -ExecutionPolicy Bypass -File $writeTurn `
+  -BodyFile $bodyFile -Ask none -Validate -Json -DisableGuard G20 | ConvertFrom-Json
+Assert (@($unguarded.findings | Where-Object { $_.guard -eq 'G20' }).Count -eq 0) 'disabling G20 exposes the duplicate-sentinel body'
+[IO.File]::WriteAllText($bodyFile, $body, (New-Object Text.UTF8Encoding($false)))
 
 # ---------------------------------------------------------------- mutation
 # Disable ONLY the insertion, by making the "is it missing?" test always answer "no".

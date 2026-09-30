@@ -247,6 +247,19 @@ Some preamble the turn opens with.
 Body text.
 '@ }
 
+  # G20 -- the journal sentinel belongs to write-turn.ps1, not the appended body.
+  @{ name = 'g20-body-sentinel'; expect = @('G20'); nl = 'LF'; body = @'
+## MOON Overnight Agent -- 2026-09-29 reply
+
+<!-- from: overnight-agent -->
+
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+**Status:** In-progress · 2026-09-29
+
+**Needs from you:** nothing.
+'@ }
+
   # G7 -- a moon-anchored turn with NO provenance stamp under it. This is the shape that
   # broke the CONSENT gate (#272): with no marker of its own, the turn is inherited by
   # whoever spoke last, so on a journal where the user replied above it the agent's own
@@ -342,7 +355,7 @@ if ($failures.Count -gt 0) {
 # --- 2. mutation: disabling guard G must change EXACTLY G's own fixtures -------------
 Write-Host ''
 Write-Host '--- mutation (disable one guard at a time) ---'
-foreach ($g in @('G1', 'G2', 'G3', 'G4', 'G5', 'G7')) {
+foreach ($g in @('G1', 'G2', 'G3', 'G4', 'G5', 'G7', 'G20')) {
   $ownFixtures = @($fixtures | Where-Object { $_.expect -contains $g })
   if ($ownFixtures.Count -eq 0) { $failures += "no fixture exercises $g"; continue }
 

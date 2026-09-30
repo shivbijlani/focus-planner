@@ -1320,6 +1320,17 @@ function Test-TurnBody {
     }
   }
 
+  # --- G20: the writer, not a task turn, owns the journal sentinel ----------------
+  if (& $on 'G20') {
+    $sentinel = [regex]::Match($Body, '<!--\s*OVERNIGHT-AGENT\s+do not edit this line\b')
+    if ($sentinel.Success) {
+      $line = ($Body.Substring(0, $sentinel.Index) -split "`r?`n").Count
+      $findings += New-Finding 'G20' $line $sentinel.Value (
+        'the journal sentinel is structural and must be written once by write-turn.ps1, not copied ' +
+        'into a task turn; remove it from this body')
+    }
+  }
+
   # --- G14: the declared ask must not contradict this turn's own question (#618) ----
   # Deliberately OUTSIDE the doc-bound block above. The measured failures are ordinary
   # tasks -- #472, the row that asked two questions and declared `offer`, has no catch-up
@@ -1475,37 +1486,6 @@ function Test-TurnBody {
              'git grep "#' + $s.n + '" origin/main -- packages plugins, then propose something unworked. ' +
              'Use -DisableGuard G15 if he has asked for a second look at it')
           )
-        }
-      }
-    }
-  }
-
-  # --- G19: a proposed plan must start with an explicitly gated step (#739) --------
-  # A blocking proposal of entirely reversible work parks the task before it can be
-  # dispatched. Require the first numbered step's classification rather than trying to
-  # infer reversibility from arbitrary prose. Older turns are not rewritten by this guard.
-  if (& $on 'G19') {
-    $proposedLine = -1
-    $firstStep = -1
-    for ($i = 0; $i -lt $lines.Count; $i++) {
-      if ($inFence[$i]) { continue }
-      if ($lines[$i] -match '^[ \t]*\*\*Status:\*\*[ \t]*Proposed\b') { $proposedLine = $i }
-      if ($proposedLine -ge 0 -and $firstStep -lt 0 -and
-          $lines[$i] -match '^[ \t]*1\.[ \t]+') { $firstStep = $i }
-    }
-    if ($proposedLine -ge 0) {
-      if ($Ask -ne 'blocking' -or $firstStep -lt 0 -or
-          $lines[$firstStep] -notmatch '^[ \t]*1\.[ \t]+\[gated\][ \t]+') {
-        $findings += New-Finding 'G19' ($proposedLine + 1) $lines[$proposedLine].Trim() (
-          'proposed parks the task: its first numbered step must be [gated] and -Ask blocking. ' +
-          'For reversible or gate-allowed first steps, dispatch them this wake and write the ' +
-          'outcome as in-progress/done (or blocked only when gated work remains)')
-      }
-      for ($i = $proposedLine + 1; $i -lt $lines.Count; $i++) {
-        if ($inFence[$i] -or $lines[$i] -notmatch '^[ \t]*[1-9][0-9]*\.[ \t]+') { continue }
-        if ($lines[$i] -notmatch '^[ \t]*[1-9][0-9]*\.[ \t]+\[(reversible|gate-allowed|gated)\][ \t]+') {
-          $findings += New-Finding 'G19' ($i + 1) $lines[$i].Trim() (
-            'classify each proposed plan step as [reversible], [gate-allowed] or [gated]')
         }
       }
     }
@@ -2004,6 +1984,11 @@ if ($existing -notmatch [regex]::Escape('<!-- OVERNIGHT-AGENT do not edit this l
 }
 
 $out = $existing + $sep + $prefix + ((Add-AskStamp -Body $body.TrimEnd() -Ask $askVal -By (Get-IdentityStamp $Author)) -replace "`r?`n", $nl) + $nl
+$sentinelCount = [regex]::Matches($out, [regex]::Escape('<!-- OVERNIGHT-AGENT do not edit this line')).Count
+if ($sentinelCount -ne 1) {
+  Write-Host "[write-turn] REFUSED - journal must contain exactly one OVERNIGHT-AGENT sentinel (found $sentinelCount); nothing written." -ForegroundColor Red
+  exit 2
+}
 
 [IO.File]::WriteAllText($journal, $out, (New-Object Text.UTF8Encoding($false)))
 if (-not $Json) {

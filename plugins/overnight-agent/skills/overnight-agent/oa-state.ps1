@@ -107,8 +107,6 @@
           [-CheckDispatch]      Check eligibility and pauses without recording a wake.
           [-ForDispatch]        Recheck eligibility and stamp the wake immediately before the
                                 coordinator sends its start/continue instruction.
-          [-PlanDispatch]       With -ForDispatch, admit a review-due agent proposal only;
-                                still checks the Today gate, pause and exact input hash.
           [-DispatchInput hash] Required with -ForDispatch; exact scan fingerprint, refusing stale input.
           [-SessionRelease]     Retire the binding (task finished, workspace torn down). Prints
                                 the teardown command; never runs it.
@@ -649,9 +647,6 @@ param(
   # Inspection is read-only; -ForDispatch is the only dispatch-authorising wake stamp.
   [switch]$CheckDispatch,
   [switch]$ForDispatch,
-  # An agent-authored legacy proposal can be sent for classified, non-gated work without
-  # fabricating a human approval or writing a second turn in the same wake.
-  [switch]$PlanDispatch,
   [string]$DispatchInput,
   # JSON response from the native get_sessions_status tool, saved by the coordinator.
   [string]$SessionsStatusFile,
@@ -1999,9 +1994,9 @@ function Test-IsRunLogBodyOnly([string]$region) {
 
 # --- Awaiting the user's reply: the selection gate's missing waiting state --------------
 # `Test-Workable` excludes `done`/`skip`/`proposed`/`blocked` because they are terminal or
-# waiting on the user. `in-progress` has a case that model misses: a run that finishes a step
-# and hands back an open question leaves the task `in-progress`, yet it is now waiting on the
-# user exactly as much as a `proposed` one is.
+# waiting on the user. Agent-authored legacy `proposed` is the exception: it is sent through
+# ordinary dispatch below. `in-progress` can also be waiting when a run finishes a step and
+# leaves an open question.
 #
 # That gap is load-bearing because of the OTHER rule the run obeys -- user-settings.md's "do
 # NOT stack a new turn on an unanswered one", which says an unanswered agent turn must be
@@ -3257,9 +3252,9 @@ function Get-PriorityRank($wp) {
 # waiting-on-the-user states are NOT workable -- that is what lets Today drain so Deferred can
 # open up (#223 rule 1). Snoozed is handled by the caller, which outranks everything.
 #
-# `awaiting_reply` is the fourth waiting state, and it is a STATE, not a status: an `in-progress`
+# `awaiting_reply` is a waiting state, and it is a STATE, not a status: an `in-progress`
 # task whose newest agent turn still asks the user something is waiting on them just as much as a
-# `proposed` one, and the run is required to replace rather than append to that turn. Leaving it
+# `blocked` one, and the run is required to replace rather than append to that turn. Leaving it
 # out of this list let a single unanswered Today row hold the whole Deferred backlog shut.
 $script:NonWorkableStatus = @('done', 'skip', 'proposed', 'blocked')
 
@@ -3268,16 +3263,16 @@ $script:NonWorkableStatus = @('done', 'skip', 'proposed', 'blocked')
 # acts, and only the first one was ever asked for. Shiv, on task #400: "I don't think we need to
 # handle the case where a reply on a closed task is considered [a reopen]".
 #
-# `proposed`/`blocked` are deliberately NOT here. Those are waiting-on-the-user states, so a reply
-# is exactly the input they are waiting for and must reopen them normally. Only work the user has
-# CLOSED is protected from being reanimated by a passing remark.
+# `proposed`/`blocked` are deliberately NOT here. User-authored instances are waiting-on-the-user
+# states, so a reply is exactly the input they are waiting for and must reopen them normally. Only
+# work the user has CLOSED is protected from being reanimated by a passing remark.
 $script:ClosedStatus = @('done', 'skip')
 
 # GH #540. The statuses that mean "waiting on the user", as opposed to "finished". Exactly
 # `$script:NonWorkableStatus` minus `$script:ClosedStatus`, and written that way rather than as a
 # third hand-maintained list so a status added to one of those cannot silently fall out of this
 # one. `Test-UserPaused` pairs it with `status_by: user` -- the status alone is not a pause,
-# because the agent proposing a plan is also `proposed`.
+# because the agent's legacy plan-review status is also `proposed`.
 $script:PausedStatus = @($script:NonWorkableStatus | Where-Object { $script:ClosedStatus -notcontains $_ })
 
 # GH #593. How long a `doc -Observe` stays evidence that a channel is quiet.
@@ -3545,6 +3540,11 @@ function Test-Workable($row) {
   # Without this the row is offered only on the single run the journal changed. #245 proves that
   # window can be 62 seconds wide and can close before any run sees it.
   if (Test-UnansweredUser $row) { return $true }
+  # Agent-authored `proposed` is a retired plan-review state, not a reason to wait for approval.
+  # Keep user-authored pauses below as non-workable; legacy agent proposals re-enter the ordinary
+  # dispatch path and the task session applies action-level consent.
+  if ("$($row.status)".ToLowerInvariant() -eq 'proposed' -and
+      "$($row.status_by)".ToLowerInvariant() -eq 'agent') { return $true }
   # A DUE timer outranks the awaiting-reply park. A poll/recheck is read-only agent work that
   # needs no reply, so parking it on "the user has not answered" would silently stop exactly the
   # recurring duty polling exists to protect -- SKILL.md's "a purely time-based job would be
@@ -3603,7 +3603,7 @@ function Test-Workable($row) {
 # than a side effect of writing. A Today row stops being exclusive when, and only when:
 #
 #   not_workable         it is terminal (`done`/`skip`) or genuinely waiting on the user
-#                        (`proposed`, `blocked`, `awaiting_reply`, snoozed). Unchanged.
+#                        (`blocked`, user-paused `proposed`, `awaiting_reply`, snoozed). Unchanged.
 #   declared_exhausted   the run has affirmatively declared -- in its own separate call, naming
 #                        what it examined -- that this row has nothing workable left THIS RUN,
 #                        and that declaration is still standing (see Test-ExhaustionClaim).
@@ -4111,7 +4111,7 @@ function Get-ScanRows {
         # them with an empty `last_turn_at`, several with no dated human block at all. The
         # flag is a RECENCY claim, so without a turn to be newer than there is nothing to
         # claim, and the row is left to the readers that already handle it: a task whose agent
-        # never wrote a turn has no agent block and is proposable anyway.
+        # never wrote a turn has no agent block and is eligible for ordinary dispatch.
         if ($turnDay -and $facts.NewestHumanAbove -gt $turnDay) {
           $reopened = $true
           $aboveSentinelReply = $true
@@ -4120,7 +4120,7 @@ function Get-ScanRows {
     }
     else {
       # No memory yet: a task is "reopened/active" only if the user has left prose below the
-      # agent's last block; otherwise it's genuinely new (no agent block) -> propose.
+      # agent's last block; otherwise it's genuinely new (no agent block) -> ordinary dispatch.
       $changed = $true
       $reopened = $facts.HasTrailingUser
       $status = if ($facts.HasAgentBlock) { 'unknown' } else { 'none' }
@@ -4191,7 +4191,7 @@ function Get-ScanRows {
       consent_ok    = [bool]$facts.Consent.consent_ok
       consent_reason = "$($facts.Consent.reason)"
       # The agent spoke last and its newest turn still carries an open ask, so this task is
-      # waiting on the user -- the same state `proposed` encodes, reached from `in-progress`.
+      # waiting on the user -- the same state `blocked` encodes, reached from `in-progress`.
       # `reopened` outranks it (Test-Workable checks that first), so a reply un-parks it at once.
       has_open_ask   = [bool]$facts.HasOpenAsk
       # #170 cause 3: a reply that landed on a task the user had CLOSED. It is deliberately not
@@ -4302,7 +4302,7 @@ function Get-ScanRows {
   #
   # This loop is journal-driven: it enumerates `task-*.md` and joins board data onto what it
   # finds. A row that is ON THE BOARD but has no journal yet produces no row at all, so it is
-  # invisible to every phase -- it cannot be ordered, gated, proposed for, or counted.
+  # invisible to every phase -- it cannot be ordered, gated, dispatched, or counted.
   #
   # Measured live 2026-09-05: `## Today` row 1 (`473`, added that day) was absent from all 248
   # scan rows. Nothing reported it. There is no error and no `eligible: false`; the id simply
@@ -4462,13 +4462,6 @@ function Get-ScanRows {
     $v = $verdicts["$($r.id)"]
     Add-Member -InputObject $r -NotePropertyName 'order' -NotePropertyValue $order -Force
     Add-Member -InputObject $r -NotePropertyName 'eligible' -NotePropertyValue $eligible -Force
-    # Review is not dispatch authority. Preserve the Today gate and human pause even for
-    # legacy proposals; a caller must opt into -PlanDispatch with this exact scan input.
-    $planReview = [bool]($r.status -eq 'proposed' -and $r.status_by -eq 'agent' -and
-      $r.on_board -and -not $r.snoozed -and -not $r.session_paused -and
-      -not $r.reopened -and -not $r.unanswered_user -and
-      ($r.section -eq 'today' -or $todayHolding -eq 0) -and -not (& $notHere $r))
-    Add-Member -InputObject $r -NotePropertyName 'plan_review_due' -NotePropertyValue $planReview -Force
     # Auditable: which Today rows are actually holding the backlog shut this run (#223 is
     # explicit that selection must be data, not the agent's judgement).
     Add-Member -InputObject $r -NotePropertyName 'holds_today_gate' `
@@ -4555,7 +4548,7 @@ $script:CompactFields = @(
   'session_activity', 'dispatch_skip_reason',
   'session_process_dead', 'replacements_24h',
   'session_workspace_missing',
-  'plan_review_due', 'dispatch_input', 'no_journal_reason',
+  'dispatch_input', 'no_journal_reason',
   'lane', 'lane_source', 'lane_from', 'lane_problem', 'lane_candidates', 'lane_served_here'
 )
 
@@ -4581,7 +4574,6 @@ function Test-CompactRowNeeded($r) {
   if ($r.PSObject.Properties['lane_served_here'] -and -not $r.lane_served_here) { return $false }
   if ($r.eligible) { return $true }
   if ($r.dispatch_skip_reason) { return $true }
-  if ($r.plan_review_due) { return $true }
   if ($r.holds_today_gate) { return $true }
   if ($r.reopened_closed) { return $true }
   if ($r.unanswered_user) { return $true }
@@ -6343,11 +6335,8 @@ function Assert-TaskDispatch($st, $sess, $facts) {
   if ($row.dispatch_skip_reason) {
     throw "$($row.dispatch_skip_reason): bound session $($sess.session_id) cannot be dispatched"
   }
-  if (-not $row -or (-not $row.eligible -and -not ($PlanDispatch -and $row.plan_review_due)) -or $row.session_paused) {
+  if (-not $row -or -not $row.eligible -or $row.session_paused) {
     throw 'session_not_eligible: follow the current Today-first worklist and user pauses'
-  }
-  if ($PlanDispatch -and -not $row.plan_review_due) {
-    throw 'session_plan_not_reviewable: -PlanDispatch only applies to an agent-authored proposal'
   }
   if ($DispatchInput -and $DispatchInput -ne $row.dispatch_input) {
     throw 'session_input_changed: the prepared task brief is stale'
@@ -6465,9 +6454,6 @@ function Cmd-Session {
   $agentModel = Get-AgentModelSettings
   if ($ForDispatch -and -not $SessionsStatusFile) {
     throw 'session_status_required: -ForDispatch requires a fresh get_sessions_status snapshot'
-  }
-  if ($PlanDispatch -and (-not $ForDispatch -or $Force)) {
-    throw 'session_plan_dispatch_flags: -PlanDispatch requires -ForDispatch and cannot use -Force'
   }
   if (($CheckDispatch -or $ForDispatch) -and (-not $Id -or
       ($CheckDispatch -and $ForDispatch) -or $SessionId -or $SessionDead -or $SessionRelease -or $WorkspaceGone)) {

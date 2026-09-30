@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const skillPath = join(resolve(here, '..'), 'skills', 'overnight-agent', 'SKILL.md');
 const source = readFileSync(skillPath, 'utf8').replace(/\r\n/g, '\n');
-const start = source.indexOf("### PHASE 1 — Dispatch approved plans to each task's own session");
+const start = source.indexOf('### PHASE 1 — Dispatch each task to its own session in autopilot');
 const end = source.indexOf('\n### PHASE 2', start);
 
 function failures(text) {
