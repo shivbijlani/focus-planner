@@ -484,7 +484,16 @@ export class GoogleDriveProvider {
 }
 
 function _redirectUri() {
-  return `${window.location.origin}${window.location.pathname}`
+  // Canonical origin, no trailing slash. Google enforces an EXACT string match
+  // between the redirect_uri sent here and the Authorized redirect URIs
+  // registered on the OAuth client, so this exact value must be registered in
+  // the Google Cloud Console:
+  //   APIs & Services > Credentials > OAuth 2.0 Client IDs >
+  //   1019840819252-jcrbpshgai7ror14pmimsv413qcuce17 > Authorized redirect URIs
+  // Add: https://plannermd.com
+  // (Previously this sent origin+pathname, e.g. https://plannermd.com/, which
+  // Google rejected with Error 400: redirect_uri_mismatch.)
+  return window.location.origin
 }
 
 function _basename(path) {
