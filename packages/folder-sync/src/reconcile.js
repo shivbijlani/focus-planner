@@ -267,3 +267,54 @@ export function mtimeKeysForProvider(keys, providerId) {
   }
   return out
 }
+
+// Per-provider sync bookkeeping in the 'meta' store: the names a provider still
+// has to push, and whether its first-contact seed has been planned.
+export const pendingKey = (providerId) => `pending:${providerId}`
+export const seededKey = (providerId) => `seeded:${providerId}`
+
+// All per-provider sync-state keys (tracked remote mtimes, pending pushes, seed
+// marker). Cleared on disconnect so a reconnect starts from a clean slate.
+export function syncStateKeysForProvider(keys, providerId) {
+  const out = mtimeKeysForProvider(keys, providerId)
+  for (const k of keys || []) {
+    if (k === pendingKey(providerId) || k === seededKey(providerId)) out.push(k)
+  }
+  return out
+}
+
+// Order the names one provider must push this cycle. The shared dirty queue is
+// fanned out into a per-provider pending list so one provider draining it can't
+// starve another (with OneDrive and Google Drive both connected, OneDrive used
+// to dequeue every edit before Google Drive ever saw it). On first contact every
+// local file is seeded, so a newly connected target gets a full backup instead
+// of only files edited after connecting. Record (board) files go first, then
+// fresh edits, then other markdown, then everything else; sidecars and names a
+// remote can't hold are dropped.
+export function planProviderPush({
+  pending = [],
+  queued = [],
+  seed = [],
+  isRecordFile = () => false,
+  isSidecar = () => false,
+} = {}) {
+  const queuedSet = new Set(queued)
+  const rank = (name) => {
+    if (isRecordFile(name)) return 0
+    if (queuedSet.has(name)) return 1
+    if (/\.md$/i.test(name)) return 2
+    return 3
+  }
+  const seen = new Set()
+  const ordered = []
+  for (const name of [...queued, ...pending, ...seed]) {
+    if (seen.has(name)) continue
+    seen.add(name)
+    if (isSidecar(name) || !isValidRemotePath(name)) continue
+    ordered.push(name)
+  }
+  return ordered
+    .map((name, i) => ({ name, i, r: rank(name) }))
+    .sort((a, b) => a.r - b.r || a.i - b.i)
+    .map((x) => x.name)
+}
