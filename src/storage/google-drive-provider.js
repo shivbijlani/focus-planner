@@ -1,5 +1,5 @@
 /**
- * Google Drive provider — Drive API v3 + PKCE OAuth2.
+ * Google Drive provider — Drive API v3 + OAuth2 token model (no client secret).
  * Files are stored under a named folder (default: "Planner") in the user's
  * Drive root so they're easy to find. Folder name is overridable per-source.
  */
@@ -10,7 +10,6 @@ import { scaffoldAgentGate } from '../config/agentGate.js'
 const DRIVE_API = 'https://www.googleapis.com/drive/v3'
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3'
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth'
-const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
 
 // Google OAuth2 SPA app — Cloud project: focus-planner-495417. The display
 // name on the consent screen ("Planner") is a user-visible label; this code
@@ -23,7 +22,6 @@ const FOLDER_KEY = 'gd_folder'
 export class GoogleDriveProvider {
   constructor(folderName = null) {
     this._token = null
-    this._refreshToken = null
     this._expiresAt = null
     this._folderId = null
     this._fileIndex = {} // path → fileId cache
@@ -40,32 +38,27 @@ export class GoogleDriveProvider {
   }
 
   async pick() {
-    await this._startPKCE()
+    await this._startAuth()
     return null // will redirect
   }
 
   async restore() {
-    const params = new URLSearchParams(window.location.search)
-    const code = params.get('code')
-    const state = params.get('state')
-    const error = params.get('error')
-
-    if (error) { console.error('Google OAuth error:', error); return null }
-
-    if (code && state) {
-      const ok = await this._exchangeCode(code, state)
-      if (ok) {
-        window.history.replaceState({}, '', window.location.pathname)
-        return true
-      }
-      return null
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+    const state = hash.get('state')
+    if (state && state === sessionStorage.getItem('gd_state')) {
+      sessionStorage.removeItem('gd_state')
+      sessionStorage.removeItem('gd_pending')
+      window.history.replaceState({}, '', window.location.pathname + window.location.search)
+      const error = hash.get('error')
+      if (error) { console.error('Google OAuth error:', error); return null }
+      const token = hash.get('access_token')
+      if (!token) return null
+      sessionStorage.removeItem('gd_silent_tried')
+      this._saveTokens({ access_token: token, expires_in: Number(hash.get('expires_in')) || 3600 })
+      return true
     }
 
     if (this._isTokenValid()) return true
-    if (this._refreshToken) {
-      const ok = await this._refreshAccessToken()
-      return ok ? true : null
-    }
     return null
   }
 
@@ -372,80 +365,34 @@ export class GoogleDriveProvider {
     return result
   }
 
-  // ── PKCE OAuth2 ──────────────────────────────────────
+  // ── OAuth2 token model ───────────────────────────────
+  // Google's token endpoint rejects this "Web application" client without its
+  // client_secret (even with PKCE), and a static site cannot hold a secret, so
+  // use the browser-safe token model: the access token (~1h, no refresh token)
+  // returns in the redirect fragment. On expiry, renew with one silent
+  // (prompt=none) redirect per tab session before falling back to the chooser.
 
-  async _startPKCE() {
-    const verifier = _randomBase64(32)
-    const challenge = await _sha256Base64url(verifier)
+  async _startAuth({ silent = false } = {}) {
     const state = _randomBase64(16)
-    sessionStorage.setItem('gd_verifier', verifier)
     sessionStorage.setItem('gd_state', state)
     sessionStorage.setItem('gd_pending', '1')
-
     const params = new URLSearchParams({
       client_id: CLIENT_ID,
-      response_type: 'code',
+      response_type: 'token',
       redirect_uri: _redirectUri(),
       scope: SCOPES,
       state,
-      code_challenge: challenge,
-      code_challenge_method: 'S256',
-      access_type: 'offline',
-      prompt: 'consent',
+      include_granted_scopes: 'true',
     })
+    if (silent) params.set('prompt', 'none')
     window.location.href = `${AUTH_ENDPOINT}?${params}`
   }
 
-  async _exchangeCode(code, state) {
-    const storedState = sessionStorage.getItem('gd_state')
-    const verifier = sessionStorage.getItem('gd_verifier')
-    if (!verifier || storedState !== state) return false
-
-    const body = new URLSearchParams({
-      client_id: CLIENT_ID,
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: _redirectUri(),
-      code_verifier: verifier,
-    })
-    const res = await fetch(TOKEN_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body,
-    })
-    if (!res.ok) return false
-    this._saveTokens(await res.json())
-    sessionStorage.removeItem('gd_verifier')
-    sessionStorage.removeItem('gd_state')
-    sessionStorage.removeItem('gd_pending')
-    return true
-  }
-
-  async _refreshAccessToken({ signal } = {}) {
-    if (!this._refreshToken) return false
-    const body = new URLSearchParams({
-      client_id: CLIENT_ID,
-      grant_type: 'refresh_token',
-      refresh_token: this._refreshToken,
-    })
-    const res = await fetch(TOKEN_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body,
-      signal,
-    })
-    if (!res.ok) { this._clearTokens(); return false }
-    this._saveTokens(await res.json())
-    return true
-  }
-
-  async _ensureToken({ signal } = {}) {
+  async _ensureToken() {
     if (this._isTokenValid()) return
-    if (this._refreshToken) {
-      const ok = await this._refreshAccessToken({ signal })
-      if (ok) return
-    }
-    await this._startPKCE()
+    const silent = !!this._token && !sessionStorage.getItem('gd_silent_tried')
+    if (silent) sessionStorage.setItem('gd_silent_tried', '1')
+    await this._startAuth({ silent })
     throw new Error('Redirecting to Google login…')
   }
 
@@ -457,22 +404,20 @@ export class GoogleDriveProvider {
 
   _saveTokens(data) {
     this._token = data.access_token
-    if (data.refresh_token) this._refreshToken = data.refresh_token
     this._expiresAt = Date.now() + (data.expires_in ?? 3600) * 1000 - 60_000
     localStorage.setItem('gd_token', this._token)
-    localStorage.setItem('gd_refresh', this._refreshToken ?? '')
     localStorage.setItem('gd_expires', String(this._expiresAt))
   }
 
   _loadTokens() {
     this._token = localStorage.getItem('gd_token') || null
-    this._refreshToken = localStorage.getItem('gd_refresh') || null
+    localStorage.removeItem('gd_refresh') // legacy auth-code flow leftover
     const exp = localStorage.getItem('gd_expires')
     this._expiresAt = exp ? parseInt(exp, 10) : null
   }
 
   _clearTokens() {
-    this._token = null; this._refreshToken = null; this._expiresAt = null
+    this._token = null; this._expiresAt = null
     localStorage.removeItem('gd_token')
     localStorage.removeItem('gd_refresh')
     localStorage.removeItem('gd_expires')
@@ -490,9 +435,9 @@ function _redirectUri() {
   // the Google Cloud Console:
   //   APIs & Services > Credentials > OAuth 2.0 Client IDs >
   //   1019840819252-jcrbpshgai7ror14pmimsv413qcuce17 > Authorized redirect URIs
-  // Add: https://plannermd.com
-  // (Previously this sent origin+pathname, e.g. https://plannermd.com/, which
-  // Google rejected with Error 400: redirect_uri_mismatch.)
+  // Registered: https://plannermd.com and http://localhost:5173. The
+  // folder-sync backup provider sends origin + pathname (https://plannermd.com/,
+  // http://localhost:5173/), so those trailing-slash forms are registered too.
   return window.location.origin
 }
 
