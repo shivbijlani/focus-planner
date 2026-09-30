@@ -11,6 +11,7 @@ $state = Join-Path $root 'state'
 $board = Join-Path $root 'planner.md'
 $snooze = Join-Path $root 'snooze.json'
 $settings = Join-Path $root 'settings.md'
+$sessionsStatus = Join-Path $root 'sessions-status.json'
 $env:WRITE_TURN_OA_HOME = Join-Path $root 'home'
 $utf8 = New-Object Text.UTF8Encoding($false)
 $psExe = (Get-Process -Id $PID).Path
@@ -23,6 +24,7 @@ function Check([string]$name, [bool]$ok) {
 }
 
 function StateCall([string[]]$arguments) {
+  if ($arguments -contains '-ForDispatch') { $arguments += @('-SessionsStatusFile', $sessionsStatus) }
   $result = & $psExe -NoProfile -File $StateScript @arguments `
     -JournalDir $journal -StateDir $state -PlannerBoard $board -SnoozeStore $snooze `
     -UserSettings $settings 2>&1
@@ -36,6 +38,7 @@ function ScanRow([string]$id) {
 }
 
 function Refused([string[]]$arguments) {
+  if ($arguments -contains '-ForDispatch') { $arguments += @('-SessionsStatusFile', $sessionsStatus) }
   $null = & $psExe -NoProfile -File $StateScript @arguments `
     -JournalDir $journal -StateDir $state -PlannerBoard $board -SnoozeStore $snooze `
     -UserSettings $settings 2>&1
@@ -48,6 +51,8 @@ try {
   [IO.File]::WriteAllText($board, $boardText, $utf8)
   [IO.File]::WriteAllText($snooze, '{}', $utf8)
   [IO.File]::WriteAllText($settings, '', $utf8)
+  [IO.File]::WriteAllText($sessionsStatus,
+    '{"sessions":[{"id":"S-901","activity":{"status":"idle"}},{"id":"S-902","activity":{"status":"idle"}},{"id":"S-903","activity":{"status":"idle"}}]}', $utf8)
   foreach ($id in 901, 902, 903) {
     $text = "# Task $id`: synthetic`n`n---`n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->`n`n## $moon Overnight Agent`n<!-- from: overnight-agent -->`n**Status:** Proposed`n`n### Proposed plan (v1)`n1. Research`n`n**Needs from you:** approve the research?`n<!-- /overnight-agent turn-end -->`n"
     if ($id -eq 903) { $text = $text.Replace('approve the research?', 'none') }

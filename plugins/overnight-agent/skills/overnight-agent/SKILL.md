@@ -523,7 +523,7 @@ Do the phases **in this order** every time.
 > retry, cleanup, email mark-read, mirror and ordinary wrap-up requirement.
 
 > **Dispatch — one direct path.** `Overnight Agent concurrency` is the maximum number of
-> accepted task-session sends still active at once, not a lifetime send cap for the run. Fill
+> accepted task-session sends **from this run** still active at once, not a lifetime send cap for the run. Fill
 > openings in `scan -Compact` order, then refill when a task session goes idle until the start
 > cutoff. A failed send, refusal or pause frees its opening; never send twice to a task in one run.
 >
@@ -536,7 +536,8 @@ Do the phases **in this order** every time.
 > Read `concurrency` and `concurrency_source` from the task's `session -Id` result. The setting
 > must be a bare whole number; absent, unreadable or malformed values narrow to 1. Report
 > `settings-malformed` rather than presenting that default as the user's choice. A later run may
-> send to the same task again; do not wait for running task sessions at the end of this run.
+> send to the same task again only once its bound session is idle; do not wait for sessions
+> busy from an earlier run. They neither consume this run's openings nor receive another brief.
 
 > **Telegram mirror runs before the drain.** PHASE 3 mirrors journals after preparation and before
 > PHASE 1's terminal dispatch drain. A task-session turn written during the drain is mirrored by the
@@ -681,8 +682,10 @@ Do the phases **in this order** every time.
 >
 >   Keep the `scan -Compact` output in a run-scoped file (`-ScanOutFile`) and pass that same file,
 >   so the record cites the bytes you actually read. `-Outcomes` words are a closed set —
->   `dispatched`, `paused`, `cutoff`, `capacity`, `refused`, `failed_send` — and a row you do not
->   name gets its reason derived: `ineligible:<today_release_reason>` when the scan found it
+>   `dispatched`, `paused`, `cutoff`, `capacity`, `refused`, `failed_send`,
+>   `busy_from_earlier_run` — and a row you do not
+>   name gets its reason derived: `busy_from_earlier_run` (or `session_status_unknown`)
+>   when the snapshot blocks its dispatch, `ineligible:<today_release_reason>` when the scan found it
 >   ineligible, otherwise `not_dispatched`. The record lists the ordered worklist, **every Today
 >   row even when ineligible**, and what was dispatched with times; it lands as one
 >   `{"kind":"decision"}` line in `%LOCALAPPDATA%\overnight-agent\run-ledger.jsonl` beside the run
@@ -1199,7 +1202,7 @@ an earlier phase or perform any follow-up.
    (see "Polling"). Run its check, then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone`.
 
 2. **Dispatch directly, in `scan -Compact` order, with at most `concurrency` active sends.**
-   Count only sends accepted by `send_session_message` toward the limit; a failed delivery does
+   Count only this run's sends accepted by `send_session_message` toward the limit; a failed delivery does
    not consume a slot. Track the task IDs attempted this run (including failed sends and
    refusals), plus any row whose dispatch check throws, and the session IDs of accepted sends
    still active. Do not dispatch an ineligible row or invent a brief for work that was not
@@ -1209,7 +1212,12 @@ an earlier phase or perform any follow-up.
    fails that check (including the Today gate), leave it for a later run; never bypass dispatch authority to meet the
    same-wake goal. Before each send, check the local :00/:30 cutoff in the pacing rule above. Replies
    collected during this run do not widen the limit; each fresh scan determines the current
-   eligible order.
+   eligible order. First save one `get_sessions_status` response to a run-scoped JSON file and pass
+   `-SessionsStatusFile <file>` to `scan -Compact`. For each bound session, the scan reports
+   `session_activity` and `dispatch_skip_reason`: skip `busy_from_earlier_run` without sending
+   or consuming an opening, then move to the next eligible row. An absent/unknown status is
+   `session_status_unknown`, not evidence of idle; report it and move on. Keep board eligibility
+   and Today gating intact: busy is a dispatch skip, not permission to bypass the Today gate.
 
    For each task with work to hand over:
 
@@ -1218,10 +1226,12 @@ an earlier phase or perform any follow-up.
       idle, without a kickoff (a session in the configured local folder project for non-code
       work, a worktree for code), then bind it.
       For `replace`, retain the returned `kickoff_continuation` line for the message.
-   2. Immediately before sending, run
-      `oa-state.ps1 session -Id <ID> -ForDispatch -DispatchInput <exact dispatch_input from scan>`.
+   2. Immediately before sending, refresh `get_sessions_status` into the run-scoped JSON file
+      and run `oa-state.ps1 session -Id <ID> -ForDispatch
+      -SessionsStatusFile <file> -DispatchInput <exact dispatch_input from scan>`.
       This rechecks eligibility, the user's pause and the brief's input fingerprint, then records
-      the wake. If it throws, do not send; report the reason.
+      the wake. A bound session now busy is refused with `busy_from_earlier_run`; if it throws,
+      do not send or count it, record the reason, and try the next eligible row.
    3. Send exactly one `send_session_message` to that task session with the approved brief and
       `delivery_mode: immediate`. The brief's first line is the emitted `role_line`, verbatim.
       Put `kickoff_continuation` next when replacing a dead session.
@@ -1251,15 +1261,17 @@ an earlier phase or perform any follow-up.
       appeared" is what a refusal *looks like*, not evidence the session failed to hear you.
       A refused task is retried in a LATER run only if he resumes it.
 
-   Fill openings from the current scan until the accepted-send count reaches the limit of active
+   Fill openings from the current scan until the accepted-send count **from this run** reaches the limit of active
    sends or the prepared worklist is exhausted. While accepted sends remain active and before
    cutoff, call the native app tool **`get_sessions_status`** about every 60 seconds, **once per
    interval**. Inspect only the tracked session IDs' `activity.status` (`busy` or `idle`); an
    `idle` session has finished and frees one opening. A reported refusal or user pause also frees
-   its opening immediately; never resend that task. Missing or unknown status is not evidence of
+   its opening immediately; never resend that task. Sessions busy before this run are not in
+   the tracked active-send set and do not occupy its openings. Missing or unknown status is not evidence of
    completion: leave its opening occupied and report it if the cutoff arrives. Do not poll journals,
    re-run `scan` or call `get_session` for every task on each tick. When an opening frees, re-run
-   `oa-state.ps1 scan -Compact`, skip every task ID already attempted this run, and send the next
+   `oa-state.ps1 scan -Compact` with `-SessionsStatusFile <fresh snapshot>`, skip every task ID already attempted this run
+   and each `busy_from_earlier_run` row, and send the next
    eligible prepared task in that fresh scan's order, with the same `-ForDispatch -DispatchInput`
    check immediately before each send. If no candidate remains but sessions are active, keep
    polling: a completed task can change eligibility. Stop when no eligible work and no active

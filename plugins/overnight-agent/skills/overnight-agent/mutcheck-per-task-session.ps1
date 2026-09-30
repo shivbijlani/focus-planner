@@ -115,6 +115,7 @@ New-Item -ItemType Directory -Path $sdir -Force | Out-Null
 
 $board = Join-Path $root 'planner.md'
 $store = Join-Path $root 'snooze.json'
+$sessionsStatus = Join-Path $root 'sessions-status.json'
 $utf8 = New-Object Text.UTF8Encoding($false)
 
 $ids = 801, 802, 803, 804, 805, 806, 807, 808, 809, 810, 812
@@ -126,6 +127,10 @@ $boardText = "## Today`n`n| ID | Task |`n|---|---|`n"
 foreach ($id in $ids) { $boardText += "| $id | synthetic |`n" }
 [IO.File]::WriteAllText($board, $boardText, $utf8)
 [IO.File]::WriteAllText($store, '{}', $utf8)
+$idleSessions = @('SESS_801', 'SESS_FORCED', 'SESS_807') | ForEach-Object {
+  @{ id = $_; activity = @{ status = 'idle' } }
+}
+[IO.File]::WriteAllText($sessionsStatus, (@{ sessions = $idleSessions } | ConvertTo-Json -Depth 5), $utf8)
 
 # Three settings files, because the concurrency arms need to distinguish "absent" from "malformed"
 # from "actually configured" -- and a single file could not tell L, M and N apart.
@@ -159,6 +164,7 @@ function Invoke-Oa {
   @('-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store,
     '-PlannerCompleted', (Join-Path $root 'absent-completed.md'),
     '-UserSettings', $Settings, '-RunWorkspace', $runWs)
+  if ($OaArgs -contains '-ForDispatch') { $all += @('-SessionsStatusFile', $sessionsStatus) }
   # Must not throw: -ExpectPreFix runs this against a build that REJECTS the new parameters, and a
   # hard failure there has to surface as a failed arm rather than a crashed harness -- otherwise
   # "pre-fix fails" is indistinguishable from "the harness is broken".

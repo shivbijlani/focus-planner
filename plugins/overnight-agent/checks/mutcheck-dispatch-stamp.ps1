@@ -119,6 +119,7 @@ function New-Store {
   Set-Content -Path (Join-Path $dir 'planner.md') -Value "## Today`n`n| ID | Task |`n|---|---|`n| 999 | fixture |" -Encoding utf8
   Set-Content -Path (Join-Path $dir 'completed.md') -Value '' -Encoding utf8
   Set-Content -Path (Join-Path $dir 'snooze.json') -Value '{}' -Encoding utf8
+  Set-Content -Path (Join-Path $dir 'sessions-status.json') -Value '{"sessions":[{"id":"aa358d1c-4c54-40cb-8809-619bd9bda3d7","activity":{"status":"idle"}}]}' -Encoding utf8
   return $dir
 }
 
@@ -143,6 +144,7 @@ function Invoke-Session {
     '-StateDir', $StateDir, '-JournalDir', (Join-Path $StateDir 'journal'),
     '-PlannerBoard', (Join-Path $StateDir 'planner.md'), '-PlannerCompleted', (Join-Path $StateDir 'completed.md'),
     '-SnoozeStore', (Join-Path $StateDir 'snooze.json'), '-UserSettings', (Join-Path $StateDir 'absent-settings.md')) + $Extra
+  if ($Extra -contains '-ForDispatch') { $argv += @('-SessionsStatusFile', (Join-Path $StateDir 'sessions-status.json')) }
   $out = & pwsh @argv 2>&1
   $text = ($out | Out-String)
   $script:LastExitCode = $LASTEXITCODE

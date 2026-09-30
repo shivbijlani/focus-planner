@@ -139,6 +139,11 @@ guards that path. It records each coordinator tool attempt in the existing run l
 second send to the same target session in one run, refuses waits that cross the hard end, and after
 that hard end permits only `task_complete`. It activates only when the skill preflight has recorded
 the current coordinator session in the ledger, so it is inert in task and ordinary chat sessions.
+Before selecting work, the coordinator saves a `get_sessions_status` snapshot and passes it to
+`oa-state.ps1 scan -Compact -SessionsStatusFile <file>`. A bound session already busy is reported
+as `busy_from_earlier_run`, skipped without consuming this run's concurrency, and checked again
+with a fresh snapshot by `session -ForDispatch` immediately before any send. Only accepted sends
+from the current run occupy its openings.
 `Overnight Agent concurrency` limits accepted sends still active at once, not
 the total tasks started during a run. It fills openings in `scan -Compact` order, checks tracked
 sessions with one `get_sessions_status` call about every 60 seconds, and re-scans to refill an
