@@ -831,7 +831,7 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
 
   return (
     <div className="dialog-overlay">
-      <div ref={dialogRef} className="add-task-dialog">
+      <div ref={dialogRef} className="add-task-dialog" data-testid="add-task-dialog">
         <h3>Add Task to {section}</h3>
         <form onSubmit={handleSubmit}>
           {sources && sources.length > 0 && (
@@ -862,7 +862,7 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
           <div className="form-row">
             <div className="form-field">
               <label>Priority</label>
-              <select value={priority} onChange={(e) => setPriority(e.target.value)}>
+              <select value={priority} onChange={(e) => setPriority(e.target.value)} data-testid="add-task-priority">
                 <option value="🔴">🔴 Urgent & Important</option>
                 <option value="🟡">🟡 Important</option>
                 <option value="🔵">🔵 Urgent, Not Important</option>
@@ -2051,7 +2051,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
   }
 
   return (
-    <div className="task-section">
+    <div className="task-section" data-testid={`task-section-${title}`}>
       <h2 
         className="section-header"
         onClick={() => setIsOpen(!isOpen)}
@@ -2268,7 +2268,7 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
   const allTaskIds = taskLookup ? Object.keys(taskLookup) : []
 
   return (
-    <div className="task-section manager-priorities-section" id={sectionId}>
+    <div className="task-section manager-priorities-section" id={sectionId} data-testid={`task-section-${title}`}>
       <h2
         className="section-header"
         onClick={() => setIsOpen(!isOpen)}

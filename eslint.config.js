@@ -27,6 +27,20 @@ export default defineConfig([
     },
   },
   {
+    // Node-side local API server, its test, and the Playwright smoke suite
+    // (whose page.evaluate callbacks run in the browser, hence both globals).
+    files: ['server.js', 'server.test.js', 'playwright.config.js', 'e2e/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: { ...globals.node, ...globals.browser },
+    },
+    rules: {
+      'react-refresh/only-export-components': 'off',
+      'react-hooks/rules-of-hooks': 'off',
+    },
+  },
+  {
     // Node-side Telegram bridge service (runs under Node, not the browser).
     files: ['packages/telegram-bridge/**/*.js'],
     languageOptions: {

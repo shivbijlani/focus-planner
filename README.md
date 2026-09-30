@@ -36,6 +36,25 @@ Then open http://localhost:5173
 
 See `.github/copilot-instructions.md` for full Copilot integration details.
 
+## Testing
+
+| Command | What it runs |
+|---|---|
+| `npm test` | Vitest unit tests (includes `server.test.js`, which runs the local API server against a temp folder) |
+| `npm run lint` | ESLint |
+| `npm run test:smoke` | Playwright app smoke suite in `e2e/` (Chromium, ~1 min) |
+
+The smoke suite builds the app (`npm run build`), serves it with `vite preview` on port 4317
+(override with `SMOKE_PORT`), and drives the real UI in a fresh browser context per test using
+the browser-only **Browser Storage** (IndexedDB) provider — no sign-in or network needed. It is a
+characterization suite for today's mainline flows (first run, add/prioritise/move/snooze/search,
+linked tasks, journal chat and unread star, complete/delete, reload persistence, agent gate and
+settings editors, phone layout, storage choices), asserting on both the DOM and the stored files.
+
+First time only: `npx playwright install chromium`. Useful flags: `npm run test:smoke -- --headed`,
+`-- --ui`, `-- e2e/journal.spec.js`. Locally an already-running server on the port is reused, so
+restart it after changing app code. CI runs it as the **App smoke (Playwright)** job.
+
 ## Working in a git worktree
 
 Run `npm ci` **inside** the worktree, and remove it with
