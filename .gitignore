@@ -46,3 +46,7 @@ spec-decisions.md
 
 # impeccable design-hook cache (local tool state)
 .impeccable/
+
+# Playwright smoke suite output
+test-results/
+playwright-report/

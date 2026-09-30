@@ -55,6 +55,47 @@ jobs:
       - run: npm ci
       - run: npm run lint
 
+  # Real-browser smoke suite for the app's mainline flows (e2e/, see README
+  # "Testing"). The 75 vitest files and the mutation checks never load the app
+  # in a browser; this is the gate that stops a refactor silently breaking the
+  # board, journals, editors or persistence. Browser Storage only: no OAuth.
+  smoke:
+    name: App smoke (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Playwright version
+        id: pw
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}-chromium
+      - name: Install Chromium
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Install Chromium system deps
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+      - name: Smoke tests
+        run: npm run test:smoke
+      - name: Upload report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
   # The browser slot table (GH #180) lives in ONE place -- `## Browser slots` in
   # user-settings.md -- and is read by ONE parser. Before this job existed, the
   # only thing standing between that table and three scripts quietly re-encoding

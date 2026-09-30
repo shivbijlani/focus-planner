@@ -9,9 +9,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3001;
+// Overridable so tests can run an isolated instance; defaults are unchanged.
+const PORT = Number(process.env.PLANNER_API_PORT) || 3001;
 
-const CONFIG_PATH = path.join(__dirname, 'planner-config.json');
+const CONFIG_PATH = process.env.PLANNER_CONFIG_PATH || path.join(__dirname, 'planner-config.json');
 const DEFAULT_PLANNER_PATH = path.join(__dirname, '..', 'planner');
 
 async function loadConfig() {

@@ -19,6 +19,7 @@ export default defineConfig({
     // %LOCALAPPDATA%, shell out, and call process.exit(). Collecting them makes vitest fail
     // the whole run on the Linux CI runner, where %LOCALAPPDATA% is undefined. They are run
     // by run-sweeps.ps1, which is the only thing that can supply their environment.
-    exclude: ['**/node_modules/**', '**/dist/**', 'plugins/**'],
+    // `e2e/` is the Playwright smoke suite (`npm run test:smoke`), not vitest.
+    exclude: ['**/node_modules/**', '**/dist/**', 'plugins/**', 'e2e/**'],
   },
 })
