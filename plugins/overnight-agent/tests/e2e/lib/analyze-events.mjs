@@ -2,13 +2,15 @@
 // analyze-events.mjs -- turn a sandbox run's events.jsonl into the facts the assertions use.
 //
 //   node analyze-events.mjs --events <events.jsonl> --sandbox <root> --skill <skillDir>
-//        --live <path> [--live <path> ...] --out <analysis.json>
+//        --live <path> [--live <path> ...] [--deny <deny-tool rule> ...] --out <analysis.json>
 //
 // Output: every tool call (name, arguments, success, error, excerpt), plus
 //   livePathHits   tool-call ARGUMENTS naming a live path (after the sandbox root is masked out,
 //                  because the sandbox itself lives under the real %TEMP%)
 //   tripwireHits   tool results carrying `oa_sandbox_violation` -- a script refused a live path
-//   deniedCalls    calls the CLI refused by --deny-tool or path verification
+//   deniedCalls    calls the CLI refused by --deny-tool or path verification, except...
+//   expectedDenials  ...the ones denial-policy.mjs proves are PHASE 0 hygiene scripts refused by
+//                  path verification (#804): reported, never counted against i3
 //   provenance     whether oa-state.ps1 / write-turn.ps1 ran from the sandbox copy only
 //   finalMessage   the coordinator's last assistant message (its wrap-up)
 // Only arguments are scanned for live paths: results legitimately quote source files that
@@ -16,6 +18,7 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { classifyDenial } from './denial-policy.mjs';
 
 const args = process.argv.slice(2);
 const opt = (k) => (args.includes(k) ? args[args.indexOf(k) + 1] : undefined);
@@ -24,6 +27,7 @@ const eventsFile = opt('--events');
 const sandbox = opt('--sandbox');
 const skillDir = opt('--skill');
 const live = many('--live').filter(Boolean);
+const denyRules = many('--deny').filter(Boolean);
 const out = opt('--out');
 
 const norm = (s) => String(s).replace(/\\\\/g, '\\').replace(/\//g, '\\').toLowerCase();
@@ -57,6 +61,8 @@ for (const ev of events) {
     c.success = d.success !== false;
     const content = typeof d.result?.content === 'string' ? d.result.content : JSON.stringify(d.result ?? '');
     c.error = d.error ? (typeof d.error === 'string' ? d.error : JSON.stringify(d.error)) : null;
+    c.errorCode = d.error && typeof d.error === 'object' ? d.error.code ?? null : null;
+    c.errorCategory = d.toolTelemetry?.properties?.shell_error_category ?? null;
     c.resultText = content;
     c.excerpt = content.slice(0, 600);
   } else if (ev.type === 'assistant.message' && typeof d.content === 'string' && d.content.trim()) {
@@ -70,6 +76,7 @@ const list = order.map((id) => calls.get(id));
 const livePathHits = [];
 const tripwireHits = [];
 const deniedCalls = [];
+const expectedDenials = [];
 const cutShort = [];
 const stateInvocations = [];
 const foreignInvocations = [];
@@ -86,7 +93,9 @@ for (const c of list) {
   if (c.success === false && /coordinator hard end|cross the coordinator hard end/i.test(text)) {
     cutShort.push(`${c.name}: ${String(c.error || c.excerpt).slice(0, 160)}`);
   } else if (c.success === false && /(denied|not permitted|permission|not allowed|refused by policy)/i.test(text)) {
-    deniedCalls.push(`${c.name}: ${String(c.error || c.excerpt).slice(0, 200)}`);
+    const verdict = classifyDenial(c, { sandboxRoot: sandbox, denyRules });
+    if (verdict.expected) expectedDenials.push(`${c.name}: ${verdict.reason}`);
+    else deniedCalls.push(`${c.name}: ${String(c.error || c.excerpt).slice(0, 200)} [${verdict.reason}]`);
   }
   // Provenance. The sandbox root is masked to `<sandbox>` first, so what remains is either the
   // sandbox copy (`<sandbox>\repo\plugins\...` or, with cwd = the sandbox, a relative
@@ -115,8 +124,8 @@ const result = {
   events: events.length,
   toolCalls: list.map(({ resultText, ...c }) => c),
   toolCounts: list.reduce((m, c) => { m[c.name] = (m[c.name] || 0) + 1; return m; }, {}),
-  livePathHits, tripwireHits, deniedCalls, cutShort, provenance, skillEvents, finalMessage,
+  livePathHits, tripwireHits, deniedCalls, expectedDenials, cutShort, provenance, skillEvents, finalMessage,
 };
 writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`);
 console.log(JSON.stringify({ toolCalls: list.length, livePathHits: livePathHits.length,
-  tripwireHits: tripwireHits.length, deniedCalls: deniedCalls.length, provenance: provenance.ok }));
+  tripwireHits: tripwireHits.length, deniedCalls: deniedCalls.length, expectedDenials: expectedDenials.length, provenance: provenance.ok }));

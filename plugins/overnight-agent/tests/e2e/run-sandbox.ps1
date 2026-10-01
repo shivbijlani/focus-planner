@@ -215,6 +215,7 @@ function Invoke-Attempt($Scenarios, [int]$Attempt, [string]$SessionRoot, [string
 
   $analysisFile = Join-Path $art 'analysis.json'
   $liveArgs = @(); foreach ($r in Get-LiveRoots) { $liveArgs += @('--live', $r) }
+  foreach ($d in $DenyTools) { $liveArgs += @('--deny', $d) }
   & node (Join-Path $PSScriptRoot 'lib\analyze-events.mjs') --events (Join-Path $art 'events.jsonl') --sandbox $L.Root `
     --skill $L.SkillDir @liveArgs --out $analysisFile | Out-Null
   $analysis = Get-Content -LiteralPath $analysisFile -Raw | ConvertFrom-Json -Depth 30
@@ -254,7 +255,7 @@ function Invoke-Attempt($Scenarios, [int]$Attempt, [string]$SessionRoot, [string
     Before = $before; After = $after; Diff = $diff; Dispatches = $dispatches; DispatchMode = $Dispatch
     GateBefore = $gateBefore; GateAfter = $gateAfter
     LivePathHits = @($analysis.livePathHits); TripwireHits = @($analysis.tripwireHits)
-    DeniedCalls = @($analysis.deniedCalls); Provenance = $analysis.provenance
+    DeniedCalls = @($analysis.deniedCalls); ExpectedDenials = @($analysis.expectedDenials); Provenance = $analysis.provenance
     FinalMessage = "$($analysis.finalMessage)"
     Run = [pscustomobject]@{ timedOut = $timedOut; completed = [bool]$result.Count; exitCode = $exitCode
       durationSec = ($end - $start).TotalSeconds }
