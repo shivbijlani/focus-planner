@@ -11,10 +11,12 @@
     baseline pass   -> candidate must be pass or flaky      (flaky is reported, not failed)
     baseline flaky  -> candidate must be pass or flaky
     baseline fail   -> not gating (the baseline itself does not pass it); reported
+    candidate inconclusive (its run was cut short or killed) -> exit 2: rerun, nothing decided
     invariants      -> must be pass on the candidate, always (safety, never waived)
+    completion      -> compared like a scenario (did the run finish on its own in its window)
     candidate invalid-seed -> fail: the candidate's own code no longer means what the seed says
 
-  Exit 0 = no regression, 1 = regression, 2 = the reports are not comparable.
+  Exit 0 = no regression, 1 = regression, 2 = inconclusive or not comparable.
 
 .EXAMPLE
   pwsh -File compare.ps1 -Baseline main\report.json -Candidate branch\report.json
@@ -45,6 +47,7 @@ foreach ($n in $names) {
   $verdict = 'ok'
   if ($n -eq 'invariants') { if ($co -ne 'pass') { $verdict = 'REGRESSION' } }
   elseif ($co -eq 'invalid-seed') { $verdict = 'REGRESSION' }
+  elseif ($bo -in $ok -and $co -eq 'inconclusive') { $verdict = 'INCONCLUSIVE' }
   elseif ($bo -in $ok -and $co -notin $ok) { $verdict = 'REGRESSION' }
   elseif ($bo -notin $ok -and $bo -ne 'absent') { $verdict = 'not gating (baseline does not pass)' }
   elseif ($bo -eq 'absent') { $verdict = 'new (no baseline)' }
@@ -52,13 +55,17 @@ foreach ($n in $names) {
   $rows += [pscustomobject]@{ scenario = $n; baseline = $bo; candidate = $co; verdict = $verdict }
 }
 $regressions = @($rows | Where-Object verdict -eq 'REGRESSION')
+$inconclusive = @($rows | Where-Object verdict -eq 'INCONCLUSIVE')
 if ($Json) {
   [ordered]@{ baseline = $b.ref; candidate = $c.ref; regressions = $regressions.Count; rows = $rows } | ConvertTo-Json -Depth 6
 } else {
   Write-Host "baseline : $($b.label) $($b.ref.ref) @ $($b.ref.sha)"
   Write-Host "candidate: $($c.label) $($c.ref.ref) @ $($c.ref.sha)"
   $rows | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
-  Write-Host $(if ($regressions.Count) { "REGRESSION: $($regressions.Count) scenario(s) pass on baseline but not on candidate" } else { 'no regression' })
+  Write-Host $(if ($regressions.Count) { "REGRESSION: $($regressions.Count) scenario(s) pass on baseline but not on candidate" }
+               elseif ($inconclusive.Count) { "INCONCLUSIVE: $($inconclusive.Count) scenario(s) could not be decided (candidate run cut short or killed); rerun the candidate" }
+               else { 'no regression' })
 }
 if ($regressions.Count) { exit 1 }
+if ($inconclusive.Count) { exit 2 }
 exit 0

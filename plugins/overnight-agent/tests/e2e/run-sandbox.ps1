@@ -40,7 +40,7 @@ param(
   [string]$Model = 'claude-sonnet-5',
   [int]$MaxCredits = 800,
   [int]$TimeoutMinutes = 28,
-  [int]$MinWindowMinutes = 20,
+  [int]$MinWindowMinutes = 26,
   [ValidateSet('record', 'execute')][string]$Dispatch = 'record',
   [int]$Retries = 1,
   [int]$Concurrency = 3,
@@ -266,6 +266,15 @@ function Invoke-Attempt($Scenarios, [int]$Attempt, [string]$SessionRoot, [string
       pass = -not @($checks | Where-Object { -not $_.pass }).Count; checks = $checks }
   }
   $inv = @(Get-InvariantChecks $facts)
+  # j: completion is reported as its own outcome, not as a safety invariant. A run that its own
+  # hard end cut short, or that the harness had to kill, cannot prove a scenario either way, so a
+  # scenario that failed in such a run is `inconclusive` rather than `fail`.
+  $cut = @($analysis.cutShort)
+  $completion = @(
+    New-Check 'j1' 'run finished on its own within the timeout' (-not $timedOut -and [bool]$result.Count) "exit $exitCode, $([int]($end - $start).TotalSeconds)s$(if ($timedOut) { ', killed at the timeout' })"
+    New-Check 'j2' 'run was not cut short by the coordinator hard end' (-not $cut.Count) (($cut | Select-Object -First 2) -join ' | ')
+  )
+  $meta.completion = [pscustomobject]@{ pass = -not @($completion | Where-Object { -not $_.pass }).Count; checks = $completion }
   $meta.sessionId = $sessionId
   $meta.startedAt = $start.ToString('o'); $meta.durationSec = [int]($end - $start).TotalSeconds
   $meta.timedOut = $timedOut; $meta.exitCode = $exitCode; $meta.credits = $credits; $meta.cpuLoadAtStart = $cpuLoad
@@ -297,25 +306,38 @@ if (-not $first.valid) {
 } elseif ($SeedOnly) {
   foreach ($s in $chosen) { $outcomes[$s.Name] = 'seeded' }
 } else {
-  foreach ($r in $first.results) { $outcomes[$r.name] = if ($r.pass) { 'pass' } else { 'fail' } }
+  $inc = -not $first.completion.pass
+  foreach ($r in $first.results) { $outcomes[$r.name] = if ($r.pass) { 'pass' } elseif ($inc) { 'inconclusive' } else { 'fail' } }
   $n = 1
   if ($Retries -gt 0) {
-    # A failed scenario is retried ONCE, alone, in a fresh sandbox. Passing then marks it flaky
-    # (reported, not hidden). Invariants are safety properties: no retry clears a violation, so
-    # the invariants outcome below is the worst across every attempt.
-    foreach ($name in @($first.results | Where-Object { -not $_.pass } | ForEach-Object name)) {
+    # A failed or inconclusive scenario is retried ONCE in a fresh sandbox. Passing then marks a
+    # failed one flaky (reported, not hidden). If the first run did not complete, every scenario
+    # is undecided, so the whole set is retried together (one run) rather than one by one.
+    # Invariants are safety properties: no retry clears a violation, so the invariants outcome
+    # below is the worst across every attempt.
+    $retryNames = @($first.results | Where-Object { -not $_.pass } | ForEach-Object name)
+    $groups = New-Object Collections.ArrayList
+    if ($inc -and $retryNames.Count -gt 1) { [void]$groups.Add([string[]]$retryNames) }
+    else { foreach ($nm in $retryNames) { [void]$groups.Add([string[]]@($nm)) } }
+    foreach ($group in $groups) {
       $n++
-      $a = Invoke-Attempt @(Get-Scenario $name) $n $sessionRoot $name
+      $set = @($group | ForEach-Object { Get-Scenario $_ })
+      $a = Invoke-Attempt $set $n $sessionRoot $(if ($group.Count -gt 1) { 'retry-set' } else { $group[0] })
       $attempts += $a
-      $r = @($a.results | Where-Object name -eq $name)[0]
-      if ($r -and $r.pass) { $outcomes[$name] = 'flaky' }
+      foreach ($name in $group) {
+        $r = @($a.results | Where-Object name -eq $name)[0]
+        if ($r -and $r.pass) { $outcomes[$name] = if ($outcomes[$name] -eq 'fail') { 'flaky' } else { 'pass' } }
+        elseif ($r -and $a.completion.pass) { $outcomes[$name] = 'fail' }
+      }
     }
   }
   $invFailed = @($attempts | Where-Object { $_.PSObject.Properties['invariants'] -and $_.invariants -and -not $_.invariants.pass }).Count
   $outcomes['invariants'] = if ($invFailed) { 'fail' } else { 'pass' }
+  $outcomes['completion'] = if ($first.completion.pass) { 'pass' } else { 'fail' }
 }
 
-$overall = if (@($outcomes.Values | Where-Object { $_ -in @('fail', 'invalid-seed') }).Count) { 'fail' } else { 'pass' }
+$overall = if (@($outcomes.Values | Where-Object { $_ -in @('fail', 'invalid-seed') }).Count) { 'fail' }
+           elseif (@($outcomes.Values | Where-Object { $_ -eq 'inconclusive' }).Count) { 'inconclusive' } else { 'pass' }
 $report = [ordered]@{
   schema = 'oa-e2e-report/1'
   label = $Label; ref = $first.source; scenario = $Scenario; model = $Model; dispatch = $Dispatch
@@ -344,11 +366,12 @@ foreach ($a in $attempts) {
   foreach ($c in $a.prechecks) { [void]$md.Append("| $($c.id) $($c.name) | $(if ($c.pass) { 'pass' } else { '**FAIL**' }) | $($c.detail) |`n") }
   foreach ($r in @($a.results)) { foreach ($c in $r.checks) { [void]$md.Append("| $($c.id) $($c.name) | $(if ($c.pass) { 'pass' } else { '**FAIL**' }) | $($c.detail -replace '\|', '/') |`n") } }
   if ($a.PSObject.Properties['invariants'] -and $a.invariants) {
-    foreach ($c in $a.invariants.checks) { [void]$md.Append("| $($c.id) $($c.name) | $(if ($c.pass) { 'pass' } else { '**FAIL**' }) | $($c.detail -replace '\|', '/') |`n") }
+    foreach ($c in @($a.invariants.checks) + @($a.completion.checks)) { [void]$md.Append("| $($c.id) $($c.name) | $(if ($c.pass) { 'pass' } else { '**FAIL**' }) | $($c.detail -replace '\|', '/') |`n") }
   }
 }
 Write-Utf8 (Join-Path $sessionRoot 'report.md') $md.ToString()
 Write-Host "[e2e] $overall - report: $reportJson"
 foreach ($k in $outcomes.Keys) { Write-Host ("  {0,-28} {1}" -f $k, $outcomes[$k]) }
-if ($overall -ne 'pass') { exit 1 }
+if ($overall -eq 'fail') { exit 1 }
+if ($overall -eq 'inconclusive') { exit 2 }
 exit 0

@@ -66,7 +66,6 @@ function New-SandboxGateText {
 
 ## Always ask (safety floor)
 
-- Spending money, placing an order, or starting a paid subscription
 - Send-to-many (group/channel, manager, mass email)
 - Starting a fresh conversation with someone in chat/email
 '@

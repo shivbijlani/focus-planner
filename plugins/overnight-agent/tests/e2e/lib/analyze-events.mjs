@@ -70,6 +70,7 @@ const list = order.map((id) => calls.get(id));
 const livePathHits = [];
 const tripwireHits = [];
 const deniedCalls = [];
+const cutShort = [];
 const stateInvocations = [];
 const foreignInvocations = [];
 for (const c of list) {
@@ -82,7 +83,9 @@ for (const c of list) {
   }
   const text = `${c.resultText ?? ''}\n${c.error ?? ''}`;
   if (/oa_sandbox_violation/.test(text)) tripwireHits.push(`${c.name}: ${(text.match(/oa_sandbox_violation[^\n]*/) || [''])[0].slice(0, 300)}`);
-  if (c.success === false && /(denied|not permitted|permission|not allowed|refused by policy)/i.test(text)) {
+  if (c.success === false && /coordinator hard end|cross the coordinator hard end/i.test(text)) {
+    cutShort.push(`${c.name}: ${String(c.error || c.excerpt).slice(0, 160)}`);
+  } else if (c.success === false && /(denied|not permitted|permission|not allowed|refused by policy)/i.test(text)) {
     deniedCalls.push(`${c.name}: ${String(c.error || c.excerpt).slice(0, 200)}`);
   }
   // Provenance. The sandbox root is masked to `<sandbox>` first, so what remains is either the
@@ -112,7 +115,7 @@ const result = {
   events: events.length,
   toolCalls: list.map(({ resultText, ...c }) => c),
   toolCounts: list.reduce((m, c) => { m[c.name] = (m[c.name] || 0) + 1; return m; }, {}),
-  livePathHits, tripwireHits, deniedCalls, provenance, skillEvents, finalMessage,
+  livePathHits, tripwireHits, deniedCalls, cutShort, provenance, skillEvents, finalMessage,
 };
 writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`);
 console.log(JSON.stringify({ toolCalls: list.length, livePathHits: livePathHits.length,

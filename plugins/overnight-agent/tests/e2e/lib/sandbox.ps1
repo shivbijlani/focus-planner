@@ -121,14 +121,31 @@ function Invoke-WithSandboxEnv([hashtable]$Env, [scriptblock]$Body) {
 # Call the sandbox copy of oa-state.ps1 in the sandbox environment. Returns parsed JSON when the
 # output is JSON, else the raw text. Throws on a non-zero exit.
 function Invoke-SandboxState($L, [hashtable]$Env, [string[]]$Arguments, [switch]$Raw) {
+  # In-process (a script invoked with & gets its own script scope and its `exit` ends only the
+  # script): a fresh pwsh per call costs minutes on a loaded machine, and seeding makes ~15 calls.
   $script = Join-Path $L.SkillDir 'oa-state.ps1'
+  # Array splatting binds every element positionally for a script, so convert `cmd -Name value
+  # -Switch` into a hashtable first.
+  $named = @{}; $positional = @()
+  for ($i = 0; $i -lt $Arguments.Count; $i++) {
+    $a = $Arguments[$i]
+    if ($a -match '^-[A-Za-z]') {
+      $name = $a.Substring(1)
+      if ($i + 1 -lt $Arguments.Count -and $Arguments[$i + 1] -notmatch '^-[A-Za-z]') { $named[$name] = $Arguments[$i + 1]; $i++ }
+      else { $named[$name] = $true }
+    } else { $positional += $a }
+  }
+  $st = @{ code = 0 }
   $out = Invoke-WithSandboxEnv $Env {
     Push-Location $L.Root
-    try { & pwsh -NoProfile -ExecutionPolicy Bypass -File $script @Arguments 2>&1 } finally { Pop-Location }
+    try {
+      $global:LASTEXITCODE = 0
+      & $script @positional @named *>&1
+      $st.code = $global:LASTEXITCODE
+    } catch { $st.code = 1; "$_" } finally { Pop-Location }
   }
-  $code = $LASTEXITCODE
   $text = ($out | ForEach-Object { "$_" }) -join "`n"
-  if ($code -ne 0) { throw "oa-state $($Arguments -join ' ') failed ($code): $text" }
+  if ($st.code -ne 0) { throw "oa-state $($Arguments -join ' ') failed ($($st.code)): $text" }
   if ($Raw) { return $text }
   try { return $text | ConvertFrom-Json -Depth 30 } catch { return $text }
 }
