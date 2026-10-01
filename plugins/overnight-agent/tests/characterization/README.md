@@ -87,7 +87,7 @@ Every path parameter defaults to the sandbox (see `lib/contract.mjs`: `-JournalD
 for write-turn). The child environment is built from an allow-list, with `LOCALAPPDATA`,
 `USERPROFILE`, `HOME`, `TEMP` pointed into the sandbox, so `COPILOT_AGENT_SESSION_ID`,
 `OVERNIGHT_AGENT_SETTINGS` and OneDrive paths from the developer's own session never leak in.
-write-turn gets `WRITE_TURN_OA_HOME=<sandbox home>` and `WRITE_TURN_ISSUE_RESOLVER=stubs/issue-shipped.mjs`
+write-turn gets `WRITE_TURN_OA_HOME=<sandbox home>` and `WRITE_TURN_ISSUE_RESOLVER=stubs/issue-shipped.stub.mjs`
 (its G15 classifier, stubbed: `CHAR_SHIPPED="640,641"` marks issues shipped, `CHAR_SHIPPED="!fail"`
 simulates a classifier that cannot measure). **No hook was added to the PowerShell scripts**: the
 clock is pinned by tokens in the fixture rather than by overriding the scripts' clock.

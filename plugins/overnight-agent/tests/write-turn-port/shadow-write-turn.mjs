@@ -8,14 +8,14 @@
 // difference in exit code or JSON verdict is printed. Backups are recreated as empty files with
 // their real names, because G12 reads only their names.
 //
-//   node shadow.mjs [--data <planner folder>] [--home <OA home>] [--limit N] [--jobs 6] [--out <file>]
+//   node shadow-write-turn.mjs [--data <planner folder>] [--home <OA home>] [--limit N] [--jobs 6] [--out <file>]
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-if (process.env.CI) { console.error('shadow.mjs reads live data and never runs in CI'); process.exit(2); }
+if (process.env.CI) { console.error('shadow-write-turn.mjs reads live data and never runs in CI'); process.exit(2); }
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SKILL = path.resolve(HERE, '..', '..', 'skills', 'overnight-agent');
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : d; };

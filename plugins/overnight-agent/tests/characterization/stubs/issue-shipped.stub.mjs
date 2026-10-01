@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 // Deterministic stand-in for checks/issue-shipped.mjs, used by write-turn's G15 guard.
+// Named *.stub.mjs, never issue-shipped.mjs: sync-oa-home deploys .mjs files by BASENAME, and a
+// second issue-shipped.mjs anywhere in the plugin freezes the real one in the OA home
+// (basename-collision-sweep, which CI now runs).
 // CHAR_SHIPPED="640,641" marks those issue numbers as shipped; everything else is unworked.
 // CHAR_SHIPPED="!fail" simulates a classifier that cannot measure (G15's advisory path).
 const args = process.argv.slice(2).filter((a) => a !== '--json');
