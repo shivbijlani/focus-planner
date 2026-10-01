@@ -7,24 +7,29 @@ vi.mock('#planner/deployment-profile', () => ({
 }))
 
 let StoragePicker
+let StorageSourceSettings
 let getEnabledProviderTypes
-let listSettingsProviders
 
 beforeAll(async () => {
   await import('./registerBuiltinProviders.js')
   ;({ StoragePicker } = await import('../StoragePicker.jsx'))
-  ;({ getEnabledProviderTypes, listSettingsProviders } = await import('./registry.js'))
+  ;({ StorageSourceSettings } = await import('../StorageSourceSettings.jsx'))
+  ;({ getEnabledProviderTypes } = await import('./registry.js'))
 })
 
 describe('profile-filtered provider UI', () => {
-  it('shows only Browser Storage in the picker and shared Settings provider list', () => {
-    const markup = renderToStaticMarkup(createElement(StoragePicker, { onReady() {} }))
+  it('shows only Browser Storage in the picker and rendered Settings cards', () => {
+    const pickerMarkup = renderToStaticMarkup(createElement(StoragePicker, { onReady() {} }))
+    const settingsMarkup = renderToStaticMarkup(
+      createElement(StorageSourceSettings, { activeProviderType: null, onChoose() {}, busy: false }),
+    )
 
     expect(getEnabledProviderTypes()).toEqual(['local-storage'])
-    expect(listSettingsProviders().map(({ label }) => label)).toEqual(['Browser Storage'])
-    expect(markup).toContain('Browser Storage')
-    expect(markup).not.toContain('Local Folder')
-    expect(markup).not.toContain('OneDrive')
-    expect(markup).not.toContain('Google Drive')
+    expect(pickerMarkup).toContain('Browser Storage')
+    expect(pickerMarkup).not.toContain('Local Folder')
+    expect(settingsMarkup).toContain('Browser Storage')
+    expect(settingsMarkup).not.toContain('Local Folder')
+    expect(settingsMarkup).not.toContain('OneDrive')
+    expect(settingsMarkup).not.toContain('Google Drive')
   })
 })
