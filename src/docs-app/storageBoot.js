@@ -5,10 +5,10 @@
 // sign-in. It never shows a storage picker: if no source is configured yet, the
 // user is sent to Focus Planner to connect one.
 import * as storage from '../storage/storage.js'
+import { createProvider } from '../storage/registry.js'
 import {
   loadSources, getSources, getActiveSourceId, restoreSource, setActiveSource,
 } from '../storage/sources.js'
-import { IndexedDbProvider } from '../storage/indexeddb-provider.js'
 
 export function plannerUrl() {
   const base = (import.meta.env?.BASE_URL || '/')
@@ -30,7 +30,7 @@ export async function bootStorage() {
     } catch { activeId = null }
   }
   if (!activeId) {
-    const fallback = new IndexedDbProvider()
+    const fallback = createProvider(storage.PROVIDERS.LOCAL_STORAGE)
     await fallback.restore()
     storage.setActiveProvider(fallback)
   }

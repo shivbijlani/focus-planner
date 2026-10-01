@@ -3,7 +3,8 @@
  * Lets user choose Local Folder, OneDrive, or Google Drive.
  */
 import { useState, useCallback } from 'react'
-import { PROVIDERS, getAvailableProviders, getProviderName } from './storage/storage.js'
+import { PROVIDERS, getProviderName } from './storage/storage.js'
+import { getEnabledProviderTypes, getProvider as getProviderDefinition } from './storage/registry.js'
 import {
   createSourceDescriptor,
   clearPendingSource,
@@ -19,7 +20,7 @@ import {
 import { findSavedSourceForProvider } from './storage/sourceRecovery.js'
 
 export function StoragePicker({ onReady }) {
-  const [availableProviders] = useState(getAvailableProviders)
+  const [availableProviders] = useState(getEnabledProviderTypes)
   const [connecting, setConnecting] = useState(null) // provider id being connected
   const [error, setError] = useState('')
 
@@ -30,14 +31,12 @@ export function StoragePicker({ onReady }) {
       const existing = findSavedSourceForProvider(getSources(), id, getActiveSourceId())
       const source = existing || createSourceDescriptor({ providerType: id })
       const provider = existing ? getProvider(source.id) : makeProviderFor(source)
-      if (id === PROVIDERS.FSA) {
+      const capabilities = getProviderDefinition(id)?.capabilities || {}
+      if (capabilities.needsUserGesture) {
         const handle = await provider.pick()
         if (!handle) { setConnecting(null); return }
         await provider.scaffold()
-      } else if (id === PROVIDERS.LOCAL_STORAGE) {
-        if (!await provider.restore()) throw new Error('Browser Storage is unavailable')
-        await provider.scaffold()
-      } else {
+      } else if (capabilities.oauthRedirect) {
         if (!existing) saveSource(source, provider)
         setPendingSource(source.id, { created: !existing })
         try {
@@ -48,6 +47,12 @@ export function StoragePicker({ onReady }) {
           throw error
         }
         return
+      } else {
+        if (!await provider.restore()) {
+          const label = getProviderName(id)
+          throw new Error(`${label} is unavailable`)
+        }
+        await provider.scaffold()
       }
       if (!existing) saveSource(source, provider)
       await setActiveSource(source.id)
@@ -90,7 +95,7 @@ export function StoragePicker({ onReady }) {
                 </div>
                 <div className="storage-option-info">
                   <div className="storage-option-name">{getProviderName(id)}</div>
-                  <div className="storage-option-desc">{descriptions[id]}</div>
+                  <div className="storage-option-desc">{descriptions[id] || 'Store files using this deployment’s configured provider.'}</div>
                 </div>
                 <button
                   className={`storage-option-btn${isConnecting ? ' loading' : ''}`}

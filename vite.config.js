@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { resolve, dirname } from 'node:path'
+import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -14,6 +15,22 @@ const BUILD_ID = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16)
 export default defineConfig({
   plugins: [react()],
   base: '/',
+  resolve: {
+    alias: [
+      {
+        find: '#planner/deployment-profile',
+        replacement: resolve(__dirname, process.env.VITE_PROFILE_MODULE || 'src/config/profile.js'),
+      },
+      {
+        find: '#planner/host-provider',
+        replacement: resolve(__dirname, process.env.VITE_HOST_PROVIDER_MODULE || 'src/host/DefaultHostProvider.jsx'),
+      },
+      {
+        find: '#planner/storage-bootstrap',
+        replacement: resolve(__dirname, process.env.VITE_STORAGE_BOOTSTRAP_MODULE || 'src/storage/registerBuiltinProviders.js'),
+      },
+    ],
+  },
   build: {
     // Two apps, one origin (plans/docs-app-design.md §3): Focus Planner (index.html) and
     // Docs (docs.html). Shared modules (storage, folder-sync) are emitted as common chunks,

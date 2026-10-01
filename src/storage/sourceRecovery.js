@@ -1,9 +1,9 @@
 import { PROVIDERS } from './storage.js'
-import { IndexedDbProvider } from './indexeddb-provider.js'
+import { createProvider } from './registry.js'
 
 export async function restoreSourceOrFallback(source, {
   restoreSource,
-  makeFallback = () => new IndexedDbProvider(),
+  makeFallback = () => createProvider(PROVIDERS.LOCAL_STORAGE),
   setActiveProvider,
   onReconnectRequired = () => {},
   pendingSource = null,

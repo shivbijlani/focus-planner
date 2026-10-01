@@ -8,7 +8,8 @@ import {
   oneDriveProvider,
   googleDriveProvider,
 } from '../../packages/folder-sync/src/index.js'
-import { IndexedDbProvider } from './indexeddb-provider.js'
+import { createProvider, getProvider as getProviderDefinition, listProviders } from './registry.js'
+import { PROVIDERS } from './providerTypes.js'
 import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
 import { scaffoldAgentGate } from '../config/agentGate.js'
 import { getActiveTombstoneIds } from '../idTombstones.js'
@@ -36,30 +37,14 @@ export const TARGET_STATUS = {
   ERROR: 'error',
 }
 
-export const PROVIDERS = {
-  LOCAL_STORAGE: 'local-storage',
-  FSA: 'fsa',
-  ONEDRIVE: 'onedrive',
-  GOOGLE_DRIVE: 'google-drive',
-}
+export { PROVIDERS }
 
 export function getProviderName(id) {
-  switch (id) {
-    case PROVIDERS.LOCAL_STORAGE: return 'Browser Storage'
-    case PROVIDERS.FSA: return 'Local Folder'
-    case PROVIDERS.ONEDRIVE: return 'OneDrive'
-    case PROVIDERS.GOOGLE_DRIVE: return 'Google Drive'
-    default: return id
-  }
+  return getProviderDefinition(id)?.label || id
 }
 
 export function getAvailableProviders() {
-  const list = [PROVIDERS.LOCAL_STORAGE]
-  if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
-    list.push(PROVIDERS.FSA)
-  }
-  list.push(PROVIDERS.ONEDRIVE, PROVIDERS.GOOGLE_DRIVE)
-  return list
+  return listProviders().map(provider => provider.type)
 }
 
 // ── Active provider singleton ──────────────────────────
@@ -192,7 +177,7 @@ export function getActiveProvider() { return _provider }
 export function hasProvider() { return _provider !== null }
 
 export function configureLocalFirstStorage() {
-  const provider = new IndexedDbProvider()
+  const provider = createProvider(PROVIDERS.LOCAL_STORAGE)
   setActiveProvider(provider)
   return provider
 }
