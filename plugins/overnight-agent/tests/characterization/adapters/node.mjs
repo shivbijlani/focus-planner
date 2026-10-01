@@ -13,6 +13,9 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 
+// Item 4: oa-state.mjs, the Node port of the state engine, mapped command by command as it lands.
+const OA_STATE = { bin: 'plugins/overnight-agent/skills/overnight-agent/oa-state.mjs' };
+
 export const IMPLEMENTATIONS = {
   'oa-state': {
     seed: null,
@@ -21,12 +24,12 @@ export const IMPLEMENTATIONS = {
     mark: null,
     resnapshot: null,
     consent: null,
-    gate: null,
+    gate: OA_STATE,
     extract: null,
     doc: null,
     session: null,
     whoami: null,
-    'critical-tools': null,
+    'critical-tools': OA_STATE,
     decisions: null,
   },
   // write-turn has no subcommand; the key is '' (every mode -- validate, append, json -- goes here).
