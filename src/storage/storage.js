@@ -257,10 +257,6 @@ export function startAutoSync() {
   getEngine()
 }
 
-export async function reconcileSyncMirror() {
-  await getEngine().reconcileMirrorToLocal()
-}
-
 export async function connectSyncTarget(targetId) {
   // Redirects to the provider's sign-in; the flow resumes after redirect back.
   return getEngine().connect(targetId)

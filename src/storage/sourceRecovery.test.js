@@ -132,7 +132,7 @@ describe('storage source recovery', () => {
     expect(provider.pick).toHaveBeenCalledOnce()
     expect(setPendingSource).toHaveBeenCalledWith('s2', { created: false })
     expect(setActiveSource).toHaveBeenCalledWith('s2')
-    expect(result).toEqual({ provider, restored: false, reconnectNow: true })
+    expect(result).toEqual({ provider, restored: false })
     expect(clearPendingSource).not.toHaveBeenCalled()
   })
 

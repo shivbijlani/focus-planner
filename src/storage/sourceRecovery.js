@@ -73,7 +73,7 @@ export async function reconnectSavedSource(source, {
     }
   }
   await setActiveSource(source.id)
-  return { provider, restored, reconnectNow: true }
+  return { provider, restored }
 }
 
 export async function bootstrapSync(storage) {

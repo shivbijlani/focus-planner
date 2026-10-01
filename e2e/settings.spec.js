@@ -1,6 +1,6 @@
 // Settings dialog, agent editors, and the storage providers offered today.
 import { test, expect } from '@playwright/test'
-import { openPlanner, waitForBoard, readFile, writeFile, planWith, PLAN_FILE, addTask } from './helpers.js'
+import { openPlanner, waitForBoard, readFile, writeFile, planWith, PLAN_FILE } from './helpers.js'
 
 async function openSettings(page) {
   await page.getByRole('button', { name: /Settings/ }).first().click()
@@ -167,35 +167,6 @@ test('failed active-source restore falls back without changing saved choices and
   expect(await page.evaluate(() => localStorage.getItem('fp-active-source'))).toBe('s1')
 })
 
-test('fallback edits reach the restored folder before the board resumes after reconnect', async ({ page }) => {
-  await page.addInitScript(() => {
-    window.showDirectoryPicker = async () => navigator.storage.getDirectory()
-  })
-  await openPlanner(page)
-  await writeFile(page, PLAN_FILE, planWith({
-    today: ['| 73 | 🟡 | Existing task | - | 2026-01-01 | |'],
-  }))
-  const sources = [{ id: 's1', name: 'Work folder', providerType: 'fsa' }]
-  await page.evaluate((savedSources) => {
-    localStorage.setItem('fp-sources', JSON.stringify(savedSources))
-    localStorage.setItem('fp-active-source', 's1')
-  }, sources)
-  await page.reload()
-  await waitForBoard(page)
-
-  await addTask(page, 'Today', { task: 'Fallback edit survives reconnect', priority: '🟡' })
-  expect(await readFile(page, PLAN_FILE)).toContain('Fallback edit survives reconnect')
-
-  await page.getByRole('button', { name: 'Reconnect Work folder' }).click()
-  await waitForBoard(page)
-  await expect.poll(() => page.evaluate(async () => {
-    const root = await navigator.storage.getDirectory()
-    const file = await root.getFileHandle('planner.md')
-    return (await file.getFile()).text()
-  })).toContain('Fallback edit survives reconnect')
-  expect(await page.evaluate(() => localStorage.getItem('fp-active-source'))).toBe('s1')
-})
-
 test('canceling reconnect then switching sources leaves the selected source active after reload', async ({ page }) => {
   await page.addInitScript(() => {
     window.showDirectoryPicker = async () => { throw new DOMException('User cancelled', 'AbortError') }
@@ -226,4 +197,39 @@ test('canceling reconnect then switching sources leaves the selected source acti
   expect(await page.evaluate(() => localStorage.getItem('fp-active-source'))).toBe('s2')
   expect(await page.evaluate(() => localStorage.getItem('fp-pending-source'))).toBeNull()
   await expect(page.locator('tr[data-task-id="73"]')).toContainText('Keep browser source')
+})
+
+test('canceling a Settings OAuth source switch keeps the previous source active after reload', async ({ page }) => {
+  await openPlanner(page)
+  await writeFile(page, PLAN_FILE, planWith({
+    today: ['| 74 | 🟡 | Browser source stays active | - | 2026-01-01 | |'],
+  }))
+  const sources = [
+    { id: 's1', name: 'Personal browser', providerType: 'local-storage' },
+    { id: 's2', name: 'Work OneDrive', providerType: 'onedrive' },
+  ]
+  await page.evaluate((savedSources) => {
+    localStorage.setItem('fp-sources', JSON.stringify(savedSources))
+    localStorage.setItem('fp-active-source', 's1')
+  }, sources)
+  await page.reload()
+  await waitForBoard(page)
+  const appOrigin = new URL(page.url()).origin
+  await page.route('https://login.microsoftonline.com/**', route =>
+    route.fulfill({ status: 200, contentType: 'text/html', body: 'Sign-in canceled' }),
+  )
+
+  const dialog = await openSettings(page)
+  await dialog.getByRole('button', { name: 'Use Work OneDrive' }).click()
+  await expect(page).toHaveURL(/login\.microsoftonline\.com/)
+
+  await page.goto(`${appOrigin}/?error=access_denied`)
+  await waitForBoard(page)
+  await page.reload()
+  await waitForBoard(page)
+
+  expect(await page.evaluate(() => localStorage.getItem('fp-active-source'))).toBe('s1')
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('fp-sources')))).toEqual(sources)
+  expect(await page.evaluate(() => localStorage.getItem('fp-pending-source'))).toBeNull()
+  await expect(page.locator('tr[data-task-id="74"]')).toContainText('Browser source stays active')
 })

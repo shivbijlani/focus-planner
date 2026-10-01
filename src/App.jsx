@@ -4309,7 +4309,7 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
         if (!handle) { setBusy(false); return }
         await provider.scaffold()
       } else if (!restored) {
-        await setActiveSource(sourceId)
+        setPendingSource(sourceId, { created: false })
         await provider.pick()
         return
       }
@@ -4342,7 +4342,7 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
         await provider.restore()
         await provider.scaffold()
       } else {
-        await setActiveSource(source.id)
+        setPendingSource(source.id, { created: true })
         await provider.pick()
         return
       }
@@ -5251,8 +5251,7 @@ function App() {
         await reconnected.provider.scaffold()
       }
       setSourceToReconnect(null)
-      await storage.reconcileSyncMirror()
-      await initWithProvider(source.providerType)
+      window.location.reload()
     } catch (e) {
       if (!e.message?.includes('Redirecting')) setReconnectError(e.message || 'Could not reconnect storage source')
     } finally {
