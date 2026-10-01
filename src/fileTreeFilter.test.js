@@ -125,6 +125,8 @@ describe('filterPlannerTree', () => {
     ]
     expect(filterPlannerTree(tree).map((i) => i.name)).toEqual(['planner.md'])
   })
+
+  it('tolerates empty / nullish input', () => {
     expect(filterPlannerTree([])).toEqual([])
     expect(filterPlannerTree(undefined)).toEqual([])
   })
