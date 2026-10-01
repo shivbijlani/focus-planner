@@ -19,7 +19,7 @@ import { cleanStderr } from '../characterization/lib/normalize.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SKILL = path.resolve(HERE, '..', '..', 'skills', 'overnight-agent');
-const STUB = path.resolve(HERE, '..', 'characterization', 'stubs', 'issue-shipped.mjs');
+const STUB = path.resolve(HERE, '..', 'characterization', 'stubs', 'issue-shipped.stub.mjs');
 const argOf = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 ? Number(process.argv[i + 1]) : d; };
 const N = argOf('--n', 150);
 const JOBS = argOf('--jobs', 6);

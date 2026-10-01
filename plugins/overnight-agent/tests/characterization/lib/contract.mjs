@@ -87,7 +87,7 @@ export function baseEnv(dirs, stubsDir) {
     // write-turn's two hermetic hooks: its backup/state home, and the G15 shipped-issue classifier
     // (stubbed so the verdict never depends on git or the network).
     WRITE_TURN_OA_HOME: dirs.home,
-    WRITE_TURN_ISSUE_RESOLVER: path.join(stubsDir, 'issue-shipped.mjs'),
+    WRITE_TURN_ISSUE_RESOLVER: path.join(stubsDir, 'issue-shipped.stub.mjs'),
     // The identity stamp names the writing host; pinned so goldens do not depend on the machine.
     WRITE_TURN_HOST: 'char-host',
   });
