@@ -52,7 +52,8 @@ function copyTree(src, dst, ctx) {
   fs.mkdirSync(dst, { recursive: true });
   for (const ent of fs.readdirSync(src, { withFileTypes: true })) {
     const s = path.join(src, ent.name);
-    const d = path.join(dst, ent.name);
+    // git cannot track a file named .git, so a fixture worktree marker is committed as dot-git.
+    const d = path.join(dst, ent.name === 'dot-git' ? '.git' : ent.name);
     if (ent.isDirectory()) { copyTree(s, d, ctx); continue; }
     if (ent.name === '.gitkeep') continue;
     const buf = fs.readFileSync(s);
@@ -90,7 +91,8 @@ export function materialize({ fixturesDir, fixture, root, t0, files, mtimes }) {
     copyTree(path.join(dir, 'state'), path.join(root, LAYOUT.state), ctx);
     Object.assign(allMtimes, meta.mtimes || {});
   }
-  for (const d of Object.values(LAYOUT)) fs.mkdirSync(path.join(root, d), { recursive: true });
+  // git drops empty directories, so the layout (journal folder included) is always created here.
+  for (const d of [...Object.values(LAYOUT), path.join(LAYOUT.data, 'journal')]) fs.mkdirSync(path.join(root, d), { recursive: true });
   for (const [rel, content] of Object.entries(files || {})) {
     const p = sandboxPath(root, rel);
     if (content === null) { fs.rmSync(p, { recursive: true, force: true }); continue; }
