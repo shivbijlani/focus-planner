@@ -18,19 +18,19 @@ const OA_STATE = { bin: 'plugins/overnight-agent/skills/overnight-agent/oa-state
 
 export const IMPLEMENTATIONS = {
   'oa-state': {
-    seed: null,
-    scan: null,
-    get: null,
-    mark: null,
-    resnapshot: null,
-    consent: null,
+    seed: OA_STATE,
+    scan: OA_STATE,
+    get: OA_STATE,
+    mark: OA_STATE,
+    resnapshot: OA_STATE,
+    consent: OA_STATE,
     gate: OA_STATE,
-    extract: null,
-    doc: null,
+    extract: OA_STATE,
+    doc: OA_STATE,
     session: null,
-    whoami: null,
+    whoami: OA_STATE,
     'critical-tools': OA_STATE,
-    decisions: null,
+    decisions: OA_STATE,
   },
   // write-turn has no subcommand; the key is '' (every mode -- validate, append, json -- goes here).
   // Item 3: the Node port, driven with the PowerShell parameter names verbatim.
@@ -68,3 +68,4 @@ export default {
     });
   },
 };
+
