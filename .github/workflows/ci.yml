@@ -1015,6 +1015,9 @@ jobs:
       - name: Mutation check (sandbox mode is inert unless set; tripwires are load-bearing)
         shell: pwsh
         run: ./plugins/overnight-agent/tests/e2e/mutcheck-sandbox-mode.ps1
+      - name: Invariant i3 excuses only PHASE 0 hygiene path denials (#804)
+        shell: pwsh
+        run: node --test ./plugins/overnight-agent/tests/e2e/lib/denial-policy.test.mjs
       - name: Seed every scenario and precheck it against the code under test
         shell: pwsh
         run: ./plugins/overnight-agent/tests/e2e/run-sandbox.ps1 -SeedOnly -NoWait -Label ci
