@@ -9,8 +9,9 @@ import { makeSyncStatusCoalescer } from './storage/syncStatusCoalesce.js'
 import {
   loadSources, getSources, getActiveSourceId, getActiveSource, setActiveSource,
   addSource, getProvider, restoreSource, getHiddenSources,
-  isMultiSourceNoticeDismissed, dismissMultiSourceNotice,
+  isMultiSourceNoticeDismissed, dismissMultiSourceNotice, setPendingSource,
 } from './storage/sources.js'
+import { bootstrapSync, reconnectSavedSource, restoreSourceOrFallback } from './storage/sourceRecovery.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority, isNeededForUrgentTask } from './taskSort.js'
 // SELF_HEAL_IDS (temporary): renumber runaway/foreign task IDs on load. Safe to
 // delete this import + selfHealIds.js + its call site once all devices healed.
@@ -4946,6 +4947,9 @@ function App() {
   const [mission, setMission] = useState(getMissionStatement())
   useEffect(() => subscribeMissionStatement(setMission), [])
   const [sourceNotice, setSourceNotice] = useState(null)
+  const [sourceToReconnect, setSourceToReconnect] = useState(null)
+  const [reconnectingSource, setReconnectingSource] = useState(false)
+  const [reconnectError, setReconnectError] = useState('')
   const snoozeSweepInFlightRef = useRef(false)
   const contentWriteInFlightRef = useRef(false)
   const [snoozeTimerNonce, setSnoozeTimerNonce] = useState(0)
@@ -5030,6 +5034,7 @@ function App() {
   }
 
   const initWithProvider = async (providerId) => {
+    await bootstrapSync(storage)
     // Only seed the starter template on a genuinely fresh, local-only install.
     // If a backup target is already configured, the remote is authoritative —
     // seeding here would let template rows merge into the real synced data
@@ -5073,31 +5078,12 @@ function App() {
         // Configure local-first storage with background sync support
         storage.configureLocalFirstStorage()
 
-        // Initialise the storage provider. Returns true if init handled
-        // everything, false if a hard fallback to pick-storage UI is needed.
+        // Initialise the saved provider or fall back to Browser Storage.
         const initialised = await initStorage()
         if (!initialised) {
           setAppState('pick-storage')
           return
         }
-
-        // Register the folder-sync service worker (served from /folder-sync/)
-        // so push+pull runs off the main thread, then restore sync targets.
-        await storage.registerSyncWorker()
-
-        // Always restore sync targets and start background sync after the
-        // storage provider is ready. This is what consumes the OAuth ?code=
-        // query param after a Sign-in redirect (via the pending-target marker
-        // in sessionStorage) and what enables the background push/pull loop.
-        await storage.restoreSyncTargets()
-        storage.startAutoSync()
-
-        // Note: when a previously-connected backup target can no longer sync
-        // (e.g. OneDrive refresh token revoked), the folder-sync engine itself
-        // redirects the user to sign in on page load — it watches the service
-        // worker's status and triggers the reconnect round trip event-driven,
-        // once the SW reports `reconnect-required`. Doing it here synchronously
-        // raced ahead of that signal and could never reliably fire.
       } catch (e) {
         console.error('Storage init failed:', e)
         setAppState('pick-storage')
@@ -5111,18 +5097,15 @@ function App() {
   const initStorage = async () => {
     loadSources()
     const activeSource = getActiveSource()
-    if (activeSource) {
-      const provider = await restoreSource(activeSource.id)
-      if (!provider) return false
+    const selected = await restoreSourceOrFallback(activeSource, {
+      restoreSource,
+      setActiveProvider,
+      onReconnectRequired: setSourceToReconnect,
+    })
+    if (activeSource && !selected.reconnectSource) {
       await setActiveSource(activeSource.id)
-      await initWithProvider(activeSource.providerType)
-      return true
     }
-
-    const fallback = new IndexedDbProvider()
-    await fallback.restore()
-    setActiveProvider(fallback)
-    await initWithProvider(PROVIDERS.LOCAL_STORAGE)
+    await initWithProvider(selected.providerType)
     return true
   }
 
@@ -5245,6 +5228,31 @@ function App() {
     await initWithProvider(providerId)
   }
 
+  const handleReconnectSource = async () => {
+    if (!sourceToReconnect || reconnectingSource) return
+    setReconnectingSource(true)
+    setReconnectError('')
+    try {
+      const source = sourceToReconnect
+      const reconnected = await reconnectSavedSource(source, {
+        getProvider,
+        restoreSource,
+        setPendingSource,
+        setActiveSource,
+      })
+      if (!reconnected) return
+      if (!reconnected.restored && source.providerType === PROVIDERS.FSA) {
+        await reconnected.provider.scaffold()
+      }
+      setSourceToReconnect(null)
+      await initWithProvider(source.providerType)
+    } catch (e) {
+      if (!e.message?.includes('Redirecting')) setReconnectError(e.message || 'Could not reconnect storage source')
+    } finally {
+      setReconnectingSource(false)
+    }
+  }
+
   const handleNavigate = (path, scrollToTaskId, initialView) => {
     pendingJournalDeepLink = null
     if (scrollToTaskId) setPendingScrollToTaskId(scrollToTaskId)
@@ -5353,6 +5361,21 @@ function App() {
         />
       </aside>
       <main ref={contentRef} className={`content${isJournal ? ' content-chat' : ''}`}>
+        {sourceToReconnect && (
+          <div className="source-reconnect-notice" role="status">
+            <span>
+              Could not restore {sourceToReconnect.name}. The board is using Browser Storage for this session.
+              {reconnectError && ` ${reconnectError}`}
+            </span>
+            <button
+              type="button"
+              onClick={handleReconnectSource}
+              disabled={reconnectingSource}
+            >
+              {reconnectingSource ? 'Reconnecting…' : `Reconnect ${sourceToReconnect.name}`}
+            </button>
+          </div>
+        )}
         {sourceNotice && (
           <div className="source-notice" role="status">
             <span>

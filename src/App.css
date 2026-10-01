@@ -352,7 +352,8 @@ body {
   scrollbar-gutter: stable;
 }
 
-.source-notice {
+.source-notice,
+.source-reconnect-notice {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -365,7 +366,8 @@ body {
   color: #fcd34d;
   font-size: 0.9rem;
 }
-.source-notice button {
+.source-notice button,
+.source-reconnect-notice button {
   flex-shrink: 0;
   border: 0;
   border-radius: 5px;

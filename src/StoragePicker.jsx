@@ -4,7 +4,19 @@
  */
 import { useState, useCallback } from 'react'
 import { PROVIDERS, getAvailableProviders, getProviderName } from './storage/storage.js'
-import { addSource, getProvider, setActiveSource } from './storage/sources.js'
+import {
+  createSourceDescriptor,
+  clearPendingSource,
+  getSources,
+  getActiveSourceId,
+  getProvider,
+  makeProviderFor,
+  removeSource,
+  saveSource,
+  setActiveSource,
+  setPendingSource,
+} from './storage/sources.js'
+import { findSavedSourceForProvider } from './storage/sourceRecovery.js'
 
 export function StoragePicker({ onReady }) {
   const [availableProviders] = useState(getAvailableProviders)
@@ -15,19 +27,30 @@ export function StoragePicker({ onReady }) {
     setConnecting(id)
     setError('')
     try {
-      const source = addSource({ providerType: id })
-      await setActiveSource(source.id)
-      const provider = getProvider(source.id)
+      const existing = findSavedSourceForProvider(getSources(), id, getActiveSourceId())
+      const source = existing || createSourceDescriptor({ providerType: id })
+      const provider = existing ? getProvider(source.id) : makeProviderFor(source)
       if (id === PROVIDERS.FSA) {
         const handle = await provider.pick()
         if (!handle) { setConnecting(null); return }
         await provider.scaffold()
       } else if (id === PROVIDERS.LOCAL_STORAGE) {
-        await provider.restore()
+        if (!await provider.restore()) throw new Error('Browser Storage is unavailable')
         await provider.scaffold()
       } else {
-        await provider.pick()
+        if (!existing) saveSource(source, provider)
+        setPendingSource(source.id)
+        try {
+          await provider.pick()
+        } catch (error) {
+          clearPendingSource(source.id)
+          if (!existing) removeSource(source.id)
+          throw error
+        }
+        return
       }
+      if (!existing) saveSource(source, provider)
+      await setActiveSource(source.id)
       onReady(id)
     } catch (e) {
       if (!e.message?.includes('Redirecting')) {

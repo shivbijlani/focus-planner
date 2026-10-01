@@ -146,3 +146,23 @@ test('switching a saved storage source in Settings reloads the board from that c
   expect(await page.evaluate(() => localStorage.getItem('fp-active-source'))).toBe('s2')
   await expect(page.locator('.source-notice')).toContainText('Work')
 })
+
+test('failed active-source restore falls back without changing saved choices and offers reconnect', async ({ page }) => {
+  await openPlanner(page)
+  await writeFile(page, PLAN_FILE, planWith({
+    today: ['| 73 | 🟡 | Browser fallback task | - | 2026-01-01 | |'],
+  }))
+  const sources = [{ id: 's1', name: 'Work folder', providerType: 'fsa' }]
+  await page.evaluate((savedSources) => {
+    localStorage.setItem('fp-sources', JSON.stringify(savedSources))
+    localStorage.setItem('fp-active-source', 's1')
+  }, sources)
+
+  await page.reload()
+  await waitForBoard(page)
+
+  await expect(page.locator('tr[data-task-id="73"]')).toContainText('Browser fallback task')
+  await expect(page.getByRole('button', { name: 'Reconnect Work folder' })).toBeVisible()
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('fp-sources')))).toEqual(sources)
+  expect(await page.evaluate(() => localStorage.getItem('fp-active-source'))).toBe('s1')
+})

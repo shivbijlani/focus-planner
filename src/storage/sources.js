@@ -12,6 +12,7 @@ import { GoogleDriveProvider } from './google-drive-provider.js'
 
 const SOURCES_KEY = 'fp-sources'
 const ACTIVE_KEY = 'fp-active-source'
+const PENDING_KEY = 'fp-pending-source'
 const MULTI_SOURCE_NOTICE_KEY = 'fp-multi-source-notice-dismissed'
 
 const _providers = new Map()
@@ -48,9 +49,10 @@ export function loadSources() {
   _sources = Array.isArray(saved) ? saved.filter(source =>
     source && typeof source.id === 'string' && typeof source.providerType === 'string',
   ) : []
-  const selected = chooseActiveSource(_sources, localStorage.getItem(ACTIVE_KEY))
+  const pending = _sources.find(source => source.id === localStorage.getItem(PENDING_KEY))
+  const selected = pending || chooseActiveSource(_sources, localStorage.getItem(ACTIVE_KEY))
   _activeId = selected?.id ?? null
-  if (_activeId && localStorage.getItem(ACTIVE_KEY) !== _activeId) {
+  if (_activeId && !pending && localStorage.getItem(ACTIVE_KEY) !== _activeId) {
     localStorage.setItem(ACTIVE_KEY, _activeId)
   }
   return [..._sources]
@@ -80,6 +82,47 @@ export function getProvider(sourceId) {
   return provider
 }
 
+function nextSourceId() {
+  const used = new Set((_sources || []).map(source => source.id))
+  let index = 1
+  while (used.has(`s${index}`)) index++
+  return `s${index}`
+}
+
+export function createSourceDescriptor({ name, providerType, config } = {}) {
+  return {
+    id: nextSourceId(),
+    name: name || getProviderName(providerType),
+    providerType,
+    ...(config ? { config } : {}),
+  }
+}
+
+export function saveSource(source, provider) {
+  if (!_sources) _sources = []
+  const existing = _sources.find(item => item.id === source.id)
+  if (!existing) _sources.push(source)
+  if (provider) _providers.set(source.id, provider)
+  localStorage.setItem(SOURCES_KEY, JSON.stringify(_sources))
+  return existing || source
+}
+
+export function setPendingSource(sourceId) {
+  localStorage.setItem(PENDING_KEY, sourceId)
+}
+
+export function clearPendingSource(sourceId) {
+  if (localStorage.getItem(PENDING_KEY) === sourceId) localStorage.removeItem(PENDING_KEY)
+}
+
+export function removeSource(sourceId) {
+  if (!_sources) return
+  _sources = _sources.filter(source => source.id !== sourceId)
+  _providers.delete(sourceId)
+  clearPendingSource(sourceId)
+  localStorage.setItem(SOURCES_KEY, JSON.stringify(_sources))
+}
+
 export async function restoreSource(sourceId) {
   const provider = getProvider(sourceId)
   if (!provider) return null
@@ -92,25 +135,14 @@ export async function setActiveSource(sourceId) {
   if (!source) throw new Error(`Unknown source: ${sourceId}`)
   _activeId = sourceId
   localStorage.setItem(ACTIVE_KEY, sourceId)
+  clearPendingSource(sourceId)
   const provider = getProvider(sourceId)
   setActiveProvider(provider)
   return provider
 }
 
 export function addSource({ name, providerType, config } = {}) {
-  if (!_sources) _sources = []
-  const used = new Set(_sources.map(source => source.id))
-  let index = 1
-  while (used.has(`s${index}`)) index++
-  const source = {
-    id: `s${index}`,
-    name: name || getProviderName(providerType),
-    providerType,
-    ...(config ? { config } : {}),
-  }
-  _sources.push(source)
-  localStorage.setItem(SOURCES_KEY, JSON.stringify(_sources))
-  return source
+  return saveSource(createSourceDescriptor({ name, providerType, config }))
 }
 
 export function renameSource(sourceId, name) {
