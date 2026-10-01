@@ -388,6 +388,9 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     async listFiles() {
       return localAdapter.listFiles()
     },
+    async reconcileMirrorToLocal() {
+      return reconcileMirrorToLocal()
+    },
     async getFolderName() {
       return localAdapter.getFolderName()
     },

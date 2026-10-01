@@ -3,10 +3,12 @@ import {
   __testing,
   chooseActiveSource,
   dismissMultiSourceNotice,
+  consumePendingSource,
   getHiddenSources,
   isMultiSourceNoticeDismissed,
   loadSources,
   setActiveSource,
+  setPendingSource,
   getActiveSourceId,
 } from './sources.js'
 
@@ -74,5 +76,46 @@ describe('single active storage source', () => {
     expect(getActiveSourceId()).toBe('second')
     expect(localStorage.getItem('fp-active-source')).toBe('second')
     expect(JSON.parse(localStorage.getItem('fp-sources'))).toEqual(storedChoices)
+  })
+
+  it('consumes pending selections once without overriding the active source on a later load', () => {
+    const storedChoices = [
+      { id: 'first', name: 'First', providerType: 'local-storage' },
+      { id: 'second', name: 'Second', providerType: 'onedrive' },
+    ]
+    globalThis.localStorage = makeLocalStorage({
+      'fp-sources': JSON.stringify(storedChoices),
+      'fp-active-source': 'first',
+    })
+    loadSources()
+    setPendingSource('second', { created: true })
+
+    expect(consumePendingSource()).toEqual({ source: storedChoices[1], created: true })
+    expect(consumePendingSource()).toBeNull()
+    loadSources()
+    expect(getActiveSourceId()).toBe('first')
+    expect(localStorage.getItem('fp-pending-source')).toBeNull()
+    expect(localStorage.getItem('fp-pending-source-created')).toBeNull()
+  })
+
+  it('clears any pending selection when a different saved source becomes active', async () => {
+    const storedChoices = [
+      { id: 'first', name: 'First', providerType: 'local-storage' },
+      { id: 'second', name: 'Second', providerType: 'local-storage' },
+    ]
+    globalThis.localStorage = makeLocalStorage({
+      'fp-sources': JSON.stringify(storedChoices),
+      'fp-active-source': 'first',
+      'fp-pending-source': 'first',
+      'fp-pending-source-created': '1',
+    })
+    loadSources()
+
+    await setActiveSource('second')
+
+    expect(getActiveSourceId()).toBe('second')
+    expect(localStorage.getItem('fp-pending-source')).toBeNull()
+    expect(localStorage.getItem('fp-pending-source-created')).toBeNull()
+    expect(consumePendingSource()).toBeNull()
   })
 })

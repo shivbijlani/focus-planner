@@ -41,11 +41,49 @@ describe('storage source recovery', () => {
       provider: fallback,
       providerType: 'local-storage',
       reconnectSource: source,
+      activateSource: null,
     })
     expect(onReconnectRequired).toHaveBeenCalledWith(source)
     expect(setActiveProvider).toHaveBeenCalledWith(fallback)
     expect(localStorage.getItem('fp-active-source')).toBe('s1')
     expect(JSON.parse(localStorage.getItem('fp-sources'))).toEqual([source])
+  })
+
+  it('removes a newly-created OAuth choice when its one-shot restore fails', async () => {
+    const source = { id: 's2', name: 'OneDrive', providerType: 'onedrive' }
+    const fallback = { restore: vi.fn().mockResolvedValue(true) }
+    const removeSource = vi.fn()
+    const onReconnectRequired = vi.fn()
+    const result = await restoreSourceOrFallback(
+      { id: 's1', name: 'Browser', providerType: 'local-storage' },
+      {
+        pendingSource: { source, created: true },
+        restoreSource: vi.fn().mockResolvedValue(null),
+        makeFallback: () => fallback,
+        setActiveProvider: vi.fn(),
+        removeSource,
+        onReconnectRequired,
+      },
+    )
+
+    expect(removeSource).toHaveBeenCalledWith('s2')
+    expect(onReconnectRequired).not.toHaveBeenCalled()
+    expect(result.reconnectSource).toBeNull()
+    expect(result.activateSource).toBeNull()
+  })
+
+  it('restores and activates the one-shot pending source only after success', async () => {
+    const active = { id: 's1', providerType: 'local-storage' }
+    const pending = { id: 's2', providerType: 'onedrive' }
+    const provider = { id: 'provider' }
+    const result = await restoreSourceOrFallback(active, {
+      pendingSource: { source: pending, created: true },
+      restoreSource: vi.fn().mockResolvedValue(provider),
+      setActiveProvider: vi.fn(),
+    })
+    expect(result.provider).toBe(provider)
+    expect(result.activateSource).toBe(pending)
+    expect(result.providerType).toBe('onedrive')
   })
 
   it('attempts all sync bootstrap steps even when one fails', async () => {
@@ -79,34 +117,55 @@ describe('storage source recovery', () => {
     const provider = { pick: vi.fn().mockResolvedValue({ name: 'chosen folder' }) }
     const restoreSource = vi.fn().mockResolvedValue(null)
     const setPendingSource = vi.fn()
+    const clearPendingSource = vi.fn()
     const setActiveSource = vi.fn()
 
     const result = await reconnectSavedSource(source, {
       getProvider: vi.fn(id => id === source.id ? provider : null),
       restoreSource,
       setPendingSource,
+      clearPendingSource,
       setActiveSource,
     })
 
     expect(restoreSource).toHaveBeenCalledWith('s2')
     expect(provider.pick).toHaveBeenCalledOnce()
-    expect(setPendingSource).toHaveBeenCalledWith('s2')
+    expect(setPendingSource).toHaveBeenCalledWith('s2', { created: false })
     expect(setActiveSource).toHaveBeenCalledWith('s2')
-    expect(result).toEqual({ provider, restored: false })
+    expect(result).toEqual({ provider, restored: false, reconnectNow: true })
+    expect(clearPendingSource).not.toHaveBeenCalled()
   })
 
   it('does not activate a source when the user cancels reconnection', async () => {
     const setActiveSource = vi.fn()
+    const clearPendingSource = vi.fn()
     const result = await reconnectSavedSource(
       { id: 's2', providerType: 'fsa' },
       {
         getProvider: () => ({ pick: vi.fn().mockResolvedValue(null) }),
         restoreSource: vi.fn().mockResolvedValue(null),
         setPendingSource: vi.fn(),
+        clearPendingSource,
         setActiveSource,
       },
     )
     expect(result).toBeNull()
+    expect(clearPendingSource).toHaveBeenCalledOnce()
     expect(setActiveSource).not.toHaveBeenCalled()
+  })
+
+  it('clears pending state when a saved source picker throws', async () => {
+    const clearPendingSource = vi.fn()
+    await expect(reconnectSavedSource(
+      { id: 's2', providerType: 'fsa' },
+      {
+        getProvider: () => ({ pick: vi.fn().mockRejectedValue(new DOMException('cancelled', 'AbortError')) }),
+        restoreSource: vi.fn().mockResolvedValue(null),
+        setPendingSource: vi.fn(),
+        clearPendingSource,
+        setActiveSource: vi.fn(),
+      },
+    )).rejects.toMatchObject({ name: 'AbortError' })
+    expect(clearPendingSource).toHaveBeenCalledOnce()
   })
 })

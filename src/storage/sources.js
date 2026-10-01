@@ -13,6 +13,7 @@ import { GoogleDriveProvider } from './google-drive-provider.js'
 const SOURCES_KEY = 'fp-sources'
 const ACTIVE_KEY = 'fp-active-source'
 const PENDING_KEY = 'fp-pending-source'
+const PENDING_CREATED_KEY = 'fp-pending-source-created'
 const MULTI_SOURCE_NOTICE_KEY = 'fp-multi-source-notice-dismissed'
 
 const _providers = new Map()
@@ -49,10 +50,9 @@ export function loadSources() {
   _sources = Array.isArray(saved) ? saved.filter(source =>
     source && typeof source.id === 'string' && typeof source.providerType === 'string',
   ) : []
-  const pending = _sources.find(source => source.id === localStorage.getItem(PENDING_KEY))
-  const selected = pending || chooseActiveSource(_sources, localStorage.getItem(ACTIVE_KEY))
+  const selected = chooseActiveSource(_sources, localStorage.getItem(ACTIVE_KEY))
   _activeId = selected?.id ?? null
-  if (_activeId && !pending && localStorage.getItem(ACTIVE_KEY) !== _activeId) {
+  if (_activeId && localStorage.getItem(ACTIVE_KEY) !== _activeId) {
     localStorage.setItem(ACTIVE_KEY, _activeId)
   }
   return [..._sources]
@@ -107,19 +107,29 @@ export function saveSource(source, provider) {
   return existing || source
 }
 
-export function setPendingSource(sourceId) {
+export function setPendingSource(sourceId, { created = false } = {}) {
   localStorage.setItem(PENDING_KEY, sourceId)
+  localStorage.setItem(PENDING_CREATED_KEY, created ? '1' : '0')
 }
 
-export function clearPendingSource(sourceId) {
-  if (localStorage.getItem(PENDING_KEY) === sourceId) localStorage.removeItem(PENDING_KEY)
+export function consumePendingSource() {
+  const sourceId = localStorage.getItem(PENDING_KEY)
+  const created = localStorage.getItem(PENDING_CREATED_KEY) === '1'
+  clearPendingSource()
+  const source = _sources?.find(item => item.id === sourceId) || null
+  return source ? { source, created } : null
+}
+
+export function clearPendingSource() {
+  localStorage.removeItem(PENDING_KEY)
+  localStorage.removeItem(PENDING_CREATED_KEY)
 }
 
 export function removeSource(sourceId) {
   if (!_sources) return
   _sources = _sources.filter(source => source.id !== sourceId)
   _providers.delete(sourceId)
-  clearPendingSource(sourceId)
+  clearPendingSource()
   localStorage.setItem(SOURCES_KEY, JSON.stringify(_sources))
 }
 
@@ -135,7 +145,7 @@ export async function setActiveSource(sourceId) {
   if (!source) throw new Error(`Unknown source: ${sourceId}`)
   _activeId = sourceId
   localStorage.setItem(ACTIVE_KEY, sourceId)
-  clearPendingSource(sourceId)
+  clearPendingSource()
   const provider = getProvider(sourceId)
   setActiveProvider(provider)
   return provider

@@ -39,7 +39,7 @@ export function StoragePicker({ onReady }) {
         await provider.scaffold()
       } else {
         if (!existing) saveSource(source, provider)
-        setPendingSource(source.id)
+        setPendingSource(source.id, { created: !existing })
         try {
           await provider.pick()
         } catch (error) {

@@ -8,8 +8,9 @@ import { IndexedDbProvider } from './storage/indexeddb-provider.js'
 import { makeSyncStatusCoalescer } from './storage/syncStatusCoalesce.js'
 import {
   loadSources, getSources, getActiveSourceId, getActiveSource, setActiveSource,
-  addSource, getProvider, restoreSource, getHiddenSources,
+  addSource, getProvider, restoreSource, getHiddenSources, removeSource,
   isMultiSourceNoticeDismissed, dismissMultiSourceNotice, setPendingSource,
+  consumePendingSource, clearPendingSource,
 } from './storage/sources.js'
 import { bootstrapSync, reconnectSavedSource, restoreSourceOrFallback } from './storage/sourceRecovery.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority, isNeededForUrgentTask } from './taskSort.js'
@@ -5097,14 +5098,18 @@ function App() {
   const initStorage = async () => {
     loadSources()
     const activeSource = getActiveSource()
+    const pendingSource = consumePendingSource()
     const selected = await restoreSourceOrFallback(activeSource, {
       restoreSource,
       setActiveProvider,
       onReconnectRequired: setSourceToReconnect,
+      pendingSource,
+      removeSource,
     })
-    if (activeSource && !selected.reconnectSource) {
-      await setActiveSource(activeSource.id)
+    if (selected.activateSource) {
+      await setActiveSource(selected.activateSource.id)
     }
+    if (selected.reconnectSource) setSourceToReconnect(selected.reconnectSource)
     await initWithProvider(selected.providerType)
     return true
   }
@@ -5238,6 +5243,7 @@ function App() {
         getProvider,
         restoreSource,
         setPendingSource,
+        clearPendingSource,
         setActiveSource,
       })
       if (!reconnected) return
@@ -5245,6 +5251,7 @@ function App() {
         await reconnected.provider.scaffold()
       }
       setSourceToReconnect(null)
+      await storage.reconcileSyncMirror()
       await initWithProvider(source.providerType)
     } catch (e) {
       if (!e.message?.includes('Redirecting')) setReconnectError(e.message || 'Could not reconnect storage source')

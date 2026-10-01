@@ -1,6 +1,6 @@
 // Settings dialog, agent editors, and the storage providers offered today.
 import { test, expect } from '@playwright/test'
-import { openPlanner, waitForBoard, readFile, writeFile, planWith, PLAN_FILE } from './helpers.js'
+import { openPlanner, waitForBoard, readFile, writeFile, planWith, PLAN_FILE, addTask } from './helpers.js'
 
 async function openSettings(page) {
   await page.getByRole('button', { name: /Settings/ }).first().click()
@@ -165,4 +165,65 @@ test('failed active-source restore falls back without changing saved choices and
   await expect(page.getByRole('button', { name: 'Reconnect Work folder' })).toBeVisible()
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('fp-sources')))).toEqual(sources)
   expect(await page.evaluate(() => localStorage.getItem('fp-active-source'))).toBe('s1')
+})
+
+test('fallback edits reach the restored folder before the board resumes after reconnect', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.showDirectoryPicker = async () => navigator.storage.getDirectory()
+  })
+  await openPlanner(page)
+  await writeFile(page, PLAN_FILE, planWith({
+    today: ['| 73 | 🟡 | Existing task | - | 2026-01-01 | |'],
+  }))
+  const sources = [{ id: 's1', name: 'Work folder', providerType: 'fsa' }]
+  await page.evaluate((savedSources) => {
+    localStorage.setItem('fp-sources', JSON.stringify(savedSources))
+    localStorage.setItem('fp-active-source', 's1')
+  }, sources)
+  await page.reload()
+  await waitForBoard(page)
+
+  await addTask(page, 'Today', { task: 'Fallback edit survives reconnect', priority: '🟡' })
+  expect(await readFile(page, PLAN_FILE)).toContain('Fallback edit survives reconnect')
+
+  await page.getByRole('button', { name: 'Reconnect Work folder' }).click()
+  await waitForBoard(page)
+  await expect.poll(() => page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory()
+    const file = await root.getFileHandle('planner.md')
+    return (await file.getFile()).text()
+  })).toContain('Fallback edit survives reconnect')
+  expect(await page.evaluate(() => localStorage.getItem('fp-active-source'))).toBe('s1')
+})
+
+test('canceling reconnect then switching sources leaves the selected source active after reload', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.showDirectoryPicker = async () => { throw new DOMException('User cancelled', 'AbortError') }
+  })
+  await openPlanner(page)
+  await writeFile(page, PLAN_FILE, planWith({
+    today: ['| 73 | 🟡 | Keep browser source | - | 2026-01-01 | |'],
+  }))
+  const sources = [
+    { id: 's1', name: 'Work folder', providerType: 'fsa' },
+    { id: 's2', name: 'Personal browser', providerType: 'local-storage' },
+  ]
+  await page.evaluate((savedSources) => {
+    localStorage.setItem('fp-sources', JSON.stringify(savedSources))
+    localStorage.setItem('fp-active-source', 's1')
+  }, sources)
+  await page.reload()
+  await waitForBoard(page)
+
+  await page.getByRole('button', { name: 'Reconnect Work folder' }).click()
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('fp-pending-source'))).toBeNull()
+  const dialog = await openSettings(page)
+  await dialog.getByRole('button', { name: 'Use Personal browser' }).click()
+  await waitForBoard(page)
+  await page.reload()
+  await waitForBoard(page)
+
+  expect(await page.evaluate(() => localStorage.getItem('fp-active-source'))).toBe('s2')
+  expect(await page.evaluate(() => localStorage.getItem('fp-pending-source'))).toBeNull()
+  await expect(page.locator('tr[data-task-id="73"]')).toContainText('Keep browser source')
 })

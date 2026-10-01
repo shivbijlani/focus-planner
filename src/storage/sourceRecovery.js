@@ -6,15 +6,29 @@ export async function restoreSourceOrFallback(source, {
   makeFallback = () => new IndexedDbProvider(),
   setActiveProvider,
   onReconnectRequired = () => {},
+  pendingSource = null,
+  removeSource = () => {},
 } = {}) {
-  if (source) {
+  const selectedSource = pendingSource?.source || source
+  if (selectedSource) {
     try {
-      const provider = await restoreSource(source.id)
-      if (provider) return { provider, providerType: source.providerType, reconnectSource: null }
+      const provider = await restoreSource(selectedSource.id)
+      if (provider) {
+        return {
+          provider,
+          providerType: selectedSource.providerType,
+          reconnectSource: null,
+          activateSource: selectedSource,
+        }
+      }
     } catch {
       // A rejected permission/token restore is handled like an unavailable source.
     }
-    onReconnectRequired(source)
+    if (pendingSource?.created) {
+      removeSource(selectedSource.id)
+    } else {
+      onReconnectRequired(selectedSource)
+    }
   }
 
   const provider = makeFallback()
@@ -23,7 +37,8 @@ export async function restoreSourceOrFallback(source, {
   return {
     provider,
     providerType: PROVIDERS.LOCAL_STORAGE,
-    reconnectSource: source || null,
+    reconnectSource: pendingSource?.created ? null : selectedSource || null,
+    activateSource: null,
   }
 }
 
@@ -37,6 +52,7 @@ export async function reconnectSavedSource(source, {
   getProvider,
   restoreSource,
   setPendingSource,
+  clearPendingSource = () => {},
   setActiveSource,
 }) {
   const provider = getProvider(source.id)
@@ -44,11 +60,20 @@ export async function reconnectSavedSource(source, {
   let restored = false
   try { restored = Boolean(await restoreSource(source.id)) } catch { /* pick below */ }
   if (!restored) {
-    setPendingSource(source.id)
-    if (!await provider.pick()) return null
+    setPendingSource(source.id, { created: false })
+    try {
+      const picked = await provider.pick()
+      if (!picked) {
+        if (source.providerType === PROVIDERS.FSA) clearPendingSource()
+        return null
+      }
+    } catch (error) {
+      clearPendingSource()
+      throw error
+    }
   }
   await setActiveSource(source.id)
-  return { provider, restored }
+  return { provider, restored, reconnectNow: true }
 }
 
 export async function bootstrapSync(storage) {
