@@ -113,7 +113,18 @@ describe('filterPlannerTree', () => {
     expect(filterPlannerTree(tree)).toEqual([])
   })
 
-  it('tolerates empty / nullish input', () => {
+  it('hides the Docs folder (docs/<id>/doc.md belongs to the Docs app)', () => {
+    const tree = [
+      { name: 'docs', type: 'directory', path: 'docs', children: [
+        { name: 'index.json', type: 'file', path: 'docs/index.json' },
+        { name: 'd-abc123', type: 'directory', path: 'docs/d-abc123', children: [
+          { name: 'doc.md', type: 'file', path: 'docs/d-abc123/doc.md' },
+        ] },
+      ] },
+      { name: 'planner.md', type: 'file', path: 'planner.md' },
+    ]
+    expect(filterPlannerTree(tree).map((i) => i.name)).toEqual(['planner.md'])
+  })
     expect(filterPlannerTree([])).toEqual([])
     expect(filterPlannerTree(undefined)).toEqual([])
   })

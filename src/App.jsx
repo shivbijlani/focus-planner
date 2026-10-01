@@ -39,6 +39,8 @@ import { patchPerSourceContent } from './combinedViewPatch.js'
 import * as ops from './focusPlanOps.js'
 import { deleteJournalForTask } from './journalDelete.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
+import { renderJournalLines } from './markdown/markdownRender.jsx'
+import { useTaskDoc, journalDeepLink } from './docsIndex.js'
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { linkedNavFallbackFile } from './linkedNav.js'
 import { clampMenuPosition, menuMaxHeight } from './menuPosition.js'
@@ -1162,6 +1164,8 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
   const isMobile = useIsMobile()
   
   const journalProvider = sourceId ? getProvider(sourceId) : getActiveProvider()
+  // Docs (#3.2 of plans/docs-app-design.md): the task's catch-up doc, when docs/index.json binds one.
+  const taskDoc = useTaskDoc(journalProvider, taskId)
   
   // Check and read the journal as one queued operation. The provider is captured
   // now and namespaces de-duplication, so a source switch cannot reuse an
@@ -1239,7 +1243,7 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
 
   const handleContextMenu = (e) => {
     e.preventDefault()
-    onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence)
+    onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence, taskDoc)
   }
 
   // Mobile (#335): visible kebab opens the same row-action sheet — no hidden
@@ -1247,7 +1251,7 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
   const handleKebab = (e) => {
     e.preventDefault()
     e.stopPropagation()
-    onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence)
+    onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence, taskDoc)
   }
 
   // Filter to only uncompleted todos
@@ -1528,6 +1532,24 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
                                     lives on the Journal icon. */}
                               </a>
                             )}
+                            {/* Docs §3.2: the third link of the trio — 📄 the task's catch-up
+                                doc — only when docs/index.json binds one. Its badge is about
+                                the DOC (unread revision / needs you); ★ stays on 📔. */}
+                            {taskDoc && (
+                              <a
+                                href={taskDoc.href}
+                                className="journal-link journal-link-doc"
+                                title={taskDoc.needsYou ? 'Catch-up doc — needs you' : taskDoc.unread ? `Catch-up doc — new revision r${taskDoc.rev}` : 'Open catch-up doc'}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                📄
+                                {taskDoc.needsYou ? (
+                                  <span className="journal-badge doc-badge-needs" aria-label="Needs you">!</span>
+                                ) : taskDoc.unread ? (
+                                  <span className="journal-badge doc-badge-unread" aria-label="New revision">●</span>
+                                ) : null}
+                              </a>
+                            )}
                           </span>
                         )}
                       </span>
@@ -1618,7 +1640,27 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
             {!isEditing && (
               <>
                 <div className="row-actions">
-                  {journalPath && (
+                  {taskDoc ? (
+                    // Docs §3.2 / Q10 default: when the task has a catch-up doc, the single
+                    // rail slot shows 📄 (the doc is the thing to read); 💬 Telegram and
+                    // 📔 Journal move to the kebab.
+                    <a
+                      href={taskDoc.href}
+                      className="row-action-btn doc-action"
+                      aria-label="Open catch-up doc"
+                      title="Open catch-up doc"
+                      onClick={(e) => { e.stopPropagation() }}
+                    >
+                      <span className="journal-glyph">
+                        📄
+                        {taskDoc.needsYou ? (
+                          <span className="journal-badge doc-badge-needs" aria-label="Needs you">!</span>
+                        ) : taskDoc.unread ? (
+                          <span className="journal-badge doc-badge-unread" aria-label="New revision">●</span>
+                        ) : null}
+                      </span>
+                    </a>
+                  ) : journalPath && (
                     telegram?.url ? (
                       // #352: Telegram-active tasks show the 💬 Chat icon, which
                       // opens the Telegram thread externally (↗ badge).
@@ -1860,7 +1902,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     }
   }
 
-  const handleContextMenu = (e, rawLine, row, journalPath, taskId, telegram, journalExistence) => {
+  const handleContextMenu = (e, rawLine, row, journalPath, taskId, telegram, journalExistence, taskDoc) => {
     const options = []
     const rowSourceId = row.__sourceId || getActiveSourceId()
     const rowReadStateId = journalReadStateId(rowSourceId, taskId)
@@ -1923,7 +1965,26 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     // Mobile #373: the rail shows ONE icon; its counterpart lives in the kebab.
     // With Telegram the rail icon is 💬 Chat → Telegram, so 📔 Journal goes here.
     // Without Telegram the rail falls back to 📔 Journal, so in-app 💬 Chat goes here.
-    if (isMobile && journalPath && taskId) {
+    // Docs §3.2: with a catch-up doc the rail is 📄, so BOTH 💬 Telegram and 📔 Journal go here.
+    if (isMobile && taskDoc) {
+      if (telegram?.url) {
+        options.push({
+          label: 'Open Telegram',
+          icon: '💬',
+          action: () => { window.open(telegram.url, '_blank', 'noopener,noreferrer') }
+        })
+      }
+      if (journalPath && taskId) {
+        options.push({
+          label: 'Open journal',
+          icon: '📔',
+          action: () => {
+            readStateService.emitJournalOpened(rowReadStateId)
+            onNavigate(qualifiedJournalPath, null, 'chat')
+          }
+        })
+      }
+    } else if (isMobile && journalPath && taskId) {
       if (telegram?.url) {
         options.push({
           label: 'Open journal',
@@ -3983,160 +4044,6 @@ function CompletedWeekSection({ title, headers, rows, getPriorityClass, onNaviga
 
 // ---- Journal chat rendering ----------------------------------------------
 
-// Render inline markdown (bold, italic, code) plus links to React nodes.
-function renderInlineFormatting(text, keyBase) {
-  const nodes = []
-  const re = /(\*\*([^*]+)\*\*|__([^_]+)__|`([^`]+)`|\*([^*]+)\*|(?<![A-Za-z0-9])_([^_]+)_(?![A-Za-z0-9]))/g
-  let last = 0
-  let m
-  let idx = 0
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) nodes.push(text.slice(last, m.index))
-    if (m[2] != null) nodes.push(<strong key={`${keyBase}-b${idx}`}>{m[2]}</strong>)
-    else if (m[3] != null) nodes.push(<strong key={`${keyBase}-b${idx}`}>{m[3]}</strong>)
-    else if (m[4] != null) nodes.push(<code className="jc-code" key={`${keyBase}-c${idx}`}>{m[4]}</code>)
-    else if (m[5] != null) nodes.push(<em key={`${keyBase}-i${idx}`}>{m[5]}</em>)
-    else if (m[6] != null) nodes.push(<em key={`${keyBase}-i${idx}`}>{m[6]}</em>)
-    last = m.index + m[0].length
-    idx++
-  }
-  if (last < text.length) nodes.push(text.slice(last))
-  return nodes
-}
-
-// Render text with links first, then inline formatting on the plain segments.
-function renderInline(text, onNavigate, keyBase = 'k') {
-  const linkRe = /(!?)\[([^\]]+)\]\(([^)]+)\)/g
-  const out = []
-  let last = 0
-  let m
-  let idx = 0
-  while ((m = linkRe.exec(text)) !== null) {
-    if (m.index > last) out.push(...renderInlineFormatting(text.slice(last, m.index), `${keyBase}-t${idx}`))
-    const isImage = m[1] === '!'
-    const label = m[2]
-    const href = m[3]
-    if (isImage) {
-      out.push(
-        <a key={`${keyBase}-imgl${idx}`} href={href} target="_blank" rel="noopener noreferrer" className="jc-image-link">
-          <img src={href} alt={label} className="jc-image" loading="lazy" />
-        </a>
-      )
-    } else if (href.startsWith('journal/') || href.endsWith('.md')) {
-      out.push(
-        <a key={`${keyBase}-l${idx}`} href="#" className="internal-link" onClick={(e) => { e.preventDefault(); onNavigate(href) }}>{label}</a>
-      )
-    } else {
-      out.push(
-        <a key={`${keyBase}-l${idx}`} href={href} target="_blank" rel="noopener noreferrer" className="external-link">{label}</a>
-      )
-    }
-    last = m.index + m[0].length
-    idx++
-  }
-  if (last < text.length) out.push(...renderInlineFormatting(text.slice(last), `${keyBase}-t${idx}`))
-  return out
-}
-
-// Render a block of journal lines into chat content (lists, todos, headings,
-// tables, blockquotes, text). Uses an index loop so block elements (tables,
-// blockquotes) can consume multiple consecutive lines.
-function renderJournalLines(lines, onNavigate, onToggle, ctx) {
-  const out = []
-  let list = null
-  const toggleProps = (idx) => (onToggle && ctx ? {
-    className: 'jc-todo-toggle',
-    role: 'button',
-    tabIndex: 0,
-    title: 'Click to toggle',
-    onClick: () => onToggle(idx),
-    onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(idx) } },
-  } : {})
-  const flush = () => {
-    if (list) { out.push(<ul className="jc-list" key={`ul-${out.length}`}>{list}</ul>); list = null }
-  }
-
-  const isTableRow = (s) => /^\|.*\|\s*$/.test(s.trim())
-  const isTableSep = (s) => /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(s.trim())
-  const splitCells = (s) => s.trim().replace(/^\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim())
-
-  for (let i = 0; i < lines.length; i++) {
-    const t = lines[i].trim()
-    if (!t) { flush(); continue }
-    let m
-
-    // Markdown table: header row, separator row, then body rows.
-    if (isTableRow(t) && i + 1 < lines.length && isTableSep(lines[i + 1])) {
-      flush()
-      const header = splitCells(t)
-      const rows = []
-      let j = i + 2
-      while (j < lines.length && isTableRow(lines[j])) { rows.push(splitCells(lines[j])); j++ }
-      out.push(
-        <table className="jc-table" key={`tbl-${i}`}>
-          <thead><tr>{header.map((h, hi) => <th key={hi}>{renderInline(h, onNavigate, `th${i}-${hi}`)}</th>)}</tr></thead>
-          <tbody>{rows.map((r, ri) => (
-            <tr key={ri}>{header.map((_, ci) => <td key={ci}>{renderInline(r[ci] || '', onNavigate, `td${i}-${ri}-${ci}`)}</td>)}</tr>
-          ))}</tbody>
-        </table>
-      )
-      i = j - 1
-      continue
-    }
-
-    // Blockquote: one or more consecutive `>` lines.
-    if (/^>\s?/.test(t)) {
-      flush()
-      const quote = [t.replace(/^>\s?/, '')]
-      let j = i + 1
-      while (j < lines.length && /^>\s?/.test(lines[j].trim())) { quote.push(lines[j].trim().replace(/^>\s?/, '')); j++ }
-      out.push(<blockquote className="jc-quote" key={`q-${i}`}>{renderJournalLines(quote, onNavigate)}</blockquote>)
-      i = j - 1
-      continue
-    }
-
-    // Checkbox items (bulleted or numbered): - [ ] / 1. [ ] / 1) [x]
-    if ((m = t.match(/^(?:[-*+]|\d+[.)])\s*\[([ xX])\]\s*(.+)/))) {
-      const done = m[1].toLowerCase() === 'x'
-      const idx = ctx ? ctx.n++ : null
-      list = list || []
-      list.push(<li key={i} {...toggleProps(idx)}><span className={`jc-chip ${done ? 'done' : 'open'}`}>{done ? 'DONE' : 'TODO'}</span>{renderInline(m[2], onNavigate, `c${i}`)}</li>)
-      continue
-    }
-    if ((m = t.match(/^-\s*TODO:\s*(.+)/i))) {
-      const idx = ctx ? ctx.n++ : null
-      list = list || []
-      list.push(<li key={i} {...toggleProps(idx)}><span className="jc-chip open">TODO</span>{renderInline(m[1], onNavigate, `c${i}`)}</li>)
-      continue
-    }
-    if ((m = t.match(/^-\s*DONE:\s*(.+)/i))) {
-      const idx = ctx ? ctx.n++ : null
-      list = list || []
-      list.push(<li key={i} {...toggleProps(idx)}><span className="jc-chip done">DONE</span>{renderInline(m[1], onNavigate, `c${i}`)}</li>)
-      continue
-    }
-    if ((m = t.match(/^[-*+]\s+(.+)/)) || (m = t.match(/^(\d+[.)])\s+(.+)/))) {
-      const itemText = m[2] != null ? `${m[1]} ${m[2]}` : m[1]
-      list = list || []
-      list.push(<li key={i}>{renderInline(itemText, onNavigate, `c${i}`)}</li>)
-      continue
-    }
-
-    flush()
-    if (/^([-*_])\1{2,}$/.test(t)) {
-      out.push(<hr className="jc-hr" key={i} />)
-      continue
-    }
-    if ((m = t.match(/^#{2,6}\s+(.+)/))) {
-      out.push(<div className="jc-subhead" key={i}>{renderInline(m[1], onNavigate, `h${i}`)}</div>)
-      continue
-    }
-    out.push(<p className="jc-p" key={i}>{renderInline(t, onNavigate, `p${i}`)}</p>)
-  }
-  flush()
-  return out
-}
-
 // View switcher between the Chat thread and the raw Journal (markdown source).
 // Desktop (>768px / fine pointer): a two-button segmented control with both
 // "Journal" and "Chat" always visible, active one highlighted. Mobile (<=768px
@@ -4164,6 +4071,28 @@ function JournalChatToggle({ showRaw, setShowRaw }) {
         >📔 Journal</button>
       )}
     </div>
+  )
+}
+
+// Docs §3.2: the 💬 Telegram · 📔 Journal · 📄 Catch-up trio in the journal header.
+// Renders nothing unless the task has a Telegram thread or a catch-up doc, so
+// journals without either look exactly as before.
+function JournalTrio({ content, taskId }) {
+  const doc = useTaskDoc(getActiveProvider(), taskId)
+  const tg = useMemo(() => parseTgLink(content), [content])
+  if (!doc && !tg?.url) return null
+  return (
+    <nav className="jc-trio" aria-label="Task links">
+      {tg?.url && (
+        <a className="jc-trio-link" href={tg.url} target="_blank" rel="noopener noreferrer" title="Open Telegram chat thread">💬</a>
+      )}
+      <span className="jc-trio-link is-current" title="Journal (you are here)" aria-current="page">📔</span>
+      {doc && (
+        <a className="jc-trio-link" href={doc.href} title={doc.needsYou ? 'Catch-up doc — needs you' : 'Open catch-up doc'}>
+          📄{doc.needsYou ? <span className="journal-badge doc-badge-needs">!</span> : doc.unread ? <span className="journal-badge doc-badge-unread">●</span> : null}
+        </a>
+      )}
+    </nav>
   )
 }
 
@@ -4343,6 +4272,7 @@ function JournalChatView({ content, filePath, onContentUpdate, onNavigate, onOpe
           <div className="jc-appbar-title" title={title}>{title}</div>
           <div className="jc-appbar-sub">Notes to self</div>
         </div>
+        <JournalTrio content={content} taskId={taskId} />
         <JournalChatToggle showRaw={showRaw} setShowRaw={setShowRaw} />
       </div>
 
@@ -6771,7 +6701,15 @@ function App() {
     setAppState('ready')
     const liveSources = getSources()
     const defaultFile = liveSources.length > 1 ? `${COMBINED_ID}::${PLAN_FILE}` : PLAN_FILE
-    handleSelectFile(defaultFile)
+    // Docs' task chip / 📔 link lands here as `#journal=<id>` (plans/docs-app-design.md §3).
+    const deepTask = journalDeepLink(window.location.hash)
+    if (deepTask != null) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search)
+      setJournalInitialView('chat')
+      handleSelectFile(`journal/task-${deepTask}.md`)
+    } else {
+      handleSelectFile(defaultFile)
+    }
   }
 
   useEffect(() => {

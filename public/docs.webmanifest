@@ -1,0 +1,16 @@
+{
+  "id": "/docs.html",
+  "name": "Docs",
+  "short_name": "Docs",
+  "description": "Catch-up documents for your Focus Planner tasks — read, highlight and comment.",
+  "start_url": "/docs.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    { "src": "/docs-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/docs-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/docs-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

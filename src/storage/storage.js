@@ -119,13 +119,21 @@ const localAdapter = {
   },
 }
 
+// Options applied when the engine is first constructed. The Docs app (docs.html) sets
+// `redirectUri` to the planner's root so an OAuth reconnect returns to the URI that is
+// registered with Microsoft/Google (origin + '/'), not to /docs.html.
+let _engineOpts = {}
+export function configureEngine(opts = {}) {
+  _engineOpts = { ..._engineOpts, ...opts }
+}
+
 function getEngine() {
   if (_engine) return _engine
   const providers = [oneDriveProvider({ clientId: ONEDRIVE_CLIENT_ID })]
   if (GOOGLE_CLIENT_ID) providers.push(googleDriveProvider({ clientId: GOOGLE_CLIENT_ID }))
   // Constructing the engine kicks off connected-flag refresh and OAuth-redirect
   // completion, and wires online/visibility nudges to the service worker.
-  _engine = createSyncEngine({ localAdapter, providers })
+  _engine = createSyncEngine({ localAdapter, providers, ..._engineOpts })
   // Record provider error transitions into Diagnostics (deduped per provider so
   // a stuck error doesn't spam the buffer). No-op unless diagnostics are enabled.
   try {

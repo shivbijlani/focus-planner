@@ -13,6 +13,7 @@
  *    `connect2026.1/`, `2026-cycle-3/`, `dist/`, `outputs/`, or
  *    `_backup_renumber_…/` is hidden even if it holds its own copy of a core
  *    file — the sidebar only surfaces the source's own top-level plan files.
+ *    This includes `docs/` (catch-up documents), which the Docs app owns.
  *  - Any loose `.md` not in the allow-list (e.g. focus-plan.md,
  *    6-week-cycle-plan.md, agent-email-setup.md).
  *
