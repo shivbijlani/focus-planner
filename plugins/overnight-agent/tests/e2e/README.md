@@ -100,7 +100,7 @@ any credit is spent; a drifted seed is `invalid-seed`, never a silent pass.
 | d | `paused-not-woken` | 9404 | user pause: no send, journal untouched, pause and binding preserved, no wake stamp |
 | e | `closed-task-reply` | 9405 | reply on a user-closed task: no turn, no dispatch, reported in the wrap-up |
 | f | `snoozed-skipped` | 9406 | snoozed until next month: journal untouched, no dispatch |
-| g | `fresh-reply-first` | 9407 (+9408) | a fresh reply on a P2 row is ordered ahead of a quiet workable P0 row; the run acts on it; the quiet row is not served first |
+| g | `fresh-reply-first` | 9407 (+9408) | a fresh reply on a P2 row is ordered ahead of a quiet workable P0 row (precheck); the run acts on it; it is never passed over for the quiet row (parallel sends in one batch have no meaningful order) |
 | h | invariant | | `agent-gate.md`, `planner.md`, `planner-completed.md` never modified |
 | i | invariant | | no tool call names a live path; no tripwire fired; no denied tool attempted; only the sandbox copy of the skill scripts ran |
 | j | `completion` | | the run finished on its own (j1) and was not cut short by the coordinator's hard end (j2) |
@@ -132,11 +132,12 @@ pwsh -File monitor.ps1 -RunDir %TEMP%\oa-e2e\<stamp>-<label>\attempt-1-all     #
 
 ## Cost, time and known limits
 
-- Measured on a 4-core box: seeding ~4-15 min (every seed step is a real `oa-state.ps1` call), then
-  one coordinator run bounded by the half-hour window. Under heavy load (other Copilot sessions and
-  the app's WebView holding the CPU at 100%), a single `scan` took 129 s and individual tool calls
-  minutes, and a run did not finish inside its window — `j1` reports that honestly as a failure.
-  Run baseline and candidate under comparable load.
+- Measured baseline (2026-09-30/10-01, 4-core box, record mode, `claude-sonnet-5`): seeding
+  5-10 min (no credits); one coordinator run over all scenarios 7-9 min and 85-116 credits when it
+  completes. Under heavy load (other Copilot sessions and the app's WebView holding the CPU at
+  100%) a single `scan` took 60-130 s and a run could hit its 28-min kill (`completion: fail`,
+  scenarios `inconclusive`). A full run with one retry is typically 40-60 min wall time and
+  ~100-200 credits. Run baseline and candidate under comparable load, one at a time.
 - Not sandboxed, by design: model calls go to the Copilot service; `git ls-remote`/`fetch` of public
   repositories still work (no credentials); the CLI's own runtime package is cached in
   `%TEMP%\oa-e2e\_cache\copilot-pkg` and junctioned into each sandbox.
