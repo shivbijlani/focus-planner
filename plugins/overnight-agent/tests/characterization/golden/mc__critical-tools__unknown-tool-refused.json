@@ -1,0 +1,11 @@
+{
+  "files": {},
+  "id": "mc/critical-tools/unknown-tool-refused",
+  "steps": [
+    {
+      "command": "critical-tools",
+      "exit": 1,
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "files": {},
+  "id": "mc/advertised-reply-word/confirm-refused",
+  "steps": [
+    {
+      "args": {
+        "Ask": "blocking",
+        "Validate": true
+      },
+      "exit": 2,
+      "stdout": [
+        "[write-turn] REFUSED - 1 guard violation(s); nothing written.",
+        "  G16 line 7: this turn offers \"confirm\" as a reply, but the consent reader does not accept it, so typing it would do nothing and would be indistinguishable from him declining (#491). Offer a word the reader accepts -- approve, yes, go ahead, lgtm, ship it, do it, proceed, or `merge <N>` -- or use -DisableGuard G16 if you really mean it",
+        "      | **Needs from you:** reply `confirm`"
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

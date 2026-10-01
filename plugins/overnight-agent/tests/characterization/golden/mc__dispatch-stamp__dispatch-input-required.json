@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "mc/dispatch-stamp/dispatch-input-required",
+  "steps": [
+    {
+      "args": {
+        "ForDispatch": true,
+        "Id": "983",
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions.json"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_input_required: -ForDispatch requires the exact dispatch_input from scan"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

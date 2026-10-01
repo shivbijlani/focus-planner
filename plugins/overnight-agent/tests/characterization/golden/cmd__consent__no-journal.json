@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "cmd/consent/no-journal",
+  "steps": [
+    {
+      "args": {
+        "Id": "999"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "consent_ok": false,
+        "id": "999",
+        "path": "<ROOT>/data/journal/task-999.md",
+        "reason": "journal-not-found"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "email": { "type": "stdio", "command": "node", "args": ["email-server.mjs"] },
+    "google-workspace": { "type": "stdio", "command": "node", "args": ["gw-server.mjs"] },
+    "playwright-1": { "type": "stdio", "command": "npx", "args": ["@playwright/mcp"] }
+  }
+}

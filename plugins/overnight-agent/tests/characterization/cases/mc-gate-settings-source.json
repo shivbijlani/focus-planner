@@ -1,0 +1,136 @@
+{
+  "fixture": "mc-gate-settings-source",
+  "covers": [
+    "mutcheck-gate-settings-source"
+  ],
+  "cases": [
+    {
+      "id": "mc/gate-settings-source/default-sources-with-no-settings",
+      "note": "no resolved settings file uses built-in gate and concurrency defaults",
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "UserSettings": null
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "950",
+            "UserSettings": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/gate-settings-source/planner-folder-settings-source",
+      "note": "settings resolved from planner folder when UserSettings is omitted",
+      "files": {
+        "data/user-settings.md": "# Settings\n\n| Setting | Value |\n|---|---|\n| Today gate backstop | 9 |\n| Today gate strict | on |\n| Overnight Agent concurrency | 4 |\n"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "UserSettings": null
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "950",
+            "UserSettings": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/gate-settings-source/cwd-settings-precede-planner-folder",
+      "note": "cwd user-settings wins before planner-folder user-settings when resolving fallbacks",
+      "files": {
+        "cwd/user-settings.md": "# Settings\n\n| Setting | Value |\n|---|---|\n| Today gate backstop | 4 |\n| Today gate strict | on |\n| Overnight Agent concurrency | 3 |\n",
+        "data/user-settings.md": "# Settings\n\n| Setting | Value |\n|---|---|\n| Today gate backstop | 9 |\n| Today gate strict | off |\n| Overnight Agent concurrency | 7 |\n"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "UserSettings": null
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "950",
+            "UserSettings": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/gate-settings-source/off-is-configured",
+      "files": {
+        "data/user-settings.md": "# Settings\n\n| Setting | Value |\n|---|---|\n| Today gate backstop | off |\n| Today gate strict | off |\n| Overnight Agent concurrency | 2 |\n"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "UserSettings": null
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "950",
+            "UserSettings": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/gate-settings-source/malformed-settings-source",
+      "files": {
+        "data/user-settings.md": "# Settings\n\n| Setting | Value |\n|---|---|\n| Today gate backstop | sometimes |\n| Today gate strict | maybe |\n| Overnight Agent concurrency | two |\n"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "UserSettings": null
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "950",
+            "UserSettings": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/gate-settings-source/argument-source-wins",
+      "files": {
+        "data/user-settings.md": "# Settings\n\n| Setting | Value |\n|---|---|\n| Today gate backstop | 9 |\n| Today gate strict | on |\n| Overnight Agent concurrency | 4 |\n"
+      },
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "UserSettings": null,
+        "TodayGateBackstopHours": 3
+      }
+    }
+  ]
+}

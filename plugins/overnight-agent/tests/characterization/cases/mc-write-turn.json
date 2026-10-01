@@ -1,0 +1,277 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-write-turn"
+  ],
+  "cases": [
+    {
+      "id": "mc/write-turn/validate-no-id-text",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "-Validate without -Id succeeds and writes nothing."
+    },
+    {
+      "id": "mc/write-turn/validate-with-id-json",
+      "tool": "write-turn",
+      "args": {
+        "Id": "901",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-901.md": "# Task 901: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — previous wake\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-08\n\nPrevious body.\n\n**Needs from you:** nothing.\n"
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "-Validate with -Id and -Json reports clean JSON."
+    },
+    {
+      "id": "mc/write-turn/append-default-output-backup",
+      "files": {
+        "data/journal/task-902.md": "# Task 902: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n"
+      },
+      "note": "Real append in default-output mode writes the journal; backup is redirected to the sandbox input area to keep timestamped filenames out of the golden.",
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "902",
+            "Ask": "none"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+          "record": false
+        }
+      ]
+    },
+    {
+      "id": "mc/write-turn/append-json-output",
+      "tool": "write-turn",
+      "args": {
+        "Id": "903",
+        "Ask": "offer",
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-903.md": "# Task 903: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n"
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** reply `go` if you want me to continue.\n",
+      "note": "Real append with -Json emits JSON and writes the journal.",
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home"
+      }
+    },
+    {
+      "id": "mc/write-turn/refusal-text-g1",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nThe quote landed around ~\\-275 all in.\n\n**Needs from you:** nothing.\n",
+      "note": "Text refusal exits 2 and names G1."
+    },
+    {
+      "id": "mc/write-turn/refusal-json-g7",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "JSON refusal exits 2 and returns G7 finding."
+    },
+    {
+      "id": "mc/write-turn/bad-args-missing-body",
+      "note": "Bad arguments: missing body file exits 3.",
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "BodyFile": "{input}\\missing.md",
+            "Ask": "none",
+            "Validate": true
+          },
+          "record": false
+        }
+      ]
+    },
+    {
+      "id": "mc/write-turn/bad-args-empty-body",
+      "note": "Bad arguments: empty body exits 3.",
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Ask": "none",
+            "Validate": true
+          },
+          "body": "",
+          "record": false
+        }
+      ]
+    },
+    {
+      "id": "mc/write-turn/bad-args-no-id-without-validate",
+      "note": "Bad arguments: append mode without -Id exits 3.",
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Ask": "none"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+          "record": false
+        }
+      ]
+    },
+    {
+      "id": "mc/write-turn/bad-args-journal-not-found",
+      "note": "Bad arguments: target journal missing exits 3.",
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "999",
+            "Ask": "none"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+          "record": false
+        }
+      ]
+    },
+    {
+      "id": "mc/write-turn/sentinel-added",
+      "files": {
+        "data/journal/task-904.md": "# Task 904: Fixture\n\nUser notes.\n"
+      },
+      "note": "A journal without the OVERNIGHT-AGENT sentinel gets one on append.",
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "904",
+            "Ask": "none"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+          "record": false
+        }
+      ]
+    },
+    {
+      "id": "mc/write-turn/crlf-preserved",
+      "files": {
+        "data/journal/task-905.md": "# Task 905: Fixture\r\n\r\nUser notes.\r\n\r\n---\r\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\r\n"
+      },
+      "note": "A CRLF journal keeps CRLF line endings after append.",
+      "env": {
+        "WRITE_TURN_OA_HOME": "{input}\\\\oa-home"
+      },
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "905",
+            "Ask": "none"
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+          "record": false
+        }
+      ]
+    },
+    {
+      "id": "mc/write-turn/disable-guard-allows-g7",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "DisableGuard": [
+          "G7"
+        ]
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "-DisableGuard can suppress one named guard."
+    },
+    {
+      "id": "mc/write-turn/author-owner-supersedes-non-owner",
+      "tool": "write-turn",
+      "args": {
+        "Id": "906",
+        "Ask": "none",
+        "Validate": true,
+        "Author": "owner-session"
+      },
+      "files": {
+        "data/journal/task-906.md": "# Task 906: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — previous wake\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-08\n\nPrevious body.\n\n**Needs from you:** nothing.\n",
+        "state/task-906.json": {
+          "id": "906",
+          "last_turn_at": "{{NOW-5m}}",
+          "last_turn_by": "run-session",
+          "session": {
+            "session_id": "owner-session",
+            "state": "live",
+            "last_woken_at": "{{NOW-10m}}"
+          }
+        }
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "-Author lets the bound owner supersede a non-owner G12 turn."
+    },
+    {
+      "id": "mc/write-turn/g12-recent-state-refuses",
+      "files": {
+        "data/journal/task-907.md": "# Task 907: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — previous wake\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-08\n\nPrevious body.\n\n**Needs from you:** nothing.\n",
+        "state/task-907.json": {
+          "id": "907",
+          "last_turn_at": "{{NOW-5m}}"
+        }
+      },
+      "note": "G12 refuses a recent prior turn from state when there is no human reply.",
+      "steps": [
+        {
+          "tool": "write-turn",
+          "args": {
+            "Id": "907",
+            "Ask": "none",
+            "Validate": true
+          },
+          "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+          "record": false
+        }
+      ]
+    },
+    {
+      "id": "mc/write-turn/g12-old-state-allows",
+      "tool": "write-turn",
+      "args": {
+        "Id": "908",
+        "Ask": "none",
+        "Validate": true
+      },
+      "files": {
+        "data/journal/task-908.md": "# Task 908: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — previous wake\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-08\n\nPrevious body.\n\n**Needs from you:** nothing.\n",
+        "state/task-908.json": {
+          "id": "908",
+          "last_turn_at": "{{NOW-3h}}",
+          "session": {
+            "session_id": "owner-session",
+            "state": "live",
+            "last_woken_at": "{{NOW-3h}}"
+          }
+        }
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "A turn far outside the wake window does not trigger G12."
+    }
+  ]
+}

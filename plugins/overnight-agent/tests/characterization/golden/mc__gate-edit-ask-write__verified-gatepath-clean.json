@@ -1,0 +1,26 @@
+{
+  "files": {},
+  "id": "mc/gate-edit-ask-write/verified-gatepath-clean",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 0,
+      "json": {
+        "ask": "none",
+        "docBound": false,
+        "docId": "",
+        "findings": [],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "",
+        "length": 241,
+        "ok": true
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

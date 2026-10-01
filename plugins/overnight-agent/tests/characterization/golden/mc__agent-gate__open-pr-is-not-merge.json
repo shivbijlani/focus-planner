@@ -1,0 +1,57 @@
+{
+  "files": {},
+  "id": "mc/agent-gate/open-pr-is-not-merge",
+  "steps": [
+    {
+      "args": {
+        "Action": "open_pr",
+        "Id": "114",
+        "Repo": "focus-planner"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "action": "open_pr",
+        "consent_ok": true,
+        "gate_list": "allow",
+        "gate_path": "<ROOT>/data/agent-gate.md",
+        "gate_rule": "Creating and publishing a pull request in any repository, do not gate it",
+        "gate_state": "ok",
+        "id": "114",
+        "path": "<ROOT>/data/journal/task-114.md",
+        "reason": "gate-allowed",
+        "repo": "focus-planner",
+        "trailing_has_user": false
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Action": "merge_pr",
+        "Id": "114",
+        "Repo": "focus-planner"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "action": "merge_pr",
+        "affirmative_answered": false,
+        "affirmative_author": "dance-church",
+        "affirmative_phrase": "yes",
+        "affirmative_unattributed": true,
+        "consent_ok": false,
+        "gate_list": null,
+        "gate_path": "<ROOT>/data/agent-gate.md",
+        "gate_rule": null,
+        "gate_state": "ok",
+        "human_segments": 0,
+        "id": "114",
+        "path": "<ROOT>/data/journal/task-114.md",
+        "reason": "affirmative-not-attributable-to-human",
+        "repo": "focus-planner",
+        "trailing_has_user": false
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

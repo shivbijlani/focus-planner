@@ -1,0 +1,30 @@
+{
+  "files": {},
+  "id": "mc/doc-consent/agent-comment-revokes-doc-channel",
+  "steps": [
+    {
+      "args": {
+        "DocComments": "<ROOT>/input/breached.txt",
+        "Id": "930"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "affirmative_answered": false,
+        "affirmative_author": null,
+        "affirmative_phrase": null,
+        "affirmative_unattributed": false,
+        "consent_ok": false,
+        "doc_comments_path": "<ROOT>/input/breached.txt",
+        "doc_consent_ok": false,
+        "doc_consent_reason": "agent-commented-after-rule",
+        "human_segments": 0,
+        "id": "930",
+        "path": "<ROOT>/data/journal/task-930.md",
+        "reason": "no-trailing-content",
+        "trailing_has_user": false
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

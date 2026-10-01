@@ -1,0 +1,13 @@
+{
+  "files": {},
+  "id": "mc/write-turn/bad-args-no-id-without-validate",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none"
+      },
+      "exit": 1,
+      "tool": "write-turn"
+    }
+  ]
+}

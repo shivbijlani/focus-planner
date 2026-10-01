@@ -1,0 +1,26 @@
+{
+  "files": {},
+  "id": "mc/turn-ask/g14-question-blocking-clean",
+  "steps": [
+    {
+      "args": {
+        "Ask": "blocking",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 0,
+      "json": {
+        "ask": "blocking",
+        "docBound": false,
+        "docId": "",
+        "findings": [],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "",
+        "length": 168,
+        "ok": true
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

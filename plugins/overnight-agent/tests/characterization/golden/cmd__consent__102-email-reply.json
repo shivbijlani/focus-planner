@@ -1,0 +1,28 @@
+{
+  "files": {},
+  "id": "cmd/consent/102-email-reply",
+  "steps": [
+    {
+      "args": {
+        "Action": "send_email_reply",
+        "Id": "102"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "action": "send_email_reply",
+        "consent_ok": true,
+        "gate_list": "allow",
+        "gate_path": "<ROOT>/data/agent-gate.md",
+        "gate_rule": "Replying to an email thread I started",
+        "gate_state": "ok",
+        "id": "102",
+        "path": "<ROOT>/data/journal/task-102.md",
+        "reason": "gate-allowed",
+        "repo": null,
+        "trailing_has_user": false
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

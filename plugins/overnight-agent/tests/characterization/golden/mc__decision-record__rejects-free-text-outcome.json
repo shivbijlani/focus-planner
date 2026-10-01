@@ -1,0 +1,21 @@
+{
+  "files": {},
+  "id": "mc/decision-record/rejects-free-text-outcome",
+  "steps": [
+    {
+      "args": {
+        "DecisionNow": "2020-01-02T10:20:00-08:00",
+        "Outcomes": "[{\"id\":\"362\",\"outcome\":\"he seemed busy\"}]",
+        "RunId": "run-2",
+        "ScanFile": "<ROOT>/data/scan-compact.json"
+      },
+      "command": "decisions",
+      "exit": 1,
+      "stderr": [
+        "decisions_outcome_word: 'he seemed busy' is not one of dispatched, paused, cutoff, capacity, refused, failed_send, busy_from_earlier_run"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

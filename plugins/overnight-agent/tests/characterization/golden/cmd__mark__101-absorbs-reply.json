@@ -1,0 +1,52 @@
+{
+  "files": {
+    "state/task-101.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "101",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "paused_at": null,
+        "plan_id": "t101-v2",
+        "processed_file_hash": "efb02161255b5d8bc98cecd790e197fbeb7b796fecf9cacbfb500774e36a404c",
+        "seeded": false,
+        "status": "in-progress",
+        "status_by": "agent",
+        "unanswered_user_message_at": "<NOW+0m>",
+        "updated": "<NOW+0m>",
+        "version": 2
+      }
+    }
+  },
+  "id": "cmd/mark/101-absorbs-reply",
+  "steps": [
+    {
+      "args": {
+        "Id": "101",
+        "PlanId": "t101-v2",
+        "Status": "in-progress",
+        "Version": 2
+      },
+      "command": "mark",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "101",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "paused_at": null,
+        "plan_id": "t101-v2",
+        "processed_file_hash": "efb02161255b5d8bc98cecd790e197fbeb7b796fecf9cacbfb500774e36a404c",
+        "seeded": false,
+        "status": "in-progress",
+        "status_by": "agent",
+        "unanswered_user_message_at": "<NOW+0m>",
+        "updated": "<NOW+0m>",
+        "version": 2
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

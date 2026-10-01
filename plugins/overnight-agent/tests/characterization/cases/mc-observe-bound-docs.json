@@ -1,0 +1,42 @@
+{
+  "fixture": "mc-observe-bound-docs",
+  "covers": [
+    "mutcheck-observe-bound-docs"
+  ],
+  "cases": [
+    {
+      "id": "mc/observe-bound-docs/observe-refreshes-stale-channel",
+      "note": "A readable observation on a stale bound doc stamps observed_at and reports pending ids for the sweep to acknowledge later.",
+      "files": {
+        "home/comments-930.txt": "Found 1 comment in document DOC930\n\nComment ID: C930A\n  Author: Shiv Bijlani\n  Created: 2020-02-01T10:00:00Z\n  Content: new instruction\n"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "930",
+            "Observe": "{home}/comments-930.txt"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/observe-bound-docs/unreadable-observe-does-not-refresh",
+      "note": "An unreadable observation withholds the comment count and leaves the stale observed_at unchanged for a later retry.",
+      "files": {
+        "home/dead-931.txt": "google-workspace: Error: MCP request failed: Transport closed\n"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "931",
+            "Observe": "{home}/dead-931.txt"
+          }
+        }
+      ]
+    }
+  ]
+}

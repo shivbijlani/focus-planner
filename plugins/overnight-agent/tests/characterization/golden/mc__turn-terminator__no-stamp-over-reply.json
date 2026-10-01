@@ -1,0 +1,118 @@
+{
+  "files": {
+    "state/task-907.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "907",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "plan_id": "",
+        "processed_file_hash": "7b5de1fab92bf536effe7f3ce9ee8eda7aa1298b069bc56ad4b78f43b91384d1",
+        "seeded": true,
+        "status": "unknown",
+        "unanswered_user_message_at": "<NOW+0m>",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    }
+  },
+  "id": "mc/turn-terminator/no-stamp-over-reply",
+  "steps": [
+    {
+      "args": {
+        "Id": "907"
+      },
+      "command": "mark",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "907",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "plan_id": "",
+        "processed_file_hash": "7b5de1fab92bf536effe7f3ce9ee8eda7aa1298b069bc56ad4b78f43b91384d1",
+        "seeded": true,
+        "status": "unknown",
+        "unanswered_user_message_at": "<NOW+0m>",
+        "updated": "<NOW+0m>",
+        "version": 0
+      },
+      "tool": "oa-state"
+    },
+    {
+      "command": "scan",
+      "exit": 0,
+      "json": [
+        {
+          "ask_declared": "none",
+          "ask_source": "declared",
+          "awaiting_reply": false,
+          "board_pos": 1,
+          "changed": false,
+          "consent_ok": true,
+          "consent_reason": "human-authored-affirmative",
+          "dispatch_input": "c34277be932d83d34b422407c79764fce2bf1af4c483435d5d67abf6ff975dbc",
+          "dispatch_skip_reason": null,
+          "doc_bound": false,
+          "doc_channel": null,
+          "doc_id": null,
+          "doc_new_comments": 0,
+          "doc_observed_at": null,
+          "doc_source": "none",
+          "due_poll": false,
+          "due_recheck": false,
+          "eligible": true,
+          "exhaustion": null,
+          "gate_backstop_hours": 0,
+          "gate_backstop_source": "settings",
+          "gate_strict": false,
+          "gate_strict_source": "default",
+          "has_agent_block": true,
+          "has_journal": true,
+          "has_open_ask": false,
+          "holds_today_gate": true,
+          "id": "907",
+          "last_turn_at": "<INVTIME+0m>",
+          "linked": [],
+          "model": "auto",
+          "model_source": "default",
+          "on_board": true,
+          "order": 1,
+          "paused_at": null,
+          "plan_review_due": false,
+          "poll_cadence": null,
+          "priorities_rank": 999999,
+          "recheck_cadence": null,
+          "recheck_kind": null,
+          "reopened": false,
+          "reopened_closed": false,
+          "replacements_24h": 0,
+          "section": "today",
+          "session_activity": null,
+          "session_id": null,
+          "session_paused": false,
+          "session_process_dead": false,
+          "session_state": null,
+          "session_verdict": "create",
+          "session_workspace": null,
+          "session_workspace_missing": false,
+          "snooze_until": null,
+          "snoozed": false,
+          "status": "unknown",
+          "status_by": "agent",
+          "today_release_reason": "holding:unanswered_user",
+          "tracked": true,
+          "unanswered_user": true,
+          "unanswered_user_at": "<INVTIME+0m>",
+          "unanswered_user_where": "below-turn",
+          "urgency": "??",
+          "user_completed": false,
+          "work_priority": null
+        }
+      ],
+      "tool": "oa-state"
+    }
+  ]
+}

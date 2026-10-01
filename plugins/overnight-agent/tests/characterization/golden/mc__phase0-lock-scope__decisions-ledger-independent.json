@@ -1,0 +1,101 @@
+{
+  "files": {
+    "home/run-ledger.jsonl": {
+      "change": "created",
+      "jsonl": [
+        {
+          "at": "2020-01-02T18:05:00.0000000Z",
+          "dispatched": [
+            {
+              "at": "2020-01-02T18:00:00.0000000Z",
+              "id": "802",
+              "sessionId": "s1"
+            }
+          ],
+          "kind": "decision",
+          "rows": [
+            {
+              "eligible": false,
+              "id": "801",
+              "order": 1,
+              "reason": "ineligible:not_workable",
+              "section": "today"
+            },
+            {
+              "eligible": true,
+              "id": "802",
+              "order": 2,
+              "reason": "dispatched",
+              "section": "deferred"
+            }
+          ],
+          "runId": "lock-scope-run",
+          "schema": "oa-decisions/1",
+          "summary": {
+            "rows_dropped": 0,
+            "rows_eligible": 1,
+            "rows_omitted": 0,
+            "rows_recorded": 2,
+            "rows_returned": 2,
+            "rows_total": 2,
+            "scan_seconds": "<DURATION>",
+            "today_holding": false
+          }
+        }
+      ]
+    }
+  },
+  "id": "mc/phase0-lock-scope/decisions-ledger-independent",
+  "steps": [
+    {
+      "args": {
+        "DecisionNow": "2020-01-02T10:05:00-08:00",
+        "Outcomes": "[{\"id\":\"802\",\"outcome\":\"dispatched\",\"at\":\"2020-01-02T10:00:00-08:00\",\"sessionId\":\"s1\"}]",
+        "RunId": "lock-scope-run",
+        "ScanFile": "<ROOT>/data/scan-compact.json"
+      },
+      "command": "decisions",
+      "exit": 0,
+      "json": {
+        "at": "2020-01-02T18:05:00.0000000Z",
+        "dispatched": [
+          {
+            "at": "2020-01-02T18:00:00.0000000Z",
+            "id": "802",
+            "sessionId": "s1"
+          }
+        ],
+        "kind": "decision",
+        "rows": [
+          {
+            "eligible": false,
+            "id": "801",
+            "order": 1,
+            "reason": "ineligible:not_workable",
+            "section": "today"
+          },
+          {
+            "eligible": true,
+            "id": "802",
+            "order": 2,
+            "reason": "dispatched",
+            "section": "deferred"
+          }
+        ],
+        "runId": "lock-scope-run",
+        "schema": "oa-decisions/1",
+        "summary": {
+          "rows_dropped": 0,
+          "rows_eligible": 1,
+          "rows_omitted": 0,
+          "rows_recorded": 2,
+          "rows_returned": 2,
+          "rows_total": 2,
+          "scan_seconds": "<DURATION>",
+          "today_holding": false
+        }
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

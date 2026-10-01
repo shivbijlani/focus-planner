@@ -1,0 +1,27 @@
+{
+  "summary": {
+    "scan_seconds": 1,
+    "rows_total": 2,
+    "rows_eligible": 1,
+    "rows_returned": 2,
+    "rows_omitted": 0,
+    "today_holding": false
+  },
+  "rows": [
+    {
+      "id": "801",
+      "order": 1,
+      "section": "today",
+      "eligible": false,
+      "status": "blocked",
+      "today_release_reason": "not_workable"
+    },
+    {
+      "id": "802",
+      "order": 2,
+      "section": "deferred",
+      "eligible": true,
+      "status": "in-progress"
+    }
+  ]
+}

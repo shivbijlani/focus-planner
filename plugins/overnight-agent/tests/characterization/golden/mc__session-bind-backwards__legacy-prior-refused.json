@@ -1,0 +1,62 @@
+{
+  "files": {},
+  "id": "mc/session-bind-backwards/legacy-prior-refused",
+  "steps": [
+    {
+      "args": {
+        "Id": "914",
+        "SessionId": "22222222-2222-4222-8222-222222222222",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-914-prior",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_bind_backwards: task 914 already retired session 22222222-2222-4222-8222-222222222222 (lineage: 22222222-2222-4222-8222-222222222222); refusing to re-bind it over 33333333-3333-4333-8333-333333333333. A replacement must be a session this task has never used. If the current binding is genuinely finished, release it with -SessionRelease and bind a new session."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "914"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "2020-03-01T12:00:00Z",
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "914",
+        "kickoff_continuation": "This session continues work on planner task #914. The previous session for this task (33333333-3333-4333-8333-333333333333) could not be woken, so this one replaces it -- you are not starting from scratch. Read the task journal for what has already been done before doing anything new.",
+        "kind": "code",
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": "22222222-2222-4222-8222-222222222222",
+        "prior_session_ids": [
+          "22222222-2222-4222-8222-222222222222"
+        ],
+        "process_dead": false,
+        "project": "focus-planner",
+        "released": false,
+        "role_line": "You are the task session for planner task #914. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "33333333-3333-4333-8333-333333333333",
+        "state": "dead",
+        "teardown_command": "pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path \"<ROOT>/lad/overnight-agent/worktrees/wt-914-old\"",
+        "verdict": "replace",
+        "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-914-old",
+        "workspace_missing": false,
+        "workspace_type": "worktree"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

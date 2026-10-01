@@ -1,0 +1,26 @@
+{
+  "files": {},
+  "id": "mc/consent-vocab-drift/merge-it-later-rejected",
+  "steps": [
+    {
+      "args": {
+        "Id": "925"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "affirmative_answered": false,
+        "affirmative_author": null,
+        "affirmative_phrase": null,
+        "affirmative_unattributed": false,
+        "consent_ok": false,
+        "human_segments": 1,
+        "id": "925",
+        "path": "<ROOT>/data/journal/task-925.md",
+        "reason": "human-spoke-but-no-affirmative",
+        "trailing_has_user": true
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

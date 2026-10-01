@@ -1,0 +1,56 @@
+{
+  "files": {},
+  "id": "cmd/extract/113-no-agent-block",
+  "steps": [
+    {
+      "args": {
+        "Id": "113",
+        "Json": true
+      },
+      "command": "extract",
+      "exit": 0,
+      "json": {
+        "board_note": "",
+        "board_path": "<ROOT>/data/planner.md",
+        "board_read": true,
+        "board_row_found": true,
+        "ceiling_bytes": 24576,
+        "deliverables": [],
+        "elided_bytes": 0,
+        "emitted_bytes": 228,
+        "has_agent_block": false,
+        "head": {
+          "elided_bytes": 0,
+          "text": "# Task 113: Plan the vegetable garden\n\nIdeas: tomatoes, beans, a herb bed by the door.\n\n- TODO: measure the beds\n\n",
+          "truncated": false
+        },
+        "id": "113",
+        "latest_turn": {
+          "elided_bytes": 0,
+          "text": "",
+          "truncated": false
+        },
+        "linked": [],
+        "linked_board": [],
+        "linked_journal": [],
+        "open_asks": [],
+        "path": "<ROOT>/data/journal/task-113.md",
+        "source_bytes": 114,
+        "status": null,
+        "trailing_user": {
+          "elided_bytes": 0,
+          "text": "# Task 113: Plan the vegetable garden\n\nIdeas: tomatoes, beans, a herb bed by the door.\n\n- TODO: measure the beds\n\n",
+          "truncated": false
+        },
+        "user_messages": {
+          "dropped": 0,
+          "elided_bytes": 0,
+          "newest_first": [],
+          "shown": 0,
+          "total": 0
+        }
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

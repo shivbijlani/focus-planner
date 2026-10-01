@@ -1,0 +1,42 @@
+{
+  "files": {},
+  "id": "mc/cadence-rearm/new-poll-due-now",
+  "steps": [
+    {
+      "args": {
+        "Id": "901",
+        "Poll": "2h"
+      },
+      "command": "mark",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "901"
+      },
+      "command": "get",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "901",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "plan_id": "",
+        "poll": {
+          "cadence": "2h",
+          "interval_minutes": 120,
+          "last_polled": "",
+          "next_due": "<NOW+0m>"
+        },
+        "processed_file_hash": "09c7b9b6f55e1537e152ac6e78f19690685f223005668d71cf84edf9550cd5c7",
+        "seeded": false,
+        "status": "unknown",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 0
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

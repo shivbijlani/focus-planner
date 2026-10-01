@@ -1,0 +1,140 @@
+{
+  "files": {
+    "state/task-912.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "912",
+        "plan_id": "t912-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": {
+          "created_at": "<NOW+0m>",
+          "kind": "code",
+          "last_woken_at": "",
+          "prior_session_id": "22222222-2222-4222-8222-222222222222",
+          "prior_session_ids": [
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222"
+          ],
+          "project": "focus-planner",
+          "replaced_at": "<NOW+0m>",
+          "session_id": "33333333-3333-4333-8333-333333333333",
+          "state": "live",
+          "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-912-3",
+          "workspace_type": "worktree"
+        },
+        "session_replacements": [
+          {
+            "at": "<NOW+0m>",
+            "session_id": "11111111-1111-4111-8111-111111111111"
+          },
+          {
+            "at": "<NOW+0m>",
+            "session_id": "22222222-2222-4222-8222-222222222222"
+          }
+        ],
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/session-bind-backwards/grand-ancestor-and-force-refused",
+  "steps": [
+    {
+      "args": {
+        "Id": "912",
+        "SessionId": "11111111-1111-4111-8111-111111111111",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-912-1",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "912",
+        "SessionDead": true
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "912",
+        "SessionId": "22222222-2222-4222-8222-222222222222",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-912-2",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "912",
+        "SessionDead": true
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "912",
+        "SessionId": "33333333-3333-4333-8333-333333333333",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-912-3",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "912",
+        "SessionId": "11111111-1111-4111-8111-111111111111",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-912-1",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_bind_backwards: task 912 already retired session 11111111-1111-4111-8111-111111111111 (lineage: 11111111-1111-4111-8111-111111111111 -> 22222222-2222-4222-8222-222222222222); refusing to re-bind it over 33333333-3333-4333-8333-333333333333. A replacement must be a session this task has never used. If the current binding is genuinely finished, release it with -SessionRelease and bind a new session."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Force": true,
+        "Id": "912",
+        "SessionId": "22222222-2222-4222-8222-222222222222",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-912-2",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_bind_backwards: task 912 already retired session 22222222-2222-4222-8222-222222222222 (lineage: 11111111-1111-4111-8111-111111111111 -> 22222222-2222-4222-8222-222222222222); refusing to re-bind it over 33333333-3333-4333-8333-333333333333. A replacement must be a session this task has never used. If the current binding is genuinely finished, release it with -SessionRelease and bind a new session."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-consent-vocab"
+  ],
+  "cases": [
+    {
+      "id": "mc/consent-vocab/merge-number-accepted",
+      "files": {
+        "data/journal/task-910.md": "# Task 910: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nmerge 300\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "910"
+      }
+    },
+    {
+      "id": "mc/consent-vocab/bare-merge-rejected",
+      "files": {
+        "data/journal/task-911.md": "# Task 911: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nremind me, should we merge or wait?\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "911"
+      }
+    },
+    {
+      "id": "mc/consent-vocab/agent-merge-narrative-rejected",
+      "files": {
+        "data/journal/task-912.md": "# Task 912: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nwhat's the status on that PR?\n\n## Overnight Agent\n\n**Status:** In progress\n\nDone for tonight: I merged 300 earlier and can merge it later if you want; to ship the rest, reply merge 300 and I will finish it.\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "912"
+      }
+    },
+    {
+      "id": "mc/consent-vocab/yes-still-accepted",
+      "files": {
+        "data/journal/task-913.md": "# Task 913: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\nyes\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "913"
+      }
+    },
+    {
+      "id": "mc/consent-vocab/approve-still-accepted",
+      "files": {
+        "data/journal/task-914.md": "# Task 914: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v1\n\nThe agent last asked for approval.\n\n**Needs from you:** approve to continue\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n"
+      },
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "914"
+      }
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-advertised-reply-word"
+  ],
+  "cases": [
+    {
+      "id": "mc/advertised-reply-word/prune-refused",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "blocking",
+        "Validate": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n\n**Status:** working.\n\n**Needs from you:** reply **prune** and I'll remove 2,951 old session folders.\n"
+    },
+    {
+      "id": "mc/advertised-reply-word/confirm-refused",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "blocking",
+        "Validate": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n\n**Status:** working.\n\n**Needs from you:** reply `confirm` to continue.\n"
+    },
+    {
+      "id": "mc/advertised-reply-word/accepted-word-allowed",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "blocking",
+        "Validate": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n\n**Status:** working.\n\n**Needs from you:** reply **go ahead** and I'll continue.\n"
+    },
+    {
+      "id": "mc/advertised-reply-word/merge-number-allowed",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "blocking",
+        "Validate": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n\n**Status:** working.\n\n**Needs from you:** reply `merge 198` when you are happy.\n"
+    },
+    {
+      "id": "mc/advertised-reply-word/yes-please-substring-allowed",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "blocking",
+        "Validate": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n\n**Status:** working.\n\n**Needs from you:** reply **yes please** when ready.\n"
+    },
+    {
+      "id": "mc/advertised-reply-word/bold-emphasis-allowed",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "blocking",
+        "Validate": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n\n**Status:** working.\n\n**Next:** I will **prune** the old folders once the check lands.\n"
+    },
+    {
+      "id": "mc/advertised-reply-word/fenced-offer-allowed",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "blocking",
+        "Validate": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n\n**Status:** working.\n\n**Next:** see the example below.\n\n```\n**Needs from you:** reply **prune**\n```\n"
+    },
+    {
+      "id": "mc/advertised-reply-word/disable-guard-allows",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "blocking",
+        "Validate": true,
+        "DisableGuard": [
+          "G16"
+        ]
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n\n**Status:** working.\n\n**Needs from you:** reply **prune** and I'll remove the folders.\n"
+    }
+  ]
+}

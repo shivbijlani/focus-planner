@@ -1,0 +1,87 @@
+{
+  "files": {},
+  "id": "mc/cadence-rearm/lengthen-poll-later",
+  "steps": [
+    {
+      "args": {
+        "Id": "902",
+        "Poll": "2h"
+      },
+      "command": "mark",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "902",
+        "PollDone": true
+      },
+      "command": "mark",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "902"
+      },
+      "command": "get",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "902",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "plan_id": "",
+        "poll": {
+          "cadence": "2h",
+          "interval_minutes": 120,
+          "last_polled": "<NOW+0m>",
+          "next_due": "<NOW+120m>"
+        },
+        "processed_file_hash": "f76ea4c694a659a8b8b7397d97dacb9089cf594e4ea850e37774cb898382e016",
+        "seeded": false,
+        "status": "unknown",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 0
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "902",
+        "Poll": "6h"
+      },
+      "command": "mark",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "902"
+      },
+      "command": "get",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "902",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "plan_id": "",
+        "poll": {
+          "cadence": "6h",
+          "interval_minutes": 360,
+          "last_polled": "<INVTIME+0m>",
+          "next_due": "<NOW+360m>"
+        },
+        "processed_file_hash": "f76ea4c694a659a8b8b7397d97dacb9089cf594e4ea850e37774cb898382e016",
+        "seeded": false,
+        "status": "unknown",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 0
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "files": {},
+  "id": "mc/today-served/unworked-row-refuses-exhaustion",
+  "steps": [
+    {
+      "args": {
+        "Exhausted": "gh:197",
+        "Id": "910"
+      },
+      "command": "mark",
+      "exit": 1,
+      "stderr": [
+        "task 910 has no turn recorded in the last 30 minute(s): work the row and mark it this run before declaring it exhausted"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "files": {},
+  "id": "mc/critical-tools/duplicates-are-unique",
+  "steps": [
+    {
+      "command": "critical-tools",
+      "exit": 0,
+      "json": {
+        "settingsPath": "<ROOT>/data/user-settings.md",
+        "tools": [
+          "email",
+          "google-workspace"
+        ]
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-issue-shipped"
+  ],
+  "cases": [
+    {
+      "id": "mc/issue-shipped/json-shipped-result-refuses",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "env": {
+        "CHAR_SHIPPED": "640"
+      },
+      "body": "## 🌙 Overnight Agent — shipped pick\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\n**Next:** pick up #640 next wake.\n",
+      "note": "write-turn consumes the shipped classifier JSON and refuses shipped work."
+    },
+    {
+      "id": "mc/issue-shipped/classifier-fail-advisory",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "env": {
+        "CHAR_SHIPPED": "!fail"
+      },
+      "body": "## 🌙 Overnight Agent — shipped pick\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\n**Next:** pick up #640 next wake.\n",
+      "note": "Classifier exit-2/unmeasurable becomes a g15Note advisory, not a refusal."
+    },
+    {
+      "id": "mc/issue-shipped/disable-g15-clears-refusal",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "DisableGuard": [
+          "G15"
+        ]
+      },
+      "env": {
+        "CHAR_SHIPPED": "640"
+      },
+      "body": "## 🌙 Overnight Agent — shipped pick\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\n**Next:** pick up #640 next wake.\n",
+      "note": "Disabling G15 clears the shipped-pick refusal."
+    }
+  ]
+}

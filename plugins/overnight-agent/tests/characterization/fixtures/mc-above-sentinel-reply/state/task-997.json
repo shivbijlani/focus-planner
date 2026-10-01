@@ -1,0 +1,14 @@
+{
+  "id": "997",
+  "status": "done",
+  "version": 1,
+  "plan_id": "t997-v1",
+  "processed_file_hash": "a59be570cca211a79b7158747ce87ef3d5ce61c4c62558b2387f977a3e2d5e6f",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-03-10T10:00:00-07:00",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "2020-03-10T10:00:00-07:00",
+  "last_turn_by": "sess-coordinator"
+}

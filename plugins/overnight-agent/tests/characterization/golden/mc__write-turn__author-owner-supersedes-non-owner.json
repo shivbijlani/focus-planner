@@ -1,0 +1,19 @@
+{
+  "files": {},
+  "id": "mc/write-turn/author-owner-supersedes-non-owner",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Author": "owner-session",
+        "Id": "906",
+        "Validate": true
+      },
+      "exit": 0,
+      "stdout": [
+        "[write-turn] clean (validate only - nothing written)."
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

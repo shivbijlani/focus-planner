@@ -1,0 +1,34 @@
+{
+  "files": {},
+  "id": "mc/pointer-turn/no-ask-refused-g11",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Id": "940",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 2,
+      "json": {
+        "ask": "none",
+        "docBound": true,
+        "docId": "DOC1234567890abcdefghijklmnopqrstuvwxyz",
+        "findings": [
+          {
+            "guard": "G11",
+            "line": 1,
+            "snippet": "(no ask marker)",
+            "why": "this task has a catch-up doc, and a doc-bound task posts nothing per turn to Telegram (#424) -- so an ask that is not in this turn reaches no surface at all. Keep the ask in the journal (duplicate it into the doc, never move it): \"**Needs from you:** ...\", \"Reply `word`\", \"**Next:** ...\" or \"**Your call:** ...\". Use -DisableGuard G11 for a genuinely informational turn"
+          }
+        ],
+        "g15Note": "",
+        "hasAsk": false,
+        "id": "940",
+        "length": 277,
+        "ok": false
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

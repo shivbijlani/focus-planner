@@ -1,0 +1,130 @@
+{
+  "files": {
+    "data/journal/task-900.md": {
+      "change": "modified",
+      "text": "# Task 900: synthetic\n\nNotes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress\n\nInitial turn.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-03\n\napproved, go ahead\n"
+    },
+    "state/task-900.json": {
+      "bom": true,
+      "change": "created",
+      "json": {
+        "has_agent_block": true,
+        "id": "900",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "paused_at": null,
+        "plan_id": "",
+        "processed_file_hash": "5f35900c4d020410bc2f56331941d21f32042386df1476825f09218f1422f51e",
+        "seeded": false,
+        "status": "in-progress",
+        "status_by": "agent",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    }
+  },
+  "id": "mc/consent-authorship/unmarked-reopens-but-not-consent",
+  "steps": [
+    {
+      "args": {
+        "Id": "900",
+        "Status": "in-progress"
+      },
+      "command": "mark",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Compact": true
+      },
+      "command": "scan",
+      "exit": 0,
+      "json": {
+        "rows": [
+          {
+            "awaiting_reply": false,
+            "board_pos": 1,
+            "changed": true,
+            "consent_ok": false,
+            "dispatch_input": "add9cfb03e5a61e2f056305007919300cdcdb460e44476ecb71bc467d0bf80e9",
+            "dispatch_skip_reason": null,
+            "doc_channel": null,
+            "doc_id": null,
+            "doc_new_comments": 0,
+            "due_poll": false,
+            "due_recheck": false,
+            "eligible": true,
+            "has_agent_block": true,
+            "has_journal": true,
+            "has_open_ask": false,
+            "holds_today_gate": true,
+            "id": "900",
+            "linked": [],
+            "order": 1,
+            "plan_review_due": false,
+            "poll_cadence": null,
+            "priorities_rank": 999999,
+            "recheck_kind": null,
+            "reopened": true,
+            "reopened_closed": false,
+            "replacements_24h": 0,
+            "section": "today",
+            "session_activity": null,
+            "session_id": null,
+            "session_paused": false,
+            "session_process_dead": false,
+            "session_verdict": "create",
+            "session_workspace_missing": false,
+            "snooze_until": null,
+            "snoozed": false,
+            "status": "in-progress",
+            "status_by": "agent",
+            "today_release_reason": "holding:reopened",
+            "tracked": true,
+            "unanswered_user": false,
+            "unanswered_user_where": "",
+            "urgency": "??",
+            "work_priority": null
+          }
+        ],
+        "summary": {
+          "omitted_reason": "ineligible, not holding the Today gate, quiet, and nothing due - use -OutFile for the full worklist",
+          "out_file": null,
+          "rows_due_poll": 0,
+          "rows_eligible": 1,
+          "rows_no_journal": 0,
+          "rows_omitted": 0,
+          "rows_reopened": 1,
+          "rows_returned": 1,
+          "rows_total": 1,
+          "rows_unanswered": 0,
+          "scan_seconds": "<DURATION>",
+          "today_holding": 1
+        }
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "900"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "affirmative_answered": false,
+        "affirmative_author": "unknown",
+        "affirmative_phrase": "approved",
+        "affirmative_unattributed": true,
+        "consent_ok": false,
+        "human_segments": 0,
+        "id": "900",
+        "path": "<ROOT>/data/journal/task-900.md",
+        "reason": "affirmative-not-attributable-to-human",
+        "trailing_has_user": true
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

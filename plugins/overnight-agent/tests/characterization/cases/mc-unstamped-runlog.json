@@ -1,0 +1,114 @@
+{
+  "fixture": "mc-empty",
+  "covers": [
+    "mutcheck-unstamped-runlog"
+  ],
+  "cases": [
+    {
+      "id": "mc/unstamped-runlog/matrix",
+      "note": "Unstamped run logs answer user text only when the remainder is run-log-shaped; raw text remains a reply.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 911 | 🟡 | Task 911 | - | 2020-01-01 | |\n| 912 | 🟡 | Task 912 | - | 2020-01-01 | |\n| 913 | 🟡 | Task 913 | - | 2020-01-01 | |\n| 914 | 🟡 | Task 914 | - | 2020-01-01 | |\n| 915 | 🟡 | Task 915 | - | 2020-01-01 | |\n| 916 | 🟡 | Task 916 | - | 2020-01-01 | |\n| 917 | 🟡 | Task 917 | - | 2020-01-01 | |\n| 918 | 🟡 | Task 918 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-911.md": "# Task 911: synthetic\n\nSome notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n**Status:** Done - plan v1 - 2020-03-01\n\n### Proposed plan (v1)\n1. Do the thing.\n\n**Needs from you:** none\n\n## 2020-07-27\n\nHe accidentally purchased from orbit, so we are just going to use that\n\n### Run log\n**2020-07-27 (overnight):**\n- Got it, closing this out.\n- Result: done. No further action.\n- Next: complete.\n",
+        "data/journal/task-912.md": "# Task 912: synthetic\n\nSome notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n**Status:** Done - plan v1 - 2020-03-01\n\n### Proposed plan (v1)\n1. Do the thing.\n\n**Needs from you:** none\n\n## 2020-07-27\n\nHe accidentally purchased from orbit, so we are just going to use that\n",
+        "data/journal/task-913.md": "# Task 913: synthetic\n\nSome notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n**Status:** Done - plan v1 - 2020-03-01\n\n### Proposed plan (v1)\n1. Do the thing.\n\n**Needs from you:** none\n\n## 2020-07-27\n\nEarlier question?\n\n### Run log\n**2020-07-27 (overnight):**\n- Answered it.\n- Next: complete.\n\nActually wait, one more thing - can you also check the deductible?\n",
+        "data/journal/task-914.md": "# Task 914: synthetic\n\nSome notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n**Status:** Done - plan v1 - 2020-03-01\n\n### Proposed plan (v1)\n1. Do the thing.\n\n**Needs from you:** none\n\n## 2020-07-27\n\nHe accidentally purchased from orbit, so we are just going to use that\n\n### Run log\n**2020-07-27 (overnight):**\n- Got it, closing this out.\n- Result: done. No further action.\n- Next: complete.\n\n## 2020-08-26\n\n<!-- from: me -->\nHey, one more thing?\n",
+        "data/journal/task-915.md": "# Task 915: synthetic\n\nSome notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n**Status:** Done - plan v1 - 2020-03-01\n\n### Proposed plan (v1)\n1. Do the thing.\n\n**Needs from you:** none\n\n## 2020-07-27\n\nHe accidentally purchased from orbit, so we are just going to use that\n\n### Run log\n**2020-07-27 (overnight):**\n- Got it, closing this out.\n- Result: done. No further action.\n- Next: complete.\n\n## 2020-03-02\n\n<!-- from: dance-church -->\nRan the loop - nothing to change.\n",
+        "data/journal/task-916.md": "# Task 916: synthetic\n\nSome notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n**Status:** Done - plan v1 - 2020-03-01\n\n### Proposed plan (v1)\n1. Do the thing.\n\n**Needs from you:** none\n\n## 2020-08-26\n\n<!-- from: me -->\nHey, one more thing?\n",
+        "data/journal/task-917.md": "# Task 917: synthetic\n\nSome notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n**Status:** Done - plan v1 - 2020-03-01\n\n### Proposed plan (v1)\n1. Do the thing.\n\n**Needs from you:** none\n\n## 2020-03-02\n\n<!-- from: dance-church -->\nRan the loop - nothing to change.\n",
+        "data/journal/task-918.md": "# Task 918: synthetic\n\nSome notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## Overnight Agent\n\n**Status:** Done - plan v1 - 2020-03-01\n\n### Proposed plan (v1)\n1. Do the thing.\n\n**Needs from you:** none\n",
+        "state/task-911.json": {
+          "id": "911",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "dc4603d3d351f264b85175056c53708a650049e153430fd3544ffca22723daa2",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-912.json": {
+          "id": "912",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "229263c1608410ab84855242902a2721e11f2884092d869e02900392794165fd",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-913.json": {
+          "id": "913",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "4c9910b5ed28ce0fe8cb770c90e4060c07099dca6c0d6b674d5e9082dcee49ba",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-914.json": {
+          "id": "914",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "6f89edbf3d091ca659ad21ba9594de5d49350dbd7586c10b028d327b0a50a949",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-915.json": {
+          "id": "915",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "e1235c073ba5f640b45bf7d261b3c73c912f5b2aab2440c4ca928ec8fb9158d6",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-916.json": {
+          "id": "916",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "a635a628d2f23b7d7b5835bf6a13726f1c523f3343bef320dcf6ce20ffec2e4a",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-917.json": {
+          "id": "917",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "de95f83d6f39fb1577ca5c82cc9b9956314e704b51116c4dd62ab24b33b06386",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-918.json": {
+          "id": "918",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "efec1a457c9805d70fceecd31e2229807020b94b96882b75dbb97cddce3dc755",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {}
+        }
+      ]
+    }
+  ]
+}

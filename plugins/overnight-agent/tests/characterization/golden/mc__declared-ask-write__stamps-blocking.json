@@ -1,0 +1,19 @@
+{
+  "files": {
+    "data/journal/task-960.md": {
+      "change": "modified",
+      "text": "# Task 960: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** reply `go` if you want me to continue.\n"
+    }
+  },
+  "id": "mc/declared-ask-write/stamps-blocking",
+  "steps": [
+    {
+      "args": {
+        "Ask": "blocking",
+        "Id": "960"
+      },
+      "exit": 0,
+      "tool": "write-turn"
+    }
+  ]
+}

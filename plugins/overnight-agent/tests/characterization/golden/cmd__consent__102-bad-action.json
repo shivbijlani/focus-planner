@@ -1,0 +1,19 @@
+{
+  "files": {},
+  "id": "cmd/consent/102-bad-action",
+  "steps": [
+    {
+      "args": {
+        "Action": "launch_rocket",
+        "Id": "102"
+      },
+      "command": "consent",
+      "exit": 1,
+      "stderr": [
+        "<PS-PARAM-INVALID:Action>"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

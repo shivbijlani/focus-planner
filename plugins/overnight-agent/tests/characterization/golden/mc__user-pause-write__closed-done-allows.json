@@ -1,0 +1,27 @@
+{
+  "files": {},
+  "id": "mc/user-pause-write/closed-done-allows",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Id": "954",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 0,
+      "json": {
+        "ask": "none",
+        "docBound": false,
+        "docId": "",
+        "findings": [],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "954",
+        "length": 150,
+        "ok": true
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

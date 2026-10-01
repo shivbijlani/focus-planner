@@ -1,0 +1,26 @@
+{
+  "files": {},
+  "id": "mc/consent-vocab/bare-merge-rejected",
+  "steps": [
+    {
+      "args": {
+        "Id": "911"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "affirmative_answered": false,
+        "affirmative_author": null,
+        "affirmative_phrase": null,
+        "affirmative_unattributed": false,
+        "consent_ok": false,
+        "human_segments": 1,
+        "id": "911",
+        "path": "<ROOT>/data/journal/task-911.md",
+        "reason": "human-spoke-but-no-affirmative",
+        "trailing_has_user": true
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

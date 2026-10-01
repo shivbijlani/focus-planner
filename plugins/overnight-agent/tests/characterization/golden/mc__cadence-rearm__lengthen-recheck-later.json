@@ -1,0 +1,62 @@
+{
+  "files": {},
+  "id": "mc/cadence-rearm/lengthen-recheck-later",
+  "steps": [
+    {
+      "args": {
+        "Id": "904",
+        "Recheck": "2h",
+        "RecheckKind": "blocker"
+      },
+      "command": "mark",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "904",
+        "RecheckDone": true
+      },
+      "command": "mark",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "904",
+        "Recheck": "6h"
+      },
+      "command": "mark",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "904"
+      },
+      "command": "get",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "904",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "plan_id": "",
+        "processed_file_hash": "bd353430ca1b3d8a280b06e5e4c229f12c94117f2b8effff5cba4f37cd439c85",
+        "recheck": {
+          "cadence": "6h",
+          "interval_minutes": 360,
+          "kind": "blocker",
+          "last_rechecked": "<INVTIME+0m>",
+          "next_due": "<NOW+360m>"
+        },
+        "seeded": false,
+        "status": "unknown",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 0
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

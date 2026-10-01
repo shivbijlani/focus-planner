@@ -1,0 +1,47 @@
+{
+  "files": {
+    "state/task-102.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "102",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "sess-from-env",
+        "plan_id": "t102-v2",
+        "processed_file_hash": "6ad197e7bc9c4dc19c177a93babb598ea9fd36bf1737c0ead446400e98ba6142",
+        "seeded": false,
+        "status": "proposed",
+        "status_by": "agent",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 2
+      }
+    }
+  },
+  "id": "cmd/mark/102-env-session",
+  "steps": [
+    {
+      "args": {
+        "Id": "102"
+      },
+      "command": "mark",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "102",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "sess-from-env",
+        "plan_id": "t102-v2",
+        "processed_file_hash": "6ad197e7bc9c4dc19c177a93babb598ea9fd36bf1737c0ead446400e98ba6142",
+        "seeded": false,
+        "status": "proposed",
+        "status_by": "agent",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 2
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

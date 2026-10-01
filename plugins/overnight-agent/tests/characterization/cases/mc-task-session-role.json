@@ -1,0 +1,242 @@
+{
+  "fixture": "mc-task-session-role",
+  "covers": [
+    "mutcheck-task-session-role"
+  ],
+  "cases": [
+    {
+      "id": "mc/task-session-role/role-line-and-coordinator",
+      "note": "session emits task role line; unbound explicit session id is coordinator",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 960 | task 960 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-960.md": "# Task 960: task 960\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-960.json": {
+          "id": "960",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t960-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "home/worktrees/wt-960/.git": "gitdir: V:/repo/.git/worktrees/x"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "960"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "whoami",
+          "args": {
+            "SessionId": "SESS_COORD"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/task-session-role/whoami-bound-explicit",
+      "note": "whoami maps bound session id to task role and task id",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 960 | task 960 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-960.md": "# Task 960: task 960\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-960.json": {
+          "id": "960",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t960-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "home/worktrees/wt-960/.git": "gitdir: V:/repo/.git/worktrees/x"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "960",
+            "SessionId": "11111111-1111-4111-8111-111111111111",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-960",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "whoami",
+          "args": {
+            "SessionId": "11111111-1111-4111-8111-111111111111"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/task-session-role/whoami-env-default",
+      "note": "whoami defaults to COPILOT_AGENT_SESSION_ID when SessionId is omitted",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 960 | task 960 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-960.md": "# Task 960: task 960\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-960.json": {
+          "id": "960",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t960-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "home/worktrees/wt-960/.git": "gitdir: V:/repo/.git/worktrees/x"
+      },
+      "env": {
+        "COPILOT_AGENT_SESSION_ID": "11111111-1111-4111-8111-111111111111"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "960",
+            "SessionId": "11111111-1111-4111-8111-111111111111",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-960",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "whoami"
+        }
+      ]
+    },
+    {
+      "id": "mc/task-session-role/whoami-replaced-ids",
+      "note": "both replaced and replacement session ids identify the task session",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 960 | task 960 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-960.md": "# Task 960: task 960\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-960.json": {
+          "id": "960",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t960-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "home/worktrees/wt-960/.git": "gitdir: V:/repo/.git/worktrees/x",
+        "home/worktrees/wt-960b/.git": "gitdir: V:/repo/.git/worktrees/x"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "960",
+            "SessionId": "11111111-1111-4111-8111-111111111111",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-960",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "960",
+            "SessionDead": true
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "960",
+            "SessionId": "22222222-2222-4222-8222-222222222222",
+            "SessionKind": "code",
+            "SessionProject": "focus-planner",
+            "SessionWorkspace": "{home}/worktrees/wt-960b",
+            "WorkspaceType": "worktree"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "whoami",
+          "args": {
+            "SessionId": "11111111-1111-4111-8111-111111111111"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "whoami",
+          "args": {
+            "SessionId": "22222222-2222-4222-8222-222222222222"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/task-session-role/whoami-no-id-unknown",
+      "note": "whoami with no explicit or environment session id reports unknown",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 960 | task 960 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-960.md": "# Task 960: task 960\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-960.json": {
+          "id": "960",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t960-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "home/worktrees/wt-960/.git": "gitdir: V:/repo/.git/worktrees/x"
+      },
+      "tool": "oa-state",
+      "command": "whoami"
+    }
+  ]
+}

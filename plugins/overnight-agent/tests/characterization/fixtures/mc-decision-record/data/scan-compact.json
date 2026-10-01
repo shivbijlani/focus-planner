@@ -1,0 +1,41 @@
+{
+  "summary": {
+    "scan_seconds": 1.2,
+    "rows_total": 4,
+    "rows_eligible": 2,
+    "rows_returned": 4,
+    "rows_omitted": 0,
+    "today_holding": 1
+  },
+  "rows": [
+    {
+      "id": "245",
+      "order": 2,
+      "section": "today",
+      "eligible": false,
+      "today_release_reason": "not_workable:done_by_agent",
+      "status": "done"
+    },
+    {
+      "id": "246",
+      "order": 3,
+      "section": "today",
+      "eligible": false,
+      "status": "awaiting reply"
+    },
+    {
+      "id": "362",
+      "order": 68,
+      "section": "deferred",
+      "eligible": true,
+      "status": "in-progress"
+    },
+    {
+      "id": "400",
+      "order": 70,
+      "section": "deferred",
+      "eligible": true,
+      "status": ""
+    }
+  ]
+}

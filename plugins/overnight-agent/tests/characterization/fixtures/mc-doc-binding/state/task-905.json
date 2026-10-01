@@ -1,0 +1,26 @@
+{
+  "id": "905",
+  "status": "in-progress",
+  "version": 1,
+  "plan_id": "t905-v1",
+  "processed_file_hash": "023eace830ba6e008a110ee8c68a5a30ecdad513b3415f0a776756a5357327d8",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-01-01T12:00:00Z",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "2020-01-01T12:00:00Z",
+  "last_turn_by": "sess-char",
+  "doc": {
+    "doc_id": "DOC905",
+    "doc_url": "https://docs.google.com/document/d/DOC905/edit",
+    "bound_at": "2020-01-01T12:00:00Z",
+    "seen_ids": [
+      "SEEN1"
+    ],
+    "pending_ids": [
+      "NEW905"
+    ],
+    "observed_at": "{{UTC-30m}}"
+  }
+}

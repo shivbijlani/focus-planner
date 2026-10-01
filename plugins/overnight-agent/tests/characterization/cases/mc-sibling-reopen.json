@@ -1,0 +1,133 @@
+{
+  "fixture": "mc-empty",
+  "covers": [
+    "mutcheck-sibling-reopen"
+  ],
+  "cases": [
+    {
+      "id": "mc/sibling-reopen/matrix",
+      "note": "Sibling skill turns are not user replies; real user and raw prose still reopen.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 901 | 🟡 | Task 901 | - | 2020-01-01 | |\n| 902 | 🟡 | Task 902 | - | 2020-01-01 | |\n| 903 | 🟡 | Task 903 | - | 2020-01-01 | |\n| 904 | 🟡 | Task 904 | - | 2020-01-01 | |\n| 905 | 🟡 | Task 905 | - | 2020-01-01 | |\n| 906 | 🟡 | Task 906 | - | 2020-01-01 | |\n| 907 | 🟡 | Task 907 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-901.md": "# Task 901: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-902.md": "# Task 902: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-903.md": "# Task 903: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-904.md": "# Task 904: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-905.md": "# Task 905: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-906.md": "# Task 906: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-907.md": "# Task 907: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** none\n\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-901.json": {
+          "id": "901",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "09c7b9b6f55e1537e152ac6e78f19690685f223005668d71cf84edf9550cd5c7",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-902.json": {
+          "id": "902",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "f76ea4c694a659a8b8b7397d97dacb9089cf594e4ea850e37774cb898382e016",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-903.json": {
+          "id": "903",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "199a2242514580ec05387ccf34543a3fdbb91d6e93346eccdb1b85dd14f82301",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-904.json": {
+          "id": "904",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "bd353430ca1b3d8a280b06e5e4c229f12c94117f2b8effff5cba4f37cd439c85",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-905.json": {
+          "id": "905",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "68d06a33182436ada221133851aceab0be7256342aea57901cf417b3661b9e5b",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-906.json": {
+          "id": "906",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "c0c772e71394ffe411696bc4d30bbdca1239dc9cc056f58df6933e204b4282eb",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-907.json": {
+          "id": "907",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "0d790d75c8afbfc2934181909f9424052add7c902da463eada2bcdfc82ab4e5b",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "append": {
+            "data/journal/task-901.md": "\n## 2020-03-02\n\n<!-- from: dance-church -->\nRan the loop - nothing to change.\n"
+          }
+        },
+        {
+          "append": {
+            "data/journal/task-902.md": "\n## 2020-03-02\n\n<!-- from: me -->\nHey, one more thing - can you also check X?\n"
+          }
+        },
+        {
+          "append": {
+            "data/journal/task-903.md": "\n## 2020-03-02\n\n<!-- from: dance-church -->\nSibling status.\n\n## 2020-03-02\n\n<!-- from: me -->\nNow a real user reply.\n"
+          }
+        },
+        {
+          "append": {
+            "data/journal/task-904.md": "\n## 2020-03-02\n\n<!-- from: me -->\nFirst user reply.\n\n## 2020-03-02\n\n<!-- from: dance-church -->\nSibling status.\n"
+          }
+        },
+        {
+          "append": {
+            "data/journal/task-906.md": "\n\nRaw text with no provenance marker at all.\n"
+          }
+        },
+        {
+          "append": {
+            "data/journal/task-907.md": "\n## 2020-03-02\n\n<!-- from: dance-church -->\nSibling status.\n\n## 2020-03-02\n\n<!-- from: kranbox-backup -->\nUploaded 0 new files.\n"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {}
+        }
+      ]
+    }
+  ]
+}

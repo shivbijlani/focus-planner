@@ -1,0 +1,6 @@
+{
+  "description": "The shared synthetic planner folder + host state. Journals/state regenerate with tools/build-base-fixture.mjs.",
+  "mtimes": {
+    "data/journal/task-108.md": "-3h"
+  }
+}

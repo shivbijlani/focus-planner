@@ -1,0 +1,22 @@
+{
+  "files": {},
+  "id": "cmd/session/122-replace-bind",
+  "steps": [
+    {
+      "args": {
+        "Id": "122",
+        "SessionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        "SessionKind": "code",
+        "SessionProject": "example/docs",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-122"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_workspace_type: a code task cannot use a 'folder' workspace; use worktree (preferred) or branch."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

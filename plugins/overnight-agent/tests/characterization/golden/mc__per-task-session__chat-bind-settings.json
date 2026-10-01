@@ -1,0 +1,77 @@
+{
+  "files": {
+    "state/task-905.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "905",
+        "plan_id": "t905-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": {
+          "created_at": "<NOW+0m>",
+          "kind": "chat",
+          "last_woken_at": "",
+          "prior_session_id": "",
+          "prior_session_ids": [],
+          "project": "50b4020e-bf7b-40bf-90f4-5261b41710bc",
+          "replaced_at": "",
+          "session_id": "11111111-1111-4111-8111-111111111111",
+          "state": "live",
+          "workspace": "<ROOT>/lad/overnight-agent/task-chats",
+          "workspace_type": "folder"
+        },
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/per-task-session/chat-bind-settings",
+  "steps": [
+    {
+      "args": {
+        "Id": "905",
+        "SessionId": "11111111-1111-4111-8111-111111111111",
+        "SessionKind": "chat",
+        "SessionProject": "50b4020e-bf7b-40bf-90f4-5261b41710bc",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/task-chats",
+        "WorkspaceType": "folder"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "<NOW+0m>",
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "905",
+        "kickoff_continuation": null,
+        "kind": "chat",
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": "50b4020e-bf7b-40bf-90f4-5261b41710bc",
+        "released": false,
+        "role_line": "You are the task session for planner task #905. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "11111111-1111-4111-8111-111111111111",
+        "state": "live",
+        "teardown_command": null,
+        "verdict": "reuse",
+        "workspace": "<ROOT>/lad/overnight-agent/task-chats",
+        "workspace_missing": false,
+        "workspace_type": "folder"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}
