@@ -8,7 +8,7 @@ import {
 } from '../collect/journal.mjs';
 import { joinPath, splitParent } from '../core/context.mjs';
 import { fileNameWithoutExtension, readJournalText, testPath } from '../core/fsx.mjs';
-import { netTrim, netTrimEnd, psIsMatch, psReplace, psSplit, rx, rxMatches } from '../core/net.mjs';
+import { netTrim, netTrimEnd, psIsMatch, psReplace, psSplit, rx, rxMatches, roundHalfEven } from '../core/net.mjs';
 import { getBoardLinkFacts as getBoardLinkFactsFromBoard } from '../collect/board.mjs';
 
 export function getUtf8ByteCount(s) {
@@ -267,7 +267,10 @@ export function formatLinkedPointer(facts) {
   return `- linked: (none -- ${boardNote}; ${journalNote})`;
 }
 
-const kb = (b) => Math.round((b / 1024) * 10) / 10;
+const kb = (b) => {
+  const v = Math.round((b / 1024) * 10) / 10;
+  return Object.is(v, -0) ? '-0' : String(v);
+};
 
 export function cmdExtract(ctx) {
   const { Id } = ctx.p;
@@ -288,12 +291,12 @@ export function cmdExtract(ctx) {
   const turn = getNewestAgentTurn(agentLeft);
   const ceiling = Math.max(4, ctx.p.BudgetKB) * 1024;
   const slices = {
-    head: getBoundedSlice(head, Math.trunc(ceiling * 0.22)),
-    turn: getBoundedSlice(turn, Math.trunc(ceiling * 0.33)),
-    trailing: getBoundedSlice(trailing, Math.trunc(ceiling * 0.15)),
+    head: getBoundedSlice(head, roundHalfEven(ceiling * 0.22)),
+    turn: getBoundedSlice(turn, roundHalfEven(ceiling * 0.33)),
+    trailing: getBoundedSlice(trailing, roundHalfEven(ceiling * 0.15)),
   };
   const userMsgs = getJournalUserMessages(content);
-  const userList = getBoundedList(userMsgs, Math.trunc(ceiling * 0.30));
+  const userList = getBoundedList(userMsgs, roundHalfEven(ceiling * 0.30));
   const asks = getJournalOpenAsks(agentLeft);
   const ptr = getJournalPointers(content, p);
   const links = getLinkedFacts(ctx, Id, [...ptr.Linked]);

@@ -183,12 +183,13 @@ function runScan(impl, root, extra = []) {
     impl === 'ps' ? '-PlannerCompleted' : '--PlannerCompleted', path.join(root, 'planner-completed.md'),
     impl === 'ps' ? '-SnoozeStore' : '--SnoozeStore', path.join(root, 'snooze.json'),
     impl === 'ps' ? '-UserSettings' : '--UserSettings', path.join(root, 'user-settings.md'),
+    impl === 'ps' ? '-LockWaitSeconds' : '--LockWaitSeconds', '1',
     ...extra,
   ];
   const cmd = impl === 'ps'
     ? ['pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', PS1, ...common]]
     : [process.execPath, [NODE, ...common]];
-  const r = spawnSync(cmd[0], cmd[1], { cwd: REPO, encoding: 'utf8', windowsHide: true });
+  const r = spawnSync(cmd[0], cmd[1], { cwd: REPO, encoding: 'utf8', windowsHide: true, maxBuffer: 50 * 1024 * 1024, timeout: 120000 });
   return { exit: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -280,22 +281,26 @@ async function functionDiffs(workRoot, n, seed) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
-  fs.rmSync(WORK, { recursive: true, force: true });
   mkdir(WORK);
-  await functionDiffs(WORK, Math.max(10, opts.n), opts.seed);
+  const runWork = path.join(WORK, `run-${Date.now()}-${process.pid}`);
+  fs.rmSync(runWork, { recursive: true, force: true });
+  mkdir(runWork);
+  await functionDiffs(runWork, Math.max(10, opts.n), opts.seed);
   for (let i = 0; i < opts.n; i++) {
-    const base = path.join(WORK, `case-${String(i).padStart(3, '0')}`, 'base');
-    const psRoot = path.join(WORK, `case-${String(i).padStart(3, '0')}`, 'ps');
-    const nodeRoot = path.join(WORK, `case-${String(i).padStart(3, '0')}`, 'node');
+    process.stderr.write(`scan-diff case ${i + 1}/${opts.n}\n`);
+    const base = path.join(runWork, `case-${String(i).padStart(3, '0')}`, 'base');
     makePlanner(base, opts.seed + i * 7919);
-    copyDir(base, psRoot);
-    copyDir(base, nodeRoot);
     const variants = [
       { name: 'full', args: [] },
       { name: 'compact', args: ['--Compact'] },
       { name: 'outfile', args: ['--ScanOutFile', path.join('{root}', 'scan-full.json')] },
     ];
     for (const v of variants) {
+      process.stderr.write(`  ${v.name}\n`);
+      const psRoot = path.join(runWork, `case-${String(i).padStart(3, '0')}`, `ps-${v.name}`);
+      const nodeRoot = path.join(runWork, `case-${String(i).padStart(3, '0')}`, `node-${v.name}`);
+      copyDir(base, psRoot);
+      copyDir(base, nodeRoot);
       const psArgs = v.args.map((x) => x === '--Compact' ? '-Compact' : x === '--ScanOutFile' ? '-ScanOutFile' : x.replace('{root}', psRoot));
       const nodeArgs = v.args.map((x) => x.replace('{root}', nodeRoot));
       const t0 = Date.now();
@@ -305,7 +310,7 @@ async function main() {
       assertEqual(tree(psRoot, t0), tree(nodeRoot, t0), `case ${i} ${v.name} tree`);
     }
   }
-  if (!opts.keep) fs.rmSync(WORK, { recursive: true, force: true });
+  if (!opts.keep) fs.rmSync(runWork, { recursive: true, force: true });
   console.log(`scan-diff: ${opts.n} whole-folder cases + ${Math.max(10, opts.n)} function inputs, 0 differences`);
 }
 

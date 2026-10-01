@@ -13,6 +13,7 @@ import { cmdSeed } from './act/seed.mjs';
 import { cmdMark } from './act/mark.mjs';
 import { cmdResnapshot } from './act/resnapshot.mjs';
 import { cmdDoc } from './act/doc.mjs';
+import { cmdSession } from './act/session.mjs';
 
 const notPorted = (name) => Object.assign(() => { throw new Error(`oa-state.mjs: '${name}' is not ported yet; use oa-state.ps1`); }, { notPorted: true });
 
@@ -26,7 +27,7 @@ export const COMMAND_TABLE = {
   gate: cmdGate,
   extract: cmdExtract,
   doc: cmdDoc,
-  session: notPorted('session'),
+  session: cmdSession,
   whoami: cmdWhoami,
   'critical-tools': cmdCriticalTools,
   decisions: cmdDecisions,
@@ -35,4 +36,3 @@ export const COMMAND_TABLE = {
 // Which commands are ported: the characterization adapter maps exactly these, so every other
 // case stays SKIP rather than failing.
 export const PORTED = Object.entries(COMMAND_TABLE).filter(([, f]) => !f.notPorted).map(([k]) => k);
-

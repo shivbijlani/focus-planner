@@ -27,10 +27,12 @@ export const IMPLEMENTATIONS = {
     gate: OA_STATE,
     extract: OA_STATE,
     doc: OA_STATE,
-    session: null,
+    session: OA_STATE,
     whoami: OA_STATE,
     'critical-tools': OA_STATE,
     decisions: OA_STATE,
+    // Any other command word: the port's own binder must reject it, exactly as the PowerShell's does.
+    '*': OA_STATE,
   },
   // write-turn has no subcommand; the key is '' (every mode -- validate, append, json -- goes here).
   // Item 3: the Node port, driven with the PowerShell parameter names verbatim.
@@ -53,7 +55,7 @@ export default {
   name: 'node',
   describe() { return 'node ports (items 3/4) -- unmapped commands are SKIP'; },
   async run(step, ctx) {
-    const impl = IMPLEMENTATIONS[step.tool]?.[step.command || ''];
+    const impl = IMPLEMENTATIONS[step.tool]?.[step.command || ''] ?? IMPLEMENTATIONS[step.tool]?.['*'];
     if (!impl) return { status: 'skip', reason: `node: ${step.tool}${step.command ? ' ' + step.command : ''} not implemented` };
     if (typeof impl === 'function') return impl(step, ctx);
     const argv = [path.join(ctx.repoDir, impl.bin), ...(impl.argv ? impl.argv(step) : defaultArgv(step))];
@@ -68,4 +70,3 @@ export default {
     });
   },
 };
-

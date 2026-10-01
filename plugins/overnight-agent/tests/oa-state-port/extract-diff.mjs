@@ -209,6 +209,7 @@ async function main() {
   const work = path.join(here, `.scratch-extract-diff-${process.pid}`);
   fs.rmSync(work, { recursive: true, force: true });
   fs.mkdirSync(work, { recursive: true });
+  let ok = false;
   try {
     let next = 0;
     const workers = Array.from({ length: Math.min(JOBS, N) }, async () => {
@@ -216,8 +217,10 @@ async function main() {
     });
     await Promise.all(workers);
     console.log(`extract-diff: ${N} inputs, 0 differences (seed ${SEED})`);
+    ok = true;
   } finally {
-    fs.rmSync(work, { recursive: true, force: true });
+    if (ok) fs.rmSync(work, { recursive: true, force: true });
+    else console.error(`extract-diff scratch kept at ${work}`);
   }
 }
 

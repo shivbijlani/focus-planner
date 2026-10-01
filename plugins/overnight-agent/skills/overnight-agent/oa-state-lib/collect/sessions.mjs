@@ -110,7 +110,6 @@ export function getSessionState(st) {
 
 function eventInstantMs(v) {
   if (v === null || v === undefined) return null;
-  if (v instanceof PsDate) return v.instantMs();
   const s = psStr(v);
   const parsed = Date.parse(s);
   if (!Number.isNaN(parsed)) return parsed;

@@ -2,7 +2,7 @@
 // Differential fuzzer for the mutating oa-state commands ported in act/*.
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { makeNormalizer, tryParseJson, cleanStderr } from '../characterization/lib/normalize.mjs';
 import { stableStringify, firstDifference } from '../characterization/lib/engine.mjs';
@@ -11,7 +11,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..', '..', '..');
 const PS = path.join(REPO, 'plugins', 'overnight-agent', 'skills', 'overnight-agent', 'oa-state.ps1');
 const NODE = path.join(REPO, 'plugins', 'overnight-agent', 'skills', 'overnight-agent', 'oa-state.mjs');
-const SCRATCH = path.join(HERE, '.scratch-mutate-diff');
+const SCRATCH = path.join(HERE, '.scratch-mutate-diff-' + process.pid);
 
 function parseArgs(argv) {
   const o = { n: 20, seed: 12345, steps: 6, keep: false };
@@ -97,18 +97,29 @@ function stepArgs(step, dirs) {
   for (const [k, v] of Object.entries(step.args || {})) {
     if (v === true) a.push(`-${k}`);
     else if (Array.isArray(v)) for (const x of v) a.push(`-${k}`, String(x));
-    else a.push(`-${k}`, String(v));
+    else { const val = k === 'Observe' && !path.isAbsolute(String(v)) ? path.join(dirs.root, String(v)) : String(v); a.push(`-${k}`, val); }
   }
   return a;
+}
+
+function runProcess(cmd, argv, opts) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, argv, { ...opts, windowsHide: false });
+    const out = []; const err = [];
+    child.stdout.on('data', (b) => out.push(b));
+    child.stderr.on('data', (b) => err.push(b));
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ status: code ?? 0, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') }));
+  });
 }
 
 function runImpl(impl, step, dirs, root) {
   const args = stepArgs(step, dirs);
   const env = { ...process.env, OA_SANDBOX_ROOT: root };
   if (impl === 'ps') {
-    return spawnSync('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', PS, ...args], { cwd: REPO, env, encoding: 'utf8', windowsHide: true });
+    return runProcess('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', PS, ...args], { cwd: REPO, env });
   }
-  return spawnSync(process.execPath, [NODE, ...args.map((x) => x.startsWith('-') ? '-' + x : x)], { cwd: REPO, env, encoding: 'utf8', windowsHide: true });
+  return runProcess(process.execPath, [NODE, ...args.map((x) => x.startsWith('-') ? '-' + x : x)], { cwd: REPO, env });
 }
 
 function normaliseRun(res, normalizer) {
@@ -192,40 +203,45 @@ function randomStep(r, seq, i, roots) {
   return { command: 'doc', args };
 }
 
-function main() {
+async function runSequence(o, s) {
+  const r = rng(o.seed + s * 1000003);
+  const base = path.join(SCRATCH, `seq-${s}-base`);
+  const psRoot = path.join(SCRATCH, `seq-${s}-ps`);
+  const nodeRoot = path.join(SCRATCH, `seq-${s}-node`);
+  makeBase(base, r); copyDir(base, psRoot); copyDir(base, nodeRoot);
+  const dirs = (root) => ({ journal: path.join(root, 'planner', 'journal'), state: path.join(root, 'state'), board: path.join(root, 'planner', 'planner.md'), completed: path.join(root, 'planner', 'planner-completed.md'), root });
+  for (let i = 0; i < o.steps; i++) {
+    if (process.env.MUTATE_DIFF_PROGRESS) console.error('progress seq=' + s + ' step=' + i);
+    const step = randomStep(r, s, i, [psRoot, nodeRoot]);
+    if (process.env.MUTATE_DIFF_PROGRESS) console.error('step ' + JSON.stringify(step));
+    const t0 = Date.now();
+    const normalizer = makeNormalizer({ t0, pathTokens: [['<ROOT>', psRoot], ['<ROOT>', nodeRoot], ['<REPO>', REPO]] });
+    const [pr, nr] = await Promise.all([runImpl('ps', step, dirs(psRoot), psRoot), runImpl('node', step, dirs(nodeRoot), nodeRoot)]);
+    const po = normaliseRun(pr, normalizer);
+    const no = normaliseRun(nr, normalizer);
+    let diff = firstDifference(po, no);
+    if (!diff) diff = firstDifference(tree(psRoot, normalizer), tree(nodeRoot, normalizer));
+    if (diff) {
+      throw new Error(`mutate-diff mismatch seed=${o.seed} seq=${s} step=${i} ${JSON.stringify(step)}: ${diff}
+ps: ${stableStringify(po)}
+node: ${stableStringify(no)}`);
+    }
+  }
+}
+
+async function main() {
   const o = parseArgs(process.argv.slice(2));
   rm(SCRATCH); mkdir(SCRATCH);
-  const r = rng(o.seed);
+  const jobs = Math.min(4, o.n);
+  let next = 0;
   try {
-    for (let s = 0; s < o.n; s++) {
-      const base = path.join(SCRATCH, `seq-${s}-base`);
-      const psRoot = path.join(SCRATCH, `seq-${s}-ps`);
-      const nodeRoot = path.join(SCRATCH, `seq-${s}-node`);
-      makeBase(base, r); copyDir(base, psRoot); copyDir(base, nodeRoot);
-      const dirs = (root) => ({ journal: path.join(root, 'planner', 'journal'), state: path.join(root, 'state'), board: path.join(root, 'planner', 'planner.md'), completed: path.join(root, 'planner', 'planner-completed.md'), root });
-      for (let i = 0; i < o.steps; i++) {
-        const step = randomStep(r, s, i, [psRoot, nodeRoot]);
-        const t0 = Date.now();
-        const normalizer = makeNormalizer({ t0, pathTokens: [['<ROOT>', psRoot], ['<ROOT>', nodeRoot], ['<REPO>', REPO]] });
-        const pr = runImpl('ps', step, dirs(psRoot), psRoot);
-        const nr = runImpl('node', step, dirs(nodeRoot), nodeRoot);
-        const po = normaliseRun(pr, normalizer);
-        const no = normaliseRun(nr, normalizer);
-        let diff = firstDifference(po, no);
-        if (!diff) diff = firstDifference(tree(psRoot, normalizer), tree(nodeRoot, normalizer));
-        if (diff) {
-          console.error(`mutate-diff mismatch seed=${o.seed} seq=${s} step=${i} ${JSON.stringify(step)}: ${diff}`);
-          console.error('ps:', stableStringify(po));
-          console.error('node:', stableStringify(no));
-          process.exitCode = 1; return;
-        }
-      }
-    }
+    await Promise.all(Array.from({ length: jobs }, async () => {
+      while (next < o.n) await runSequence(o, next++);
+    }));
     console.log(`mutate-diff: ${o.n} sequences x ${o.steps} steps (${o.n * o.steps} steps), seed ${o.seed}: 0 differences`);
   } finally {
     if (!o.keep) rm(SCRATCH);
   }
 }
 
-main();
-
+main().catch((e) => { console.error(e.stack || String(e)); process.exitCode = 1; });
