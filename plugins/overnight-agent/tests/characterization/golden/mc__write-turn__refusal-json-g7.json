@@ -17,7 +17,7 @@
           {
             "guard": "G7",
             "line": 1,
-            "snippet": "## ?? Overnight Agent - 2020-03-09",
+            "snippet": "## 🌙 Overnight Agent — 2020-03-09",
             "why": "this turn has no \"<!-- from: overnight-agent -->\" under its heading, so the consent reader attributes it to whoever spoke last -- the agent's own words can then be read back as the user's approval (#272)"
           }
         ],

@@ -93,7 +93,7 @@
           "unanswered_user": true,
           "unanswered_user_at": null,
           "unanswered_user_where": "below-turn",
-          "urgency": "??",
+          "urgency": "🟡",
           "user_completed": false,
           "work_priority": null
         },
@@ -159,7 +159,7 @@
           "unanswered_user": true,
           "unanswered_user_at": null,
           "unanswered_user_where": "below-turn",
-          "urgency": "??",
+          "urgency": "🟡",
           "user_completed": false,
           "work_priority": null
         },
@@ -225,7 +225,7 @@
           "unanswered_user": true,
           "unanswered_user_at": null,
           "unanswered_user_where": "below-turn",
-          "urgency": "??",
+          "urgency": "🟡",
           "user_completed": false,
           "work_priority": null
         },
@@ -291,7 +291,7 @@
           "unanswered_user": false,
           "unanswered_user_at": null,
           "unanswered_user_where": "",
-          "urgency": "??",
+          "urgency": "🟡",
           "user_completed": false,
           "work_priority": null
         },
@@ -357,7 +357,7 @@
           "unanswered_user": false,
           "unanswered_user_at": null,
           "unanswered_user_where": "",
-          "urgency": "??",
+          "urgency": "🟡",
           "user_completed": false,
           "work_priority": null
         },
@@ -423,7 +423,7 @@
           "unanswered_user": false,
           "unanswered_user_at": null,
           "unanswered_user_where": "",
-          "urgency": "??",
+          "urgency": "🟡",
           "user_completed": false,
           "work_priority": null
         },
@@ -489,7 +489,7 @@
           "unanswered_user": false,
           "unanswered_user_at": null,
           "unanswered_user_where": "",
-          "urgency": "??",
+          "urgency": "🟡",
           "user_completed": false,
           "work_priority": null
         }
