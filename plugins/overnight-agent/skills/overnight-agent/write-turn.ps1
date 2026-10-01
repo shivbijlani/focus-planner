@@ -184,7 +184,31 @@ $DocMetaRe = '<!--\s*doc-meta\s+docId=(?<id>[A-Za-z0-9_\-]+)(?:\s+docUrl=(?<url>
 # guard whose evidence can only be produced by writing into the real OA home is a guard that
 # cannot be tested in CI - which is how it ends up unverified (#461's lesson, applied here
 # before it bites rather than after).
-$OA_HOME = if ($env:WRITE_TURN_OA_HOME) { $env:WRITE_TURN_OA_HOME } else { Join-Path $env:LOCALAPPDATA 'overnight-agent' }
+$OA_HOME = if ($env:WRITE_TURN_OA_HOME) { $env:WRITE_TURN_OA_HOME }
+           elseif ($env:OVERNIGHT_AGENT_HOME) { $env:OVERNIGHT_AGENT_HOME }
+           else { Join-Path $env:LOCALAPPDATA 'overnight-agent' }
+
+# --- Sandbox mode (tests/e2e/run-sandbox.ps1). Inert unless the variables are set. -----------
+# OVERNIGHT_AGENT_PLANNER_DIR replaces the default journal folder (an explicit -JournalDir still
+# wins), and OA_SANDBOX_ROOT makes any resolved path outside the sandbox a hard error, so an
+# end-to-end run can never write a live journal. Same contract as oa-state.ps1's block.
+if ($env:OVERNIGHT_AGENT_PLANNER_DIR -and -not $PSBoundParameters.ContainsKey('JournalDir')) {
+  $JournalDir = Join-Path $env:OVERNIGHT_AGENT_PLANNER_DIR 'journal'
+}
+if ($env:OA_SANDBOX_ROOT) {
+  $sbRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+    [Environment]::ExpandEnvironmentVariables($env:OA_SANDBOX_ROOT)).TrimEnd('\', '/')
+  foreach ($pair in @(@('JournalDir', $JournalDir), @('OA home', $OA_HOME), @('BodyFile', $BodyFile))) {
+    if (-not $pair[1]) { continue }
+    $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+      [Environment]::ExpandEnvironmentVariables($pair[1])).TrimEnd('\', '/')
+    $inside = [string]::Equals($full, $sbRoot, [StringComparison]::OrdinalIgnoreCase) -or
+      $full.StartsWith($sbRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+    if (-not $inside) {
+      [Console]::Error.WriteLine("oa_sandbox_violation: $($pair[0]) '$full' is outside OA_SANDBOX_ROOT '$sbRoot'"); exit 3
+    }
+  }
+}
 
 # --- #635 the already-shipped pick -------------------------------------------------------
 # Where the shipped/unworked classifier lives. Resolved relative to THIS script, not to the

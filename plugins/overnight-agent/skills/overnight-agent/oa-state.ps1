@@ -736,6 +736,44 @@ if (Test-Path -LiteralPath $settingsValueScript) {
   }
 }
 
+# --- Sandbox mode (tests/e2e/run-sandbox.ps1) ----------------------------------------------
+#
+# INERT UNLESS AN ENVIRONMENT VARIABLE IS SET. The live agent sets none of these, so every
+# default above binds exactly as it always has. The e2e harness sets them so an end-to-end run
+# of the Overnight Agent can never read or write the live planner or the live OA home:
+#   OVERNIGHT_AGENT_HOME        replaces %LOCALAPPDATA%\overnight-agent in unbound defaults
+#   OVERNIGHT_AGENT_PLANNER_DIR replaces %USERPROFILE%\OneDrive\Apps\Focus Planner likewise
+#   OA_SANDBOX_ROOT             tripwire: any resolved path outside it is a hard error
+# An explicitly passed parameter always wins over an override, and is still tripwired.
+function Assert-OaSandboxPath([string]$Path, [string]$What) {
+  if (-not $env:OA_SANDBOX_ROOT -or -not $Path) { return }
+  $root = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+    [Environment]::ExpandEnvironmentVariables($env:OA_SANDBOX_ROOT)).TrimEnd('\', '/')
+  $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+    [Environment]::ExpandEnvironmentVariables($Path)).TrimEnd('\', '/')
+  $inside = [string]::Equals($full, $root, [StringComparison]::OrdinalIgnoreCase) -or
+    $full.StartsWith($root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+  if (-not $inside) { throw "oa_sandbox_violation: $What '$full' is outside OA_SANDBOX_ROOT '$root'" }
+}
+if ($env:OVERNIGHT_AGENT_HOME) {
+  $oaHomeOverride = $env:OVERNIGHT_AGENT_HOME
+  if (-not $PSBoundParameters.ContainsKey('StateDir')) { $StateDir = Join-Path $oaHomeOverride 'state' }
+  if (-not $PSBoundParameters.ContainsKey('RunLedger')) { $RunLedger = Join-Path $oaHomeOverride 'run-ledger.jsonl' }
+  if (-not $PSBoundParameters.ContainsKey('CapabilitiesPath')) { $CapabilitiesPath = Join-Path $oaHomeOverride 'capabilities.json' }
+}
+if ($env:OVERNIGHT_AGENT_PLANNER_DIR) {
+  $plannerOverride = $env:OVERNIGHT_AGENT_PLANNER_DIR
+  if (-not $PSBoundParameters.ContainsKey('JournalDir')) { $JournalDir = Join-Path $plannerOverride 'journal' }
+  if (-not $PSBoundParameters.ContainsKey('PlannerBoard')) { $PlannerBoard = Join-Path $plannerOverride 'planner.md' }
+  if (-not $PSBoundParameters.ContainsKey('PlannerCompleted')) { $PlannerCompleted = Join-Path $plannerOverride 'planner-completed.md' }
+  if (-not $PSBoundParameters.ContainsKey('SnoozeStore')) { $SnoozeStore = Join-Path $plannerOverride 'snooze.json' }
+  if (-not $PSBoundParameters.ContainsKey('GatePath')) { $GatePath = Join-Path $plannerOverride 'agent-gate.md' }
+}
+if ($env:OA_SANDBOX_ROOT -and $env:COPILOT_HOME) {
+  if (-not $PSBoundParameters.ContainsKey('SessionStateDir')) { $SessionStateDir = Join-Path $env:COPILOT_HOME 'session-state' }
+  if (-not $PSBoundParameters.ContainsKey('McpConfig')) { $McpConfig = Join-Path $env:COPILOT_HOME 'mcp-config.json' }
+}
+
 # --- The gate tunables, resolved from user-settings.md (#310 follow-up) --------------------
 #
 # WHY THIS SCRIPT READS THE FILE ITSELF, rather than the agent passing flags.
@@ -775,8 +813,10 @@ function Get-UserSettingsPath {
     $env:OVERNIGHT_AGENT_SETTINGS,
     (Join-Path (Get-Location).Path 'user-settings.md'),
     (Join-Path (Split-Path -Parent $PlannerBoard) 'user-settings.md'),
-    "$env:USERPROFILE\OneDrive\Apps\Focus Planner\user-settings.md",
-    "$env:LOCALAPPDATA\overnight-agent\user-settings.md"
+    $(if ($env:OVERNIGHT_AGENT_PLANNER_DIR) { Join-Path $env:OVERNIGHT_AGENT_PLANNER_DIR 'user-settings.md' }
+      else { "$env:USERPROFILE\OneDrive\Apps\Focus Planner\user-settings.md" }),
+    $(if ($env:OVERNIGHT_AGENT_HOME) { Join-Path $env:OVERNIGHT_AGENT_HOME 'user-settings.md' }
+      else { "$env:LOCALAPPDATA\overnight-agent\user-settings.md" })
   )
   foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { return $c } }
   return $null
@@ -5500,10 +5540,11 @@ function Assert-ChatWorkspace([string]$project, [string]$workspace, [string]$wsT
   if ($configured -cnotmatch ('^' + $idPattern + '$')) {
     throw "session_chat_project_invalid: Non-code task project must be a project id, got '$setting'"
   }
-  if (-not $env:LOCALAPPDATA) {
+  if (-not $env:LOCALAPPDATA -and -not $env:OVERNIGHT_AGENT_HOME) {
     throw 'session_chat_home_required: LOCALAPPDATA is required for Non-code task project'
   }
-  $chatHome = Join-Path $env:LOCALAPPDATA 'overnight-agent\task-chats'
+  $chatHome = if ($env:OVERNIGHT_AGENT_HOME) { Join-Path $env:OVERNIGHT_AGENT_HOME 'task-chats' }
+              else { Join-Path $env:LOCALAPPDATA 'overnight-agent\task-chats' }
   if (-not $project -or $project -ne $configured -or -not $workspace -or $wsType -ne 'folder') {
     throw 'session_chat_scope: bind the configured Non-code task project with its folder workspace (-SessionProject, -SessionWorkspace, -WorkspaceType folder)'
   }
@@ -6498,6 +6539,19 @@ elseif ($env:OA_STATE_LOCK_WAIT_SECONDS) {
   $parsedWait = 0
   if ([int]::TryParse("$env:OA_STATE_LOCK_WAIT_SECONDS", [ref]$parsedWait) -and $parsedWait -gt 0) {
     $lockWaitSeconds = $parsedWait
+  }
+}
+if ($env:OA_SANDBOX_ROOT) {
+  foreach ($pair in @(
+      @('JournalDir', $JournalDir), @('StateDir', $StateDir), @('SessionStateDir', $SessionStateDir),
+      @('PlannerBoard', $PlannerBoard), @('PlannerCompleted', $PlannerCompleted),
+      @('SnoozeStore', $SnoozeStore), @('GatePath', $GatePath), @('RunLedger', $RunLedger),
+      @('CapabilitiesPath', $CapabilitiesPath), @('McpConfig', $McpConfig),
+      @('UserSettings', (Get-UserSettingsPath)), @('ScanOutFile', $ScanOutFile), @('ScanFile', $ScanFile),
+      @('Observe', $Observe), @('DocComments', $DocComments), @('SessionsStatusFile', $SessionsStatusFile),
+      @('SessionWorkspace', $SessionWorkspace), @('WorkspaceGone', $WorkspaceGone),
+      @('RunWorkspace', $RunWorkspace))) {
+    Assert-OaSandboxPath $pair[1] $pair[0]
   }
 }
 $needsStateLock = @('critical-tools', 'decisions') -notcontains $Command

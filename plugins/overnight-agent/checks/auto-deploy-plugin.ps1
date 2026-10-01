@@ -96,6 +96,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Sandbox mode (tests/e2e/run-sandbox.ps1): inert unless OA_SANDBOX_ROOT is set. Every target
+# this script writes (installed-plugins, the flat OA home, the bridge) is live by definition, so
+# a sandbox run skips the deploy with an explicit line and a clean exit rather than touching them.
+if ($env:OA_SANDBOX_ROOT) {
+  if ($Json) { [ordered]@{ sandbox = $true; skipped = 'deploy targets are live; skipped under OA_SANDBOX_ROOT' } | ConvertTo-Json -Compress }
+  else { Write-Host '[auto-deploy] SANDBOX: deploy skipped (OA_SANDBOX_ROOT is set; deploy targets are live)' }
+  exit 0
+}
+
 function Write-Note([string]$msg) { if (-not $Json) { Write-Host "[auto-deploy] $msg" } }
 function Get-NormHash([byte[]]$bytes) {
   # The classifier compares NORMALISED content (CRLF and LF are the same file), so this

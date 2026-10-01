@@ -45,6 +45,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Sandbox mode (tests/e2e/run-sandbox.ps1): inert unless OA_SANDBOX_ROOT is set. The mirror posts
+# to Telegram, and a sandbox run must never send anything, so it refuses before reading a token.
+if ($env:OA_SANDBOX_ROOT) { throw 'oa_sandbox_violation: the Telegram mirror sends externally; refused under OA_SANDBOX_ROOT' }
+
 $PlannerPath = 'C:\Users\shiv\OneDrive\Apps\Focus Planner'
 $Settings    = if ($SettingsPath) { $SettingsPath } else { Join-Path $PlannerPath 'user-settings.md' }
 $ChatId      = '-1004310604015'

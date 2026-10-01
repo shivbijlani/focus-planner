@@ -111,6 +111,7 @@ $manifestPath = Resolve-First @(
   $Manifest,
   (Join-Path $here 'run-capabilities.json'),
   (Join-Path $here '..\..\skills\overnight-agent\run-capabilities.json'),
+  (Join-IfSet $env:OVERNIGHT_AGENT_HOME 'run-capabilities.json'),
   (Join-IfSet $env:LOCALAPPDATA 'overnight-agent\run-capabilities.json')
 )
 
@@ -118,6 +119,7 @@ $proberPath = Resolve-First @(
   $ProberScript,
   (Join-Path $here 'mcp-probe.mjs'),
   (Join-Path $here '..\..\checks\mcp-probe.mjs'),
+  (Join-IfSet $env:OVERNIGHT_AGENT_HOME 'mcp-probe.mjs'),
   (Join-IfSet $env:LOCALAPPDATA 'overnight-agent\mcp-probe.mjs')
 )
 
