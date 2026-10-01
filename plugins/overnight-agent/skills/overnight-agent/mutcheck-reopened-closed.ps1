@@ -95,15 +95,13 @@ $ErrorActionPreference = 'Stop'
 
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
 if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
 
 # Launch the host that actually EXISTS here. `powershell` is Windows-only, so hardcoding it makes
 # the guard die on the Linux runner with "The term 'powershell' is not recognized". This file
 # never ran in CI until #501 wired it in, which is why it still had the Windows-only spelling.
 # Same idiom as mutcheck-cadence-rearm.ps1: under Core, re-launch the very executable running
 # this script; under 5.1, `powershell`.
-$script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
-if (-not $script:PsExe) { $script:PsExe = 'pwsh' }
-
 $script:pass = 0
 $script:fail = 0
 function Ok   { param([string]$n, [string]$m = '') $script:pass++; Write-Host ("  ok    {0} {1}" -f $n, $m) }
@@ -212,8 +210,10 @@ function New-Sandbox {
 
 function Invoke-Oa {
   param([string]$Subject, $Sx, [string[]]$OaArgs)
-  return (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File $Subject @OaArgs `
-    -JournalDir $Sx.JDir -StateDir $Sx.SDir -PlannerBoard $Sx.Board -PlannerCompleted $Sx.Done -SnoozeStore $Sx.Store 2>&1)
+  $cmd = Get-OaStateCommand $Subject
+  return (& $cmd.Exe @($cmd.Prefix + $OaArgs + @(
+    '-JournalDir', $Sx.JDir, '-StateDir', $Sx.SDir, '-PlannerBoard', $Sx.Board,
+    '-PlannerCompleted', $Sx.Done, '-SnoozeStore', $Sx.Store)) 2>&1)
 }
 
 function Initialize-Sandbox {
@@ -249,13 +249,12 @@ function Get-Row {
 }
 
 function New-Mutant {
-  param([string]$Name, [string]$Find, [string]$Replace)
-  $src = [IO.File]::ReadAllText($ScriptPath, $utf8)
-  if ($src -notmatch [regex]::Escape($Find)) { throw "mutant $Name : anchor not found -> $Find" }
-  $dst = Join-Path $root "mutant-$Name.ps1"
-  New-Item -ItemType Directory -Path $root -Force | Out-Null
-  [IO.File]::WriteAllText($dst, $src.Replace($Find, $Replace), $utf8)
-  return $dst
+  param([string]$Name, [string]$Find, [string]$Replace, [string]$JsFind = $null, [string]$JsReplace = $null)
+  if (Test-OaStateNodeTarget $ScriptPath) {
+    if (-not $JsFind) { throw "mutant $Name has no Node twin" }
+    return New-OaStateMutant $ScriptPath $Name $JsFind $JsReplace $root
+  }
+  return New-OaStateMutant $ScriptPath $Name $Find $Replace $root
 }
 
 Write-Host ''
@@ -314,7 +313,8 @@ Write-Host '[mutants] each must FLIP the case it protects'
 
 # M1 - break the SHARED predicate, which is the only mutation that restores the defect
 #      everywhere at once. Both readers below depend on it, so this is the core kill.
-$m1 = New-Mutant 'M1' '  return [bool]($row.reopened -and (Test-UserClosed $row))' '  return $false'
+$m1 = New-Mutant 'M1' '  return [bool]($row.reopened -and (Test-UserClosed $row))' '  return $false' `
+  "  return !!(psTruthy(get(row, 'reopened')) && testUserClosed(row));" "  return false;"
 $sx1 = New-Sandbox 'm1'
 Initialize-Sandbox $m1 $sx1
 $rows1 = Get-Rows $m1 $sx1
@@ -328,7 +328,8 @@ Assert ((Get-Row $rows1 '910').eligible -ne $false) 'M1' 'without the closed che
 
 # M5 - remove only the check in the ELIGIBILITY pass. `Test-Workable` still refuses, but the
 #      `reopened` shortcut sits ABOVE it and hands the row to the run anyway.
-$m5 = New-Mutant 'M5' '      if (Test-ReopenedClosed $r) { $eligible = $false }' '      if ($false) { $eligible = $false }'
+$m5 = New-Mutant 'M5' '      if (Test-ReopenedClosed $r) { $eligible = $false }' '      if ($false) { $eligible = $false }' `
+  '      if (testReopenedClosed(r)) eligible = false;' '      if (false) eligible = false;'
 $sx5 = New-Sandbox 'm5'
 Initialize-Sandbox $m5 $sx5
 $rows5 = Get-Rows $m5 $sx5
@@ -338,7 +339,8 @@ Assert ((Get-Row $rows5 '910').eligible -ne $false) 'M5' 'the eligibility shortc
 #      so nothing is worked -- but it becomes WORKABLE, and a workable Today row HOLDS the
 #      Today-before-Deferred gate. The whole Deferred backlog would then be frozen behind a task
 #      nobody is permitted to touch: unworkable forever, and blocking forever.
-$m6 = New-Mutant 'M6' '  if (Test-ReopenedClosed $row) { return $false }' '  if ($false) { return $false }'
+$m6 = New-Mutant 'M6' '  if (Test-ReopenedClosed $row) { return $false }' '  if ($false) { return $false }' `
+  "  if (testReopenedClosed(row)) return false;" "  if (false) return false;"
 $sx6 = New-Sandbox 'm6'
 Initialize-Sandbox $m6 $sx6
 $rows6 = Get-Rows $m6 $sx6
@@ -347,7 +349,8 @@ Assert ((Get-Row $rows6 '910').eligible -eq $false) 'M6_STILL_INELIG' 'while the
 
 # M2 - the half-fix: protect `done` and forget `skip`. Both are closed; a fix that names one is
 #      a fix with a hole in it, and the hole is invisible because the `done` case passes.
-$m2 = New-Mutant 'M2' "`$script:ClosedStatus = @('done', 'skip')" "`$script:ClosedStatus = @('done')"
+$m2 = New-Mutant 'M2' "`$script:ClosedStatus = @('done', 'skip')" "`$script:ClosedStatus = @('done')" `
+  "export const ClosedStatus = ['done', 'skip'];" "export const ClosedStatus = ['done'];"
 $sx2 = New-Sandbox 'm2'
 Initialize-Sandbox $m2 $sx2
 $rows2 = Get-Rows $m2 $sx2
@@ -362,7 +365,8 @@ Assert ((Get-Row $rows2 '910').eligible -eq $false) 'M2_NARROW' 'while done itse
 #      bites. Since #501 a closed STATUS is only a precondition: an on-board row is still open
 #      work whatever the status says, so 913 would survive this mutant and prove nothing. The
 #      arm had to move with the rule it guards, or it would have quietly stopped testing.
-$m3 = New-Mutant 'M3' "`$script:ClosedStatus = @('done', 'skip')" "`$script:ClosedStatus = @('done', 'skip', 'proposed', 'blocked')"
+$m3 = New-Mutant 'M3' "`$script:ClosedStatus = @('done', 'skip')" "`$script:ClosedStatus = @('done', 'skip', 'proposed', 'blocked')" `
+  "export const ClosedStatus = ['done', 'skip'];" "export const ClosedStatus = ['done', 'skip', 'proposed', 'blocked'];"
 $sx3 = New-Sandbox 'm3'
 Initialize-Sandbox $m3 $sx3
 $rows3 = Get-Rows $m3 $sx3
@@ -372,7 +376,8 @@ Assert ((Get-Row $rows3 '912').eligible -eq $true) 'M3_NARROW' 'while an in-prog
 # M4 - suppress the work AND the message. This is the arm that keeps the fix honest: the whole
 #      justification for not reanimating closed work is that the nudge STAYS VISIBLE. Drop the
 #      report and that justification is gone -- a loud failure has become a silent one.
-$m4 = New-Mutant 'M4' '      -NotePropertyValue ([bool](Test-ReopenedClosed $r)) -Force' '      -NotePropertyValue $false -Force'
+$m4 = New-Mutant 'M4' '      -NotePropertyValue ([bool](Test-ReopenedClosed $r)) -Force' '      -NotePropertyValue $false -Force' `
+  "  for (const r of rows) setMember(r, 'reopened_closed', !!testReopenedClosed(r));" "  for (const r of rows) setMember(r, 'reopened_closed', false);"
 $sx4 = New-Sandbox 'm4'
 Initialize-Sandbox $m4 $sx4
 $rows4 = Get-Rows $m4 $sx4
@@ -392,6 +397,12 @@ $m7 = New-Mutant 'M7' @'
   if (-not $row.on_board) { return $true }
   return $false
 '@ '  return $true
+' @'
+  if (psTruthy(get(row, 'user_completed'))) return true;
+  if (lowerInvariant(psStr(get(row, 'status_by'))) === 'user') return true;
+  if (!psTruthy(get(row, 'on_board'))) return true;
+  return false;
+'@ '  return true;
 '
 $sx7 = New-Sandbox 'm7'
 Initialize-Sandbox $m7 $sx7
@@ -404,7 +415,8 @@ Assert ((Get-Row $rows7 '912').eligible -eq $true) 'M7_NARROW' 'while an in-prog
 #      journal's hash moved -- and #245 proves a `mark` 62 seconds later closes that window
 #      for good. This arm is what makes the fix survive a re-snapshot rather than merely
 #      survive the first scan after the reply.
-$m8 = New-Mutant 'M8' '    unanswered_user    = [bool]($facts.HasTrailingHuman -or $aboveSentinelReply)' '    unanswered_user    = $false'
+$m8 = New-Mutant 'M8' '    unanswered_user    = [bool]($facts.HasTrailingHuman -or $aboveSentinelReply)' '    unanswered_user    = $false' `
+  '      unanswered_user: !!(facts.HasTrailingHuman || aboveSentinelReply),' '      unanswered_user: false,'
 $sx8 = New-Sandbox 'm8'
 Initialize-Sandbox $m8 $sx8
 # Re-mark 914 AFTER the reply landed: this is the #245 sequence exactly, and it is what erases

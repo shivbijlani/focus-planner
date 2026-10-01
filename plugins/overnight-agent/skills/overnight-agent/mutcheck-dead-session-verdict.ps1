@@ -11,7 +11,8 @@ param([string]$ScriptPath)
 
 $ErrorActionPreference = 'Stop'
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
-if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
 
 $script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
 if (-not $script:PsExe) { $script:PsExe = 'pwsh' }
@@ -78,13 +79,13 @@ function New-Fixture {
 
 function Get-Session {
   param($Fixture, [string]$Build, [string[]]$Action = @('session', '-Id', '900'))
-  $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Build) + $Action +
-    @(
+  $cmd = Get-OaStateCommand $Build
+  $args = $cmd.Prefix + $Action + @(
     '-JournalDir', $script:JournalDir, '-StateDir', $Fixture.stateDir,
     '-SessionStateDir', $Fixture.sessionStateDir, '-PlannerBoard', $script:Board, '-SnoozeStore', $script:Store)
   $old = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  try { $out = & $script:PsExe @args 2>&1 }
+  try { $out = & $cmd.Exe @args 2>&1 }
   finally { $ErrorActionPreference = $old }
   $script:LastCommandOutput = ($out -join "`n")
   if ($LASTEXITCODE -ne 0 -or -not $out) { return $null }
@@ -227,36 +228,48 @@ $mutants = @(
     Expect = 'A_dead-stale'
     Find = "  if (`$sessionProcessDead) { return 'replace' }"
     Replace = '  if ($false) { return ''replace'' }'
+    JsFind = '  if (processDead) return ''replace'';'
+    JsReplace = '  if (false) return ''replace'';'
   }
   @{
     Name = 'M2_ignore-event-freshness'
     Expect = 'C_recent-events'
     Find = '  if ((Get-Item -LiteralPath $eventsPath -ErrorAction Stop).LastWriteTimeUtc -gt $staleBefore) { return $false }'
     Replace = '  if ($false) { return $false }'
+    JsFind = '  if (fs.statSync(eventsPath).mtimeMs > staleBefore) return false;'
+    JsReplace = '  if (false) return false;'
   }
   @{
     Name = 'M3_ignore-live-lock-owner'
     Expect = 'B_live-owner'
     Find = '      if (-not $process.HasExited) { return $false }'
     Replace = '      if ($false) { return $false }'
+    JsFind = '    if (processAlive(pidValue)) return false;'
+    JsReplace = '    if (false) return false;'
   }
   @{
     Name = 'M4_mark-live-session-dead'
     Expect = 'E_idle-alive'
     Find = '    if (Test-SessionProcessAlive "$($sess.session_id)") {'
     Replace = '    if ($false) {'
+    JsFind = "    if (testSessionProcessAlive(ctx, psStr(get(sess, 'session_id')))) {"
+    JsReplace = '    if (false) {'
   }
   @{
     Name = 'M5_drop-replacement-count'
     Expect = 'F_rolling-window'
     Find = '      replacements_24h = (Get-Replacements24h $st)'
     Replace = '      replacements_24h = 0'
+    JsFind = '      replacements_24h: Sessions.getReplacements24h(st),'
+    JsReplace = '      replacements_24h: 0,'
   }
   @{
     Name = 'M6_routine-shutdown-means-dead'
     Expect = 'G_routine-shutdown'
     Find = '  if ("$($lastEvent.type)" -eq ''session.shutdown'' -and "$($lastEvent.data.shutdownType)" -eq ''routine'') {'
     Replace = '  if ($false) {'
+    JsFind = "  if (psStr(get(lastEvent, 'type')) === 'session.shutdown' && psStr(get(get(lastEvent, 'data'), 'shutdownType')) === 'routine') {"
+    JsReplace = '  if (false) {'
   }
 )
 
@@ -273,19 +286,14 @@ Write-Host '  [baseline] OK -- dead+stale=>replace, idle-alive=>reuse, rolling r
 
 $survived = @()
 foreach ($mutant in $mutants) {
-  if (-not $Source.Contains($mutant.Find)) {
-    Write-Host "  [ERROR  ] $($mutant.Name) target not found" -ForegroundColor Red
+  $find = if (Test-OaStateNodeTarget $ScriptPath) { $mutant.JsFind } else { $mutant.Find }
+  $replace = if (Test-OaStateNodeTarget $ScriptPath) { $mutant.JsReplace } else { $mutant.Replace }
+  try { $path = New-OaStateMutant $ScriptPath $mutant.Name $find $replace $script:Root }
+  catch {
+    Write-Host "  [ERROR  ] $($mutant.Name) target not found: $($_.Exception.Message)" -ForegroundColor Red
     $survived += $mutant.Name
     continue
   }
-  $mutated = $Source.Replace($mutant.Find, $mutant.Replace)
-  if ($mutated -eq $Source) {
-    Write-Host "  [ERROR  ] $($mutant.Name) did not change source" -ForegroundColor Red
-    $survived += $mutant.Name
-    continue
-  }
-  $path = Join-Path $script:Root ($mutant.Name + '.ps1')
-  [IO.File]::WriteAllText($path, $mutated, $utf8)
   $failure = switch ($mutant.Expect) {
     'E_idle-alive' { Test-AliveMarkRefused $path }
     'F_rolling-window' { Test-ReplacementCount $path }

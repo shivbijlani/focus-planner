@@ -57,28 +57,19 @@ if (-not $ScriptPath) {
 }
 $Subject = $ScriptPath
 if (-not $Subject -or -not (Test-Path $Subject)) { throw "subject not found: $Subject" }
-
-# Normalised to LF before any mutation: the working tree is CRLF on Windows, so patterns written
-# against LF would match nothing and every mutant would "survive" for a reason unrelated to the
-# subject. A mutation that fails to apply is reported as a failure, never counted as a kill.
-$Source = (Get-Content -Raw $Subject) -replace "`r`n", "`n"
+. (Join-Path (Split-Path -Parent $Subject) 'oa-state-target.ps1')
+$script:TargetIsNode = Test-OaStateNodeTarget $Subject
 
 $Tmp = Join-Path ([IO.Path]::GetTempPath()) ("mutcheck-dispatch-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $Tmp -Force | Out-Null
 
 function New-Subject {
-  param([string]$Name, [scriptblock]$Mutate)
-  $src = $Source
-  if ($Mutate) {
-    $next = & $Mutate $src
-    if ($next -eq $src) { throw "mutation $Name did not change the source" }
-    $src = $next
-  }
-  $dir = Join-Path $Tmp $Name
-  New-Item -ItemType Directory -Path $dir -Force | Out-Null
-  $path = Join-Path $dir 'oa-state.ps1'
-  [IO.File]::WriteAllText($path, $src, (New-Object Text.UTF8Encoding $false))
-  return $path
+  param([string]$Name, [string]$Find = $null, [string]$Replace = $null, [string]$JsFind = $null, [string]$JsReplace = $null)
+  if (-not $Find) { return $Subject }
+  $needle = if ($script:TargetIsNode) { $JsFind } else { $Find }
+  $with = if ($script:TargetIsNode) { $JsReplace } else { $Replace }
+  if (-not $needle) { throw "mutation $Name has no Node twin" }
+  return New-OaStateMutant $Subject $Name $needle $with (Join-Path $Tmp 'mutants')
 }
 
 # A store holding one task with a live binding and a wake stamp that is OLD but present -- the
@@ -140,12 +131,14 @@ function Read-Stamp {
 
 function Invoke-Session {
   param([string]$SubjectPath, [string]$StateDir, [string[]]$Extra = @())
-  $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $SubjectPath, 'session', '-Id', '999',
+  $cmd = Get-OaStateCommand $SubjectPath
+  $argv = @('session', '-Id', '999',
     '-StateDir', $StateDir, '-JournalDir', (Join-Path $StateDir 'journal'),
+    '-SessionStateDir', (Join-Path $StateDir 'session-state'),
     '-PlannerBoard', (Join-Path $StateDir 'planner.md'), '-PlannerCompleted', (Join-Path $StateDir 'completed.md'),
     '-SnoozeStore', (Join-Path $StateDir 'snooze.json'), '-UserSettings', (Join-Path $StateDir 'absent-settings.md')) + $Extra
   if ($Extra -contains '-ForDispatch') { $argv += @('-SessionsStatusFile', (Join-Path $StateDir 'sessions-status.json')) }
-  $out = & pwsh @argv 2>&1
+  $out = & $cmd.Exe @($cmd.Prefix + $argv) 2>&1
   $text = ($out | Out-String)
   $script:LastExitCode = $LASTEXITCODE
   $script:LastSessionOutput = $text
@@ -154,13 +147,15 @@ function Invoke-Session {
 
 function Get-DispatchInput {
   param([string]$SubjectPath, [string]$StateDir)
-  $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $SubjectPath, 'scan',
+  $cmd = Get-OaStateCommand $SubjectPath
+  $argv = @('scan',
     '-StateDir', $StateDir, '-JournalDir', (Join-Path $StateDir 'journal'),
+    '-SessionStateDir', (Join-Path $StateDir 'session-state'),
     '-PlannerBoard', (Join-Path $StateDir 'planner.md'),
     '-PlannerCompleted', (Join-Path $StateDir 'completed.md'),
     '-SnoozeStore', (Join-Path $StateDir 'snooze.json'),
     '-UserSettings', (Join-Path $StateDir 'absent-settings.md'))
-  $out = & pwsh @argv 2>&1
+  $out = & $cmd.Exe @($cmd.Prefix + $argv) 2>&1
   if ($LASTEXITCODE -ne 0) { throw "scan failed while preparing the dispatch fingerprint: $out" }
   $rows = (($out | Out-String) | ConvertFrom-Json)
   $row = @($rows | Where-Object { "$($_.id)" -eq '999' }) | Select-Object -First 1
@@ -263,7 +258,7 @@ Write-Host ''
 Write-Host 'mutcheck-dispatch-stamp -- GH #532 dispatch authority cannot be obtained unstamped'
 Write-Host ''
 
-$baseSubject = New-Subject -Name 'baseline' -Mutate $null
+$baseSubject = New-Subject -Name 'baseline'
 $baseline = Test-Arms -SubjectPath $baseSubject
 if ($baseline.Count) {
   foreach ($x in $baseline) { Write-Host "  FAIL  baseline  $x" -ForegroundColor Red }
@@ -274,25 +269,44 @@ if ($baseline.Count) {
 $mutants = @(
   # The verdict authorises everything, so a run that never declared a dispatch is told it may
   # dispatch -- exactly the ambiguity the field exists to remove.
-  @{ Name = 'B_alwaysAuthorised'; Expect = 'A1'; Mutate = {
-      param($s) $s.Replace('dispatch_authorised = [bool]$ForDispatch', 'dispatch_authorised = $true') } }
+  @{
+    Name = 'B_alwaysAuthorised'; Expect = 'A1'
+    Find = 'dispatch_authorised = [bool]$ForDispatch'
+    Replace = 'dispatch_authorised = $true'
+    JsFind = 'dispatch_authorised: !!ctx.p.ForDispatch,'
+    JsReplace = 'dispatch_authorised: true,'
+  }
   # -ForDispatch answers the question but does not record the wake: the verdict and the stamp go
   # back to being two events joined by nothing.
-  @{ Name = 'C_neverStamp'; Expect = 'A2'; Mutate = {
-      param($s) $s.Replace('if ($ForDispatch) {', 'if ($false) {') } }
+  @{
+    Name = 'C_neverStamp'; Expect = 'A2'
+    Find = '  if ($ForDispatch) {'
+    Replace = '  if ($false) {'
+    JsFind = '  if (ctx.p.ForDispatch) {'
+    JsReplace = '  if (false) {'
+  }
   # THE TRAP. Stamp on bind: cheap, plausible, and it records wakes that never happened.
-  @{ Name = 'D_stampOnBind'; Expect = 'A3'; Mutate = {
-      param($s) $s.Replace(
-        "-LastWokenAt `$(if (`$sess -and `"`$(`$sess.session_id)`" -eq `$SessionId) { `$sess.last_woken_at } else { '' }) ``",
-        "-LastWokenAt (Now-Iso) ``") } }
-  @{ Name = 'E_missingDispatchInputAllowed'; Expect = 'A4'; Mutate = {
-      param($s) $s.Replace(
-        "if (`$ForDispatch -and [string]::IsNullOrWhiteSpace(`$DispatchInput)) {",
-        'if ($false) {') } }
-  @{ Name = 'F_changedDispatchInputAllowed'; Expect = 'A5'; Mutate = {
-      param($s) $s.Replace(
-        'if ($DispatchInput -and $DispatchInput -ne $row.dispatch_input) {',
-        'if ($false) {') } }
+  @{
+    Name = 'D_stampOnBind'; Expect = 'A3'
+    Find = "-LastWokenAt `$(if (`$sess -and `"`$(`$sess.session_id)`" -eq `$SessionId) { `$sess.last_woken_at } else { '' }) ``"
+    Replace = "-LastWokenAt (Now-Iso) ``"
+    JsFind = "    const lastWoken = sess && oldSessionId === ctx.p.SessionId ? get(sess, 'last_woken_at') : '';"
+    JsReplace = "    const lastWoken = nowIso();"
+  }
+  @{
+    Name = 'E_missingDispatchInputAllowed'; Expect = 'A4'
+    Find = "if (`$ForDispatch -and [string]::IsNullOrWhiteSpace(`$DispatchInput)) {"
+    Replace = 'if ($false) {'
+    JsFind = '  if (ctx.p.ForDispatch && isNullOrWhiteSpace(ctx.p.DispatchInput)) {'
+    JsReplace = '  if (false) {'
+  }
+  @{
+    Name = 'F_changedDispatchInputAllowed'; Expect = 'A5'
+    Find = 'if ($DispatchInput -and $DispatchInput -ne $row.dispatch_input) {'
+    Replace = 'if ($false) {'
+    JsFind = "  if (ctx.p.DispatchInput && ctx.p.DispatchInput !== psStr(get(row, 'dispatch_input'))) {"
+    JsReplace = '  if (false) {'
+  }
 )
 
 Write-Host ''
@@ -300,7 +314,7 @@ Write-Host 'MUTATION ARMS'
 $survived = @()
 foreach ($m in $mutants) {
   try {
-    $p = New-Subject -Name $m.Name -Mutate $m.Mutate
+    $p = New-Subject -Name $m.Name -Find $m.Find -Replace $m.Replace -JsFind $m.JsFind -JsReplace $m.JsReplace
   } catch {
     Write-Host ("  [ERROR  ] {0,-20} {1}" -f $m.Name, $_.Exception.Message) -ForegroundColor Red
     $survived += $m.Name

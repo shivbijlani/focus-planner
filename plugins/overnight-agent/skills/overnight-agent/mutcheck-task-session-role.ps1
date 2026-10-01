@@ -32,7 +32,9 @@ param(
 $ErrorActionPreference = 'Stop'
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
 if (-not $SkillPath) { $SkillPath = Join-Path $PSScriptRoot 'SKILL.md' }
-if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
 $script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
 if (-not $script:PsExe) { $script:PsExe = 'pwsh' }
@@ -40,7 +42,8 @@ if (-not $script:PsExe) { $script:PsExe = 'pwsh' }
 $root = Join-Path ([IO.Path]::GetTempPath()) ("oa-role-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $jdir = Join-Path $root 'journal'
 $sdir = Join-Path $root 'state'
-New-Item -ItemType Directory -Path $jdir, $sdir -Force | Out-Null
+$sessionStateDir = Join-Path $root 'session-state'
+New-Item -ItemType Directory -Path $jdir, $sdir, $sessionStateDir -Force | Out-Null
 $utf8 = New-Object Text.UTF8Encoding($false)
 $board = Join-Path $root 'planner.md'
 $store = Join-Path $root 'snooze.json'
@@ -56,8 +59,9 @@ $bindArgs = @('-SessionKind', 'code', '-SessionProject', 'focus-planner', '-Sess
 
 function Invoke-OaJson {
   param([string[]]$OaArgs, [string]$EnvSessionId = '')
-  $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $OaArgs +
+  $all = $script:OaCmd.Prefix + $OaArgs +
   @('-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store,
+    '-SessionStateDir', $sessionStateDir,
     '-PlannerCompleted', (Join-Path $root 'absent-completed.md'),
     '-UserSettings', (Join-Path $root 'absent-settings.md'), '-RunWorkspace', $runWs)
   $prevEnv = $env:COPILOT_AGENT_SESSION_ID
@@ -65,7 +69,7 @@ function Invoke-OaJson {
   $ErrorActionPreference = 'Continue'
   try {
     $env:COPILOT_AGENT_SESSION_ID = $EnvSessionId
-    $out = & $script:PsExe @all 2>&1 | Out-String -Width 4096
+    $out = & $script:OaCmd.Exe @all 2>&1 | Out-String -Width 4096
   }
   catch { $out = '' }
   finally {

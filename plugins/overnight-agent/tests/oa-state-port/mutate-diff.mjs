@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Differential fuzzer for the mutating oa-state commands ported in act/*.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -11,15 +12,16 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..', '..', '..');
 const PS = path.join(REPO, 'plugins', 'overnight-agent', 'skills', 'overnight-agent', 'oa-state.ps1');
 const NODE = path.join(REPO, 'plugins', 'overnight-agent', 'skills', 'overnight-agent', 'oa-state.mjs');
-const SCRATCH = path.join(HERE, '.scratch-mutate-diff-' + process.pid);
+let SCRATCH = null;
 
 function parseArgs(argv) {
-  const o = { n: 20, seed: 12345, steps: 6, keep: false };
+  const o = { n: 20, seed: 12345, steps: 6, keep: false, jobs: 1 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]; const v = () => argv[++i];
     if (a === '--n') o.n = Number(v());
     else if (a === '--seed') o.seed = Number(v());
     else if (a === '--steps') o.steps = Number(v());
+    else if (a === '--jobs') o.jobs = Number(v());
     else if (a === '--keep') o.keep = true;
     else throw new Error(`unknown arg ${a}`);
   }
@@ -231,16 +233,18 @@ node: ${stableStringify(no)}`);
 
 async function main() {
   const o = parseArgs(process.argv.slice(2));
-  rm(SCRATCH); mkdir(SCRATCH);
-  const jobs = Math.min(4, o.n);
+  SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'oa-mutate-diff-'));
+  const jobs = Math.max(1, Math.min(o.jobs, o.n));
   let next = 0;
+  let success = false;
   try {
     await Promise.all(Array.from({ length: jobs }, async () => {
       while (next < o.n) await runSequence(o, next++);
     }));
+    success = true;
     console.log(`mutate-diff: ${o.n} sequences x ${o.steps} steps (${o.n * o.steps} steps), seed ${o.seed}: 0 differences`);
   } finally {
-    if (!o.keep) rm(SCRATCH);
+    if (success && !o.keep) rm(SCRATCH);
   }
 }
 

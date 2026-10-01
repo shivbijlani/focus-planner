@@ -56,17 +56,26 @@ if (-not $ScriptPath) {
 }
 $ScriptPath = [IO.Path]::GetFullPath($ScriptPath)
 if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:IsNodeTarget = Test-OaStateNodeTarget $ScriptPath
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
 # Both hosts must exist or the invariant is untestable. Say so loudly rather than passing
 # vacuously -- a check that cannot fail is not a check.
 $hosts = @{}
-foreach ($h in @('powershell', 'pwsh')) {
-  $cmd = Get-Command $h -ErrorAction SilentlyContinue
-  if ($cmd) { $hosts[$h] = $cmd.Source }
+if ($script:IsNodeTarget) {
+  $hosts['node-a'] = $script:OaCmd.Exe
+  $hosts['node-b'] = $script:OaCmd.Exe
 }
-if ($hosts.Count -lt 2) {
-  Write-Host "SKIP-UNSOUND: need both Windows PowerShell 5.1 and pwsh 7 to compare decoders; found: $($hosts.Keys -join ', ')"
-  exit 2
+else {
+  foreach ($h in @('powershell', 'pwsh')) {
+    $cmd = Get-Command $h -ErrorAction SilentlyContinue
+    if ($cmd) { $hosts[$h] = $cmd.Source }
+  }
+  if ($hosts.Count -lt 2) {
+    Write-Host "SKIP-UNSOUND: need both Windows PowerShell 5.1 and pwsh 7 to compare decoders; found: $($hosts.Keys -join ', ')"
+    exit 2
+  }
 }
 
 # --- fixtures -------------------------------------------------------------------------------
@@ -123,7 +132,11 @@ foreach ($id in $fixtures.Keys) {
 # --- run the same script under each host ----------------------------------------------------
 function Get-HashesForHost([string]$hostExe, [string]$script, [string]$journals, [string]$stateDir) {
   New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
-  & $hostExe -NoProfile -ExecutionPolicy Bypass -File $script seed -JournalDir $journals -StateDir $stateDir *> $null
+  if ($script:IsNodeTarget) {
+    & $hostExe @($script:OaCmd.Prefix + @('seed', '-JournalDir', $journals, '-StateDir', $stateDir)) *> $null
+  } else {
+    & $hostExe -NoProfile -ExecutionPolicy Bypass -File $script seed -JournalDir $journals -StateDir $stateDir *> $null
+  }
   $result = @{}
   foreach ($sf in Get-ChildItem $stateDir -Filter 'task-*.json') {
     $obj = [IO.File]::ReadAllText($sf.FullName, $Utf8NoBom) | ConvertFrom-Json
@@ -134,7 +147,13 @@ function Get-HashesForHost([string]$hostExe, [string]$script, [string]$journals,
 
 $byHost = @{}
 foreach ($h in @('powershell', 'pwsh')) {
+  if (-not $hosts.ContainsKey($h)) { continue }
   $byHost[$h] = Get-HashesForHost $hosts[$h] $ScriptPath $journalDir (Join-Path $root "state-$h")
+}
+if ($script:IsNodeTarget) {
+  foreach ($h in @('node-a', 'node-b')) {
+    $byHost[$h] = Get-HashesForHost $hosts[$h] $ScriptPath $journalDir (Join-Path $root "state-$h")
+  }
 }
 
 # --- assert ---------------------------------------------------------------------------------
@@ -142,8 +161,10 @@ $rows = @()
 $pass = 0
 foreach ($id in $fixtures.Keys) {
   $f = $fixtures[$id]
-  $a = $byHost['powershell'][$id]
-  $b = $byHost['pwsh'][$id]
+  $left = if ($script:IsNodeTarget) { 'node-a' } else { 'powershell' }
+  $right = if ($script:IsNodeTarget) { 'node-b' } else { 'pwsh' }
+  $a = $byHost[$left][$id]
+  $b = $byHost[$right][$id]
 
   if (-not $a -or -not $b) {
     $rows += [pscustomobject]@{ case = $id; expect = 'hash'; actual = 'MISSING'; why = 'no state written by one host'; ok = $false }
@@ -152,7 +173,7 @@ foreach ($id in $fixtures.Keys) {
 
   $agree = ($a -eq $b)
   # Post-fix: every fixture agrees. Pre-fix: ASCII agrees, non-ASCII must NOT.
-  $want = if ($ExpectPreFix -and $f.NonAscii) { $false } else { $true }
+  $want = if ((-not $script:IsNodeTarget) -and $ExpectPreFix -and $f.NonAscii) { $false } else { $true }
   $ok = ($agree -eq $want)
   if ($ok) { $pass++ }
 

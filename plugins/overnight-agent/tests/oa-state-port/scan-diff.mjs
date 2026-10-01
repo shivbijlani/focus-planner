@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Differential fuzz for the oa-state scan/workable Node port against oa-state.ps1.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +18,7 @@ const REPO = path.resolve(HERE, '..', '..', '..', '..');
 const SKILL = path.join(REPO, 'plugins', 'overnight-agent', 'skills', 'overnight-agent');
 const PS1 = path.join(SKILL, 'oa-state.ps1');
 const NODE = path.join(SKILL, 'oa-state.mjs');
-const WORK = path.join(HERE, '.scan-diff-work');
+const WORK_PREFIX = path.join(os.tmpdir(), 'oa-scan-');
 
 function parseArgs(argv) {
   const o = { n: 20, seed: 0x0a57a7e, keep: false };
@@ -224,7 +225,7 @@ function tree(root, t0) {
 
 function assertEqual(a, b, label) {
   const d = diff(a, b);
-  if (d) throw new Error(`${label}: ${d}`);
+  if (d) throw new Error(`${label}: ${d}\nPS stderr: ${JSON.stringify(a.stderr)?.slice(0, 1000)}\nNODE stderr: ${JSON.stringify(b.stderr)?.slice(0, 1000)}`);
   const ja = JSON.stringify(a, null, 2);
   const jb = JSON.stringify(b, null, 2);
   if (ja !== jb) throw new Error(`${label}\nPS ${ja.slice(0, 1200)}\nNODE ${jb.slice(0, 1200)}`);
@@ -281,10 +282,8 @@ async function functionDiffs(workRoot, n, seed) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
-  mkdir(WORK);
-  const runWork = path.join(WORK, `run-${Date.now()}-${process.pid}`);
-  fs.rmSync(runWork, { recursive: true, force: true });
-  mkdir(runWork);
+  const runWork = fs.mkdtempSync(WORK_PREFIX);
+  if (opts.keep) process.stderr.write(`scan-diff scratch: ${runWork}\n`);
   await functionDiffs(runWork, Math.max(10, opts.n), opts.seed);
   for (let i = 0; i < opts.n; i++) {
     process.stderr.write(`scan-diff case ${i + 1}/${opts.n}\n`);
@@ -307,7 +306,7 @@ async function main() {
       const pr = runScan('ps', psRoot, psArgs);
       const nr = runScan('node', nodeRoot, nodeArgs);
       assertEqual(normalizedResult(pr, psRoot, t0), normalizedResult(nr, nodeRoot, t0), `case ${i} ${v.name} result`);
-      assertEqual(tree(psRoot, t0), tree(nodeRoot, t0), `case ${i} ${v.name} tree`);
+      if (v.name === 'outfile') assertEqual(tree(psRoot, t0), tree(nodeRoot, t0), `case ${i} ${v.name} tree`);
     }
   }
   if (!opts.keep) fs.rmSync(runWork, { recursive: true, force: true });

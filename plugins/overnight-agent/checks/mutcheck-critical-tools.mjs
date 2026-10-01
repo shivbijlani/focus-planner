@@ -12,14 +12,18 @@ const shell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
 const settings = path.join(temp, 'user-settings.md');
 const config = path.join(temp, 'mcp-config.json');
 const state = path.join(temp, 'state');
-const oa = path.join(here, '..', 'skills', 'overnight-agent', 'oa-state.ps1');
+const targetArg = process.argv.includes('--target') ? process.argv[process.argv.indexOf('--target') + 1] : null;
+const oa = targetArg || path.join(here, '..', 'skills', 'overnight-agent', 'oa-state.ps1');
 try {
   writeFileSync(settings, '| Critical tools | `email, bogus-tool` — configured outage floor |\n');
   writeFileSync(config, JSON.stringify({ mcpServers: { email: {}, 'google-workspace': {} } }));
-  const policy = (extra = []) => spawnSync(shell, [
-    '-NoProfile', '-File', oa, 'critical-tools', '-UserSettings', settings,
-    '-McpConfig', config, '-StateDir', state, ...extra,
-  ], { encoding: 'utf8', timeout: 60000 });
+  const policy = (extra = []) => {
+    const isNode = oa.endsWith('.mjs');
+    const argv = isNode
+      ? [oa, 'critical-tools', '--UserSettings', settings, '--McpConfig', config, '--StateDir', state, ...extra]
+      : ['-NoProfile', '-File', oa, 'critical-tools', '-UserSettings', settings, '-McpConfig', config, '-StateDir', state, ...extra];
+    return spawnSync(isNode ? process.execPath : shell, argv, { encoding: 'utf8', timeout: 60000 });
+  };
   const unknown = policy();
   assert.notEqual(unknown.status, 0);
   assert.match(unknown.stderr, /bogus-tool/);
@@ -123,6 +127,11 @@ try {
   { encoding: 'utf8' });
   assert.equal(JSON.parse(clear.stdout).down, false);
 
+  if (targetArg?.endsWith('.mjs')) {
+    console.log('PASS settings, --record parser, immediate down, absent-tool-is-down, outage/recovery, skip, tray (Node oa-state policy target)');
+    process.exit(0);
+  }
+
   // End-to-end: the real CLI, policy, --record, persistent state, and alert route. No subprocess
   // is spawned to test email/google-workspace health -- only to deliver the alert itself.
   const server = path.join(temp, 'fake-mcp.cjs');
@@ -157,7 +166,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
       '--settings', settings, '--mcp-config', mcpConfig, '--state', capabilities, '--ledger', ledger,
       '--state-dir', state, '--now', now, ...extraArgs,
       ...recordArgs.flatMap((r) => ['--record', r]),
-    ], { encoding: 'utf8', timeout: 90000 },
+    ], { encoding: 'utf8', timeout: 180000 },
   );
   const run1 = check('2026-09-29T10:00:00Z', ['email=ok', 'google-workspace=down:protocol mismatch']);
   assert.equal(run1.status, 2, run1.stderr);

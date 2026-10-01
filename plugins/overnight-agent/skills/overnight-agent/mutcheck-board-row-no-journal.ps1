@@ -37,8 +37,9 @@ param([string]$ScriptPath)
 $ErrorActionPreference = 'Stop'
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
 if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
-$script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
 $utf8 = New-Object Text.UTF8Encoding($false)
 $root = Join-Path ([IO.Path]::GetTempPath()) ("oa-534-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $J = Join-Path $root 'journal'; New-Item -ItemType Directory -Path $J -Force | Out-Null
@@ -64,8 +65,9 @@ function Assert([bool]$ok, [string]$name, [string]$why, [string]$detail = '') {
   "# Planner`n`n## Today`n`n| ID | Urgency | Task |`n| 902 | Red | no journal yet |`n| 901 | Yellow | has a journal |`n", $utf8)
 
 function Scan([string]$path) {
-  $argv = @($path, 'scan', '-JournalDir', $J, '-StateDir', $S, '-PlannerBoard', $board)
-  $out = (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File @argv 2>&1 | Out-String)
+  $cmd = Get-OaStateCommand $path
+  $argv = @('scan', '-JournalDir', $J, '-StateDir', $S, '-PlannerBoard', $board)
+  $out = (& $cmd.Exe @($cmd.Prefix + $argv) 2>&1 | Out-String)
   $rows = @()
   # ConvertFrom-Json on a JSON ARRAY returns the array as ONE object here, so @() wraps
   # rather than unrolls it. Assigning first and then indexing gives the rows themselves.
@@ -121,33 +123,18 @@ if ($row901) {
 Write-Host ''
 Write-Host 'LOAD-BEARING -- remove the fix and the row vanishes again'
 
-# Mutated IN PLACE and restored from the ORIGINAL BYTES in a `finally` -- a copy in TEMP
-# cannot resolve the helpers this script expects beside it, and a text-mode restore would
-# strip the subject's UTF-8 BOM (measured on a sibling check; ps1-encoding-sweep caught it).
-$srcBytes = [IO.File]::ReadAllBytes($ScriptPath)
-$src = [IO.File]::ReadAllText($ScriptPath)
 $anchor = '    if ($seenScanIds.ContainsKey("$bid")) { continue }'
-if (-not $src.Contains($anchor)) { throw 'anchor not found: the #534 synthesis loop moved' }
-$mutated = $src.Replace($anchor, '    if ($true) { continue }')
-
-
-try {
-  [IO.File]::WriteAllText($ScriptPath, $mutated, (New-Object Text.UTF8Encoding($true)))
-  Scan $ScriptPath
+$nodeAnchor = "    if (Object.prototype.hasOwnProperty.call(seenScanIds, psStr(bid))) continue;"
+$mutant = if (Test-OaStateNodeTarget $ScriptPath) {
+  New-OaStateMutant $ScriptPath 'M1' $nodeAnchor "    if (true) continue;" $root
+} else {
+  New-OaStateMutant $ScriptPath 'M1' $anchor '    if ($true) { continue }' $root
 }
-finally {
-  [IO.File]::WriteAllBytes($ScriptPath, $srcBytes)
-}
+Scan $mutant
 
 $mutRow = Row '902'
 Assert ($null -eq $mutRow) 'KILLED' 'with the synthesis skipped the row disappears again (the fix is load-bearing)' (D)
-
-# Byte-compare the restore: a harness that silently re-encodes its subject is the defect
-# wearing the harness's clothes.
-$restored = [IO.File]::ReadAllBytes($ScriptPath)
-$same = ($restored.Length -eq $srcBytes.Length)
-if ($same) { for ($i = 0; $i -lt $srcBytes.Length; $i++) { if ($restored[$i] -ne $srcBytes[$i]) { $same = $false; break } } }
-Assert $same 'RESTORED' 'and the subject is byte-identical afterwards, BOM included' ''
+Assert (Test-Path $ScriptPath) 'RESTORED' 'the subject was never edited in place; the mutant ran from a copy' ''
 
 Write-Host ''
 if ($script:fail -gt 0) {

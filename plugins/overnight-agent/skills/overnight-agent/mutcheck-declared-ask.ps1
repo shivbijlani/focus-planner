@@ -87,6 +87,7 @@ if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
 if (-not $WriteTurnPath) { $WriteTurnPath = Join-Path $PSScriptRoot 'write-turn.ps1' }
 if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
 if (-not (Test-Path $WriteTurnPath)) { throw "write-turn.ps1 not found at $WriteTurnPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
 
 # Under pwsh this is pwsh itself, so the whole harness runs on Linux in CI. Under Windows
 # PowerShell it is `powershell`, matching how the skill actually invokes these scripts.
@@ -251,8 +252,9 @@ Documentation of the format:
 
 function Invoke-Oa {
   param([string]$Subject, $Sx, [string[]]$OaArgs)
-  return (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File $Subject @OaArgs `
-      -JournalDir $Sx.JDir -StateDir $Sx.SDir -PlannerBoard $Sx.Board -SnoozeStore $Sx.Store 2>&1)
+  $cmd = Get-OaStateCommand $Subject
+  return (& $cmd.Exe @($cmd.Prefix + $OaArgs + @(
+      '-JournalDir', $Sx.JDir, '-StateDir', $Sx.SDir, '-PlannerBoard', $Sx.Board, '-SnoozeStore', $Sx.Store)) 2>&1)
 }
 
 function Initialize-Sandbox {
@@ -272,7 +274,11 @@ function Get-Rows {
 function Get-Row { param($rows, [string]$id) return ($rows | Where-Object { "$($_.id)" -eq $id } | Select-Object -First 1) }
 
 function New-Mutant {
-  param([string]$Name, [string]$Source, [string]$Find, [string]$Replace)
+  param([string]$Name, [string]$Source, [string]$Find, [string]$Replace, [string]$JsFind = $null, [string]$JsReplace = $null)
+  if ((Resolve-Path $Source).Path -eq (Resolve-Path $ScriptPath).Path -and (Test-OaStateNodeTarget $ScriptPath)) {
+    if (-not $JsFind) { throw "mutant $Name has no Node twin" }
+    return New-OaStateMutant $ScriptPath $Name $JsFind $JsReplace $root
+  }
   $src = [IO.File]::ReadAllText($Source, $utf8)
   if (-not $src.Contains($Find)) { throw "mutant $Name : anchor not found in $Source -> $Find" }
   $dst = Join-Path $root ("mutant-$Name-" + [IO.Path]::GetFileName($Source))
@@ -505,7 +511,9 @@ function Get-MutantRows {
 #       declaration exists. This is the shipped defect, restored in one line.
 $m1 = New-Mutant 'M1' $ScriptPath `
   '    HasBlockingAsk  = [bool]$askVerdict.blocking          # gate: does it stop the run proceeding?' `
-  '    HasBlockingAsk  = (Test-HasBlockingAsk $agentLeft)'
+  '    HasBlockingAsk  = (Test-HasBlockingAsk $agentLeft)' `
+  '    HasBlockingAsk: !!askVerdict.blocking,' `
+  '    HasBlockingAsk: testHasBlockingAsk(agentLeft),'
 Test-Mutant 'M1' 'awaiting_reply keyed back to the prose when a declaration exists' $m1 {
   $rm = Get-MutantRows $m1
   ((Get-Row $rm '910').awaiting_reply -eq $false) -and ((Get-Row $rm '911').awaiting_reply -eq $true)
@@ -515,7 +523,9 @@ Test-Mutant 'M1' 'awaiting_reply keyed back to the prose when a declaration exis
 #       is unmeasurable, which is the only way anyone would notice it not shrinking.
 $m2 = New-Mutant 'M2' $ScriptPath `
   '      ask_source     = "$($facts.AskSource)"' `
-  '      ask_source     = ''declared'''
+  '      ask_source     = ''declared''' `
+  '      ask_source: psStr(facts.AskSource),' `
+  "      ask_source: 'declared',"
 Test-Mutant 'M2' 'ask_source always reports declared, so the inferred share is invisible' $m2 {
   $rm = Get-MutantRows $m2
   ((Get-Row $rm '912').ask_source -eq 'inferred') -and ((Get-Row $rm '910').ask_source -eq 'declared')
@@ -527,7 +537,11 @@ $m3 = New-Mutant 'M3' $ScriptPath `
   '  $scan = Get-FenceMaskedText $turn
   $val = ''''' `
   '  $scan = $turn
-  $val = '''''
+  $val = ''''' `
+  '  const scan = getFenceMaskedText(turn);
+  let val = '''';' `
+  '  const scan = turn;
+  let val = '''';'
 Test-Mutant 'M3' 'a stamp inside a fenced example is read as a live declaration' $m3 {
   $rm = Get-MutantRows $m3
   ((Get-Row $rm '915').ask_source -eq 'inferred') -and ((Get-Row $rm '915').awaiting_reply -eq $true)
@@ -541,7 +555,13 @@ $m4 = New-Mutant 'M4' $ScriptPath `
   $scan = Get-FenceMaskedText $turn' `
   '  $turn = $agentLeft
   if ([string]::IsNullOrEmpty($turn)) { return '''' }
-  $scan = Get-FenceMaskedText $turn'
+  $scan = Get-FenceMaskedText $turn' `
+  '  const turn = getNewestAgentTurn(agentLeft);
+  if (turn.length === 0) return '''';
+  const scan = getFenceMaskedText(turn);' `
+  '  const turn = String(agentLeft ?? '''');
+  if (turn.length === 0) return '''';
+  const scan = getFenceMaskedText(turn);'
 Test-Mutant 'M4' 'the declaration is read from the whole block, so an old blocking outlives its turn' $m4 {
   $rm = Get-MutantRows $m4
   ((Get-Row $rm '917').ask_source -eq 'inferred') -and ((Get-Row $rm '917').awaiting_reply -eq $false)
@@ -553,7 +573,9 @@ Test-Mutant 'M4' 'the declaration is read from the whole block, so an old blocki
 #       of hand-written stamps rests on.
 $m5 = New-Mutant 'M5' $ScriptPath `
   '  foreach ($m in [regex]::Matches($scan, $script:AskDeclRe)) { $val = $m.Groups[1].Value }' `
-  '  foreach ($m in [regex]::Matches($scan, $script:AskDeclRe)) { if (-not $val) { $val = $m.Groups[1].Value } }'
+  '  foreach ($m in [regex]::Matches($scan, $script:AskDeclRe)) { if (-not $val) { $val = $m.Groups[1].Value } }' `
+  '  for (const m of rxMatches(scan, AskDeclRe)) val = m[1];' `
+  '  for (const m of rxMatches(scan, AskDeclRe)) { if (!val) val = m[1]; }'
 Test-Mutant 'M5' 'the FIRST declaration in a turn wins, so a correction below it is ignored' $m5 {
   $rm = Get-MutantRows $m5
   ((Get-Row $rm '918').ask_declared -eq 'none') -and ((Get-Row $rm '918').awaiting_reply -eq $false)
@@ -564,7 +586,9 @@ Test-Mutant 'M5' 'the FIRST declaration in a turn wins, so a correction below it
 #       question Shiv could have answered would reach no surface at all.
 $m6 = New-Mutant 'M6' $ScriptPath `
   '  if ($declared -eq ''blocking'' -or $declared -eq ''offer'') { return $true }' `
-  '  if ($declared) { return ($declared -ne ''none'') }'
+  '  if ($declared) { return ($declared -ne ''none'') }' `
+  "  if (declared === 'blocking' || declared === 'offer') return true;" `
+  "  if (declared) return declared !== 'none';"
 Test-Mutant 'M6' 'a declared none suppresses has_open_ask, hiding a question the prose still asks' $m6 {
   $rm = Get-MutantRows $m6
   ((Get-Row $rm '916').has_open_ask -eq $true) -and ((Get-Row $rm '910').has_open_ask -eq $true)

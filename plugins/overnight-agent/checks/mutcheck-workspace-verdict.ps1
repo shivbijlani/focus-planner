@@ -69,29 +69,19 @@ if (-not $ScriptPath) {
 }
 $Subject = $ScriptPath
 if (-not $Subject -or -not (Test-Path $Subject)) { throw "subject not found: $Subject" }
-
-# Normalised to LF before any mutation. The working tree is CRLF on Windows, so patterns written
-# against LF would match NOTHING and every mutant would "survive" for a reason unrelated to the
-# subject. A mutation that fails to apply is reported as a failure rather than counted as a kill.
-$Source = (Get-Content -Raw $Subject) -replace "`r`n", "`n"
+. (Join-Path (Split-Path -Parent $Subject) 'oa-state-target.ps1')
+$script:TargetIsNode = Test-OaStateNodeTarget $Subject
 
 $Tmp = Join-Path ([IO.Path]::GetTempPath()) ("mutcheck-wsverdict-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $Tmp -Force | Out-Null
 
 function New-Subject {
-  param([string]$Name, [scriptblock]$Mutate)
-  $src = $Source
-  if ($Mutate) {
-    $next = & $Mutate $src
-    if ($next -eq $src) { throw "mutation $Name did not change the source" }
-    $src = $next
-  }
-  $dir = Join-Path $Tmp $Name
-  New-Item -ItemType Directory -Path $dir -Force | Out-Null
-  $path = Join-Path $dir 'oa-state.ps1'
-  # UTF8 without BOM, matching how the real file is stored; a BOM here would trip the encoding guard.
-  [IO.File]::WriteAllText($path, $src, (New-Object Text.UTF8Encoding $false))
-  return $path
+  param([string]$Name, [string]$Find = $null, [string]$Replace = $null, [string]$JsFind = $null, [string]$JsReplace = $null)
+  if (-not $Find) { return $Subject }
+  $needle = if ($script:TargetIsNode) { $JsFind } else { $Find }
+  $with = if ($script:TargetIsNode) { $JsReplace } else { $Replace }
+  if (-not $needle) { throw "mutation $Name has no Node twin" }
+  return New-OaStateMutant $Subject $Name $needle $with (Join-Path $Tmp 'mutants')
 }
 
 # Build one isolated state store holding a single task with a live binding at $Workspace.
@@ -99,6 +89,7 @@ function New-Store {
   param([string]$Name, [string]$Workspace, [string]$WsType = 'worktree')
   $dir = Join-Path $Tmp ("state-" + $Name)
   New-Item -ItemType Directory -Path $dir -Force | Out-Null
+  New-Item -ItemType Directory -Path (Join-Path $dir 'journal') -Force | Out-Null
   $state = [ordered]@{
     id      = '999'
     status  = 'in-progress'
@@ -122,14 +113,22 @@ function New-Store {
 
 function Get-Verdict {
   param([string]$SubjectPath, [string]$StateDir)
-  $out = & pwsh -NoProfile -ExecutionPolicy Bypass -File $SubjectPath session -Id 999 -StateDir $StateDir 2>&1
+  $cmd = Get-OaStateCommand $SubjectPath
+  $out = & $cmd.Exe @($cmd.Prefix + @('session', '-Id', '999',
+    '-StateDir', $StateDir, '-JournalDir', (Join-Path $StateDir 'journal'),
+    '-SessionStateDir', (Join-Path $StateDir 'session-state'),
+    '-UserSettings', (Join-Path $StateDir 'absent-settings.md'))) 2>&1
   $text = ($out | Out-String)
   try { return ((($text | ConvertFrom-Json)).verdict) } catch { return "UNPARSEABLE: $text" }
 }
 
 function Get-MissingFlag {
   param([string]$SubjectPath, [string]$StateDir)
-  $out = & pwsh -NoProfile -ExecutionPolicy Bypass -File $SubjectPath session -Id 999 -StateDir $StateDir 2>&1
+  $cmd = Get-OaStateCommand $SubjectPath
+  $out = & $cmd.Exe @($cmd.Prefix + @('session', '-Id', '999',
+    '-StateDir', $StateDir, '-JournalDir', (Join-Path $StateDir 'journal'),
+    '-SessionStateDir', (Join-Path $StateDir 'session-state'),
+    '-UserSettings', (Join-Path $StateDir 'absent-settings.md'))) 2>&1
   $text = ($out | Out-String)
   try { return [string]((($text | ConvertFrom-Json)).workspace_missing) } catch { return "UNPARSEABLE" }
 }
@@ -146,8 +145,10 @@ $wsOk = Join-Path $Tmp 'ws-ok'
 New-Item -ItemType Directory -Path $wsOk -Force | Out-Null
 Set-Content -Path (Join-Path $wsOk '.git') -Value 'gitdir: V:/repos/focus-planner/.git/worktrees/x' -Encoding utf8
 
-# UNREADABLE: a path we cannot inspect. Never evidence the checkout is gone.
-$wsWeird = 'Z:\no-such-mount\never-created'
+# UNREADABLE: a path we cannot inspect. Never evidence the checkout is gone. Do not use an
+# absent drive letter here: on some Windows hosts `Test-Path Z:\...` blocks on drive-provider
+# discovery before the check reaches its own guard.
+$wsWeird = 'NoSuchProvider::\never-created'
 
 # DELETED OUTRIGHT: `git worktree remove` leaves nothing behind, so the path itself is gone while
 # its containing root is perfectly reachable. This is the #717 shape, measured on tasks 329/466.
@@ -179,7 +180,7 @@ Write-Host ''
 Write-Host 'mutcheck-workspace-verdict -- GH #452 the session verdict verifies its workspace'
 Write-Host ''
 
-$baseSubject = New-Subject -Name 'baseline' -Mutate $null
+$baseSubject = New-Subject -Name 'baseline'
 $baseline = Test-Verdicts -SubjectPath $baseSubject
 if ($baseline.Count) {
   foreach ($x in $baseline) { Write-Host "  FAIL  baseline  $x" -ForegroundColor Red }
@@ -188,13 +189,55 @@ if ($baseline.Count) {
 }
 
 $mutants = @(
-  @{ Name='B_neverVerify';   Expect='A1'; Mutate={ param($s) $s.Replace("if (-not (Test-WorkspaceUsable `"`$(`$sess.workspace)`" `"`$(`$sess.workspace_type)`")) { return 'replace' }", "") } }
-  @{ Name='C_verdictCreate'; Expect='A2'; Mutate={ param($s) $s.Replace("if (-not (Test-WorkspaceUsable `"`$(`$sess.workspace)`" `"`$(`$sess.workspace_type)`")) { return 'replace' }", "if (-not (Test-WorkspaceUsable `"`$(`$sess.workspace)`" `"`$(`$sess.workspace_type)`")) { return 'create' }") } }
-  @{ Name='D_requireGitDir'; Expect='A3'; Mutate={ param($s) $s.Replace("if (Test-Path -LiteralPath (Join-Path `$path '.git')) { return `$true }", "if (Test-Path -LiteralPath (Join-Path `$path '.git') -PathType Container) { return `$true }") } }
-  @{ Name='F_judgeFolders';  Expect='A5'; Mutate={ param($s) $s.Replace("if (`$wsType -and `$wsType -ne 'worktree') { return `$true }", "") } }
-  @{ Name='G_unbornIsAlive'; Expect='A6'; Mutate={ param($s) $s.Replace("    if (-not (Test-Path -LiteralPath `$path)) { return (-not (Test-WorkspaceMissing `$path `$wsType)) }", "    if (-not (Test-Path -LiteralPath `$path)) { return `$true }") } }
-  @{ Name='H_rootNotChecked'; Expect='A4'; Mutate={ param($s) $s.Replace("    if (-not (Test-Path -LiteralPath `$root)) { return `$false }", "") } }
-  @{ Name='I_missingUnreported'; Expect='A7'; Mutate={ param($s) $s.Replace("    workspace_missing = [bool](Test-WorkspaceMissing `"`$(`$sess.workspace)`" `"`$(`$sess.workspace_type)`")", "    workspace_missing = `$false") } }
+  @{
+    Name='B_neverVerify'; Expect='A1'
+    Find="  if (-not (Test-WorkspaceUsable `"`$(`$sess.workspace)`" `"`$(`$sess.workspace_type)`")) { return 'replace' }"
+    Replace=''
+    JsFind="export function getSessionVerdict(ctx, sess, row, journalFacts, sessionProcessDead = null) {`r`n  if (testUserPaused(row, journalFacts)) return 'paused';`r`n  if (!sess) return 'create';`r`n  if (psStr(get(sess, 'state')) === 'dead') return 'replace';`r`n  let processDead = sessionProcessDead;`r`n  if (processDead === null || processDead === undefined) processDead = testSessionProcessDead(ctx, psStr(get(sess, 'session_id')));`r`n  if (processDead) return 'replace';`r`n  if (!testWorkspaceUsable(psStr(get(sess, 'workspace')), psStr(get(sess, 'workspace_type')))) return 'replace';`r`n  return 'reuse';`r`n}"
+    JsReplace="export function getSessionVerdict(ctx, sess, row, journalFacts, sessionProcessDead = null) {`r`n  if (testUserPaused(row, journalFacts)) return 'paused';`r`n  if (!sess) return 'create';`r`n  if (psStr(get(sess, 'state')) === 'dead') return 'replace';`r`n  let processDead = sessionProcessDead;`r`n  if (processDead === null || processDead === undefined) processDead = testSessionProcessDead(ctx, psStr(get(sess, 'session_id')));`r`n  if (processDead) return 'replace';`r`n  return 'reuse';`r`n}"
+  }
+  @{
+    Name='C_verdictCreate'; Expect='A2'
+    Find="  if (-not (Test-WorkspaceUsable `"`$(`$sess.workspace)`" `"`$(`$sess.workspace_type)`")) { return 'replace' }"
+    Replace="  if (-not (Test-WorkspaceUsable `"`$(`$sess.workspace)`" `"`$(`$sess.workspace_type)`")) { return 'create' }"
+    JsFind="export function getSessionVerdict(ctx, sess, row, journalFacts, sessionProcessDead = null) {`r`n  if (testUserPaused(row, journalFacts)) return 'paused';`r`n  if (!sess) return 'create';`r`n  if (psStr(get(sess, 'state')) === 'dead') return 'replace';`r`n  let processDead = sessionProcessDead;`r`n  if (processDead === null || processDead === undefined) processDead = testSessionProcessDead(ctx, psStr(get(sess, 'session_id')));`r`n  if (processDead) return 'replace';`r`n  if (!testWorkspaceUsable(psStr(get(sess, 'workspace')), psStr(get(sess, 'workspace_type')))) return 'replace';`r`n  return 'reuse';`r`n}"
+    JsReplace="export function getSessionVerdict(ctx, sess, row, journalFacts, sessionProcessDead = null) {`r`n  if (testUserPaused(row, journalFacts)) return 'paused';`r`n  if (!sess) return 'create';`r`n  if (psStr(get(sess, 'state')) === 'dead') return 'replace';`r`n  let processDead = sessionProcessDead;`r`n  if (processDead === null || processDead === undefined) processDead = testSessionProcessDead(ctx, psStr(get(sess, 'session_id')));`r`n  if (processDead) return 'replace';`r`n  if (!testWorkspaceUsable(psStr(get(sess, 'workspace')), psStr(get(sess, 'workspace_type')))) return 'create';`r`n  return 'reuse';`r`n}"
+  }
+  @{
+    Name='D_requireGitDir'; Expect='A3'
+    Find="    if (Test-Path -LiteralPath (Join-Path `$path '.git')) { return `$true }"
+    Replace="    if (Test-Path -LiteralPath (Join-Path `$path '.git') -PathType Container) { return `$true }"
+    JsFind="export function testWorkspaceUsable(p, wsType) {`r`n  if (!p) return true;`r`n  if (wsType && wsType !== 'worktree') return true;`r`n  try {`r`n    if (!testPath(p)) return !testWorkspaceMissing(p, wsType);`r`n    if (testPath(joinPath(p, '.git'))) return true;`r`n    return false;`r`n  } catch {`r`n    return true;`r`n  }`r`n}"
+    JsReplace="export function testWorkspaceUsable(p, wsType) {`r`n  if (!p) return true;`r`n  if (wsType && wsType !== 'worktree') return true;`r`n  try {`r`n    if (!testPath(p)) return !testWorkspaceMissing(p, wsType);`r`n    if (isDir(joinPath(p, '.git'))) return true;`r`n    return false;`r`n  } catch {`r`n    return true;`r`n  }`r`n}"
+  }
+  @{
+    Name='F_judgeFolders'; Expect='A5'
+    Find="  if (`$wsType -and `$wsType -ne 'worktree') { return `$true }"
+    Replace=''
+    JsFind="  if (wsType && wsType !== 'worktree') return true;"
+    JsReplace=''
+  }
+  @{
+    Name='G_unbornIsAlive'; Expect='A6'
+    Find="    if (-not (Test-Path -LiteralPath `$path)) { return (-not (Test-WorkspaceMissing `$path `$wsType)) }"
+    Replace="    if (-not (Test-Path -LiteralPath `$path)) { return `$true }"
+    JsFind="export function testWorkspaceUsable(p, wsType) {`r`n  if (!p) return true;`r`n  if (wsType && wsType !== 'worktree') return true;`r`n  try {`r`n    if (!testPath(p)) return !testWorkspaceMissing(p, wsType);`r`n    if (testPath(joinPath(p, '.git'))) return true;`r`n    return false;`r`n  } catch {`r`n    return true;`r`n  }`r`n}"
+    JsReplace="export function testWorkspaceUsable(p, wsType) {`r`n  if (!p) return true;`r`n  if (wsType && wsType !== 'worktree') return true;`r`n  try {`r`n    if (!testPath(p)) return true;`r`n    if (testPath(joinPath(p, '.git'))) return true;`r`n    return false;`r`n  } catch {`r`n    return true;`r`n  }`r`n}"
+  }
+  @{
+    Name='H_rootNotChecked'; Expect='A4'
+    Find="    if (-not `$root) { return `$false }`r`n    if (-not (Test-Path -LiteralPath `$root)) { return `$false }"
+    Replace=''
+    JsFind="    if (!root) return false;`r`n    if (!testPath(root)) return false;"
+    JsReplace=''
+  }
+  @{
+    Name='I_missingUnreported'; Expect='A7'
+    Find="    workspace_missing = [bool](Test-WorkspaceMissing `"`$(`$sess.workspace)`" `"`$(`$sess.workspace_type)`")"
+    Replace="    workspace_missing = `$false"
+    JsFind="    workspace_missing: !!testWorkspaceMissing(psStr(get(sess, 'workspace')), psStr(get(sess, 'workspace_type'))),"
+    JsReplace="    workspace_missing: false,"
+  }
 )
 
 Write-Host ''
@@ -202,7 +245,7 @@ Write-Host 'MUTATION ARMS'
 $survived = @()
 foreach ($m in $mutants) {
   try {
-    $p = New-Subject -Name $m.Name -Mutate $m.Mutate
+    $p = New-Subject -Name $m.Name -Find $m.Find -Replace $m.Replace -JsFind $m.JsFind -JsReplace $m.JsReplace
   } catch {
     Write-Host ("  [ERROR  ] {0,-16} {1}" -f $m.Name, $_.Exception.Message) -ForegroundColor Red
     $survived += $m.Name

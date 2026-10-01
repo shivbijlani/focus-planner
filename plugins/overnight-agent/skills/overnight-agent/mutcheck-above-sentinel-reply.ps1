@@ -40,8 +40,9 @@ param([string]$ScriptPath)
 $ErrorActionPreference = 'Stop'
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
 if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
-$script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
 $utf8 = New-Object Text.UTF8Encoding($false)
 $MOON = [char]::ConvertFromUtf32(0x1F319)
 
@@ -89,8 +90,8 @@ function Scan([string]$journal, [string]$lastTurnAt = '2026-09-10T10:00:00-07:00
   $st = [ordered]@{ id = '999'; status = $status; status_by = 'agent'; processed_file_hash = 'stale' }
   if ($lastTurnAt) { $st['last_turn_at'] = $lastTurnAt }
   [IO.File]::WriteAllText((Join-Path $S 'task-999.json'), ([pscustomobject]$st | ConvertTo-Json), $utf8)
-  $argv = @($ScriptPath, 'scan', '-JournalDir', $J, '-StateDir', $S, '-PlannerBoard', $board)
-  $out = (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File @argv 2>&1 | Out-String)
+  $argv = @('scan', '-JournalDir', $J, '-StateDir', $S, '-PlannerBoard', $board)
+  $out = (& $script:OaCmd.Exe @($script:OaCmd.Prefix + $argv) 2>&1 | Out-String)
   try { return (($out | ConvertFrom-Json) | Where-Object { $_.id -eq '999' }) } catch { return $null }
 }
 function D($r) { if ($r) { "reopened=$($r.reopened) unanswered=$($r.unanswered_user) where=$($r.unanswered_user_where) eligible=$($r.eligible)" } else { 'scan produced no row' } }

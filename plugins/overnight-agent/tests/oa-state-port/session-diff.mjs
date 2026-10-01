@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createPsHost, asJson, diff } from './fn-diff.mjs';
 import { buildContext } from '../../skills/overnight-agent/oa-state-lib/core/context.mjs';
@@ -17,7 +18,7 @@ import { testUserPaused, testResumeIsAfterPause, getIsoDate } from '../../skills
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../../../..');
-const scratch = path.join(here, '.scratch-session-diff');
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'oa-session-diff-'));
 
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, arr) => a.startsWith('--') ? [a.slice(2), arr[i + 1] && !arr[i + 1].startsWith('--') ? arr[i + 1] : true] : []));
 const N = Number(args.n ?? 200);

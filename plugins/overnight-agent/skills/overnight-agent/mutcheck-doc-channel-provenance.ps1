@@ -31,7 +31,9 @@ param([string]$ScriptPath)
 $ErrorActionPreference = 'Stop'
 # Resolved in the BODY: $PSScriptRoot is not bound while parameter defaults are evaluated.
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
-if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
 $script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
 $utf8 = New-Object Text.UTF8Encoding($false)
@@ -82,8 +84,9 @@ function New-Sandbox {
 
 function Invoke-Oa {
   param([string]$Subject, $Sx, [string[]]$OaArgs)
-  return (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File $Subject @OaArgs `
-      -JournalDir $Sx.JDir -StateDir $Sx.SDir -PlannerBoard $Sx.Board -SnoozeStore $Sx.Store 2>&1)
+  $cmd = Get-OaStateCommand $Subject
+  return (& $cmd.Exe @($cmd.Prefix + $OaArgs +
+      @('-JournalDir', $Sx.JDir, '-StateDir', $Sx.SDir, '-PlannerBoard', $Sx.Board, '-SnoozeStore', $Sx.Store)) 2>&1)
 }
 
 # The doc object is written STRAIGHT INTO STATE rather than produced by `doc -Observe`, because
@@ -115,8 +118,8 @@ function Build-Fixture {
   $sx = New-Sandbox
   foreach ($id in 940, 941, 942, 943) { [void](Invoke-Oa $Subject $sx @('mark', '-Id', "$id", '-Status', 'in-progress')) }
   Set-Channel $sx '940' ''                                                      # never observed
-  Set-Channel $sx '941' ([datetime]::Now.ToString('o'))                         # observed now
-  Set-Channel $sx '942' ([datetime]::Now.AddDays(-5).ToString('o'))             # observed 5 days ago
+  Set-Channel $sx '941' ([datetime]::UtcNow.ToString('o'))                      # observed now
+  Set-Channel $sx '942' ([datetime]::UtcNow.AddDays(-5).ToString('o'))          # observed 5 days ago
   return $sx
 }
 
@@ -182,7 +185,7 @@ Assert ("$((Get-Row $r2 '940').doc_channel)" -eq 'unread') 'UNPARSEABLE' `
   'a stamp nobody can evaluate is not evidence of a read' "got $((Get-Row $r2 '940').doc_channel)"
 
 $sx3 = Build-Fixture $ScriptPath
-Set-Channel $sx3 '942' ([datetime]::Now.AddDays(-5).ToString('o')) -Pending 3
+Set-Channel $sx3 '942' ([datetime]::UtcNow.AddDays(-5).ToString('o')) -Pending 3
 $r3 = Get-Rows $ScriptPath $sx3
 $p = Get-Row $r3 '942'
 # Pending comments and staleness are independent facts. A stale channel with 3 unacked comments
@@ -194,9 +197,12 @@ Assert ("$($p.doc_new_comments)" -eq '3' -and "$($p.doc_channel)" -eq 'stale') '
 Write-Host ''
 Write-Host 'THE THRESHOLD -- one definition, and it is the one three files already cite'
 
-$src = [IO.File]::ReadAllText($ScriptPath)
-Assert ($src -match '\$script:DocObservationFreshMinutes\s*=') 'DEFINED' `
-  'oa-state.ps1 declares the constant catchup-doc-sweep, observe-bound-docs and run-sweeps name' ''
+$srcFiles = if (Test-OaStateNodeTarget $ScriptPath) {
+  @(Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-lib\plan\status.mjs')
+} else { @($ScriptPath) }
+$src = ($srcFiles | ForEach-Object { [IO.File]::ReadAllText($_) }) -join "`n"
+Assert (($src -match '\$script:DocObservationFreshMinutes\s*=') -or ($src -match 'DocObservationFreshMinutes\s*=')) 'DEFINED' `
+  'the state engine declares the freshness constant catchup-doc-sweep, observe-bound-docs and run-sweeps name' ''
 
 # Honouring the override is what lets an arm age a channel without waiting three hours, and it
 # is also how the sweep is configured. If it stops being read, the two drift apart in silence.
@@ -204,7 +210,7 @@ $sx4 = Build-Fixture $ScriptPath
 $old = $env:OA_DOC_FRESH_MINUTES
 try {
   $env:OA_DOC_FRESH_MINUTES = '1'
-  Set-Channel $sx4 '941' ([datetime]::Now.AddMinutes(-5).ToString('o'))
+  Set-Channel $sx4 '941' ([datetime]::UtcNow.AddMinutes(-5).ToString('o'))
   $r4 = Get-Rows $ScriptPath $sx4
   Assert ("$((Get-Row $r4 '941').doc_channel)" -eq 'stale') 'THRESHOLD-BINDS' `
     'the freshness window is read from the constant rather than hardcoded at the use site' `

@@ -111,6 +111,7 @@ $Oa = Resolve-First @(
   (Join-Path $here '../../skills/overnight-agent/oa-state.ps1'),
   $(if ($oaHome) { Join-Path $oaHome 'oa-state.ps1' })
 ) 'oa-state.ps1'
+. (Join-Path (Split-Path -Parent $Oa) 'oa-state-target.ps1')
 
 # The bridge sources are the acceptance-2 surface. Resolved from the repo, because the point of
 # arm G is to run the SHIPPING digest rather than a restatement of it.
@@ -294,11 +295,12 @@ function Guards($r) {
 }
 
 function Invoke-Oa([string[]]$OaArgs) {
-  $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Oa) + $OaArgs +
-  @('-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store)
+  $cmd = Get-OaStateCommand $Oa
+  $all = @($cmd.Prefix + $OaArgs +
+  @('-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store))
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  try { $out = & $PsExe @all 2>&1 | Out-String -Width 8192 }
+  try { $out = & $cmd.Exe @all 2>&1 | Out-String -Width 8192 }
   catch { $out = '' }
   finally { $ErrorActionPreference = $prev; $global:LASTEXITCODE = 0 }
   return $out

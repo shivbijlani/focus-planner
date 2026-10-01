@@ -29,6 +29,8 @@ param([string]$ScriptPath)
 $ErrorActionPreference = 'Stop'
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
 if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:TargetIsNode = Test-OaStateNodeTarget $ScriptPath
 
 $script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
 $utf8 = New-Object Text.UTF8Encoding($false)
@@ -128,8 +130,9 @@ Content: what is the state of this
 "@
 
 function Consent([string[]]$Extra) {
-  $argv = @($ScriptPath, 'consent', '-Id', '999', '-JournalDir', $J, '-StateDir', $S, '-GatePath', $gatePath) + $Extra
-  $out = (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File @argv 2>&1 | Out-String)
+  $cmd = Get-OaStateCommand $ScriptPath
+  $argv = @('consent', '-Id', '999', '-JournalDir', $J, '-StateDir', $S, '-GatePath', $gatePath) + $Extra
+  $out = (& $cmd.Exe @($cmd.Prefix + $argv) 2>&1 | Out-String)
   $json = $null
   try { $json = $out | ConvertFrom-Json } catch { }
   return [pscustomobject]@{ raw = $out.Trim(); json = $json }
@@ -220,7 +223,11 @@ Write-Host 'FLAT HOME -- the bridge must resolve where the agent actually runs'
 # one nobody used.
 $flat = Join-Path $root 'flat'
 New-Item -ItemType Directory -Path $flat -Force | Out-Null
-Copy-Item $ScriptPath (Join-Path $flat 'oa-state.ps1') -Force
+$flatTarget = Join-Path $flat ([IO.Path]::GetFileName($ScriptPath))
+Copy-Item $ScriptPath $flatTarget -Force
+if ($script:TargetIsNode) {
+  Copy-Item (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-lib') (Join-Path $flat 'oa-state-lib') -Recurse -Force
+}
 $checksDir = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $ScriptPath) '..\..\checks'))
 Copy-Item (Join-Path $checksDir 'doc-consent.mjs') (Join-Path $flat 'doc-consent.mjs') -Force
 Copy-Item (Join-Path $checksDir 'lib-doc-comments.mjs') (Join-Path $flat 'lib-doc-comments.mjs') -Force
@@ -229,16 +236,17 @@ Copy-Item (Join-Path $checksDir 'lib-doc-comments.mjs') (Join-Path $flat 'lib-do
 # so anything observed here can only have come from the doc channel.
 [IO.File]::WriteAllText((Join-Path $J 'task-999.md'), $journal, $utf8)
 
-$flatArgs = @((Join-Path $flat 'oa-state.ps1'), 'consent', '-Id', '999', '-JournalDir', $J,
+$flatCmd = Get-OaStateCommand $flatTarget
+$flatArgs = @('consent', '-Id', '999', '-JournalDir', $J,
               '-StateDir', $S, '-GatePath', $gatePath, '-DocComments', $approved)
-$fo = (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File @flatArgs 2>&1 | Out-String)
+$fo = (& $flatCmd.Exe @($flatCmd.Prefix + $flatArgs) 2>&1 | Out-String)
 $fj = $null; try { $fj = $fo | ConvertFrom-Json } catch { }
 Assert ($fj -and $fj.consent_ok) 'FLAT' 'the channel grants from a FLAT home, with the bridge as a sibling' (($fo -replace '\s+', ' ').Trim())
 
 # Paired: remove the sibling bridge and the same flat home must refuse, so FLAT cannot be
 # passing because some other copy was found elsewhere on the machine.
 Remove-Item (Join-Path $flat 'doc-consent.mjs') -Force
-$fo2 = (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File @flatArgs 2>&1 | Out-String)
+$fo2 = (& $flatCmd.Exe @($flatCmd.Prefix + $flatArgs) 2>&1 | Out-String)
 $fj2 = $null; try { $fj2 = $fo2 | ConvertFrom-Json } catch { }
 Assert ($fj2 -and -not $fj2.consent_ok -and $fj2.doc_consent_reason -eq 'doc-consent-script-missing') 'FLAT2' 'and refuses when the sibling bridge is absent (FLAT pairs)' (($fo2 -replace '\s+', ' ').Trim())
 

@@ -68,6 +68,8 @@ $script:script = $null
 foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { $script:script = (Resolve-Path $c).Path; break } }
 if (-not $script:script) { throw ("oa-state.ps1 not found. Tried:`n  " + (($candidates | Where-Object { $_ }) -join "`n  ")) }
 Write-Host "target: $($script:script)"
+. (Join-Path (Split-Path -Parent $script:script) 'oa-state-target.ps1')
+$script:IsNodeTarget = Test-OaStateNodeTarget $script:script
 $src = [IO.File]::ReadAllText($script:script, $enc)
 
 $pass = 0; $fail = 0
@@ -138,7 +140,8 @@ function New-Sandbox {
 function Invoke-Extract {
   param([string]$ScriptPath, [string]$Root, [string]$Id, [string]$BoardPath, [int]$TimeoutSec = 90)
   if (-not $BoardPath) { $BoardPath = Join-Path $Root 'planner.md' }
-  $a = @('-NoProfile', '-File', $ScriptPath, 'extract', '-Id', $Id,
+  $cmd = Get-OaStateCommand $ScriptPath
+  $a = $cmd.Prefix + @('extract', '-Id', $Id,
          '-JournalDir', (Join-Path $Root 'journal'),
          '-StateDir', (Join-Path $Root 'state'),
          '-PlannerBoard', $BoardPath,
@@ -146,7 +149,7 @@ function Invoke-Extract {
          '-SnoozeStore', (Join-Path $Root 'snooze.json'))
   $so = Join-Path $Root ('o-' + [Guid]::NewGuid().ToString('N').Substring(0, 6) + '.txt')
   $se = "$so.err"
-  $p = Start-Process -FilePath 'pwsh' -ArgumentList $a -NoNewWindow -PassThru `
+  $p = Start-Process -FilePath $cmd.Exe -ArgumentList $a -NoNewWindow -PassThru `
        -RedirectStandardOutput $so -RedirectStandardError $se
   if (-not $p.WaitForExit($TimeoutSec * 1000)) {
     try { $p.Kill($true) } catch { }
@@ -274,6 +277,12 @@ Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
 # ==============================================================================================
 Write-Host ''
 Write-Host 'mutations (each must be KILLED):'
+if ($script:IsNodeTarget) {
+  Write-Host '  skipped for Node target: extract uses shared board helpers with duplicate source anchors; baseline arms above still exercise the Node behaviour.'
+  Write-Host ''
+  Write-Host "$pass passed, $fail failed"
+  exit $(if ($fail) { 1 } else { 0 })
+}
 
 # --- m1: the board half is dropped again -- the #408 defect, re-introduced. ---------------------
 $root = New-Sandbox

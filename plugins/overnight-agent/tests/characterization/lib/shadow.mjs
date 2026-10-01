@@ -62,6 +62,9 @@ function readOnlyPlan(ids, sample) {
     plan.push({ tool: 'oa-state', command: 'get', args: { Id: id } });
     plan.push({ tool: 'oa-state', command: 'consent', args: { Id: id } });
     plan.push({ tool: 'oa-state', command: 'extract', args: { Id: id, Json: true } });
+    plan.push({ tool: 'oa-state', command: 'extract', args: { Id: id } });
+    plan.push({ tool: 'oa-state', command: 'consent', args: { Id: id, Action: 'merge_pr', Repo: 'focus-planner' } });
+    plan.push({ tool: 'oa-state', command: 'consent', args: { Id: id, Action: 'delete_data' } });
     plan.push({ tool: 'oa-state', command: 'session', args: { Id: id } });
   }
   return plan;

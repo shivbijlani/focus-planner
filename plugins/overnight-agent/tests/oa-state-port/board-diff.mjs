@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createPsHost, asJson, diff } from './fn-diff.mjs';
@@ -110,8 +111,7 @@ async function check(label, psValue, nodeValue) {
 }
 
 async function main() {
-  const root = path.join(here, `.scratch-board-${process.pid}-${Date.now()}`);
-  fs.mkdirSync(root, { recursive: true });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oa-board-diff-'));
   let ps = null;
   try {
     ps = await createPsHost({ params: {}, cwd: repo });

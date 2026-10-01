@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Command-level differential test for `oa-state consent`: PowerShell vs Node, both read-only.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -204,9 +205,7 @@ async function runCase(work, i) {
 }
 
 async function main() {
-  const work = path.join(here, `.scratch-consent-diff-${process.pid}`);
-  fs.rmSync(work, { recursive: true, force: true });
-  fs.mkdirSync(work, { recursive: true });
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'oa-consent-diff-'));
   try {
     let next = 0;
     const workers = Array.from({ length: Math.min(JOBS, N) }, async () => {

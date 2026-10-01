@@ -60,7 +60,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
-if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:IsNodeTarget = Test-OaStateNodeTarget $ScriptPath
 
 $script:Root = Join-Path ([IO.Path]::GetTempPath()) ("oa-pace-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $script:StateDir = Join-Path $script:Root 'state'
@@ -98,7 +100,8 @@ function Get-Pacing {
   try {
     $old = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    try { $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $Build @a 2>$null }
+    try {     $cmd = Get-OaStateCommand $Build
+    $out = & $cmd.Exe @($cmd.Prefix + $a) 2>$null }
     finally { $ErrorActionPreference = $old }
   }
   catch { return $null }
@@ -166,6 +169,8 @@ $Mutants = [ordered]@{
     edits = @(@{
         find  = "if (`$n -ge 1) { `$value = `$n; `$source = 'settings' }"
         with  = "if (`$n -ge -99) { `$value = `$n; `$source = 'settings' }"
+        nodeFind = "          if (n >= 1) { value = n; source = 'settings'; }"
+        nodeWith = "          if (n >= -99) { value = n; source = 'settings'; }"
         count = 1
       })
   }
@@ -175,6 +180,8 @@ $Mutants = [ordered]@{
     edits = @(@{
         find  = "if (`$v -match '^\s*(\d+)\s*`$') {"
         with  = "if (`$v -match '^\s*(\d+)') {"
+        nodeFind = "        const m = psMatch(v, '^\\s*(\\d+)\\s*$');"
+        nodeWith = "        const m = psMatch(v, '^\\s*(\\d+)');"
         count = 1
       })
   }
@@ -183,6 +190,8 @@ $Mutants = [ordered]@{
     edits = @(@{
         find  = 'if ($match.Success) { return $match.Groups[1].Value.Trim() }'
         with  = 'if ($false) { return $match.Groups[1].Value.Trim() }'
+        nodeFind = "  if (m) return netTrim(m[1]);"
+        nodeWith = "  if (false) return netTrim(m[1]);"
         count = 1
       })
   }
@@ -191,6 +200,8 @@ $Mutants = [ordered]@{
     edits = @(@{
         find  = "`$source = 'settings-malformed'"
         with  = "`$source = 'settings'"
+        nodeFind = "        source = 'settings-malformed';`n        const m = psMatch(v, '^\\s*(\\d+)\\s*$');"
+        nodeWith = "        source = 'settings';`n        const m = psMatch(v, '^\\s*(\\d+)\\s*$');"
         count = 1
       })
   }
@@ -199,6 +210,8 @@ $Mutants = [ordered]@{
     edits = @(@{
         find  = "if (`$null -ne `$v -and `$v -ne '') {"
         with  = 'if ($null -ne $v) {'
+        nodeFind = "      if (v !== null && v !== '') {"
+        nodeWith = "      if (v !== null) {"
         count = 1
       })
   }
@@ -207,6 +220,8 @@ $Mutants = [ordered]@{
     edits = @(@{
         find  = "if (`$n -ge 1) { `$value = `$n; `$source = 'settings' }"
         with  = "if (`$n -ge 1) { `$value = 1; `$source = 'settings' }"
+        nodeFind = "          if (n >= 1) { value = n; source = 'settings'; }"
+        nodeWith = "          if (n >= 1) { value = 1; source = 'settings'; }"
         count = 1
       })
   }
@@ -223,6 +238,11 @@ function Get-NormalisedSource {
   # LF copies the deployer writes to installed-plugins / %LOCALAPPDATA%. Without this a mutant can
   # match in one tree and be a silent no-op in the other.
   param([string]$Path)
+  if (Test-OaStateNodeTarget $Path) {
+    $root = Split-Path -Parent $Path
+    return (Get-ChildItem -LiteralPath (Join-Path $root 'oa-state-lib') -Recurse -File -Filter '*.mjs' |
+      ForEach-Object { ConvertTo-Lf ([IO.File]::ReadAllText($_.FullName)) }) -join "`n"
+  }
   return (ConvertTo-Lf ([IO.File]::ReadAllText($Path)))
 }
 
@@ -235,7 +255,8 @@ function Test-MutantTargets {
   $drifted = @()
   foreach ($mName in $Mutants.Keys) {
     foreach ($e in $Mutants[$mName].edits) {
-      $n = ([regex]::Matches($text, [regex]::Escape((ConvertTo-Lf $e.find)))).Count
+      $find = if (Test-OaStateNodeTarget $ScriptPath -and $e.nodeFind) { $e.nodeFind } else { $e.find }
+      $n = ([regex]::Matches($text, [regex]::Escape((ConvertTo-Lf $find)))).Count
       if ($n -ne $e.count) { $drifted += "$mName -- expected $($e.count) occurrence(s) of its target, found $n" }
     }
   }
@@ -252,6 +273,13 @@ function Test-MutantTargets {
 
 function New-Mutant {
   param([string]$Name, $Spec)
+  if (Test-OaStateNodeTarget $ScriptPath) {
+    $target = $ScriptPath
+    foreach ($e in $Spec.edits) {
+      $target = New-OaStateMutant $target $Name $e.nodeFind $e.nodeWith $script:Root
+    }
+    return $target
+  }
   $text = Get-NormalisedSource $ScriptPath
   foreach ($e in $Spec.edits) {
     $find = ConvertTo-Lf $e.find

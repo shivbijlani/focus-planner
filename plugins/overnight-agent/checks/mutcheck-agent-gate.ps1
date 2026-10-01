@@ -87,6 +87,8 @@ if (-not $ScriptPath) {
   foreach ($c in $candidates) { if (Test-Path $c) { $ScriptPath = (Resolve-Path $c).Path; break } }
 }
 if (-not $ScriptPath -or -not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found (pass -ScriptPath)" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:TargetIsNode = Test-OaStateNodeTarget $ScriptPath
 
 # The host to launch children with. `powershell` exists only on Windows, so hardcoding it made
 # every arm fail on Linux with "The term 'powershell' is not recognized" -- a harness that cannot
@@ -447,7 +449,16 @@ function Invoke-Child {
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   try {
-    $raw = (& $script:PsExe @ChildArgs 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    $fileIndex = [Array]::IndexOf($ChildArgs, '-File')
+    if ($fileIndex -ge 0 -and $ChildArgs.Count -gt ($fileIndex + 1)) {
+      $target = $ChildArgs[$fileIndex + 1]
+      $oaArgs = @()
+      if ($ChildArgs.Count -gt ($fileIndex + 2)) { $oaArgs = @($ChildArgs[($fileIndex + 2)..($ChildArgs.Count - 1)]) }
+      $cmd = Get-OaStateCommand $target
+      $raw = (& $cmd.Exe @($cmd.Prefix + $oaArgs) 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    } else {
+      $raw = (& $script:PsExe @ChildArgs 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    }
     $code = $LASTEXITCODE
   }
   finally { $ErrorActionPreference = $prev }
@@ -685,6 +696,8 @@ $mutations = @(
       param($s)
       $s -replace [regex]::Escape('foreach ($stage in $stages) {'), 'foreach ($stage in ($stages[1], $stages[0])) {'
     }
+    nodeFind = 'for (const stage of stages) {'
+    nodeReplace = 'for (const stage of [stages[1], stages[0]]) {'
   },
   @{
     name  = 'M2: a floor verdict no longer short-circuits, so a journal `approve` overrides it'
@@ -695,6 +708,8 @@ $mutations = @(
       param($s)
       $s -replace [regex]::Escape("if (`$verdict.decision -ne 'none') {"), "if (`$verdict.decision -eq 'allow') {"
     }
+    nodeFind = "if (verdict.decision !== 'none') {"
+    nodeReplace = "if (verdict.decision === 'allow') {"
   },
   @{
     name  = 'M3: repo matching by SUBSTRING, so a prefix repo collects another repo''s grant'
@@ -703,6 +718,8 @@ $mutations = @(
       param($s)
       $s -replace [regex]::Escape('if ($t -eq $want -or $t -eq $wantBare) { $hit = $true; break }'), 'if ($t.Contains($want) -or $t.Contains($wantBare)) { $hit = $true; break }'
     }
+    nodeFind = 'if (lowerInvariant(t) === lowerInvariant(want) || lowerInvariant(t) === lowerInvariant(wantBare)) { hit = true; break; }'
+    nodeReplace = 'if (lowerInvariant(t).includes(lowerInvariant(want)) || lowerInvariant(t).includes(lowerInvariant(wantBare))) { hit = true; break; }'
   },
   @{
     name  = 'M4: merge_pr accepts CREATE verbs, so "creating a PR is fine" authorises merging'
@@ -711,6 +728,8 @@ $mutations = @(
       param($s)
       $s -replace [regex]::Escape("merge_pr              = @('\bmerg(?:e|es|ed|ing)\b|\bauto-?merges?\b|\bland(?:s|ed|ing)? (?:the |a |it )?(?:pr|pull request)\b')"), "merge_pr              = @('\bmerg(?:e|es|ed|ing)\b|\bcreat(?:e|es|ed|ing)\b|\bpublish(?:es|ed|ing)?\b')"
     }
+    nodeFind = "merge_pr: ['\\\\bmerg(?:e|es|ed|ing)\\\\b|\\\\bauto-?merges?\\\\b|\\\\bland(?:s|ed|ing)? (?:the |a |it )?(?:pr|pull request)\\\\b'],"
+    nodeReplace = "merge_pr: ['\\\\bmerg(?:e|es|ed|ing)\\\\b|\\\\bcreat(?:e|es|ed|ing)\\\\b|\\\\bpublish(?:es|ed|ing)?\\\\b'],"
   },
   @{
     name  = 'M5: an ABSENT gate file yields a permissive default instead of no rules'
@@ -724,6 +743,8 @@ $mutations = @(
     return [pscustomobject]$result
   }'
     }
+    nodeFind = 'if (!isLeaf) return result;'
+    nodeReplace = "if (!isLeaf) { result.allow = ['yolo mode, dont ask just do']; return result; }"
   },
   @{
     name  = 'M6: -Action is free text again (ValidateSet dropped)'
@@ -736,6 +757,8 @@ $mutations = @(
     'post_public', 'spend_money', 'delete_data', 'deploy', 'publish_release')]
   [string]`$Action,"), "  [string]`$Action,"
     }
+    nodeFind = "  { name: 'Action', type: S, set: ACTIONS }, { name: 'Repo', type: S },"
+    nodeReplace = "  { name: 'Action', type: S }, { name: 'Repo', type: S },"
   },
   @{
     name  = 'M10: outcome-shaped floor vocabulary dropped (a floor naming the OUTCOME goes inert)'
@@ -747,6 +770,8 @@ $mutations = @(
       # YOLO grant below it wins.
       $s -replace [regex]::Escape('  if ($allowOutcomePhrasing) {'), '  if ($false) {'
     }
+    nodeFind = '  if (allowOutcomePhrasing) {'
+    nodeReplace = '  if (false) {'
   },
   @{
     name  = 'M11: outcome vocabulary applied to the ALLOW list too (it starts GRANTING)'
@@ -757,6 +782,8 @@ $mutations = @(
       # licence to cause one.
       $s -replace [regex]::Escape("Scoped = `$true; Outcome = `$false }"), "Scoped = `$true; Outcome = `$true }"
     }
+    nodeFind = "    { Decision: 'allow', List: 'allow', Rules: [...(gate?.allow ?? [])], Scoped: true, Outcome: false },"
+    nodeReplace = "    { Decision: 'allow', List: 'allow', Rules: [...(gate?.allow ?? [])], Scoped: true, Outcome: true },"
   },
   @{
     name  = 'M7: the gate is consulted even when -Action is omitted (output shape changes)'
@@ -768,6 +795,8 @@ $mutations = @(
     $gate = Read-AgentGate $GatePath'
       $out -replace [regex]::Escape('if ($Action) { Add-GateFallthrough $out $gate }'), 'Add-GateFallthrough $out $gate'
     }
+    nodeFind = '  const { Id, Action, Repo, DocComments } = ctx.p;'
+    nodeReplace = "  let { Id, Action, Repo, DocComments } = ctx.p;`n  if (!Action) Action = 'send_email_self';"
   },
   # M8 and M9 are the two halves of the same guarantee and BOTH name arm H, which is allowed:
   # the aim check requires each mutation to be caught by exactly one arm, not each arm to have
@@ -780,6 +809,8 @@ $mutations = @(
       param($s)
       $s -replace [regex]::Escape('if (Test-Path $path) { $trailingHasUser = [bool](Get-JournalFacts $path).HasTrailingUser }'), '# mutated: never look'
     }
+    nodeFind = 'if (testPath(p)) trailingHasUser = !!getJournalFacts(p).HasTrailingUser;'
+    nodeReplace = '// mutated: never look'
   },
   @{
     name  = 'M9: the gate path reports trailing_has_user as always TRUE (the field says nothing)'
@@ -802,6 +833,8 @@ $mutations = @(
       param($s)
       $s -replace [regex]::Escape('if (Test-Path $path) { $trailingHasUser = [bool](Get-JournalFacts $path).HasTrailingUser }'), '$trailingHasUser = $true'
     }
+    nodeFind = 'if (testPath(p)) trailingHasUser = !!getJournalFacts(p).HasTrailingUser;'
+    nodeReplace = 'trailingHasUser = true;'
   }
   @{
     # THE CONSUMER HALF ITSELF (#302). Without this mutant the guard could be deleted outright
@@ -817,6 +850,8 @@ $mutations = @(
       param($s)
       $s -replace [regex]::Escape('$humanSpoke = ($verdict.decision -eq ''allow'') -and $trailingHasUser'), '$humanSpoke = $false'
     }
+    nodeFind = "const humanSpoke = verdict.decision === 'allow' && trailingHasUser;"
+    nodeReplace = 'const humanSpoke = false;'
   }
   @{
     # THE MUTANT IS SHAPED LIKE A HELPFUL EDIT, NOT LIKE SABOTAGE (#326). Nobody will submit a PR
@@ -838,6 +873,8 @@ $mutations = @(
         ('$result.mtime = (Get-Item -LiteralPath $path).LastWriteTimeUtc.ToString(''o''); ' +
          '[IO.File]::AppendAllText($path, "<!-- last_read -->")')
     }
+    nodeFind = "    result.mtime = PsDate.fromInstant(fs.statSync(p).mtimeMs, 'Utc').format('o');"
+    nodeReplace = "    result.mtime = PsDate.fromInstant(fs.statSync(p).mtimeMs, 'Utc').format('o'); fs.appendFileSync(p, '<!-- last_read -->');"
   }
 )
 
@@ -848,14 +885,18 @@ try {
   foreach ($m in $mutations) {
     Write-Host ""
     Write-Host "--- $($m.name)"
-    $mutated = & $m.apply $src
-    if ($mutated -eq $src) {
-      Write-Host "  !! mutation did not apply (anchor text moved) -- treating as SURVIVED"
-      $survived++
-      continue
+    if ($script:TargetIsNode) {
+      $path = New-OaStateMutant $ScriptPath $m.name $m.nodeFind $m.nodeReplace $mutDir
+    } else {
+      $mutated = & $m.apply $src
+      if ($mutated -eq $src) {
+        Write-Host "  !! mutation did not apply (anchor text moved) -- treating as SURVIVED"
+        $survived++
+        continue
+      }
+      $path = Join-Path $mutDir ("oa-state-" + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.ps1')
+      [IO.File]::WriteAllText($path, $mutated, (New-Object Text.UTF8Encoding($false)))
     }
-    $path = Join-Path $mutDir ("oa-state-" + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.ps1')
-    [IO.File]::WriteAllText($path, $mutated, (New-Object Text.UTF8Encoding($false)))
 
     $failedArms = @()
     try { $failedArms = Test-AllArms -Script $path -Label $m.name -Quiet }

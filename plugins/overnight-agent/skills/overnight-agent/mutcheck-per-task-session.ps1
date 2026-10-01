@@ -79,7 +79,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
-if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
 # Resolve the PowerShell host rather than hard-coding `powershell`: this guard runs on the Linux
 # CI runner as well as the nightly laptop, and everything it touches is plain text in a temp dir.
@@ -110,8 +112,10 @@ $chatHome = Join-Path $root 'overnight-agent\task-chats'
 New-Item -ItemType Directory -Path $chatHome -Force | Out-Null
 $jdir = Join-Path $root 'journal'
 $sdir = Join-Path $root 'state'
+$sessionStateDir = Join-Path $root 'session-state'
 New-Item -ItemType Directory -Path $jdir -Force | Out-Null
 New-Item -ItemType Directory -Path $sdir -Force | Out-Null
+New-Item -ItemType Directory -Path $sessionStateDir -Force | Out-Null
 
 $board = Join-Path $root 'planner.md'
 $store = Join-Path $root 'snooze.json'
@@ -160,8 +164,9 @@ New-Item -ItemType Directory -Path $runWs -Force | Out-Null
 
 function Invoke-Oa {
   param([string[]]$OaArgs, [string]$Settings = $noSettings)
-  $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $OaArgs +
+  $all = $script:OaCmd.Prefix + $OaArgs +
   @('-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store,
+    '-SessionStateDir', $sessionStateDir,
     '-PlannerCompleted', (Join-Path $root 'absent-completed.md'),
     '-UserSettings', $Settings, '-RunWorkspace', $runWs)
   if ($OaArgs -contains '-ForDispatch') { $all += @('-SessionsStatusFile', $sessionsStatus) }
@@ -172,7 +177,7 @@ function Invoke-Oa {
   $ErrorActionPreference = 'Continue'
   # -Width is not cosmetic on the JSON-bearing calls: the default wraps captured output at the
   # host's render width, which splits a long JSON line and defeats ConvertFrom-Json.
-  try { $out = & $script:PsExe @all 2>&1 | Out-String -Width 4096 }
+  try { $out = & $script:OaCmd.Exe @all 2>&1 | Out-String -Width 4096 }
   catch { $out = '' }
   finally {
     $script:LastOaExit = $LASTEXITCODE
