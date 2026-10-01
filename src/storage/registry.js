@@ -34,6 +34,10 @@ export function getEnabledProviderTypes() {
   return listProviders().map(provider => provider.type)
 }
 
+export function listSettingsProviders() {
+  return listProviders().filter(provider => provider.capabilities.settingsSource)
+}
+
 export function validateRegisteredProviders() {
   listProviders()
 }

@@ -4,7 +4,11 @@ import './App.css'
 import './mobile-board.css'
 import * as storage from './storage/storage.js'
 import { setActiveProvider, getActiveProvider, PROVIDERS, TARGET_STATUS, getProviderName } from './storage/storage.js'
-import { getEnabledProviderTypes } from './storage/registry.js'
+import {
+  getEnabledProviderTypes,
+  getProvider as getProviderDefinition,
+  listSettingsProviders,
+} from './storage/registry.js'
 import { makeSyncStatusCoalescer } from './storage/syncStatusCoalesce.js'
 import {
   loadSources, getSources, getActiveSourceId, getActiveSource, setActiveSource,
@@ -4133,6 +4137,17 @@ const PROVIDER_ICONS = {
   [PROVIDERS.GOOGLE_DRIVE]: '🌐',
 }
 
+const SETTINGS_PROVIDER_DETAILS = {
+  [PROVIDERS.LOCAL_STORAGE]: {
+    description: 'A storage source saved in this browser.',
+    action: 'Use this',
+  },
+  [PROVIDERS.FSA]: {
+    description: 'A storage source in a folder on this device.',
+    action: 'Choose folder',
+  },
+}
+
 const SYNC_LABELS = {
   [TARGET_STATUS.DISCONNECTED]: 'Not backed up',
   [TARGET_STATUS.PENDING]: 'Waiting to back up',
@@ -4293,6 +4308,7 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
   const fsaSupported = typeof window !== 'undefined' && 'showDirectoryPicker' in window
   const enabledProviders = new Set(getEnabledProviderTypes())
   const sources = savedSources.filter(source => enabledProviders.has(source.providerType))
+  const settingsProviders = listSettingsProviders()
   const isMulti = sources.length > 1
 
   const close = () => { setOpen(false); setError('') }
@@ -4307,9 +4323,10 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
     try {
       const source = sources.find(item => item.id === sourceId)
       const provider = getProvider(sourceId)
+      const capabilities = getProviderDefinition(source?.providerType)?.capabilities || {}
       if (!source || !provider) throw new Error('Storage source is unavailable.')
       const restored = await provider.restore()
-      if (!restored && source.providerType === PROVIDERS.FSA) {
+      if (!restored && capabilities.needsUserGesture) {
         const handle = await provider.pick()
         if (!handle) { setBusy(false); return }
         await provider.scaffold()
@@ -4339,11 +4356,12 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
     try {
       const source = addSource({ providerType })
       const provider = getProvider(source.id)
-      if (providerType === PROVIDERS.FSA) {
+      const capabilities = getProviderDefinition(providerType)?.capabilities || {}
+      if (capabilities.needsUserGesture) {
         const handle = await provider.pick()
         if (!handle) { setBusy(false); return }
         await provider.scaffold()
-      } else if (providerType === PROVIDERS.LOCAL_STORAGE) {
+      } else if (!capabilities.oauthRedirect) {
         await provider.restore()
         await provider.scaffold()
       } else {
@@ -4641,36 +4659,26 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
 
             <div className={`settings-dialog-section${sectionCollapsed.storage ? ' collapsed' : ''}`}>
               <SettingsSectionTitle id="storage" label="Storage & backups" collapsed={!!sectionCollapsed.storage} onToggle={toggleSection} />
-              {enabledProviders.has(PROVIDERS.LOCAL_STORAGE) && <div className={`sync-target-card${getActiveSource()?.providerType === PROVIDERS.LOCAL_STORAGE ? ' active-source' : ''}`}>
-                <div className="sync-target-main">
-                  <span className="sync-target-icon">{PROVIDER_ICONS[PROVIDERS.LOCAL_STORAGE]}</span>
-                  <div>
-                    <div className="sync-target-name">Browser Storage</div>
-                    <div className="sync-target-status">A storage source saved in this browser.</div>
-                  </div>
-                </div>
-                <div className="sync-target-actions">
-                  {getActiveSource()?.providerType === PROVIDERS.LOCAL_STORAGE
-                    ? <span className="sync-active-badge">● Active</span>
-                    : <button className="storage-footer-btn sync-target-action" onClick={() => chooseProvider(PROVIDERS.LOCAL_STORAGE)} disabled={busy}>Use this</button>}
-                </div>
-              </div>}
-              {enabledProviders.has(PROVIDERS.FSA) && fsaSupported && (
-                <div className={`sync-target-card${getActiveSource()?.providerType === PROVIDERS.FSA ? ' active-source' : ''}`}>
+              {settingsProviders.map(({ type, label }) => {
+                const active = getActiveSource()?.providerType === type
+                const details = SETTINGS_PROVIDER_DETAILS[type] || {}
+                return (
+                  <div key={type} className={`sync-target-card${active ? ' active-source' : ''}`}>
                   <div className="sync-target-main">
-                    <span className="sync-target-icon">📂</span>
+                    <span className="sync-target-icon">{PROVIDER_ICONS[type] || '📁'}</span>
                     <div>
-                      <div className="sync-target-name">Local Folder</div>
-                      <div className="sync-target-status">A storage source in a folder on this device.</div>
+                      <div className="sync-target-name">{label}</div>
+                      <div className="sync-target-status">{details.description || `A ${label} source for this deployment.`}</div>
                     </div>
                   </div>
                   <div className="sync-target-actions">
-                    {getActiveSource()?.providerType === PROVIDERS.FSA
+                    {active
                       ? <span className="sync-active-badge">● Active</span>
-                      : <button className="storage-footer-btn sync-target-action" onClick={() => chooseProvider(PROVIDERS.FSA)} disabled={busy}>Choose folder</button>}
+                      : <button className="storage-footer-btn sync-target-action" onClick={() => chooseProvider(type)} disabled={busy}>{details.action || 'Use this'}</button>}
                   </div>
-                </div>
-              )}
+                  </div>
+                )
+              })}
               {(enabledProviders.has(PROVIDERS.ONEDRIVE) || enabledProviders.has(PROVIDERS.GOOGLE_DRIVE)) && (
                 <p className="settings-dialog-subtle">The cloud options below are sync targets and backups, not additional board sources.</p>
               )}

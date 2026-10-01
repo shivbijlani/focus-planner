@@ -9,13 +9,13 @@ registerProvider({
   type: PROVIDERS.LOCAL_STORAGE,
   label: 'Browser Storage',
   factory: () => new IndexedDbProvider(),
-  capabilities: {},
+  capabilities: { settingsSource: true },
 })
 registerProvider({
   type: PROVIDERS.FSA,
   label: 'Local Folder',
   factory: ({ id } = {}) => new FSAProvider(id),
-  capabilities: { needsUserGesture: true, pickFolder: true },
+  capabilities: { needsUserGesture: true, pickFolder: true, settingsSource: true },
 })
 registerProvider({
   type: PROVIDERS.ONEDRIVE,

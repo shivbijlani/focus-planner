@@ -8,11 +8,12 @@ vi.mock('#planner/deployment-profile', () => ({
 
 let StoragePicker
 let getEnabledProviderTypes
+let listSettingsProviders
 
 beforeAll(async () => {
   await import('./registerBuiltinProviders.js')
   ;({ StoragePicker } = await import('../StoragePicker.jsx'))
-  ;({ getEnabledProviderTypes } = await import('./registry.js'))
+  ;({ getEnabledProviderTypes, listSettingsProviders } = await import('./registry.js'))
 })
 
 describe('profile-filtered provider UI', () => {
@@ -20,6 +21,7 @@ describe('profile-filtered provider UI', () => {
     const markup = renderToStaticMarkup(createElement(StoragePicker, { onReady() {} }))
 
     expect(getEnabledProviderTypes()).toEqual(['local-storage'])
+    expect(listSettingsProviders().map(({ label }) => label)).toEqual(['Browser Storage'])
     expect(markup).toContain('Browser Storage')
     expect(markup).not.toContain('Local Folder')
     expect(markup).not.toContain('OneDrive')
