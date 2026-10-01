@@ -1,6 +1,6 @@
 // Settings dialog, agent editors, and the storage providers offered today.
 import { test, expect } from '@playwright/test'
-import { openPlanner, waitForBoard, readFile } from './helpers.js'
+import { openPlanner, waitForBoard, readFile, writeFile, planWith, PLAN_FILE } from './helpers.js'
 
 async function openSettings(page) {
   await page.getByRole('button', { name: /Settings/ }).first().click()
@@ -94,4 +94,55 @@ test('storage picker lists every provider when storage cannot start', async ({ p
   await expect(picker).toBeVisible()
   const names = picker.locator('.storage-option-name')
   await expect(names).toHaveText(['Browser Storage', 'Local Folder', 'OneDrive', 'Google Drive'])
+})
+
+test('legacy multi-source state opens only the saved active source and shows a dismissible notice', async ({ page }) => {
+  await openPlanner(page)
+  await writeFile(page, PLAN_FILE, planWith({
+    today: ['| 42 | 🟡 | Personal source task | - | 2026-01-01 | |'],
+  }))
+  const savedSources = [
+    { id: 's1', name: 'Work folder', providerType: 'fsa' },
+    { id: 's2', name: 'Personal browser', providerType: 'local-storage' },
+  ]
+  await page.evaluate((sources) => {
+    localStorage.setItem('fp-sources', JSON.stringify(sources))
+    localStorage.setItem('fp-active-source', 's2')
+  }, savedSources)
+
+  await page.reload()
+  await waitForBoard(page)
+
+  await expect(page.locator('.source-notice')).toContainText('Work folder')
+  await expect(page.locator('.source-notice')).toContainText('Switch sources in Settings')
+  await expect(page.locator('tr[data-task-id="42"]')).toContainText('Personal source task')
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('fp-sources')))).toEqual(savedSources)
+  expect(await page.evaluate(() => localStorage.getItem('fp-active-source'))).toBe('s2')
+
+  await page.getByRole('button', { name: 'Dismiss storage source notice' }).click()
+  await expect(page.locator('.source-notice')).toHaveCount(0)
+  await page.reload()
+  await waitForBoard(page)
+  await expect(page.locator('.source-notice')).toHaveCount(0)
+})
+
+test('switching a saved storage source in Settings reloads the board from that choice', async ({ page }) => {
+  await openPlanner(page)
+  const savedSources = [
+    { id: 's1', name: 'Work', providerType: 'local-storage' },
+    { id: 's2', name: 'Personal', providerType: 'local-storage' },
+  ]
+  await page.evaluate((sources) => {
+    localStorage.setItem('fp-sources', JSON.stringify(sources))
+    localStorage.setItem('fp-active-source', 's1')
+  }, savedSources)
+  await page.reload()
+  await waitForBoard(page)
+
+  const dialog = await openSettings(page)
+  await dialog.getByRole('button', { name: 'Use Personal' }).click()
+
+  await waitForBoard(page)
+  expect(await page.evaluate(() => localStorage.getItem('fp-active-source'))).toBe('s2')
+  await expect(page.locator('.source-notice')).toContainText('Work')
 })
