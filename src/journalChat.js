@@ -1,3 +1,5 @@
+import { fencedLineMask } from '../packages/docs-core/src/grammar.js'
+
 // Pure helpers for rendering journal markdown as a chat thread.
 // Kept dependency-free so they can be unit tested without React.
 
@@ -54,42 +56,9 @@ const FROM_RE = /^<!--\s*from:\s*([^\s>]+)\s*-->/i
 // same rule. Keeping the two in step matters: when one reader thinks a quoted marker is real
 // and the other does not, they disagree about who wrote a message -- and the thing they
 // disagree about is whether Shiv approved something.
-const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})([^\r\n]*)$/
-const FENCE_CLOSE_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/
-
-// Mark every line that belongs to a fenced block (delimiters included). Returns a boolean
-// array parallel to `lines`, so callers keep their own indices and offsets unchanged.
-//
-// Deliberately ONE implementation shared by the parser and the writer below. They ask the
-// same question -- "is this line markup or quoted text?" -- and two copies of a subtle
-// CommonMark rule is how they drift back apart.
-export function fencedLineMask(lines) {
-  const mask = new Array(lines.length).fill(false)
-  let inFence = false
-  let fenceChar = ''
-  let fenceLen = 0
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].replace(/\r$/, '')
-    if (!inFence) {
-      const m = line.match(FENCE_OPEN_RE)
-      if (!m) continue
-      const [, delim, info] = m
-      // A backtick fence may not carry a backtick in its info string (CommonMark), which
-      // keeps inline code such as `a``b` from opening a block.
-      if (delim[0] === '`' && info.includes('`')) continue
-      inFence = true
-      fenceChar = delim[0]
-      fenceLen = delim.length
-      mask[i] = true
-    } else {
-      mask[i] = true
-      const c = line.match(FENCE_CLOSE_RE)
-      if (c && c[1][0] === fenceChar && c[1].length >= fenceLen) inFence = false
-    }
-  }
-  // An unterminated fence runs to end of input, matching Get-FenceMaskedText.
-  return mask
-}
+// The fence rule now lives in packages/docs-core (shared with the Docs app's doc.md parser,
+// plans/docs-app-design.md action item 2) so the journal and Docs readers cannot drift.
+export { fencedLineMask }
 const DATE_RE = /^##\s+(\d{4}-\d{2}-\d{2})\b/
 // Any `## ` heading (dated or not) ends the preceding marker's ownership.
 const HEADING_RE = /^##\s/

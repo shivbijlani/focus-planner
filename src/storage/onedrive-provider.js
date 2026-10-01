@@ -94,6 +94,25 @@ export class OneDriveProvider {
     return res.text()
   }
 
+  /**
+   * Read a file together with its eTag, for optimistic-concurrency writes
+   * (`write(path, content, { ifMatch: etag })`). Returns { content: '', etag: null }
+   * for a missing file, so the caller can create it with `ifNoneMatch: '*'`.
+   */
+  async readWithEtag(path) {
+    await this._ensureToken()
+    const res = await fetch(`${APPROOT}:/${path}?$select=eTag,@microsoft.graph.downloadUrl`, {
+      headers: this._authHeader(), cache: 'no-store',
+    })
+    if (res.status === 404) return { content: '', etag: null }
+    if (!res.ok) throw new Error(`OneDrive read failed: ${res.status}`)
+    const meta = await res.json()
+    const url = meta['@microsoft.graph.downloadUrl']
+    const body = url ? await fetch(url, { cache: 'no-store' }) : null
+    if (body && !body.ok) throw new Error(`OneDrive read failed: ${body.status}`)
+    return { content: body ? await body.text() : '', etag: meta.eTag ?? null }
+  }
+
   async write(path, content, opts = {}) {
     await this._ensureToken()
     // For subdirectory paths (e.g. journal/task-1.md), ensure the subdir exists

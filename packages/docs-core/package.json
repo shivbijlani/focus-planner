@@ -1,0 +1,14 @@
+{
+  "name": "@focus/docs-core",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Pure core for Focus Planner Docs: doc.md parsing into anchored blocks, doc: links, W3C TextQuote anchoring, review.json merge and derived doc state.",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "test": "vitest run"
+  }
+}

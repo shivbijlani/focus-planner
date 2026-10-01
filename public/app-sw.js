@@ -1,3 +1,6 @@
+// One worker for both apps on this origin: Focus Planner (/) and Docs (/docs.html).
+// Network-first means neither app can be pinned to a stale build by the other's
+// update; the cache is only an offline fallback.
 const CACHE_NAME = 'planner-v3';
 
 self.addEventListener('install', () => self.skipWaiting());

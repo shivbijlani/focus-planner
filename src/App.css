@@ -1399,6 +1399,60 @@ tr.highlight-flash {
   background: #6ec1ff;
 }
 
+/* Docs §3.2: the 📄 catch-up icon's badge is about the doc — blue dot for an unread
+   revision, red ! when a comment came back `needs-you`. */
+.doc-badge-unread {
+  color: #8ab4f8;
+  background: #8ab4f8;
+  font-size: 0.45em;
+}
+
+.doc-badge-needs {
+  color: #fff;
+  background: #e5484d;
+  font-weight: 800;
+}
+
+.journal-link-doc {
+  position: relative;
+  text-decoration: none;
+}
+
+/* Journal header trio: 💬 · 📔 (here) · 📄 */
+.jc-trio {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+}
+
+.jc-trio-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 17px;
+  font-size: 18px;
+  text-decoration: none;
+}
+
+.jc-trio-link.is-current {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* On phones the app bar's 📔 avatar already says "you are in the journal". */
+@media (max-width: 768px) {
+  .jc-trio-link.is-current { display: none; }
+}
+
+.jc-trio-link .journal-badge {
+  bottom: 2px;
+  right: 2px;
+  font-size: 10px;
+}
+
 .todo-preview {
   display: flex;
   align-items: center;

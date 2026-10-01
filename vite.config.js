@@ -1,5 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 // Build identifier (UTC build time) surfaced in Settings so users can confirm
 // the running version after an "Update app" — and so support can tell whether a
@@ -10,6 +14,18 @@ const BUILD_ID = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 16)
 export default defineConfig({
   plugins: [react()],
   base: '/',
+  build: {
+    // Two apps, one origin (plans/docs-app-design.md §3): Focus Planner (index.html) and
+    // Docs (docs.html). Shared modules (storage, folder-sync) are emitted as common chunks,
+    // and both pages register the same network-first service worker (public/app-sw.js),
+    // so deploying one never strands the other on a stale cache.
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        docs: resolve(__dirname, 'docs.html'),
+      },
+    },
+  },
   define: {
     __APP_BUILD__: JSON.stringify(BUILD_ID),
   },

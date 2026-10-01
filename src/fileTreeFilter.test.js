@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { filterPlannerTree } from './fileTreeFilter.js'
+import { filterPlannerTree, hideDocsFolder } from './fileTreeFilter.js'
 
 // Mirrors the noisy real-world tree from the screenshot.
 const sampleTree = [
@@ -111,6 +111,32 @@ describe('filterPlannerTree', () => {
       ] },
     ]
     expect(filterPlannerTree(tree)).toEqual([])
+  })
+
+  it('hides the Docs folder (docs/<id>/doc.md belongs to the Docs app)', () => {
+    const tree = [
+      { name: 'docs', type: 'directory', path: 'docs', children: [
+        { name: 'index.json', type: 'file', path: 'docs/index.json' },
+        { name: 'd-abc123', type: 'directory', path: 'docs/d-abc123', children: [
+          { name: 'doc.md', type: 'file', path: 'docs/d-abc123/doc.md' },
+        ] },
+      ] },
+      { name: 'planner.md', type: 'file', path: 'planner.md' },
+    ]
+    expect(filterPlannerTree(tree).map((i) => i.name)).toEqual(['planner.md'])
+  })
+
+  it('hideDocsFolder removes only the top-level docs/ folder (what the sidebar applies)', () => {
+    const tree = [
+      { name: 'docs', type: 'directory', path: 'docs', children: [] },
+      { name: 'journal', type: 'directory', path: 'journal', children: [
+        { name: 'docs', type: 'directory', path: 'journal/docs', children: [] },
+      ] },
+      { name: 'docs.md', type: 'file', path: 'docs.md' },
+      { name: 'misc', type: 'directory', path: 'misc', children: [] },
+    ]
+    expect(hideDocsFolder(tree).map((i) => i.path)).toEqual(['journal', 'docs.md', 'misc'])
+    expect(hideDocsFolder(undefined)).toBeUndefined()
   })
 
   it('tolerates empty / nullish input', () => {
