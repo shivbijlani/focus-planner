@@ -28,7 +28,22 @@ import path from 'node:path';
 
 const CONFIG = process.env.MCP_PROBE_CONFIG || path.join(homedir(), '.copilot', 'mcp-config.json');
 
+// Sandbox mode (tests/e2e/run-sandbox.ps1): inert unless OA_SANDBOX_ROOT is set. A sandbox run
+// must never start a live MCP server (email, Telegram, Google), so a config outside the sandbox
+// is refused before anything is spawned.
+function assertSandboxConfig() {
+  const rootEnv = process.env.OA_SANDBOX_ROOT;
+  if (!rootEnv) return;
+  const fold = (value) => (process.platform === 'win32' ? value.toLowerCase() : value);
+  const root = fold(path.resolve(rootEnv).replace(/[\\/]+$/, ''));
+  const full = fold(path.resolve(CONFIG));
+  if (full !== root && !full.startsWith(root + path.sep)) {
+    throw new Error(`oa_sandbox_violation: mcp-config '${path.resolve(CONFIG)}' is outside OA_SANDBOX_ROOT`);
+  }
+}
+
 function loadServer(name) {
+  assertSandboxConfig();
   const cfg = JSON.parse(readFileSync(CONFIG, 'utf8'));
   const s = cfg.mcpServers?.[name];
   if (!s) throw new Error(`server '${name}' not in ${CONFIG}`);

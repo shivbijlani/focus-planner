@@ -4,7 +4,10 @@ import {
   appendGuardRecord, decideToolUse, readLedger,
 } from './guard-policy.mjs';
 
-const ledger = join(process.env.LOCALAPPDATA ?? process.env.HOME ?? '.', 'overnight-agent', 'run-ledger.jsonl');
+// OVERNIGHT_AGENT_HOME is the e2e sandbox's override (tests/e2e); unset, the path is unchanged.
+const ledger = process.env.OVERNIGHT_AGENT_HOME
+  ? join(process.env.OVERNIGHT_AGENT_HOME, 'run-ledger.jsonl')
+  : join(process.env.LOCALAPPDATA ?? process.env.HOME ?? '.', 'overnight-agent', 'run-ledger.jsonl');
 
 await joinSession({
   tools: [],

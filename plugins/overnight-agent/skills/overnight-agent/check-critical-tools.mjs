@@ -32,10 +32,23 @@ const firstExisting = (...paths) => paths.find((p) => {
 // no live MCP connection to reuse, unlike the health probe above which the coordinator now does
 // itself. See `sendAlert` below.
 const prober = firstExisting(path.join(here, 'mcp-probe.mjs'), path.join(plugin, 'checks', 'mcp-probe.mjs'));
-const statePath = process.env.OA_CAPABILITIES_PATH ??
-  path.join(process.env.LOCALAPPDATA || tmpdir(), 'overnight-agent', 'capabilities.json');
-const ledgerPath = process.env.OA_RUN_LEDGER_PATH ??
-  path.join(process.env.LOCALAPPDATA || tmpdir(), 'overnight-agent', 'run-ledger.jsonl');
+// Sandbox mode (tests/e2e/run-sandbox.ps1): inert unless the variables are set. OVERNIGHT_AGENT_HOME
+// replaces %LOCALAPPDATA%\overnight-agent; OA_SANDBOX_ROOT makes a path outside it a hard error
+// and refuses every outgoing alert, because a sandbox run must never send anything.
+const oaHome = process.env.OVERNIGHT_AGENT_HOME ||
+  path.join(process.env.LOCALAPPDATA || tmpdir(), 'overnight-agent');
+export function assertSandboxPath(target, what) {
+  const rootEnv = process.env.OA_SANDBOX_ROOT;
+  if (!rootEnv || !target) return;
+  const root = path.resolve(rootEnv).replace(/[\\/]+$/, '');
+  const full = path.resolve(target).replace(/[\\/]+$/, '');
+  const fold = (value) => (process.platform === 'win32' ? value.toLowerCase() : value);
+  if (fold(full) !== fold(root) && !fold(full).startsWith(fold(root + path.sep))) {
+    throw new Error(`oa_sandbox_violation: ${what} '${full}' is outside OA_SANDBOX_ROOT '${root}'`);
+  }
+}
+const statePath = process.env.OA_CAPABILITIES_PATH ?? path.join(oaHome, 'capabilities.json');
+const ledgerPath = process.env.OA_RUN_LEDGER_PATH ?? path.join(oaHome, 'run-ledger.jsonl');
 const shell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
 
 function call(server, action, ...args) {
@@ -162,6 +175,10 @@ function settingsFrom(pathname) {
 }
 
 async function sendAlert(text, settings, unavailable) {
+  if (process.env.OA_SANDBOX_ROOT) {
+    console.error(`Critical alert suppressed (sandbox): ${text}`);
+    return false;
+  }
   // An alert is acknowledged only after a successful send, never after an attempted call.
   const dm = readSettingRow(settings, 'Critical alert Telegram DM');
   if (dm && !unavailable.includes('telegram')) {
@@ -214,6 +231,10 @@ export async function main(args = process.argv.slice(2)) {
   const records = args.flatMap((arg, i) => (arg === '--record' ? [args[i + 1]] : []));
   if (Number.isNaN(now.valueOf())) throw new Error('--now must be an ISO timestamp');
   if (args.includes('--run') && !runId) throw new Error('--run requires a runId');
+  for (const [what, target] of [['capabilities', file], ['ledger', ledger], ['--settings', settingsPath],
+    ['--mcp-config', configPath], ['--state-dir', stateDir], ['--tasks', taskFile]]) {
+    assertSandboxPath(target, what);
+  }
   mkdirSync(path.dirname(file), { recursive: true });
   mkdirSync(path.dirname(ledger), { recursive: true });
   // GH #778: capabilities.json has its OWN short lock, taken independently of `oa-state.ps1`'s

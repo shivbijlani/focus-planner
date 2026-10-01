@@ -249,6 +249,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Sandbox mode (tests/e2e/run-sandbox.ps1): inert unless OA_SANDBOX_ROOT is set. The flat OA home
+# this syncs is live, so a sandbox run refuses outright.
+if ($env:OA_SANDBOX_ROOT) { throw 'oa_sandbox_violation: sync-oa-home writes the live OA home; refused under OA_SANDBOX_ROOT' }
+
 # ENTRY (rule 3 above): the scripts user-settings.md invokes by absolute path OUT OF THE
 # FLAT HOME. Naming them makes "belongs in the home" explicit instead of inferring it
 # from whatever happens to be on disk - so a wiped or fresh home is still restorable.

@@ -172,6 +172,7 @@ $proberPath = Resolve-First @(
   $ProberScript,
   (Join-Path $here 'mcp-probe.mjs'),
   (Join-Path $here '..\..\checks\mcp-probe.mjs'),
+  (Join-IfSet $env:OVERNIGHT_AGENT_HOME 'mcp-probe.mjs'),
   (Join-IfSet $env:LOCALAPPDATA 'overnight-agent\mcp-probe.mjs')
 )
 
@@ -187,7 +188,9 @@ function Get-UserSettingsPath {
   $candidates = @(
     $env:OVERNIGHT_AGENT_SETTINGS,
     (Join-Path (Get-Location).Path 'user-settings.md'),
+    (Join-IfSet $env:OVERNIGHT_AGENT_PLANNER_DIR 'user-settings.md'),
     (Join-IfSet $env:USERPROFILE 'OneDrive\Apps\Focus Planner\user-settings.md'),
+    (Join-IfSet $env:OVERNIGHT_AGENT_HOME 'user-settings.md'),
     (Join-IfSet $env:LOCALAPPDATA 'overnight-agent\user-settings.md')
   )
   foreach ($c in $candidates) { if ($c -and (Test-Path -LiteralPath $c)) { return $c } }

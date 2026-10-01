@@ -998,6 +998,27 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-session-pause.ps1
 
+  # Item 0c: the end-to-end sandbox harness (plugins/overnight-agent/tests/e2e). The real run
+  # invokes a model and is run by hand (baseline vs candidate, see its README); CI runs the two
+  # parts that need no model. The tripwire check proves sandbox mode is inert when unset and that
+  # every tripwire is load-bearing. The seed-only run seeds every scenario through the CURRENT
+  # oa-state.ps1 and prechecks that each seed still means what its scenario claims, so a change to
+  # the state engine that silently invalidates a scenario fails here rather than at run time.
+  e2e-sandbox:
+    name: E2E sandbox (tripwires + scenario seeds)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check (sandbox mode is inert unless set; tripwires are load-bearing)
+        shell: pwsh
+        run: ./plugins/overnight-agent/tests/e2e/mutcheck-sandbox-mode.ps1
+      - name: Seed every scenario and precheck it against the code under test
+        shell: pwsh
+        run: ./plugins/overnight-agent/tests/e2e/run-sandbox.ps1 -SeedOnly -NoWait -Label ci
+
   # Pacing: how the historical `Overnight Agent concurrency` tunable (#391) is READ. The per-run
   # dispatch job guards enforcement; this one guards the parse
   # boundary, the argument-over-file precedence, and whether a fallback is visible.
