@@ -11,7 +11,13 @@ test('first run bootstraps Browser Storage, scaffolds files and renders the boar
   await openPlanner(page)
 
   // No chooser on first run: the app auto-selects the browser-only provider.
-  expect(await page.evaluate(() => localStorage.getItem('fp-storage-provider'))).toBe('local-storage')
+  const savedSource = await page.evaluate(() => ({
+    active: localStorage.getItem('fp-active-source'),
+    sources: JSON.parse(localStorage.getItem('fp-sources') || '[]'),
+  }))
+  expect(savedSource.sources).toHaveLength(1)
+  expect(savedSource.sources[0].providerType).toBe('local-storage')
+  expect(savedSource.active).toBe(savedSource.sources[0].id)
 
   const files = await listFiles(page)
   expect(files).toEqual(expect.arrayContaining([PLAN_FILE, COMPLETED_FILE, 'AGENTS.md', 'agent-gate.md']))
