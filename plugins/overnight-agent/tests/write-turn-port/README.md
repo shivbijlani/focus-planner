@@ -15,6 +15,9 @@ agent state into a temp sandbox (the live folders are only read; `OA_SANDBOX_ROO
 run) and re-validates each journal's newest agent turn against its own task with both tools,
 `-Validate -Json`.
 
+`ledger.test.mjs` (`node --test`) pins what has no PowerShell twin: the sent-messages ledger
+(`record-sent` / `was-sent`) and G20 against a journal that is a link to `agent-gate.md`.
+
 Exit 0 means identical. Two tolerances, both stated in the code: PowerShell's own error decoration
 (`Write-Error: <script>:<line>`) is stripped from stderr, and a displayed `<n> min` age may differ by
 one because pwsh starts seconds later than node.

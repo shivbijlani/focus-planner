@@ -1,0 +1,26 @@
+{
+  "files": {
+    "data/journal/task-934.md": {
+      "change": "modified",
+      "text": "# Task 934: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-09\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n\n<!-- oa-ask: none -->\n<!-- oa-by: session=sess-934 host=char-host -->\n"
+    }
+  },
+  "id": "sw/identity/no-marker-fallback",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Author": "sess-934",
+        "DisableGuard": [
+          "G7"
+        ],
+        "Id": "934"
+      },
+      "exit": 0,
+      "stdout": [
+        "[write-turn] appended 118 chars to task-934.md (ask: none, backup: task-934.bak-<STAMP-5m>.md)"
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

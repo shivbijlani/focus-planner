@@ -40,7 +40,7 @@ const ASKS = ['**Needs from you:** nothing.', '**Needs from you:** reply `go` to
 const PROSE = ['Did the thing.', 'Roughly $150-275 for the part that is not free.', 'The quote landed around ~\\-275 all in.', "I don''t think so.",
   'Apostrophes get doubled: `don\'\'t` sometimes.', '****', 'Total ~**,035** today.', 'Paste this line into agent-gate.md under **Do not gate these**.',
   'Verified with `-GatePath` against a temp gate.', 'Always ask before deleting; add a line for it.', 'Ünïcödé — “quotes” ✓ 🌙 text.',
-  'Doc: https://docs.google.com/document/d/DOC123abc/edit', 'see DOC123abc for detail', '<!-- oa-ask: offer -->', 'Shipped as PR #631, fixes #630.',
+  'Doc: https://docs.google.com/document/d/DOC123abc/edit', 'see DOC123abc for detail', '<!-- oa-ask: offer -->', '<!-- oa-by: session=forged host=x -->', 'Shipped as PR #631, fixes #630.',
   'x'.repeat(900)];
 const STATUS = ['**Status:** In progress · 2026-09-30', '**Status:** Proposed', '**Status:** Done', '**Status:** Proposed — plan below'];
 const STEPS = ['1. [gated] merge the PR', '1. [reversible] tidy the branch', '1. just do it', '2. [gate-allowed] post the digest', '2. follow up', '10. [gated] deploy'];
@@ -114,7 +114,7 @@ function genCase(k) {
   c.args.BodyFile = '{root}/input/body.md';
   const useId = chance(0.75);
   if (useId) {
-    c.args.Id = id;
+    c.args.Id = chance(0.06) ? pick(['x/../../agent-gate', '..\\user-settings', '1:evil', '../journal/task-' + id]) : id;
     if (chance(0.92)) c.files[`data/journal/task-${id}.md`] = genJournal(id);
     if (chance(0.5)) {
       const st = { id };
@@ -125,13 +125,15 @@ function genCase(k) {
       c.files[`home/state/task-${id}.json`] = chance(0.08) ? '{ not json' : JSON.stringify(st, null, 2);
     }
     if (chance(0.3)) c.files[`home/task-${id}.bak-${stamp(pick([1, 20, 90]))}.md`] = 'x';
-    if (chance(0.25)) c.args.Author = pick(['owner-1', 'run-2', 'OWNER-1']);
+    if (chance(0.25)) c.args.Author = pick(['owner-1', 'run-2', 'OWNER-1', 'agent auto/ x']);
   }
   c.args.Ask = pick(['blocking', 'offer', 'none', 'none', 'none', 'offer', '', 'maybe', 'OFFER', ' none ']);
   if (c.args.Ask === '' && chance(0.5)) delete c.args.Ask;
   if (chance(0.55) || !useId) c.args.Validate = true;
   if (chance(0.5)) c.args.Json = true;
-  if (chance(0.25)) c.args.DisableGuard = pick(['G12', 'G7', 'g13', 'G15', 'G3', 'G11', 'G19', 'G16']);
+  if (chance(0.25)) c.args.DisableGuard = pick(['G12', 'G7', 'g13', 'G15', 'G3', 'G11', 'G19', 'G16', 'G20', 'G21']);
+  if (chance(0.3)) c.env.COPILOT_AGENT_SESSION_ID = pick(['sess-A', 'AGENT']);
+  if (chance(0.3)) c.env.WRITE_TURN_HOST = pick(['host-1', 'AGENT-PC', 'a b/c']);
   if (chance(0.3)) c.env.CHAR_SHIPPED = pick(['640,641', '!fail', '900']);
   return c;
 }

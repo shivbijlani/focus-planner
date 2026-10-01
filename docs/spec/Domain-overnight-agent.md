@@ -124,6 +124,8 @@ These files are runtime-critical even though the fact collector does not index t
 | --- | --- |
 | `plugins/overnight-agent/skills/overnight-agent/SKILL.md` | Main operating contract. The phase headings in the file are literal: `PHASE 0`, `PHASE 0.7`, `PHASE 1`, `PHASE 1.5`, `PHASE 2`, `PHASE 2.5`, `PHASE 3`. |
 | `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1` | Core state-machine CLI and journal/board/session reader. |
+| `plugins/overnight-agent/skills/overnight-agent/write-turn.mjs` | The sanctioned planner write tool: the only way the agent writes a journal turn, plus the sent-messages ledger. |
+| `plugins/overnight-agent/skills/overnight-agent/write-turn.ps1` | The same tool in PowerShell, kept with identical behaviour as the fallback for a host without Node. |
 | `plugins/overnight-agent/skills/overnight-agent/user-settings.md` | Shareable template for the external settings file; the skill warns that updates overwrite the bundled template. |
 | `plugins/overnight-agent/skills/catchup-doc/SKILL.md` | The companion write-up skill the overnight agent points at when a task uses a catch-up document. |
 | `plugins/overnight-agent/skills/catchup-doc/resolve-ids.ps1` | ID-to-title link resolver used by the catch-up-doc workflow. |
@@ -183,6 +185,35 @@ backstop`, `Today gate strict`, `Overnight Agent concurrency`, and the coordinat
 `Planner board`, `Completed board`, `Journals folder`, `Agent state store`, `Dev drive (repos)`,
 `Non-code task project`, `Google account (Tasks)`, and Telegram settings. The template is explicit that the real settings
 live outside the plugin and that the bundled copy is overwritten on update.
+
+### The sanctioned write tool
+
+The agent changes planner files through one Node command-line script it runs and that then exits:
+`write-turn.mjs`. It appends a journal turn only after a set of guards (G1–G21) accept it: the text
+survived the trip to disk, the turn is anchorable and carries its own provenance marker, it declares
+its ask (`-Ask blocking|offer|none`), and — for a task with a catch-up document — it is a short pointer
+that still holds the ask. It never rewrites or deletes existing content, backs the journal up first
+and keeps the file's own line endings. Exit codes: `0` written or clean, `2` refused (nothing
+written), `3` an `OA_SANDBOX_ROOT` violation or bad ledger arguments, `1` other bad arguments.
+
+Three duties make it the sanctioned writer rather than one writer among several:
+
+- **Identity.** Every appended turn carries `<!-- oa-by: session=<id> host=<host> -->` directly under
+  its `<!-- from: overnight-agent -->` marker and `oa-ask` stamp. The marker itself is unchanged, so
+  every reader still attributes the turn to the agent; the stamp only adds which session and which
+  machine. A body that carries its own stamp is refused (G21).
+- **Files no agent writes.** The only target is `journal/task-<id>.md` inside `-JournalDir`. An `-Id`
+  carrying a path, a target outside the folder, or a journal that is a link to `agent-gate.md` or
+  `user-settings.md` is refused (G20). G20 and G21 cannot be disabled with `-DisableGuard`.
+- **Sent-messages ledger.** `write-turn.mjs record-sent` records each message the agent sends
+  outside the planner (mail, Teams, Google Doc comments, Telegram); `write-turn.mjs was-sent` answers
+  whether a message id is the agent's own. Teams, mail and Google Doc replies are posted as the user,
+  so the consent reader can only accept one there when it has no agent signature and its id is not in
+  this ledger (Data formats § 3). The consent reader does not consult it yet.
+
+Its contract is the characterization goldens recorded from `write-turn.ps1`
+(`plugins/overnight-agent/tests/characterization`), which both implementations pass, plus
+differential tests that run the two side by side (`plugins/overnight-agent/tests/write-turn-port`).
 
 ### Per-task session isolation
 

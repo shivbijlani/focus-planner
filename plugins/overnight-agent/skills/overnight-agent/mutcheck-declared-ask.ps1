@@ -587,10 +587,10 @@ Test-Mutant 'M7' 'write-turn accepts a turn that declares nothing' $m7 {
 # M8 -- validate the flag but never write the stamp. Every refusal still fires, the author is
 #       told nothing is wrong, and the reader falls back to the prose: green and broken.
 $m8 = if ($wtNode) {
-  New-Mutant 'M8' $WriteTurnPath 'const turn = addAskStamp(netTrimEnd(body), askVal).replace(/\r?\n/g, nl);' 'const turn = netTrimEnd(body).replace(/\r?\n/g, nl);'
+  New-Mutant 'M8' $WriteTurnPath 'const turn = addAskStamp(netTrimEnd(body), askVal, identityStamp(author)).replace(/\r?\n/g, nl);' 'const turn = netTrimEnd(body).replace(/\r?\n/g, nl);'
 } else {
   New-Mutant 'M8' $WriteTurnPath `
-    '((Add-AskStamp -Body $body.TrimEnd() -Ask $askVal) -replace "`r?`n", $nl)' `
+    '((Add-AskStamp -Body $body.TrimEnd() -Ask $askVal -By (Get-IdentityStamp $Author)) -replace "`r?`n", $nl)' `
     '($body.TrimEnd() -replace "`r?`n", $nl)'
 }
 Test-Mutant 'M8' 'the declaration is validated but never written to the journal' $m8 {

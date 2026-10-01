@@ -47,6 +47,15 @@ describe('escapeHtml', () => {
 })
 
 describe('mdToTelegramHtml', () => {
+  it('drops a line that is one complete HTML comment (the oa-ask / oa-by stamps), keeps one in prose or code', () => {
+    const md = '<!-- oa-ask: none -->\n<!-- oa-by: session=s1 host=h1 -->\n**Status:** ok\n\nsee <!-- inline --> here\n```\n<!-- quoted -->\n```'
+    const html = mdToTelegramHtml(md)
+    expect(html).not.toContain('oa-ask')
+    expect(html).not.toContain('oa-by')
+    expect(html).toContain('<b>Status:</b> ok')
+    expect(html).toContain('&lt;!-- inline --&gt;')
+    expect(html).toContain('<pre>&lt;!-- quoted --&gt;</pre>')
+  })
   it('returns empty string for empty input', () => {
     expect(mdToTelegramHtml('')).toBe('')
     expect(mdToTelegramHtml(null)).toBe('')

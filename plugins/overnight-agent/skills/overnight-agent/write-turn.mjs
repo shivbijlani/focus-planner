@@ -28,6 +28,19 @@
     G16 an advertised reply word the reader rejects      G17 a turn into a user-paused task
     G18 an unverified agent-gate edit ask                G19 a proposed plan's first step
   G6 is not a refusal: a journal with no OVERNIGHT-AGENT sentinel gets one on append.
+  G20 a target that is not this task's own journal (agent-gate.md, user-settings.md, a path in
+      -Id, a symlink out of -JournalDir). G21 a hand-written `oa-by` identity stamp. Neither can be
+      switched off with -DisableGuard: they are what make the tool the ONLY way an agent writes.
+
+  Every appended turn carries `<!-- oa-by: session=<id> host=<host> -->` under its provenance
+  marker and `oa-ask` stamp: which agent wrote it, from which machine (-Author, else
+  COPILOT_AGENT_SESSION_ID; WRITE_TURN_HOST, else COMPUTERNAME / the host name).
+
+  The sent-messages ledger (spec: a reply on Teams, mail or a Google Doc counts as his only if its
+  message id is NOT one the agent sent) lives here too, as two subcommands:
+    node write-turn.mjs record-sent -Channel teams -MessageId <id> [-TaskId 448] [-At <iso>]
+    node write-turn.mjs was-sent -Channel teams -MessageId <id>
+  Both print JSON; the ledger is <OA home>/sent-messages.jsonl (docs/spec/Data-Formats.md).
 
   Usage (PowerShell-style names, GNU `--name` and `--name=value` are accepted too):
     node write-turn.mjs -Id 448 -BodyFile turn.md -Ask offer             # validate, back up, append
@@ -39,6 +52,7 @@
   `$ErrorActionPreference = 'Stop'` terminates with 1, whatever the `exit 3` after it says).
 */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -466,10 +480,31 @@ function newFinding(guard, line, snippet, why) {
   return { guard, line: Math.trunc(Number(line) || 0), snippet: snippet == null ? '' : String(snippet), why };
 }
 
-// Insert `<!-- oa-ask: VALUE -->` directly beneath the turn's LAST provenance marker outside a
+// The writing agent's identity, stamped into every appended turn. Values are reduced to a safe
+// alphabet, and a bare AUTO / AGENT word gets a `_` so the stamp can never match the app's
+// agent-block sentinel (/^<!--.*\b(AUTO|AGENT)\b.*-->/i in src/journalChat.js).
+function identityValue(v) {
+  const s = String(v || '').replace(/[^A-Za-z0-9._@:-]/g, '_').slice(0, 128).replace(/\b(auto|agent)\b/gi, '$1_');
+  return s || 'unknown';
+}
+// [Environment]::MachineName, which the PowerShell fallback uses when COMPUTERNAME is unset: the
+// NetBIOS name on Windows (at most 15 characters), the first DNS label elsewhere.
+function machineName() {
+  const h = os.hostname();
+  return IS_WIN ? h.slice(0, 15) : h.split('.')[0];
+}
+const hostName = () => process.env.WRITE_TURN_HOST || process.env.COMPUTERNAME || machineName();
+function identityStamp(author) {
+  const session = author || process.env.COPILOT_AGENT_SESSION_ID || 'unknown';
+  const host = hostName();
+  return `<!-- oa-by: session=${identityValue(session)} host=${identityValue(host)} -->`;
+}
+const IdentityStampRe = '^[ \\t]*<!--[ \\t]*oa-by[ \\t]*:';
+
+// Insert `<!-- oa-ask: VALUE -->` (then the identity stamp) directly beneath the turn's LAST provenance marker outside a
 // fence, so the stamp stays bound to the attribution it qualifies and above the turn-end
 // terminator `mark` appends. No marker (G7 disabled) -> appended at the end instead.
-function addAskStamp(body, ask) {
+function addAskStamp(body, ask, by) {
   const nl = body.includes('\r\n') ? '\r\n' : '\n';
   const lines = splitLines(body);
   let fence = false;
@@ -479,11 +514,11 @@ function addAskStamp(body, ask) {
     if (fence) continue;
     if (psMatch(lines[i], ProvenanceLineRe)) at = i;
   }
-  if (at < 0) return netTrimEnd(body) + nl + nl + `<!-- oa-ask: ${ask} -->`;
+  if (at < 0) return netTrimEnd(body) + nl + nl + `<!-- oa-ask: ${ask} -->` + nl + by;
   const out = [];
   for (let i = 0; i < lines.length; i++) {
     out.push(lines[i]);
-    if (i === at) out.push(`<!-- oa-ask: ${ask} -->`);
+    if (i === at) out.push(`<!-- oa-ask: ${ask} -->`, by);
   }
   return out.join(nl);
 }
@@ -1052,7 +1087,41 @@ function turnBodyFindings(ctx, body, disabled, doc, ask) {
     }
   }
 
+  // G21: the identity stamp is the tool's to write. A body carrying its own could claim any
+  // author; fenced quotations are exempt. Not disableable.
+  for (let i = 0; i < lines.length; i++) {
+    if (inFence[i]) continue;
+    if (psMatch(lines[i], IdentityStampRe)) {
+      findings.push(newFinding('G21', i + 1, netTrim(lines[i]),
+        'this body writes its own `oa-by` identity stamp. The stamp records which agent wrote the turn and is ' +
+        'emitted by this tool from -Author / the session; a hand-written one could claim any author. Remove it ' +
+        '(or fence it, if you are quoting the format). This guard cannot be disabled'));
+      break;
+    }
+  }
+
   return findings;
+}
+
+// G20: the only file this tool may write is the task's own journal inside -JournalDir. The
+// planner's consent rules (agent-gate.md, user-settings.md) are the user's alone (spec: the agent
+// can never write agent-gate.md), so an -Id carrying a path, a target outside -JournalDir, or a
+// journal that is a link to a protected file is refused. Not disableable.
+const PROTECTED_FILES = ['agent-gate.md', 'user-settings.md'];
+function protectedTargetFinding(journalDir, id, journal) {
+  const refuse = (why) => newFinding('G20', 1, `-Id ${id}`,
+    `${why} write-turn writes exactly one file, journal/task-<id>.md; agent-gate.md and ` +
+    'user-settings.md hold the consent rules and only the user writes them. This guard cannot be disabled');
+  if (/[\\/]/.test(id) || id.includes('..') || id.includes(':')) return refuse('-Id must be a task id, not a path.');
+  const dir = path.resolve(journalDir);
+  let target = path.resolve(journal);
+  try { target = fs.realpathSync.native(target); } catch { /* not there yet: judged by its name */ }
+  let realDir = dir;
+  try { realDir = fs.realpathSync.native(dir); } catch { /* judged lexically */ }
+  if (PROTECTED_FILES.includes(path.basename(target).toLowerCase())) return refuse(`the target resolves to ${path.basename(target)}.`);
+  const inside = (d) => target.toLowerCase().startsWith((d.replace(/[\\/]+$/, '') + path.sep).toLowerCase());
+  if (!inside(dir) && !inside(realDir)) return refuse('the target resolves outside -JournalDir.');
+  return null;
 }
 
 // [int] conversion of WRITE_TURN_WAKE_WINDOW_MIN (default 45).
@@ -1130,6 +1199,10 @@ function run(argv, out) {
   if (id && !ciContains(disabled, 'G12')) {
     const wake = wakeTurnFinding(ctx, journal, id);
     if (wake) findings = [...findings, wake];
+  }
+  if (id) {
+    const prot = protectedTargetFinding(journalDir, id, journal);
+    if (prot) findings = [...findings, prot];
   }
   const hasAsk = turnHasAsk(body);
   const askVal = lowerInvariant(netTrim(ask));
@@ -1213,16 +1286,116 @@ function run(argv, out) {
     if (!P.Json) say('[write-turn] journal had no OVERNIGHT-AGENT sentinel - adding it (the Telegram bridge skips tasks without one).');
   }
 
-  const turn = addAskStamp(netTrimEnd(body), askVal).replace(/\r?\n/g, nl);
+  const turn = addAskStamp(netTrimEnd(body), askVal, identityStamp(author)).replace(/\r?\n/g, nl);
   writeAllText(journal, existing + sep + prefix + turn + nl);
   if (!P.Json) say(`[write-turn] appended ${bodyLen} chars to task-${id}.md (ask: ${askVal}, backup: task-${id}.bak-${stamp}.md)`);
+  return 0;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The sent-messages ledger. Teams, mail and Google Doc comments are posted AS the user, so a reply
+// on those channels can only count as his when it is not one the agent itself sent. Every message
+// the agent sends outside the planner is recorded here, and the consent reader asks was-sent.
+// One JSON object per line, appended; an existing (channel, message id) is never recorded twice.
+// ---------------------------------------------------------------------------------------------
+const LEDGER_FILE = 'sent-messages.jsonl';
+const bad = (message) => new Exit(3, message);
+
+function oaHomeDir() {
+  if (process.env.WRITE_TURN_OA_HOME) return process.env.WRITE_TURN_OA_HOME;
+  if (process.env.OVERNIGHT_AGENT_HOME) return process.env.OVERNIGHT_AGENT_HOME;
+  if (!process.env.LOCALAPPDATA) throw bad('cannot locate the OA home: set OVERNIGHT_AGENT_HOME (or LOCALAPPDATA)');
+  return joinPS(process.env.LOCALAPPDATA, 'overnight-agent');
+}
+
+function assertLedgerSandbox(p) {
+  if (!process.env.OA_SANDBOX_ROOT) return;
+  const sb = path.resolve(process.env.OA_SANDBOX_ROOT).replace(/[\\/]+$/, '');
+  const full = path.resolve(p).replace(/[\\/]+$/, '');
+  const inside = full.toLowerCase() === sb.toLowerCase() || full.toLowerCase().startsWith((sb + path.sep).toLowerCase());
+  if (!inside) throw bad(`oa_sandbox_violation: ledger '${full}' is outside OA_SANDBOX_ROOT '${sb}'`);
+}
+
+function ledgerArgs(argv, allowed) {
+  const o = {};
+  for (let k = 0; k < argv.length; k++) {
+    const m = /^--?([A-Za-z][A-Za-z-]*)(?:[:=]([\s\S]*))?$/.exec(argv[k]);
+    if (!m) throw bad(`unexpected argument '${argv[k]}'`);
+    const key = m[1].toLowerCase().replace(/-/g, '');
+    const name = allowed.find((a) => a.toLowerCase() === key);
+    if (!name) throw bad(`unknown parameter '${m[1]}' (expected ${allowed.map((a) => '-' + a).join(', ')})`);
+    let v = m[2];
+    if (v === undefined) { v = argv[++k]; if (v === undefined) throw bad(`-${name} needs a value`); }
+    o[name] = v;
+  }
+  return o;
+}
+
+function ledgerRows(file) {
+  const rows = [];
+  let malformed = 0;
+  if (!testPath(file)) return { rows, malformed };
+  for (const line of readAllText(file).split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const r = JSON.parse(line);
+      if (r && typeof r.channel === 'string' && typeof r.message_id === 'string') rows.push(r); else malformed++;
+    } catch { malformed++; }
+  }
+  return { rows, malformed };
+}
+
+function isoLocal(ms) {
+  const d = new Date(ms);
+  const p2 = (n) => String(n).padStart(2, '0');
+  const off = -d.getTimezoneOffset();
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}` +
+    `${off >= 0 ? '+' : '-'}${p2(Math.floor(Math.abs(off) / 60))}:${p2(Math.abs(off) % 60)}`;
+}
+
+function ledgerCommand(cmd, argv, out) {
+  const a = ledgerArgs(argv, cmd === 'record-sent' ? ['Channel', 'MessageId', 'TaskId', 'At', 'Author'] : ['Channel', 'MessageId']);
+  const channel = String(a.Channel || '').trim().toLowerCase();
+  const messageId = String(a.MessageId || '').trim();
+  if (!/^[a-z][a-z0-9-]{0,31}$/.test(channel)) throw bad('-Channel is required: a short lower-case name such as teams, mail, google-doc, telegram');
+  if (!messageId || messageId.length > 1024 || /[\r\n]/.test(messageId)) throw bad('-MessageId is required: the id the channel gave the sent message (one line, at most 1024 characters)');
+  const home = oaHomeDir();
+  const file = path.join(home, LEDGER_FILE);
+  assertLedgerSandbox(file);
+  const { rows, malformed } = ledgerRows(file);
+  const existing = rows.find((r) => r.channel.toLowerCase() === channel && r.message_id === messageId) || null;
+  const emit = (o) => out(JSON.stringify(o, null, 2).replace(/\n/g, EOL) + EOL);
+  if (cmd === 'was-sent') {
+    emit({ ok: true, sent: !!existing, entry: existing, ledger: file, malformed });
+    return 0;
+  }
+  const taskId = a.TaskId === undefined ? '' : String(a.TaskId).trim();
+  if (taskId.length > 64 || /[\r\n]/.test(taskId)) throw bad('-TaskId must be a task id (one line, at most 64 characters)');
+  let at = isoLocal(Date.now());
+  if (a.At !== undefined) {
+    const ms = Date.parse(String(a.At));
+    if (Number.isNaN(ms) || !/^\d{4}-\d{2}-\d{2}T/.test(String(a.At))) throw bad('-At must be an ISO-8601 timestamp, e.g. 2026-10-01T03:00:00-07:00');
+    at = String(a.At);
+  }
+  if (existing) {
+    emit({ ok: true, recorded: false, duplicate: true, entry: existing, ledger: file });
+    return 0;
+  }
+  const session = a.Author || process.env.COPILOT_AGENT_SESSION_ID || 'unknown';
+  const host = hostName();
+  const entry = { v: 1, at, channel, message_id: messageId, task_id: taskId, by: identityValue(session), host: identityValue(host) };
+  fs.mkdirSync(home, { recursive: true });
+  fs.appendFileSync(file, JSON.stringify(entry) + '\n');
+  emit({ ok: true, recorded: true, duplicate: false, entry, ledger: file });
   return 0;
 }
 
 function main() {
   const out = (s) => process.stdout.write(s);
   try {
-    process.exitCode = run(process.argv.slice(2), out);
+    const argv = process.argv.slice(2);
+    if (argv[0] === 'record-sent' || argv[0] === 'was-sent') { process.exitCode = ledgerCommand(argv[0], argv.slice(1), out); return; }
+    process.exitCode = run(argv, out);
   } catch (e) {
     if (e instanceof Exit) {
       if (e.message) process.stderr.write(e.message + EOL);
