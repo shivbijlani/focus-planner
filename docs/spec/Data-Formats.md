@@ -177,6 +177,7 @@ yes, go ahead
 | Multi-line HTML comments are hidden from the chat. | Machine metadata must travel with the file without rendering as prose. | `src/journalChat.js`; `src/journalChat.test.js` |
 | Fenced code is quoted text, not markup. | A fenced `## 2026-12-25` or `<!-- from: me -->` must not fabricate a new day or fake human approval. | `fencedLineMask()` in `src/journalChat.js`; `src/journalChat.test.js`; PowerShell mirror in `oa-state.ps1` |
 | Appends happen at the bottom only. | Re-scan logic and user-visible history depend on stable earlier content. | `appendJournalMessage()` in `src/journalChat.js`; `packages/telegram-bridge/src/journal.js` |
+| An agent turn written by `write-turn.mjs` carries `<!-- oa-ask: blocking\|offer\|none -->` and `<!-- oa-by: session=<id> host=<host> -->` directly under its `<!-- from: overnight-agent -->` marker. | The ask is declared, not guessed from prose; the identity records which session on which machine wrote the turn. Both are complete inline comments, so they render as nothing, and neither contains `AUTO` or `AGENT` as a word. | `plugins/overnight-agent/skills/overnight-agent/write-turn.mjs` (G13, G21); `oa-state.ps1` reads `oa-ask` |
 | Checkbox items and `TODO:` / `DONE:` prefixes are first-class task markers. | The UI and `server.js` extract todos from those exact shapes. | `server.js`, `src/config/agentsDoc.js` |
 
 </details>
@@ -379,6 +380,43 @@ Source-faithful sample built from `Cmd-Seed`, `Cmd-Mark`, `New-PollObject`, `New
 | `status_by` defaults to `agent` when absent on read. | Old state files must not silently acquire “user said so” authority. | `Cmd-Scan` and `Cmd-Mark` in `oa-state.ps1` |
 
 Known gap: issue #571 says `status_by` still lacks enough close provenance to prove the “only the user closes a task” invariant by itself.
+
+### Sent-messages ledger — `%LOCALAPPDATA%\overnight-agent\sent-messages.jsonl`
+
+Every message the agent sends outside the planner is recorded here by
+`write-turn.mjs record-sent`, so a reply on a channel where the agent posts as the user (Teams, mail,
+Google Doc comments) can be told apart from one of the agent's own messages: it counts as the
+user's only when it carries no agent signature **and** its id is not in this ledger. The file is in
+the OA home (`WRITE_TURN_OA_HOME`, else `OVERNIGHT_AGENT_HOME`, else `%LOCALAPPDATA%\overnight-agent`),
+never in the planner folder, and only the tool writes it.
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
+One JSON object per line, appended:
+
+```json
+{"v":1,"at":"2026-10-01T03:00:00-07:00","channel":"teams","message_id":"1727776800123","task_id":"448","by":"3b7bb6f8-2914-44a9-851b-0d6a5a906283","host":"shiv-devbox"}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `v` | Format version, `1`. |
+| `at` | When it was sent: ISO-8601 with offset (`-At`, default now). |
+| `channel` | Lower-case channel name: `mail`, `teams`, `google-doc`, `telegram`, `github`, … (`^[a-z][a-z0-9-]{0,31}$`). |
+| `message_id` | The id the channel returned for the sent message, verbatim (one line, ≤ 1024 characters). |
+| `task_id` | The task it was sent for, or `""`. |
+| `by`, `host` | The sending session and machine, in the same form as the journal's `oa-by` stamp. |
+
+Rules: a `(channel, message_id)` pair is recorded at most once (`channel` compared case-insensitively,
+`message_id` exactly); a line that is not such an object is ignored and counted as `malformed`;
+`was-sent -Channel <c> -MessageId <id>` prints `{ ok, sent, entry, ledger, malformed }` and exits 0;
+bad arguments exit 3.
+
+</details>
 
 ## 4. Telegram bridge state — `state.json`
 

@@ -88,6 +88,8 @@ export function baseEnv(dirs, stubsDir) {
     // (stubbed so the verdict never depends on git or the network).
     WRITE_TURN_OA_HOME: dirs.home,
     WRITE_TURN_ISSUE_RESOLVER: path.join(stubsDir, 'issue-shipped.mjs'),
+    // The identity stamp names the writing host; pinned so goldens do not depend on the machine.
+    WRITE_TURN_HOST: 'char-host',
   });
   return env;
 }

@@ -1053,6 +1053,19 @@ Write clean, lightweight, mobile-friendly HTML: real `<p>` paragraphs, `<ul>`/`<
 text). Convert any Markdown you would have written into the equivalent HTML. Avoid heavy inline CSS,
 remote/tracking images, and `<script>`. Keep it short.
 
+### Record every outside message you send (the sent-messages ledger)
+
+Teams, mail and Google Doc comments are posted **as the user**, so a reply there can only count as his
+approval when it is not a message you sent yourself. Right after you send, reply to or forward an
+email, post a Teams message, or post any comment or message outside the planner, record it with the
+id the channel returned:
+
+`node <skill>\write-turn.mjs record-sent -Channel <mail|teams|google-doc|telegram|github> -MessageId <id> -TaskId <ID>`
+
+It appends one line to `sent-messages.jsonl` in the OA home and prints JSON; recording the same id
+twice is a no-op. `write-turn.mjs was-sent -Channel <c> -MessageId <id>` answers whether an id is
+yours. Never edit the ledger by hand.
+
 ### Gather linked-task context FIRST (before you plan or execute any task)
 
 A task rarely lives alone. The board's **`Linked ID`** column (and any `**Linked:**` line in the
@@ -1922,7 +1935,10 @@ See PHASE 0.
 - **Write every journal turn through `write-turn.mjs`** (next to this skill), never by hand:
   `node <skill>\write-turn.mjs -Id <ID> -BodyFile <file.md> -Ask <blocking|offer|none>`.
   (`write-turn.ps1` beside it is the same tool in PowerShell -- same arguments, same refusals -- kept
-  only as a fallback for a host without Node. Use the Node one.)
+  only as a fallback for a host without Node. Use the Node one.) It writes exactly one file, the
+  task's own journal: it refuses any other target, `agent-gate.md` and `user-settings.md` above all
+  (**G20**), and it stamps the turn with who wrote it (`<!-- oa-by: session=… host=… -->`) itself, so a
+  body must not carry its own (**G21**). Neither guard can be disabled.
   **`-Ask` is required (G13)** and is the subject of its own rule below.
   Author the turn body with a **file tool** first, then pass the file. The script validates the body
   and **refuses to write** if it finds any of the five corruption classes that have already destroyed

@@ -1766,6 +1766,9 @@ jobs:
           node ./plugins/overnight-agent/tests/characterization/run.mjs --impl node --tool write-turn --jobs 4 | Tee-Object -Variable out
           if ($LASTEXITCODE -ne 0) { exit 1 }
           if (-not (($out -join "`n") -match 'skip 0')) { Write-Error 'the Node port left write-turn cases unmapped (SKIP)'; exit 1 }
+      - name: Sent-messages ledger and protected-target guard (node --test)
+        shell: pwsh
+        run: node --test ./plugins/overnight-agent/tests/write-turn-port/ledger.test.mjs
       - name: Differential -- regex translation vs .NET
         shell: pwsh
         run: node ./plugins/overnight-agent/tests/write-turn-port/regex-diff.mjs --n 400

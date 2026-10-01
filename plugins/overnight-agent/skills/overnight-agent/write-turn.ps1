@@ -122,6 +122,16 @@
     write-turn.ps1 -BodyFile turn.md -Ask none -Validate           # lint any turn text
 
   Exit codes: 0 ok - 2 guard violation (nothing written) - 3 bad arguments.
+
+  THE NODE PORT IS THE TOOL NOW (item 3). `write-turn.mjs` beside this file is what SKILL.md
+  invokes; this script is kept, with identical behaviour, as the fallback for a host without Node.
+  Change both or neither -- tests/characterization pins them to the same goldens.
+
+  IDENTITY, AND THE FILES NO AGENT WRITES (item 3, sanctioned write tool)
+  Every appended turn carries `<!-- oa-by: session=<id> host=<host> -->` under its `oa-ask` stamp,
+  so which agent wrote a turn, and from which machine, is in the journal itself. G21 refuses a body
+  that writes its own; G20 refuses any target other than this task's journal inside -JournalDir
+  (agent-gate.md and user-settings.md are the user's alone). Neither can be disabled.
 #>
 [CmdletBinding()]
 param(
@@ -279,8 +289,24 @@ $script:AskDeclRe = '(?im)^[ \t]*<!--[ \t]*oa-ask[ \t]*:[ \t]*([a-z]+)[ \t]*-->[
 # Matches the marker the reader anchors the newest turn on, so the stamp lands INSIDE that turn.
 $script:ProvenanceLineRe = '^[ \t]*<!--[ \t]*from:[ \t]*overnight-agent[ \t]*-->[ \t\r]*$'
 
+# The writing agent's identity. Values are reduced to a safe alphabet, and a bare AUTO / AGENT word
+# gets a `_` so the stamp can never match the app's agent-block sentinel (AGENT_SENTINEL_RE).
+function Get-IdentityValue([string]$v) {
+  $s = ("$v" -creplace '[^A-Za-z0-9._@:-]', '_')
+  if ($s.Length -gt 128) { $s = $s.Substring(0, 128) }
+  $s = $s -creplace '(?i)\b(auto|agent)\b', '$1_'
+  if (-not $s) { $s = 'unknown' }
+  return $s
+}
+function Get-IdentityStamp([string]$Author) {
+  $session = if ($Author) { $Author } elseif ($env:COPILOT_AGENT_SESSION_ID) { $env:COPILOT_AGENT_SESSION_ID } else { 'unknown' }
+  $hostName = if ($env:WRITE_TURN_HOST) { $env:WRITE_TURN_HOST } elseif ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { [Environment]::MachineName }
+  return ('<!-- oa-by: session={0} host={1} -->' -f (Get-IdentityValue $session), (Get-IdentityValue $hostName))
+}
+$script:IdentityStampRe = '^[ \t]*<!--[ \t]*oa-by[ \t]*:'
+
 function Add-AskStamp {
-  param([string]$Body, [string]$Ask)
+  param([string]$Body, [string]$Ask, [string]$By)
   # Insert `<!-- oa-ask: VALUE -->` directly beneath the turn's own provenance marker.
   #
   # WHY THERE, rather than appended at the end of the body. `Get-NewestAgentTurn` anchors on the
@@ -306,11 +332,11 @@ function Add-AskStamp {
   # the end of the body rather than dropping the declaration: an unstamped turn silently reverts
   # to the prose inference, which is the defect. `mark` appends its terminator on a NEW line
   # after this, so the stamp still precedes the boundary.
-  if ($at -lt 0) { return ($Body.TrimEnd() + $nl + $nl + "<!-- oa-ask: $Ask -->") }
+  if ($at -lt 0) { return ($Body.TrimEnd() + $nl + $nl + "<!-- oa-ask: $Ask -->" + $nl + $By) }
   $out = @()
   for ($i = 0; $i -lt $lines.Count; $i++) {
     $out += $lines[$i]
-    if ($i -eq $at) { $out += "<!-- oa-ask: $Ask -->" }
+    if ($i -eq $at) { $out += "<!-- oa-ask: $Ask -->"; $out += $By }
   }
   return ($out -join $nl)
 }
@@ -1441,7 +1467,50 @@ function Test-TurnBody {
     }
   }
 
+  # --- G21: the identity stamp is the tool's to write ---------------------------------
+  # A body carrying its own `oa-by` could claim any author. Fenced quotations are exempt.
+  # Not disableable.
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($inFence[$i]) { continue }
+    if ($lines[$i] -match $script:IdentityStampRe) {
+      $findings += New-Finding 'G21' ($i + 1) $lines[$i].Trim() (
+        'this body writes its own `oa-by` identity stamp. The stamp records which agent wrote the turn and is ' +
+        'emitted by this tool from -Author / the session; a hand-written one could claim any author. Remove it ' +
+        '(or fence it, if you are quoting the format). This guard cannot be disabled')
+      break
+    }
+  }
+
   return $findings
+}
+
+# --- G20: the only file this tool writes is the task's own journal --------------------
+# agent-gate.md and user-settings.md hold the consent rules and are the user's alone (spec: the
+# agent can never write agent-gate.md). An -Id carrying a path, a target outside -JournalDir, or
+# a journal that is a link to a protected file is refused. Not disableable.
+$script:ProtectedFiles = @('agent-gate.md', 'user-settings.md')
+function Get-ProtectedTargetFinding([string]$JournalDir, [string]$TaskId, [string]$Journal) {
+  $tail = ' write-turn writes exactly one file, journal/task-<id>.md; agent-gate.md and ' +
+    'user-settings.md hold the consent rules and only the user writes them. This guard cannot be disabled'
+  if ($TaskId -cmatch '[\\/]' -or $TaskId.Contains('..') -or $TaskId.Contains(':')) {
+    return (New-Finding 'G20' 1 "-Id $TaskId" ('-Id must be a task id, not a path.' + $tail))
+  }
+  $dir = [IO.Path]::GetFullPath($JournalDir)
+  $target = [IO.Path]::GetFullPath($Journal)
+  $li = Get-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+  if ($li -and $li.LinkType) {
+    $to = @($li.Target)[0]
+    if ($to) { $target = [IO.Path]::GetFullPath([IO.Path]::Combine((Split-Path -Parent $target), $to)) }
+  }
+  $leaf = [IO.Path]::GetFileName($target).ToLowerInvariant()
+  if ($script:ProtectedFiles -ccontains $leaf) {
+    return (New-Finding 'G20' 1 "-Id $TaskId" ("the target resolves to $([IO.Path]::GetFileName($target))." + $tail))
+  }
+  $prefix = $dir.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+  if (-not $target.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+    return (New-Finding 'G20' 1 "-Id $TaskId" ('the target resolves outside -JournalDir.' + $tail))
+  }
+  return $null
 }
 
 # --- entry point -------------------------------------------------------------------
@@ -1490,6 +1559,10 @@ $findings = @(Test-TurnBody -Body $body -Disabled $DisableGuard -Doc $doc -Ask $
 if ($Id -and ($DisableGuard -notcontains 'G12')) {
   $wake = Get-WakeTurnFinding $journal $Id $WAKE_WINDOW_MIN $Author
   if ($wake) { $findings = @($findings) + @($wake) }
+}
+if ($Id) {
+  $prot = Get-ProtectedTargetFinding $JournalDir $Id $journal
+  if ($prot) { $findings = @($findings) + @($prot) }
 }
 $findings = @($findings)
 $hasAsk = Test-TurnAsk -Body $body
@@ -1616,7 +1689,7 @@ if ($existing -notmatch [regex]::Escape('<!-- OVERNIGHT-AGENT do not edit this l
   }
 }
 
-$out = $existing + $sep + $prefix + ((Add-AskStamp -Body $body.TrimEnd() -Ask $askVal) -replace "`r?`n", $nl) + $nl
+$out = $existing + $sep + $prefix + ((Add-AskStamp -Body $body.TrimEnd() -Ask $askVal -By (Get-IdentityStamp $Author)) -replace "`r?`n", $nl) + $nl
 
 [IO.File]::WriteAllText($journal, $out, (New-Object Text.UTF8Encoding($false)))
 if (-not $Json) {
