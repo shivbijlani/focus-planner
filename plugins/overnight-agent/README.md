@@ -194,7 +194,7 @@ node plugins/overnight-agent/checks/issue-shipped.mjs 588 620
 (**not** a pass) · `3` bad arguments.
 
 It resolves each issue against implementation source on `origin/main` rather than the
-commit log, because a commit subject names the PR, not the issue. `write-turn.ps1`'s G15
+commit log, because a commit subject names the PR, not the issue. `write-turn.mjs`'s G15
 enforces the same answer on journal turns, so a run cannot recommend shipped work by
 skipping the check (GH #635).
 

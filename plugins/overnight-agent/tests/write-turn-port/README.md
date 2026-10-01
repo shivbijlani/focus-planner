@@ -10,6 +10,11 @@ golden thought of, by running the PowerShell and the port side by side. Both nee
 | `regex-diff.mjs` | every regex the guards use, translated from .NET semantics by the port's `netRe`, against .NET `[regex]` -- each match's index, length and groups, with PowerShell's `-match` options (case-insensitive) or `[regex]::Matches`' (none) as each guard applies them. Inputs are seeded positive examples, randomly mutated (CR/LF, Unicode word / space / digit characters, astral characters, case). | `node regex-diff.mjs --n 400 [--seed N]` |
 | `body-diff.mjs` | the whole tool: random turn bodies x random destinations (no sentinel, prior turns, doc bindings real and fenced, human replies, state fresh / stale / owned / paused / corrupt, backups) x random flags, run through BOTH implementations in twin sandboxes. Compares exit code, stdout (JSON structurally), stderr messages and every file effect. | `node body-diff.mjs --n 80 [--seed N] [--jobs 4]` |
 
+`shadow.mjs` (local only, refuses under CI) is the cutover check: it copies the live journal folder and
+agent state into a temp sandbox (the live folders are only read; `OA_SANDBOX_ROOT` is set on every
+run) and re-validates each journal's newest agent turn against its own task with both tools,
+`-Validate -Json`.
+
 Exit 0 means identical. Two tolerances, both stated in the code: PowerShell's own error decoration
 (`Write-Error: <script>:<line>`) is stripped from stderr, and a displayed `<n> min` age may differ by
 one because pwsh starts seconds later than node.
