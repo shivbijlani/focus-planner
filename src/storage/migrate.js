@@ -3,21 +3,12 @@
  * Copies all files from one provider to another, including journal subdir.
  */
 import { PROVIDERS, setActiveProvider } from './storage.js'
-import { IndexedDbProvider } from './indexeddb-provider.js'
-import { FSAProvider } from './fsa-provider.js'
-import { OneDriveProvider } from './onedrive-provider.js'
-import { GoogleDriveProvider } from './google-drive-provider.js'
+import { createProvider } from './registry.js'
 
 const MIGRATION_KEY = 'fp-pending-migration'
 
 export function makeProvider(id, opts = {}) {
-  switch (id) {
-    case PROVIDERS.LOCAL_STORAGE: return new IndexedDbProvider()
-    case PROVIDERS.FSA: return new FSAProvider()
-    case PROVIDERS.ONEDRIVE: return new OneDriveProvider()
-    case PROVIDERS.GOOGLE_DRIVE: return new GoogleDriveProvider(opts.folderName || null)
-    default: throw new Error(`Unknown provider: ${id}`)
-  }
+  return createProvider(id, opts)
 }
 
 function flattenTree(tree, out = []) {
@@ -65,7 +56,7 @@ export function clearPendingMigration() {
 
 export async function migrate(fromProvider, toId, opts = {}) {
   const payload = await snapshotFiles(fromProvider)
-  const target = makeProvider(toId)
+  const target = makeProvider(toId, { folderName: opts.folderName })
 
   if (toId === PROVIDERS.ONEDRIVE || toId === PROVIDERS.GOOGLE_DRIVE) {
     sessionStorage.setItem(MIGRATION_KEY, JSON.stringify({
@@ -117,7 +108,7 @@ export async function resumePendingMigration() {
   await restoreFiles(target, pending.payload)
   setActiveProvider(target)
   if (pending.deleteSource && pending.fromId === PROVIDERS.LOCAL_STORAGE) {
-    await new IndexedDbProvider().clear()
+    await makeProvider(PROVIDERS.LOCAL_STORAGE).clear()
   }
   clearPendingMigration()
   return pending.toId

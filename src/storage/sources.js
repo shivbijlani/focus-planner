@@ -5,10 +5,7 @@
  * switching, but only the active provider is opened by the planner.
  */
 import { PROVIDERS, getProviderName, setActiveProvider } from './storage.js'
-import { IndexedDbProvider } from './indexeddb-provider.js'
-import { FSAProvider } from './fsa-provider.js'
-import { OneDriveProvider } from './onedrive-provider.js'
-import { GoogleDriveProvider } from './google-drive-provider.js'
+import { createProvider } from './registry.js'
 
 const SOURCES_KEY = 'fp-sources'
 const ACTIVE_KEY = 'fp-active-source'
@@ -35,13 +32,7 @@ export function chooseActiveSource(sources, activeId) {
 }
 
 export function makeProviderFor(source) {
-  switch (source.providerType) {
-    case PROVIDERS.LOCAL_STORAGE: return new IndexedDbProvider()
-    case PROVIDERS.FSA: return new FSAProvider(source.id)
-    case PROVIDERS.ONEDRIVE: return new OneDriveProvider()
-    case PROVIDERS.GOOGLE_DRIVE: return new GoogleDriveProvider(source.config?.folderName || null)
-    default: throw new Error(`Unknown providerType: ${source.providerType}`)
-  }
+  return createProvider(source.providerType, source)
 }
 
 /** Load saved choices without opening any provider. */

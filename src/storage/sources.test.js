@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import './registerBuiltinProviders.js'
 import {
   __testing,
   chooseActiveSource,

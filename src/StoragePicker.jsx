@@ -3,7 +3,8 @@
  * Lets user choose Local Folder, OneDrive, or Google Drive.
  */
 import { useState, useCallback } from 'react'
-import { PROVIDERS, getAvailableProviders, getProviderName } from './storage/storage.js'
+import { PROVIDERS, getProviderName } from './storage/storage.js'
+import { listProviders } from './storage/registry.js'
 import {
   createSourceDescriptor,
   clearPendingSource,
@@ -19,7 +20,7 @@ import {
 import { findSavedSourceForProvider } from './storage/sourceRecovery.js'
 
 export function StoragePicker({ onReady }) {
-  const [availableProviders] = useState(getAvailableProviders)
+  const [availableProviders] = useState(() => listProviders().map(provider => provider.type))
   const [connecting, setConnecting] = useState(null) // provider id being connected
   const [error, setError] = useState('')
 

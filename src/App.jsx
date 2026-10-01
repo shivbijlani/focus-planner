@@ -4,7 +4,7 @@ import './App.css'
 import './mobile-board.css'
 import * as storage from './storage/storage.js'
 import { setActiveProvider, getActiveProvider, PROVIDERS, TARGET_STATUS, getProviderName } from './storage/storage.js'
-import { IndexedDbProvider } from './storage/indexeddb-provider.js'
+import { listProviders } from './storage/registry.js'
 import { makeSyncStatusCoalescer } from './storage/syncStatusCoalesce.js'
 import {
   loadSources, getSources, getActiveSourceId, getActiveSource, setActiveSource,
@@ -47,6 +47,7 @@ import { hideDocsFolder } from './fileTreeFilter.js'
 // navigates somewhere themselves.
 let pendingJournalDeepLink = typeof window !== 'undefined' ? journalDeepLink(window.location.hash) : null
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
+import profile from '#planner/deployment-profile'
 import { linkedNavFallbackFile } from './linkedNav.js'
 import { clampMenuPosition, menuMaxHeight } from './menuPosition.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment, insertTodoLine, stripEmptyTodoLines } from './journalChat.js'
@@ -4285,10 +4286,12 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
   const aggregate = syncStatus?.aggregate ?? TARGET_STATUS.DISCONNECTED
   const syncClass = aggregate.replace(/[^a-z-]/g, '')
 
-  const sources = getSources()
+  const savedSources = getSources()
   const activeId = getActiveSourceId()
-  const isMulti = sources.length > 1
   const fsaSupported = typeof window !== 'undefined' && 'showDirectoryPicker' in window
+  const enabledProviders = new Set(listProviders().map(provider => provider.type))
+  const sources = savedSources.filter(source => enabledProviders.has(source.providerType))
+  const isMulti = sources.length > 1
 
   const close = () => { setOpen(false); setError('') }
   const openAgentSettingsFile = () => {
@@ -4541,14 +4544,16 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
   return (
     <>
       <div className="sidebar-storage-footer">
-        <InstallButton
-          onOpen={() => setInstallOpen(true)}
-          appName={APP_NAME}
-          label="Install app"
-          className="storage-footer-toggle"
-          iconClassName="storage-footer-icon"
-          labelClassName="storage-footer-label"
-        />
+        {profile.installPrompt && (
+          <InstallButton
+            onOpen={() => setInstallOpen(true)}
+            appName={APP_NAME}
+            label="Install app"
+            className="storage-footer-toggle"
+            iconClassName="storage-footer-icon"
+            labelClassName="storage-footer-label"
+          />
+        )}
         <button
           className="storage-footer-toggle"
           onClick={() => setTourOpen(true)}
@@ -4570,9 +4575,9 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
         </button>
       </div>
 
-      <InstallNudge onOpen={() => setInstallOpen(true)} appName={APP_NAME} />
-      <InstallSuccessToast appName={APP_NAME} />
-      {installOpen && <InstallModal onClose={() => setInstallOpen(false)} appName={APP_NAME} />}
+      {profile.installPrompt && <InstallNudge onOpen={() => setInstallOpen(true)} appName={APP_NAME} />}
+      {profile.installPrompt && <InstallSuccessToast appName={APP_NAME} />}
+      {profile.installPrompt && installOpen && <InstallModal onClose={() => setInstallOpen(false)} appName={APP_NAME} />}
       {tourOpen && <TourModal onClose={() => setTourOpen(false)} />}
 
       {open && createPortal(
@@ -4583,7 +4588,7 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
               <button className="settings-dialog-close" onClick={close}>✕</button>
             </div>
 
-            <InstallSettingsSection onOpen={() => setInstallOpen(true)} appName={APP_NAME} />
+            {profile.installPrompt && <InstallSettingsSection onOpen={() => setInstallOpen(true)} appName={APP_NAME} />}
 
             <div className={`settings-dialog-section${sectionCollapsed.mission ? ' collapsed' : ''}`}>
               <SettingsSectionTitle id="mission" label="Mission" collapsed={!!sectionCollapsed.mission} onToggle={toggleSection} />
@@ -4634,7 +4639,7 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
 
             <div className={`settings-dialog-section${sectionCollapsed.storage ? ' collapsed' : ''}`}>
               <SettingsSectionTitle id="storage" label="Storage & backups" collapsed={!!sectionCollapsed.storage} onToggle={toggleSection} />
-              <div className={`sync-target-card${getActiveSource()?.providerType === PROVIDERS.LOCAL_STORAGE ? ' active-source' : ''}`}>
+              {enabledProviders.has(PROVIDERS.LOCAL_STORAGE) && <div className={`sync-target-card${getActiveSource()?.providerType === PROVIDERS.LOCAL_STORAGE ? ' active-source' : ''}`}>
                 <div className="sync-target-main">
                   <span className="sync-target-icon">{PROVIDER_ICONS[PROVIDERS.LOCAL_STORAGE]}</span>
                   <div>
@@ -4647,8 +4652,8 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
                     ? <span className="sync-active-badge">● Active</span>
                     : <button className="storage-footer-btn sync-target-action" onClick={() => chooseProvider(PROVIDERS.LOCAL_STORAGE)} disabled={busy}>Use this</button>}
                 </div>
-              </div>
-              {fsaSupported && (
+              </div>}
+              {enabledProviders.has(PROVIDERS.FSA) && fsaSupported && (
                 <div className={`sync-target-card${getActiveSource()?.providerType === PROVIDERS.FSA ? ' active-source' : ''}`}>
                   <div className="sync-target-main">
                     <span className="sync-target-icon">📂</span>
@@ -4664,10 +4669,12 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
                   </div>
                 </div>
               )}
-              <p className="settings-dialog-subtle">The cloud options below are sync targets and backups, not additional board sources.</p>
+              {(enabledProviders.has(PROVIDERS.ONEDRIVE) || enabledProviders.has(PROVIDERS.GOOGLE_DRIVE)) && (
+                <p className="settings-dialog-subtle">The cloud options below are sync targets and backups, not additional board sources.</p>
+              )}
 
               {/* AI agent collapsible */}
-              {fsaSupported && (
+              {enabledProviders.has(PROVIDERS.FSA) && fsaSupported && (
                 <details className="settings-ai-details">
                   <summary>💡 Use with AI agents</summary>
                   <div className="settings-ai-callout-body">
@@ -4757,14 +4764,14 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
 
             <div className={`settings-dialog-section${sectionCollapsed.backup ? ' collapsed' : ''}`}>
               <SettingsSectionTitle id="backup" label="Backup & sync" collapsed={!!sectionCollapsed.backup} onToggle={toggleSection} />
-              <div className="sync-target-card">
+              {enabledProviders.has(PROVIDERS.GOOGLE_DRIVE) && <div className="sync-target-card">
                 <div className="sync-target-main">
                   <span className="sync-target-icon">{PROVIDER_ICONS[PROVIDERS.GOOGLE_DRIVE]}</span>
                   <div>
                     <div className="sync-target-name">Google Drive</div>
                     <div className={`sync-target-status ${googleDrive.status}`}>
                       {SYNC_LABELS[googleDrive.status] || googleDrive.status}
-                    </div>
+                    </div>}
                   </div>
                 </div>
                 <div className="sync-target-actions">
@@ -4788,14 +4795,14 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
                 </div>
               </div>
               {googleDrive.message && <div className="storage-footer-error">{googleDrive.message}</div>}
-              <div className="sync-target-card">
+              {enabledProviders.has(PROVIDERS.ONEDRIVE) && <div className="sync-target-card">
                 <div className="sync-target-main">
                   <span className="sync-target-icon">{PROVIDER_ICONS[PROVIDERS.ONEDRIVE]}</span>
                   <div>
                     <div className="sync-target-name">OneDrive</div>
                     <div className={`sync-target-status ${oneDrive.status}`}>
                       {SYNC_LABELS[oneDrive.status] || oneDrive.status}
-                    </div>
+                    </div>}
                   </div>
                 </div>
                 <div className="sync-target-actions">
