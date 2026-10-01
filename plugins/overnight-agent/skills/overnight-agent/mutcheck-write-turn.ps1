@@ -50,11 +50,16 @@ if (-not $target) {
 }
 Write-Host "target: $target"
 
+# Launch the host that actually exists, as the CI-run mutchecks do: Windows PowerShell when this
+# runs under it (the laptop's run-sweeps), the running pwsh otherwise (CI, where ~160 cold 5.1
+# starts did not finish inside an hour).
+$PsHost = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
+
 # The PowerShell script runs under Windows PowerShell exactly as production drives it; the Node
 # port (write-turn.mjs) under node with the same argument list.
 function Invoke-Target([string[]]$a) {
   if ($target -like '*.mjs') { return (& node $target @a 2>&1 | Out-String) }
-  return (& powershell -NoProfile -ExecutionPolicy Bypass -File $target @a 2>&1 | Out-String)
+  return (& $PsHost -NoProfile -ExecutionPolicy Bypass -File $target @a 2>&1 | Out-String)
 }
 
 $MOON = [char]::ConvertFromUtf32(0x1F319)

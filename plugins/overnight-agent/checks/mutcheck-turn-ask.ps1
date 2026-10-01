@@ -71,10 +71,14 @@ if (-not $script) {
   throw ("write-turn.ps1 not found. Tried:`n  " + (($candidates | Where-Object { $_ }) -join "`n  "))
 }
 Write-Host "target: $script"
+# Launch the host that actually exists, as the CI-run mutchecks do: Windows PowerShell when this
+# runs under it (the laptop's run-sweeps), the running pwsh otherwise (CI, where ~160 cold 5.1
+# starts did not finish inside an hour).
+$PsHost = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
 
 function Invoke-WT([string]$Path, [string[]]$A) {
   if ($Path -like '*.mjs') { return (& node $Path @A 2>&1 | Out-String) }
-  return (& powershell -NoProfile -ExecutionPolicy Bypass -File $Path @A 2>&1 | Out-String)
+  return (& $PsHost -NoProfile -ExecutionPolicy Bypass -File $Path @A 2>&1 | Out-String)
 }
 
 $pass = 0; $fail = 0

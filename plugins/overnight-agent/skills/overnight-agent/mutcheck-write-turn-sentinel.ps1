@@ -58,6 +58,10 @@ $writeTurn = $null
 foreach ($c in $candidates) { if (Test-Path -LiteralPath $c) { $writeTurn = (Resolve-Path $c).Path; break } }
 if (-not $writeTurn) { Write-Host 'FAIL - write-turn.ps1 not found' -ForegroundColor Red; exit 1 }
 Write-Host "[mutcheck-sentinel] target = $writeTurn"
+# Launch the host that actually exists, as the CI-run mutchecks do: Windows PowerShell when this
+# runs under it (the laptop's run-sweeps), the running pwsh otherwise (CI, where ~160 cold 5.1
+# starts did not finish inside an hour).
+$PsHost = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
 
 $SENTINEL = '<!-- OVERNIGHT-AGENT do not edit this line'
 $tmp = Join-Path $env:TEMP ("oa-sentinel-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -91,7 +95,7 @@ function Invoke-WriteTurn([string]$ScriptPath, [string]$dir, [string]$id) {
   # sentinel, so declaring one keeps the refusal under test the one it was written for.
   $wtArgs = @('-Id', $id, '-BodyFile', $bodyFile, '-JournalDir', $dir, '-Ask', 'none')
   if ($ScriptPath -like '*.mjs') { & node $ScriptPath @wtArgs *>&1 | Out-Null }
-  else { & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @wtArgs *>&1 | Out-Null }
+  else { & $PsHost -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @wtArgs *>&1 | Out-Null }
   return $LASTEXITCODE
 }
 
