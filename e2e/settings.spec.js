@@ -199,19 +199,104 @@ test('canceling reconnect then switching sources leaves the selected source acti
   await expect(page.locator('tr[data-task-id="73"]')).toContainText('Keep browser source')
 })
 
-test('canceling a Settings OAuth source switch keeps the previous source active after reload', async ({ page }) => {
+test('canceling a Settings OAuth source switch restores the previous folder in the error session', async ({ page }) => {
+  await page.addInitScript(() => {
+    const filesKey = 'e2e-fsa-files'
+    const readFiles = () => JSON.parse(localStorage.getItem(filesKey) || '{}')
+    const writeFiles = files => localStorage.setItem(filesKey, JSON.stringify(files))
+    const makeFile = path => ({
+      kind: 'file',
+      async getFile() {
+        const content = readFiles()[path] || ''
+        return { text: async () => content }
+      },
+      async createWritable() {
+        let content = ''
+        return {
+          write: async value => { content = value },
+          close: async () => {
+            const files = readFiles()
+            files[path] = content
+            writeFiles(files)
+          },
+        }
+      },
+    })
+    const makeDirectory = (prefix = '') => ({
+      kind: 'directory',
+      name: 'Smoke folder',
+      queryPermission: async () => 'granted',
+      requestPermission: async () => 'granted',
+      async getDirectoryHandle(name, { create = false } = {}) {
+        const path = prefix ? `${prefix}/${name}` : name
+        if (!create && !Object.keys(readFiles()).some(file => file.startsWith(`${path}/`))) {
+          throw new DOMException('Directory not found', 'NotFoundError')
+        }
+        return makeDirectory(path)
+      },
+      async getFileHandle(name, { create = false } = {}) {
+        const path = prefix ? `${prefix}/${name}` : name
+        if (!create && !(path in readFiles())) throw new DOMException('File not found', 'NotFoundError')
+        return makeFile(path)
+      },
+      async *entries() {
+        const files = Object.keys(readFiles())
+        const names = new Set()
+        for (const file of files) {
+          if (prefix && !file.startsWith(`${prefix}/`)) continue
+          const remainder = prefix ? file.slice(prefix.length + 1) : file
+          const name = remainder.split('/')[0]
+          if (names.has(name)) continue
+          names.add(name)
+          yield [name, remainder.includes('/') ? makeDirectory(prefix ? `${prefix}/${name}` : name) : makeFile(prefix ? `${prefix}/${name}` : name)]
+        }
+      },
+    })
+    const directory = makeDirectory()
+    window.showDirectoryPicker = async () => directory
+    const nativeGet = IDBObjectStore.prototype.get
+    const nativePut = IDBObjectStore.prototype.put
+    IDBObjectStore.prototype.get = function(key) {
+      const request = nativeGet.call(this, key)
+      if (this.transaction.db.name === 'keyval-store' && String(key).startsWith('focus-planner-dir-handle:')) {
+        Object.defineProperty(request, 'result', { configurable: true, get: () => directory })
+      }
+      return request
+    }
+    IDBObjectStore.prototype.put = function(value, key) {
+      if (this.transaction.db.name === 'keyval-store' && String(key).startsWith('focus-planner-dir-handle:')) {
+        return nativePut.call(this, 'mock-folder-handle', key)
+      }
+      return nativePut.call(this, value, key)
+    }
+  })
   await openPlanner(page)
-  await writeFile(page, PLAN_FILE, planWith({
-    today: ['| 74 | 🟡 | Browser source stays active | - | 2026-01-01 | |'],
-  }))
   const sources = [
-    { id: 's1', name: 'Personal browser', providerType: 'local-storage' },
+    { id: 's1', name: 'Work folder', providerType: 'fsa' },
     { id: 's2', name: 'Work OneDrive', providerType: 'onedrive' },
   ]
-  await page.evaluate((savedSources) => {
+  const folderPlan = planWith({
+    today: ['| 74 | 🟡 | Restored folder task | - | 2026-01-01 | |'],
+  })
+  await page.evaluate(async ({ savedSources, content }) => {
     localStorage.setItem('fp-sources', JSON.stringify(savedSources))
     localStorage.setItem('fp-active-source', 's1')
-  }, sources)
+    localStorage.setItem('e2e-fsa-files', JSON.stringify({
+      'planner.md': content,
+      'planner-completed.md': '# Completed Tasks\n',
+    }))
+    const request = indexedDB.open('keyval-store')
+    request.onupgradeneeded = () => request.result.createObjectStore('keyval')
+    await new Promise((resolve, reject) => {
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => {
+        const tx = request.result.transaction('keyval', 'readwrite')
+        tx.objectStore('keyval').put('mock-folder-handle', 'focus-planner-dir-handle:s1')
+        tx.oncomplete = resolve
+        tx.onerror = () => reject(tx.error)
+      }
+    })
+  }, { savedSources: sources, content: folderPlan })
   await page.reload()
   await waitForBoard(page)
   const appOrigin = new URL(page.url()).origin
@@ -225,11 +310,10 @@ test('canceling a Settings OAuth source switch keeps the previous source active 
 
   await page.goto(`${appOrigin}/?error=access_denied`)
   await waitForBoard(page)
-  await page.reload()
-  await waitForBoard(page)
 
   expect(await page.evaluate(() => localStorage.getItem('fp-active-source'))).toBe('s1')
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('fp-sources')))).toEqual(sources)
   expect(await page.evaluate(() => localStorage.getItem('fp-pending-source'))).toBeNull()
-  await expect(page.locator('tr[data-task-id="74"]')).toContainText('Browser source stays active')
+  await expect(page.getByText('Restored folder task')).toBeVisible()
+  await expect(page.getByRole('button', { name: /Reconnect/ })).toHaveCount(0)
 })

@@ -9,26 +9,40 @@ export async function restoreSourceOrFallback(source, {
   pendingSource = null,
   removeSource = () => {},
 } = {}) {
-  const selectedSource = pendingSource?.source || source
-  if (selectedSource) {
+  if (pendingSource?.source) {
     try {
-      const provider = await restoreSource(selectedSource.id)
+      const provider = await restoreSource(pendingSource.source.id)
       if (provider) {
         return {
           provider,
-          providerType: selectedSource.providerType,
+          providerType: pendingSource.source.providerType,
           reconnectSource: null,
-          activateSource: selectedSource,
+          activateSource: pendingSource.source,
+          fallback: false,
         }
       }
     } catch {
       // A rejected permission/token restore is handled like an unavailable source.
     }
-    if (pendingSource?.created) {
-      removeSource(selectedSource.id)
-    } else {
-      onReconnectRequired(selectedSource)
+    if (pendingSource.created) removeSource(pendingSource.source.id)
+  }
+
+  if (source) {
+    try {
+      const provider = await restoreSource(source.id)
+      if (provider) {
+        return {
+          provider,
+          providerType: source.providerType,
+          reconnectSource: null,
+          activateSource: source,
+          fallback: false,
+        }
+      }
+    } catch {
+      // A rejected permission/token restore is handled like an unavailable source.
     }
+    onReconnectRequired(source)
   }
 
   const provider = makeFallback()
@@ -37,8 +51,9 @@ export async function restoreSourceOrFallback(source, {
   return {
     provider,
     providerType: PROVIDERS.LOCAL_STORAGE,
-    reconnectSource: pendingSource?.created ? null : selectedSource || null,
+    reconnectSource: source || null,
     activateSource: null,
+    fallback: true,
   }
 }
 

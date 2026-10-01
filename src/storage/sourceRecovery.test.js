@@ -42,6 +42,7 @@ describe('storage source recovery', () => {
       providerType: 'local-storage',
       reconnectSource: source,
       activateSource: null,
+      fallback: true,
     })
     expect(onReconnectRequired).toHaveBeenCalledWith(source)
     expect(setActiveProvider).toHaveBeenCalledWith(fallback)
@@ -49,27 +50,43 @@ describe('storage source recovery', () => {
     expect(JSON.parse(localStorage.getItem('fp-sources'))).toEqual([source])
   })
 
-  it('removes a newly-created OAuth choice when its one-shot restore fails', async () => {
-    const source = { id: 's2', name: 'OneDrive', providerType: 'onedrive' }
-    const fallback = { restore: vi.fn().mockResolvedValue(true) }
+  it.each([true, false])('retries the persisted active source after pending restore fails (created=%s)', async created => {
+    const active = { id: 's1', name: 'Work folder', providerType: 'fsa' }
+    const pending = { id: 's2', name: 'OneDrive', providerType: 'onedrive' }
+    const activeProvider = { id: 'active-provider' }
+    const restoreSource = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(activeProvider)
     const removeSource = vi.fn()
     const onReconnectRequired = vi.fn()
-    const result = await restoreSourceOrFallback(
-      { id: 's1', name: 'Browser', providerType: 'local-storage' },
-      {
-        pendingSource: { source, created: true },
-        restoreSource: vi.fn().mockResolvedValue(null),
-        makeFallback: () => fallback,
-        setActiveProvider: vi.fn(),
-        removeSource,
-        onReconnectRequired,
-      },
-    )
+    const makeFallback = vi.fn()
+    globalThis.localStorage = memoryStorage({
+      'fp-sources': JSON.stringify([active, pending]),
+      'fp-active-source': active.id,
+    })
 
-    expect(removeSource).toHaveBeenCalledWith('s2')
+    const result = await restoreSourceOrFallback(active, {
+      pendingSource: { source: pending, created },
+      restoreSource,
+      makeFallback,
+      setActiveProvider: vi.fn(),
+      removeSource,
+      onReconnectRequired,
+    })
+
+    expect(restoreSource.mock.calls).toEqual([[pending.id], [active.id]])
+    expect(removeSource.mock.calls).toEqual(created ? [[pending.id]] : [])
+    expect(result).toEqual({
+      provider: activeProvider,
+      providerType: active.providerType,
+      reconnectSource: null,
+      activateSource: active,
+      fallback: false,
+    })
     expect(onReconnectRequired).not.toHaveBeenCalled()
-    expect(result.reconnectSource).toBeNull()
-    expect(result.activateSource).toBeNull()
+    expect(makeFallback).not.toHaveBeenCalled()
+    expect(localStorage.getItem('fp-active-source')).toBe(active.id)
+    expect(JSON.parse(localStorage.getItem('fp-sources'))[0]).toEqual(active)
   })
 
   it('restores and activates the one-shot pending source only after success', async () => {
@@ -84,6 +101,7 @@ describe('storage source recovery', () => {
     expect(result.provider).toBe(provider)
     expect(result.activateSource).toBe(pending)
     expect(result.providerType).toBe('onedrive')
+    expect(result.fallback).toBe(false)
   })
 
   it('attempts all sync bootstrap steps even when one fails', async () => {
