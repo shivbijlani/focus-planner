@@ -71,7 +71,7 @@
   script's own `-DisableGuard` hook; two are generated source mutants, because the fence mask
   and the opt-in have no hook and are the two behaviours most likely to be quietly wrong.
 
-  Usage: pwsh -File mutcheck-pointer-turn.ps1 [-Target <write-turn.ps1>] [-Oa <oa-state.ps1>]
+  Usage: pwsh -File mutcheck-pointer-turn.ps1 [-Target <write-turn.ps1|write-turn.mjs>] [-Oa <oa-state.ps1>]
   Exit:  0 all arms hold and every mutant is killed by exactly one arm - 1 otherwise.
 #>
 [CmdletBinding()]
@@ -271,11 +271,13 @@ function Invoke-WriteTurn {
   # NOTE for the documented `-Target <origin/main copy>` mode in the header: a pre-#560 script has
   # no `-Ask` parameter and will reject it. Run that comparison against a pre-#560 checkout of THIS
   # file too, or drop the flag for that one invocation.
-  $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Script,
-    '-Id', $Id, '-BodyFile', $BodyFile, '-JournalDir', $jdir, '-Ask', 'none', '-Json') + $Extra
+  $wtArgs = @('-Id', $Id, '-BodyFile', $BodyFile, '-JournalDir', $jdir, '-Ask', 'none', '-Json') + $Extra
+  # The Node port (write-turn.mjs, item 3) takes the same arguments and must pass the same arms.
+  $exe = if ($Script -like '*.mjs') { 'node' } else { $PsExe }
+  $all = if ($Script -like '*.mjs') { @($Script) + $wtArgs } else { @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Script) + $wtArgs }
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  try { $out = & $PsExe @all 2>&1 | Out-String -Width 4096 }
+  try { $out = & $exe @all 2>&1 | Out-String -Width 4096 }
   catch { $out = '' }
   finally { $script:LastExit = $LASTEXITCODE; $ErrorActionPreference = $prev; $global:LASTEXITCODE = 0 }
   $start = $out.IndexOf('{')
@@ -439,17 +441,24 @@ function New-Mutant([string]$name, [string]$find, [string]$replace) {
   # An absent anchor is still a failure; it is simply reported as an unkilled mutant below.
   $src = [IO.File]::ReadAllText($Target)
   if ($src -notmatch [regex]::Escape($find)) { return $null }
-  $p = Join-Path $root "mutant-$name.ps1"
+  $p = Join-Path $root ("mutant-$name" + [IO.Path]::GetExtension($Target))
   [IO.File]::WriteAllText($p, $src.Replace($find, $replace), $utf8)
   return $p
 }
 
 # Fence mask -> identity: a doc-meta quoted inside a fenced example becomes a real binding.
-$mFence = New-Mutant 'fence' 'if ($fence) { $lines[$i] = '' '' * $lines[$i].Length }' '# mutated: fence mask removed'
-# Opt-in removed: every task is treated as doc-bound.
-$mOptIn = New-Mutant 'optin' '$doc = if ($journal) { Get-JournalDocMeta $journal } else { $null }' `
-  '$doc = if ($journal) { Get-JournalDocMeta $journal } else { $null }
+# Opt-in removed: every task is treated as doc-bound. Each has a PowerShell and a Node anchor.
+if ($Target -like '*.mjs') {
+  $mFence = New-Mutant 'fence' 'if (fence) parts[i] = '' ''.repeat(parts[i].length);' '// mutated: fence mask removed'
+  $mOptIn = New-Mutant 'optin' 'const doc = journal ? journalDocMeta(journal) : null;' `
+    'let doc = journal ? journalDocMeta(journal) : null;
+  if (!doc) doc = { doc_id: ''MUTANT'', doc_url: '''' };'
+} else {
+  $mFence = New-Mutant 'fence' 'if ($fence) { $lines[$i] = '' '' * $lines[$i].Length }' '# mutated: fence mask removed'
+  $mOptIn = New-Mutant 'optin' '$doc = if ($journal) { Get-JournalDocMeta $journal } else { $null }' `
+    '$doc = if ($journal) { Get-JournalDocMeta $journal } else { $null }
 if (-not $doc) { $doc = [pscustomobject]@{ doc_id = ''MUTANT''; doc_url = '''' } }'
+}
 
 $mutants = @(
   @{ name = 'disable G9 (no size ceiling)'; extra = @('-DisableGuard', 'G9'); script = $Target; kills = 'B narrative refused by G9' },

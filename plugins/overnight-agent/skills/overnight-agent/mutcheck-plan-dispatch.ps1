@@ -1,8 +1,14 @@
 [CmdletBinding()]
 param(
   [string]$StateScript = (Join-Path $PSScriptRoot 'oa-state.ps1'),
+  # May name the Node port, write-turn.mjs (item 3): same arguments, same arms.
   [string]$TurnScript = (Join-Path $PSScriptRoot 'write-turn.ps1')
 )
+
+function Invoke-Turn([string[]]$A) {
+  if ($TurnScript -like '*.mjs') { return (& node $TurnScript @A) }
+  return (& $psExe -NoProfile -File $TurnScript @A)
+}
 
 $ErrorActionPreference = 'Stop'
 $root = Join-Path ([IO.Path]::GetTempPath()) ("oa-plan-" + [guid]::NewGuid().ToString('N'))
@@ -107,11 +113,11 @@ try {
     $body = "## $moon Overnight Agent`n<!-- from: overnight-agent -->`n**Status:** $($c.status)`n### Proposed plan (v1)`n1. $($c.step)`n**Needs from you:** Book at `$250?`n"
     $file = Join-Path $root 'turn.md'
     [IO.File]::WriteAllText($file, $body, $utf8)
-    $result = & $psExe -NoProfile -File $TurnScript -BodyFile $file -Ask $c.ask -Validate -Json | ConvertFrom-Json
+    $result = Invoke-Turn @('-BodyFile', $file, '-Ask', $c.ask, '-Validate', '-Json') | ConvertFrom-Json
     $g19 = @($result.findings | Where-Object { $_.guard -eq 'G19' }).Count -gt 0
     Check $c.name ($g19 -eq $c.reject)
     if ($c.reject) {
-      $mutant = & $psExe -NoProfile -File $TurnScript -BodyFile $file -Ask $c.ask -Validate -Json -DisableGuard G19 | ConvertFrom-Json
+      $mutant = Invoke-Turn @('-BodyFile', $file, '-Ask', $c.ask, '-Validate', '-Json', '-DisableGuard', 'G19') | ConvertFrom-Json
       Check "$($c.name) is killed by G19" (-not (@($mutant.findings | Where-Object { $_.guard -eq 'G19' }).Count -gt 0))
     }
   }

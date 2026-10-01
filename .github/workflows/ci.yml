@@ -1737,3 +1737,69 @@ jobs:
       - name: Characterization suite against the PowerShell implementation
         shell: pwsh
         run: node ./plugins/overnight-agent/tests/characterization/run.mjs --impl ps --jobs 4
+  # Item 3: write-turn.mjs, the Node port of the sanctioned journal writer. It is not called by
+  # anything yet; this job is what earns it the right to be. The contract is the characterization
+  # goldens recorded from write-turn.ps1, so the port must pass every write-turn case with ZERO
+  # skips. Two differential runs then aim at what no golden thought of: every pattern the guards
+  # use, translated from .NET regex semantics, compared match-for-match against .NET itself; and
+  # random turns x random destinations x random flags run through BOTH implementations in twin
+  # sandboxes, comparing exit code, output and every file effect. Finally every mutation check
+  # that drives write-turn runs against the port as well -- and the three that ran nowhere in CI
+  # (mutcheck-write-turn, -sentinel, turn-ask; the first had rotted when G19 landed) now run
+  # against the PowerShell too. windows-latest: those three drive Windows PowerShell, as
+  # production does, and the goldens are Windows-recorded.
+  write-turn-node:
+    name: write-turn Node port (goldens, differential, mutation checks)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Pin the time zone the goldens were recorded in
+        shell: pwsh
+        run: tzutil /s "Pacific Standard Time"
+      - name: Characterization goldens, every write-turn case, against the Node port (no SKIP)
+        shell: pwsh
+        run: |
+          node ./plugins/overnight-agent/tests/characterization/run.mjs --impl node --tool write-turn --jobs 4 | Tee-Object -Variable out
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (($out -join "`n") -match 'skip 0')) { Write-Error 'the Node port left write-turn cases unmapped (SKIP)'; exit 1 }
+      - name: Differential -- regex translation vs .NET
+        shell: pwsh
+        run: node ./plugins/overnight-agent/tests/write-turn-port/regex-diff.mjs --n 400
+      - name: Differential -- whole tool, PowerShell vs Node, twin sandboxes
+        shell: pwsh
+        run: node ./plugins/overnight-agent/tests/write-turn-port/body-diff.mjs --n 80 --jobs 4
+      - name: Mutation checks against BOTH implementations
+        shell: pwsh
+        run: |
+          $skill = './plugins/overnight-agent/skills/overnight-agent'
+          $wt = "$skill/write-turn.mjs"
+          $failed = @()
+          $runs = @(
+            @{ f = "$skill/mutcheck-write-turn.ps1";            node = @('-Target', $wt);        ps = @() },
+            @{ f = "$skill/mutcheck-write-turn-sentinel.ps1";   node = @('-Target', $wt);        ps = @() },
+            @{ f = './plugins/overnight-agent/checks/mutcheck-turn-ask.ps1'; node = @('-Target', $wt); ps = @() },
+            @{ f = "$skill/mutcheck-pointer-turn.ps1";          node = @('-Target', $wt);        ps = $null },
+            @{ f = "$skill/mutcheck-declared-ask.ps1";          node = @('-WriteTurnPath', $wt); ps = $null },
+            @{ f = "$skill/mutcheck-advertised-reply-word.ps1"; node = @('-WriteTurnPath', $wt); ps = $null },
+            @{ f = "$skill/mutcheck-gate-edit-ask.ps1";         node = @('-WriteTurnPath', $wt); ps = $null },
+            @{ f = "$skill/mutcheck-user-pause-write.ps1";      node = @('-WriteTurnPath', $wt); ps = $null },
+            @{ f = "$skill/mutcheck-shipped-pick.ps1";          node = @('-WriteTurnPath', $wt); ps = $null },
+            @{ f = "$skill/mutcheck-plan-dispatch.ps1";         node = @('-TurnScript', $wt);    ps = $null }
+          )
+          # ps = $null: the PowerShell run already has its own job elsewhere in this workflow.
+          foreach ($r in $runs) {
+            foreach ($target in @('node', 'ps')) {
+              $extra = $r[$target]
+              if ($null -eq $extra) { continue }
+              Write-Host "::group::$($r.f) [$target]"
+              & pwsh -NoProfile -File $r.f @extra
+              $code = $LASTEXITCODE
+              Write-Host '::endgroup::'
+              if ($code -ne 0) { $failed += "$($r.f) [$target] exit $code" }
+            }
+          }
+          if ($failed.Count) { $failed | ForEach-Object { Write-Host "FAILED: $_" }; exit 1 }

@@ -30,7 +30,8 @@
   FILES rather than a re-implementation of their logic -- a re-implemented subject can drift
   from what ships, which is #463's "green where it was written, broken where it runs".
 
-    pwsh -File mutcheck-declared-ask.ps1 [-ScriptPath <oa-state.ps1>] [-WriteTurnPath <write-turn.ps1>]
+    pwsh -File mutcheck-declared-ask.ps1 [-ScriptPath <oa-state.ps1>] [-WriteTurnPath <write-turn.ps1|write-turn.mjs>]
+  (-WriteTurnPath may name the Node port, item 3: same arguments, same arms, its own mutant anchors.)
 
   BASELINE ARMS, and the distinct claim each one makes:
 
@@ -398,8 +399,9 @@ function New-BodyFile {
 
 function Invoke-WriteTurn {
   param([string]$Subject, $Sx, [string[]]$Extra)
-  $out = (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File $Subject `
-      -Id 930 -BodyFile (Join-Path $root 'body.md') -JournalDir $Sx.JDir @Extra 2>&1 | Out-String)
+  $wtArgs = @('-Id', '930', '-BodyFile', (Join-Path $root 'body.md'), '-JournalDir', $Sx.JDir) + @($Extra)
+  $out = if ($Subject -like '*.mjs') { (& node $Subject @wtArgs 2>&1 | Out-String) }
+         else { (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File $Subject @wtArgs 2>&1 | Out-String) }
   return [pscustomobject]@{ out = $out; code = $LASTEXITCODE }
 }
 
@@ -570,7 +572,9 @@ Test-Mutant 'M6' 'a declared none suppresses has_open_ask, hiding a question the
 
 # M7 -- drop G13's refusal. The flag becomes optional, so a forgotten `-Ask` silently reverts
 #       that turn to the prose inference and the ratchet comes back one turn at a time.
-$m7 = New-Mutant 'M7' $WriteTurnPath '  if (& $on ''G13'') {' '  if ($false) {'
+$wtNode = $WriteTurnPath -like '*.mjs'
+$m7 = if ($wtNode) { New-Mutant 'M7' $WriteTurnPath "  if (on('G13')) {" '  if (false) {' }
+      else { New-Mutant 'M7' $WriteTurnPath '  if (& $on ''G13'') {' '  if ($false) {' }
 Test-Mutant 'M7' 'write-turn accepts a turn that declares nothing' $m7 {
   $wsm = New-WriteSandbox 'm7'
   [void](New-BodyFile (Join-Path $root 'body.md'))
@@ -582,9 +586,13 @@ Test-Mutant 'M7' 'write-turn accepts a turn that declares nothing' $m7 {
 
 # M8 -- validate the flag but never write the stamp. Every refusal still fires, the author is
 #       told nothing is wrong, and the reader falls back to the prose: green and broken.
-$m8 = New-Mutant 'M8' $WriteTurnPath `
-  '((Add-AskStamp -Body $body.TrimEnd() -Ask $askVal) -replace "`r?`n", $nl)' `
-  '($body.TrimEnd() -replace "`r?`n", $nl)'
+$m8 = if ($wtNode) {
+  New-Mutant 'M8' $WriteTurnPath 'const turn = addAskStamp(netTrimEnd(body), askVal).replace(/\r?\n/g, nl);' 'const turn = netTrimEnd(body).replace(/\r?\n/g, nl);'
+} else {
+  New-Mutant 'M8' $WriteTurnPath `
+    '((Add-AskStamp -Body $body.TrimEnd() -Ask $askVal) -replace "`r?`n", $nl)' `
+    '($body.TrimEnd() -replace "`r?`n", $nl)'
+}
 Test-Mutant 'M8' 'the declaration is validated but never written to the journal' $m8 {
   $wsm = New-WriteSandbox 'm8'
   [void](New-BodyFile (Join-Path $root 'body.md'))

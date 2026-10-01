@@ -17,7 +17,8 @@
   The script is invoked as a CHILD PROCESS per fixture rather than dot-sourced, so what
   is measured is the real script as it will actually run, not a function lifted out of it.
 
-  Usage: powershell -NoProfile -ExecutionPolicy Bypass -File mutcheck-write-turn.ps1
+  Usage: powershell -NoProfile -ExecutionPolicy Bypass -File mutcheck-write-turn.ps1 [-Target <write-turn.ps1|write-turn.mjs>]
+  -Target may name the Node port (item 3); it takes the same arguments and gets the same arms.
   Exit: 0 all assertions hold - 1 a guard is not doing what it claims.
 #>
 [CmdletBinding()]
@@ -48,6 +49,18 @@ if (-not $target) {
   throw ("write-turn.ps1 not found. Tried:`n  " + (($candidates | Where-Object { $_ }) -join "`n  "))
 }
 Write-Host "target: $target"
+
+# Launch the host that actually exists, as the CI-run mutchecks do: Windows PowerShell when this
+# runs under it (the laptop's run-sweeps), the running pwsh otherwise (CI, where ~160 cold 5.1
+# starts did not finish inside an hour).
+$PsHost = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
+
+# The PowerShell script runs under Windows PowerShell exactly as production drives it; the Node
+# port (write-turn.mjs) under node with the same argument list.
+function Invoke-Target([string[]]$a) {
+  if ($target -like '*.mjs') { return (& node $target @a 2>&1 | Out-String) }
+  return (& $PsHost -NoProfile -ExecutionPolicy Bypass -File $target @a 2>&1 | Out-String)
+}
 
 $MOON = [char]::ConvertFromUtf32(0x1F319)
 $tmp  = Join-Path ([IO.Path]::GetTempPath()) ("wt-mut-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -200,10 +213,12 @@ Use the moon first instead.
   # This one genuinely carries BOTH defects and must say so: G4 is defined by there
   # being no heading above the marker, so giving it an anchor to isolate G4 would
   # delete the very condition under test. Asserting both keeps the fixture honest.
+  # `In progress`, not `Proposed`: since #739 a Proposed status with no classified plan trips G19,
+  # which would make this fixture assert a third defect while claiming to test G4.
   @{ name = 'g4-stray-marker';  expect = @('G4', 'G5'); nl = 'LF';   body = @'
 <!-- from: overnight-agent -->
 
-**Status:** Proposed
+**Status:** In progress
 
 **Needs from you:** none
 '@ }
@@ -287,10 +302,9 @@ function Invoke-Guarded([string]$bodyPath, [string[]]$disable) {
   # equal to the guard it was written for, instead of every one of them also reporting G13.
   # G13 itself is proven load-bearing by mutcheck-declared-ask.ps1 (arms W_REQUIRED /
   # W_BADVALUE / W_HANDSTAMP and mutant M7), so nothing is being waived here.
-  $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $target,
-            '-BodyFile', $bodyPath, '-Ask', 'none', '-Validate', '-Json')
-  if ($disable.Count -gt 0) { $args += @('-DisableGuard', ($disable -join ',')) }
-  $raw = & powershell @args 2>&1 | Out-String
+  $a = @('-BodyFile', $bodyPath, '-Ask', 'none', '-Validate', '-Json')
+  if ($disable.Count -gt 0) { $a += @('-DisableGuard', ($disable -join ',')) }
+  $raw = Invoke-Target $a
   try { $o = $raw | ConvertFrom-Json } catch { throw "unparseable output for $bodyPath :`n$raw" }
   return @($o.findings | ForEach-Object { $_.guard } | Sort-Object -Unique)
 }
@@ -407,13 +421,12 @@ function Set-G12State([datetime]$when, $woken = $null) {
   [IO.File]::WriteAllText((Join-Path $g12Home 'state\task-901.json'), ($h | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
 }
 function Invoke-G12([string[]]$disable, [string]$asAuthor = '') {
-  $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $target,
-         '-Id', '901', '-BodyFile', $g12Body, '-JournalDir', $g12Journal, '-Ask', 'none', '-Validate', '-Json')
+  $a = @('-Id', '901', '-BodyFile', $g12Body, '-JournalDir', $g12Journal, '-Ask', 'none', '-Validate', '-Json')
   if ($disable.Count -gt 0) { $a += @('-DisableGuard', ($disable -join ',')) }
   if ($asAuthor) { $a += @('-Author', $asAuthor) }
   $prev = $env:WRITE_TURN_OA_HOME
   $env:WRITE_TURN_OA_HOME = $g12Home
-  try { $raw = & powershell @a 2>&1 | Out-String } finally { $env:WRITE_TURN_OA_HOME = $prev }
+  try { $raw = Invoke-Target $a } finally { $env:WRITE_TURN_OA_HOME = $prev }
   try { $o = $raw | ConvertFrom-Json } catch { throw "unparseable G12 output:`n$raw" }
   return @($o.findings | ForEach-Object { $_.guard } | Sort-Object -Unique)
 }

@@ -30,8 +30,9 @@ export const IMPLEMENTATIONS = {
     decisions: null,
   },
   // write-turn has no subcommand; the key is '' (every mode -- validate, append, json -- goes here).
+  // Item 3: the Node port, driven with the PowerShell parameter names verbatim.
   'write-turn': {
-    '': null,
+    '': { bin: 'plugins/overnight-agent/skills/overnight-agent/write-turn.mjs' },
   },
 };
 
