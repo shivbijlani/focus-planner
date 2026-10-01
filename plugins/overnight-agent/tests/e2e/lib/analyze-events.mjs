@@ -94,9 +94,9 @@ for (const c of list) {
   const masked = norm(JSON.stringify(c.args)).split(sandboxN).join('<sandbox>');
   const skillRel = skillN.startsWith(sandboxN) ? skillN.slice(sandboxN.length).replace(/^\\+/, '') : null;
   let fromSandbox = false;
-  if (/(oa-state|write-turn)\.ps1/.test(masked)) {
+  if (/(oa-state|write-turn)\.(ps1|mjs)/.test(masked)) {
     if (masked.includes(`<sandbox>\\${skillRel}`) || (skillRel && masked.includes(skillRel))) fromSandbox = true;
-    for (const m of masked.matchAll(/[a-z]:\\[^"'\s<>]*?\\(oa-state|write-turn)\.ps1/g)) foreignInvocations.push(m[0]);
+    for (const m of masked.matchAll(/[a-z]:\\[^"'\s<>]*?\\(oa-state|write-turn)\.(ps1|mjs)/g)) foreignInvocations.push(m[0]);
     if (masked.includes('installed-plugins')) foreignInvocations.push('installed-plugins');
   }
   if (fromSandbox) stateInvocations.push(c.id);

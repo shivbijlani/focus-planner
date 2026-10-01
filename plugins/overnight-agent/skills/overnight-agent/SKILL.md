@@ -441,7 +441,7 @@ live on #442: a 15,473-char "human-authored" region of which 15,400 chars were t
 Ownership now stops at the next `## ` heading, so an unstamped turn reads as `unknown` and fails closed.
 The narrow half matters as much: an approval typed under `<!-- from: me -->` with no heading between is
 untouched, so a genuine `approve` still reads as one. **The verdict now means what the table says it
-means** — but it only stays true while every turn stamps itself, which is why `write-turn.ps1` **G7**
+means** — but it only stays true while every turn stamps itself, which is why `write-turn.mjs` **G7**
 refuses to write one that does not, and `unstamped-turn-sweep` reports the ones already on disk.
 
 ⚠️ **An affirmative is SPENT once you have replied beneath it (#465, fixed 2026-09-04).** Approval
@@ -1399,7 +1399,7 @@ an earlier phase or perform any follow-up.
    two turns four minutes apart, describing the same PR, **disagreeing** on both the count and the
    timestamp, and every guard passed because G1–G11 each judge one turn in isolation.
 
-   This is enforced, not conventional: `write-turn.ps1` **G12** refuses a second turn while the
+   This is enforced, not conventional: `write-turn.mjs` **G12** refuses a second turn while the
    previous one is unanswered and inside the wake window. A human reply releases it immediately, and
    so does time, so answering him and writing on a later night both still work.
 
@@ -1490,7 +1490,7 @@ node <repo>\plugins\overnight-agent\checks\issue-shipped.mjs 588 620
 `0` = safe to pick up · `1` = **already shipped, choose something else** · `2` = could not classify
 (**not** a pass — verify by hand) · `3` = bad arguments.
 
-This is enforced, not advisory: `write-turn.ps1` **G15** refuses a turn whose forward-looking line
+This is enforced, not advisory: `write-turn.mjs` **G15** refuses a turn whose forward-looking line
 proposes an already-shipped issue. A turn that *reports* shipped work ("Shipped as PR #631, fixes
 #630") is correct and passes untouched — only proposals are inspected. If he has explicitly asked
 for a second look at something already shipped, pass `-DisableGuard G15`.
@@ -1919,8 +1919,10 @@ See PHASE 0.
   task goes quiet. \*\*Mark handled instruction emails as read\*\* so you don't reprocess them.
 - **Stay in the user's space cleanly.** Never edit above the sentinel. Preserve the user's notes,
   links, and formatting. Write files as UTF-8.
-- **Write every journal turn through `write-turn.ps1`** (next to this skill), never by hand:
-  `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\write-turn.ps1 -Id <ID> -BodyFile <file.md> -Ask <blocking|offer|none>`.
+- **Write every journal turn through `write-turn.mjs`** (next to this skill), never by hand:
+  `node <skill>\write-turn.mjs -Id <ID> -BodyFile <file.md> -Ask <blocking|offer|none>`.
+  (`write-turn.ps1` beside it is the same tool in PowerShell -- same arguments, same refusals -- kept
+  only as a fallback for a host without Node. Use the Node one.)
   **`-Ask` is required (G13)** and is the subject of its own rule below.
   Author the turn body with a **file tool** first, then pass the file. The script validates the body
   and **refuses to write** if it finds any of the five corruption classes that have already destroyed
@@ -1987,7 +1989,7 @@ See PHASE 0.
   <!-- /overnight-agent turn-end -->
   ```
 
-  **Aim under ~800 characters.** `write-turn.ps1` refuses a doc-bound turn over **1,500** (**G9**),
+  **Aim under ~800 characters.** `write-turn.mjs` refuses a doc-bound turn over **1,500** (**G9**),
   and nudges above 800. The ceiling sits above the target on purpose — the first real pointer turn
   was 901 chars, ~250 of which are structure — so it can refuse the shape this replaces (turns on
   #468 averaged **5,305** chars, 21 of 28 too big for a single Telegram message) without ever

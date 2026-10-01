@@ -111,7 +111,7 @@ The rules, all enforced by `lib-issue-comments.mjs` and pinned by `mutcheck-issu
    is a wish.
 
 1. **Stamp every agent-authored issue comment** with `<!-- from: overnight-agent -->` as its
-   **first line** — invisible when rendered, and the same provenance string `write-turn.ps1`
+   **first line** — invisible when rendered, and the same provenance string `write-turn.mjs`
    guard G7 already enforces on journal turns. Use `stampIssueComment()`; it is idempotent.
 2. **Resolve "the agentic comment" by marker — never by count or position.** The contract used to
    be satisfied only because there happened to be exactly one comment, which is a property of the
@@ -300,7 +300,7 @@ invisible until he reads it.
   there is no argument that could target an existing file. Pointing it at a task that already has a
   doc produces a **second** document and silently orphans the binding, which is precisely the
   "which one is current" failure this skill exists to prevent. Use the edit-in-place mechanism below.
-- **Journal turn** — write it through `write-turn.ps1`, never by hand.
+- **Journal turn** — write it through `write-turn.mjs`, never by hand.
 
 ## Editing in place
 

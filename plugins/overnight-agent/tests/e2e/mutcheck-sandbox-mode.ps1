@@ -40,7 +40,7 @@ function Set-Vars([hashtable]$h) {
   foreach ($k in $h.Keys) { [Environment]::SetEnvironmentVariable($k, $h[$k]) }
 }
 function Run([string]$Script, [string[]]$Arguments) {
-  $out = & $psExe -NoProfile -File $Script @Arguments 2>&1
+  $out = if ($Script -like '*.mjs') { & node $Script @Arguments 2>&1 } else { & $psExe -NoProfile -File $Script @Arguments 2>&1 }
   [pscustomobject]@{ code = $LASTEXITCODE; text = (($out | ForEach-Object { "$_" }) -join "`n") }
 }
 function Write-Text([string]$Path, [string]$Text) {
@@ -72,6 +72,7 @@ try {
     COPILOT_HOME = $copilotHome; OVERNIGHT_AGENT_SETTINGS = '' }
   $state = Join-Path $skill 'oa-state.ps1'
   $turn = Join-Path $skill 'write-turn.ps1'
+  $turnNode = Join-Path $skill 'write-turn.mjs'
 
   # 1. UNSET is behaviour-neutral: `gate` reports the default path it resolved, character for character.
   Set-Vars @{ USERPROFILE = $fakeProfile; LOCALAPPDATA = (Join-Path $root 'local'); OVERNIGHT_AGENT_SETTINGS = '' }
@@ -107,6 +108,11 @@ try {
   Check 'tripwire: write-turn refuses an outside journal dir' ($r.code -eq 3 -and $r.text -match 'oa_sandbox_violation') $r.text
   $r = Run $turn @('-Id', '404', '-BodyFile', $body, '-Ask', 'none')
   Check 'override: write-turn resolves its journal inside the planner dir' ($r.text -match [regex]::Escape((Join-Path $planner 'journal'))) $r.text
+  # The Node port (item 3) is what SKILL.md invokes; it must carry the same tripwire.
+  $r = Run $turnNode @('-Id', '1', '-BodyFile', $body, '-Ask', 'none', '-JournalDir', (Join-Path $outside 'journal'))
+  Check 'tripwire: write-turn.mjs refuses an outside journal dir' ($r.code -eq 3 -and $r.text -match 'oa_sandbox_violation') $r.text
+  $r = Run $turnNode @('-Id', '404', '-BodyFile', $body, '-Ask', 'none')
+  Check 'override: write-turn.mjs resolves its journal inside the planner dir' ($r.text -match [regex]::Escape((Join-Path $planner 'journal'))) $r.text
 
   $probe = Join-Path $checks 'mcp-probe.mjs'
   $env:MCP_PROBE_CONFIG = Join-Path $outside 'mcp-config.json'
@@ -134,6 +140,9 @@ try {
   $m2 = Mutant $turn 'if (-not $inside) {' 'if ($false) {'
   $r = Run $m2 @('-Id', '1', '-BodyFile', $body, '-Ask', 'none', '-JournalDir', (Join-Path $outside 'journal'))
   Check 'mutant: write-turn without the assertion is caught' ($r.code -ne 3 -and $r.text -notmatch 'oa_sandbox_violation') $r.text
+  $m3 = Mutant $turnNode 'if (!inside) throw' 'if (false) throw'
+  $r = Run $m3 @('-Id', '1', '-BodyFile', $body, '-Ask', 'none', '-JournalDir', (Join-Path $outside 'journal'))
+  Check 'mutant: write-turn.mjs without the assertion is caught' ($r.code -ne 3 -and $r.text -notmatch 'oa_sandbox_violation') $r.text
 
   Write-Host "mutcheck-sandbox-mode: $passed passed"
 }

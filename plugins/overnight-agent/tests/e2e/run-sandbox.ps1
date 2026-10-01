@@ -89,7 +89,7 @@ function Write-CopilotHome($L, [string]$AppScript, [hashtable]$AppEnv) {
 }
 
 function Assert-SandboxSupport($L, $src) {
-  foreach ($f in @('skills\overnight-agent\oa-state.ps1', 'skills\overnight-agent\write-turn.ps1')) {
+  foreach ($f in @('skills\overnight-agent\oa-state.ps1', 'skills\overnight-agent\write-turn.ps1', 'skills\overnight-agent\write-turn.mjs')) {
     $p = Join-Path $L.PluginDir $f
     if (-not (Test-Path -LiteralPath $p) -or -not (Select-String -LiteralPath $p -Pattern 'OA_SANDBOX_ROOT' -SimpleMatch -Quiet)) {
       throw "ref $($src.ref) ($($src.sha)) predates sandbox mode: $f has no OA_SANDBOX_ROOT tripwire, so a run could write live data. Refusing."
