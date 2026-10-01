@@ -2,103 +2,66 @@
  * StoragePicker — shown on first visit or when no storage is configured.
  * Lets user choose Local Folder, OneDrive, or Google Drive.
  */
-import { useState, useEffect, useCallback } from 'react'
-import { PROVIDERS, getAvailableProviders, getProviderName, setActiveProvider } from './storage/storage.js'
-import { IndexedDbProvider } from './storage/indexeddb-provider.js'
-import { FSAProvider } from './storage/fsa-provider.js'
-import { OneDriveProvider } from './storage/onedrive-provider.js'
-import { GoogleDriveProvider } from './storage/google-drive-provider.js'
-
-function makeProvider(id) {
-  switch (id) {
-    case PROVIDERS.LOCAL_STORAGE: return new IndexedDbProvider()
-    case PROVIDERS.FSA: return new FSAProvider()
-    case PROVIDERS.ONEDRIVE: return new OneDriveProvider()
-    case PROVIDERS.GOOGLE_DRIVE: return new GoogleDriveProvider()
-    default: throw new Error(`Unknown provider: ${id}`)
-  }
-}
+import { useState, useCallback } from 'react'
+import { PROVIDERS, getAvailableProviders, getProviderName } from './storage/storage.js'
+import {
+  createSourceDescriptor,
+  clearPendingSource,
+  getSources,
+  getActiveSourceId,
+  getProvider,
+  makeProviderFor,
+  removeSource,
+  saveSource,
+  setActiveSource,
+  setPendingSource,
+} from './storage/sources.js'
+import { findSavedSourceForProvider } from './storage/sourceRecovery.js'
 
 export function StoragePicker({ onReady }) {
   const [availableProviders] = useState(getAvailableProviders)
   const [connecting, setConnecting] = useState(null) // provider id being connected
   const [error, setError] = useState('')
 
-  const tryConnect = useCallback(async (id, silent = false) => {
+  const tryConnect = useCallback(async (id) => {
     setConnecting(id)
     setError('')
     try {
-      const provider = makeProvider(id)
-      const result = await provider.restore()
-      if (result) {
-        // Restore succeeded (has valid tokens or just completed OAuth)
-        setActiveProvider(provider)
-        localStorage.setItem('fp-storage-provider', id)
-        onReady(id)
-        return
-      }
-      if (id === PROVIDERS.LOCAL_STORAGE) {
-        await provider.restore()
+      const existing = findSavedSourceForProvider(getSources(), id, getActiveSourceId())
+      const source = existing || createSourceDescriptor({ providerType: id })
+      const provider = existing ? getProvider(source.id) : makeProviderFor(source)
+      if (id === PROVIDERS.FSA) {
+        const handle = await provider.pick()
+        if (!handle) { setConnecting(null); return }
         await provider.scaffold()
-        setActiveProvider(provider)
-        onReady(id)
-      } else if (id === PROVIDERS.FSA) {
-        // FSA restore failed — need user to pick
-        setConnecting(null)
-        if (!silent) setError('Could not restore folder access. Please pick a folder.')
+      } else if (id === PROVIDERS.LOCAL_STORAGE) {
+        if (!await provider.restore()) throw new Error('Browser Storage is unavailable')
+        await provider.scaffold()
+      } else {
+        if (!existing) saveSource(source, provider)
+        setPendingSource(source.id, { created: !existing })
+        try {
+          await provider.pick()
+        } catch (error) {
+          clearPendingSource(source.id)
+          if (!existing) removeSource(source.id)
+          throw error
+        }
         return
       }
-      // Cloud provider — no tokens yet, prompt
-      if (!silent) {
-        // Already connecting, will redirect
-      } else {
-        setConnecting(null)
-      }
+      if (!existing) saveSource(source, provider)
+      await setActiveSource(source.id)
+      onReady(id)
     } catch (e) {
       if (!e.message?.includes('Redirecting')) {
         setError(e.message || 'Connection failed')
+        setConnecting(null)
       }
-      setConnecting(null)
     }
   }, [onReady])
 
-  // On mount: check for saved provider or returning from OAuth redirect
-  useEffect(() => {
-    const savedId = localStorage.getItem('fp-storage-provider')
-    const hasODCode = new URLSearchParams(window.location.search).get('code') && sessionStorage.getItem('onedrive_verifier')
-    const hasGDToken = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('state') && sessionStorage.getItem('gd_state')
-
-    const targetId = hasODCode ? PROVIDERS.ONEDRIVE : hasGDToken ? PROVIDERS.GOOGLE_DRIVE : savedId
-    if (targetId) {
-      setTimeout(() => tryConnect(targetId, true), 0)
-    }
-  }, [tryConnect])
-
   const handlePick = async (id) => {
-    setConnecting(id)
-    setError('')
-    // Save before redirect so we can resume
-    localStorage.setItem('fp-storage-provider', id)
-    try {
-      const provider = makeProvider(id)
-      if (id === PROVIDERS.FSA) {
-        const handle = await provider.pick()
-        if (handle) {
-          setActiveProvider(provider)
-          onReady(id)
-        } else {
-          setConnecting(null)
-        }
-      } else {
-        // Cloud — will redirect to OAuth
-        await provider.pick()
-      }
-    } catch (e) {
-      if (!e.message?.includes('Redirecting')) {
-        setError(e.message || 'Connection failed')
-        setConnecting(null)
-      }
-    }
+    await tryConnect(id)
   }
 
   const descriptions = {

@@ -6,15 +6,14 @@ import * as storage from './storage/storage.js'
 import { setActiveProvider, getActiveProvider, PROVIDERS, TARGET_STATUS, getProviderName } from './storage/storage.js'
 import { IndexedDbProvider } from './storage/indexeddb-provider.js'
 import { makeSyncStatusCoalescer } from './storage/syncStatusCoalesce.js'
-import { resumePendingMigration, hasPendingMigration, makeProvider } from './storage/migrate.js'
 import {
-  loadSources, migrateLegacy, getSources, getActiveSourceId, getActiveSource, setActiveSource,
-  addSource, removeSource, renameSource, getProvider, restoreSource,
-  consumePendingAdd, consumePendingReauth,
+  loadSources, getSources, getActiveSourceId, getActiveSource, setActiveSource,
+  addSource, getProvider, restoreSource, getHiddenSources, removeSource,
+  isMultiSourceNoticeDismissed, dismissMultiSourceNotice, setPendingSource,
+  consumePendingSource, clearPendingSource,
 } from './storage/sources.js'
+import { bootstrapSync, reconnectSavedSource, restoreSourceOrFallback } from './storage/sourceRecovery.js'
 import { extractTaskId, parseManagerPriorities, resolveManagerPriority, sortTasksByPriority, isNeededForUrgentTask } from './taskSort.js'
-import { computeMoveSet, computeBrokenLinks, renumberMovedRows, maxTaskIdInRows, retitleJournal } from './moveTask.js'
-import { tagMergedRows, resolveRowSourceId } from './combinedRouting.js'
 // SELF_HEAL_IDS (temporary): renumber runaway/foreign task IDs on load. Safe to
 // delete this import + selfHealIds.js + its call site once all devices healed.
 import { selfHealOutlierIds } from './selfHealIds.js'
@@ -35,7 +34,6 @@ import { StoragePicker } from './StoragePicker.jsx'
 import { isPrioritiesSection } from './focusPlanShared.js'
 import SkillsSection from './SkillsSection.jsx'
 import { parseSkillsSection, hasRenderableSkills } from './skillsSection.js'
-import { patchPerSourceContent } from './combinedViewPatch.js'
 import * as ops from './focusPlanOps.js'
 import { deleteJournalForTask } from './journalDelete.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
@@ -54,7 +52,6 @@ import { clampMenuPosition, menuMaxHeight } from './menuPosition.js'
 import { parseJournalChat, formatChatDay, appendJournalMessage, formatCloseOutComment, insertTodoLine, stripEmptyTodoLines } from './journalChat.js'
 import * as readStateService from './readState/readStateService.js'
 import { enqueueJournalLoad, waitForInitialJournalLoads } from './journalLoadQueue.js'
-import { createJournalInSource } from './journalCreate.js'
 import {
   JOURNAL_EXISTENCE,
   canCreateJournal,
@@ -62,17 +59,14 @@ import {
   journalStateFromResult,
 } from './journalLoadState.js'
 import { sameFileTree } from './fileTreeEqual.js'
-import { joinSourcePath, journalReadStateId } from './sourcePath.js'
+import { journalReadStateId } from './sourcePath.js'
 import { getMissionStatement, loadMissionStatement, setMissionStatement, subscribeMissionStatement } from './missionStatement.js'
 import { SETTINGS_FILE } from './storage/settings.js'
 import {
   TASK_SETTINGS_FILE,
   DEFAULT_TASK_SETTINGS,
-  readTaskSettingsFromSource,
-  writeTaskSettingsToSource,
-  setTaskSettingInSource,
-  moveTaskSettingsEntries,
-  withTaskSettingsMutationLock,
+  readTaskSettings,
+  setTaskSetting,
 } from './storage/taskSettings.js'
 import { gatherDiagnostics, formatDiagnosticsReport } from './storage/diagnostics.js'
 import { AI_SETTINGS_FILE } from './config/aiSettings.js'
@@ -95,34 +89,6 @@ import {
   isDiagEnabled,
 } from '../packages/diagnostics/src/index.js'
 import '../packages/install-prompt/src/styles/install-prompt.css'
-
-// ── Multi-source path helpers ───────────────────────────────────────
-// In single-source mode all paths are plain ("focus-plan.md").
-// In multi-source mode paths are namespaced ("s2::focus-plan.md") so the
-// sidebar tree, selectedFile state and the dispatcher can tell sources apart.
-// The "combined" sourceId is virtual — it has no provider; reads are
-// synthesized from every real source.
-const COMBINED_ID = 'combined'
-
-function splitSourcePath(qualified) {
-  if (!qualified) return { sourceId: null, path: '' }
-  const idx = qualified.indexOf('::')
-  if (idx === -1) return { sourceId: null, path: qualified }
-  return { sourceId: qualified.slice(0, idx), path: qualified.slice(idx + 2) }
-}
-
-function prefixTreePaths(items, sourceId) {
-  return items.map(item => {
-    if (item.type === 'directory') {
-      return {
-        ...item,
-        path: joinSourcePath(sourceId, item.path),
-        children: item.children ? prefixTreePaths(item.children, sourceId) : [],
-      }
-    }
-    return { ...item, path: joinSourcePath(sourceId, item.path) }
-  })
-}
 
 // Context Menu component
 function LinkPickerModal({ currentLinkedId, taskLookup, allTaskIds, onSelect, onCancel }) {
@@ -642,73 +608,6 @@ function CloseOutDialog({ taskName, onClose, onConfirm }) {
   )
 }
 
-// Confirmation dialog shown before moving a task (and possibly its
-// dependency subtree) from the active source to another source.
-function MoveToSourceDialog({ targetName, movingTasks, brokenLinks, onClose, onConfirm }) {
-  const [moving, setMoving] = useState(false)
-
-  const handleMove = async () => {
-    setMoving(true)
-    try {
-      await onConfirm()
-      onClose()
-    } catch (err) {
-      setMoving(false)
-      alert(`Failed to move tasks to ${targetName}: ${err.message || err}`)
-    }
-  }
-
-  return (
-    <div className="dialog-overlay" onClick={moving ? undefined : onClose}>
-      <div className="dialog" onClick={e => e.stopPropagation()}>
-        <h3>📦 Move to {targetName}</h3>
-        {moving ? (
-          <div className="move-in-progress">
-            <span className="spinner" />
-            Moving tasks to {targetName}…
-          </div>
-        ) : (
-          <>
-            <p className="dialog-hint">
-              {movingTasks.length === 1
-                ? 'The following task will be moved:'
-                : `The following ${movingTasks.length} tasks will be moved together:`}
-            </p>
-            <ul className="move-task-list">
-              {movingTasks.map(t => (
-                <li key={t.id}>
-                  <strong>#{t.id}</strong> {t.name || '(no name)'}
-                  {t.isPriority && <span className="move-task-tag"> ⭐ priority</span>}
-                </li>
-              ))}
-            </ul>
-            {brokenLinks.length > 0 && (
-              <>
-                <p className="dialog-hint dialog-warning">
-                  ⚠️ {brokenLinks.length === 1 ? 'This link will break' : `${brokenLinks.length} links will break`} because the linked task is moving to another source:
-                </p>
-                <ul className="move-task-list move-broken-list">
-                  {brokenLinks.map(b => (
-                    <li key={`${b.fromId}->${b.toId}`}>
-                      <strong>#{b.fromId}</strong> {b.fromName || ''} → <strong>#{b.toId}</strong>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-          </>
-        )}
-        <div className="dialog-actions">
-          <button onClick={onClose} disabled={moving}>Cancel</button>
-          <button className="dialog-save-btn" onClick={handleMove} disabled={moving}>
-            {moving ? 'Moving…' : 'Move'}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // The set of priority choices, shared by the inline priority dropdown and the
 // kebab "Change priority" submenu (#346).
 const PRIORITY_CHOICES = [
@@ -794,22 +693,15 @@ function PriorityDropdown({ currentPriority, isNeededForUrgent, onChangePriority
 }
 
 // Add Task Dialog component
-function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sources, defaultSourceId, perSourceTaskLookup }) {
+function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds }) {
   const [task, setTask] = useState('')
   const [priority, setPriority] = useState('🟡')
   const [linkedTask, setLinkedTask] = useState('')
-  const [sourceId, setSourceId] = useState(defaultSourceId || (sources && sources[0]?.id) || '')
   const [showLinkPicker, setShowLinkPicker] = useState(false)
   const dialogRef = useRef(null)
   const inputRef = useRef(null)
 
-  // Resolve the task lookup for the currently-selected source.
-  // In multi-source (Combined) view: use perSourceTaskLookup[sourceId].
-  // In single-source view: fall back to the taskLookup / activeTaskIds props.
-  const effectiveTaskLookup = (perSourceTaskLookup && sourceId && perSourceTaskLookup[sourceId])
-    ? perSourceTaskLookup[sourceId]
-    : (taskLookup || {})
-  // Use activeTaskIds when available (single source view), otherwise fall back to keys of current lookup
+  const effectiveTaskLookup = taskLookup || {}
   const effectiveTaskIds = activeTaskIds || Object.keys(effectiveTaskLookup)
 
   useEffect(() => {
@@ -833,7 +725,7 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
   const handleSubmit = (e) => {
     e.preventDefault()
     if (task.trim()) {
-      onAdd({ task: task.trim(), priority, linkedTask: linkedTask.trim(), section, sourceId })
+      onAdd({ task: task.trim(), priority, linkedTask: linkedTask.trim(), section })
       onClose()
     }
   }
@@ -843,16 +735,6 @@ function AddTaskDialog({ section, onClose, onAdd, taskLookup, activeTaskIds, sou
       <div ref={dialogRef} className="add-task-dialog" data-testid="add-task-dialog">
         <h3>Add Task to {section}</h3>
         <form onSubmit={handleSubmit}>
-          {sources && sources.length > 0 && (
-            <div className="form-field">
-              <label>Source</label>
-              <select value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
-                {sources.map(s => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
           <div className="form-field">
             <label>Task</label>
             <input
@@ -1151,7 +1033,7 @@ function renderIconsWithTooltips(text, keyOffset = 0) {
 }
 
 // Task row component with expandable todos
-function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, loadOrder = 0, onClearSearch }) {
+function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, loadOrder = 0, onClearSearch }) {
   const taskId = extractTaskId(row)
   const readStateId = journalReadStateId(sourceId, taskId)
   const [todosExpanded, setTodosExpanded] = useState(false)
@@ -1170,7 +1052,7 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
   const [telegram, setTelegram] = useState(null)
   const isMobile = useIsMobile()
   
-  const journalProvider = sourceId ? getProvider(sourceId) : getActiveProvider()
+  const journalProvider = getActiveProvider()
   // Docs (#3.2 of plans/docs-app-design.md): the task's catch-up doc, when docs/index.json binds one.
   const taskDoc = useTaskDoc(journalProvider, taskId)
   
@@ -1408,7 +1290,7 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
                     onSelect={(tid) => {
                       const oldLinkedId = linkedId || ''
                       setIsEditingLinkedId(false)
-                      if (tid !== oldLinkedId) onChangeLinkedId(rawLine, tid, row.__sourceId)
+                      if (tid !== oldLinkedId) onChangeLinkedId(rawLine, tid)
                     }}
                     onCancel={() => setIsEditingLinkedId(false)}
                   />
@@ -1452,7 +1334,7 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
 
             const saveEdit = () => {
               if (editText.trim() && editText !== cellValue) {
-                onRenameTask(rawLine, editText.trim(), row.__sourceId)
+                onRenameTask(rawLine, editText.trim())
               }
               setIsEditing(false)
             }
@@ -1500,7 +1382,7 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
                               onClick={(e) => {
                                 e.preventDefault()
                                 readStateService.emitJournalOpened(readStateId)
-                                onNavigate(joinSourcePath(navigationSourceId, journalPath), null, 'chat')
+                                onNavigate(journalPath, null, 'chat')
                               }}
                             >
                               📔
@@ -1625,7 +1507,7 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
                 <PriorityDropdown 
                   currentPriority={cellValue || '⚪'} 
                   isNeededForUrgent={isNeededForUrgent}
-                  onChangePriority={(newPriority) => onChangePriority(rawLine, cellValue, newPriority, row.__sourceId)}
+                  onChangePriority={(newPriority) => onChangePriority(rawLine, cellValue, newPriority)}
                 />
               </td>
             )
@@ -1694,7 +1576,7 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
                         onClick={(e) => {
                           e.preventDefault()
                           readStateService.emitJournalOpened(readStateId)
-                          onNavigate(joinSourcePath(navigationSourceId, journalPath), null, 'chat')
+                          onNavigate(journalPath, null, 'chat')
                         }}
                       >
                         {/* #373: wrap glyph + pip so the ★ hugs the emoji corner (like
@@ -1788,18 +1670,14 @@ function TaskRow({ row, sourceId, navigationSourceId, headers, onNavigate, manag
 
 // Collapsible section component
 // Collapsible section component
-function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onSnoozeTask, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, otherSources, onMoveToSource, onDeferBelow, searchQuery = '', onClearSearch, taskSettings = {}, onToggleTaskSetting }) {
+function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, managerPriorities, onScrollToPriorities, onTaskAction, onMoveToCompleted, onAddTask, onAddClick, onCreateJournal, onChangePriority, onSnoozeTask, onDeleteTask, onPromoteTodo, onRenameTask, onChangeLinkedId, onLinkToAdoBugDb, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, onPromoteToManagerPriority, onRemoveFromManagerPriority, onDeferBelow, searchQuery = '', onClearSearch, taskSettings = {}, onToggleTaskSetting }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const { headers, rows, rawLines } = parseMarkdownTable(tableLines)
-  // Combined view (#39): tag each row with its owning source so destructive
-  // ops route back to the correct source even when two sources share an
-  // identical row text / id. `lineSourceIds` is parallel to the data rows.
-  if (lineSourceIds) tagMergedRows(rows, lineSourceIds)
   const seedCandidateKey = rows
     .map((row) => {
       const taskId = extractTaskId(row)
       if (!taskId) return null
-      return journalReadStateId(row.__sourceId || getActiveSourceId(), taskId)
+      return journalReadStateId(getActiveSourceId(), taskId)
     })
     .filter(Boolean)
     .join('\n')
@@ -1827,7 +1705,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
   const isTaskSection = title === 'Today' || title === 'Deferred'
   if (sortedRows.length === 0 && !showAddDialog && !isTaskSection) return null
   
-  const openTaskPiP = async (taskId, taskName, priority, journalPath, sourceId, navigationSourceId) => {
+  const openTaskPiP = async (taskId, taskName, priority, journalPath) => {
     const pipWindow = await documentPictureInPicture.requestWindow({
       width: 420,
       height: 320,
@@ -1867,7 +1745,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     // Double-click anywhere to jump to journal in main window
     pipWindow.document.body.addEventListener('dblclick', () => {
       if (journalPath) {
-        onNavigate(joinSourcePath(navigationSourceId, journalPath))
+        onNavigate(journalPath)
       }
       window.focus()
     })
@@ -1875,9 +1753,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     // Fetch and show todos if journal exists
     if (journalPath) {
       try {
-        const todos = sourceId
-          ? await storage.getTodosFromSource(sourceId, journalPath)
-          : await storage.getTodos(journalPath)
+        const todos = await storage.getTodos(journalPath)
         if (todos.length > 0) {
           const label = pipWindow.document.createElement('div')
           label.className = 'pip-section-label'
@@ -1911,16 +1787,16 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
 
   const handleContextMenu = (e, rawLine, row, journalPath, taskId, telegram, journalExistence, taskDoc) => {
     const options = []
-    const rowSourceId = row.__sourceId || getActiveSourceId()
+    const rowSourceId = getActiveSourceId()
     const rowReadStateId = journalReadStateId(rowSourceId, taskId)
-    const qualifiedJournalPath = joinSourcePath(row.__sourceId, journalPath)
+    const qualifiedJournalPath = journalPath
     const currentSnoozeUntil = row.snoozeUntil || parseSnoozeUntil(rawLine)
 
     if (title === 'Today') {
       options.push({
         label: 'Defer',
         icon: '📅',
-        action: () => onTaskAction('defer', rawLine, 'Today', 'Deferred', row.__sourceId)
+        action: () => onTaskAction('defer', rawLine, 'Today', 'Deferred')
       })
       // "Defer all below" cut-line action — only when a handler is provided
       // (single-source view) and there are tasks below the clicked row.
@@ -1939,7 +1815,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       options.push({
         label: 'Move to Today',
         icon: '⬆️',
-        action: () => onTaskAction('move', rawLine, 'Deferred', 'Today', row.__sourceId)
+        action: () => onTaskAction('move', rawLine, 'Deferred', 'Today')
       })
     }
 
@@ -1949,15 +1825,14 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
         icon: '💤',
         action: () => setSnoozePicker({
           rawLine,
-          sourceId: row.__sourceId,
-          currentSnoozeUntil,
+                    currentSnoozeUntil,
         }),
       })
       if (currentSnoozeUntil) {
         options.push({
           label: 'Un-snooze',
           icon: '☀️',
-          action: () => onSnoozeTask(rawLine, null, row.__sourceId),
+          action: () => onSnoozeTask(rawLine, null),
         })
       }
     }
@@ -2019,7 +1894,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       options.push({
         label: 'Create Journal',
         icon: '📓',
-        action: () => onCreateJournal(taskId, taskName, row.__sourceId)
+        action: () => onCreateJournal(taskId, taskName)
       })
     }
 
@@ -2030,7 +1905,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
       options.push({
         label: 'Focus Sticky Note',
         icon: '📌',
-        action: () => openTaskPiP(taskId, taskName, priority, journalPath, rowSourceId, row.__sourceId)
+        action: () => openTaskPiP(taskId, taskName, priority, journalPath)
       })
     }
 
@@ -2057,19 +1932,8 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     options.push({
       label: currentAdoLink ? 'Edit external link' : 'External link',
       icon: '🔗',
-      action: () => setAdoLinkDialog({ rawLine, currentUrl: currentAdoLink ? currentAdoLink.url : '', sourceId: row.__sourceId })
+      action: () => setAdoLinkDialog({ rawLine, currentUrl: currentAdoLink ? currentAdoLink.url : '' })
     })
-
-    // Add "Move to {source}" options when there are multiple sources.
-    if (otherSources && otherSources.length > 0 && taskId) {
-      for (const src of otherSources) {
-        options.push({
-          label: `Move to ${src.name}`,
-          icon: '📦',
-          action: () => onMoveToSource(rawLine, row, taskId, src.id),
-        })
-      }
-    }
 
     // #346: change priority straight from the kebab (mobile users complained the
     // slim left tap-bar wasn't discoverable). Opens a second menu/sheet of the
@@ -2083,8 +1947,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
           y: e.clientY,
           rawLine,
           idCell: row['ID'],
-          sourceId: row.__sourceId,
-        }),
+                  }),
       })
     }
 
@@ -2092,17 +1955,17 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
     // — AI-assisted and persistent session — defaulting to off so existing
     // tasks with no recorded settings keep their current (non-AI) behavior.
     if (taskId && onToggleTaskSetting) {
-      const settingsKey = row.__sourceId ? `${row.__sourceId}:${taskId}` : taskId
+      const settingsKey = taskId
       const currentTaskSettings = taskSettings[settingsKey] || DEFAULT_TASK_SETTINGS
       options.push({
         label: `AI-assisted: ${currentTaskSettings.aiAssisted ? 'On' : 'Off'}`,
         icon: '🤖',
-        action: () => onToggleTaskSetting(taskId, { aiAssisted: !currentTaskSettings.aiAssisted }, row.__sourceId),
+        action: () => onToggleTaskSetting(taskId, { aiAssisted: !currentTaskSettings.aiAssisted }),
       })
       options.push({
         label: `Persistent session: ${currentTaskSettings.persistentSession ? 'On' : 'Off'}`,
         icon: '🧷',
-        action: () => onToggleTaskSetting(taskId, { persistentSession: !currentTaskSettings.persistentSession }, row.__sourceId),
+        action: () => onToggleTaskSetting(taskId, { persistentSession: !currentTaskSettings.persistentSession }),
       })
     }
 
@@ -2159,13 +2022,12 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
             </thead>
             <tbody>
               {visibleRows.map((row, i) => {
-                const journalSourceId = row.__sourceId || getActiveSourceId()
+                const journalSourceId = getActiveSourceId()
                 return (
                 <TaskRow
                   key={`${journalSourceId || 'active'}-${extractTaskId(row) || 'row'}-${i}`}
                   row={row} 
                   sourceId={journalSourceId}
-                  navigationSourceId={row.__sourceId}
                   loadOrder={i}
                   headers={headers} 
                   onNavigate={onNavigate}
@@ -2214,7 +2076,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
           options={PRIORITY_CHOICES.map(({ icon, label }) => ({
             icon,
             label,
-            action: () => onChangePriority(priorityMenu.rawLine, priorityMenu.idCell, icon, priorityMenu.sourceId),
+            action: () => onChangePriority(priorityMenu.rawLine, priorityMenu.idCell, icon),
           }))}
           onClose={() => setPriorityMenu(null)}
         />
@@ -2223,7 +2085,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
         <SnoozePickerModal
           currentSnoozeUntil={snoozePicker.currentSnoozeUntil}
           onClose={() => setSnoozePicker(null)}
-          onSave={(date) => onSnoozeTask(snoozePicker.rawLine, date, snoozePicker.sourceId)}
+          onSave={(date) => onSnoozeTask(snoozePicker.rawLine, date)}
         />
       )}
       {showAddDialog && (
@@ -2239,7 +2101,7 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
         <AdoLinkDialog
           currentUrl={adoLinkDialog.currentUrl}
           onClose={() => setAdoLinkDialog(null)}
-          onSave={(adoLink) => onLinkToAdoBugDb(adoLinkDialog.rawLine, adoLink, adoLinkDialog.sourceId)}
+          onSave={(adoLink) => onLinkToAdoBugDb(adoLinkDialog.rawLine, adoLink)}
         />
       )}
     </div>
@@ -2247,28 +2109,11 @@ function TaskSection({ title, tableLines, lineSourceIds, onNavigate, defaultOpen
 }
 
 // Manager Priorities Section
-function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddAndPrioritize, tasksByPriority = {}, taskLookup = {}, title = 'Work Priorities', sectionId = 'work-priorities', otherSources, onMoveToSource, sourceId }) {
+function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddAndPrioritize, tasksByPriority = {}, taskLookup = {}, title = 'Work Priorities', sectionId = 'work-priorities' }) {
   const [isOpen, setIsOpen] = useState(defaultOpen)
   const [isAdding, setIsAdding] = useState(false)
   const [newPriority, setNewPriority] = useState('')
   const [expandedPriorities, setExpandedPriorities] = useState({})
-  const [contextMenu, setContextMenu] = useState(null)
-  const isMobile = useIsMobile()
-
-  const handlePriorityContextMenu = (e, id, taskName) => {
-    e.preventDefault()
-    const options = []
-    if (otherSources && otherSources.length > 0 && onMoveToSource) {
-      for (const src of otherSources) {
-        options.push({
-          label: `Move to ${src.name}`,
-          icon: '📦',
-          action: () => onMoveToSource(null, { Task: taskName }, id, src.id, sourceId),
-        })
-      }
-    }
-    if (options.length > 0) setContextMenu({ x: e.clientX, y: e.clientY, options })
-  }
   const priorities = parseManagerPriorities(lines)
   const priorityList = Object.entries(priorities).sort((a, b) => a[1] - b[1])
 
@@ -2369,7 +2214,7 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
               const taskName = taskLookup[id] || `Task ${id}`
 
               return (
-                <li key={id} className="priority-item" onContextMenu={(e) => handlePriorityContextMenu(e, id, taskName)}>
+                <li key={id} className="priority-item">
                   <div className="priority-item-header">
                     <span className="priority-number">#{num}</span>
                     <span className="priority-name priority-name-clickable" onClick={() => scrollToTask(id)} title={taskName}>
@@ -2445,16 +2290,6 @@ function ManagerPrioritiesSection({ lines, defaultOpen = false, onUpdate, onAddA
             </div>
           )}
         </div>
-      )}
-      {contextMenu && (
-        <ContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          options={contextMenu.options}
-          title="Priority actions"
-          sheet={isMobile}
-          onClose={() => setContextMenu(null)}
-        />
       )}
     </div>
   )
@@ -2738,7 +2573,7 @@ function useCompleteInitialReadStateSeeding(ready) {
   }, [ready])
 }
 
-function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sourceId, search: searchProp, onSearchChange, mission, syncStatus, onDataChanged }) {
+function FocusPlanView({ content, onNavigate, onContentUpdate, sourceId, search: searchProp, onSearchChange, mission, syncStatus, onDataChanged }) {
   const [completedTaskLookup, setCompletedTaskLookup] = useState({})
   // Per-task AI-assisted / persistent-session opt-ins (#379), keyed by task ID.
   // Loaded from task-settings.json independently of plan content since it's a
@@ -2838,7 +2673,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sou
   // remote sync pulls that touch task-settings.json.
   useEffect(() => {
     let cancelled = false
-    const load = () => readTaskSettingsFromSource(sourceId)
+    const load = () => readTaskSettings()
       .then(file => { if (!cancelled) setTaskSettingsMap(file.tasks) })
       .catch((error) => {
         console.error('Failed to load task settings:', error)
@@ -2853,7 +2688,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sou
   // task-settings.json in the active source (single-source view).
   const handleToggleTaskSetting = async (taskId, patch) => {
     try {
-      const next = await setTaskSettingInSource(sourceId, taskId, patch)
+      const next = await setTaskSetting(taskId, patch)
       setTaskSettingsMap(next.tasks)
     } catch (error) {
       console.error('Failed to update task settings:', error)
@@ -3545,238 +3380,6 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sou
     await handleUpdateManagerPriorities(renumbered)
   }
 
-  // ── Move-to-source ────────────────────────────────────────────────
-  // Right-click → "Move to {source}" hands the task (and, for a manager
-  // priority, its full dependency subtree) over to another source's
-  // focus-plan.md. The dialog summarises which tasks are travelling and
-  // which incoming links will break before the move is committed.
-  const [moveDialog, setMoveDialog] = useState(null)
-
-  const findRawLineForTaskId = (id) => {
-    for (const section of taskSections) {
-      for (const line of section.lines) {
-        const trimmed = line.trim()
-        if (!trimmed.startsWith('|')) continue
-        const cells = trimmed.split('|').slice(1, -1).map(c => c.trim())
-        if (cells.length === 0) continue
-        const idCell = cells[0]
-        const localId = idCell.indexOf(',[') !== -1
-          ? idCell.substring(0, idCell.indexOf(',['))
-          : idCell
-        if (localId === String(id)) return { rawLine: trimmed, sectionTitle: section.title }
-      }
-    }
-    return null
-  }
-
-  const handleMoveToSource = (rawLine, row, taskId, targetSourceId) => {
-    if (!targetSourceId || !taskId) return
-    const target = (otherSources || []).find(s => s.id === targetSourceId)
-    if (!target) return
-
-    const moveSet = computeMoveSet(taskId, managerPriorities, linkedIdMap, activeTaskIds)
-    const movingTasks = [...moveSet].map(id => ({
-      id,
-      name: taskLookup[id] || (id === taskId ? (row['Task'] || '') : ''),
-      isPriority: !!managerPriorities[id],
-    }))
-    const brokenLinks = computeBrokenLinks(moveSet, linkedIdMap, taskLookup)
-
-    setMoveDialog({
-      target,
-      taskId,
-      rawLine,
-      movingTasks,
-      brokenLinks,
-    })
-  }
-
-  const performMoveToSource = async ({ target, movingTasks }) => {
-    const sourceId = getActiveSourceId()
-    return withTaskSettingsMutationLock([sourceId, target.id], async () => {
-    const movingIds = new Set(movingTasks.map(t => t.id))
-    // Collect raw lines + journal task IDs in deterministic order.
-    const movingRows = []
-    for (const t of movingTasks) {
-      const found = findRawLineForTaskId(t.id)
-      if (found) movingRows.push({ ...found, taskId: t.id })
-    }
-    if (movingRows.length === 0) return
-
-    // 1. Build the new content for the current source: drop matching rows
-    //    from Today/Deferred and remove any matching Priorities entries.
-    const removalSet = new Set(movingRows.map(r => r.rawLine))
-    const lines = content.split('\n')
-    let inPriorities = false
-    const newLines = []
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (trimmed.startsWith('## ')) {
-        inPriorities = isPrioritiesSection(trimmed.replace(/^##\s+/, ''))
-        newLines.push(line)
-        continue
-      }
-      if (removalSet.has(trimmed)) continue
-      if (inPriorities) {
-        const m = trimmed.match(/^\d+\.\s+(.+)$/)
-        if (m && movingIds.has(m[1].trim())) continue
-      }
-      newLines.push(line)
-    }
-    // Renumber the remaining Priorities entries.
-    const renumbered = []
-    let pInside = false
-    let pIdx = 1
-    for (const line of newLines) {
-      const trimmed = line.trim()
-      if (trimmed.startsWith('## ')) {
-        pInside = isPrioritiesSection(trimmed.replace(/^##\s+/, ''))
-        if (pInside) pIdx = 1
-        renumbered.push(line)
-        continue
-      }
-      if (pInside) {
-        const m = line.match(/^(\s*)\d+\.\s+(.+)$/)
-        if (m) {
-          renumbered.push(`${m[1]}${pIdx++}. ${m[2]}`)
-          continue
-        }
-      }
-      renumbered.push(line)
-    }
-
-    // 2. Build the new content for the target source. We need to read its
-    //    current focus-plan.md, then append moving rows under Today and
-    //    moving manager-priority entries under Priorities.
-    const targetProvider = getProvider(target.id)
-    if (!targetProvider) {
-      alert(`Cannot reach source "${target.name}". Please check that the source is connected.`)
-      return
-    }
-    let targetContent = ''
-    try {
-      targetContent = await targetProvider.read(PLAN_FILE)
-    } catch {
-      // Target may not have a focus-plan yet — start with a minimal one.
-      targetContent =
-        '# Focus Plan\n\n## Today\n\n| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |\n|---|---|------|---------------|-------|-----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Mngr Priority | Added | Wake | Linked ID |\n|---|---|------|---------------|-------|------|-----------|\n'
-    }
-
-    const tLines = targetContent.split('\n')
-    // Renumber moving tasks into the target's own sequence so a foreign ID
-    // never crosses folders (which would inflate the target's numbering).
-    const targetBase = maxTaskIdInRows(targetContent)
-    const targetJournalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(target.id))
-    // Read both sides' task-settings.json up front, before any content is
-    // written. A malformed sidecar on either side aborts the whole move
-    // (nothing has been written yet) rather than silently dropping the
-    // moving tasks' AI-control settings.
-    let sourceSettings
-    let targetSettings
-    try {
-      sourceSettings = await readTaskSettingsFromSource(sourceId)
-      targetSettings = await readTaskSettingsFromSource(target.id)
-    } catch (error) {
-      alert(error.message || 'Could not move task settings.')
-      return
-    }
-    for (const id of Object.keys(targetSettings.tasks)) targetJournalIds.add(Number(id))
-    const { idMap, rows: renumberedRows } = renumberMovedRows(movingRows, targetBase, targetJournalIds)
-    const movedSettings = moveTaskSettingsEntries(sourceSettings, targetSettings, idMap)
-    // Find Today section's insertion point (right after the separator row).
-    let inToday = false
-    let todayInsertIdx = -1
-    for (let i = 0; i < tLines.length; i++) {
-      const trimmed = tLines[i].trim()
-      if (trimmed.startsWith('## ')) {
-        inToday = trimmed.replace(/^##\s+/, '') === 'Today'
-        continue
-      }
-      if (inToday && trimmed.startsWith('|') && trimmed.includes('---')) {
-        todayInsertIdx = i + 1
-        break
-      }
-    }
-    if (todayInsertIdx === -1) {
-      // No Today section in target — append one.
-      tLines.push(
-        '',
-        '## Today',
-        '',
-        '| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |',
-        '|---|---|------|---------------|-------|-----------|',
-      )
-      todayInsertIdx = tLines.length
-    }
-    const rowsToInsert = renumberedRows.map(r => r.newRawLine)
-    tLines.splice(todayInsertIdx, 0, ...rowsToInsert)
-
-    // Append any moving Priorities entries to the target's Priorities section.
-    const priorityIdsMoving = movingTasks.filter(t => t.isPriority).map(t => idMap.get(String(t.id)) || String(t.id))
-    if (priorityIdsMoving.length > 0) {
-      let pStart = -1
-      let pEnd = tLines.length
-      for (let i = 0; i < tLines.length; i++) {
-        const trimmed = tLines[i].trim()
-        if (trimmed.startsWith('## ') && isPrioritiesSection(trimmed.replace(/^##\s+/, ''))) {
-          pStart = i
-        } else if (pStart !== -1 && trimmed.startsWith('## ')) {
-          pEnd = i
-          break
-        }
-      }
-      if (pStart === -1) {
-        tLines.push('', '## Priorities', '')
-        pStart = tLines.length - 2
-        pEnd = tLines.length
-      }
-      let maxNum = 0
-      for (let i = pStart + 1; i < pEnd; i++) {
-        const m = tLines[i].trim().match(/^(\d+)\.\s+/)
-        if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10))
-      }
-      const newEntries = priorityIdsMoving.map((id, i) => `${maxNum + i + 1}. ${id}`)
-      // Insert before pEnd (end of section), trimming trailing blanks.
-      let insertAt = pEnd
-      while (insertAt > pStart + 1 && tLines[insertAt - 1].trim() === '') insertAt--
-      tLines.splice(insertAt, 0, ...newEntries)
-    }
-
-    // 3. Persist metadata and plans before moving journals. Roll back the
-    // target and source settings if the final source-plan write fails.
-    try {
-      await writeTaskSettingsToSource(target.id, movedSettings.target)
-      await targetProvider.write(PLAN_FILE, tLines.join('\n'))
-      await writeTaskSettingsToSource(sourceId, movedSettings.source)
-      await onContentUpdate(renumbered.join('\n'))
-    } catch (error) {
-      await Promise.allSettled([
-        writeTaskSettingsToSource(target.id, targetSettings),
-        targetProvider.write(PLAN_FILE, targetContent),
-        writeTaskSettingsToSource(sourceId, sourceSettings),
-        onContentUpdate(content),
-      ])
-      throw error
-    }
-
-    // 4. Move journals only after both task rows and settings are durable.
-    const activeProvider = getActiveProvider()
-    for (const r of renumberedRows) {
-      const fromPath = `journal/task-${r.oldId}.md`
-      const toPath = `journal/task-${r.newId}.md`
-      try {
-        const journalContent = await activeProvider.read(fromPath)
-        if (typeof journalContent === 'string') {
-          await targetProvider.write(toPath, retitleJournal(journalContent, r.newId))
-          await activeProvider.remove(fromPath)
-        }
-      } catch {
-        // No journal for this task — fine.
-      }
-    }
-    })
-  }
-
   return (
     <div className="focus-plan-view" ref={viewRootRef}>
       {(showSearch || mission || syncStatus) && (
@@ -3841,8 +3444,6 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sou
           adoLookup={adoLookup}
           onPromoteToManagerPriority={handlePromoteToManagerPriority}
           onRemoveFromManagerPriority={handleRemoveFromManagerPriority}
-          otherSources={otherSources}
-          onMoveToSource={handleMoveToSource}
           taskSettings={taskSettings}
           onToggleTaskSetting={handleToggleTaskSetting}
         />
@@ -3862,8 +3463,6 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sou
           taskLookup={taskLookup}
           title="Priorities"
           sectionId="priorities"
-          otherSources={otherSources}
-          onMoveToSource={handleMoveToSource}
         />
       )}
 
@@ -3886,18 +3485,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, otherSources, sou
         />
       )}
 
-      {moveDialog && (
-        <MoveToSourceDialog
-          targetName={moveDialog.target.name}
-          movingTasks={moveDialog.movingTasks}
-          brokenLinks={moveDialog.brokenLinks}
-          onClose={() => setMoveDialog(null)}
-          onConfirm={async () => {
-            const dlg = moveDialog
-            await performMoveToSource(dlg)
-          }}
-        />
-      )}
+
 
     </div>
   )
@@ -4598,8 +4186,8 @@ function TourModal({ onClose }) {
             <li><strong>Today &amp; Deferred</strong> — your top plan lives in <code>{PLAN_FILE}</code>. Add tasks with the <strong>+</strong> button; right-click to defer or complete.</li>
             <li><strong>Priorities</strong> — pin top-of-mind themes in the <em>Priorities</em> section so tasks can be tagged against them.</li>
             <li><strong>Journals</strong> — every task with a journal entry expands to show its TODO / DONE bullets inline.</li>
-            <li><strong>Sources</strong> — open <em>Settings</em> to add more storage sources (e.g. a Work folder + a Personal folder). With multiple sources, a ✨ <strong>Combined</strong> view appears at the top.</li>
-            <li><strong>Sync</strong> — your data is stored in the browser first, then backed up to OneDrive in the background.</li>
+            <li><strong>Storage source</strong> — the board uses one source at a time. Switch among saved sources in <em>Settings</em>.</li>
+            <li><strong>Sync targets</strong> — OneDrive and Google Drive can back up the active source without becoming board sources.</li>
           </ul>
         </div>
         <div className="settings-dialog-section">
@@ -4615,50 +4203,6 @@ function targetStatus(syncStatus, targetId) {
     status: TARGET_STATUS.DISCONNECTED,
     message: '',
   }
-}
-
-// A source is "empty" when it has no journal entries and no task rows in
-// focus-plan.md / focus-plan-completed.md. Scaffold-only counts as empty so
-// users can clean up storage they never actually used. Returns true on any
-// read failure so we never block deletion if the source is unreachable.
-async function isSourceEmpty(provider) {
-  try {
-    const plan = (await provider.read(PLAN_FILE).catch(() => '')) || ''
-    const completed = (await provider.read(COMPLETED_FILE).catch(() => '')) || ''
-    const planRows = countTaskRows(plan)
-    const completedRows = countTaskRows(completed)
-    if (planRows + completedRows > 0) return false
-    // Look for any journal/* entries via the provider's tree.
-    const tree = await provider.getFiles?.().catch(() => null)
-    if (!tree) return true
-    return !treeHasJournals(tree)
-  } catch {
-    return true
-  }
-}
-
-// A "task row" is a markdown table data row that starts with a numeric ID
-// column — i.e. "| 123 | ..." — which is the shape every focus-plan task and
-// completed-task entry uses.
-function countTaskRows(md) {
-  if (!md) return 0
-  let n = 0
-  for (const line of md.split(/\r?\n/)) {
-    if (/^\s*\|\s*\d/.test(line)) n++
-  }
-  return n
-}
-
-function treeHasJournals(items) {
-  for (const item of items || []) {
-    if (item.type === 'directory' && item.name === 'journal') {
-      // Any file inside the journal directory counts.
-      if ((item.children || []).some(c => c.type === 'file')) return true
-    } else if (item.type === 'directory' && item.children) {
-      if (treeHasJournals(item.children)) return true
-    }
-  }
-  return false
 }
 
 // Flatten a provider file tree ({name,type,path,children}) into a sorted list
@@ -4701,14 +4245,12 @@ function SettingsSectionTitle({ id, label, collapsed, onToggle, className = '' }
   )
 }
 
-function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged, onOpenFile }) {
+function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
   const [open, setOpen] = useState(false)
   const [tourOpen, setTourOpen] = useState(false)
   const [installOpen, setInstallOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [emptySources, setEmptySources] = useState({}) // sourceId -> boolean
-  const [removeConfirm, setRemoveConfirm] = useState(null) // { sourceId, name }
   // File manager (Settings → Files): browse + delete files in the active source.
   const [filesOpen, setFilesOpen] = useState(false)
   const [fileList, setFileList] = useState(null) // null = not loaded yet; [] = empty
@@ -4746,144 +4288,70 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged,
   const sources = getSources()
   const activeId = getActiveSourceId()
   const isMulti = sources.length > 1
-  const activePrimary = getActiveSource()?.providerType ?? PROVIDERS.LOCAL_STORAGE
   const fsaSupported = typeof window !== 'undefined' && 'showDirectoryPicker' in window
-  const localStorageSource = sources.find(s => s.providerType === PROVIDERS.LOCAL_STORAGE)
-  const fsaSources = sources.filter(s => s.providerType === PROVIDERS.FSA)
 
-  // Probe each non-active source's emptiness when the dialog opens so we can
-  // show a Remove button on truly empty sources. "Empty" means no task rows in
-  // focus-plan.md and no journal files.
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
-    ;(async () => {
-      const next = {}
-      for (const s of sources) {
-        if (s.id === activeId) continue
-        try {
-          const p = getProvider(s.id)
-          if (!p) continue
-          // Cloud sources are backup targets, not removable here
-          if (s.providerType !== PROVIDERS.LOCAL_STORAGE && s.providerType !== PROVIDERS.FSA) continue
-          next[s.id] = await isSourceEmpty(p)
-        } catch {
-          next[s.id] = false
-        }
-      }
-      if (!cancelled) setEmptySources(next)
-    })()
-    return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, activeId, sources.length])
-
-  const close = () => { setOpen(false); setError(''); setRemoveConfirm(null) }
+  const close = () => { setOpen(false); setError('') }
   const openAgentSettingsFile = () => {
     close()
     onOpenFile?.(AI_SETTINGS_FILE)
   }
 
-  const askRemoveSource = (sourceId, name, isCloud = false, isFolder = false) => {
-    setError('')
-    setRemoveConfirm({ sourceId, name, isCloud, isFolder })
-  }
-
-  const confirmRemoveSource = async () => {
-    if (!removeConfirm) return
-    setBusy(true)
-    try {
-      await removeSource(removeConfirm.sourceId)
-      setRemoveConfirm(null)
-      // Reload so the file tree, active provider, and sources state all settle.
-      window.location.reload()
-    } catch (e) {
-      setError(e.message || 'Could not remove source')
-      setBusy(false)
-    }
-  }
-
-  const addLocalFolder = async () => {
-    setBusy(true)
-    setError('')
-    let createdId = null
-    try {
-      const src = addSource({ providerType: PROVIDERS.FSA })
-      createdId = src.id
-      const p = getProvider(src.id)
-      const handle = await p.pick()
-      if (!handle) {
-        // User cancelled the picker — roll back the orphan source entry.
-        await removeSource(src.id)
-        setBusy(false)
-        return
-      }
-      renameSource(src.id, handle.name)
-      await p.scaffold()
-      await setActiveSource(src.id)
-      window.location.reload()
-    } catch (e) {
-      if (createdId) {
-        try { await removeSource(createdId) } catch { /* ignore */ }
-      }
-      if (!e.message?.toLowerCase().includes('aborted')) {
-        setError(e.message || 'Could not access folder')
-      }
-      setBusy(false)
-    }
-  }
-
-  const changeLocalFolder = async (sourceId) => {
+  const switchSource = async (sourceId) => {
     setBusy(true)
     setError('')
     try {
-      const p = getProvider(sourceId)
-      const handle = await p.pick()
-      if (!handle) { setBusy(false); return }
-      renameSource(sourceId, handle.name)
-      await p.scaffold()
-      if (sourceId !== activeId) await setActiveSource(sourceId)
-      window.location.reload()
-    } catch (e) {
-      if (!e.message?.toLowerCase().includes('aborted')) {
-        setError(e.message || 'Could not access folder')
-      }
-      setBusy(false)
-    }
-  }
-
-  const selectLocalFolder = async (sourceId) => {
-    setBusy(true)
-    setError('')
-    try {
-      const p = getProvider(sourceId)
-      // Try restoring the saved handle. If it's gone (e.g. permission cleared),
-      // fall back to a fresh pick so the user can re-grant access.
-      const restored = await p.restore()
-      if (!restored) {
-        const handle = await p.pick()
+      const source = sources.find(item => item.id === sourceId)
+      const provider = getProvider(sourceId)
+      if (!source || !provider) throw new Error('Storage source is unavailable.')
+      const restored = await provider.restore()
+      if (!restored && source.providerType === PROVIDERS.FSA) {
+        const handle = await provider.pick()
         if (!handle) { setBusy(false); return }
-        renameSource(sourceId, handle.name)
+        await provider.scaffold()
+      } else if (!restored) {
+        setPendingSource(sourceId, { created: false })
+        await provider.pick()
+        return
       }
       await setActiveSource(sourceId)
       window.location.reload()
     } catch (e) {
-      if (!e.message?.toLowerCase().includes('aborted')) {
-        setError(e.message || 'Could not switch folder')
+      if (!e.message?.toLowerCase().includes('aborted') && !e.message?.includes('Redirecting')) {
+        setError(e.message || 'Could not switch storage source')
       }
       setBusy(false)
     }
   }
 
-  const useBrowserStorage = async () => {
+  const chooseProvider = async (providerType) => {
+    const existing = sources.find(source => source.providerType === providerType)
+    if (existing) {
+      await switchSource(existing.id)
+      return
+    }
     setBusy(true)
+    setError('')
     try {
-      const existing = getSources().find(s => s.providerType === PROVIDERS.LOCAL_STORAGE)
-      if (existing) {
-        await setActiveSource(existing.id)
-        window.location.reload()
+      const source = addSource({ providerType })
+      const provider = getProvider(source.id)
+      if (providerType === PROVIDERS.FSA) {
+        const handle = await provider.pick()
+        if (!handle) { setBusy(false); return }
+        await provider.scaffold()
+      } else if (providerType === PROVIDERS.LOCAL_STORAGE) {
+        await provider.restore()
+        await provider.scaffold()
+      } else {
+        setPendingSource(source.id, { created: true })
+        await provider.pick()
+        return
       }
+      await setActiveSource(source.id)
+      window.location.reload()
     } catch (e) {
-      setError(e.message || 'Switch failed')
+      if (!e.message?.toLowerCase().includes('aborted') && !e.message?.includes('Redirecting')) {
+        setError(e.message || 'Could not open storage source')
+      }
       setBusy(false)
     }
   }
@@ -4957,17 +4425,15 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged,
 
   // ── Settings → Files: list + delete files in the active source ──────────
   const activeSourceName = getActiveSource()?.name
-    || getProviderName(activePrimary)
+    || getProviderName(getActiveSource()?.providerType)
     || 'this source'
 
   const loadFileList = async () => {
     setFilesBusy(true)
     setFilesError('')
     try {
-      // Browse via the active-provider singleton (storage.getFiles), which is
-      // the restored instance the rest of the app uses. Going through
-      // getFilesFromSource(activeId) could hand back a fresh, unrestored
-      // provider whose folder handle is null (crashes on `.entries()`).
+      // Browse through the active-provider singleton, which is the restored
+      // instance the rest of the app uses.
       const tree = await storage.getFiles()
       const flat = flattenTree(tree).sort((a, b) => a.path.localeCompare(b.path))
       setFileList(flat)
@@ -5152,142 +4618,53 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged,
 
             {isMulti && (
               <div className={`settings-dialog-section${sectionCollapsed.sources ? ' collapsed' : ''}`}>
-                <SettingsSectionTitle id="sources" label="Sources" collapsed={!!sectionCollapsed.sources} onToggle={toggleSection} />
-                {sources.map(s => {
-                  const icon = PROVIDER_ICONS[s.providerType] || '📁'
-                  const isActive = s.id === activeId
-                  return (
-                    <div key={s.id} className={`storage-footer-source-row${isActive ? ' active' : ''}`}>
-                      <span className="storage-footer-source-icon">{icon}</span>
-                      <span className="storage-footer-source-name">{s.name}</span>
-                      {failedSourceIds.has(s.id) && <span title="Authentication required" style={{color:'#f59e0b'}}>⚠</span>}
-                      {isActive && !failedSourceIds.has(s.id) && <span className="storage-footer-source-active">●</span>}
-                      {!isActive && (
-                        <button
-                          className="sync-target-remove"
-                          style={{ marginLeft: 'auto' }}
-                          onClick={() => askRemoveSource(s.id, s.name, s.providerType === PROVIDERS.ONEDRIVE || s.providerType === PROVIDERS.GOOGLE_DRIVE)}
-                          disabled={busy}
-                          title={`Remove ${s.name}`}
-                          aria-label={`Remove ${s.name}`}
-                        >🗑</button>
-                      )}
-                    </div>
-                  )
-                })}
+                <SettingsSectionTitle id="sources" label="Storage source" collapsed={!!sectionCollapsed.sources} onToggle={toggleSection} />
+                <p className="settings-dialog-subtle">Only one source is open at a time. These saved sources are separate from sync targets and backups.</p>
+                {sources.map(source => (
+                  <div key={source.id} className={`storage-footer-source-row${source.id === activeId ? ' active' : ''}`}>
+                    <span className="storage-footer-source-icon">{PROVIDER_ICONS[source.providerType] || '📁'}</span>
+                    <span className="storage-footer-source-name">{source.name}</span>
+                    {source.id === activeId
+                      ? <span className="storage-footer-source-active">● Active</span>
+                      : <button className="storage-footer-btn sync-target-action" onClick={() => switchSource(source.id)} disabled={busy}>Use {source.name}</button>}
+                  </div>
+                ))}
               </div>
             )}
 
             <div className={`settings-dialog-section${sectionCollapsed.storage ? ' collapsed' : ''}`}>
-              <SettingsSectionTitle id="storage" label="Storage" collapsed={!!sectionCollapsed.storage} onToggle={toggleSection} />
-
-              {/* Browser Storage */}
-              <div className={`sync-target-card${activePrimary === PROVIDERS.LOCAL_STORAGE ? ' active-source' : ''}`}>
+              <SettingsSectionTitle id="storage" label="Storage & backups" collapsed={!!sectionCollapsed.storage} onToggle={toggleSection} />
+              <div className={`sync-target-card${getActiveSource()?.providerType === PROVIDERS.LOCAL_STORAGE ? ' active-source' : ''}`}>
                 <div className="sync-target-main">
                   <span className="sync-target-icon">{PROVIDER_ICONS[PROVIDERS.LOCAL_STORAGE]}</span>
                   <div>
                     <div className="sync-target-name">Browser Storage</div>
-                    <div className="sync-target-status">Saves in this browser. Private, fast, works offline.</div>
+                    <div className="sync-target-status">A storage source saved in this browser.</div>
                   </div>
                 </div>
                 <div className="sync-target-actions">
-                  {activePrimary === PROVIDERS.LOCAL_STORAGE
+                  {getActiveSource()?.providerType === PROVIDERS.LOCAL_STORAGE
                     ? <span className="sync-active-badge">● Active</span>
-                    : <button className="storage-footer-btn sync-target-action" onClick={useBrowserStorage} disabled={busy}>Use this</button>
-                  }
-                  {localStorageSource && localStorageSource.id !== activeId && (
-                    <button
-                      className="sync-target-remove"
-                      onClick={() => askRemoveSource(localStorageSource.id, 'Browser Storage')}
-                      disabled={busy || !emptySources[localStorageSource.id]}
-                      title={emptySources[localStorageSource.id] ? 'Remove Browser Storage' : 'Has data — cannot remove'}
-                      aria-label="Remove Browser Storage"
-                    >🗑</button>
-                  )}
+                    : <button className="storage-footer-btn sync-target-action" onClick={() => chooseProvider(PROVIDERS.LOCAL_STORAGE)} disabled={busy}>Use this</button>}
                 </div>
               </div>
-
-              {/* Local Folders — one card per FSA source, plus an "Add" affordance */}
-              {fsaSupported && fsaSources.map(s => {
-                const isActive = s.id === activeId
-                const provider = getProvider(s.id)
-                const restoredName = provider?.folderName?.() || ''
-                const displayName = restoredName || s.name || 'Local Folder'
-                return (
-                  <div key={s.id} className={`sync-target-card${isActive ? ' active-source' : ''}`}>
-                    <div className="sync-target-main">
-                      <span className="sync-target-icon">📂</span>
-                      <div>
-                        <div className="sync-target-name">{displayName}</div>
-                        <div className="sync-target-status">
-                          {isActive
-                            ? 'Stored as Markdown in this folder'
-                            : 'Local Folder — switch to use'}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="sync-target-actions">
-                      {isActive
-                        ? <span className="sync-active-badge">● Active</span>
-                        : <button className="storage-footer-btn sync-target-action" onClick={() => selectLocalFolder(s.id)} disabled={busy}>Use this</button>
-                      }
-                      <button
-                        className="storage-footer-btn sync-target-action"
-                        onClick={() => changeLocalFolder(s.id)}
-                        disabled={busy}
-                        title="Pick a different folder for this source"
-                      >
-                        Change
-                      </button>
-                      {isActive && (
-                        <button
-                          className="storage-footer-btn sync-target-action"
-                          onClick={() => askRemoveSource(s.id, displayName, false, true)}
-                          disabled={busy}
-                          title="Disconnect this folder — your files stay on disk"
-                        >
-                          Close folder
-                        </button>
-                      )}
-                      {!isActive && (
-                        <button
-                          className="sync-target-remove"
-                          onClick={() => askRemoveSource(s.id, displayName)}
-                          disabled={busy || !emptySources[s.id]}
-                          title={emptySources[s.id] ? 'Disconnect this folder' : 'Has data — cannot remove'}
-                          aria-label={`Remove ${displayName}`}
-                        >🗑</button>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
               {fsaSupported && (
-                <div className="sync-target-card sync-target-add">
+                <div className={`sync-target-card${getActiveSource()?.providerType === PROVIDERS.FSA ? ' active-source' : ''}`}>
                   <div className="sync-target-main">
-                    <span className="sync-target-icon">➕</span>
+                    <span className="sync-target-icon">📂</span>
                     <div>
-                      <div className="sync-target-name">
-                        {fsaSources.length === 0 ? 'Local Folder' : 'Add another local folder'}
-                      </div>
-                      <div className="sync-target-status">
-                        {fsaSources.length === 0
-                          ? 'Store in a folder on this device — readable by AI agents.'
-                          : 'Connect a second folder (e.g. Work + Personal).'}
-                      </div>
+                      <div className="sync-target-name">Local Folder</div>
+                      <div className="sync-target-status">A storage source in a folder on this device.</div>
                     </div>
                   </div>
                   <div className="sync-target-actions">
-                    <button
-                      className="storage-footer-btn sync-target-action"
-                      onClick={addLocalFolder}
-                      disabled={busy}
-                    >
-                      {busy ? '...' : fsaSources.length === 0 ? 'Choose folder' : 'Add folder'}
-                    </button>
+                    {getActiveSource()?.providerType === PROVIDERS.FSA
+                      ? <span className="sync-active-badge">● Active</span>
+                      : <button className="storage-footer-btn sync-target-action" onClick={() => chooseProvider(PROVIDERS.FSA)} disabled={busy}>Choose folder</button>}
                   </div>
                 </div>
               )}
+              <p className="settings-dialog-subtle">The cloud options below are sync targets and backups, not additional board sources.</p>
 
               {/* AI agent collapsible */}
               {fsaSupported && (
@@ -5540,979 +4917,16 @@ function StorageFooter({ syncStatus, failedSourceIds = new Set(), onDataChanged,
         document.body
       )}
 
-      {removeConfirm && createPortal(
-        <div className="dialog-overlay" onClick={() => !busy && setRemoveConfirm(null)}>
-          <div className="settings-dialog" onClick={e => e.stopPropagation()} style={{ maxWidth: '420px' }}>
-            <div className="settings-dialog-header">
-              <h3>{removeConfirm.isFolder ? `Close ${removeConfirm.name}?` : `Remove ${removeConfirm.name}?`}</h3>
-              <button className="settings-dialog-close" onClick={() => !busy && setRemoveConfirm(null)} disabled={busy}>✕</button>
-            </div>
-            <div className="settings-dialog-section">
-              <div className="storage-footer-note">
-                {removeConfirm.isCloud
-                  ? 'Your local data is safe. This removes the cloud connection; you can reconnect any time by signing in again.'
-                  : removeConfirm.isFolder
-                  ? 'Your files stay on disk — nothing is deleted. The planner disconnects this folder and resets to empty browser storage, like a fresh start. You can re-open the folder any time.'
-                  : 'This storage is empty — there are no tasks or journals to lose. You can add it again later.'}
-              </div>
-              <div className="storage-footer-actions">
-                <button className="storage-footer-btn secondary" onClick={() => setRemoveConfirm(null)} disabled={busy}>Cancel</button>
-                <button className="storage-footer-btn danger" onClick={confirmRemoveSource} disabled={busy}>
-                  {busy
-                    ? (removeConfirm.isFolder ? 'Closing…' : 'Removing...')
-                    : (removeConfirm.isFolder ? 'Close folder' : 'Remove')}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+
     </>
   )
 }
-// Combined Focus Plan view — same UI as FocusPlanView but synthesised
-// from every source's focus-plan.md. Each rendered task row remembers
-// which source it came from so right-click actions, drag-to-defer, edits
-// and deletes can be routed back to the correct source's storage.
-//
-// Per-source Priorities sections are rendered separately (so numbering
-// from different sources doesn't collide); each one is fully editable
-// and writes back to its source.
-function CombinedFocusPlanView({ sources, onNavigate, onDataChanged }) {
-  const [perSource, setPerSource] = useState(null) // [{ source, content, sections }]
-  const [completedTaskLookup, setCompletedTaskLookup] = useState({})
-  // Per-task AI-controls settings (#379), keyed per source since each row's
-  // task belongs to a specific registered source (task-settings.json lives
-  // alongside that source's planner.md, not a single "active" source).
-  const [taskSettingsBySource, setTaskSettingsBySource] = useState({})
-  const [bridgeDialog, setBridgeDialog] = useState(null)
-  const [closeOutDialog, setCloseOutDialog] = useState(null)
-  const [error, setError] = useState('')
-  const [reloadKey, setReloadKey] = useState(0)
-  const [addDialog, setAddDialog] = useState(null) // { section }
-  const [moveDialog, setMoveDialog] = useState(null)
-  const snoozeSweepInFlightRef = useRef(false)
-  const [snoozeTimerNonce, setSnoozeTimerNonce] = useState(0)
-
-  const sweepAllSourceSnoozes = useCallback(async () => {
-    if (snoozeSweepInFlightRef.current) return
-    snoozeSweepInFlightRef.current = true
-    try {
-      let changed = false
-      await Promise.all(sources.map(async (s) => {
-        try {
-          const text = await storage.readFromSource(s.id, PLAN_FILE)
-          const nextContent = ops.opApplySnoozeTransitions(text, getTodayDateString())
-          if (nextContent !== text) {
-            await storage.writeToSource(s.id, PLAN_FILE, nextContent)
-            changed = true
-          }
-        } catch { /* ignore sources that are temporarily unavailable */ }
-      }))
-      if (changed) setReloadKey(k => k + 1)
-    } finally {
-      snoozeSweepInFlightRef.current = false
-    }
-  }, [sources])
-  useCompleteInitialReadStateSeeding(perSource !== null)
-
-  // Reload all sources' focus-plan.md content.
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        const results = await Promise.all(sources.map(async (s) => {
-          try {
-            const text = await storage.readFromSource(s.id, PLAN_FILE)
-            const migrated = migratePrioritiesSections(text) ?? text
-            // SELF_HEAL_IDS (temporary): renumber runaway/foreign outlier IDs
-            // for this source, writing back + renaming journals if anything changed.
-            let healed = migrated
-            try {
-              const journalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(s.id))
-              const res = selfHealOutlierIds(migrated, { journalIds })
-              if (res.changed) {
-                await storage.writeToSource(s.id, PLAN_FILE, res.content)
-                for (const [oldId, newId] of res.idMap) {
-                  const fromPath = `journal/task-${oldId}.md`
-                  try {
-                    const jc = await storage.readFromSource(s.id, fromPath)
-                    if (typeof jc === 'string') {
-                      await storage.writeToSource(s.id, `journal/task-${newId}.md`, jc.replace(/^# Task \d+:/, `# Task ${newId}:`))
-                      await storage.removeFromSource(s.id, fromPath)
-                    }
-                  } catch { /* no journal — fine */ }
-                }
-                healed = res.content
-              }
-            } catch { /* healing is best-effort */ }
-            const snoozeContent = ops.opApplySnoozeTransitions(healed, getTodayDateString())
-            if (snoozeContent !== healed) {
-              await storage.writeToSource(s.id, PLAN_FILE, snoozeContent)
-            }
-            return { source: s, content: snoozeContent, sections: parseFocusPlan(snoozeContent) }
-          } catch {
-            return { source: s, content: '', sections: [] }
-          }
-        }))
-        if (!cancelled) setPerSource(results)
-      } catch (e) {
-        if (!cancelled) setError(e.message || String(e))
-      }
-    })()
-    return () => { cancelled = true }
-  }, [sources, reloadKey])
-
-  useEffect(() => {
-    let debounceTimer = null
-    const scheduleSweep = () => {
-      clearTimeout(debounceTimer)
-      debounceTimer = setTimeout(() => {
-        if (document.visibilityState && document.visibilityState !== 'visible') return
-        sweepAllSourceSnoozes()
-      }, 150)
-    }
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') scheduleSweep()
-    }
-    window.addEventListener('focus', scheduleSweep)
-    document.addEventListener('visibilitychange', onVisibilityChange)
-    return () => {
-      clearTimeout(debounceTimer)
-      window.removeEventListener('focus', scheduleSweep)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
-    }
-  }, [sweepAllSourceSnoozes])
-
-  useEffect(() => {
-    if (!perSource) return
-    const delays = perSource
-      .map(({ content }) => ops.nextWakeTimeoutMs(content, new Date()))
-      .filter(delay => delay !== null)
-    if (delays.length === 0) return
-    const timer = setTimeout(() => {
-      Promise.resolve(sweepAllSourceSnoozes()).finally(() => setSnoozeTimerNonce(k => k + 1))
-    }, Math.min(...delays))
-    return () => clearTimeout(timer)
-  }, [perSource, snoozeTimerNonce, sweepAllSourceSnoozes])
-
-  // Pull completed-task labels from every source so linked-id chains can
-  // resolve names that have already been archived.
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      const merged = {}
-      await Promise.all(sources.map(async (s) => {
-        try {
-          const text = await storage.readFromSource(s.id, COMPLETED_FILE)
-          if (!text) return
-          const sections = parseFocusPlan(text)
-          for (const sec of sections) Object.assign(merged, buildTaskIdLookup(sec.lines))
-        } catch { /* ignore */ }
-      }))
-      if (!cancelled) setCompletedTaskLookup(merged)
-    })()
-    return () => { cancelled = true }
-  }, [sources, reloadKey])
-
-  // Load per-task AI-controls settings from every source, and keep them
-  // fresh across remote sync pulls that touch any source's task-settings.json.
-  useEffect(() => {
-    let cancelled = false
-    const load = () => Promise.all(sources.map(async (s) => {
-      try {
-        const file = await readTaskSettingsFromSource(s.id)
-        return [s.id, file.tasks]
-      } catch (error) {
-        console.error(`Failed to load task settings for source ${s.id}:`, error)
-        return [s.id, {}]
-      }
-    })).then(entries => {
-      if (!cancelled) setTaskSettingsBySource(Object.fromEntries(entries))
-    })
-    load()
-    const unsub = storage.onLocalChange((path) => { if (path === TASK_SETTINGS_FILE) load() })
-    return () => { cancelled = true; unsub() }
-  }, [sources, reloadKey])
-
-  // Toggle one per-task AI-controls opt-in, routed to the task's owning
-  // source (falls back to the row-supplied sourceId, then sourceForTask).
-  const handleToggleTaskSetting = async (taskId, patch, sourceId) => {
-    const sid = sourceId || sourceForTask(taskId)
-    if (!sid) return
-    try {
-      const next = await setTaskSettingInSource(sid, taskId, patch)
-      setTaskSettingsBySource(prev => ({ ...prev, [sid]: next.tasks }))
-    } catch (error) {
-      console.error('Failed to update task settings:', error)
-      alert(error.message || 'Could not update task settings.')
-    }
-  }
-
-  if (error) return <div className="placeholder"><h1>✨ Combined</h1><p>Failed to load: {error}</p></div>
-  if (!perSource) return <div className="placeholder"><h1>✨ Combined</h1><p>Loading…</p></div>
-
-  // ── Build merged tables and source lookup maps ──────────────────────
-  // For each task section (Today / Deferred), concatenate the body lines
-  // from every source. We keep the original raw rows untouched so:
-  //   - Task IDs render exactly as they do in the per-source view.
-  //   - Right-click handlers can match by raw line text and route the
-  //     write back to the right source.
-  //
-  // Note: TaskSection works off table-shaped `lines` (header row,
-  // separator row, then data rows). We re-emit a fresh header from the
-  // first source that provides one so the columns line up.
-
-  const lineToSource = new Map() // rawLine -> sourceId
-  const taskIdToSource = new Map() // taskId -> sourceId (for priority operations)
-
-  const buildMergedSection = (title) => {
-    let header = null
-    let separator = null
-    const dataLines = []
-    const dataSourceIds = []
-    for (const { source, sections } of perSource) {
-      const sec = sections.find(s => s.title === title)
-      if (!sec) continue
-      for (const line of sec.lines) {
-        const trimmed = line.trim()
-        if (!trimmed.startsWith('|')) continue
-        if (trimmed.includes('---')) {
-          if (!separator) separator = line
-          continue
-        }
-        const cells = trimmed.split('|').slice(1, -1).map(c => c.trim())
-        if (cells.length === 0) continue
-        if (cells[0] === 'ID' || cells[0] === '#') {
-          if (!header) header = line
-          continue
-        }
-        dataLines.push(line)
-        dataSourceIds.push(source.id)
-        lineToSource.set(trimmed, source.id)
-        const idCell = cells[0]
-        const localId = idCell.indexOf(',[') !== -1
-          ? idCell.substring(0, idCell.indexOf(',[')).trim()
-          : idCell
-        if (localId) taskIdToSource.set(localId, source.id)
-      }
-    }
-    if (!header) header = title === 'Deferred'
-      ? '| ID | 🎯 | Task | Priority | Added | Wake | Linked ID |'
-      : '| ID | 🎯 | Task | Priority | Added | Linked ID |'
-    if (!separator) separator = title === 'Deferred'
-      ? '|---|---|------|----------|-------|------|-----------|'
-      : '|---|---|------|----------|-------|-----------|'
-    // `sourceIds` is parallel to the data rows (not the header/separator) so the
-    // combined view can tag each rendered row with its owning source (#39).
-    return { lines: [header, separator, ...dataLines], sourceIds: dataSourceIds }
-  }
-
-  const todayMerged = buildMergedSection('Today')
-  const deferredMerged = buildMergedSection('Deferred')
-  const todaySectionLines = todayMerged.lines
-  const todaySourceIds = todayMerged.sourceIds
-  const deferredSectionLines = deferredMerged.lines
-  const deferredSourceIds = deferredMerged.sourceIds
-
-  // Build merged lookups for resolveManagerPriority / linked tasks.
-  // taskLookup is many-to-one (taskId → name). On collision we keep the
-  // first source's entry — combined view doesn't try to disambiguate
-  // identical IDs across sources (vanishingly rare in practice).
-  const currentTaskLookup = {}
-  const taskPriorityLookup = {}
-  const linkedIdMap = {}
-  const adoLookup = {}
-  // Per-source task lookups for the Add Task dialog's linked-task search.
-  const perSourceTaskLookup = {}
-  for (const { source, sections } of perSource) {
-    const srcLookup = {}
-    for (const sec of sections) {
-      if (sec.title !== 'Today' && sec.title !== 'Deferred') continue
-      Object.assign(currentTaskLookup, buildTaskIdLookup(sec.lines))
-      Object.assign(taskPriorityLookup, buildTaskPriorityLookup(sec.lines))
-      Object.assign(srcLookup, buildTaskIdLookup(sec.lines))
-      Object.assign(linkedIdMap, buildLinkedIdMap(sec.lines))
-      Object.assign(adoLookup, buildAdoLookup(sec.lines))
-    }
-    perSourceTaskLookup[source.id] = srcLookup
-  }
-  const taskLookup = { ...completedTaskLookup, ...currentTaskLookup }
-  const activeTaskIds = Object.keys(currentTaskLookup)
-
-  // ── Source-routing helpers ──────────────────────────────────────────
-  // Each handler below identifies the source from either the raw line
-  // text or a task id, reads that source's current content, applies the
-  // pure operation from focusPlanOps, and writes back via writeToSource.
-
-  const sourceForLine = (rawLine) => lineToSource.get(rawLine.trim())
-  const sourceForTask = (taskId) => taskIdToSource.get(String(taskId))
-  // #39: prefer the row's own source tag over the ambiguous text/id lookup so
-  // destructive ops route to the correct source when two folders collide.
-  const sourceForRow = (row, rawLine) => resolveRowSourceId(row, rawLine, lineToSource)
-
-  const applyOp = async (sourceId, opFn) => {
-    if (!sourceId) return
-    const text = await storage.readFromSource(sourceId, PLAN_FILE)
-    const result = opFn(text)
-    const newContent = typeof result === 'string' ? result : result.content
-    if (newContent === text) return
-    await storage.writeToSource(sourceId, PLAN_FILE, newContent)
-    // Reflect the write immediately so the board re-renders now, instead of
-    // waiting on the reloadKey re-read below — that re-read hits the provider
-    // directly and can return stale content right after a write, which left the
-    // board stale until a full page reload (#411). The reloadKey bump still
-    // reconciles every source from storage in the background.
-    setPerSource(prev => patchPerSourceContent(prev, sourceId, newContent, parseFocusPlan))
-    setReloadKey(k => k + 1)
-  }
-
-  // ── Today / Deferred handlers ──────────────────────────────────────
-
-  const handleTaskAction = (action, rawLine, fromSection, toSection, sourceIdHint) =>
-    applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opMoveBetweenSections(c, rawLine, fromSection, toSection))
-
-  const handleChangePriority = (rawLine, oldPriority, newPriority, sourceIdHint) =>
-    applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opChangePriority(c, rawLine, oldPriority, newPriority))
-
-  const handleSnoozeTask = (rawLine, snoozeUntil, sourceIdHint) =>
-    applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opSnoozeTask(c, rawLine, snoozeUntil))
-
-  const handleRenameTask = (rawLine, newTaskName, sourceIdHint) =>
-    applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opRenameTask(c, rawLine, newTaskName))
-
-  const handleChangeLinkedId = (rawLine, newLinkedId, sourceIdHint) =>
-    applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opChangeLinkedId(c, rawLine, newLinkedId))
-
-  const handleLinkToAdoBugDb = (rawLine, adoLink, sourceIdHint) =>
-    applyOp(sourceIdHint || sourceForLine(rawLine), c => ops.opLinkToAdoBugDb(c, rawLine, adoLink))
-
-  const handleDeleteTask = async (rawLine, fromSection, journalPath, taskId, row) => {
-    const sid = sourceForRow(row, rawLine)
-    if (!sid) return
-
-    // Check for incoming links across ALL sources to bridge
-    if (taskId && linkedIdMap) {
-      const incoming = []
-      for (const [fId, tId] of Object.entries(linkedIdMap)) {
-        if (tId === String(taskId)) {
-          incoming.push({ fromId: fId, fromName: taskLookup[fId] || '' })
-        }
-      }
-      if (incoming.length > 0) {
-        const idCol = row['ID']
-        const nextIdRawValue = (typeof idCol === 'object' && idCol.linkedId) ? idCol.linkedId : ''
-        const nextIdNum = nextIdRawValue.match(/(\d+)/)?.[1]
-        setBridgeDialog({
-          incomingLinks: incoming,
-          removedTaskName: row['Task'] || `Task ${taskId}`,
-          nextTaskId: nextIdNum,
-          nextTaskName: nextIdNum ? taskLookup[nextIdNum] : '',
-          onConfirm: async () => {
-            // Apply bridge to ALL sources because linkers could be anywhere
-            await Promise.all(sources.map(async (src) => {
-              const text = await storage.readFromSource(src.id, PLAN_FILE)
-              const bridged = ops.opBridgeLinks(text, taskId, nextIdRawValue)
-              if (bridged !== text) {
-                await storage.writeToSource(src.id, PLAN_FILE, bridged)
-              }
-            }))
-            await applyOp(sid, c => ops.opDeleteTask(c, rawLine))
-            if (taskId) recordDeletedId(taskId)
-            await deleteJournalForTask({
-              journalPath,
-              taskId,
-              checkJournal: (id) => storage.checkJournalFromSource(sid, id),
-              remove: (p) => storage.removeFromSource(sid, p),
-              onError: (e) => console.error('Failed to delete journal:', e),
-            })
-            setBridgeDialog(null)
-            setReloadKey(k => k + 1)
-          }
-        })
-        return
-      }
-    }
-
-    await applyOp(sid, c => ops.opDeleteTask(c, rawLine))
-    if (taskId) recordDeletedId(taskId)
-    // Resolved at delete time, not from lazily-loaded row state (#185).
-    await deleteJournalForTask({
-      journalPath,
-      taskId,
-      checkJournal: (id) => storage.checkJournalFromSource(sid, id),
-      remove: (p) => storage.removeFromSource(sid, p),
-      onError: (e) => console.error('Failed to delete journal:', e),
-    })
-  }
-
-  const handlePromoteTodo = async (todoText, parentTaskId) => {
-    // Promote into the same source as the parent task.
-    const sid = sourceForTask(parentTaskId) || sources[0]?.id
-    if (!sid) return
-    const journalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(sid))
-    for (const id of Object.keys(taskSettingsBySource[sid] || {})) journalIds.add(Number(id))
-    await applyOp(sid, c => ops.opPromoteTodoToTask(c, todoText, parentTaskId, journalIds))
-  }
-
-  const handleAdd = async ({ task, priority, linkedTask, section, sourceId }) => {
-    if (!sourceId) return
-    const journalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(sourceId))
-    for (const id of Object.keys(taskSettingsBySource[sourceId] || {})) journalIds.add(Number(id))
-    await applyOp(sourceId, c => ops.opAddTask(c, { task, priority, linkedTask, section }, journalIds))
-  }
-
-  const handleCreateJournal = async (taskId, taskName, sourceId) => {
-    const sid = sourceId
-    if (!sid) return
-    try {
-      const journalPath = await createJournalInSource(storage, sid, taskId, taskName)
-      // Refresh the sidebar tree so the newly created journal appears in the
-      // hamburger pane immediately (task #371).
-      await onDataChanged?.()
-      onNavigate(joinSourcePath(sid, journalPath))
-    } catch (e) {
-      console.error('Failed to create journal:', e)
-    }
-  }
-
-  const handleMoveToCompleted = async (rawLine, row, fromSection) => {
-    const sid = sourceForRow(row, rawLine)
-    if (!sid) return
-    const taskId = extractTaskId(row)
-    // Show the close-out dialog first; completion (and the link-bridge check)
-    // proceeds only after the user confirms.
-    setCloseOutDialog({
-      taskName: row['Task'] || (taskId ? `Task ${taskId}` : 'this task'),
-      onConfirm: async (outcome, comment) => {
-        setCloseOutDialog(null)
-        await runCompletionCombined(rawLine, row, fromSection, sid, taskId, { outcome, comment })
-      }
-    })
-  }
-
-  const runCompletionCombined = async (rawLine, row, fromSection, sid, taskId, closeout) => {
-    // Check for incoming links across ALL sources to bridge
-    if (taskId && linkedIdMap) {
-      const incoming = []
-      for (const [fId, tId] of Object.entries(linkedIdMap)) {
-        if (tId === String(taskId)) {
-          incoming.push({ fromId: fId, fromName: taskLookup[fId] || '' })
-        }
-      }
-      if (incoming.length > 0) {
-        const idCol = row['ID']
-        const nextIdRawValue = (typeof idCol === 'object' && idCol.linkedId) ? idCol.linkedId : ''
-        const nextIdNum = nextIdRawValue.match(/(\d+)/)?.[1]
-        setBridgeDialog({
-          incomingLinks: incoming,
-          removedTaskName: row['Task'] || `Task ${taskId}`,
-          nextTaskId: nextIdNum,
-          nextTaskName: nextIdNum ? taskLookup[nextIdNum] : '',
-          onConfirm: async () => {
-            // Apply bridge to ALL sources because linkers could be anywhere
-            await Promise.all(sources.map(async (src) => {
-              const text = await storage.readFromSource(src.id, PLAN_FILE)
-              const bridged = ops.opBridgeLinks(text, taskId, nextIdRawValue)
-              if (bridged !== text) {
-                await storage.writeToSource(src.id, PLAN_FILE, bridged)
-              }
-            }))
-            setBridgeDialog(null)
-            await performMoveToCompletedCombined(rawLine, row, fromSection, sid, closeout)
-          }
-        })
-        return
-      }
-    }
-    await performMoveToCompletedCombined(rawLine, row, fromSection, sid, closeout)
-  }
-
-  const performMoveToCompletedCombined = async (rawLine, row, fromSection, sid, closeout = {}) => {
-    const taskId = extractTaskId(row)
-    const taskName = row['Task'] || ''
-    const priority = row['Work Priority'] || row['Mngr Priority'] || row['Priority'] || '-'
-    let todoItems = []
-    if (taskId) {
-      try {
-        const j = await storage.checkJournalFromSource(sid, taskId)
-        if (j.exists) {
-          const todos = await storage.getTodosFromSource(sid, j.path)
-          todoItems = todos.map(t => t.text)
-        }
-      } catch (e) { console.error('Failed to fetch journal todos:', e) }
-    }
-    const completedRow = ops.buildCompletedRow({ taskId, taskName, priority, todoItems, outcome: closeout.outcome })
-    // Write the focus-plan deletion and the completed-plan append in
-    // sequence against the same source.
-    const focusText = await storage.readFromSource(sid, PLAN_FILE)
-    const removal = ops.opRemoveTaskFromFocusPlanResult(focusText, rawLine, fromSection)
-    if (!removal.removed) {
-      // The source row could not be located, so completing here would append to
-      // the completed board while leaving the task active — the "on both boards"
-      // corruption. Fail loudly and change nothing instead.
-      console.error('Move to completed aborted: task row not found on the plan board', { taskId, fromSection })
-      alert('Could not complete this task: its row was not found on the board. Reload and try again.')
-      return
-    }
-    const newFocus = removal.content
-    let completedText = ''
-    try { completedText = await storage.readFromSource(sid, COMPLETED_FILE) } catch { /* file may not exist */ }
-    const newCompleted = ops.opAppendToCompleted(completedText, completedRow, { taskId })
-    await storage.writeToSource(sid, COMPLETED_FILE, newCompleted)
-    await storage.writeToSource(sid, PLAN_FILE, newFocus)
-    // Reflect the completion immediately so the row disappears from the board
-    // now, instead of waiting on the async reloadKey re-read below (#411 — same
-    // stale-render class as the link path in applyOp). The reload still
-    // reconciles every source from storage in the background.
-    setPerSource(prev => patchPerSourceContent(prev, sid, newFocus, parseFocusPlan))
-
-    // Write the optional close-out comment into the task journal.
-    const closeOutText = formatCloseOutComment(closeout.outcome, closeout.comment)
-    if (taskId && closeOutText) {
-      try {
-        const j = await storage.checkJournalFromSource(sid, taskId)
-        if (j.exists) {
-          const journalContent = await storage.readFromSource(sid, j.path)
-          await storage.writeToSource(sid, j.path, appendJournalMessage(journalContent, closeOutText))
-        }
-      } catch (e) { console.error('Failed to write close-out to journal:', e) }
-    }
-    setReloadKey(k => k + 1)
-  }
-
-  // Right-click → "Move to {source}" works the same as in FocusPlanView,
-  // except that the "from" source is determined by the row's source map
-  // rather than the active provider.
-  const findRawLineForTaskIdInSource = (sourceId, id) => {
-    const entry = perSource.find(p => p.source.id === sourceId)
-    if (!entry) return null
-    for (const sec of entry.sections) {
-      if (sec.title !== 'Today' && sec.title !== 'Deferred') continue
-      for (const line of sec.lines) {
-        const trimmed = line.trim()
-        if (!trimmed.startsWith('|')) continue
-        const cells = trimmed.split('|').slice(1, -1).map(c => c.trim())
-        if (cells.length === 0) continue
-        const idCell = cells[0]
-        const localId = idCell.indexOf(',[') !== -1
-          ? idCell.substring(0, idCell.indexOf(',['))
-          : idCell
-        if (localId === String(id)) return { rawLine: trimmed, sectionTitle: sec.title }
-      }
-    }
-    return null
-  }
-
-  const handleMoveToSource = (rawLine, row, taskId, targetSourceId, explicitFromSourceId = null) => {
-    if (!targetSourceId || !taskId) return
-    const fromSourceId = explicitFromSourceId || sourceForRow(row, rawLine)
-    if (!fromSourceId || fromSourceId === targetSourceId) return
-    const target = sources.find(s => s.id === targetSourceId)
-    if (!target) return
-    const fromEntry = perSource.find(p => p.source.id === fromSourceId)
-    if (!fromEntry) return
-    const fromManagerPriorities = (() => {
-      const sec = fromEntry.sections.find(s => isPrioritiesSection(s.title))
-      return sec ? parseManagerPriorities(sec.lines) : {}
-    })()
-    const fromLinkedMap = {}
-    const fromActiveIds = []
-    for (const sec of fromEntry.sections) {
-      if (sec.title !== 'Today' && sec.title !== 'Deferred') continue
-      Object.assign(fromLinkedMap, buildLinkedIdMap(sec.lines))
-      fromActiveIds.push(...Object.keys(buildTaskIdLookup(sec.lines)))
-    }
-    const moveSet = computeMoveSet(taskId, fromManagerPriorities, fromLinkedMap, fromActiveIds)
-    const movingTasks = [...moveSet].map(id => ({
-      id,
-      name: taskLookup[id] || (id === taskId ? (row['Task'] || '') : ''),
-      isPriority: !!fromManagerPriorities[id],
-    }))
-    const brokenLinks = computeBrokenLinks(moveSet, fromLinkedMap, taskLookup)
-    setMoveDialog({ target, fromSourceId, taskId, rawLine, movingTasks, brokenLinks })
-  }
-
-  const performMoveToSource = async ({ target, fromSourceId, movingTasks }) => {
-    return withTaskSettingsMutationLock([fromSourceId, target.id], async () => {
-    const fromEntry = perSource.find(p => p.source.id === fromSourceId)
-    if (!fromEntry) return
-    const movingIds = new Set(movingTasks.map(t => t.id))
-    const movingRows = []
-    for (const t of movingTasks) {
-      const found = findRawLineForTaskIdInSource(fromSourceId, t.id)
-      if (found) movingRows.push({ ...found, taskId: t.id })
-    }
-    if (movingRows.length === 0) return
-
-    const removalSet = new Set(movingRows.map(r => r.rawLine))
-    const fromLines = fromEntry.content.split('\n')
-    let inPriorities = false
-    const newFromLines = []
-    for (const line of fromLines) {
-      const trimmed = line.trim()
-      if (trimmed.startsWith('## ')) {
-        inPriorities = isPrioritiesSection(trimmed.replace(/^##\s+/, ''))
-        newFromLines.push(line)
-        continue
-      }
-      if (removalSet.has(trimmed)) continue
-      if (inPriorities) {
-        const m = trimmed.match(/^\d+\.\s+(.+)$/)
-        if (m && movingIds.has(m[1].trim())) continue
-      }
-      newFromLines.push(line)
-    }
-    // Renumber
-    const renumbered = []
-    let pInside = false
-    let pIdx = 1
-    for (const line of newFromLines) {
-      const trimmed = line.trim()
-      if (trimmed.startsWith('## ')) {
-        pInside = isPrioritiesSection(trimmed.replace(/^##\s+/, ''))
-        if (pInside) pIdx = 1
-        renumbered.push(line)
-        continue
-      }
-      if (pInside) {
-        const m = line.match(/^(\s*)\d+\.\s+(.+)$/)
-        if (m) { renumbered.push(`${m[1]}${pIdx++}. ${m[2]}`); continue }
-      }
-      renumbered.push(line)
-    }
-
-    // Build target content
-    let targetContent = ''
-    try { targetContent = await storage.readFromSource(target.id, PLAN_FILE) }
-    catch {
-      targetContent = '# Focus Plan\n\n## Today\n\n| ID | 🎯 | Task | Priority | Added | Linked ID |\n|---|---|------|----------|-------|-----------|\n\n## Deferred\n\n| ID | 🎯 | Task | Priority | Added | Wake | Linked ID |\n|---|---|------|----------|-------|------|-----------|\n'
-    }
-    const tLines = targetContent.split('\n')
-    // Renumber moving tasks into the target's own sequence (no foreign IDs).
-    const targetBase = maxTaskIdInRows(targetContent)
-    const targetJournalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(target.id))
-    // Read both sides' task-settings.json up front, before any content is
-    // written. A malformed sidecar on either side aborts the whole move
-    // (nothing has been written yet) rather than silently dropping the
-    // moving tasks' AI-control settings.
-    let sourceSettings
-    let targetSettings
-    try {
-      sourceSettings = await readTaskSettingsFromSource(fromSourceId)
-      targetSettings = await readTaskSettingsFromSource(target.id)
-    } catch (error) {
-      alert(error.message || 'Could not move task settings.')
-      return
-    }
-    for (const id of Object.keys(targetSettings.tasks)) targetJournalIds.add(Number(id))
-    const { idMap, rows: renumberedRows } = renumberMovedRows(movingRows, targetBase, targetJournalIds)
-    const movedSettings = moveTaskSettingsEntries(sourceSettings, targetSettings, idMap)
-    let inToday = false
-    let todayInsertIdx = -1
-    for (let i = 0; i < tLines.length; i++) {
-      const trimmed = tLines[i].trim()
-      if (trimmed.startsWith('## ')) {
-        inToday = trimmed.replace(/^##\s+/, '') === 'Today'
-        continue
-      }
-      if (inToday && trimmed.startsWith('|') && trimmed.includes('---')) {
-        todayInsertIdx = i + 1
-        break
-      }
-    }
-    if (todayInsertIdx === -1) {
-      tLines.push('', '## Today', '', '| ID | 🎯 | Task | Priority | Added | Linked ID |', '|---|---|------|----------|-------|-----------|')
-      todayInsertIdx = tLines.length
-    }
-    tLines.splice(todayInsertIdx, 0, ...renumberedRows.map(r => r.newRawLine))
-
-    const priorityIdsMoving = movingTasks.filter(t => t.isPriority).map(t => idMap.get(String(t.id)) || String(t.id))
-    if (priorityIdsMoving.length > 0) {
-      let pStart = -1
-      let pEnd = tLines.length
-      for (let i = 0; i < tLines.length; i++) {
-        const trimmed = tLines[i].trim()
-        if (trimmed.startsWith('## ') && isPrioritiesSection(trimmed.replace(/^##\s+/, ''))) pStart = i
-        else if (pStart !== -1 && trimmed.startsWith('## ')) { pEnd = i; break }
-      }
-      if (pStart === -1) {
-        tLines.push('', '## Priorities', '')
-        pStart = tLines.length - 2
-        pEnd = tLines.length
-      }
-      let maxNum = 0
-      for (let i = pStart + 1; i < pEnd; i++) {
-        const m = tLines[i].trim().match(/^(\d+)\.\s+/)
-        if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10))
-      }
-      const newEntries = priorityIdsMoving.map((id, i) => `${maxNum + i + 1}. ${id}`)
-      let insertAt = pEnd
-      while (insertAt > pStart + 1 && tLines[insertAt - 1].trim() === '') insertAt--
-      tLines.splice(insertAt, 0, ...newEntries)
-    }
-
-    try {
-      await writeTaskSettingsToSource(target.id, movedSettings.target)
-      await storage.writeToSource(target.id, PLAN_FILE, tLines.join('\n'))
-      await writeTaskSettingsToSource(fromSourceId, movedSettings.source)
-      await storage.writeToSource(fromSourceId, PLAN_FILE, renumbered.join('\n'))
-    } catch (error) {
-      await Promise.allSettled([
-        writeTaskSettingsToSource(target.id, targetSettings),
-        storage.writeToSource(target.id, PLAN_FILE, targetContent),
-        writeTaskSettingsToSource(fromSourceId, sourceSettings),
-        storage.writeToSource(fromSourceId, PLAN_FILE, fromEntry.content),
-      ])
-      throw error
-    }
-
-    // Move journals after the rows and settings have committed successfully.
-    for (const r of renumberedRows) {
-      const fromPath = `journal/task-${r.oldId}.md`
-      const toPath = `journal/task-${r.newId}.md`
-      try {
-        const journalContent = await storage.readFromSource(fromSourceId, fromPath)
-        if (typeof journalContent === 'string' && journalContent.length > 0) {
-          await storage.writeToSource(target.id, toPath, retitleJournal(journalContent, r.newId))
-          await storage.removeFromSource(fromSourceId, fromPath)
-        }
-      } catch { /* no journal — skip */ }
-    }
-    setReloadKey(k => k + 1)
-    })
-  }
-
-  // ── Per-source priorities ──────────────────────────────────────────
-  // For each source we render its own ManagerPrioritiesSection so
-  // numbering stays scoped to that source. Edits write back to the
-  // source via the same op functions FocusPlanView would use.
-
-  const buildPriorityHandlers = (sourceId) => ({
-    onUpdate: (newLines) =>
-      applyOp(sourceId, c => ops.opUpdateManagerPriorities(c, newLines)),
-    onAddAndPrioritize: async (taskName, prioritySectionTitle) => {
-      const journalIds = withDeletedIdTombstones(await storage.journalIdsFromSource(sourceId))
-      for (const id of Object.keys(taskSettingsBySource[sourceId] || {})) journalIds.add(Number(id))
-      await applyOp(sourceId, c => ops.opAddAndPrioritize(c, taskName, prioritySectionTitle, journalIds))
-    },
-    onPromoteToManagerPriority: (taskId) =>
-      applyOp(sourceId, c => ops.opPromoteToManagerPriority(c, taskId)),
-    onRemoveFromManagerPriority: (taskId) =>
-      applyOp(sourceId, c => ops.opRemoveFromManagerPriority(c, taskId)),
-  })
-
-  // Expose promote/remove to the right-click menu by routing the task id
-  // back to its owning source.
-  const handlePromoteToManagerPriority = (taskId) => {
-    const sid = sourceForTask(taskId)
-    if (!sid) return
-    return buildPriorityHandlers(sid).onPromoteToManagerPriority(taskId)
-  }
-  const handleRemoveFromManagerPriority = (taskId) => {
-    const sid = sourceForTask(taskId)
-    if (!sid) return
-    return buildPriorityHandlers(sid).onRemoveFromManagerPriority(taskId)
-  }
-
-  // ── Render ──────────────────────────────────────────────────────────
-
-  const scrollToPriorities = () => {
-    const el = document.querySelector('[id^="combined-priorities-"]')
-    if (el) el.scrollIntoView({ behavior: 'smooth' })
-  }
-
-  // Aggregate manager priorities across all sources for sort/colour
-  // hints in TaskSection. Entries from different sources don't collide
-  // unless task IDs do — same caveat as taskLookup above.
-  const managerPriorities = {}
-  for (const { sections } of perSource) {
-    const sec = sections.find(s => isPrioritiesSection(s.title))
-    if (sec) Object.assign(managerPriorities, parseManagerPriorities(sec.lines))
-  }
-
-  // Preserve source identity because independent sources may use the same task ID.
-  const taskSettings = Object.fromEntries(
-    Object.entries(taskSettingsBySource).flatMap(([sourceId, settings]) =>
-      Object.entries(settings).map(([taskId, value]) => [`${sourceId}:${taskId}`, value]),
-    ),
-  )
-
-  return (
-    <div className="focus-plan-view combined-view">
-      <h1>✨ Combined Focus Plan</h1>
-
-      <TaskSection
-        title="Today"
-        tableLines={todaySectionLines}
-        lineSourceIds={todaySourceIds}
-        onNavigate={onNavigate}
-        defaultOpen={true}
-        managerPriorities={managerPriorities}
-        onScrollToPriorities={scrollToPriorities}
-        onTaskAction={handleTaskAction}
-        onMoveToCompleted={handleMoveToCompleted}
-        onAddClick={() => setAddDialog({ section: 'Today' })}
-        onCreateJournal={handleCreateJournal}
-        onChangePriority={handleChangePriority}
-        onSnoozeTask={handleSnoozeTask}
-        onDeleteTask={handleDeleteTask}
-        onPromoteTodo={handlePromoteTodo}
-        onRenameTask={handleRenameTask}
-        onChangeLinkedId={handleChangeLinkedId}
-        onLinkToAdoBugDb={handleLinkToAdoBugDb}
-        taskLookup={taskLookup}
-        taskPriorityLookup={taskPriorityLookup}
-        activeTaskIds={activeTaskIds}
-        linkedIdMap={linkedIdMap}
-        adoLookup={adoLookup}
-        onPromoteToManagerPriority={handlePromoteToManagerPriority}
-        onRemoveFromManagerPriority={handleRemoveFromManagerPriority}
-        otherSources={sources}
-        onMoveToSource={handleMoveToSource}
-        taskSettings={taskSettings}
-        onToggleTaskSetting={handleToggleTaskSetting}
-      />
-
-      <TaskSection
-        title="Deferred"
-        tableLines={deferredSectionLines}
-        lineSourceIds={deferredSourceIds}
-        onNavigate={onNavigate}
-        defaultOpen={false}
-        managerPriorities={managerPriorities}
-        onScrollToPriorities={scrollToPriorities}
-        onTaskAction={handleTaskAction}
-        onMoveToCompleted={handleMoveToCompleted}
-        onAddClick={() => setAddDialog({ section: 'Deferred' })}
-        onCreateJournal={handleCreateJournal}
-        onChangePriority={handleChangePriority}
-        onSnoozeTask={handleSnoozeTask}
-        onDeleteTask={handleDeleteTask}
-        onPromoteTodo={handlePromoteTodo}
-        onRenameTask={handleRenameTask}
-        onChangeLinkedId={handleChangeLinkedId}
-        onLinkToAdoBugDb={handleLinkToAdoBugDb}
-        taskLookup={taskLookup}
-        taskPriorityLookup={taskPriorityLookup}
-        activeTaskIds={activeTaskIds}
-        linkedIdMap={linkedIdMap}
-        adoLookup={adoLookup}
-        onPromoteToManagerPriority={handlePromoteToManagerPriority}
-        onRemoveFromManagerPriority={handleRemoveFromManagerPriority}
-        otherSources={sources}
-        onMoveToSource={handleMoveToSource}
-        taskSettings={taskSettings}
-        onToggleTaskSetting={handleToggleTaskSetting}
-      />
-
-      {perSource.map(({ source, sections }) => {
-        const pri = sections.find(s => isPrioritiesSection(s.title))
-        if (!pri) return null
-        const taskSections = sections.filter(s => s.title === 'Today' || s.title === 'Deferred')
-        const localTaskLookup = {}
-        const localLinkedMap = {}
-        for (const sec of taskSections) {
-          Object.assign(localTaskLookup, buildTaskIdLookup(sec.lines))
-          Object.assign(localLinkedMap, buildLinkedIdMap(sec.lines))
-        }
-        const localManagerPriorities = parseManagerPriorities(pri.lines)
-        const tasksByPriority = {}
-        for (const sec of taskSections) {
-          const { headers, rows } = parseMarkdownTable(sec.lines)
-          const priorityCol = headers.find(h => h.includes('🎯')) || '🎯'
-          for (const row of rows) {
-            const id = extractTaskId(row)
-            if (!id) continue
-            if (localManagerPriorities[id]) continue
-            const resolved = resolveManagerPriority(id, localLinkedMap, localManagerPriorities)
-            if (resolved) {
-              if (!tasksByPriority[resolved.id]) tasksByPriority[resolved.id] = []
-              tasksByPriority[resolved.id].push({
-                id,
-                task: row['Task'] || '',
-                priority: row[priorityCol] || '',
-                section: sec.title,
-              })
-            }
-          }
-        }
-        const handlers = buildPriorityHandlers(source.id)
-        return (
-          <ManagerPrioritiesSection
-            key={source.id}
-            lines={pri.lines}
-            defaultOpen={false}
-            onUpdate={handlers.onUpdate}
-            onAddAndPrioritize={(name) => handlers.onAddAndPrioritize(name, pri.title)}
-            tasksByPriority={tasksByPriority}
-            taskLookup={{ ...completedTaskLookup, ...localTaskLookup }}
-            title={`${source.name} — Priorities`}
-            sectionId={`combined-priorities-${source.id}`}
-            sourceId={source.id}
-            otherSources={sources.filter(s => s.id !== source.id)}
-            onMoveToSource={handleMoveToSource}
-          />
-        )
-      })}
-
-      {bridgeDialog && (
-        <LinkBridgeDialog
-          incomingLinks={bridgeDialog.incomingLinks}
-          removedTaskName={bridgeDialog.removedTaskName}
-          nextTaskId={bridgeDialog.nextTaskId}
-          nextTaskName={bridgeDialog.nextTaskName}
-          onClose={() => setBridgeDialog(null)}
-          onConfirm={bridgeDialog.onConfirm}
-        />
-      )}
-
-      {closeOutDialog && (
-        <CloseOutDialog
-          taskName={closeOutDialog.taskName}
-          onClose={() => setCloseOutDialog(null)}
-          onConfirm={closeOutDialog.onConfirm}
-        />
-      )}
-
-      {addDialog && (
-        <AddTaskDialog
-          section={addDialog.section}
-          sources={sources}
-          defaultSourceId={sources[0]?.id}
-          perSourceTaskLookup={perSourceTaskLookup}
-          onClose={() => setAddDialog(null)}
-          onAdd={async (args) => { await handleAdd(args); setAddDialog(null) }}
-        />
-      )}
-
-      {moveDialog && (
-        <MoveToSourceDialog
-          targetName={moveDialog.target.name}
-          movingTasks={moveDialog.movingTasks}
-          brokenLinks={moveDialog.brokenLinks}
-          onClose={() => setMoveDialog(null)}
-          onConfirm={async () => {
-            const dlg = moveDialog
-            await performMoveToSource(dlg)
-          }}
-        />
-      )}
-
-    </div>
-  )
-}
-
 function App() {
   // 'loading' | 'pick-storage' | 'ready'
   const [appState, setAppState] = useState('loading')
   const [files, setFiles] = useState([])
   const [folderName, setFolderName] = useState('')
   const [, setStorageProvider] = useState('')
-  // selectedFile uses qualified paths in multi-source mode (`${sourceId}::${path}`),
-  // plain paths in single-source mode. The dispatcher in handleSelectFile/etc.
-  // copes with both shapes.
   const [syncStatus, setSyncStatus] = useState(storage.getSyncStatus())
   const [selectedFile, setSelectedFile] = useState(PLAN_FILE)
   const [content, setContent] = useState('')
@@ -6533,22 +4947,17 @@ function App() {
   // top of the board. Subscribe so a change in Settings updates the banner live.
   const [mission, setMission] = useState(getMissionStatement())
   useEffect(() => subscribeMissionStatement(setMission), [])
-  // Re-render trigger for the source list when Settings mutates it.
-  const [sourcesVersion, setSourcesVersion] = useState(0)
-  // Sources that failed to restore on init (cloud sources needing re-authentication).
-  const [failedSourceIds, setFailedSourceIds] = useState(new Set())
-  // Re-read every render so post-init/post-mutation state is always fresh.
-  // sourcesVersion is the explicit reactivity trigger.
-  void sourcesVersion
-  const sources = getSources()
+  const [sourceNotice, setSourceNotice] = useState(null)
+  const [sourceToReconnect, setSourceToReconnect] = useState(null)
+  const [reconnectingSource, setReconnectingSource] = useState(false)
+  const [reconnectError, setReconnectError] = useState('')
   const snoozeSweepInFlightRef = useRef(false)
   const contentWriteInFlightRef = useRef(false)
   const [snoozeTimerNonce, setSnoozeTimerNonce] = useState(0)
 
   const sweepCurrentPlanSnoozes = useCallback(async () => {
-    const { sourceId, path } = splitSourcePath(selectedFile)
-    const target = path || selectedFile
-    if (sourceId === COMBINED_ID || target !== PLAN_FILE) return
+    const target = selectedFile
+    if (target !== PLAN_FILE) return
     if (snoozeSweepInFlightRef.current || contentWriteInFlightRef.current) return
     snoozeSweepInFlightRef.current = true
     try {
@@ -6570,55 +4979,17 @@ function App() {
     }
   }, [selectedFile])
 
-  /**
-   * Build the sidebar tree.
-   *  - 0/1 source → return that source's tree directly (no wrapper folders,
-   *    no Combined entry — the UI looks identical to before).
-   *  - 2+ sources → wrap each source's tree in a top-level folder, with
-   *    "✨ Combined" prepended.
-   */
   const loadFiles = async () => {
     try {
-      // Read fresh registry — the closure-captured `sources` may be stale during init.
-      const liveSources = getSources()
-      if (liveSources.length <= 1) {
-        const data = hideDocsFolder(await storage.getFiles())
-        setFiles(prev => sameFileTree(prev, data) ? prev : data)
-        return
-      }
-      const perSource = await Promise.all(
-        liveSources.map(async (s) => {
-          try {
-            const tree = hideDocsFolder(await storage.getFilesFromSource(s.id))
-            return { source: s, tree }
-          } catch {
-            return { source: s, tree: [] }
-          }
-        })
-      )
-      const combinedFolder = {
-        name: '✨ Combined',
-        type: 'directory',
-        path: `${COMBINED_ID}::`,
-        children: [
-          { name: PLAN_FILE, type: 'file', path: `${COMBINED_ID}::${PLAN_FILE}` },
-        ],
-      }
-      const sourceFolders = perSource.map(({ source, tree }) => ({
-        name: source.name,
-        type: 'directory',
-        path: `${source.id}::`,
-        children: prefixTreePaths(tree, source.id),
-      }))
-      const nextFiles = [combinedFolder, ...sourceFolders]
-      setFiles(prev => sameFileTree(prev, nextFiles) ? prev : nextFiles)
+      const data = hideDocsFolder(await storage.getFiles())
+      setFiles(prev => sameFileTree(prev, data) ? prev : data)
     } catch (err) {
       console.error('Failed to load files:', err)
     }
   }
 
   const handleSelectFile = async (qualifiedPath) => {
-    const { sourceId, path } = splitSourcePath(qualifiedPath)
+    const target = qualifiedPath
     // Capture the board's scroll position when leaving it, and arrange to
     // restore it when returning (task #334). Skip restore when a specific task
     // scroll is already pending — that takes precedence.
@@ -6626,34 +4997,16 @@ function App() {
     if (leavingBoard && contentRef.current) {
       boardScrollRef.current = contentRef.current.scrollTop
     }
-    const returningToBoard = !leavingBoard && (path || qualifiedPath) === PLAN_FILE
+    const returningToBoard = !leavingBoard && target === PLAN_FILE
     if (returningToBoard && !pendingScrollToTaskId) {
       setPendingBoardScrollRestore(true)
     }
-    setSelectedFile(qualifiedPath)
-    selectedFileRef.current = path
+    setSelectedFile(target)
+    selectedFileRef.current = target
     setSidebarOpen(false)
 
-    // Combined virtual file → CombinedFocusPlanView reads its own data, just clear content.
-    if (sourceId === COMBINED_ID) {
-      setContent('')
-      return
-    }
-
-    // Switch active source if the file lives in a non-active source.
-    if (sourceId && sourceId !== getActiveSourceId()) {
-      try {
-        await setActiveSource(sourceId)
-        setStorageProvider(sources.find(s => s.id === sourceId)?.providerType || '')
-        setFolderName(storage.folderName())
-      } catch (e) {
-        console.error('Failed to switch source:', e)
-      }
-    }
-
     try {
-      const text = await storage.read(path || qualifiedPath)
-      const target = path || qualifiedPath
+      const text = await storage.read(target)
       if (target === PLAN_FILE) {
         // Run the legacy Work/Personal Priorities → unified Priorities migration once.
         const migrated = migratePrioritiesSections(text)
@@ -6682,6 +5035,7 @@ function App() {
   }
 
   const initWithProvider = async (providerId) => {
+    await bootstrapSync(storage)
     // Only seed the starter template on a genuinely fresh, local-only install.
     // If a backup target is already configured, the remote is authoritative —
     // seeding here would let template rows merge into the real synced data
@@ -6694,20 +5048,19 @@ function App() {
     // Make the folder self-documenting for external agents. Version-gated and
     // idempotent, so this is safe to run on every init (new and existing users).
     storage.ensureAgentsDoc().catch(() => {})
-    // Ensure we have a sources registry. If first run on legacy install,
-    // the legacy → registry migration was already attempted; otherwise
-    // create the canonical single-source entry now.
+    // Create the initial saved choice when this is a fresh install.
     if (getSources().length === 0) {
       const src = addSource({ providerType: providerId, name: storage.folderName() || getProviderName(providerId) })
       await setActiveSource(src.id)
     }
+    const hiddenSources = getHiddenSources()
+    if (hiddenSources.length > 0 && !isMultiSourceNoticeDismissed()) {
+      setSourceNotice(hiddenSources.map(source => source.name))
+    }
     await loadFiles()
     setFolderName(storage.folderName())
     setStorageProvider(providerId)
-    setSourcesVersion(v => v + 1)
     setAppState('ready')
-    const liveSources = getSources()
-    const defaultFile = liveSources.length > 1 ? `${COMBINED_ID}::${PLAN_FILE}` : PLAN_FILE
     const deepTask = pendingJournalDeepLink
     if (deepTask != null) {
       if (journalDeepLink(window.location.hash) != null) {
@@ -6716,7 +5069,7 @@ function App() {
       setJournalInitialView('chat')
       handleSelectFile(`journal/task-${deepTask}.md`)
     } else {
-      handleSelectFile(defaultFile)
+      handleSelectFile(PLAN_FILE)
     }
   }
 
@@ -6726,31 +5079,12 @@ function App() {
         // Configure local-first storage with background sync support
         storage.configureLocalFirstStorage()
 
-        // Initialise the storage provider. Returns true if init handled
-        // everything, false if a hard fallback to pick-storage UI is needed.
+        // Initialise the saved provider or fall back to Browser Storage.
         const initialised = await initStorage()
         if (!initialised) {
           setAppState('pick-storage')
           return
         }
-
-        // Register the folder-sync service worker (served from /folder-sync/)
-        // so push+pull runs off the main thread, then restore sync targets.
-        await storage.registerSyncWorker()
-
-        // Always restore sync targets and start background sync after the
-        // storage provider is ready. This is what consumes the OAuth ?code=
-        // query param after a Sign-in redirect (via the pending-target marker
-        // in sessionStorage) and what enables the background push/pull loop.
-        await storage.restoreSyncTargets()
-        storage.startAutoSync()
-
-        // Note: when a previously-connected backup target can no longer sync
-        // (e.g. OneDrive refresh token revoked), the folder-sync engine itself
-        // redirects the user to sign in on page load — it watches the service
-        // worker's status and triggers the reconnect round trip event-driven,
-        // once the SW reports `reconnect-required`. Doing it here synchronously
-        // raced ahead of that signal and could never reliably fire.
       } catch (e) {
         console.error('Storage init failed:', e)
         setAppState('pick-storage')
@@ -6762,106 +5096,21 @@ function App() {
   // Returns true if storage was initialised, false if the caller should
   // surface the pick-storage UI.
   const initStorage = async () => {
-    // 1. If returning from OAuth redirect with a pending migration, finish it
-    if (hasPendingMigration()) {
-      const migratedTo = await resumePendingMigration()
-      if (migratedTo) {
-        window.location.reload()
-        return true
-      }
-    }
-
-    // 2. Load (and one-shot migrate) the multi-source registry.
     loadSources()
-    migrateLegacy()
-    const registry = getSources()
-
-    if (registry.length > 0) {
-      // If we're returning from a re-auth OAuth redirect (for an existing source),
-      // restore that source FIRST so it consumes the ?code= param.
-      const pendingReauthId = consumePendingReauth()
-      if (pendingReauthId) {
-        try { await restoreSource(pendingReauthId) } catch { /* ok — will retry later */ }
-      }
-
-      // If we're returning from an "add cloud source" OAuth redirect,
-      // restore that source FIRST so it consumes the ?code= param —
-      // otherwise other cloud providers' restore() would try (and fail)
-      // to exchange the code as their own.
-      const pendingAddId = consumePendingAdd()
-      let scaffoldedAddId = null
-      if (pendingAddId) {
-        try {
-          const p = await restoreSource(pendingAddId)
-          if (p) {
-            await p.scaffold()
-            scaffoldedAddId = pendingAddId
-          } else {
-            // User cancelled / token exchange failed — roll back the entry.
-            await removeSource(pendingAddId)
-          }
-        } catch (e) {
-          console.error('Cloud source add failed, rolling back:', e)
-          await removeSource(pendingAddId)
-        }
-      }
-      // Restore each source's provider eagerly so cross-source reads work.
-      const restoredIds = new Set()
-      if (pendingReauthId) restoredIds.add(pendingReauthId) // already restored above
-      if (scaffoldedAddId) restoredIds.add(scaffoldedAddId)
-      let firstHealthyId = pendingReauthId || scaffoldedAddId || null
-      const failed = new Set()
-      for (const s of getSources()) {
-        if (restoredIds.has(s.id)) continue
-        try {
-          const p = await restoreSource(s.id)
-          if (p) {
-            restoredIds.add(s.id)
-            if (!firstHealthyId) firstHealthyId = s.id
-          } else {
-            failed.add(s.id)
-          }
-        } catch {
-          failed.add(s.id)
-        }
-      }
-      if (failed.size > 0) setFailedSourceIds(failed)
-      // Pick the saved active source if it restored, otherwise the first that did.
-      const savedActive = getActiveSourceId()
-      const targetId = restoredIds.has(savedActive) ? savedActive : firstHealthyId
-      if (targetId) {
-        await setActiveSource(targetId)
-        const active = getSources().find(s => s.id === targetId)
-        await initWithProvider(active.providerType)
-        return true
-      }
-      // No source restored cleanly — fall back to LocalStorage.
+    const activeSource = getActiveSource()
+    const pendingSource = consumePendingSource()
+    const selected = await restoreSourceOrFallback(activeSource, {
+      restoreSource,
+      setActiveProvider,
+      onReconnectRequired: setSourceToReconnect,
+      pendingSource,
+      removeSource,
+    })
+    if (selected.activateSource) {
+      await setActiveSource(selected.activateSource.id)
     }
-
-    // 3. Legacy single-provider path (no registry yet — migrateLegacy() didn't run because
-    // there was no fp-storage-provider key either). Fresh install → pick storage.
-    const savedId = localStorage.getItem('fp-storage-provider')
-    if (!savedId) {
-      // Auto-bootstrap LocalStorage as the default first source.
-      const fallback = new IndexedDbProvider()
-      await fallback.restore()
-      setActiveProvider(fallback)
-      localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
-      await initWithProvider(PROVIDERS.LOCAL_STORAGE)
-      return true
-    }
-    const provider = makeProvider(savedId)
-    const ok = await provider.restore()
-    if (ok) {
-      setActiveProvider(provider)
-      await initWithProvider(savedId)
-    } else {
-      const fallback = new IndexedDbProvider()
-      await fallback.restore()
-      setActiveProvider(fallback)
-      localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
-      await initWithProvider(PROVIDERS.LOCAL_STORAGE)
-    }
+    if (selected.reconnectSource) setSourceToReconnect(selected.reconnectSource)
+    await initWithProvider(selected.providerType)
     return true
   }
 
@@ -6901,9 +5150,8 @@ function App() {
   }, [sweepCurrentPlanSnoozes])
 
   useEffect(() => {
-    const { sourceId, path } = splitSourcePath(selectedFile)
-    const target = path || selectedFile
-    if (sourceId === COMBINED_ID || target !== PLAN_FILE || !content) return
+    const target = selectedFile
+    if (target !== PLAN_FILE || !content) return
     const delay = ops.nextWakeTimeoutMs(content, new Date())
     if (delay === null) return
     const timer = setTimeout(() => {
@@ -6985,6 +5233,32 @@ function App() {
     await initWithProvider(providerId)
   }
 
+  const handleReconnectSource = async () => {
+    if (!sourceToReconnect || reconnectingSource) return
+    setReconnectingSource(true)
+    setReconnectError('')
+    try {
+      const source = sourceToReconnect
+      const reconnected = await reconnectSavedSource(source, {
+        getProvider,
+        restoreSource,
+        setPendingSource,
+        clearPendingSource,
+        setActiveSource,
+      })
+      if (!reconnected) return
+      if (!reconnected.restored && source.providerType === PROVIDERS.FSA) {
+        await reconnected.provider.scaffold()
+      }
+      setSourceToReconnect(null)
+      window.location.reload()
+    } catch (e) {
+      if (!e.message?.includes('Redirecting')) setReconnectError(e.message || 'Could not reconnect storage source')
+    } finally {
+      setReconnectingSource(false)
+    }
+  }
+
   const handleNavigate = (path, scrollToTaskId, initialView) => {
     pendingJournalDeepLink = null
     if (scrollToTaskId) setPendingScrollToTaskId(scrollToTaskId)
@@ -7036,11 +5310,9 @@ function App() {
   }, [content, pendingBoardScrollRestore])
 
   const handleContentUpdate = async (newContent) => {
-    const { path, sourceId } = splitSourcePath(selectedFile)
-    if (sourceId === COMBINED_ID) return // Combined view is read-only
     try {
       contentWriteInFlightRef.current = true
-      await storage.write(path || selectedFile, newContent)
+      await storage.write(selectedFile, newContent)
       setContent(newContent)
     } catch (err) {
       console.error('Failed to update file:', err)
@@ -7058,14 +5330,12 @@ function App() {
     return <StoragePicker onReady={handleStorageReady} />
   }
 
-  const { sourceId: selSourceId, path: selPath } = splitSourcePath(selectedFile)
-  const isCombinedFocusPlan = selSourceId === COMBINED_ID && (selPath === PLAN_FILE || selPath === '')
-  const localPath = selPath || selectedFile
-  const isFocusPlan = !isCombinedFocusPlan && localPath === PLAN_FILE
-  const isCompletedPlan = !isCombinedFocusPlan && localPath === COMPLETED_FILE
-  const isAgentSettingsFile = selSourceId !== COMBINED_ID && localPath === AI_SETTINGS_FILE
-  const isAgentGateFile = selSourceId !== COMBINED_ID && localPath === AGENT_GATE_FILE
-  const isJournal = !isCombinedFocusPlan && !isFocusPlan && !isCompletedPlan &&
+  const localPath = selectedFile
+  const isFocusPlan = localPath === PLAN_FILE
+  const isCompletedPlan = localPath === COMPLETED_FILE
+  const isAgentSettingsFile = localPath === AI_SETTINGS_FILE
+  const isAgentGateFile = localPath === AGENT_GATE_FILE
+  const isJournal = !isFocusPlan && !isCompletedPlan &&
     /(^|\/)journal\//.test(localPath) && localPath.endsWith('.md')
 
   return (
@@ -7092,12 +5362,39 @@ function App() {
         <StorageFooter
           folderName={folderName}
           syncStatus={syncStatus}
-          failedSourceIds={failedSourceIds}
           onDataChanged={loadFiles}
           onOpenFile={handleSelectFile}
         />
       </aside>
       <main ref={contentRef} className={`content${isJournal ? ' content-chat' : ''}`}>
+        {sourceToReconnect && (
+          <div className="source-reconnect-notice" role="status">
+            <span>
+              Could not restore {sourceToReconnect.name}. The board is using Browser Storage for this session.
+              {reconnectError && ` ${reconnectError}`}
+            </span>
+            <button
+              type="button"
+              onClick={handleReconnectSource}
+              disabled={reconnectingSource}
+            >
+              {reconnectingSource ? 'Reconnecting…' : `Reconnect ${sourceToReconnect.name}`}
+            </button>
+          </div>
+        )}
+        {sourceNotice && (
+          <div className="source-notice" role="status">
+            <span>
+              Only {getActiveSource()?.name || 'one storage source'} is shown. Not shown: {sourceNotice.join(', ')}.
+              {' '}Switch sources in Settings. Other sources and their data remain untouched.
+            </span>
+            <button
+              type="button"
+              onClick={() => { dismissMultiSourceNotice(); setSourceNotice(null) }}
+              aria-label="Dismiss storage source notice"
+            >Dismiss</button>
+          </div>
+        )}
         <div className="mobile-nav-bar">
           {(() => {
             // Sync status is folded into the Files button (#274): the button owns
@@ -7134,7 +5431,7 @@ function App() {
               </button>
             )
           })()}
-          {selectedFile && <span className="mobile-file-name">{(selPath || selectedFile).replace(/.*\//, '')}</span>}
+          {selectedFile && <span className="mobile-file-name">{selectedFile.replace(/.*\//, '')}</span>}
           {isFocusPlan && (
             <div className="mobile-board-search is-expanded">
               <span className="board-search-icon" aria-hidden="true">🔍</span>
@@ -7187,8 +5484,6 @@ function App() {
               loadFiles().catch(() => {})
             }}
           />
-        ) : isCombinedFocusPlan ? (
-          <CombinedFocusPlanView sources={sources} onNavigate={handleNavigate} onDataChanged={loadFiles} />
         ) : content ? (
           isFocusPlan ? (
             <FocusPlanView
@@ -7196,7 +5491,6 @@ function App() {
               onNavigate={handleNavigate}
               onContentUpdate={handleContentUpdate}
               sourceId={getActiveSourceId()}
-              otherSources={sources.filter(s => s.id !== getActiveSourceId())}
               search={boardSearch}
               onSearchChange={setBoardSearch}
               mission={mission}

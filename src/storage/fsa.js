@@ -3,12 +3,10 @@ import { PLAN_FILE, COMPLETED_FILE } from '../config/branding.js'
 import { scaffoldAgentsDoc } from '../config/agentsDoc.js'
 import { scaffoldAgentGate } from '../config/agentGate.js'
 
-// Historical key — kept under this name so existing folder handles continue
-// to load after the Planner rebrand. The name is internal-only.
-const LEGACY_DB_KEY = 'focus-planner-dir-handle'
+const HANDLE_DB_KEY = 'focus-planner-dir-handle'
 
 function dbKey(suffix) {
-  return suffix ? `${LEGACY_DB_KEY}:${suffix}` : LEGACY_DB_KEY
+  return suffix ? `${HANDLE_DB_KEY}:${suffix}` : HANDLE_DB_KEY
 }
 
 export function isSupported() {
@@ -26,18 +24,7 @@ export async function forgetFolder(suffix) {
 }
 
 export async function restoreFolder(suffix) {
-  let handle = await get(dbKey(suffix))
-  // Backward-compat: if the registry was migrated from a legacy single-FSA
-  // setup, the handle still lives at the unsuffixed key. Adopt it under the
-  // new suffixed key and clean up the legacy slot so this is one-shot.
-  if (!handle && suffix) {
-    const legacy = await get(LEGACY_DB_KEY)
-    if (legacy) {
-      await set(dbKey(suffix), legacy)
-      await del(LEGACY_DB_KEY)
-      handle = legacy
-    }
-  }
+  const handle = await get(dbKey(suffix))
   if (!handle) return null
   try {
     const permission = await handle.queryPermission({ mode: 'readwrite' })

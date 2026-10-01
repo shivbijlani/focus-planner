@@ -18,8 +18,8 @@
  *    6-week-cycle-plan.md, agent-email-setup.md).
  *
  * The tree shape is the provider shape: { name, type: 'file'|'directory',
- * path, children? }. This operates on the UNPREFIXED tree (basenames), so it is
- * applied before any multi-source `sourceId::` path prefixing.
+ * path, children? }. This operates on the active provider's unprefixed tree
+ * (basenames).
  */
 import { PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { AGENTS_FILE } from './config/agentsDoc.js'
@@ -63,7 +63,7 @@ export const DOCS_DIR = 'docs'
  * Remove the top-level `docs/` folder (catch-up documents, owned by the Docs app —
  * plans/docs-app-design.md §3.2) from a provider file tree. Deliberately narrow: it is
  * the only filter the sidebar applies, so every other file keeps showing exactly as
- * before. Apply to the UNPREFIXED tree of each source.
+ * before. Apply to the active provider's tree.
  */
 export function hideDocsFolder(items) {
   if (!Array.isArray(items)) return items

@@ -8,7 +8,6 @@ import {
   serializeTaskSettingsFile,
   getTaskSettings,
   withTaskSetting,
-  moveTaskSettingsEntries,
   readTaskSettings,
   writeTaskSettings,
   setTaskSetting,
@@ -91,21 +90,6 @@ describe('taskSettings storage', () => {
     it('withTaskSetting creates a new entry (with defaults) for a task not yet in the file', () => {
       const next = withTaskSetting({ version: 1, tasks: {} }, '379', { aiAssisted: true })
       expect(next.tasks['379']).toEqual({ aiAssisted: true, persistentSession: false })
-    })
-
-    it('moves settings to renumbered target IDs without disturbing unrelated entries', () => {
-      const result = moveTaskSettingsEntries(
-        { tasks: { '10': { aiAssisted: true }, '11': { persistentSession: true } } },
-        { tasks: { '20': { aiAssisted: true } } },
-        new Map([['10', '21']]),
-      )
-      expect(result.source.tasks).toEqual({
-        '11': { aiAssisted: false, persistentSession: true },
-      })
-      expect(result.target.tasks).toEqual({
-        '20': { aiAssisted: true, persistentSession: false },
-        '21': { aiAssisted: true, persistentSession: false },
-      })
     })
 
     it('withTaskSetting leaves other tasks in the file untouched', () => {

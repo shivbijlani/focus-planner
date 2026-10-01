@@ -352,6 +352,31 @@ body {
   scrollbar-gutter: stable;
 }
 
+.source-notice,
+.source-reconnect-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.1);
+  color: #fcd34d;
+  font-size: 0.9rem;
+}
+.source-notice button,
+.source-reconnect-notice button {
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 5px;
+  padding: 0.35rem 0.65rem;
+  background: rgba(245, 158, 11, 0.18);
+  color: inherit;
+  cursor: pointer;
+}
+
 /* Mission statement: a tasteful "north star" banner pinned at the top of the
    board (task #322). Quiet by default, legible on the dark shell, and it wraps
    gracefully on small screens. */

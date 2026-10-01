@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { detectOutlierIds, selfHealOutlierIds } from './selfHealIds.js'
+import { detectOutlierIds, parseLocalId, selfHealOutlierIds } from './selfHealIds.js'
+
+describe('parseLocalId', () => {
+  it('parses plain and ADO-suffixed IDs', () => {
+    expect(parseLocalId('271')).toBe('271')
+    expect(parseLocalId('426576,[419965](https://x/419965)')).toBe('426576')
+  })
+})
 
 describe('detectOutlierIds', () => {
   it('flags a high cluster separated by a large gap', () => {

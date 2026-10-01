@@ -194,7 +194,6 @@ export function hasProvider() { return _provider !== null }
 export function configureLocalFirstStorage() {
   const provider = new IndexedDbProvider()
   setActiveProvider(provider)
-  localStorage.setItem('fp-storage-provider', PROVIDERS.LOCAL_STORAGE)
   return provider
 }
 
@@ -418,69 +417,4 @@ export async function journalIds() {
   if (!_provider) throw new Error('No provider set')
   const ids = _provider.journalIds ? await _provider.journalIds() : new Set()
   return withTombstones(ids)
-}
-
-// ── Cross-source read helpers (for Combined view) ─────
-// These bypass the active-provider singleton so the Combined view can
-// pull data from every registered source in parallel.
-
-export async function readFromSource(sourceId, path) {
-  const { getProvider } = await import('./sources.js')
-  const p = getProvider(sourceId)
-  if (!p) throw new Error(`No provider for source ${sourceId}`)
-  return p.read(path)
-}
-
-export async function writeToSource(sourceId, path, content) {
-  const { getActiveSourceId, getProvider } = await import('./sources.js')
-  if (sourceId === getActiveSourceId()) return write(path, content)
-  const p = getProvider(sourceId)
-  if (!p) throw new Error(`No provider for source ${sourceId}`)
-  return p.write(path, content)
-}
-
-export async function maxJournalIdFromSource(sourceId) {
-  const { getProvider } = await import('./sources.js')
-  const p = getProvider(sourceId)
-  if (!p) return 0
-  try { return await p.maxJournalId() } catch { return 0 }
-}
-
-export async function journalIdsFromSource(sourceId) {
-  const { getProvider } = await import('./sources.js')
-  const p = getProvider(sourceId)
-  if (!p || !p.journalIds) return withTombstones(new Set())
-  try { return withTombstones(await p.journalIds()) } catch { return withTombstones(new Set()) }
-}
-
-export async function getFilesFromSource(sourceId) {
-  const { getProvider } = await import('./sources.js')
-  const p = getProvider(sourceId)
-  if (!p) throw new Error(`No provider for source ${sourceId}`)
-  return p.getFiles()
-}
-
-export async function removeFromSource(sourceId, path) {
-  const { getProvider } = await import('./sources.js')
-  const p = getProvider(sourceId)
-  if (!p) throw new Error(`No provider for source ${sourceId}`)
-  return p.remove(path)
-}
-
-export async function checkJournalFromSource(sourceId, taskId) {
-  const { getProvider } = await import('./sources.js')
-  const p = getProvider(sourceId)
-  if (!p) return { exists: false }
-  try { return await p.checkJournal(taskId) } catch { return { exists: false } }
-}
-
-export async function getTodosFromSource(sourceId, path) {
-  const { getProvider } = await import('./sources.js')
-  const p = getProvider(sourceId)
-  if (!p) return []
-  try {
-    const content = await p.read(path)
-    const { parseTodos } = await import('./fsa.js')
-    return parseTodos(content)
-  } catch { return [] }
 }

@@ -6,7 +6,7 @@
 // user is sent to Focus Planner to connect one.
 import * as storage from '../storage/storage.js'
 import {
-  loadSources, migrateLegacy, getSources, getActiveSourceId, restoreSource, setActiveSource,
+  loadSources, getSources, getActiveSourceId, restoreSource, setActiveSource,
 } from '../storage/sources.js'
 import { IndexedDbProvider } from '../storage/indexeddb-provider.js'
 
@@ -19,15 +19,15 @@ export async function bootStorage() {
   // OAuth redirects must land on a registered redirect URI (the planner root).
   storage.configureEngine({ redirectUri: `${window.location.origin}${plannerUrl()}` })
   loadSources()
-  migrateLegacy()
   const sources = getSources()
-  const order = [...new Set([getActiveSourceId(), ...sources.map((s) => s.id)].filter(Boolean))]
+  const selectedId = getActiveSourceId()
   let activeId = null
-  for (const id of order) {
+  if (selectedId) {
     try {
-      const p = await restoreSource(id)
-      if (p) { await setActiveSource(id); activeId = id; break }
-    } catch { /* try the next source */ }
+      const provider = await restoreSource(selectedId)
+      if (provider) { await setActiveSource(selectedId); activeId = selectedId }
+      else activeId = null
+    } catch { activeId = null }
   }
   if (!activeId) {
     const fallback = new IndexedDbProvider()
