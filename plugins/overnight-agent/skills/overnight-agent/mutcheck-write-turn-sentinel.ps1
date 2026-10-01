@@ -35,7 +35,8 @@
                  Without this arm, a guard enforced by some other code path (or one that
                  never runs) is indistinguishable from a working one.
 
-  Usage: powershell -NoProfile -ExecutionPolicy Bypass -File mutcheck-write-turn-sentinel.ps1
+  Usage: powershell -NoProfile -ExecutionPolicy Bypass -File mutcheck-write-turn-sentinel.ps1 [-Target <write-turn.ps1|write-turn.mjs>]
+  -Target may name the Node port (item 3); it takes the same arguments and gets the same arms.
   Exit:  0 all assertions hold - 1 the guard is not doing what it claims.
 #>
 [CmdletBinding()]
@@ -88,7 +89,9 @@ function New-Journal([string]$dir, [string]$id, [string]$nl, [bool]$withSentinel
 function Invoke-WriteTurn([string]$ScriptPath, [string]$dir, [string]$id) {
   # `-Ask none` because #560 made the declaration required (G13); this harness is about G6, the
   # sentinel, so declaring one keeps the refusal under test the one it was written for.
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath -Id $id -BodyFile $bodyFile -JournalDir $dir -Ask none *>&1 | Out-Null
+  $wtArgs = @('-Id', $id, '-BodyFile', $bodyFile, '-JournalDir', $dir, '-Ask', 'none')
+  if ($ScriptPath -like '*.mjs') { & node $ScriptPath @wtArgs *>&1 | Out-Null }
+  else { & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @wtArgs *>&1 | Out-Null }
   return $LASTEXITCODE
 }
 
@@ -142,13 +145,15 @@ foreach ($nl in @("`n", "`r`n")) {
 Write-Host ''
 Write-Host 'MUTATION (guard disabled)'
 $src = [IO.File]::ReadAllText($writeTurn, (New-Object Text.UTF8Encoding($false)))
-$needle = "if (`$existing -notmatch [regex]::Escape('<!-- OVERNIGHT-AGENT do not edit this line')) {"
+$isNode = $writeTurn -like '*.mjs'
+$needle = if ($isNode) { "if (!psMatch(existing, '<!-- OVERNIGHT-AGENT do not edit this line')) {" }
+          else { "if (`$existing -notmatch [regex]::Escape('<!-- OVERNIGHT-AGENT do not edit this line')) {" }
 if (-not $src.Contains($needle)) {
   Write-Host '  FAIL - could not locate the guard to mutate; the check is stale.' -ForegroundColor Red
   $failures += 'mutation site not found'
 } else {
-  $mutant = Join-Path $tmp 'write-turn.mutant.ps1'
-  [IO.File]::WriteAllText($mutant, $src.Replace($needle, 'if ($false) {'), (New-Object Text.UTF8Encoding($false)))
+  $mutant = Join-Path $tmp ('write-turn.mutant' + [IO.Path]::GetExtension($writeTurn))
+  [IO.File]::WriteAllText($mutant, $src.Replace($needle, $(if ($isNode) { 'if (false) {' } else { 'if ($false) {' })), (New-Object Text.UTF8Encoding($false)))
 
   $m1 = Test-Scenario $mutant "`n" $false
   Assert ($m1.Count -eq 0)  "mutant: no-sentinel journal stays invisible (this is the bug; got $($m1.Count))"

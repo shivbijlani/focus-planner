@@ -11,13 +11,15 @@ It changes no agent behaviour. Nothing here is loaded by the plugin at runtime.
 ```
 node plugins/overnight-agent/tests/characterization/run.mjs --impl ps            # must be 100% green
 node plugins/overnight-agent/tests/characterization/run.mjs --impl node          # the port; unmapped = SKIP
+node plugins/overnight-agent/tests/characterization/run.mjs --impl node --tool write-turn  # one tool's cases only
 node plugins/overnight-agent/tests/characterization/run.mjs --impl ps --update   # re-record goldens (ps only)
 node plugins/overnight-agent/tests/characterization/run.mjs --impl ps --repeat 3 # determinism check
 node plugins/overnight-agent/tests/characterization/run.mjs --list               # cases, per-command and per-mutcheck counts
 node plugins/overnight-agent/tests/characterization/run.mjs --coverage           # the mutcheck mapping as markdown
 ```
 
-Other flags: `--filter <regex>` (on case id), `--jobs N`, `--keep` (leave failing sandboxes on
+Other flags: `--filter <regex>` (on case id), `--tool oa-state|write-turn` (every case with a step
+driving that tool -- how a port proves itself tool by tool), `--jobs N`, `--keep` (leave failing sandboxes on
 disk and print their path), `--prune` (with `--update`, delete goldens whose case is gone).
 
 CI runs `--impl ps` on `windows-latest` (job `agent-characterization`, time zone pinned, see
@@ -170,6 +172,9 @@ export const IMPLEMENTATIONS = {
   'write-turn': { '': { bin: 'plugins/overnight-agent/skills/overnight-agent/write-turn.mjs' } },
 };
 ```
+
+**write-turn is mapped** (item 3): `skills/overnight-agent/write-turn.mjs` passes all 84 write-turn
+cases with no SKIP (`--impl node --tool write-turn`, CI job `write-turn-node`). oa-state is item 4.
 
 With `{ bin }` the adapter runs `node <bin> <command> --Name value ...` using the PowerShell
 parameter names verbatim (switches as `--Name`, arrays as repeated `--Name`), in the same

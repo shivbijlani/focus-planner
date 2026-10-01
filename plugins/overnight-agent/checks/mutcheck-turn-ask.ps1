@@ -2,6 +2,7 @@
 #
 # -Target lets a caller name the write-turn.ps1 under test explicitly; when omitted it is
 # located by search (see below), so this runs from the repo and from the flat OA home.
+# -Target may also name the Node port, write-turn.mjs (item 3): same arguments, same arms.
 [CmdletBinding()]
 param([string]$Target)
 
@@ -71,6 +72,11 @@ if (-not $script) {
 }
 Write-Host "target: $script"
 
+function Invoke-WT([string]$Path, [string[]]$A) {
+  if ($Path -like '*.mjs') { return (& node $Path @A 2>&1 | Out-String) }
+  return (& powershell -NoProfile -ExecutionPolicy Bypass -File $Path @A 2>&1 | Out-String)
+}
+
 $pass = 0; $fail = 0
 
 function Check($name, $cond, $detail) {
@@ -90,7 +96,7 @@ foreach ($c in @(
   # omitted it, so every one of them exited 2 on a G13 refusal and the "exit code is
   # unaffected" assertion had been failing on main -- a red check nobody was reading. The
   # cases are about whether the ask TEXT parses, so declaring one keeps their intent intact.
-  $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $script -BodyFile $f -Validate -Json -Ask offer 2>&1 | Out-String
+  $out = Invoke-WT $script @('-BodyFile', $f, '-Validate', '-Json', '-Ask', 'offer')
   $code = $LASTEXITCODE
   $j = $out | ConvertFrom-Json
   Check $c.n ($j.hasAsk -eq $c.want) ("hasAsk=$($j.hasAsk) want=$($c.want)")
@@ -133,7 +139,7 @@ function Invoke-G14([string]$Target, [hashtable]$Case) {
   $f = Join-Path $env:TEMP ('wt14-' + [guid]::NewGuid().ToString('N') + '.md')
   [IO.File]::WriteAllText($f, ($g14Hdr + $Case.line + "`n"), $enc)
   try {
-    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $Target -BodyFile $f -Validate -Json -Ask $Case.ask 2>&1 | Out-String
+    $out = Invoke-WT $Target @('-BodyFile', $f, '-Validate', '-Json', '-Ask', $Case.ask)
     return [bool]((($out | ConvertFrom-Json).findings | Where-Object { $_.guard -eq 'G14' }) -ne $null)
   } finally { Remove-Item $f -Force -ErrorAction SilentlyContinue }
 }
@@ -151,7 +157,7 @@ $mutFired = $null
 $mf = Join-Path $env:TEMP ('wt14m-' + [guid]::NewGuid().ToString('N') + '.md')
 [IO.File]::WriteAllText($mf, ($g14Hdr + $mutBaseline.line + "`n"), $enc)
 try {
-  $mo = & powershell -NoProfile -ExecutionPolicy Bypass -File $script -BodyFile $mf -Validate -Json -Ask $mutBaseline.ask -DisableGuard G14 2>&1 | Out-String
+  $mo = Invoke-WT $script @('-BodyFile', $mf, '-Validate', '-Json', '-Ask', $mutBaseline.ask, '-DisableGuard', 'G14')
   $mutFired = [bool]((($mo | ConvertFrom-Json).findings | Where-Object { $_.guard -eq 'G14' }) -ne $null)
 } finally { Remove-Item $mf -Force -ErrorAction SilentlyContinue }
 Check 'M-ASK: -DisableGuard G14 removes the refusal (guard is load-bearing)' ($mutFired -eq $false) "still fired=$mutFired"

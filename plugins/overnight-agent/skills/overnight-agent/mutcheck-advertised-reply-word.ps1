@@ -44,6 +44,13 @@ if (-not $OaStatePath)   { $OaStatePath   = Join-Path $PSScriptRoot 'oa-state.ps
 if (-not (Test-Path $WriteTurnPath)) { throw "write-turn.ps1 not found at $WriteTurnPath" }
 
 $script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
+
+# The subject may be write-turn.ps1 or its Node port, write-turn.mjs (item 3): same arguments,
+# same arms. Source-level pins read the port's own spelling of the same line.
+$script:WtNode = $WriteTurnPath -like '*.mjs'
+function Get-WtExe { if ($script:WtNode) { 'node' } else { $script:PsExe } }
+function Get-WtPrefix { if ($script:WtNode) { $WriteTurnPath } else { '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $WriteTurnPath } }
+$script:WtHomeLineRe = if ($script:WtNode) { '(?m)^.*\boaHome\s*=\s*process\.env\.WRITE_TURN_OA_HOME.*$' } else { '(?m)^\s*\$OA_HOME\s*=.*$' }
 $utf8 = New-Object Text.UTF8Encoding($true)
 $MOON = [char]::ConvertFromUtf32(0x1F319)
 $root = Join-Path ([IO.Path]::GetTempPath()) ("oa-491-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -76,10 +83,10 @@ function Turn([string]$askLine) {
 function Check([string]$askLine, [string[]]$extra = @()) {
   $p = Join-Path $root ("t-" + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.md')
   [IO.File]::WriteAllText($p, (Turn $askLine), $utf8)
-  $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $WriteTurnPath,
+  $argv = @(Get-WtPrefix) + @(
             '-BodyFile', $p, '-Ask', 'blocking', '-Validate') + $extra
   $so = "$p.out"; $se = "$p.err"
-  $proc = Start-Process -FilePath $script:PsExe -ArgumentList $argv -NoNewWindow -Wait -PassThru `
+  $proc = Start-Process -FilePath (Get-WtExe) -ArgumentList $argv -NoNewWindow -Wait -PassThru `
                         -RedirectStandardOutput $so -RedirectStandardError $se
   $out = ''
   foreach ($f in @($so, $se)) { if (Test-Path $f) { $out += (Get-Content $f -Raw -ErrorAction SilentlyContinue) } }
@@ -152,7 +159,11 @@ if (Test-Path $OaStatePath) {
     if ($m.Success) { return $m.Groups[1].Value } else { return $null }
   }
   $reader = & $reOf $OaStatePath
-  $writer = & $reOf $WriteTurnPath
+  $writer = if ($script:WtNode) {
+    # The port spells it as a JS string literal; undo the JS escaping before comparing.
+    $m = [regex]::Match([IO.File]::ReadAllText($WriteTurnPath), "(?m)^\s*const ConsentAffirmRe\s*=\s*'([^']+)'")
+    if ($m.Success) { $m.Groups[1].Value.Replace('\\', '\') } else { $null }
+  } else { & $reOf $WriteTurnPath }
   Assert ($null -ne $reader -and $null -ne $writer) 'BOTH-PRESENT' 'both the reader and the writer declare the vocabulary' ''
   Assert ($reader -eq $writer) 'IN-STEP' 'and the two patterns are character-for-character identical' `
     $(if ($reader -ne $writer) { "reader=$reader`n        writer=$writer" } else { '' })
@@ -169,7 +180,7 @@ Write-Host 'HERMETIC -- the arms above must have run against the sandbox, not a 
 # is null. Both readings are wrong, and only one of them is visible. So pin the contract the
 # sandbox depends on -- write-turn must still honour the override -- and prove the child process
 # actually landed in TEMP rather than somewhere real.
-$homeLine = [regex]::Match([IO.File]::ReadAllText($WriteTurnPath), '(?m)^\s*\$OA_HOME\s*=.*$').Value
+$homeLine = [regex]::Match([IO.File]::ReadAllText($WriteTurnPath), $script:WtHomeLineRe).Value
 Assert ($homeLine -match 'WRITE_TURN_OA_HOME') 'OVERRIDE-HONOURED' `
   'write-turn still resolves its home from WRITE_TURN_OA_HOME' "OA_HOME line: $homeLine"
 Assert ($env:WRITE_TURN_OA_HOME -and $env:WRITE_TURN_OA_HOME.StartsWith($root)) 'SANDBOXED' `

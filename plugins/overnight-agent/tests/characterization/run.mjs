@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Overnight Agent characterization (golden) harness.
 //
-//   node run.mjs --impl ps|node [--update] [--filter <regex>] [--jobs N] [--repeat N] [--keep]
+//   node run.mjs --impl ps|node [--update] [--filter <regex>] [--tool oa-state|write-turn] [--jobs N] [--repeat N] [--keep]
 //   node run.mjs --list [--filter <regex>]          # cases and per-command counts
 //   node run.mjs --shadow [--data <planner folder>] [--state <state dir>] [--sample N]
 //
@@ -35,6 +35,7 @@ function parseArgs(argv) {
       case '--update': o.update = true; break;
       case '--prune': o.prune = true; break;
       case '--filter': o.filter = new RegExp(val()); break;
+      case '--tool': o.tool = val(); break;
       case '--jobs': o.jobs = Number(val()); break;
       case '--repeat': o.repeat = Number(val()); break;
       case '--keep': o.keep = true; break;
@@ -130,6 +131,8 @@ async function main() {
   if (o.shadow) return runShadow({ ...o, ...PATHS, loadAdapter });
   let cases = loadCases();
   if (o.filter) cases = cases.filter((c) => o.filter.test(c.id));
+  // Every case with at least one step driving this tool: a port proves itself tool by tool.
+  if (o.tool) cases = cases.filter((c) => c.steps.some((s) => s.tool === o.tool));
   if (o.list) { listCases(cases); return 0; }
   if (o.coverage) { writeCoverage(loadCases()); return 0; }
   if (!o.impl) throw new Error('--impl ps|node is required');

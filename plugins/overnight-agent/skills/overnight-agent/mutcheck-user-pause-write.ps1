@@ -30,6 +30,13 @@ if (-not $OaStatePath)   { $OaStatePath   = Join-Path $PSScriptRoot 'oa-state.ps
 if (-not (Test-Path $WriteTurnPath)) { throw "write-turn.ps1 not found at $WriteTurnPath" }
 
 $script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
+
+# The subject may be write-turn.ps1 or its Node port, write-turn.mjs (item 3): same arguments,
+# same arms. Source-level pins read the port's own spelling of the same line.
+$script:WtNode = $WriteTurnPath -like '*.mjs'
+function Get-WtExe { if ($script:WtNode) { 'node' } else { $script:PsExe } }
+function Get-WtPrefix { if ($script:WtNode) { $WriteTurnPath } else { '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $WriteTurnPath } }
+$script:WtHomeLineRe = if ($script:WtNode) { '(?m)^.*\boaHome\s*=\s*process\.env\.WRITE_TURN_OA_HOME.*$' } else { '(?m)^\s*\$OA_HOME\s*=.*$' }
 $utf8 = New-Object Text.UTF8Encoding($true)
 $MOON = [char]::ConvertFromUtf32(0x1F319)
 
@@ -78,12 +85,12 @@ function Check([string]$id, [string[]]$extra = @()) {
   $body = "## $MOON Overnight Agent -- 2026-09-25 07:00 PT`n`n<!-- from: overnight-agent -->`n`n" +
           "**Status:** working.`n`n**Needs from you:** nothing.`n"
   [IO.File]::WriteAllText($p, $body, $utf8)
-  $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $WriteTurnPath,
+  $argv = @(Get-WtPrefix) + @(
             '-BodyFile', $p, '-Ask', 'none', '-Validate', '-JournalDir', $journalDir)
   if ($id) { $argv += @('-Id', $id) }
   $argv += $extra
   $so = "$p.out"; $se = "$p.err"
-  $proc = Start-Process -FilePath $script:PsExe -ArgumentList $argv -NoNewWindow -Wait -PassThru `
+  $proc = Start-Process -FilePath (Get-WtExe) -ArgumentList $argv -NoNewWindow -Wait -PassThru `
                         -RedirectStandardOutput $so -RedirectStandardError $se
   $out = ''
   foreach ($f in @($so, $se)) { if (Test-Path $f) { $out += (Get-Content $f -Raw -ErrorAction SilentlyContinue) } }
@@ -175,7 +182,8 @@ if (Test-Path $OaStatePath) {
   if ($nonWorkable -and $closed) {
     $expected = @($nonWorkable | Where-Object { $closed -notcontains $_ }) | Sort-Object
     $wtSrc = [IO.File]::ReadAllText($WriteTurnPath)
-    $m = [regex]::Match($wtSrc, '(?m)^\s*\$script:PausedStatusWT\s*=\s*@\(([^\)]*)\)')
+    $m = if ($script:WtNode) { [regex]::Match($wtSrc, '(?m)^\s*const PausedStatusWT\s*=\s*\[([^\]]*)\]') }
+         else { [regex]::Match($wtSrc, '(?m)^\s*\$script:PausedStatusWT\s*=\s*@\(([^\)]*)\)') }
     $actual = if ($m.Success) { @($m.Groups[1].Value -split ',' | ForEach-Object { $_.Trim().Trim("'").Trim('"') } | Where-Object { $_ }) | Sort-Object } else { @() }
     Assert (($expected -join ',') -eq ($actual -join ',')) 'IN-STEP' `
       'write-turn''s paused set equals NonWorkableStatus minus ClosedStatus' `
@@ -188,7 +196,7 @@ else {
 
 Write-Host ''
 Write-Host 'HERMETIC -- the arms above ran against the sandbox, not a real home'
-$homeLine = [regex]::Match([IO.File]::ReadAllText($WriteTurnPath), '(?m)^\s*\$OA_HOME\s*=.*$').Value
+$homeLine = [regex]::Match([IO.File]::ReadAllText($WriteTurnPath), $script:WtHomeLineRe).Value
 Assert ($homeLine -match 'WRITE_TURN_OA_HOME') 'OVERRIDE-HONOURED' `
   'write-turn still resolves its home from WRITE_TURN_OA_HOME' "OA_HOME line: $homeLine"
 Assert ($env:WRITE_TURN_OA_HOME -and $env:WRITE_TURN_OA_HOME.StartsWith($root)) 'SANDBOXED' `
