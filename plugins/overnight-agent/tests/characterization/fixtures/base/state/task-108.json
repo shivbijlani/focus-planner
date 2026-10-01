@@ -1,0 +1,28 @@
+{
+  "id": "108",
+  "status": "blocked",
+  "version": 1,
+  "plan_id": "t108-v1",
+  "processed_file_hash": "b127cdaf6fb5f7f5e8670aaf2f02d452892bad6f9d0e7a1a4d81abea0d1ab302",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-03-01T12:00:00Z",
+  "status_by": "user",
+  "unanswered_user_message_at": "{{NOW-3h}}",
+  "last_turn_at": "2020-03-01T12:00:00Z",
+  "last_turn_by": "sess-coordinator",
+  "paused_at": "{{NOW-2h}}",
+  "session": {
+    "session_id": "12121212-3434-4565-8787-909090909090",
+    "kind": "chat",
+    "project": "",
+    "workspace": "",
+    "workspace_type": "folder",
+    "created_at": "{{NOW-2d}}",
+    "last_woken_at": "{{NOW-4h}}",
+    "state": "live",
+    "prior_session_id": "",
+    "prior_session_ids": [],
+    "replaced_at": null
+  }
+}

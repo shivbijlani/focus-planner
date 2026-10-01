@@ -1,0 +1,29 @@
+{
+  "files": {},
+  "id": "cmd/consent/109-email-many-floor",
+  "steps": [
+    {
+      "args": {
+        "Action": "send_email_many",
+        "Id": "109",
+        "Repo": "sample-repo"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "action": "send_email_many",
+        "consent_ok": false,
+        "gate_list": "ask",
+        "gate_path": "<ROOT>/data/agent-gate.md",
+        "gate_rule": "Send-to-many (group/channel, mass email)",
+        "gate_state": "ok",
+        "id": "109",
+        "path": "<ROOT>/data/journal/task-109.md",
+        "reason": "gate-floor-blocks",
+        "repo": "sample-repo",
+        "trailing_has_user": true
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "files": {},
+  "id": "mc/issue-shipped/json-shipped-result-refuses",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 2,
+      "json": {
+        "ask": "none",
+        "docBound": false,
+        "docId": "",
+        "findings": [
+          {
+            "guard": "G15",
+            "line": 7,
+            "snippet": "**Next:** pick up #640 next wake.",
+            "why": "this turn proposes work on #640, but #640's fix is already cited in shipped source on origin/main (packages/example/src/fix-640.js). A shipped PR does not close its issue here, so OPEN spans unworked AND shipped-awaiting-his-review, and the tracker shows them identically (#630) -- twelve such picks were made in two days (#635). Verify with git grep \"#640\" origin/main -- packages plugins, then propose something unworked. Use -DisableGuard G15 if he has asked for a second look at it"
+          }
+        ],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "",
+        "length": 141,
+        "ok": false
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

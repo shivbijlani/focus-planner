@@ -1,0 +1,127 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-user-pause-write"
+  ],
+  "cases": [
+    {
+      "id": "mc/user-pause-write/user-blocked-refused",
+      "tool": "write-turn",
+      "args": {
+        "Id": "950",
+        "Ask": "none",
+        "Validate": true
+      },
+      "files": {
+        "data/journal/task-950.md": "# Task 950: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — previous wake\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-08\n\nPrevious body.\n\n**Needs from you:** nothing.\n",
+        "state/task-950.json": {
+          "id": "950",
+          "status": "blocked",
+          "status_by": "user",
+          "paused_at": "2020-01-02T03:04:05-08:00"
+        }
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "A task paused as blocked by the user refuses G17 and quotes the recorded stamp."
+    },
+    {
+      "id": "mc/user-pause-write/user-proposed-refused",
+      "tool": "write-turn",
+      "args": {
+        "Id": "951",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-951.md": "# Task 951: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — previous wake\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-08\n\nPrevious body.\n\n**Needs from you:** nothing.\n",
+        "state/task-951.json": {
+          "id": "951",
+          "status": "proposed",
+          "status_by": "user",
+          "paused_at": "2020-01-02T03:04:05-08:00"
+        }
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "The other paused status, proposed by user, also refuses."
+    },
+    {
+      "id": "mc/user-pause-write/resumed-human-reply-allows",
+      "tool": "write-turn",
+      "args": {
+        "Id": "952",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-952.md": "# Task 952: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — previous wake\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-08\n\nPrevious body.\n\n**Needs from you:** nothing.\n\n<!-- from: me -->\n\nPlease resume now.\n",
+        "state/task-952.json": {
+          "id": "952",
+          "status": "blocked",
+          "status_by": "user",
+          "paused_at": "2020-01-02T03:04:05-08:00"
+        }
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "A human reply below the newest turn is the resume and allows the write."
+    },
+    {
+      "id": "mc/user-pause-write/agent-blocked-allows",
+      "tool": "write-turn",
+      "args": {
+        "Id": "953",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-953.md": "# Task 953: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — previous wake\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-08\n\nPrevious body.\n\n**Needs from you:** nothing.\n",
+        "state/task-953.json": {
+          "id": "953",
+          "status": "blocked",
+          "status_by": "agent",
+          "paused_at": "2020-01-02T03:04:05-08:00"
+        }
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "Agent-authored blocked is not a user pause."
+    },
+    {
+      "id": "mc/user-pause-write/closed-done-allows",
+      "tool": "write-turn",
+      "args": {
+        "Id": "954",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-954.md": "# Task 954: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — previous wake\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-08\n\nPrevious body.\n\n**Needs from you:** nothing.\n",
+        "state/task-954.json": {
+          "id": "954",
+          "status": "done",
+          "status_by": "user",
+          "paused_at": "2020-01-02T03:04:05-08:00"
+        }
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "done is closed, not paused, so G17 stays quiet."
+    },
+    {
+      "id": "mc/user-pause-write/corrupt-state-advisory",
+      "tool": "write-turn",
+      "args": {
+        "Id": "955",
+        "Ask": "none",
+        "Validate": true
+      },
+      "files": {
+        "data/journal/task-955.md": "# Task 955: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — previous wake\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-08\n\nPrevious body.\n\n**Needs from you:** nothing.\n",
+        "state/task-955.json": "{ this is not json"
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "Unreadable state fails open but emits the G17 advisory note."
+    }
+  ]
+}

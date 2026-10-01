@@ -1,0 +1,7 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-direct-dispatch-drain"
+  ],
+  "cases": []
+}

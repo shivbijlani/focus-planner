@@ -1,0 +1,14 @@
+{
+  "id": "720",
+  "status": "in-progress",
+  "version": 1,
+  "plan_id": "t720-v1",
+  "processed_file_hash": "f8c54e9bc65de2fdf833412169b61489951ee184504d46474049c6d02fb0f59b",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "{{NOW-30m}}",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "{{NOW-30m}}",
+  "last_turn_by": "sess-coordinator"
+}

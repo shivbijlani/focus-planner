@@ -1,0 +1,186 @@
+{
+  "files": {
+    "state/task-929.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "929",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "paused_at": null,
+        "plan_id": "t929-v1",
+        "processed_file_hash": "398f61b0b8a25cc8bb7889dc15726959f12a79c6acc49392923a7ab63ec19e3a",
+        "seeded": false,
+        "session": {
+          "created_at": "2020-03-01T00:00:00Z",
+          "kind": "chat",
+          "last_woken_at": "",
+          "prior_session_id": "",
+          "project": "p",
+          "replaced_at": "",
+          "session_id": "S-929",
+          "state": "live",
+          "workspace": "",
+          "workspace_type": "folder"
+        },
+        "status": "approved",
+        "status_by": "user",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/session-pause/mark-preserves-and-clears-stamp",
+  "steps": [
+    {
+      "args": {
+        "Id": "929",
+        "Status": "blocked",
+        "StatusBy": "user"
+      },
+      "command": "mark",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "929",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "paused_at": "2020-03-01T06:00:00Z",
+        "plan_id": "t929-v1",
+        "processed_file_hash": "398f61b0b8a25cc8bb7889dc15726959f12a79c6acc49392923a7ab63ec19e3a",
+        "seeded": false,
+        "session": {
+          "created_at": "2020-03-01T00:00:00Z",
+          "kind": "chat",
+          "last_woken_at": "",
+          "prior_session_id": "",
+          "project": "p",
+          "replaced_at": "",
+          "session_id": "S-929",
+          "state": "live",
+          "workspace": "",
+          "workspace_type": "folder"
+        },
+        "status": "blocked",
+        "status_by": "user",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "929"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "2020-03-01T00:00:00Z",
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "929",
+        "kickoff_continuation": null,
+        "kind": "chat",
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": "2020-03-01T06:00:00Z",
+        "paused_by_user": true,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": "p",
+        "released": false,
+        "role_line": "You are the task session for planner task #929. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "S-929",
+        "state": "live",
+        "teardown_command": null,
+        "verdict": "paused",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": "folder"
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "929",
+        "Status": "approved",
+        "StatusBy": "user"
+      },
+      "command": "mark",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "929",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "paused_at": null,
+        "plan_id": "t929-v1",
+        "processed_file_hash": "398f61b0b8a25cc8bb7889dc15726959f12a79c6acc49392923a7ab63ec19e3a",
+        "seeded": false,
+        "session": {
+          "created_at": "2020-03-01T00:00:00Z",
+          "kind": "chat",
+          "last_woken_at": "",
+          "prior_session_id": "",
+          "project": "p",
+          "replaced_at": "",
+          "session_id": "S-929",
+          "state": "live",
+          "workspace": "",
+          "workspace_type": "folder"
+        },
+        "status": "approved",
+        "status_by": "user",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "929"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "2020-03-01T00:00:00Z",
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "929",
+        "kickoff_continuation": null,
+        "kind": "chat",
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": "p",
+        "released": false,
+        "role_line": "You are the task session for planner task #929. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "S-929",
+        "state": "live",
+        "teardown_command": null,
+        "verdict": "reuse",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": "folder"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

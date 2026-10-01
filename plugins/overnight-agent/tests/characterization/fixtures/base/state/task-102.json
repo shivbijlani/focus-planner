@@ -1,0 +1,14 @@
+{
+  "id": "102",
+  "status": "proposed",
+  "version": 2,
+  "plan_id": "t102-v2",
+  "processed_file_hash": "6ad197e7bc9c4dc19c177a93babb598ea9fd36bf1737c0ead446400e98ba6142",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-03-01T12:00:00Z",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "2020-03-01T12:00:00Z",
+  "last_turn_by": "sess-coordinator"
+}

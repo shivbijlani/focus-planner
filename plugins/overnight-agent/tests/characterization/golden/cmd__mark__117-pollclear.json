@@ -1,0 +1,50 @@
+{
+  "files": {
+    "state/task-117.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "117",
+        "last_turn_at": "2020-03-01T12:00:00Z",
+        "last_turn_by": "sess-coordinator",
+        "plan_id": "t117-v1",
+        "poll": null,
+        "processed_file_hash": "97a59078b2a07979f35cbf37572f340d4010a5199654eb249cc5a428b85cf195",
+        "seeded": false,
+        "status": "in-progress",
+        "status_by": "agent",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "cmd/mark/117-pollclear",
+  "steps": [
+    {
+      "args": {
+        "Id": "117",
+        "PollClear": true
+      },
+      "command": "mark",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "117",
+        "last_turn_at": "2020-03-01T12:00:00Z",
+        "last_turn_by": "sess-coordinator",
+        "plan_id": "t117-v1",
+        "poll": null,
+        "processed_file_hash": "97a59078b2a07979f35cbf37572f340d4010a5199654eb249cc5a428b85cf195",
+        "seeded": false,
+        "status": "in-progress",
+        "status_by": "agent",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "files": {},
+  "id": "mc/pointer-turn/fenced-doc-meta-real-binding-wins",
+  "steps": [
+    {
+      "args": {
+        "Ask": "blocking",
+        "Id": "942",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 0,
+      "json": {
+        "ask": "blocking",
+        "docBound": true,
+        "docId": "DOC1234567890abcdefghijklmnopqrstuvwxyz",
+        "findings": [],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "942",
+        "length": 341,
+        "ok": true
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

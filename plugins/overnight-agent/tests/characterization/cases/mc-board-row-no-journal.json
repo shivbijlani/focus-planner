@@ -1,0 +1,17 @@
+{
+  "fixture": "mc-board-row-no-journal",
+  "covers": [
+    "mutcheck-board-row-no-journal"
+  ],
+  "cases": [
+    {
+      "id": "mc/board-row-no-journal/visible-honest-row",
+      "note": "a board row with no journal appears with has_journal:false, section, reason, and no invented reply facts",
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "Compact": true
+      }
+    }
+  ]
+}

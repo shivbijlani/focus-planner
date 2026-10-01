@@ -1,0 +1,148 @@
+{
+  "files": {
+    "state/task-912.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "912",
+        "plan_id": "t912-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": {
+          "created_at": "<NOW+0m>",
+          "kind": "code",
+          "last_woken_at": "",
+          "prior_session_id": "<GUID>",
+          "prior_session_ids": [
+            "<GUID>",
+            "<GUID>"
+          ],
+          "project": "focus-planner",
+          "replaced_at": "<NOW+0m>",
+          "session_id": "<GUID>",
+          "state": "live",
+          "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-912-3",
+          "workspace_type": "worktree"
+        },
+        "session_replacements": [
+          {
+            "at": "<NOW+0m>",
+            "session_id": "<GUID>"
+          },
+          {
+            "at": "<NOW+0m>",
+            "session_id": "<GUID>"
+          }
+        ],
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/session-bind-backwards/grand-ancestor-and-force-refused",
+  "steps": [
+    {
+      "args": {
+        "Id": "912",
+        "SessionId": "<GUID>",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-912-1",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "912",
+        "SessionDead": true
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "912",
+        "SessionId": "<GUID>",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-912-2",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "912",
+        "SessionDead": true
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "912",
+        "SessionId": "<GUID>",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-912-3",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "912",
+        "SessionId": "<GUID>",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-912-1",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "Exception: <SKILL>/oa-state.ps1:<LINE>",
+        "session_bind_backwards: task 912 already retired session <GUID> (lineage:",
+        "<GUID> -> <GUID>); refusing to re-bind it over",
+        "<GUID>. A replacement must be a session this task has never used. If the current",
+        "binding is genuinely finished, release it with -SessionRelease and bind a new session."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Force": true,
+        "Id": "912",
+        "SessionId": "<GUID>",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-912-2",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "Exception: <SKILL>/oa-state.ps1:<LINE>",
+        "session_bind_backwards: task 912 already retired session <GUID> (lineage:",
+        "<GUID> -> <GUID>); refusing to re-bind it over",
+        "<GUID>. A replacement must be a session this task has never used. If the current",
+        "binding is genuinely finished, release it with -SessionRelease and bind a new session."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

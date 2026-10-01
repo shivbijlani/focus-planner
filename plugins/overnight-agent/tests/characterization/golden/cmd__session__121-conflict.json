@@ -1,0 +1,22 @@
+{
+  "files": {},
+  "id": "cmd/session/121-conflict",
+  "steps": [
+    {
+      "args": {
+        "Id": "121",
+        "SessionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        "SessionKind": "code",
+        "SessionProject": "example/sync-lib",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-other"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_bind_conflict: task 121 is already bound to LIVE session 11111111-2222-4333-8444-555555555555; refusing to bind aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee over it. Wake the bound session instead. If it genuinely cannot be woken, record that with -SessionDead first -- that is the replacement path, and it is what carries the continuation into the new session."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

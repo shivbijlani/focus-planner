@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "cmd/mark/101-polldone-without-poll",
+  "steps": [
+    {
+      "args": {
+        "Id": "101",
+        "PollDone": true
+      },
+      "command": "mark",
+      "exit": 1,
+      "stderr": [
+        "Exception: <SKILL>/oa-state.ps1:<LINE>",
+        "task 101 has no poll to mark done (arm one with -Poll first)"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

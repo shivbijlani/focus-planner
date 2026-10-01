@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "cmd/mark/101-bad-cadence",
+  "steps": [
+    {
+      "args": {
+        "Id": "101",
+        "Poll": "fortnightly"
+      },
+      "command": "mark",
+      "exit": 1,
+      "stderr": [
+        "Exception: <SKILL>/oa-state.ps1:<LINE>",
+        "invalid cadence 'fortnightly' (use hourly|daily|weekly|<N>h|<N>d|<N>m)"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

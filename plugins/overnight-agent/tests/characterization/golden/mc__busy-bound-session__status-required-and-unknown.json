@@ -1,0 +1,30 @@
+{
+  "files": {},
+  "id": "mc/busy-bound-session/status-required-and-unknown",
+  "steps": [
+    {
+      "args": {
+        "DispatchInput": "stale",
+        "ForDispatch": true,
+        "Id": "950"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_status_required: -ForDispatch requires a fresh get_sessions_status snapshot"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Compact": true,
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions-missing.json"
+      },
+      "command": "scan",
+      "exit": null,
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

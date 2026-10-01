@@ -1,0 +1,16 @@
+{
+  "files": {},
+  "id": "mc/plan-dispatch/scan-plan-review",
+  "steps": [
+    {
+      "args": {
+        "Compact": true,
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions.json"
+      },
+      "command": "scan",
+      "exit": null,
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

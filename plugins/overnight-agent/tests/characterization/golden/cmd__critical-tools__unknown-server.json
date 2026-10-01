@@ -1,0 +1,17 @@
+{
+  "files": {},
+  "id": "cmd/critical-tools/unknown-server",
+  "steps": [
+    {
+      "command": "critical-tools",
+      "exit": 1,
+      "stderr": [
+        "Exception: <SKILL>/oa-state.ps1:<LINE>",
+        "Critical tools: unknown MCP server 'telegram' in",
+        "<ROOT>/lad/overnight-agent/mcp-config.json"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "files": {},
+  "id": "mc/doc-consent/journal-approval-keeps-provenance",
+  "steps": [
+    {
+      "args": {
+        "DocComments": "<ROOT>/input/breached.txt",
+        "Id": "930"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "affirmative_answered": false,
+        "affirmative_author": "me",
+        "affirmative_phrase": "yes",
+        "affirmative_unattributed": false,
+        "consent_ok": true,
+        "doc_comments_path": "<ROOT>/input/breached.txt",
+        "doc_consent_ok": false,
+        "doc_consent_reason": "doc-consent-not-consulted",
+        "human_segments": 1,
+        "id": "930",
+        "path": "<ROOT>/data/journal/task-930.md",
+        "reason": "human-authored-affirmative",
+        "trailing_has_user": true
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "fixture": "mc-scan-perf",
+  "covers": [
+    "mutcheck-scan-perf"
+  ],
+  "cases": [
+    {
+      "id": "mc/scan-perf/compact-shape",
+      "note": "-Compact returns summary plus only actionable rows with returned/omitted counts",
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "Compact": true
+      }
+    },
+    {
+      "id": "mc/scan-perf/scanoutfile-equivalence-shape",
+      "note": "-ScanOutFile writes the full worklist file and prints a small summary",
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "ScanOutFile": "{cwd}\\scan-full.json"
+      }
+    }
+  ]
+}

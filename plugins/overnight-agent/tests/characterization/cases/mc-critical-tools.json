@@ -1,0 +1,49 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-critical-tools"
+  ],
+  "cases": [
+    {
+      "id": "mc/critical-tools/configured-tools",
+      "note": "Critical tools row resolves configured MCP servers",
+      "tool": "oa-state",
+      "command": "critical-tools"
+    },
+    {
+      "id": "mc/critical-tools/default-tools-with-no-row",
+      "note": "missing settings row defaults to email and google-workspace",
+      "files": {
+        "data/no-critical-settings.md": "# Settings\n\n| Setting | Value |\n|---|---|\n| Some other setting | yes |\n"
+      },
+      "tool": "oa-state",
+      "command": "critical-tools",
+      "args": {
+        "UserSettings": "{data}\\no-critical-settings.md"
+      }
+    },
+    {
+      "id": "mc/critical-tools/unknown-tool-refused",
+      "note": "critical tools not present in MCP config are refused",
+      "files": {
+        "data/user-settings.md": "# Settings\n\n| Setting | Value |\n|---|---|\n| Critical tools | email, bogus-tool |\n"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "critical-tools",
+          "record": false
+        }
+      ]
+    },
+    {
+      "id": "mc/critical-tools/duplicates-are-unique",
+      "note": "duplicate configured tools are returned once",
+      "files": {
+        "data/user-settings.md": "# Settings\n\n| Setting | Value |\n|---|---|\n| Critical tools | email, email, google-workspace |\n"
+      },
+      "tool": "oa-state",
+      "command": "critical-tools"
+    }
+  ]
+}

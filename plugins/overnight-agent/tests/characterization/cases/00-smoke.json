@@ -1,0 +1,11 @@
+{
+  "fixture": "base",
+  "cases": [
+    { "id": "scan/base-full", "tool": "oa-state", "command": "scan", "note": "the full worklist over the shared fixture" },
+    { "id": "scan/base-compact", "tool": "oa-state", "command": "scan", "args": { "Compact": true } },
+    { "id": "gate/base", "tool": "oa-state", "command": "gate" },
+    { "id": "consent/109-valid-merge", "tool": "oa-state", "command": "consent", "args": { "Id": "109" } },
+    { "id": "write-turn/validate-clean", "tool": "write-turn", "args": { "Ask": "none", "Validate": true },
+      "body": "## \ud83c\udf19 Overnight Agent \u2014 2020-03-09\n\n<!-- from: overnight-agent -->\n**Status:** In progress\n\nDid the thing.\n\n**Needs from you:** none\n" }
+  ]
+}

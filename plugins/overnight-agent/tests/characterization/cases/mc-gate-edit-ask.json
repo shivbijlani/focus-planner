@@ -1,0 +1,74 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-gate-edit-ask"
+  ],
+  "cases": [
+    {
+      "id": "mc/gate-edit-ask/live-gate-edit-refused",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n\n**Status:** working.\n\n**Needs from you:** Open **Agent gate** in the planner sidebar and add this to the **Do not gate these (reversible)** list as a fourth bullet. Once that line exists, `consent` returns `gate-allowed` and I run the cleanup without asking again.\n"
+    },
+    {
+      "id": "mc/gate-edit-ask/add-line-refused",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n\n**Status:** working.\n\n**Needs from you:** add a line to `agent-gate.md` under **Do not gate these**.\n"
+    },
+    {
+      "id": "mc/gate-edit-ask/ordinary-ask-allowed",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n\n**Status:** working.\n\n**Needs from you:** nothing.\n"
+    },
+    {
+      "id": "mc/gate-edit-ask/discussion-allowed",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n\n**Status:** working.\n\n**Needs from you:** nothing. Noting that `agent-gate.md`'s floor is matched by action kind and cannot be scoped, which is why the earlier ask could never have worked.\n"
+    },
+    {
+      "id": "mc/gate-edit-ask/verified-edit-allowed",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n\n**Status:** working.\n\n**Needs from you:** add the line to **Do not gate these**. Verified first: I wrote the proposed gate to a temp file and ran `consent -GatePath <temp>` with and without that line, and the verdicts differ, so the line is what flips it.\n"
+    },
+    {
+      "id": "mc/gate-edit-ask/fenced-example-allowed",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n\n**Status:** working.\n\n**Needs from you:** nothing.\n\n```\nadd this to Do not gate these\n```\n"
+    },
+    {
+      "id": "mc/gate-edit-ask/disable-guard-allows",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "DisableGuard": [
+          "G18"
+        ]
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n\n**Status:** working.\n\n**Needs from you:** add this to **Do not gate these**.\n"
+    }
+  ]
+}

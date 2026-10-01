@@ -1,0 +1,77 @@
+{
+  "files": {
+    "state/task-108.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "108",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "paused_at": null,
+        "plan_id": "t108-v1",
+        "processed_file_hash": "b127cdaf6fb5f7f5e8670aaf2f02d452892bad6f9d0e7a1a4d81abea0d1ab302",
+        "seeded": false,
+        "session": {
+          "created_at": "<NOW-2880m>",
+          "kind": "chat",
+          "last_woken_at": "<NOW-240m>",
+          "prior_session_id": "",
+          "prior_session_ids": [],
+          "project": "",
+          "replaced_at": null,
+          "session_id": "<GUID>",
+          "state": "live",
+          "workspace": "",
+          "workspace_type": "folder"
+        },
+        "status": "in-progress",
+        "status_by": "user",
+        "unanswered_user_message_at": "<NOW-180m>",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "cmd/mark/108-user-unpauses",
+  "steps": [
+    {
+      "args": {
+        "Id": "108",
+        "Status": "in-progress",
+        "StatusBy": "user"
+      },
+      "command": "mark",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "108",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "paused_at": null,
+        "plan_id": "t108-v1",
+        "processed_file_hash": "b127cdaf6fb5f7f5e8670aaf2f02d452892bad6f9d0e7a1a4d81abea0d1ab302",
+        "seeded": false,
+        "session": {
+          "created_at": "<NOW-2880m>",
+          "kind": "chat",
+          "last_woken_at": "<NOW-240m>",
+          "prior_session_id": "",
+          "prior_session_ids": [],
+          "project": "",
+          "replaced_at": null,
+          "session_id": "<GUID>",
+          "state": "live",
+          "workspace": "",
+          "workspace_type": "folder"
+        },
+        "status": "in-progress",
+        "status_by": "user",
+        "unanswered_user_message_at": "<NOW-180m>",
+        "updated": "<NOW+0m>",
+        "version": 1
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

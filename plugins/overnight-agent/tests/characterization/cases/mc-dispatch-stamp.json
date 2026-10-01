@@ -1,0 +1,295 @@
+{
+  "fixture": "mc-dispatch-stamp",
+  "covers": [
+    "mutcheck-dispatch-stamp"
+  ],
+  "cases": [
+    {
+      "id": "mc/dispatch-stamp/inspection-does-not-authorise-or-stamp",
+      "note": "plain session read is inspection only: no dispatch_authorised and stale wake unchanged",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 980 | task 980 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-980.md": "# Task 980: task 980\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-980.json": {
+          "id": "980",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t980-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T00:00:00Z",
+          "session": {
+            "session_id": "S-980",
+            "kind": "code",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "2020-03-01T01:00:00Z",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-980\",\"activity\":{\"status\":\"idle\"}}]}"
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "980"
+      }
+    },
+    {
+      "id": "mc/dispatch-stamp/check-readonly-and-stale-refused",
+      "note": "CheckDispatch is read-only; stale ForDispatch input refuses before stamp",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 981 | task 981 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-981.md": "# Task 981: task 981\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-981.json": {
+          "id": "981",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t981-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T00:00:00Z",
+          "session": {
+            "session_id": "S-981",
+            "kind": "code",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "2020-03-01T01:00:00Z",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-981\",\"activity\":{\"status\":\"idle\"}}]}"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "981",
+            "CheckDispatch": true
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "981",
+            "ForDispatch": true,
+            "DispatchInput": "stale-dispatch-input",
+            "SessionsStatusFile": "{home}/sessions.json"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/dispatch-stamp/for-dispatch-authorises-and-stamps",
+      "note": "ForDispatch with exact scan dispatch_input authorises and stamps last_woken_at",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 985 | task 985 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-985\",\"activity\":{\"status\":\"idle\"}}]}",
+        "data/journal/task-985.md": "# Task 985: task 985\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-985.json": {
+          "id": "985",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t985-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T00:00:00Z",
+          "session": {
+            "session_id": "S-985",
+            "kind": "code",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "2020-03-01T01:00:00Z",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "Compact": true,
+            "SessionsStatusFile": "{home}/sessions.json"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "985",
+            "ForDispatch": true,
+            "DispatchInput": "ed31c38831e12f73be07a7b9cf0af3de47b9d569996eae789f07cc329a0a39c2",
+            "SessionsStatusFile": "{home}/sessions.json"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/dispatch-stamp/bind-does-not-stamp",
+      "note": "binding a new session is not a wake and leaves last_woken_at empty",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 982 | task 982 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-982.md": "# Task 982: task 982\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-982.json": {
+          "id": "982",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t982-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "home/worktrees/wt-982/.git": "gitdir: V:/repo/.git/worktrees/x"
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "982",
+        "SessionId": "11111111-1111-4111-8111-111111111111",
+        "SessionKind": "code",
+        "SessionProject": "p",
+        "SessionWorkspace": "{home}/worktrees/wt-982",
+        "WorkspaceType": "worktree"
+      }
+    },
+    {
+      "id": "mc/dispatch-stamp/dispatch-input-required",
+      "note": "ForDispatch without dispatch_input is refused before stamping",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 983 | task 983 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-983.md": "# Task 983: task 983\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-983.json": {
+          "id": "983",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t983-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T00:00:00Z",
+          "session": {
+            "session_id": "S-983",
+            "kind": "code",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "2020-03-01T01:00:00Z",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          }
+        },
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-983\",\"activity\":{\"status\":\"idle\"}}]}"
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "983",
+        "ForDispatch": true,
+        "SessionsStatusFile": "{home}/sessions.json"
+      }
+    },
+    {
+      "id": "mc/dispatch-stamp/paused-refused-before-stamp",
+      "note": "user-paused task refuses ForDispatch by name before wake stamp",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 984 | task 984 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-984.md": "# Task 984: task 984\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-984.json": {
+          "id": "984",
+          "status": "blocked",
+          "status_by": "user",
+          "version": 1,
+          "plan_id": "t984-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T00:00:00Z",
+          "session": {
+            "session_id": "S-984",
+            "kind": "code",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "2020-03-01T01:00:00Z",
+            "state": "live",
+            "prior_session_id": "",
+            "replaced_at": ""
+          },
+          "paused_at": "2020-03-01T00:30:00Z"
+        },
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-984\",\"activity\":{\"status\":\"idle\"}}]}"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {
+            "Compact": true,
+            "SessionsStatusFile": "{home}/sessions.json"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "session",
+          "args": {
+            "Id": "984",
+            "ForDispatch": true,
+            "DispatchInput": "stale",
+            "SessionsStatusFile": "{home}/sessions.json"
+          }
+        }
+      ]
+    }
+  ]
+}

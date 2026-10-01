@@ -1,0 +1,51 @@
+{
+  "files": {
+    "state/task-104.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "104",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "paused_at": "<NOW+0m>",
+        "plan_id": "t104-v1",
+        "processed_file_hash": "98e0074ffc77fc16b407c7c6637e43232752b616e7c206195740588e26374e6d",
+        "seeded": false,
+        "status": "blocked",
+        "status_by": "user",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "cmd/mark/104-user-pauses",
+  "steps": [
+    {
+      "args": {
+        "Id": "104",
+        "Status": "blocked",
+        "StatusBy": "user"
+      },
+      "command": "mark",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "104",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "paused_at": "<NOW+0m>",
+        "plan_id": "t104-v1",
+        "processed_file_hash": "98e0074ffc77fc16b407c7c6637e43232752b616e7c206195740588e26374e6d",
+        "seeded": false,
+        "status": "blocked",
+        "status_by": "user",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "files": {},
+  "id": "cmd/mark/no-id",
+  "steps": [
+    {
+      "command": "mark",
+      "exit": 1,
+      "stderr": [
+        "mark requires -Id"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

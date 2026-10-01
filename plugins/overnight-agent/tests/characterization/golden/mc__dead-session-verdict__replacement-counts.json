@@ -1,0 +1,237 @@
+{
+  "files": {
+    "state/task-944.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "944",
+        "plan_id": "t944-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": {
+          "created_at": "<NOW+5m>",
+          "kind": "code",
+          "last_woken_at": "",
+          "prior_session_id": "11111111-1111-4111-8111-111111111111",
+          "prior_session_ids": [
+            "11111111-1111-4111-8111-111111111111"
+          ],
+          "project": "focus-planner",
+          "replaced_at": "<NOW+5m>",
+          "session_id": "22222222-2222-4222-8222-222222222222",
+          "state": "live",
+          "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-944",
+          "workspace_type": "worktree"
+        },
+        "session_replacements": [
+          {
+            "at": "2020-01-01T00:00:00Z",
+            "session_id": "old"
+          },
+          {
+            "at": "<NOW-90m>",
+            "session_id": "recent"
+          },
+          {
+            "at": "<NOW+5m>",
+            "session_id": "11111111-1111-4111-8111-111111111111"
+          }
+        ],
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+5m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/dead-session-verdict/replacement-counts",
+  "steps": [
+    {
+      "args": {
+        "Compact": true
+      },
+      "command": "scan",
+      "exit": 0,
+      "json": {
+        "rows": [
+          {
+            "awaiting_reply": false,
+            "board_pos": 1,
+            "changed": true,
+            "consent_ok": false,
+            "dispatch_input": "4aa400b9cc768f3e13d53eeddeefd222608e7a6b209f1ce0263895122c541367",
+            "dispatch_skip_reason": null,
+            "doc_channel": null,
+            "doc_id": null,
+            "doc_new_comments": 0,
+            "due_poll": false,
+            "due_recheck": false,
+            "eligible": true,
+            "has_agent_block": true,
+            "has_journal": true,
+            "has_open_ask": false,
+            "holds_today_gate": true,
+            "id": "944",
+            "linked": [],
+            "order": 1,
+            "plan_review_due": false,
+            "poll_cadence": null,
+            "priorities_rank": 999999,
+            "recheck_kind": null,
+            "reopened": false,
+            "reopened_closed": false,
+            "replacements_24h": 0,
+            "section": "today",
+            "session_activity": null,
+            "session_id": "11111111-1111-4111-8111-111111111111",
+            "session_paused": false,
+            "session_process_dead": false,
+            "session_verdict": "replace",
+            "session_workspace_missing": false,
+            "snooze_until": null,
+            "snoozed": false,
+            "status": "in-progress",
+            "status_by": "agent",
+            "today_release_reason": "holding:no_declaration",
+            "tracked": true,
+            "unanswered_user": false,
+            "unanswered_user_where": "",
+            "urgency": "task 944",
+            "work_priority": null
+          }
+        ],
+        "summary": {
+          "omitted_reason": "ineligible, not holding the Today gate, quiet, and nothing due - use -OutFile for the full worklist",
+          "out_file": null,
+          "rows_due_poll": 0,
+          "rows_eligible": 1,
+          "rows_no_journal": 0,
+          "rows_omitted": 0,
+          "rows_reopened": 0,
+          "rows_returned": 1,
+          "rows_total": 1,
+          "rows_unanswered": 0,
+          "scan_seconds": "<DURATION>",
+          "today_holding": 1
+        }
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "944",
+        "SessionId": "22222222-2222-4222-8222-222222222222",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-944",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "<NOW+5m>",
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "944",
+        "kickoff_continuation": null,
+        "kind": "code",
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": "11111111-1111-4111-8111-111111111111",
+        "prior_session_ids": [
+          "11111111-1111-4111-8111-111111111111"
+        ],
+        "process_dead": false,
+        "project": "focus-planner",
+        "released": false,
+        "role_line": "You are the task session for planner task #944. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "22222222-2222-4222-8222-222222222222",
+        "state": "live",
+        "teardown_command": "pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path \"<ROOT>/lad/overnight-agent/worktrees/wt-944\"",
+        "verdict": "reuse",
+        "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-944",
+        "workspace_missing": false,
+        "workspace_type": "worktree"
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Compact": true
+      },
+      "command": "scan",
+      "exit": 0,
+      "json": {
+        "rows": [
+          {
+            "awaiting_reply": false,
+            "board_pos": 1,
+            "changed": true,
+            "consent_ok": false,
+            "dispatch_input": "28019e97e24a0d0c72f592a1d1cb13845f62f5590dca11e0f1daeed4811ff4f3",
+            "dispatch_skip_reason": null,
+            "doc_channel": null,
+            "doc_id": null,
+            "doc_new_comments": 0,
+            "due_poll": false,
+            "due_recheck": false,
+            "eligible": true,
+            "has_agent_block": true,
+            "has_journal": true,
+            "has_open_ask": false,
+            "holds_today_gate": true,
+            "id": "944",
+            "linked": [],
+            "order": 1,
+            "plan_review_due": false,
+            "poll_cadence": null,
+            "priorities_rank": 999999,
+            "recheck_kind": null,
+            "reopened": false,
+            "reopened_closed": false,
+            "replacements_24h": 1,
+            "section": "today",
+            "session_activity": null,
+            "session_id": "22222222-2222-4222-8222-222222222222",
+            "session_paused": false,
+            "session_process_dead": false,
+            "session_verdict": "reuse",
+            "session_workspace_missing": false,
+            "snooze_until": null,
+            "snoozed": false,
+            "status": "in-progress",
+            "status_by": "agent",
+            "today_release_reason": "holding:no_declaration",
+            "tracked": true,
+            "unanswered_user": false,
+            "unanswered_user_where": "",
+            "urgency": "task 944",
+            "work_priority": null
+          }
+        ],
+        "summary": {
+          "omitted_reason": "ineligible, not holding the Today gate, quiet, and nothing due - use -OutFile for the full worklist",
+          "out_file": null,
+          "rows_due_poll": 0,
+          "rows_eligible": 1,
+          "rows_no_journal": 0,
+          "rows_omitted": 0,
+          "rows_reopened": 0,
+          "rows_returned": 1,
+          "rows_total": 1,
+          "rows_unanswered": 0,
+          "scan_seconds": "<DURATION>",
+          "today_holding": 1
+        }
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

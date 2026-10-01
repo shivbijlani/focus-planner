@@ -1,0 +1,33 @@
+{
+  "files": {},
+  "id": "mc/turn-ask/g14-question-offer-refused",
+  "steps": [
+    {
+      "args": {
+        "Ask": "offer",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 2,
+      "json": {
+        "ask": "offer",
+        "docBound": false,
+        "docId": "",
+        "findings": [
+          {
+            "guard": "G14",
+            "line": 9,
+            "snippet": "**Needs from you:** which date should I use?",
+            "why": "this turn declares -Ask offer, but asks Shiv a direct question. A not-blocking declaration sets awaiting_reply false, so the question is dropped from the blocked-on-human digest and no later run re-raises it (#618) -- it would reach nobody. Use -Ask blocking if you need the answer to continue; reword to a statement if you do not; -DisableGuard G14 if you really mean it"
+          }
+        ],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "",
+        "length": 166,
+        "ok": false
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "750",
+  "status": "in-progress",
+  "version": 1,
+  "plan_id": "t750-v1",
+  "processed_file_hash": "785e256e5e4d90dd6a90f725c23a7bd487d904855b729a3195d0b2f54af4c23c",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "{{NOW-30m}}",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "{{NOW-30m}}",
+  "last_turn_by": "sess-coordinator"
+}

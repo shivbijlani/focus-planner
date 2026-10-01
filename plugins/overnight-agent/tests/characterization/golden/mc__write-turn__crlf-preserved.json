@@ -1,0 +1,19 @@
+{
+  "files": {
+    "data/journal/task-905.md": {
+      "change": "modified",
+      "text": "# Task 905: Fixture\r\n\r\nUser notes.\r\n\r\n---\r\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\r\n\r\n## 🌙 Overnight Agent — 2020-03-09\r\n\r\n<!-- from: overnight-agent -->\r\n<!-- oa-ask: none -->\r\n\r\n**Status:** In progress · 2020-03-09\r\n\r\nDid the thing.\r\n\r\n**Needs from you:** nothing.\r\n"
+    }
+  },
+  "id": "mc/write-turn/crlf-preserved",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Id": "905"
+      },
+      "exit": 0,
+      "tool": "write-turn"
+    }
+  ]
+}

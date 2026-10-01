@@ -1,0 +1,45 @@
+{
+  "files": {
+    "state/task-113.json": {
+      "bom": true,
+      "change": "created",
+      "json": {
+        "has_agent_block": false,
+        "id": "113",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "plan_id": "",
+        "processed_file_hash": "257c37360ae1c1e19cd16a7e126d23d6a0cd7d9e6e2ef59f2ac9bed2a2303fce",
+        "seeded": false,
+        "status": "unknown",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    }
+  },
+  "id": "cmd/mark/113-first-mark",
+  "steps": [
+    {
+      "args": {
+        "Id": "113"
+      },
+      "command": "mark",
+      "exit": 0,
+      "json": {
+        "has_agent_block": false,
+        "id": "113",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "plan_id": "",
+        "processed_file_hash": "257c37360ae1c1e19cd16a7e126d23d6a0cd7d9e6e2ef59f2ac9bed2a2303fce",
+        "seeded": false,
+        "status": "unknown",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 0
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

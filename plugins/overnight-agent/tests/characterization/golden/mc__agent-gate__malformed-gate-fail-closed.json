@@ -1,0 +1,34 @@
+{
+  "files": {},
+  "id": "mc/agent-gate/malformed-gate-fail-closed",
+  "steps": [
+    {
+      "args": {
+        "Action": "send_email_self",
+        "GatePath": "<ROOT>/data/malformed-gate.md",
+        "Id": "114"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "action": "send_email_self",
+        "affirmative_answered": false,
+        "affirmative_author": "dance-church",
+        "affirmative_phrase": "yes",
+        "affirmative_unattributed": true,
+        "consent_ok": false,
+        "gate_list": null,
+        "gate_path": "<ROOT>/data/malformed-gate.md",
+        "gate_rule": null,
+        "gate_state": "malformed",
+        "human_segments": 0,
+        "id": "114",
+        "path": "<ROOT>/data/journal/task-114.md",
+        "reason": "affirmative-not-attributable-to-human",
+        "repo": null,
+        "trailing_has_user": false
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "files": {},
+  "id": "mc/dispatch-stamp/check-readonly-and-stale-refused",
+  "steps": [
+    {
+      "args": {
+        "CheckDispatch": true,
+        "Id": "981"
+      },
+      "command": "session",
+      "exit": null,
+      "stdout": [],
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "DispatchInput": "stale-dispatch-input",
+        "ForDispatch": true,
+        "Id": "981",
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions.json"
+      },
+      "command": "session",
+      "exit": null,
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

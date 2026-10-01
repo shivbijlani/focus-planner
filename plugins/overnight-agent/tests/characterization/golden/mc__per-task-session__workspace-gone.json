@@ -1,0 +1,156 @@
+{
+  "files": {
+    "state/task-907.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "907",
+        "plan_id": "t907-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": {
+          "created_at": "<NOW+0m>",
+          "kind": "code",
+          "last_woken_at": "",
+          "prior_session_id": "",
+          "prior_session_ids": [],
+          "project": "focus-planner",
+          "replaced_at": "",
+          "session_id": "<GUID>",
+          "state": "dead",
+          "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-907",
+          "workspace_type": "worktree"
+        },
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    },
+    "state/task-908.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "908",
+        "plan_id": "t908-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": {
+          "created_at": "<NOW+0m>",
+          "kind": "code",
+          "last_woken_at": "",
+          "prior_session_id": "",
+          "prior_session_ids": [],
+          "project": "focus-planner",
+          "replaced_at": "",
+          "session_id": "<GUID>",
+          "state": "live",
+          "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-908",
+          "workspace_type": "worktree"
+        },
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/per-task-session/workspace-gone",
+  "steps": [
+    {
+      "args": {
+        "Id": "907",
+        "SessionId": "<GUID>",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-907",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "908",
+        "SessionId": "<GUID>",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-908",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "WorkspaceGone": "<ROOT>/lad/overnight-agent/worktrees/wt-907"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "already_dead": 0,
+        "marked_dead": 1,
+        "tasks": [
+          "907"
+        ],
+        "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-907"
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "907"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "<NOW+0m>",
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "907",
+        "kickoff_continuation": "This session continues work on planner task #907. The previous session for this task (<GUID>) could not be woken, so this one replaces it -- you are not starting from scratch. Read the task journal for what has already been done before doing anything new.",
+        "kind": "code",
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": "focus-planner",
+        "released": false,
+        "role_line": "You are the task session for planner task #907. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "<GUID>",
+        "state": "dead",
+        "teardown_command": "pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path \"<ROOT>/lad/overnight-agent/worktrees/wt-907\"",
+        "verdict": "replace",
+        "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-907",
+        "workspace_missing": false,
+        "workspace_type": "worktree"
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "WorkspaceGone": "<ROOT>/lad/overnight-agent/worktrees"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "already_dead": 0,
+        "marked_dead": 0,
+        "tasks": [],
+        "workspace": "<ROOT>/lad/overnight-agent/worktrees"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

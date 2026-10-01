@@ -1,0 +1,81 @@
+{
+  "files": {
+    "data/journal/task-942.md": {
+      "change": "modified",
+      "text": "# Task 942: Synthetic 942\n<!-- tg-meta chatId=-100123 threadId=7 -->\n<!-- doc-meta docId=DOC942 docUrl=https://docs.google.com/document/d/DOC942/edit -->\n\nUser notes for 942.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-01-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress\n\nWorked on task 942.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n"
+    },
+    "state/task-942.json": {
+      "bom": true,
+      "change": "created",
+      "json": {
+        "doc": {
+          "bound_at": "<NOW+0m>",
+          "doc_id": "DOC942",
+          "doc_url": "https://docs.google.com/document/d/DOC942/edit",
+          "observed_at": "",
+          "pending_ids": [],
+          "seen_ids": []
+        },
+        "has_agent_block": false,
+        "id": "942",
+        "plan_id": "",
+        "processed_file_hash": "",
+        "seeded": false,
+        "status": "unknown",
+        "updated": "<NOW+0m>",
+        "version": 0
+      }
+    }
+  },
+  "id": "mc/phase07-ownership/explicit-bind-is-separate-owner",
+  "steps": [
+    {
+      "args": {
+        "DocId": "DOC942",
+        "DocUrl": "https://docs.google.com/document/d/DOC942/edit",
+        "Id": "942"
+      },
+      "command": "doc",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "doc_id": "DOC942",
+        "doc_url": "https://docs.google.com/document/d/DOC942/edit",
+        "healed": false,
+        "id": "942",
+        "journal_stamp_mismatch_id": null,
+        "journal_stamped": true,
+        "new_comment_ids": null,
+        "new_comments": 0,
+        "observation": null,
+        "observed_at": null,
+        "seen_comments": 0,
+        "source": "none"
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "942"
+      },
+      "command": "doc",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "doc_id": "DOC942",
+        "doc_url": "https://docs.google.com/document/d/DOC942/edit",
+        "healed": false,
+        "id": "942",
+        "journal_stamp_mismatch_id": null,
+        "journal_stamped": true,
+        "new_comment_ids": null,
+        "new_comments": 0,
+        "observation": null,
+        "observed_at": null,
+        "seen_comments": 0,
+        "source": "state"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

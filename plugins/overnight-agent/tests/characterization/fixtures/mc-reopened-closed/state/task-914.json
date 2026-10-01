@@ -1,0 +1,14 @@
+{
+  "id": "914",
+  "status": "done",
+  "version": 1,
+  "plan_id": "t914-v1",
+  "processed_file_hash": "3c81f8215c44e90cee523caa9b30c443d2c75ace11e73712b3ad3d10b718c49d",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-03-01T12:00:00Z",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "2020-03-01T12:00:00Z",
+  "last_turn_by": "sess-coordinator"
+}

@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "mc/write-turn/disable-guard-allows-g7",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "DisableGuard": [
+          "G7"
+        ],
+        "Validate": true
+      },
+      "exit": 0,
+      "stdout": [
+        "[write-turn] clean (validate only - nothing written)."
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

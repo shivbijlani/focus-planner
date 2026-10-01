@@ -1,0 +1,185 @@
+{
+  "fixture": "mc-doc-binding",
+  "covers": [
+    "mutcheck-doc-binding"
+  ],
+  "cases": [
+    {
+      "id": "mc/doc-binding/bind-docid-url-stamps-journal",
+      "note": "Explicit -DocId/-DocUrl binds the task, reports the document, and writes a durable journal stamp beside tg-meta.",
+      "tool": "oa-state",
+      "command": "doc",
+      "args": {
+        "Id": "900",
+        "DocId": "DOC900",
+        "DocUrl": "https://docs.google.com/document/d/DOC900/edit"
+      }
+    },
+    {
+      "id": "mc/doc-binding/rebind-conflict-and-force",
+      "note": "A conflicting bind is refused with doc_bind_conflict, while -Force moves the binding.",
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "901",
+            "DocId": "DOC901A",
+            "DocUrl": "https://docs.google.com/document/d/DOC901A/edit"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "901",
+            "DocId": "DOC901B"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "901",
+            "DocId": "DOC901B",
+            "DocUrl": "https://docs.google.com/document/d/DOC901B/edit",
+            "Force": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/doc-binding/observe-text-dump-two-phase-ack",
+      "note": "Text comment dumps report new ids without advancing until -Ack, and ack clears exactly the pending ids.",
+      "files": {
+        "home/comments-902.txt": "Found 2 comments in document DOC902\n\nComment ID: C902A\n  Author: Shiv Bijlani\n  Created: 2020-02-01T10:00:00Z\n  Content: first\n\nComment ID: C902B\n  Author: Shiv Bijlani\n  Created: 2020-02-01T10:05:00Z\n  Content: second\n"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "902",
+            "DocId": "DOC902",
+            "DocUrl": "https://docs.google.com/document/d/DOC902/edit"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "902",
+            "Observe": "{home}/comments-902.txt"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "902",
+            "Observe": "{home}/comments-902.txt"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "902",
+            "Ack": true
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "902",
+            "Observe": "{home}/comments-902.txt"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/doc-binding/observe-json-array-accepted",
+      "note": "Structured JSON comment arrays are accepted as observations and produce the same pending-id shape.",
+      "files": {
+        "home/comments-903.json": "[{\"id\":\"C903A\",\"created\":\"2020-02-01T10:00:00Z\"},{\"id\":\"C903B\",\"created\":\"2020-02-01T10:05:00Z\"}]\n"
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "903",
+            "DocId": "DOC903",
+            "DocUrl": "https://docs.google.com/document/d/DOC903/edit"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "903",
+            "Observe": "{home}/comments-903.json"
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "903",
+            "Ack": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/doc-binding/unbind-reheals-from-journal-stamp",
+      "note": "-Unbind reports unbound, but the durable doc-meta stamp lets a later resolve self-heal the binding.",
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "906",
+            "DocId": "DOC906",
+            "DocUrl": "https://docs.google.com/document/d/DOC906/edit"
+          },
+          "record": false
+        },
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "906",
+            "Unbind": true
+          }
+        },
+        {
+          "tool": "oa-state",
+          "command": "doc",
+          "args": {
+            "Id": "906"
+          }
+        }
+      ]
+    },
+    {
+      "id": "mc/doc-binding/journal-doc-meta-self-heals",
+      "note": "A journal doc-meta stamp with no state file resolves as a healed binding and writes state.",
+      "tool": "oa-state",
+      "command": "doc",
+      "args": {
+        "Id": "904"
+      }
+    },
+    {
+      "id": "mc/doc-binding/scan-reports-doc-fields",
+      "note": "scan surfaces the bound doc id, pending comment count, and freshness fields on the normal worklist.",
+      "tool": "oa-state",
+      "command": "scan"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "files": {},
+  "id": "cmd/consent/102-delete-data-floor-beats-yolo",
+  "steps": [
+    {
+      "args": {
+        "Action": "delete_data",
+        "Id": "102",
+        "Repo": "sample-repo"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "action": "delete_data",
+        "consent_ok": false,
+        "gate_list": "ask",
+        "gate_path": "<ROOT>/data/agent-gate.md",
+        "gate_rule": "Outcome can result in permanent data loss",
+        "gate_state": "ok",
+        "id": "102",
+        "path": "<ROOT>/data/journal/task-102.md",
+        "reason": "gate-floor-blocks",
+        "repo": "sample-repo",
+        "trailing_has_user": false
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "files": {
+    "state/task-101.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "101",
+        "last_turn_at": "<NOW-60m>",
+        "last_turn_by": "sess-coordinator",
+        "plan_id": "t101-v1",
+        "processed_file_hash": "882c76a0f237ed2963a74d24dfcfb150923e09759779c3f81177b732a9f64be9",
+        "seeded": false,
+        "status": "in-progress",
+        "status_by": "agent",
+        "today_exhausted": null,
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "cmd/mark/101-exhaustion-clear",
+  "steps": [
+    {
+      "args": {
+        "ExhaustionClear": true,
+        "Id": "101"
+      },
+      "command": "mark",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "101",
+        "last_turn_at": "<NOW-60m>",
+        "last_turn_by": "sess-coordinator",
+        "plan_id": "t101-v1",
+        "processed_file_hash": "882c76a0f237ed2963a74d24dfcfb150923e09759779c3f81177b732a9f64be9",
+        "seeded": false,
+        "status": "in-progress",
+        "status_by": "agent",
+        "today_exhausted": null,
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

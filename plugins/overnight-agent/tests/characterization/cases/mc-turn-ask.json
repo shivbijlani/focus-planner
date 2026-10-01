@@ -1,0 +1,85 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-turn-ask"
+  ],
+  "cases": [
+    {
+      "id": "mc/turn-ask/colon-reply-not-ask",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "offer",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n*Reply:* **`merge 198`**\n",
+      "note": "Colon Reply shape has hasAsk false but exits clean."
+    },
+    {
+      "id": "mc/turn-ask/needs-from-you-is-ask",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "offer",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** reply `go` if you want me to continue.\n",
+      "note": "Needs from you reply dialect has hasAsk true."
+    },
+    {
+      "id": "mc/turn-ask/imperative-reply-is-ask",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "offer",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\nReply `merge 198` and I will land it.\n",
+      "note": "Imperative Reply `x` dialect has hasAsk true."
+    },
+    {
+      "id": "mc/turn-ask/info-no-ask-clean",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\nRecorded for the archive. Nothing needed.\n",
+      "note": "Informational turn has hasAsk false and is still clean."
+    },
+    {
+      "id": "mc/turn-ask/g14-question-offer-refused",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "offer",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** which date should I use?\n",
+      "note": "A direct question declared offer is refused by G14."
+    },
+    {
+      "id": "mc/turn-ask/g14-none-opener-offer-clean",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "offer",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** none. Two optional things you may want to action.\n",
+      "note": "Dismissive opener with offer stays clean."
+    },
+    {
+      "id": "mc/turn-ask/g14-question-blocking-clean",
+      "tool": "write-turn",
+      "args": {
+        "Ask": "blocking",
+        "Validate": true,
+        "Json": true
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-09\n\nDid the thing.\n\n**Needs from you:** which option should I use?\n",
+      "note": "The same direct question declared blocking is allowed."
+    }
+  ]
+}

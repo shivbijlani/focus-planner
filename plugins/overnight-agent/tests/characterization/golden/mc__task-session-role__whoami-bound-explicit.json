@@ -1,0 +1,70 @@
+{
+  "files": {
+    "state/task-960.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "960",
+        "plan_id": "t960-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": {
+          "created_at": "<NOW+0m>",
+          "kind": "code",
+          "last_woken_at": "",
+          "prior_session_id": "",
+          "prior_session_ids": [],
+          "project": "focus-planner",
+          "replaced_at": "",
+          "session_id": "<GUID>",
+          "state": "live",
+          "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-960",
+          "workspace_type": "worktree"
+        },
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/task-session-role/whoami-bound-explicit",
+  "steps": [
+    {
+      "args": {
+        "Id": "960",
+        "SessionId": "<GUID>",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-960",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "SessionId": "<GUID>"
+      },
+      "command": "whoami",
+      "exit": 0,
+      "json": {
+        "role": "task",
+        "role_line": "You are the task session for planner task #960. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "<GUID>",
+        "session_id_source": "parameter",
+        "task_id": "960",
+        "tasks": [
+          {
+            "id": "960",
+            "match": "session_id",
+            "state": "live"
+          }
+        ]
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

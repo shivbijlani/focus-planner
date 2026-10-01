@@ -1,0 +1,32 @@
+{
+  "files": {},
+  "id": "mc/plan-dispatch/deferred-today-gate",
+  "steps": [
+    {
+      "args": {
+        "Compact": true,
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions.json"
+      },
+      "command": "scan",
+      "exit": null,
+      "stdout": [],
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "DispatchInput": "stale",
+        "ForDispatch": true,
+        "Id": "900",
+        "PlanDispatch": true,
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions.json"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_not_eligible: follow the current Today-first worklist and user pauses"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

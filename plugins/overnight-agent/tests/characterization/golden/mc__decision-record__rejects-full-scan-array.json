@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "mc/decision-record/rejects-full-scan-array",
+  "steps": [
+    {
+      "args": {
+        "DecisionNow": "2020-01-02T10:30:00-08:00",
+        "RunId": "run-3",
+        "ScanFile": "<ROOT>/data/scan-array.json"
+      },
+      "command": "decisions",
+      "exit": 1,
+      "stderr": [
+        "decisions_requires_compact_scan: pass the output of `scan -Compact`, which carries summary + rows"
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

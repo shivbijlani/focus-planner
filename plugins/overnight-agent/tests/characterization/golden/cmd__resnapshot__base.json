@@ -1,0 +1,125 @@
+{
+  "files": {
+    "state/task-101.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "101",
+        "last_turn_at": "<NOW-60m>",
+        "last_turn_by": "sess-coordinator",
+        "plan_id": "t101-v1",
+        "processed_file_hash": "882c76a0f237ed2963a74d24dfcfb150923e09759779c3f81177b732a9f64be9",
+        "seeded": false,
+        "status": "in-progress",
+        "status_by": "agent",
+        "unanswered_user_message_at": "<NOW+0m>",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    },
+    "state/task-106.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "106",
+        "last_turn_at": "2020-03-01T12:00:00Z",
+        "last_turn_by": "sess-coordinator",
+        "plan_id": "t106-v1",
+        "processed_file_hash": "00e750425b63f5fcd853a80ed80dc77bc1d08342b014bfb81c2442eda6eae700",
+        "seeded": false,
+        "status": "done",
+        "status_by": "agent",
+        "unanswered_user_message_at": "<NOW+0m>",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    },
+    "state/task-107.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "107",
+        "last_turn_at": "2020-03-01T12:00:00Z",
+        "last_turn_by": "sess-coordinator",
+        "plan_id": "t107-v1",
+        "processed_file_hash": "0174a41b8a047d9f4cee67d93ece9a8afd31ccaa30a73f84119b944e2c6ed9a9",
+        "seeded": false,
+        "status": "done",
+        "status_by": "agent",
+        "unanswered_user_message_at": "<NOW+0m>",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    },
+    "state/task-109.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "109",
+        "last_turn_at": "2020-03-01T12:00:00Z",
+        "last_turn_by": "sess-coordinator",
+        "plan_id": "t109-v1",
+        "processed_file_hash": "0367384428ccdcaa783f96a2fcf6c7562e46fe84b2d2431e36d5bc2a4d9f4f5f",
+        "seeded": false,
+        "status": "proposed",
+        "status_by": "agent",
+        "unanswered_user_message_at": "<NOW+0m>",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    },
+    "state/task-111.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "111",
+        "last_turn_at": "2020-03-01T12:00:00Z",
+        "last_turn_by": "sess-coordinator",
+        "plan_id": "t111-v1",
+        "processed_file_hash": "c892711eb9edd59677c7c532a748788858366fea3210c8f28cc36f56d24b8bf0",
+        "seeded": false,
+        "status": "proposed",
+        "status_by": "agent",
+        "unanswered_user_message_at": "<NOW+0m>",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    },
+    "state/task-114.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "114",
+        "last_turn_at": "2020-03-01T12:00:00Z",
+        "last_turn_by": "sess-coordinator",
+        "plan_id": "t114-v1",
+        "processed_file_hash": "154066828e4d3a8796066721f8a51b1aec93ea5da69c7e87010f40ae0822e68c",
+        "seeded": false,
+        "status": "in-progress",
+        "status_by": "agent",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "cmd/resnapshot/base",
+  "steps": [
+    {
+      "command": "resnapshot",
+      "exit": 0,
+      "json": {
+        "left_for_review": 7,
+        "rebaselined": 1,
+        "untracked": 2
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

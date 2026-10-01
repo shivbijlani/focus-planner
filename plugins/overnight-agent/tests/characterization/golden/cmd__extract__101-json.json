@@ -1,0 +1,58 @@
+{
+  "files": {},
+  "id": "cmd/extract/101-json",
+  "steps": [
+    {
+      "args": {
+        "Id": "101",
+        "Json": true
+      },
+      "command": "extract",
+      "exit": 0,
+      "json": {
+        "board_note": "",
+        "board_path": "<ROOT>/data/planner.md",
+        "board_read": true,
+        "board_row_found": true,
+        "ceiling_bytes": 24576,
+        "deliverables": [],
+        "elided_bytes": 34,
+        "emitted_bytes": 454,
+        "has_agent_block": true,
+        "head": {
+          "elided_bytes": 0,
+          "text": "# Task 101: Renew passport\n\nPrefer the expedited option; budget is fine.\n\n---\n",
+          "truncated": false
+        },
+        "id": "101",
+        "latest_turn": {
+          "elided_bytes": 0,
+          "text": "## ?? Overnight Agent - 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nDrafted the DS-82 form and booked a photo slot.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+          "truncated": false
+        },
+        "linked": [],
+        "linked_board": [],
+        "linked_journal": [],
+        "open_asks": [],
+        "path": "<ROOT>/data/journal/task-101.md",
+        "source_bytes": 488,
+        "status": "In progress - plan v1",
+        "trailing_user": {
+          "elided_bytes": 0,
+          "text": "\n## 2020-03-02\n\n<!-- from: me -->\nThanks - can you also check the photo size rules?\n",
+          "truncated": false
+        },
+        "user_messages": {
+          "dropped": 0,
+          "elided_bytes": 0,
+          "newest_first": [
+            "\nThanks - can you also check the photo size rules?\n"
+          ],
+          "shown": 1,
+          "total": 1
+        }
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

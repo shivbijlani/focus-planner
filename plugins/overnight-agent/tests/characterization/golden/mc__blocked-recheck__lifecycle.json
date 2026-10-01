@@ -1,0 +1,169 @@
+{
+  "files": {
+    "state/task-901.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "901",
+        "last_turn_at": "2020-03-01T12:00:00Z",
+        "last_turn_by": "sess-test",
+        "plan_id": "t901-v1",
+        "processed_file_hash": "f9991cd9116d641cedf8c50f83313b2252e378da7084f967f92f2d3c07b1aae5",
+        "recheck": null,
+        "seeded": false,
+        "status": "blocked",
+        "status_by": "agent",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/blocked-recheck/lifecycle",
+  "steps": [
+    {
+      "command": "scan",
+      "exit": 0,
+      "json": [
+        {
+          "ask_declared": "none",
+          "ask_source": "declared",
+          "awaiting_reply": false,
+          "board_pos": 1,
+          "changed": false,
+          "consent_ok": false,
+          "consent_reason": "no-trailing-content",
+          "dispatch_input": "19bb4209138ec0383c624cc70815624715a312b2fa397d5011a1c93187ca789a",
+          "dispatch_skip_reason": null,
+          "doc_bound": false,
+          "doc_channel": null,
+          "doc_id": null,
+          "doc_new_comments": 0,
+          "doc_observed_at": null,
+          "doc_source": "none",
+          "due_poll": false,
+          "due_recheck": true,
+          "eligible": true,
+          "exhaustion": null,
+          "gate_backstop_hours": 0,
+          "gate_backstop_source": "settings",
+          "gate_strict": false,
+          "gate_strict_source": "default",
+          "has_agent_block": true,
+          "has_journal": true,
+          "has_open_ask": false,
+          "holds_today_gate": true,
+          "id": "901",
+          "last_turn_at": "03/01/2020 12:00:00",
+          "linked": [],
+          "model": "auto",
+          "model_source": "default",
+          "on_board": true,
+          "order": 1,
+          "paused_at": null,
+          "plan_review_due": false,
+          "poll_cadence": null,
+          "priorities_rank": 999999,
+          "recheck_cadence": "12h",
+          "recheck_kind": "ci",
+          "reopened": false,
+          "reopened_closed": false,
+          "replacements_24h": 0,
+          "section": "today",
+          "session_activity": null,
+          "session_id": null,
+          "session_paused": false,
+          "session_process_dead": false,
+          "session_state": null,
+          "session_verdict": "create",
+          "session_workspace": null,
+          "session_workspace_missing": false,
+          "snooze_until": null,
+          "snoozed": false,
+          "status": "blocked",
+          "status_by": "agent",
+          "today_release_reason": "holding:no_declaration",
+          "tracked": true,
+          "unanswered_user": false,
+          "unanswered_user_at": null,
+          "unanswered_user_where": "",
+          "urgency": "??",
+          "user_completed": false,
+          "work_priority": null
+        }
+      ],
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "901",
+        "RecheckDone": true
+      },
+      "command": "mark",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "901"
+      },
+      "command": "get",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "901",
+        "last_turn_at": "2020-03-01T12:00:00Z",
+        "last_turn_by": "sess-test",
+        "plan_id": "t901-v1",
+        "processed_file_hash": "f9991cd9116d641cedf8c50f83313b2252e378da7084f967f92f2d3c07b1aae5",
+        "recheck": {
+          "cadence": "12h",
+          "interval_minutes": 720,
+          "kind": "ci",
+          "last_rechecked": "<NOW+0m>",
+          "next_due": "<NOW+720m>"
+        },
+        "seeded": false,
+        "status": "blocked",
+        "status_by": "agent",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "901",
+        "RecheckClear": true
+      },
+      "command": "mark",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "901"
+      },
+      "command": "get",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "901",
+        "last_turn_at": "2020-03-01T12:00:00Z",
+        "last_turn_by": "sess-test",
+        "plan_id": "t901-v1",
+        "processed_file_hash": "f9991cd9116d641cedf8c50f83313b2252e378da7084f967f92f2d3c07b1aae5",
+        "recheck": null,
+        "seeded": false,
+        "status": "blocked",
+        "status_by": "agent",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

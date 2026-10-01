@@ -1,0 +1,85 @@
+{
+  "files": {
+    "state/task-985.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "985",
+        "plan_id": "t985-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": {
+          "created_at": "2020-03-01T00:00:00Z",
+          "kind": "code",
+          "last_woken_at": "<NOW+5m>",
+          "prior_session_id": "",
+          "prior_session_ids": [],
+          "project": "p",
+          "replaced_at": "",
+          "session_id": "S-985",
+          "state": "live",
+          "workspace": "",
+          "workspace_type": "folder"
+        },
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+5m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/dispatch-stamp/for-dispatch-authorises-and-stamps",
+  "steps": [
+    {
+      "args": {
+        "Compact": true,
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions.json"
+      },
+      "command": "scan",
+      "exit": null,
+      "stdout": [],
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "DispatchInput": "ed31c38831e12f73be07a7b9cf0af3de47b9d569996eae789f07cc329a0a39c2",
+        "ForDispatch": true,
+        "Id": "985",
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions.json"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "2020-03-01T00:00:00Z",
+        "dispatch_authorised": true,
+        "dispatch_eligible": true,
+        "id": "985",
+        "kickoff_continuation": null,
+        "kind": "code",
+        "last_woken_at": "<NOW+5m>",
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": "p",
+        "released": false,
+        "role_line": "You are the task session for planner task #985. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "S-985",
+        "state": "live",
+        "teardown_command": null,
+        "verdict": "reuse",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": "folder"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

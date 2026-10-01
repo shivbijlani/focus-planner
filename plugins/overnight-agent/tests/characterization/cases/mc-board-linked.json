@@ -1,0 +1,37 @@
+{
+  "fixture": "mc-board-linked",
+  "covers": [
+    "mutcheck-board-linked"
+  ],
+  "cases": [
+    {
+      "id": "mc/board-linked/scan-merged-board-links",
+      "note": "full scan pins board-only, journal-only, merged board+journal, ragged Deferred, Wake-not-linked, and trailing-snooze linked[] behavior in one worklist",
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "ScanOutFile": "{cwd}\\worklist.json"
+      }
+    },
+    {
+      "id": "mc/board-linked/unreadable-board-not-none",
+      "note": "an unreadable board is reported as a gap, not as (none)",
+      "tool": "oa-state",
+      "command": "extract",
+      "args": {
+        "Id": "907",
+        "PlannerBoard": "{data}\\missing-planner.md"
+      }
+    },
+    {
+      "id": "mc/board-linked/extract-merged-board-and-journal",
+      "note": "extract POINTERS merge board Linked ID and journal **Linked:** parents with provenance",
+      "tool": "oa-state",
+      "command": "extract",
+      "args": {
+        "Id": "902",
+        "BudgetKB": 2
+      }
+    }
+  ]
+}

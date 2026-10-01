@@ -1,0 +1,22 @@
+{
+  "files": {},
+  "id": "cmd/whoami/coordinator",
+  "steps": [
+    {
+      "args": {
+        "SessionId": "<GUID>"
+      },
+      "command": "whoami",
+      "exit": 0,
+      "json": {
+        "role": "coordinator",
+        "role_line": null,
+        "session_id": "<GUID>",
+        "session_id_source": "parameter",
+        "task_id": null,
+        "tasks": []
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

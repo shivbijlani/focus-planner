@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "cmd/gate/empty",
+  "steps": [
+    {
+      "command": "gate",
+      "exit": 0,
+      "json": {
+        "allow": [],
+        "ask": [],
+        "exists": true,
+        "mtime": "<NOW+0m>",
+        "path": "<ROOT>/data/agent-gate.md",
+        "state": "empty",
+        "version": null
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

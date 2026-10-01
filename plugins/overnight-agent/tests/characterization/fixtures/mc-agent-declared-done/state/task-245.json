@@ -1,0 +1,22 @@
+{
+  "id": "245",
+  "status": "done",
+  "version": 1,
+  "plan_id": "t245-v1",
+  "processed_file_hash": "91da17759d84172c66da62082129bec65a1fd68eeeed9aaccd3e60bc4cd74e97",
+  "has_agent_block": true,
+  "seeded": false,
+  "updated": "2020-03-01T12:00:00Z",
+  "status_by": "agent",
+  "unanswered_user_message_at": null,
+  "last_turn_at": "2020-03-01T12:00:00Z",
+  "last_turn_by": "sess-coordinator",
+  "today_exhausted": {
+    "at": "{{NOW-5m}}",
+    "examined": [
+      "gh:501"
+    ],
+    "note": "",
+    "today_hash": "1d91e88ff08055d169245dec8c65a330fa8871623272f125ed15cc42bafddf3c"
+  }
+}

@@ -1,0 +1,145 @@
+{
+  "files": {
+    "state/task-910.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "910",
+        "plan_id": "t910-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": {
+          "created_at": "<NOW+0m>",
+          "kind": "code",
+          "last_woken_at": "",
+          "prior_session_id": "<GUID>",
+          "prior_session_ids": [
+            "<GUID>",
+            "<GUID>"
+          ],
+          "project": "focus-planner",
+          "replaced_at": "<NOW+0m>",
+          "session_id": "<GUID>",
+          "state": "live",
+          "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-910-3",
+          "workspace_type": "worktree"
+        },
+        "session_replacements": [
+          {
+            "at": "<NOW+0m>",
+            "session_id": "<GUID>"
+          },
+          {
+            "at": "<NOW+0m>",
+            "session_id": "<GUID>"
+          }
+        ],
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/session-bind-backwards/forward-lineage",
+  "steps": [
+    {
+      "args": {
+        "Id": "910",
+        "SessionId": "<GUID>",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-910-1",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "910",
+        "SessionDead": true
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "910",
+        "SessionId": "<GUID>",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-910-2",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "910",
+        "SessionDead": true
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "910",
+        "SessionId": "<GUID>",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-910-3",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "910"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "<NOW+0m>",
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "910",
+        "kickoff_continuation": null,
+        "kind": "code",
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": "<GUID>",
+        "prior_session_ids": [
+          "<GUID>",
+          "<GUID>"
+        ],
+        "process_dead": false,
+        "project": "focus-planner",
+        "released": false,
+        "role_line": "You are the task session for planner task #910. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "<GUID>",
+        "state": "live",
+        "teardown_command": "pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path \"<ROOT>/lad/overnight-agent/worktrees/wt-910-3\"",
+        "verdict": "reuse",
+        "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-910-3",
+        "workspace_missing": false,
+        "workspace_type": "worktree"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

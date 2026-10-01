@@ -1,0 +1,59 @@
+{
+  "files": {
+    "state/task-930.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "doc": {
+          "bound_at": "01/01/2020 12:00:00",
+          "doc_id": "DOC930",
+          "doc_url": "https://docs.google.com/document/d/DOC930/edit",
+          "observed_at": "<NOW+0m>",
+          "pending_ids": [
+            "C930A"
+          ],
+          "seen_ids": []
+        },
+        "has_agent_block": true,
+        "id": "930",
+        "last_turn_at": "2020-01-01T12:00:00Z",
+        "last_turn_by": "sess-char",
+        "plan_id": "t930-v1",
+        "processed_file_hash": "f7f7907cd1ef48d627d03cb9b67f898df476f42250f0517b00033b792340fe7f",
+        "seeded": false,
+        "status": "in-progress",
+        "status_by": "agent",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/observe-bound-docs/observe-refreshes-stale-channel",
+  "steps": [
+    {
+      "args": {
+        "Id": "930",
+        "Observe": "<ROOT>/lad/overnight-agent/comments-930.txt"
+      },
+      "command": "doc",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "doc_id": "DOC930",
+        "doc_url": "https://docs.google.com/document/d/DOC930/edit",
+        "healed": false,
+        "id": "930",
+        "journal_stamp_mismatch_id": null,
+        "journal_stamped": false,
+        "new_comment_ids": "C930A",
+        "new_comments": 1,
+        "observation": "read",
+        "observed_at": "<NOW+0m>",
+        "seen_comments": 0,
+        "source": "state"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

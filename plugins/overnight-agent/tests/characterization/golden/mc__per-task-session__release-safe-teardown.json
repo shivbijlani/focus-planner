@@ -1,0 +1,111 @@
+{
+  "files": {
+    "state/task-906.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "906",
+        "plan_id": "t906-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": null,
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/per-task-session/release-safe-teardown",
+  "steps": [
+    {
+      "args": {
+        "Id": "906",
+        "SessionId": "<GUID>",
+        "SessionKind": "code",
+        "SessionProject": "focus-planner",
+        "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-906",
+        "WorkspaceType": "worktree"
+      },
+      "command": "session",
+      "exit": 0,
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "906",
+        "SessionRelease": true
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": false,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": null,
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "906",
+        "kickoff_continuation": null,
+        "kind": null,
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": null,
+        "released": true,
+        "role_line": "You are the task session for planner task #906. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": null,
+        "state": null,
+        "teardown_command": null,
+        "verdict": "create",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": null
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "906"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": false,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": null,
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "906",
+        "kickoff_continuation": null,
+        "kind": null,
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": null,
+        "released": false,
+        "role_line": "You are the task session for planner task #906. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": null,
+        "state": null,
+        "teardown_command": null,
+        "verdict": "create",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": null
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

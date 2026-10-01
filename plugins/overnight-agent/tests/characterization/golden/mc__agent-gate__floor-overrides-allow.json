@@ -1,0 +1,28 @@
+{
+  "files": {},
+  "id": "mc/agent-gate/floor-overrides-allow",
+  "steps": [
+    {
+      "args": {
+        "Action": "send_email_many",
+        "Id": "114"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "action": "send_email_many",
+        "consent_ok": false,
+        "gate_list": "ask",
+        "gate_path": "<ROOT>/data/agent-gate.md",
+        "gate_rule": "Send-to-many (group/channel, mass email)",
+        "gate_state": "ok",
+        "id": "114",
+        "path": "<ROOT>/data/journal/task-114.md",
+        "reason": "gate-floor-blocks",
+        "repo": null,
+        "trailing_has_user": false
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

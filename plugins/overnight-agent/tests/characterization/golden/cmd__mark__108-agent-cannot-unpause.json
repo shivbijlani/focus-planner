@@ -1,0 +1,19 @@
+{
+  "files": {},
+  "id": "cmd/mark/108-agent-cannot-unpause",
+  "steps": [
+    {
+      "args": {
+        "Id": "108",
+        "Status": "in-progress"
+      },
+      "command": "mark",
+      "exit": 1,
+      "stderr": [
+        "task_paused_by_user: task 108 was paused by the user at <INVTIME-120m> (status blocked, status_by user), and the agent may not change its status out of that. Only he clears a pause: either he replies in the journal below the newest turn, or a run records his decision with `-StatusBy user`. Marking it as the agent would erase the instruction as a side effect of reporting work he asked you to stop (#540)."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

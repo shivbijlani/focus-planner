@@ -1,0 +1,26 @@
+{
+  "files": {},
+  "id": "mc/issue-shipped/classifier-fail-advisory",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 0,
+      "json": {
+        "ask": "none",
+        "docBound": false,
+        "docId": "",
+        "findings": [],
+        "g15Note": "origin/main is not resolvable (stub)",
+        "hasAsk": true,
+        "id": "",
+        "length": 141,
+        "ok": true
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

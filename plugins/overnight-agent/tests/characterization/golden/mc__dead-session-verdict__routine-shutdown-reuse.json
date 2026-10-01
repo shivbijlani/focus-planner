@@ -1,0 +1,15 @@
+{
+  "files": {},
+  "id": "mc/dead-session-verdict/routine-shutdown-reuse",
+  "steps": [
+    {
+      "args": {
+        "Id": "943"
+      },
+      "command": "session",
+      "exit": null,
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}

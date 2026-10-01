@@ -1,0 +1,43 @@
+{
+  "files": {},
+  "id": "cmd/session/122-replace",
+  "steps": [
+    {
+      "args": {
+        "Id": "122"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 2,
+        "concurrency_source": "settings",
+        "created_at": "<NOW-2880m>",
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "122",
+        "kickoff_continuation": "This session continues work on planner task #122. The previous session for this task (<GUID>) could not be woken, so this one replaces it -- you are not starting from scratch. Read the task journal for what has already been done before doing anything new.",
+        "kind": "chat",
+        "last_woken_at": "<NOW-1440m>",
+        "model": "auto",
+        "model_source": "settings",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": null,
+        "released": false,
+        "role_line": "You are the task session for planner task #122. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "<GUID>",
+        "state": "dead",
+        "teardown_command": null,
+        "verdict": "replace",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": "folder"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

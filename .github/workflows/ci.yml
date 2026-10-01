@@ -1709,3 +1709,26 @@ jobs:
       - name: Mutation check (G15 refuses proposals, never reports, and fails open loudly)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-shipped-pick.ps1
+  # Item 0b: the Overnight Agent CHARACTERIZATION (golden) suite. It pins what oa-state.ps1 and
+  # write-turn.ps1 observably do today -- every subcommand and every write-turn mode, plus at
+  # least one case per behaviour each oa-state/write-turn mutation check protects -- as
+  # implementation-agnostic goldens (exit code, normalised stdout/stderr, and the file-tree diff
+  # of a sandboxed planner folder + state dir). It is the gate for the Node ports (items 3 and 4):
+  # the same cases run against `--impl node` must produce the same observations.
+  #
+  # windows-latest because the owner's agent runs on Windows and a few verdicts are OS-shaped
+  # (the state-lock path is case-folded on Windows, path roots, Test-Path). Hermetic: every path
+  # argument points into a temp sandbox and the child environment is an allow-list, so no live
+  # store, no network, and no ambient session id. See plugins/overnight-agent/tests/characterization/README.md.
+  agent-characterization:
+    name: Agent characterization (golden) suite
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Characterization suite against the PowerShell implementation
+        shell: pwsh
+        run: node ./plugins/overnight-agent/tests/characterization/run.mjs --impl ps --jobs 4

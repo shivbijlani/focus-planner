@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "mc/issue-shipped/disable-g15-clears-refusal",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "DisableGuard": [
+          "G15"
+        ],
+        "Validate": true
+      },
+      "exit": 0,
+      "stdout": [
+        "[write-turn] clean (validate only - nothing written)."
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}

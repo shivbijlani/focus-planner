@@ -1,0 +1,129 @@
+{
+  "files": {
+    "state/task-930.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "930",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "paused_at": null,
+        "plan_id": "t930-v1",
+        "processed_file_hash": "d69a6c75f6cad0d92a49dcc22c672b6dfac848b8be782f2b889177361cca9a83",
+        "seeded": false,
+        "session": {
+          "created_at": "2020-03-01T00:00:00Z",
+          "kind": "chat",
+          "last_woken_at": "",
+          "prior_session_id": "",
+          "project": "p",
+          "replaced_at": "",
+          "session_id": "S-930",
+          "state": "live",
+          "workspace": "",
+          "workspace_type": "folder"
+        },
+        "status": "in-progress",
+        "status_by": "user",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/session-pause/agent-cannot-unpause",
+  "steps": [
+    {
+      "args": {
+        "Id": "930",
+        "Status": "in-progress"
+      },
+      "command": "mark",
+      "exit": 1,
+      "stderr": [
+        "Exception: <SKILL>/oa-state.ps1:<LINE>",
+        "task_paused_by_user: task 930 was paused by the user at 03/01/2020 06:00:00 (status blocked, status_by user),",
+        "and the agent may not change its status out of that. Only he clears a pause: either he replies in the journal",
+        "below the newest turn, or a run records his decision with `-StatusBy user`. Marking it as the agent would erase",
+        "the instruction as a side effect of reporting work he asked you to stop (#540)."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "930",
+        "Status": "in-progress",
+        "StatusBy": "user"
+      },
+      "command": "mark",
+      "exit": 0,
+      "json": {
+        "has_agent_block": true,
+        "id": "930",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "paused_at": null,
+        "plan_id": "t930-v1",
+        "processed_file_hash": "d69a6c75f6cad0d92a49dcc22c672b6dfac848b8be782f2b889177361cca9a83",
+        "seeded": false,
+        "session": {
+          "created_at": "2020-03-01T00:00:00Z",
+          "kind": "chat",
+          "last_woken_at": "",
+          "prior_session_id": "",
+          "project": "p",
+          "replaced_at": "",
+          "session_id": "S-930",
+          "state": "live",
+          "workspace": "",
+          "workspace_type": "folder"
+        },
+        "status": "in-progress",
+        "status_by": "user",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "930"
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": true,
+        "concurrency": 1,
+        "concurrency_source": "default",
+        "created_at": "2020-03-01T00:00:00Z",
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "930",
+        "kickoff_continuation": null,
+        "kind": "chat",
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "default",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": "p",
+        "released": false,
+        "role_line": "You are the task session for planner task #930. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": "S-930",
+        "state": "live",
+        "teardown_command": null,
+        "verdict": "reuse",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": "folder"
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

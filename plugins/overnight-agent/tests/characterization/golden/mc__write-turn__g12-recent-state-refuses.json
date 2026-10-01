@@ -1,0 +1,15 @@
+{
+  "files": {},
+  "id": "mc/write-turn/g12-recent-state-refuses",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Id": "907",
+        "Validate": true
+      },
+      "exit": 2,
+      "tool": "write-turn"
+    }
+  ]
+}

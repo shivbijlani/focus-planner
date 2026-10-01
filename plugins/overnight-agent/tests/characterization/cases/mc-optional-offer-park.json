@@ -1,0 +1,103 @@
+{
+  "fixture": "mc-empty",
+  "covers": [
+    "mutcheck-optional-offer-park"
+  ],
+  "cases": [
+    {
+      "id": "mc/optional-offer-park/matrix",
+      "note": "Dismissive optional offers are not open asks, while real asks still are.",
+      "files": {
+        "data/planner.md": "# Planner\n\n## Today\n\n| ID | 🎯 | Task | Work Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 901 | 🟡 | Task 901 | - | 2020-01-01 | |\n| 902 | 🟡 | Task 902 | - | 2020-01-01 | |\n| 903 | 🟡 | Task 903 | - | 2020-01-01 | |\n| 904 | 🟡 | Task 904 | - | 2020-01-01 | |\n| 905 | 🟡 | Task 905 | - | 2020-01-01 | |\n| 906 | 🟡 | Task 906 | - | 2020-01-01 | |\n| 907 | 🟡 | Task 907 | - | 2020-01-01 | |\n\n## Deferred\n\n| ID | 🎯 | Task | Work Priority | Added | Wake | Linked ID |\n|----|----|------|---------------|-------|------|-----------|\n\n## Priorities\n\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/agent-gate.md": "# Agent gate\n",
+        "data/user-settings.md": "# Settings\n\n| Key | Value |\n| --- | --- |\n| Today gate backstop | off |\n",
+        "data/journal/task-901.md": "# Task 901: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** nothing. Both items above are optional; say the word on either and I will pick it up.\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-902.md": "# Task 902: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** nothing to start. If you want it faster, reply `rerun` and I will.\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-903.md": "# Task 903: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** nothing to unblock it. Two calls when you’re ready.\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-904.md": "# Task 904: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** none - but tell me which of the two invoices you want cancelled.\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-905.md": "# Task 905: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** a decision on the Postgres vs SQLite split before I can continue.\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-906.md": "# Task 906: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** nothing.\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/journal/task-907.md": "# Task 907: synthetic\n\nUser notes at the top.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress - plan v1\n\nThe agent turn.\n\n**Needs from you:** pick one of the optional add-ons before I order.\n\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-901.json": {
+          "id": "901",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "36b00af4b8d0128568ee34895c112dfca94ec5379cef1be9ed0cd3a9d523dfe5",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-902.json": {
+          "id": "902",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "ebffb8cfa5392617ecbcec5375760ce17cbbbd01f0b9d5acf0ad596c6030448d",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-903.json": {
+          "id": "903",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "e1ea37e16cfda7be4272d78c030593a5a020e82e051bb9e803ae920a50a0c7f5",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-904.json": {
+          "id": "904",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "fe5e14253047bdb992d4e4045f0388a343b4f3fd83f55b8b991e94e7480994b9",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-905.json": {
+          "id": "905",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "3b9a58e8a23c6bc019688b988307ce6fe18ee84989bbff2e226f73e3e5f510aa",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-906.json": {
+          "id": "906",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "07308170c530b131ffa8a16d89efb1ffb6fc8d44842dbba1b679b2d8a1c4c95e",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        },
+        "state/task-907.json": {
+          "id": "907",
+          "status": "unknown",
+          "version": 0,
+          "plan_id": "",
+          "processed_file_hash": "d1a8d9f9594892d530151c259e1cab74a50f1a2a5c94a2f8c61016d055b3960a",
+          "has_agent_block": true,
+          "seeded": true,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "steps": [
+        {
+          "tool": "oa-state",
+          "command": "scan",
+          "args": {}
+        }
+      ]
+    }
+  ]
+}

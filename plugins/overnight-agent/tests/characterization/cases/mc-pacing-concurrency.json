@@ -1,0 +1,204 @@
+{
+  "fixture": "mc-pacing-concurrency",
+  "covers": [
+    "mutcheck-pacing-concurrency"
+  ],
+  "cases": [
+    {
+      "id": "mc/pacing-concurrency/default-no-row",
+      "note": "no row defaults to concurrency 1/source default",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 990 | task 990 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "## Overnight Agent behaviour\n\n| Setting | Value |\n| --- | --- |\n",
+        "data/agent-gate.md": "",
+        "data/journal/task-990.md": "# Task 990: task 990\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-990.json": {
+          "id": "990",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t990-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "990"
+      }
+    },
+    {
+      "id": "mc/pacing-concurrency/settings-row",
+      "note": "bare integer setting applies",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 990 | task 990 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "## Overnight Agent behaviour\n\n| Setting | Value |\n| --- | --- |\n| Overnight Agent concurrency | 3 |\n",
+        "data/agent-gate.md": "",
+        "data/journal/task-990.md": "# Task 990: task 990\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-990.json": {
+          "id": "990",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t990-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "990"
+      }
+    },
+    {
+      "id": "mc/pacing-concurrency/backticked-value",
+      "note": "template-style backticked value parses",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 990 | task 990 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "## Overnight Agent behaviour\n\n| Setting | Value |\n| --- | --- |\n| Overnight Agent concurrency | `2` |\n",
+        "data/agent-gate.md": "",
+        "data/journal/task-990.md": "# Task 990: task 990\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-990.json": {
+          "id": "990",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t990-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "990"
+      }
+    },
+    {
+      "id": "mc/pacing-concurrency/zero-visible",
+      "note": "zero narrows to 1 and reports settings-malformed",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 990 | task 990 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "## Overnight Agent behaviour\n\n| Setting | Value |\n| --- | --- |\n| Overnight Agent concurrency | 0 |\n",
+        "data/agent-gate.md": "",
+        "data/journal/task-990.md": "# Task 990: task 990\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-990.json": {
+          "id": "990",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t990-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "990"
+      }
+    },
+    {
+      "id": "mc/pacing-concurrency/word-visible",
+      "note": "word value narrows to 1 and reports settings-malformed",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 990 | task 990 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "## Overnight Agent behaviour\n\n| Setting | Value |\n| --- | --- |\n| Overnight Agent concurrency | many |\n",
+        "data/agent-gate.md": "",
+        "data/journal/task-990.md": "# Task 990: task 990\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-990.json": {
+          "id": "990",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t990-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "990"
+      }
+    },
+    {
+      "id": "mc/pacing-concurrency/prose-no-widen",
+      "note": "prose beginning with a date does not widen concurrency",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 990 | task 990 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "## Overnight Agent behaviour\n\n| Setting | Value |\n| --- | --- |\n| Overnight Agent concurrency | 2026-09-02: set to 1 by Shiv |\n",
+        "data/agent-gate.md": "",
+        "data/journal/task-990.md": "# Task 990: task 990\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-990.json": {
+          "id": "990",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t990-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "990"
+      }
+    },
+    {
+      "id": "mc/pacing-concurrency/empty-cell-default",
+      "note": "empty concurrency cell reverts to default without malformed source",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 990 | task 990 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "## Overnight Agent behaviour\n\n| Setting | Value |\n| --- | --- |\n| Overnight Agent concurrency |  |\n",
+        "data/agent-gate.md": "",
+        "data/journal/task-990.md": "# Task 990: task 990\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n**Status:** In progress - plan v1\nWorked on the task.\n\n**Needs from you:** none\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-990.json": {
+          "id": "990",
+          "status": "in-progress",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t990-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "990"
+      }
+    }
+  ]
+}

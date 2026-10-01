@@ -1,0 +1,27 @@
+{
+  "fixture": "mc-board-compound-id",
+  "covers": [
+    "mutcheck-board-compound-id"
+  ],
+  "cases": [
+    {
+      "id": "mc/board-compound-id/compound-today-gates-deferred",
+      "note": "compound Today ids parse to section=today, keep urgency/priority, sort first, and hold Deferred shut",
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "ScanOutFile": "{cwd}\\worklist.json"
+      }
+    },
+    {
+      "id": "mc/board-compound-id/plain-control-gates-deferred",
+      "fixture": "mc-board-compound-id-plain",
+      "note": "plain Today rows still gate Deferred (control)",
+      "tool": "oa-state",
+      "command": "scan",
+      "args": {
+        "ScanOutFile": "{cwd}\\worklist.json"
+      }
+    }
+  ]
+}
