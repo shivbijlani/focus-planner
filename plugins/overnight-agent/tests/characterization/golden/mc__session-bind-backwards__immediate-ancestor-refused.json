@@ -13,14 +13,14 @@
           "created_at": "<NOW+0m>",
           "kind": "code",
           "last_woken_at": "",
-          "prior_session_id": "<GUID>",
+          "prior_session_id": "22222222-2222-4222-8222-222222222222",
           "prior_session_ids": [
-            "<GUID>",
-            "<GUID>"
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222"
           ],
           "project": "focus-planner",
           "replaced_at": "<NOW+0m>",
-          "session_id": "<GUID>",
+          "session_id": "33333333-3333-4333-8333-333333333333",
           "state": "live",
           "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-911-3",
           "workspace_type": "worktree"
@@ -28,11 +28,11 @@
         "session_replacements": [
           {
             "at": "<NOW+0m>",
-            "session_id": "<GUID>"
+            "session_id": "11111111-1111-4111-8111-111111111111"
           },
           {
             "at": "<NOW+0m>",
-            "session_id": "<GUID>"
+            "session_id": "22222222-2222-4222-8222-222222222222"
           }
         ],
         "status": "in-progress",
@@ -47,7 +47,7 @@
     {
       "args": {
         "Id": "911",
-        "SessionId": "<GUID>",
+        "SessionId": "11111111-1111-4111-8111-111111111111",
         "SessionKind": "code",
         "SessionProject": "focus-planner",
         "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-911-1",
@@ -69,7 +69,7 @@
     {
       "args": {
         "Id": "911",
-        "SessionId": "<GUID>",
+        "SessionId": "22222222-2222-4222-8222-222222222222",
         "SessionKind": "code",
         "SessionProject": "focus-planner",
         "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-911-2",
@@ -91,7 +91,7 @@
     {
       "args": {
         "Id": "911",
-        "SessionId": "<GUID>",
+        "SessionId": "33333333-3333-4333-8333-333333333333",
         "SessionKind": "code",
         "SessionProject": "focus-planner",
         "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-911-3",
@@ -104,7 +104,7 @@
     {
       "args": {
         "Id": "911",
-        "SessionId": "<GUID>",
+        "SessionId": "22222222-2222-4222-8222-222222222222",
         "SessionKind": "code",
         "SessionProject": "focus-planner",
         "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-911-2",
@@ -113,11 +113,7 @@
       "command": "session",
       "exit": 1,
       "stderr": [
-        "Exception: <SKILL>/oa-state.ps1:<LINE>",
-        "session_bind_backwards: task 911 already retired session <GUID> (lineage:",
-        "<GUID> -> <GUID>); refusing to re-bind it over",
-        "<GUID>. A replacement must be a session this task has never used. If the current",
-        "binding is genuinely finished, release it with -SessionRelease and bind a new session."
+        "session_bind_backwards: task 911 already retired session 22222222-2222-4222-8222-222222222222 (lineage: 11111111-1111-4111-8111-111111111111 -> 22222222-2222-4222-8222-222222222222); refusing to re-bind it over 33333333-3333-4333-8333-333333333333. A replacement must be a session this task has never used. If the current binding is genuinely finished, release it with -SessionRelease and bind a new session."
       ],
       "stdout": [],
       "tool": "oa-state"
@@ -143,16 +139,16 @@
         "model_source": "default",
         "paused_at": null,
         "paused_by_user": false,
-        "prior_session_id": "<GUID>",
+        "prior_session_id": "22222222-2222-4222-8222-222222222222",
         "prior_session_ids": [
-          "<GUID>",
-          "<GUID>"
+          "11111111-1111-4111-8111-111111111111",
+          "22222222-2222-4222-8222-222222222222"
         ],
         "process_dead": false,
         "project": "focus-planner",
         "released": false,
         "role_line": "You are the task session for planner task #911. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
-        "session_id": "<GUID>",
+        "session_id": "33333333-3333-4333-8333-333333333333",
         "state": "live",
         "teardown_command": "pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path \"<ROOT>/lad/overnight-agent/worktrees/wt-911-3\"",
         "verdict": "reuse",

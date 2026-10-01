@@ -10,7 +10,6 @@
       "command": "mark",
       "exit": 1,
       "stderr": [
-        "Exception: <SKILL>/oa-state.ps1:<LINE>",
         "invalid cadence 'fortnightly' (use hourly|daily|weekly|<N>h|<N>d|<N>m)"
       ],
       "stdout": [],

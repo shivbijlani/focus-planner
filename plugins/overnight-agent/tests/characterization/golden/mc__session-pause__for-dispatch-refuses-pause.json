@@ -38,10 +38,7 @@
       "command": "session",
       "exit": 1,
       "stderr": [
-        "Exception: <SKILL>/oa-state.ps1:<LINE>",
-        "session_user_paused: task 931 was paused by the user (status blocked, status_by user). Do not dispatch it. Only",
-        "he clears a pause: he replies in the journal below the newest turn, or a run records his decision with",
-        "`-StatusBy user`."
+        "session_user_paused: task 931 was paused by the user (status blocked, status_by user). Do not dispatch it. Only he clears a pause: he replies in the journal below the newest turn, or a run records his decision with `-StatusBy user`."
       ],
       "stdout": [],
       "tool": "oa-state"

@@ -17,7 +17,7 @@
           "prior_session_ids": [],
           "project": "focus-planner",
           "replaced_at": "",
-          "session_id": "<GUID>",
+          "session_id": "11111111-1111-4111-8111-111111111111",
           "state": "live",
           "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-901",
           "workspace_type": "worktree"
@@ -34,7 +34,7 @@
     {
       "args": {
         "Id": "901",
-        "SessionId": "<GUID>",
+        "SessionId": "11111111-1111-4111-8111-111111111111",
         "SessionKind": "code",
         "SessionProject": "focus-planner",
         "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-901",
@@ -71,7 +71,7 @@
         "project": "focus-planner",
         "released": false,
         "role_line": "You are the task session for planner task #901. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
-        "session_id": "<GUID>",
+        "session_id": "11111111-1111-4111-8111-111111111111",
         "state": "live",
         "teardown_command": "pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path \"<ROOT>/lad/overnight-agent/worktrees/wt-901\"",
         "verdict": "reuse",

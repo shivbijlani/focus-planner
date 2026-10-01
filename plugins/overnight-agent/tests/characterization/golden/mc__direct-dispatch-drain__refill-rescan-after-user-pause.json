@@ -1,19 +1,48 @@
 {
-  "files": {},
-  "id": "cmd/mark/101-exhausted",
+  "files": {
+    "state/task-121.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "121",
+        "last_turn_at": "<NOW+0m>",
+        "last_turn_by": "unknown",
+        "paused_at": "<NOW+0m>",
+        "plan_id": "t121-v1",
+        "processed_file_hash": "ec93ed6b248f1ea4b8bc59180eaf9c7badafe464d3a6548a2ca7647c4bb8c25e",
+        "seeded": false,
+        "session": {
+          "created_at": "<NOW-1440m>",
+          "kind": "code",
+          "last_woken_at": "<NOW-180m>",
+          "prior_session_id": "",
+          "prior_session_ids": [],
+          "project": "example/sync-lib",
+          "replaced_at": null,
+          "session_id": "11111111-2222-4333-8444-555555555555",
+          "state": "live",
+          "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-121",
+          "workspace_type": "worktree"
+        },
+        "status": "blocked",
+        "status_by": "user",
+        "unanswered_user_message_at": null,
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "mc/direct-dispatch-drain/refill-rescan-after-user-pause",
   "steps": [
     {
       "args": {
-        "Exhausted": "gh:197,gh:179",
-        "ExhaustedNote": "all blocked on review",
-        "Id": "101"
+        "Id": "121",
+        "Status": "blocked",
+        "StatusBy": "user"
       },
       "command": "mark",
-      "exit": 1,
-      "stderr": [
-        "task 101 has no turn recorded in the last 30 minute(s): work the row and mark it this run before declaring it exhausted"
-      ],
-      "stdout": [],
+      "exit": 0,
       "tool": "oa-state"
     },
     {
@@ -599,54 +628,6 @@
             "work_priority": null
           },
           {
-            "awaiting_reply": false,
-            "board_pos": 7,
-            "changed": false,
-            "consent_ok": false,
-            "dispatch_input": "981311c5ad01dfa737f7a4291659c8851ddeabc3b7bd073f93791427b8cbae33",
-            "dispatch_skip_reason": null,
-            "doc_channel": null,
-            "doc_id": null,
-            "doc_new_comments": 0,
-            "due_poll": false,
-            "due_recheck": false,
-            "eligible": true,
-            "has_agent_block": true,
-            "has_journal": true,
-            "has_open_ask": false,
-            "holds_today_gate": false,
-            "id": "121",
-            "linked": [
-              "104",
-              "105"
-            ],
-            "order": 14,
-            "plan_review_due": false,
-            "poll_cadence": null,
-            "priorities_rank": 999999,
-            "recheck_kind": null,
-            "reopened": false,
-            "reopened_closed": false,
-            "replacements_24h": 0,
-            "section": "today",
-            "session_activity": null,
-            "session_id": "11111111-2222-4333-8444-555555555555",
-            "session_paused": false,
-            "session_process_dead": false,
-            "session_verdict": "reuse",
-            "session_workspace_missing": false,
-            "snooze_until": null,
-            "snoozed": false,
-            "status": "in-progress",
-            "status_by": "agent",
-            "today_release_reason": "stale_turn_backstop",
-            "tracked": true,
-            "unanswered_user": false,
-            "unanswered_user_where": "",
-            "urgency": "??",
-            "work_priority": null
-          },
-          {
             "board_pos": null,
             "changed": true,
             "doc_channel": null,
@@ -773,17 +754,30 @@
           "omitted_reason": "ineligible, not holding the Today gate, quiet, and nothing due - use -OutFile for the full worklist",
           "out_file": null,
           "rows_due_poll": 1,
-          "rows_eligible": 13,
+          "rows_eligible": 12,
           "rows_no_journal": 2,
-          "rows_omitted": 8,
+          "rows_omitted": 9,
           "rows_reopened": 10,
-          "rows_returned": 17,
+          "rows_returned": 16,
           "rows_total": 25,
           "rows_unanswered": 7,
           "scan_seconds": "<DURATION>",
           "today_holding": 5
         }
       },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "CheckDispatch": true,
+        "Id": "121"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_user_paused: task 121 was paused by the user (status blocked, status_by user). Do not dispatch it. Only he clears a pause: he replies in the journal below the newest turn, or a run records his decision with `-StatusBy user`."
+      ],
+      "stdout": [],
       "tool": "oa-state"
     }
   ]

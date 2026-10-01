@@ -13,13 +13,13 @@
           "created_at": "<NOW+0m>",
           "kind": "code",
           "last_woken_at": "",
-          "prior_session_id": "<GUID>",
+          "prior_session_id": "11111111-1111-4111-8111-111111111111",
           "prior_session_ids": [
-            "<GUID>"
+            "11111111-1111-4111-8111-111111111111"
           ],
           "project": "focus-planner",
           "replaced_at": "<NOW+0m>",
-          "session_id": "<GUID>",
+          "session_id": "22222222-2222-4222-8222-222222222222",
           "state": "live",
           "workspace": "<ROOT>/lad/overnight-agent/worktrees/wt-902b",
           "workspace_type": "worktree"
@@ -27,7 +27,7 @@
         "session_replacements": [
           {
             "at": "<NOW+0m>",
-            "session_id": "<GUID>"
+            "session_id": "11111111-1111-4111-8111-111111111111"
           }
         ],
         "status": "in-progress",
@@ -42,7 +42,7 @@
     {
       "args": {
         "Id": "902",
-        "SessionId": "<GUID>",
+        "SessionId": "11111111-1111-4111-8111-111111111111",
         "SessionKind": "code",
         "SessionProject": "focus-planner",
         "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-902a",
@@ -55,7 +55,7 @@
     {
       "args": {
         "Id": "902",
-        "SessionId": "<GUID>",
+        "SessionId": "22222222-2222-4222-8222-222222222222",
         "SessionKind": "code",
         "SessionProject": "focus-planner",
         "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-902b",
@@ -64,11 +64,7 @@
       "command": "session",
       "exit": 1,
       "stderr": [
-        "Exception: <SKILL>/oa-state.ps1:<LINE>",
-        "session_bind_conflict: task 902 is already bound to LIVE session <GUID>; refusing",
-        "to bind <GUID> over it. Wake the bound session instead. If it genuinely cannot be",
-        "woken, record that with -SessionDead first -- that is the replacement path, and it is what carries the",
-        "continuation into the new session."
+        "session_bind_conflict: task 902 is already bound to LIVE session 11111111-1111-4111-8111-111111111111; refusing to bind 22222222-2222-4222-8222-222222222222 over it. Wake the bound session instead. If it genuinely cannot be woken, record that with -SessionDead first -- that is the replacement path, and it is what carries the continuation into the new session."
       ],
       "stdout": [],
       "tool": "oa-state"
@@ -77,7 +73,7 @@
       "args": {
         "Force": true,
         "Id": "902",
-        "SessionId": "<GUID>",
+        "SessionId": "22222222-2222-4222-8222-222222222222",
         "SessionKind": "code",
         "SessionProject": "focus-planner",
         "SessionWorkspace": "<ROOT>/lad/overnight-agent/worktrees/wt-902b",
@@ -100,15 +96,15 @@
         "model_source": "default",
         "paused_at": null,
         "paused_by_user": false,
-        "prior_session_id": "<GUID>",
+        "prior_session_id": "11111111-1111-4111-8111-111111111111",
         "prior_session_ids": [
-          "<GUID>"
+          "11111111-1111-4111-8111-111111111111"
         ],
         "process_dead": false,
         "project": "focus-planner",
         "released": false,
         "role_line": "You are the task session for planner task #902. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
-        "session_id": "<GUID>",
+        "session_id": "22222222-2222-4222-8222-222222222222",
         "state": "live",
         "teardown_command": "pwsh -NoProfile -File scripts/remove-worktree.ps1 -Path \"<ROOT>/lad/overnight-agent/worktrees/wt-902b\"",
         "verdict": "reuse",

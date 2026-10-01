@@ -5,7 +5,7 @@
     {
       "args": {
         "Id": "113",
-        "SessionId": "<GUID>",
+        "SessionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
         "SessionKind": "code",
         "SessionProject": "example/garden",
         "SessionWorkspace": "<ROOT>/cwd"
@@ -13,10 +13,7 @@
       "command": "session",
       "exit": 1,
       "stderr": [
-        "Exception: <SKILL>/oa-state.ps1:<LINE>",
-        "session_workspace_inherited: workspace '<ROOT>/cwd' is the RUN",
-        "session's own workspace. One task, one workspace -- sharing one deadlocks the sessions and reproduces the very",
-        "isolation failure #404 exists to prevent."
+        "session_workspace_inherited: workspace '<ROOT>/cwd' is the RUN session's own workspace. One task, one workspace -- sharing one deadlocks the sessions and reproduces the very isolation failure #404 exists to prevent."
       ],
       "stdout": [],
       "tool": "oa-state"

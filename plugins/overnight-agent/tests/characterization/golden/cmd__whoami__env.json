@@ -8,7 +8,7 @@
       "json": {
         "role": "task",
         "role_line": "You are the task session for planner task #122. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
-        "session_id": "<GUID>",
+        "session_id": "66666666-7777-4888-9999-000000000000",
         "session_id_source": "COPILOT_AGENT_SESSION_ID",
         "task_id": "122",
         "tasks": [

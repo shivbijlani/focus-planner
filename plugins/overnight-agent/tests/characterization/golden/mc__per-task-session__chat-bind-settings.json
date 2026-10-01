@@ -15,9 +15,9 @@
           "last_woken_at": "",
           "prior_session_id": "",
           "prior_session_ids": [],
-          "project": "<GUID>",
+          "project": "50b4020e-bf7b-40bf-90f4-5261b41710bc",
           "replaced_at": "",
-          "session_id": "<GUID>",
+          "session_id": "11111111-1111-4111-8111-111111111111",
           "state": "live",
           "workspace": "<ROOT>/lad/overnight-agent/task-chats",
           "workspace_type": "folder"
@@ -34,9 +34,9 @@
     {
       "args": {
         "Id": "905",
-        "SessionId": "<GUID>",
+        "SessionId": "11111111-1111-4111-8111-111111111111",
         "SessionKind": "chat",
-        "SessionProject": "<GUID>",
+        "SessionProject": "50b4020e-bf7b-40bf-90f4-5261b41710bc",
         "SessionWorkspace": "<ROOT>/lad/overnight-agent/task-chats",
         "WorkspaceType": "folder"
       },
@@ -60,10 +60,10 @@
         "prior_session_id": null,
         "prior_session_ids": [],
         "process_dead": false,
-        "project": "<GUID>",
+        "project": "50b4020e-bf7b-40bf-90f4-5261b41710bc",
         "released": false,
         "role_line": "You are the task session for planner task #905. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
-        "session_id": "<GUID>",
+        "session_id": "11111111-1111-4111-8111-111111111111",
         "state": "live",
         "teardown_command": null,
         "verdict": "reuse",

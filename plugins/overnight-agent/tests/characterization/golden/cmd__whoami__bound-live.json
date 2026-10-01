@@ -4,14 +4,14 @@
   "steps": [
     {
       "args": {
-        "SessionId": "<GUID>"
+        "SessionId": "11111111-2222-4333-8444-555555555555"
       },
       "command": "whoami",
       "exit": 0,
       "json": {
         "role": "task",
         "role_line": "You are the task session for planner task #121. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
-        "session_id": "<GUID>",
+        "session_id": "11111111-2222-4333-8444-555555555555",
         "session_id_source": "parameter",
         "task_id": "121",
         "tasks": [

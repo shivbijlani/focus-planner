@@ -11,9 +11,7 @@
       "command": "mark",
       "exit": 1,
       "stderr": [
-        "Exception: <SKILL>/oa-state.ps1:<LINE>",
-        "-Exhausted is a separate declaration and cannot be combined with -Status/-Version/-PlanId or any timer flag:",
-        "write the turn first, then declare exhaustion in its own call"
+        "-Exhausted is a separate declaration and cannot be combined with -Status/-Version/-PlanId or any timer flag: write the turn first, then declare exhaustion in its own call"
       ],
       "stdout": [],
       "tool": "oa-state"

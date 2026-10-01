@@ -9,7 +9,6 @@
       "command": "mark",
       "exit": 1,
       "stderr": [
-        "Exception: <SKILL>/oa-state.ps1:<LINE>",
         "no journal at <ROOT>/data/journal/task-999.md"
       ],
       "stdout": [],

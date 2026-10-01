@@ -42,11 +42,7 @@
       "command": "mark",
       "exit": 1,
       "stderr": [
-        "Exception: <SKILL>/oa-state.ps1:<LINE>",
-        "task_paused_by_user: task 930 was paused by the user at 03/01/2020 06:00:00 (status blocked, status_by user),",
-        "and the agent may not change its status out of that. Only he clears a pause: either he replies in the journal",
-        "below the newest turn, or a run records his decision with `-StatusBy user`. Marking it as the agent would erase",
-        "the instruction as a side effect of reporting work he asked you to stop (#540)."
+        "task_paused_by_user: task 930 was paused by the user at 03/01/2020 06:00:00 (status blocked, status_by user), and the agent may not change its status out of that. Only he clears a pause: either he replies in the journal below the newest turn, or a run records his decision with `-StatusBy user`. Marking it as the agent would erase the instruction as a side effect of reporting work he asked you to stop (#540)."
       ],
       "stdout": [],
       "tool": "oa-state"

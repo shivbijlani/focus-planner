@@ -20,7 +20,7 @@
           "prior_session_ids": [],
           "project": "",
           "replaced_at": null,
-          "session_id": "<GUID>",
+          "session_id": "12121212-3434-4565-8787-909090909090",
           "state": "live",
           "workspace": "",
           "workspace_type": "folder"
@@ -60,7 +60,7 @@
           "prior_session_ids": [],
           "project": "",
           "replaced_at": null,
-          "session_id": "<GUID>",
+          "session_id": "12121212-3434-4565-8787-909090909090",
           "state": "live",
           "workspace": "",
           "workspace_type": "folder"
