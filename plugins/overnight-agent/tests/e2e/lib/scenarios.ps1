@@ -335,9 +335,12 @@ $script:Scenarios = @(
       $turns = (Get-AgentTurnCount $f.After.Journals['9407']) - (Get-AgentTurnCount $f.Before.Journals['9407'])
       $acted = ($sent.Count -gt 0) -or ($turns -gt 0)
       $checks = @(New-Check 'g1' 'the run acted on the reply (dispatch or turn)' $acted "sends $($sent.Count), turns $turns")
-      $firstSend = @($f.Dispatches | Where-Object { $_.task_id } | Sort-Object at | Select-Object -First 1)
-      $quietFirst = $firstSend -and $firstSend.task_id -eq '9408'
-      $checks += New-Check 'g2' 'no quiet row was dispatched before the replied-to rows' (-not $quietFirst) "first send: $($firstSend.task_id)"
+      $sentReply = @($f.Dispatches | Where-Object { $_.task_id -eq '9407' }).Count
+      $sentQuiet = @($f.Dispatches | Where-Object { $_.task_id -eq '9408' }).Count
+      # Openings are filled in scan order, but sends that fit in the same openings may be issued
+      # as one parallel batch whose arrival order is arbitrary. So the outcome checked is "the
+      # replied-to row was never passed over for the quiet one", not which call landed first.
+      $checks += New-Check 'g2' 'the replied-to row was not passed over for the quiet row' (-not ($sentQuiet -and -not $sentReply)) "replied 9407 sends $sentReply, quiet 9408 sends $sentQuiet"
       $checks
     }
   }
