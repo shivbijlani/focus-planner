@@ -56,3 +56,16 @@ export function filterPlannerTree(items) {
   }
   return out
 }
+
+export const DOCS_DIR = 'docs'
+
+/**
+ * Remove the top-level `docs/` folder (catch-up documents, owned by the Docs app —
+ * plans/docs-app-design.md §3.2) from a provider file tree. Deliberately narrow: it is
+ * the only filter the sidebar applies, so every other file keeps showing exactly as
+ * before. Apply to the UNPREFIXED tree of each source.
+ */
+export function hideDocsFolder(items) {
+  if (!Array.isArray(items)) return items
+  return items.filter((item) => !(item?.type === 'directory' && item.name === DOCS_DIR && (item.path || item.name) === DOCS_DIR))
+}

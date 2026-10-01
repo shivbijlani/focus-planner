@@ -48,7 +48,7 @@ a { color: var(--dx-accent); }
 .dx-btn-primary { background: var(--dx-accent); border-color: var(--dx-accent); color: #fff; }
 .dx-btn-primary:disabled { opacity: .5; }
 .dx-btn-danger { color: var(--dx-warn); border-color: transparent; }
-.dx-btn-small { padding: 4px 12px; font-size: 13px; }
+.dx-btn-small { padding: 4px 12px; font-size: 13px; white-space: nowrap; flex-shrink: 0; }
 .dx-link-btn { border: 0; background: none; color: var(--dx-accent); padding: 4px 0; cursor: pointer; font-size: 14px; text-align: left; }
 .dx-task-chip {
   display: inline-flex; align-items: center; height: 28px; padding: 0 10px; border-radius: 14px;
@@ -67,11 +67,13 @@ a { color: var(--dx-accent); }
   position: absolute; top: 4px; right: 2px; min-width: 18px; height: 18px; border-radius: 9px;
   background: var(--dx-accent); color: #fff; font-size: 11px; line-height: 18px; font-weight: 700;
 }
-.dx-tabs { display: flex; gap: 4px; padding: 0 12px; border-bottom: 1px solid var(--dx-line); overflow-x: auto; }
+.dx-tabs { display: flex; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--dx-line); overflow-x: auto; scrollbar-width: none; }
+.dx-tabs::-webkit-scrollbar { display: none; }
 .dx-tab {
-  border: 0; background: none; padding: 12px 12px 10px; font-size: 15px; color: var(--dx-ink-2);
+  flex: 1 1 auto; border: 0; background: none; padding: 12px 8px 10px; font-size: 15px; color: var(--dx-ink-2);
   border-bottom: 3px solid transparent; cursor: pointer; white-space: nowrap;
 }
+.lib-tabs .dx-tab { flex: 0 0 auto; padding: 12px 12px 10px; }
 .dx-tab.is-on { color: var(--dx-accent); border-bottom-color: var(--dx-accent); font-weight: 600; }
 
 /* ── Library ───────────────────────────────────────────── */
@@ -159,11 +161,15 @@ a { color: var(--dx-accent); }
 .doc-link { font-weight: 500; text-decoration: none; border-bottom: 1px solid rgba(26,115,232,.35); }
 .doc-link.is-missing { color: var(--dx-ink-3); border-bottom-style: dashed; }
 
+.dv-block.has-badge { padding-right: 46px; }
 .dv-badge {
-  position: absolute; top: 2px; right: -6px; border: 0; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.18);
+  position: absolute; top: 2px; right: 0; border: 0; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.18);
   border-radius: 12px; height: 24px; padding: 0 8px; font-size: 12px; cursor: pointer;
 }
-@media (min-width: 800px) { .dv-badge { right: -52px; } }
+@media (min-width: 800px) {
+  .dv-block.has-badge { padding-right: 12px; }
+  .dv-badge { right: -52px; }
+}
 .dv-notes { display: flex; flex-direction: column; gap: 4px; margin: -4px 0 12px; }
 .dv-note {
   display: flex; gap: 6px; align-items: flex-start; border: 0; text-align: left; cursor: pointer;

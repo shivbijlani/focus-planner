@@ -41,6 +41,13 @@ import { deleteJournalForTask } from './journalDelete.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { renderJournalLines } from './markdown/markdownRender.jsx'
 import { useTaskDoc, journalDeepLink } from './docsIndex.js'
+import { hideDocsFolder } from './fileTreeFilter.js'
+
+// Docs' task chip / 📔 link opens the planner at `#journal=<id>` (plans/docs-app-design.md §3).
+// Captured once at load: init can run more than once (StrictMode, source switches), and the
+// hash is cleared after the first run, so later runs must still honour it until the user
+// navigates somewhere themselves.
+let pendingJournalDeepLink = typeof window !== 'undefined' ? journalDeepLink(window.location.hash) : null
 import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import { linkedNavFallbackFile } from './linkedNav.js'
 import { clampMenuPosition, menuMaxHeight } from './menuPosition.js'
@@ -6575,14 +6582,14 @@ function App() {
       // Read fresh registry — the closure-captured `sources` may be stale during init.
       const liveSources = getSources()
       if (liveSources.length <= 1) {
-        const data = await storage.getFiles()
+        const data = hideDocsFolder(await storage.getFiles())
         setFiles(prev => sameFileTree(prev, data) ? prev : data)
         return
       }
       const perSource = await Promise.all(
         liveSources.map(async (s) => {
           try {
-            const tree = await storage.getFilesFromSource(s.id)
+            const tree = hideDocsFolder(await storage.getFilesFromSource(s.id))
             return { source: s, tree }
           } catch {
             return { source: s, tree: [] }
@@ -6701,10 +6708,11 @@ function App() {
     setAppState('ready')
     const liveSources = getSources()
     const defaultFile = liveSources.length > 1 ? `${COMBINED_ID}::${PLAN_FILE}` : PLAN_FILE
-    // Docs' task chip / 📔 link lands here as `#journal=<id>` (plans/docs-app-design.md §3).
-    const deepTask = journalDeepLink(window.location.hash)
+    const deepTask = pendingJournalDeepLink
     if (deepTask != null) {
-      window.history.replaceState(null, '', window.location.pathname + window.location.search)
+      if (journalDeepLink(window.location.hash) != null) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search)
+      }
       setJournalInitialView('chat')
       handleSelectFile(`journal/task-${deepTask}.md`)
     } else {
@@ -6978,6 +6986,7 @@ function App() {
   }
 
   const handleNavigate = (path, scrollToTaskId, initialView) => {
+    pendingJournalDeepLink = null
     if (scrollToTaskId) setPendingScrollToTaskId(scrollToTaskId)
     // #373: honour the icon that was clicked (Journal vs Chat). Default to chat.
     setJournalInitialView(initialView === 'journal' ? 'journal' : 'chat')

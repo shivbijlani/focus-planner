@@ -17,7 +17,7 @@ const DISP_SHORT = { answered: 'Answered', done: 'Done', 'needs-you': 'Needs you
 
 const Block = memo(function Block({ block, changed, count, notes, linkHandler, onBadge }) {
   return (
-    <section className={`dv-block dv-k-${block.kind}${changed ? ' is-changed' : ''}`} id={`blk-${block.id}`}>
+    <section className={`dv-block dv-k-${block.kind}${changed ? ' is-changed' : ''}${count > 0 ? ' has-badge' : ''}`} id={`blk-${block.id}`}>
       <div className="dv-block-body" data-block={block.id}>
         <MarkdownBlocks lines={block.lines} options={{ fences: true, linkHandler }} />
       </div>

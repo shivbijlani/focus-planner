@@ -1442,6 +1442,11 @@ tr.highlight-flash {
   background: rgba(255, 255, 255, 0.1);
 }
 
+/* On phones the app bar's 📔 avatar already says "you are in the journal". */
+@media (max-width: 768px) {
+  .jc-trio-link.is-current { display: none; }
+}
+
 .jc-trio-link .journal-badge {
   bottom: 2px;
   right: 2px;
