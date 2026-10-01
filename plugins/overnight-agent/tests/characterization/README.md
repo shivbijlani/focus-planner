@@ -20,7 +20,8 @@ node plugins/overnight-agent/tests/characterization/run.mjs --coverage          
 Other flags: `--filter <regex>` (on case id), `--jobs N`, `--keep` (leave failing sandboxes on
 disk and print their path), `--prune` (with `--update`, delete goldens whose case is gone).
 
-CI runs `--impl ps` on `windows-latest` (job `agent-characterization`), because the
+CI runs `--impl ps` on `windows-latest` (job `agent-characterization`, time zone pinned, see
+below), because the
 owner's agent runs on Windows and a few verdicts are OS-shaped (lock-path case folding, path
 roots, `Test-Path` semantics). Determinism is proven locally with `--repeat 3`, and CI re-proves
 it across machines and days every run, since the goldens were recorded elsewhere and earlier.
@@ -56,6 +57,20 @@ That observation is compared with `golden/<case id>.json`.
 Nothing semantic is normalised. Because the clock window is ±45 days, **fixed dates in fixtures
 must be far from any run date** -- the fixtures use 2020 for "long ago" and 2099 for "far
 future". Anything that must be relative to now uses a clock token (below).
+
+**Time zone is pinned, not normalised.** PowerShell renders some timestamps in local time (an ISO
+string read back from JSON becomes a local `[datetime]`; fixed 2020 times print as `-08:00`), so the
+goldens are tied to the zone they were recorded in, `America/Los_Angeles` (the owner's). `run.mjs`
+refuses to compare in another zone (`--any-tz` overrides); CI runs `tzutil /s "Pacific Standard
+Time"` first. On Linux/macOS export `TZ=America/Los_Angeles`.
+
+**Opaque clock-derived fingerprints** are the one escape hatch, and it is per case and explicit: a
+case may list keys in `"mask"` (today only `dispatch_input`, in `cmd/mark/101-arm-poll`, where the
+hash covers a poll armed "now"). Each distinct value becomes `<MASKED:key#n>`, so the golden still
+pins which rows/steps share a fingerprint and when it changes. Everywhere else `dispatch_input` is
+compared exactly, so the port must reproduce the hash.
+
+A child that does not exit (timeout, default 900 s) is an error, never a recorded result.
 
 ### No live data, no ambient identity
 
@@ -114,6 +129,7 @@ threshold a case is meant to sit on one side of.
   "fixture": "base",                            // optional, defaults to the file's
   "covers": ["mutcheck-sibling-reopen"],        // mutchecks whose pinned behaviour this case pins
   "note": "why this case exists",
+  "mask": ["dispatch_input"],                   // rare: opaque clock-derived fingerprints only
   "files": { "data/journal/task-901.md": "...", "state/task-901.json": null },  // overlay; null deletes
   "mtimes": { "data/journal/task-901.md": "-3h" },
   "env": { "COPILOT_AGENT_SESSION_ID": "sess-a" },

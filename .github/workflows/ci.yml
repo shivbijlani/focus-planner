@@ -1729,6 +1729,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      # The goldens were recorded in the owner's zone, and PowerShell renders some timestamps in
+      # local time; the runner refuses to compare in any other zone rather than normalise it away.
+      - name: Pin the time zone the goldens were recorded in
+        shell: pwsh
+        run: tzutil /s "Pacific Standard Time"
       - name: Characterization suite against the PowerShell implementation
         shell: pwsh
         run: node ./plugins/overnight-agent/tests/characterization/run.mjs --impl ps --jobs 4

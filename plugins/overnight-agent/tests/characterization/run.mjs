@@ -40,6 +40,7 @@ function parseArgs(argv) {
       case '--keep': o.keep = true; break;
       case '--list': o.list = true; break;
       case '--coverage': o.coverage = true; break;
+      case '--any-tz': o.anyTz = true; break;
       case '--shadow': o.shadow = true; break;
       case '--data': o.data = val(); break;
       case '--state': o.state = val(); break;
@@ -124,6 +125,7 @@ function listCases(cases) {
 
 async function main() {
   const o = parseArgs(process.argv.slice(2));
+  checkTimeZone(o);
   if (o.help) { console.log(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 8).join('\n')); return 0; }
   if (o.shadow) return runShadow({ ...o, ...PATHS, loadAdapter });
   let cases = loadCases();
@@ -184,6 +186,19 @@ async function main() {
 async function loadAdapter(name) {
   if (!['ps', 'node'].includes(name)) throw new Error(`unknown --impl '${name}' (ps|node)`);
   return (await import(`./adapters/${name}.mjs`)).default;
+}
+
+// The goldens were recorded in one time zone, and some observables are rendered in LOCAL time
+// (PowerShell turns an ISO string from JSON into a local [datetime]; fixed 2020 timestamps print as
+// `-08:00`). So the zone is part of the environment contract, like the clock: it is checked, never
+// normalised away. CI pins it with `tzutil /s "Pacific Standard Time"`; elsewhere set the zone or
+// export TZ (honoured by .NET and node on Linux/macOS).
+const GOLDEN_TZ = 'America/Los_Angeles';
+function checkTimeZone(o) {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (tz === GOLDEN_TZ || o.anyTz || o.list || o.coverage || o.shadow) return;
+  throw new Error(`goldens are recorded in ${GOLDEN_TZ} but this machine is ${tz}. ` +
+    'Windows: tzutil /s "Pacific Standard Time"  |  Linux/macOS: TZ=America/Los_Angeles  |  or pass --any-tz to run anyway');
 }
 
 main().then((code) => { process.exitCode = code; }, (e) => { console.error(e.stack || String(e)); process.exitCode = 2; });

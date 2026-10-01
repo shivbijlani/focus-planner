@@ -6,7 +6,6 @@
       "command": "get",
       "exit": 1,
       "stderr": [
-        "Exception: <SKILL>/oa-state.ps1:<LINE>",
         "get requires -Id"
       ],
       "stdout": [],

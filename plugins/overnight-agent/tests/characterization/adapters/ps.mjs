@@ -35,7 +35,7 @@ export default {
       child.stdout.on('data', (b) => out.push(b));
       child.stderr.on('data', (b) => err.push(b));
       if (step.stdin != null) child.stdin.end(step.stdin); else child.stdin.end();
-      const timer = setTimeout(() => child.kill(), (ctx.timeoutSeconds || 240) * 1000);
+      const timer = setTimeout(() => child.kill(), (ctx.timeoutSeconds || 900) * 1000);
       child.on('error', reject);
       child.on('close', (code) => {
         clearTimeout(timer);

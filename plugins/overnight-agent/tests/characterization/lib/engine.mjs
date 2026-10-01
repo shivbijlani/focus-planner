@@ -82,6 +82,8 @@ export async function runCase(kase, { adapter, fixturesDir, skillDir, repoDir, s
         root, dirs, cwd: dirs.cwd, env, skillDir, repoDir, timeoutSeconds,
       });
       if (res.status === 'skip') return { status: 'skip', reason: res.reason };
+      // A child killed by the timeout has no exit code; that is an infrastructure failure, never a result.
+      if (res.exit === null || res.exit === undefined) throw new Error(`step ${i} (${step.tool} ${step.command || ''}) did not exit (timed out or killed)`);
       const { warnings, body } = splitStdout(res.stdout);
       const parsed = tryParseJson(body);
       const rec = { tool: step.tool };
@@ -114,10 +116,31 @@ export async function runCase(kase, { adapter, fixturesDir, skillDir, repoDir, s
       if (a && b && a.equals(b)) continue;
       files[name] = { change: a ? 'modified' : 'created', ...describeFile(b, n, rel) };
     }
-    return { status: 'ran', result: { id: kase.id, steps, files }, root };
+    const result = { id: kase.id, steps, files };
+    if (kase.mask?.length) applyMask(result, new Set(kase.mask));
+    return { status: 'ran', result, root };
   } finally {
     if (!keep) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
+}
+
+// Per-case, opt-in: values under these keys are OPAQUE FINGERPRINTS of clock-derived input (e.g.
+// `dispatch_input` hashing a poll armed "now"). Each distinct value becomes <MASKED:key#n> in order
+// of first appearance, so the golden still pins which steps/rows share a value and when it changes.
+function applyMask(result, keys) {
+  const seen = new Map();
+  const walk = (v) => {
+    if (Array.isArray(v)) { v.forEach(walk); return; }
+    if (!v || typeof v !== 'object') return;
+    for (const k of Object.keys(v)) {
+      if (keys.has(k) && typeof v[k] === 'string') {
+        const id = `${k}|${v[k]}`;
+        if (!seen.has(id)) seen.set(id, `<MASKED:${k}#${[...seen.keys()].filter((x) => x.startsWith(k + '|')).length + 1}>`);
+        v[k] = seen.get(id);
+      } else walk(v[k]);
+    }
+  };
+  walk(result);
 }
 
 export function stableStringify(v) {

@@ -26,7 +26,7 @@
     { "id": "cmd/mark/117-polldone", "command": "mark", "args": { "Id": "117", "PollDone": true } },
     { "id": "cmd/mark/117-poll-cadence-change", "command": "mark", "args": { "Id": "117", "Poll": "hourly" } },
     { "id": "cmd/mark/117-pollclear", "command": "mark", "args": { "Id": "117", "PollClear": true } },
-    { "id": "cmd/mark/101-arm-poll", "steps": [
+    { "id": "cmd/mark/101-arm-poll", "mask": ["dispatch_input"], "note": "a freshly armed poll is due now; its next_due feeds dispatch_input, so that hash is clock-derived and masked", "steps": [
         { "command": "mark", "args": { "Id": "101", "Poll": "2d" } },
         { "command": "scan", "args": { "Compact": true } } ] },
     { "id": "cmd/mark/101-polldone-without-poll", "command": "mark", "args": { "Id": "101", "PollDone": true } },
