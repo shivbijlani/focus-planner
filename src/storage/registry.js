@@ -30,6 +30,10 @@ export function listProviders(enabledProviders = profile.enabledProviders) {
       || (typeof window !== 'undefined' && 'showDirectoryPicker' in window))
 }
 
+export function getEnabledProviderTypes() {
+  return listProviders().map(provider => provider.type)
+}
+
 export function validateRegisteredProviders() {
   listProviders()
 }

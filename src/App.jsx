@@ -4,7 +4,7 @@ import './App.css'
 import './mobile-board.css'
 import * as storage from './storage/storage.js'
 import { setActiveProvider, getActiveProvider, PROVIDERS, TARGET_STATUS, getProviderName } from './storage/storage.js'
-import { listProviders } from './storage/registry.js'
+import { getEnabledProviderTypes } from './storage/registry.js'
 import { makeSyncStatusCoalescer } from './storage/syncStatusCoalesce.js'
 import {
   loadSources, getSources, getActiveSourceId, getActiveSource, setActiveSource,
@@ -46,7 +46,7 @@ import { hideDocsFolder } from './fileTreeFilter.js'
 // hash is cleared after the first run, so later runs must still honour it until the user
 // navigates somewhere themselves.
 let pendingJournalDeepLink = typeof window !== 'undefined' ? journalDeepLink(window.location.hash) : null
-import { APP_NAME, PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
+import { PLAN_FILE, COMPLETED_FILE } from './config/branding.js'
 import profile from '#planner/deployment-profile'
 import { linkedNavFallbackFile } from './linkedNav.js'
 import { clampMenuPosition, menuMaxHeight } from './menuPosition.js'
@@ -4124,6 +4124,8 @@ async function selfHealRunawayIds(content, updateFile) {
   return healed
 }
 
+const APP_NAME = profile.branding.name
+
 const PROVIDER_ICONS = {
   [PROVIDERS.LOCAL_STORAGE]: '🗂️',
   [PROVIDERS.FSA]: '💾',
@@ -4289,7 +4291,7 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
   const savedSources = getSources()
   const activeId = getActiveSourceId()
   const fsaSupported = typeof window !== 'undefined' && 'showDirectoryPicker' in window
-  const enabledProviders = new Set(listProviders().map(provider => provider.type))
+  const enabledProviders = new Set(getEnabledProviderTypes())
   const sources = savedSources.filter(source => enabledProviders.has(source.providerType))
   const isMulti = sources.length > 1
 
@@ -4762,8 +4764,9 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
               )}
             </div>
 
-            <div className={`settings-dialog-section${sectionCollapsed.backup ? ' collapsed' : ''}`}>
-              <SettingsSectionTitle id="backup" label="Backup & sync" collapsed={!!sectionCollapsed.backup} onToggle={toggleSection} />
+            {(enabledProviders.has(PROVIDERS.GOOGLE_DRIVE) || enabledProviders.has(PROVIDERS.ONEDRIVE)) && (
+              <div className={`settings-dialog-section${sectionCollapsed.backup ? ' collapsed' : ''}`}>
+                <SettingsSectionTitle id="backup" label="Backup & sync" collapsed={!!sectionCollapsed.backup} onToggle={toggleSection} />
               {enabledProviders.has(PROVIDERS.GOOGLE_DRIVE) && <div className="sync-target-card">
                 <div className="sync-target-main">
                   <span className="sync-target-icon">{PROVIDER_ICONS[PROVIDERS.GOOGLE_DRIVE]}</span>
@@ -4771,7 +4774,7 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
                     <div className="sync-target-name">Google Drive</div>
                     <div className={`sync-target-status ${googleDrive.status}`}>
                       {SYNC_LABELS[googleDrive.status] || googleDrive.status}
-                    </div>}
+                    </div>
                   </div>
                 </div>
                 <div className="sync-target-actions">
@@ -4793,8 +4796,8 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
                     </button>
                   )}
                 </div>
-              </div>
-              {googleDrive.message && <div className="storage-footer-error">{googleDrive.message}</div>}
+              </div>}
+              {enabledProviders.has(PROVIDERS.GOOGLE_DRIVE) && googleDrive.message && <div className="storage-footer-error">{googleDrive.message}</div>}
               {enabledProviders.has(PROVIDERS.ONEDRIVE) && <div className="sync-target-card">
                 <div className="sync-target-main">
                   <span className="sync-target-icon">{PROVIDER_ICONS[PROVIDERS.ONEDRIVE]}</span>
@@ -4802,7 +4805,7 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
                     <div className="sync-target-name">OneDrive</div>
                     <div className={`sync-target-status ${oneDrive.status}`}>
                       {SYNC_LABELS[oneDrive.status] || oneDrive.status}
-                    </div>}
+                    </div>
                   </div>
                 </div>
                 <div className="sync-target-actions">
@@ -4824,12 +4827,13 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
                     </button>
                   )}
                 </div>
-              </div>
-              {oneDrive.message && <div className="storage-footer-error">{oneDrive.message}</div>}
+              </div>}
+              {enabledProviders.has(PROVIDERS.ONEDRIVE) && oneDrive.message && <div className="storage-footer-error">{oneDrive.message}</div>}
               <div className="storage-footer-note">
                 You can keep using {APP_NAME} without signing in. If you edit offline, backup resumes when you reconnect.
               </div>
-            </div>
+              </div>
+            )}
 
             <div className={`settings-dialog-section${sectionCollapsed.appDiagnostics ? ' collapsed' : ''}`}>
               <SettingsSectionTitle

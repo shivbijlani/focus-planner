@@ -31,6 +31,8 @@ export const deploymentProfile = validateDeploymentProfile({
   branding: {
     name: APP_NAME,
     description: APP_DESCRIPTION,
+    icon: 'icon.svg',
+    links: [],
     planFile: PLAN_FILE,
     completedFile: COMPLETED_FILE,
     cloudFolderName: CLOUD_FOLDER_NAME,

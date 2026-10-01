@@ -6,6 +6,7 @@ export function DefaultHostProvider({ children }) {
   return <HostContext.Provider value={{ identity: null, kind: 'consumer-web' }}>{children}</HostContext.Provider>
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useHost() {
   return useContext(HostContext)
 }

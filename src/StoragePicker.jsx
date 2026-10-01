@@ -4,7 +4,7 @@
  */
 import { useState, useCallback } from 'react'
 import { PROVIDERS, getProviderName } from './storage/storage.js'
-import { listProviders } from './storage/registry.js'
+import { getEnabledProviderTypes } from './storage/registry.js'
 import {
   createSourceDescriptor,
   clearPendingSource,
@@ -20,7 +20,7 @@ import {
 import { findSavedSourceForProvider } from './storage/sourceRecovery.js'
 
 export function StoragePicker({ onReady }) {
-  const [availableProviders] = useState(() => listProviders().map(provider => provider.type))
+  const [availableProviders] = useState(getEnabledProviderTypes)
   const [connecting, setConnecting] = useState(null) // provider id being connected
   const [error, setError] = useState('')
 

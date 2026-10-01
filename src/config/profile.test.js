@@ -12,6 +12,7 @@ describe('consumer deployment profile', () => {
       enabledIntegrations: [],
       branding: {
         name: 'Planner',
+        icon: 'icon.svg',
         planFile: 'planner.md',
         completedFile: 'planner-completed.md',
       },
