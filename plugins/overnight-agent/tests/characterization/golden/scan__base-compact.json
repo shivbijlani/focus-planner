@@ -52,7 +52,7 @@
             "tracked": true,
             "unanswered_user": true,
             "unanswered_user_where": "below-turn",
-            "urgency": "??",
+            "urgency": "🔴",
             "work_priority": null
           },
           {
@@ -97,7 +97,7 @@
             "tracked": true,
             "unanswered_user": true,
             "unanswered_user_where": "below-turn",
-            "urgency": "??",
+            "urgency": "🟡",
             "work_priority": null
           },
           {
@@ -142,7 +142,7 @@
             "tracked": true,
             "unanswered_user": true,
             "unanswered_user_where": "below-turn",
-            "urgency": "??",
+            "urgency": "🔵",
             "work_priority": null
           },
           {
@@ -187,7 +187,7 @@
             "tracked": true,
             "unanswered_user": true,
             "unanswered_user_where": "below-turn",
-            "urgency": "??",
+            "urgency": "🟡",
             "work_priority": null
           },
           {
@@ -232,7 +232,7 @@
             "tracked": true,
             "unanswered_user": false,
             "unanswered_user_where": "",
-            "urgency": "??",
+            "urgency": "🟡",
             "work_priority": null
           },
           {
@@ -277,7 +277,7 @@
             "tracked": true,
             "unanswered_user": true,
             "unanswered_user_where": "below-turn",
-            "urgency": "??",
+            "urgency": "🟡",
             "work_priority": null
           },
           {
@@ -322,7 +322,7 @@
             "tracked": true,
             "unanswered_user": true,
             "unanswered_user_where": "above-sentinel",
-            "urgency": "??",
+            "urgency": "🟡",
             "work_priority": null
           },
           {
@@ -367,7 +367,7 @@
             "tracked": false,
             "unanswered_user": false,
             "unanswered_user_where": "",
-            "urgency": "??",
+            "urgency": "📖",
             "work_priority": null
           },
           {
@@ -412,7 +412,7 @@
             "tracked": true,
             "unanswered_user": false,
             "unanswered_user_where": "",
-            "urgency": "?",
+            "urgency": "⚪",
             "work_priority": null
           },
           {
@@ -536,7 +536,7 @@
             "tracked": false,
             "unanswered_user": false,
             "unanswered_user_where": "",
-            "urgency": "??",
+            "urgency": "🔴",
             "work_priority": null
           },
           {
@@ -581,7 +581,7 @@
             "tracked": true,
             "unanswered_user": false,
             "unanswered_user_where": "",
-            "urgency": "??",
+            "urgency": "🟡",
             "work_priority": null
           },
           {
@@ -629,7 +629,7 @@
             "tracked": true,
             "unanswered_user": false,
             "unanswered_user_where": "",
-            "urgency": "??",
+            "urgency": "🟡",
             "work_priority": null
           },
           {
@@ -661,7 +661,7 @@
             "tracked": false,
             "unanswered_user": false,
             "unanswered_user_where": "",
-            "urgency": "??",
+            "urgency": "🐸",
             "work_priority": null
           },
           {
@@ -706,7 +706,7 @@
             "tracked": true,
             "unanswered_user": false,
             "unanswered_user_where": "",
-            "urgency": "??",
+            "urgency": "🔵",
             "work_priority": null
           },
           {
@@ -751,7 +751,7 @@
             "tracked": true,
             "unanswered_user": false,
             "unanswered_user_where": "",
-            "urgency": "??",
+            "urgency": "🔵",
             "work_priority": null
           }
         ],

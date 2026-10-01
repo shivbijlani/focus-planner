@@ -27,7 +27,7 @@
         "id": "102",
         "latest_turn": {
           "elided_bytes": 0,
-          "text": "## ?? Overnight Agent - 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v2\n\nBoth venues hold the date.\n\n**Needs from you:** pick **A** (Hall) or **B** (Garden) - I cannot book until you choose.\n<!-- /overnight-agent turn-end -->\n",
+          "text": "## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed - plan v2\n\nBoth venues hold the date.\n\n**Needs from you:** pick **A** (Hall) or **B** (Garden) — I cannot book until you choose.\n<!-- /overnight-agent turn-end -->\n",
           "truncated": false
         },
         "linked": [],
@@ -37,7 +37,7 @@
           {
             "blocking": true,
             "kind": "Needs from you",
-            "text": "pick **A** (Hall) or **B** (Garden) - I cannot book until you choose."
+            "text": "pick **A** (Hall) or **B** (Garden) — I cannot book until you choose."
           }
         ],
         "path": "<ROOT>/data/journal/task-102.md",

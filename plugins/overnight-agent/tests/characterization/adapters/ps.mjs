@@ -30,7 +30,11 @@ export default {
     if (step.tool === 'oa-state' && step.command) argv.push(step.command);
     argv.push(...toArgv(step.args));
     return new Promise((resolve, reject) => {
-      const child = spawn(process.env.CHAR_PWSH || 'pwsh', argv, { cwd: ctx.cwd, env: ctx.env, windowsHide: true });
+      // windowsHide must stay false: with no console attached, pwsh writes stdout in the OEM code
+      // page with best-fit, so every non-ASCII character reached the goldens as `?` (`🔴` and `🟡`
+      // were both "??") and no port could be compared on them. With a console it writes UTF-8, as
+      // it does for the agent, whose shell has one.
+      const child = spawn(process.env.CHAR_PWSH || 'pwsh', argv, { cwd: ctx.cwd, env: ctx.env, windowsHide: false });
       const out = []; const err = [];
       child.stdout.on('data', (b) => out.push(b));
       child.stderr.on('data', (b) => err.push(b));

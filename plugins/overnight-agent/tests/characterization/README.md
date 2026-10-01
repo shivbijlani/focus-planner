@@ -54,6 +54,11 @@ That observation is compared with `golden/<case id>.json`.
 | PowerShell error decoration (`Exception: x.ps1:<line>` header, `Line |`, source excerpt, `~~~`, the `x.ps1: ` prefix, console-width wrapping) | removed; one string per error message | implementation detail; the message text is kept |
 | an error raised by PowerShell's own parameter binder (bad `ValidateSet` value, unknown parameter, ...) | `<PS-PARAM-INVALID:Name>` etc. | the contract is "that argument is rejected", not the binder's English |
 
+**pwsh runs with a console.** The ps adapter does not hide the child's window: without a console,
+pwsh writes stdout in the OEM code page with best-fit, so every non-ASCII character (urgency
+emoji, the moon, an em dash) used to reach the goldens as `?`. With one it writes UTF-8, which is
+what the agent's own shell sees and what a Node port writes.
+
 Nothing semantic is normalised. Because the clock window is ±45 days, **fixed dates in fixtures
 must be far from any run date** -- the fixtures use 2020 for "long ago" and 2099 for "far
 future". Anything that must be relative to now uses a clock token (below).
