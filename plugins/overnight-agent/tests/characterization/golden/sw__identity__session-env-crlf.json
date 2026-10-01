@@ -1,0 +1,31 @@
+{
+  "files": {
+    "data/journal/task-932.md": {
+      "change": "modified",
+      "text": "# Task 932: Fixture\r\n\r\nUser notes.\r\n\r\n---\r\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\r\n\r\n## 🌙 Overnight Agent — 2020-03-09\r\n\r\n<!-- from: overnight-agent -->\r\n<!-- oa-ask: offer -->\r\n<!-- oa-by: session=env-sess-932 host=char-host -->\r\n\r\n**Status:** In progress · 2020-03-09\r\n\r\nDid the thing.\r\n\r\n**Needs from you:** nothing.\r\n"
+    }
+  },
+  "id": "sw/identity/session-env-crlf",
+  "steps": [
+    {
+      "args": {
+        "Ask": "offer",
+        "Id": "932",
+        "Json": true
+      },
+      "exit": 0,
+      "json": {
+        "ask": "offer",
+        "docBound": false,
+        "docId": "",
+        "findings": [],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "932",
+        "length": 150,
+        "ok": true
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

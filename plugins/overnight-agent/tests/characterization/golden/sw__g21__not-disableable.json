@@ -1,0 +1,22 @@
+{
+  "files": {},
+  "id": "sw/g21/not-disableable",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "DisableGuard": [
+          "G21"
+        ],
+        "Validate": true
+      },
+      "exit": 2,
+      "stdout": [
+        "[write-turn] REFUSED - 1 guard violation(s); nothing written.",
+        "  G21 line 4: this body writes its own `oa-by` identity stamp. The stamp records which agent wrote the turn and is emitted by this tool from -Author / the session; a hand-written one could claim any author. Remove it (or fence it, if you are quoting the format). This guard cannot be disabled",
+        "      | <!-- OA-BY: session=x -->"
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}
