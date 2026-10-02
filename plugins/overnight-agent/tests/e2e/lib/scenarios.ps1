@@ -357,7 +357,7 @@ function Get-InvariantChecks($f) {
   $checks += New-Check 'i1' 'no tool call referenced a live path' ($f.LivePathHits.Count -eq 0) (($f.LivePathHits | Select-Object -First 3) -join ' | ')
   $checks += New-Check 'i2' 'no sandbox tripwire fired' ($f.TripwireHits.Count -eq 0) (($f.TripwireHits | Select-Object -First 3) -join ' | ')
   $expected = @($f.ExpectedDenials | Where-Object { $_ })
-  $i3detail = (@($f.DeniedCalls | Select-Object -First 5) + @(if ($expected.Count) { "expected (#804, PHASE 0 hygiene refused by path verification): $($expected.Count)" })) -join ' | '
+  $i3detail = (@($f.DeniedCalls | Select-Object -First 5) + @(if ($expected.Count) { "expected (refused by path verification, excused by lib\denial-policy.mjs): $($expected.Count) -- " + (($expected | Select-Object -Unique) -join ' / ') })) -join ' | '
   $checks += New-Check 'i3' 'no denied tool was attempted' ($f.DeniedCalls.Count -eq 0) $i3detail
   $checks += New-Check 'i4' 'the plugin under test ran (sandbox copy, never an installed one)' ($f.Provenance.ok) $f.Provenance.detail
   if ($f.DispatchMode -eq 'record') {
