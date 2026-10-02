@@ -18,6 +18,22 @@
 //   - after the sandbox root is masked, the command names no absolute path at all
 //     (drive, UNC or `~`);
 //   - the command matches none of the harness's `--deny-tool` rules.
+//
+// The second excused shape (#810 gate; measured on the coordinator's main baseline 2026-10-02):
+// the CLI resolves a RELATIVE path against the session directory (`-C <sandbox>`), not against a
+// `cd` the command makes first. So `cd <sandbox>\repo\...\skills\overnight-agent; node
+// .\write-turn.mjs -BodyFile ..\..\..\..\..\home\body.md` names a file INSIDE the sandbox, but the
+// CLI sees five `..` from the sandbox root -- outside -- and denies it. `--add-dir <sandbox>` does
+// not change that (measured), and `--allow-all-paths` would remove the prevention layer. So i3
+// re-resolves the paths the way PowerShell will: such a denial is EXPECTED only if, besides the
+// tool / code / category and deny-rule conditions above,
+//   - the command changes location exactly once (`cd`, `Set-Location`, `Push-Location`, `sl`,
+//     `pushd`, `chdir`), to a literal absolute path inside the sandbox;
+//   - every path-like token resolves -- against that location -- inside the sandbox, and none uses
+//     a variable, `~`, a wildcard, a UNC prefix, a driveless root or a URL;
+//   - at least one of them resolves OUTSIDE the sandbox against the session directory, which is
+//     what explains the denial (otherwise something else was refused, and that stays a failure).
+import path from 'node:path';
 
 export const HYGIENE_SCRIPTS = ['auto-deploy-plugin.ps1', 'split-user-settings.ps1'];
 
@@ -29,6 +45,40 @@ const dotdotSegment = /(?:^|[\\/\s"'`(=])\.\.(?:[\\/]|$|[\s"'`)])/;
 const absolutePath = /(?:^|[\s"'`(=;,])(?:[a-z]:[\\/]|\\\\[^\\\s]+\\|~[\\/])/i;
 
 const norm = (s) => String(s).replace(/\//g, '\\').toLowerCase();
+
+const inside = (p, root) => {
+  const a = norm(path.win32.normalize(p)).replace(/\\+$/, '');
+  const r = norm(path.win32.normalize(root)).replace(/\\+$/, '');
+  return a === r || a.startsWith(r + '\\');
+};
+const LOCATION_RE = /(?:^|[;\n|&{(])\s*(?:cd|set-location|push-location|sl|pushd|chdir)\s+(?:-(?:literal)?path\s+)?(?:"([^"]*)"|'([^']*)'|([^\s;|]+))/gi;
+
+// The cd-relative rule (see the header). Returns { expected, reason }.
+export function classifyCdRelative(command, sandboxRoot) {
+  const no = (reason) => ({ expected: false, reason });
+  if (!sandboxRoot) return no('no sandbox root to resolve against');
+  const locs = [...command.matchAll(LOCATION_RE)];
+  if (locs.length !== 1) return no(locs.length ? 'command changes location more than once' : 'command changes no location');
+  const target = locs[0][1] ?? locs[0][2] ?? locs[0][3];
+  if (/[$%~`]/.test(target) || !/^[a-z]:[\\/]/i.test(target)) return no('location is not a literal absolute path');
+  if (!inside(target, sandboxRoot)) return no('location is outside the sandbox');
+  const body = command.slice(0, locs[0].index) + ' ' + command.slice(locs[0].index + locs[0][0].length);
+  if (/\b[a-z][a-z0-9+.-]*:\/\//i.test(body)) return no('command names a URL');
+  const tokens = body.split(/[\s"'`;|&(),=]+/).filter((t) => /[\\/]/.test(t) || /^\.\.?$/.test(t) || /^[a-z]:/i.test(t));
+  if (!tokens.length) return no('command names no path');
+  let explains = false;
+  for (const t of tokens) {
+    if (/[$%~*?<>]/.test(t) || t.startsWith('\\\\')) return no(`path ${t} cannot be resolved here`);
+    const abs = /^[a-z]:[\\/]/i.test(t);
+    if (!abs && /^[\\/]/.test(t)) return no(`path ${t} is rooted without a drive`);
+    if (!abs && /^[a-z]:/i.test(t)) return no(`path ${t} is drive-relative`);
+    const resolved = abs ? t : path.win32.resolve(target, t);
+    if (!inside(resolved, sandboxRoot)) return no(`path ${t} resolves outside the sandbox`);
+    if (!abs && !inside(path.win32.resolve(sandboxRoot, t), sandboxRoot)) explains = true;
+  }
+  if (!explains) return no('no path escapes the session directory, so path verification does not explain the denial');
+  return { expected: true, reason: "in-sandbox path relative to the command's own cd, which the CLI resolves against the session directory" };
+}
 
 // `shell(git push)` -> matches a command containing `git push`; `web_fetch` -> the tool name.
 export function denyRuleHit(name, command, denyRules) {
@@ -55,7 +105,10 @@ export function classifyDenial(call, { sandboxRoot, denyRules = [] } = {}) {
   const rule = denyRuleHit(call.name, command, denyRules);
   if (rule) return no(`command matches deny rule ${rule}`);
   const lower = command.toLowerCase();
-  if (!HYGIENE_SCRIPTS.some((s) => lower.includes(s))) return no('command names no PHASE 0 hygiene script');
+  if (!HYGIENE_SCRIPTS.some((s) => lower.includes(s))) {
+    const cd = classifyCdRelative(command, sandboxRoot);
+    return cd.expected ? cd : no(`command names no PHASE 0 hygiene script, and ${cd.reason}`);
+  }
   let masked = norm(command);
   if (sandboxRoot) {
     const root = norm(sandboxRoot).replace(/\\+$/, '');

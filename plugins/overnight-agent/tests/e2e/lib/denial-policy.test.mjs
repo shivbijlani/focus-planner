@@ -50,7 +50,9 @@ const mutations = {
   'a deny-tool rule refused it (other error code)': [call(measured.deployAlone, { errorCode: 'rejected' })],
   'not path verification (other shell category)': [call(measured.deployAlone, { errorCategory: 'policy' })],
   'no shell category recorded': [call(measured.deployAlone, { errorCategory: null })],
-  'no hygiene script at all': [call(`cd "${SKILL}"\nGet-Content ..\\..\\..\\..\\..\\secret.txt`)],
+  // Six levels up from the skill dir is ABOVE the sandbox root (five would be the root itself,
+  // which the cd-relative rule rightly excuses).
+  'no hygiene script, and the path escapes the sandbox': [call(`cd "${SKILL}"\nGet-Content ..\\..\\..\\..\\..\\..\\secret.txt`)],
   'hygiene + git push': [call(`${measured.deployAlone}\ngit push origin HEAD`)],
   'hygiene + curl': [call(`${measured.deployAlone}\ncurl https://example.com`)],
   'hygiene + gh api': [call(`${measured.deployAlone}\ngh api /user`)],
@@ -70,6 +72,50 @@ for (const [name, [c]] of Object.entries(mutations)) {
     assert.equal(v.expected, false, `classified expected: ${v.reason}`);
   });
 }
+
+// --- The cd-relative rule (#810 gate) -----------------------------------------------------------
+// Measured on the coordinator's main baseline 20261002-011342-coord-daily-81bda41: the turn files
+// sat in <sandbox>\home, five levels above the skill dir the command cd'd into.
+const coordMeasured = `cd "${SKILL}"; \`\nnode .\\write-turn.mjs -Id 9401 -BodyFile "..\\..\\..\\..\\..\\home\\body-9401.md" -Ask blocking; \`\n` +
+  'node .\\write-turn.mjs -Id 9403 -BodyFile "..\\..\\..\\..\\..\\home\\body-9403.md" -Ask blocking';
+const cdExpected = {
+  'measured: write-turn bodies in <sandbox>\\home, relative to the skill dir': coordMeasured,
+  'Set-Location -LiteralPath, single-quoted': `Set-Location -LiteralPath '${SKILL}'\nGet-Content ..\\..\\..\\..\\..\\home\\x.md`,
+  'an absolute in-sandbox path alongside': `cd "${SKILL}"\nCopy-Item ..\\..\\..\\..\\..\\home\\a.md "${ROOT}\\tmp\\a.md"`,
+};
+for (const [name, command] of Object.entries(cdExpected)) {
+  test(`cd-relative denial is expected: ${name}`, () => {
+    const v = classifyDenial(call(command), opts);
+    assert.equal(v.expected, true, v.reason);
+  });
+}
+const cdMutations = {
+  'relative path escapes the sandbox from the cd target': `cd "${SKILL}"\nGet-Content ..\\..\\..\\..\\..\\..\\x.md`,
+  'relative path escapes into a live folder': `cd "${SKILL}"\nGet-Content ..\\..\\..\\..\\..\\..\\..\\..\\..\\..\\OneDrive\\Apps\\planner.md`,
+  'one path inside, one outside': `cd "${SKILL}"\nCopy-Item ..\\..\\..\\..\\..\\home\\a.md ..\\..\\..\\..\\..\\..\\..\\b.md`,
+  'cd to a folder outside the sandbox': 'cd "C:\\Users\\u\\Documents"\nGet-Content ..\\x.md',
+  'no cd: resolved against the session dir, which is what the CLI did': 'Get-Content ..\\..\\..\\..\\..\\home\\x.md',
+  'two location changes': `cd "${SKILL}"\ncd ..\nGet-Content ..\\..\\..\\..\\home\\x.md`,
+  'cd through a variable': `$s = "${SKILL}"; cd $s\nGet-Content ..\\..\\..\\..\\..\\home\\x.md`,
+  'a path through an environment variable': `cd "${SKILL}"\nGet-Content ..\\..\\..\\..\\..\\home\\x.md, $env:USERPROFILE\\x.md`,
+  'a home-relative path': `cd "${SKILL}"\nGet-Content ..\\..\\..\\..\\..\\home\\x.md, ~\\x.md`,
+  'a UNC path': `cd "${SKILL}"\nGet-Content ..\\..\\..\\..\\..\\home\\x.md, \\\\server\\share\\x.md`,
+  'an absolute live path alongside': `cd "${SKILL}"\nCopy-Item ..\\..\\..\\..\\..\\home\\a.md C:\\Users\\u\\a.md`,
+  'a URL alongside': `cd "${SKILL}"\nnode x.mjs ..\\..\\..\\..\\..\\home\\a.md https://example.com/x`,
+  'in-sandbox paths only: path verification does not explain the denial': `cd "${SKILL}"\nGet-Content .\\SKILL.md`,
+  'a deny-tool rule alongside': `cd "${SKILL}"\nGet-Content ..\\..\\..\\..\\..\\home\\x.md; git push origin HEAD`,
+  'drive-relative path': `cd "${SKILL}"\nGet-Content ..\\..\\..\\..\\..\\home\\x.md, C:x.md`,
+};
+for (const [name, command] of Object.entries(cdMutations)) {
+  test(`cd-relative mutation still fails i3: ${name}`, () => {
+    const v = classifyDenial(call(command), opts);
+    assert.equal(v.expected, false, `classified expected: ${v.reason}`);
+  });
+}
+test('cd-relative rule does not excuse a non-permission refusal', () => {
+  assert.equal(classifyDenial(call(coordMeasured, { errorCategory: 'policy' }), opts).expected, false);
+  assert.equal(classifyDenial({ ...call(coordMeasured), name: 'create' }, opts).expected, false);
+});
 
 // End to end through analyze-events.mjs: the measured denials pass; one unexpected denial among
 // them still lands in deniedCalls (the field i3 counts).
