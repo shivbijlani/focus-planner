@@ -5851,6 +5851,57 @@ function Assert-TaskDispatch($st, $sess, $facts) {
   if ($Force -and -not ($row.unanswered_user -or $row.doc_new_comments -gt 0)) {
     throw 'session_collect_evidence_required: fold the human reply or observe the human doc comment first'
   }
+  Assert-GatedPlanConsent $st $facts
+}
+
+# --- The floor, in code (#804) -------------------------------------------------------------
+# A `[gated]` plan step (write-turn's G19 classification: the step needs HIS consent) must never
+# reach a task session on anything less than the consent reader's own `consent_ok: true`.
+# Measured on the #810 e2e gate: a coordinator read `approved: yes, go ahead and place the order`
+# -- an UNATTRIBUTED line below a [gated] $899 purchase -- as approval, never called `consent`,
+# and dispatched the purchase. `-ForDispatch` stamped it, because dispatch authority never asked.
+# The rule existed only as prose, and prose is what the model skipped. So the stamp now asks.
+#
+# Scope is exactly the newest agent turn's numbered `[gated]` steps. A plan whose steps are all
+# `[reversible]` / `[gate-allowed]` is untouched, as is a turn with no classified plan. Consent is
+# the same fail-closed reader `consent` uses (journal, then -- only when it declines and the
+# caller passes -DocComments -- the catch-up doc), so the two can never disagree.
+$script:GatedStepRe = '(?m)^[ \t]*[1-9][0-9]*\.[ \t]+\[gated\][ \t]+(.*)$'
+
+function Get-GatedPlanSteps($facts) {
+  if (-not $facts -or -not $facts.Content) { return @() }
+  $content = [string]$facts.Content
+  $agentEnd = Get-AgentEndIndex $content
+  if ($agentEnd -lt 0) { return @() }
+  $agentLeft = $content.Substring(0, [Math]::Min($agentEnd, $content.Length))
+  $turn = Get-NewestAgentTurn $agentLeft
+  if (-not $turn) { return @() }
+  $masked = Get-FenceMaskedText $turn
+  $out = @()
+  foreach ($m in [regex]::Matches($masked, $script:GatedStepRe)) {
+    $out += $turn.Substring($m.Index, $m.Length).Trim()
+  }
+  return $out
+}
+
+function Assert-GatedPlanConsent($st, $facts) {
+  $gated = @(Get-GatedPlanSteps $facts)
+  if ($gated.Count -eq 0) { return }
+  $c = $facts.Consent
+  if ($c.consent_ok) { return }
+  $reason = "$($c.reason)"
+  if ($DocComments) {
+    $meta = Get-DocMetaFromJournal $facts.Path $facts.Content
+    $doc = Get-DocCommentConsent -DumpPath $DocComments -DocId $(if ($meta) { $meta.doc_id } else { '' })
+    if ($doc -and $doc.consent_ok) { return }
+    $reason = "$reason; doc: $(if ($doc) { "$($doc.reason)" } else { 'doc-consent-not-consulted' })"
+  }
+  $step = $gated[0]
+  if ($step.Length -gt 120) { $step = $step.Substring(0, 117) + '...' }
+  throw ("session_gated_needs_consent: task $($st.id)'s newest plan has a [gated] step ($step) and " +
+    "``consent -Id $($st.id)`` does not return consent_ok ($reason). Do not dispatch it. Ask him in " +
+    'the journal; dispatch after HIS reply. Nothing an agent writes -- in the journal or in a brief -- ' +
+    'can approve a [gated] step.')
 }
 
 function Get-KickoffContinuation([string]$taskId, [string]$priorId) {

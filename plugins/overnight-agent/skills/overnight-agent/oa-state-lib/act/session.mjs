@@ -3,9 +3,11 @@ import fs from 'node:fs';
 import { joinPath } from '../core/context.mjs';
 import { readAllText, testPath, isFile } from '../core/fsx.mjs';
 import { fromJson } from '../core/psjson.mjs';
-import { get, has, asArray, psStr, psTruthy, setMember, isNullOrWhiteSpace, lowerInvariant, toInt } from '../core/net.mjs';
+import { get, has, asArray, psStr, psTruthy, setMember, isNullOrWhiteSpace, lowerInvariant, toInt, rxMatches, netTrim } from '../core/net.mjs';
 import { readState, writeState, nowIso } from '../collect/state.mjs';
-import { getJournalFacts } from '../collect/journal.mjs';
+import { getJournalFacts, getAgentEndIndex, getNewestAgentTurn, getFenceMaskedText } from '../collect/journal.mjs';
+import { getDocMetaFromJournal } from '../collect/doc.mjs';
+import { getDocCommentConsent } from '../plan/consent.mjs';
 import { getAgentModelSettings } from '../collect/settings.mjs';
 import {
   assertChatWorkspace,
@@ -72,6 +74,44 @@ export function assertTaskDispatch(ctx, st, sess, facts) {
   if (ctx.p.Force && !(get(row, 'unanswered_user') || toInt(get(row, 'doc_new_comments')) > 0)) {
     throw new Error('session_collect_evidence_required: fold the human reply or observe the human doc comment first');
   }
+  assertGatedPlanConsent(ctx, st, facts);
+}
+
+// The floor, in code (#804): a numbered `[gated]` step in the newest agent turn needs the consent
+// reader's own `consent_ok: true` before a session is woken for it. See oa-state.ps1
+// Assert-GatedPlanConsent for the measured failure this closes.
+export const GatedStepRe = '(?m)^[ \\t]*[1-9][0-9]*\\.[ \\t]+\\[gated\\][ \\t]+(.*)$';
+
+export function getGatedPlanSteps(facts) {
+  if (!facts || !facts.Content) return [];
+  const content = String(facts.Content);
+  const agentEnd = getAgentEndIndex(content);
+  if (agentEnd < 0) return [];
+  const turn = getNewestAgentTurn(content.substring(0, Math.min(agentEnd, content.length)));
+  if (!turn) return [];
+  const masked = getFenceMaskedText(turn);
+  return rxMatches(masked, GatedStepRe).map((m) => netTrim(turn.substring(m.index, m.index + m[0].length)));
+}
+
+export function assertGatedPlanConsent(ctx, st, facts) {
+  const gated = getGatedPlanSteps(facts);
+  if (!gated.length) return;
+  const c = facts.Consent;
+  if (c && c.consent_ok) return;
+  let reason = psStr(c?.reason);
+  if (ctx.p.DocComments) {
+    const meta = getDocMetaFromJournal(facts.Path, facts.Content);
+    const doc = getDocCommentConsent(ctx, ctx.p.DocComments, meta ? meta.doc_id : '');
+    if (doc && psTruthy(get(doc, 'consent_ok'))) return;
+    reason = `${reason}; doc: ${doc ? psStr(get(doc, 'reason')) : 'doc-consent-not-consulted'}`;
+  }
+  let step = gated[0];
+  if (step.length > 120) step = `${step.substring(0, 117)}...`;
+  const id = psStr(get(st, 'id'));
+  throw new Error(`session_gated_needs_consent: task ${id}'s newest plan has a [gated] step (${step}) and `
+    + `\`consent -Id ${id}\` does not return consent_ok (${reason}). Do not dispatch it. Ask him in `
+    + 'the journal; dispatch after HIS reply. Nothing an agent writes -- in the journal or in a brief -- '
+    + 'can approve a [gated] step.');
 }
 
 function listStateFiles(ctx) {

@@ -1709,6 +1709,9 @@ jobs:
         run: node ./plugins/overnight-agent/checks/mutcheck-shipped-but-open.mjs
       - name: Mutation check (the preflight's exit-code contract, incl. 2 != 0)
         run: node ./plugins/overnight-agent/checks/mutcheck-issue-shipped.mjs
+      - name: Mutation check (a [gated] step is never dispatched without HIS consent, #804)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-gated-dispatch.ps1
       - name: Mutation check (G15 refuses proposals, never reports, and fails open loudly)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-shipped-pick.ps1

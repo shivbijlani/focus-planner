@@ -38,6 +38,7 @@ $table = @(
   @('skills', 'mutcheck-doc-consent.ps1', 'ScriptPath'),
   @('skills', 'mutcheck-gate-edit-ask.ps1', 'OaStatePath'),
   @('skills', 'mutcheck-gate-settings-source.ps1', 'ScriptPath'),
+  @('skills', 'mutcheck-gated-dispatch.ps1', 'ScriptPath'),
   @('skills', 'mutcheck-managed-heading.ps1', 'Script'),
   @('skills', 'mutcheck-pacing-concurrency.ps1', 'ScriptPath'),
   @('skills', 'mutcheck-per-task-session.ps1', 'ScriptPath'),
