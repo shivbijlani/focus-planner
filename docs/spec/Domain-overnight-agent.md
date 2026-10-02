@@ -18,8 +18,8 @@ exhaustion, consent, and self-healing, see [Prioritisation](Prioritisation) and
 `plugins/overnight-agent/skills/overnight-agent/SKILL.md` defines an unattended planner loop. It
 reads external settings, checks inbox/doc-comment surfaces, scans planner state, dispatches
 approved work into per-task sessions, proposes new plans for eligible work, generates task papers,
-and mirrors results to Telegram. `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1`
-implements the machine-readable state layer behind that loop: board ordering, reopen detection,
+and mirrors results to Telegram. `plugins/overnight-agent/skills/overnight-agent/oa-state.mjs`
+(the Node port of `oa-state.ps1`, which stays as the fallback) implements the machine-readable state layer behind that loop: board ordering, reopen detection,
 doc bindings, session bindings, consent, gates, timers, and journal snapshots.
 The coordinator fills up to `Overnight Agent concurrency` active sends, polls tracked sessions
 with the native `get_sessions_status` tool about once per minute, and re-scans to refill idle
@@ -123,7 +123,8 @@ These files are runtime-critical even though the fact collector does not index t
 | Path | Role |
 | --- | --- |
 | `plugins/overnight-agent/skills/overnight-agent/SKILL.md` | Main operating contract. The phase headings in the file are literal: `PHASE 0`, `PHASE 0.7`, `PHASE 1`, `PHASE 1.5`, `PHASE 2`, `PHASE 2.5`, `PHASE 3`. |
-| `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1` | Core state-machine CLI and journal/board/session reader. |
+| `plugins/overnight-agent/skills/overnight-agent/oa-state.mjs` | Core state-machine CLI and journal/board/session reader, the one the agent runs (`node <skill>\oa-state.mjs <command>`). Laid out as `oa-state-lib/` collect / plan / act / report. |
+| `plugins/overnight-agent/skills/overnight-agent/oa-state.ps1` | The same CLI in PowerShell, kept with identical behaviour (characterization goldens, differential tests, every mutation check on both) as the fallback for a host without Node, for a whole run at a time. Both take the same state lock file, so a PowerShell writer and a Node writer queue rather than lose an update (`mutcheck-engine-lock.ps1`). |
 | `plugins/overnight-agent/skills/overnight-agent/write-turn.mjs` | The sanctioned planner write tool: the only way the agent writes a journal turn, plus the sent-messages ledger. |
 | `plugins/overnight-agent/skills/overnight-agent/write-turn.ps1` | The same tool in PowerShell, kept with identical behaviour as the fallback for a host without Node. |
 | `plugins/overnight-agent/skills/overnight-agent/user-settings.md` | Shareable template for the external settings file; the skill warns that updates overwrite the bundled template. |
@@ -133,7 +134,7 @@ These files are runtime-critical even though the fact collector does not index t
 </details>
 
 `SKILL.md` is operational, not aspirational. It tells the agent to resolve an **external**
-`user-settings.md`, to run `oa-state.ps1 scan` before judging tasks, and to keep task work in a
+`user-settings.md`, to run `oa-state.mjs scan` before judging tasks, and to keep task work in a
 per-task session rather than in the run session. `plugins/overnight-agent/skills/catchup-doc/SKILL.md`
 adds the reporting side: one zero-context paper, titled links for IDs, and document updates in
 place rather than comment-thread back-and-forth. It names the one tool that can actually rewrite a
@@ -151,7 +152,7 @@ replaced a version of PHASE 0.7 that told the reader to skip unbound tasks and t
 instructed it to create the doc for them — the contradiction behind issue #548, closed by moving
 ownership out of the phase entirely.
 
-`oa-state.ps1` is large, but its command surface is explicit near the top:
+`oa-state.ps1` (and its port `oa-state.mjs`, with the same commands) is large, but its command surface is explicit near the top:
 
 > [!NOTE]
 > **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.

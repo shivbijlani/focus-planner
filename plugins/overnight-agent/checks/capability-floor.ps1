@@ -223,7 +223,9 @@ function Invoke-Restore {
 
     Write-Host ("[floor] restored {0}" -f $e.file)
     $restored++
-    if ($e.file -eq $OaState) { $touchedOaState = $true }
+    $engineDir = Split-Path -Parent $OaState
+    if ($e.file -eq $OaState -or $e.file -eq (Join-Path $engineDir 'oa-state.mjs') -or
+      $e.file.StartsWith((Join-Path $engineDir 'oa-state-lib') + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { $touchedOaState = $true }
   }
 
   if ($restored -eq 0) {
@@ -240,7 +242,14 @@ function Invoke-Restore {
   # deliberately skips any journal with trailing user content, so an unanswered reply is never
   # baselined away.
   if ($touchedOaState -and -not $SkipResnapshot) {
-    if (Test-Path $OaState) {
+    $oaMjs = Join-Path (Split-Path -Parent $OaState) 'oa-state.mjs'
+    if ((Test-Path $oaMjs) -and (Get-Command node -ErrorAction SilentlyContinue)) {
+      # The engine the agent runs (#124); the .ps1 below only when the port or node is absent.
+      Write-Host '[floor] the state engine changed - running resnapshot (oa-state.mjs) to re-baseline journal hashes.'
+      $out = & node $oaMjs resnapshot 2>&1
+      Write-Host (($out | Out-String).TrimEnd())
+    }
+    elseif (Test-Path $OaState) {
       Write-Host '[floor] oa-state.ps1 changed - running resnapshot to re-baseline journal hashes.'
       $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $OaState resnapshot 2>&1
       Write-Host (($out | Out-String).TrimEnd())

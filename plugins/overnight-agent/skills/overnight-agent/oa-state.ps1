@@ -1064,6 +1064,72 @@ function Enter-OaFileLock([string]$target, [int]$timeoutSeconds, [string]$code) 
   }
 }
 
+function Get-OaStateLockFilePath([string]$lockKey) {
+  # The state lock FILE oa-state.mjs takes (core/lock.mjs, stateLockPath): the same key as the
+  # mutex, in the directory Node's os.tmpdir() names. Resolved the way Node resolves it (TEMP
+  # before TMP on Windows; TMPDIR first elsewhere), NOT [IO.Path]::GetTempPath(), which prefers
+  # TMP -- two processes that disagree about the directory would each hold "the" lock alone.
+  $dir = $null
+  if ($env:OS -eq 'Windows_NT') {
+    foreach ($v in @($env:TEMP, $env:TMP)) { if ($v) { $dir = $v; break } }
+    if (-not $dir) { $dir = Join-Path $(if ($env:SystemRoot) { $env:SystemRoot } else { $env:windir }) 'temp' }
+    if ($dir.Length -gt 1 -and $dir.EndsWith('\') -and -not $dir.EndsWith(':\')) { $dir = $dir.Substring(0, $dir.Length - 1) }
+  }
+  else {
+    foreach ($v in @($env:TMPDIR, $env:TMP, $env:TEMP)) { if ($v) { $dir = $v; break } }
+    if (-not $dir) { $dir = '/tmp' }
+    if ($dir.Length -gt 1 -and $dir.EndsWith('/')) { $dir = $dir.Substring(0, $dir.Length - 1) }
+  }
+  return [IO.Path]::GetFullPath((Join-Path $dir "oa-state-$lockKey.lock"))
+}
+
+function Test-OaLockHolderAlive([string]$lockPath) {
+  # Node's rule (core/lock.mjs holderAlive): a holder is DEAD only when the file names a PID and
+  # no such process exists. Unreadable, empty (mid-create) or unparsable all count as alive, so
+  # a doubt waits rather than steals a live writer's lock.
+  $text = $null
+  try { $text = [IO.File]::ReadAllText($lockPath) } catch { return $true }
+  $holder = 0
+  if (-not [int]::TryParse("$text".Trim(), [ref]$holder) -or $holder -le 0) { return $true }
+  if ($holder -eq $PID) { return $true }
+  try { $null = [Diagnostics.Process]::GetProcessById($holder); return $true }
+  catch [ArgumentException] { return $false }
+  catch { return $true }
+}
+
+function Enter-OaStateFileLock([string]$lockPath, [int]$timeoutSeconds) {
+  # THE ENGINES EXCLUDE EACH OTHER HERE. The named mutex below only excludes other PowerShell
+  # writers; oa-state.mjs cannot take a Windows mutex and locks this FILE instead. Taking it too
+  # (always first, then the mutex, so no two writers can hold one each and wait on the other)
+  # means a PowerShell `mark` and a Node `mark` on the same store queue rather than lose an
+  # update. Same path, same exclusive create, same dead-PID reclaim, no stale age (a long scan
+  # is a live holder, not a stale one).
+  $deadline = (Get-Date).AddSeconds([Math]::Max(1, $timeoutSeconds))
+  while ($true) {
+    try {
+      $stream = [IO.File]::Open($lockPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+      $bytes = [Text.Encoding]::UTF8.GetBytes("$PID")
+      $stream.Write($bytes, 0, $bytes.Length)
+      $stream.Flush()
+      return $stream
+    }
+    catch [IO.IOException] {
+      if (-not (Test-OaLockHolderAlive $lockPath)) {
+        try { Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop; continue } catch { }
+      }
+    }
+    catch [UnauthorizedAccessException] { }
+    if ((Get-Date) -ge $deadline) { return $null }
+    Start-Sleep -Milliseconds 50
+  }
+}
+
+function Exit-OaStateFileLock($stream, [string]$lockPath) {
+  if (-not $stream) { return }
+  try { $stream.Dispose() } catch { }
+  Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+}
+
 function Exit-OaFileLock($stream, [string]$target) {
   if (-not $stream) { return }
   try { $stream.Dispose() } catch { }
@@ -6584,12 +6650,15 @@ $script:DefaultLockWaitSeconds = 180
 # Past this age, a lock FILE (not the mutex, which the OS releases when its holder dies) belongs
 # to a writer that was killed mid-write; it is reclaimed rather than left to wedge the ledger.
 $script:LockStaleSeconds = 300
-$lockWaitSeconds = $script:DefaultLockWaitSeconds
-if ($LockWaitSeconds -gt 0) { $lockWaitSeconds = $LockWaitSeconds }
+# NOT `$lockWaitSeconds`: PowerShell names are case-insensitive, so that local WAS the
+# -LockWaitSeconds parameter, and assigning the default to it first discarded both the flag and
+# OA_STATE_LOCK_WAIT_SECONDS (every wait was 180 s). oa-state.mjs always honoured them.
+$stateLockWait = $script:DefaultLockWaitSeconds
+if ($LockWaitSeconds -gt 0) { $stateLockWait = $LockWaitSeconds }
 elseif ($env:OA_STATE_LOCK_WAIT_SECONDS) {
   $parsedWait = 0
   if ([int]::TryParse("$env:OA_STATE_LOCK_WAIT_SECONDS", [ref]$parsedWait) -and $parsedWait -gt 0) {
-    $lockWaitSeconds = $parsedWait
+    $stateLockWait = $parsedWait
   }
 }
 if ($env:OA_SANDBOX_ROOT) {
@@ -6609,6 +6678,8 @@ $needsStateLock = @('critical-tools', 'decisions') -notcontains $Command
 $mutex = $null
 $locked = $false
 $ledgerLock = $null
+$stateFileLock = $null
+$stateFileLockPath = $null
 try {
   if ($needsStateLock) {
     $lockPath = [IO.Path]::GetFullPath($StateDir).TrimEnd([char[]]'\/')
@@ -6616,15 +6687,19 @@ try {
     $sha = [Security.Cryptography.SHA256]::Create()
     try { $lockKey = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($lockPath)))).Replace('-', '') }
     finally { $sha.Dispose() }
+    $stateLockTimeout = "state_lock_timeout: another state operation held the lock for the whole $stateLockWait s wait; it is stuck, not merely busy"
+    $stateFileLockPath = Get-OaStateLockFilePath $lockKey
+    $stateFileLock = Enter-OaStateFileLock $stateFileLockPath $stateLockWait
+    if (-not $stateFileLock) { throw $stateLockTimeout }
     $mutex = New-Object Threading.Mutex($false, "oa-state-$lockKey")
-    try { $locked = $mutex.WaitOne($lockWaitSeconds * 1000) }
+    try { $locked = $mutex.WaitOne($stateLockWait * 1000) }
     catch [Threading.AbandonedMutexException] { $locked = $true }
     if (-not $locked) {
-      throw "state_lock_timeout: another state operation held the lock for the whole $lockWaitSeconds s wait; it is stuck, not merely busy"
+      throw $stateLockTimeout
     }
   }
   elseif ($Command -eq 'decisions') {
-    $ledgerLock = Enter-OaFileLock $RunLedger $lockWaitSeconds 'ledger_lock_timeout'
+    $ledgerLock = Enter-OaFileLock $RunLedger $stateLockWait 'ledger_lock_timeout'
   }
   Resolve-GateSettings
   Resolve-PacingSettings
@@ -6648,4 +6723,5 @@ finally {
   if ($ledgerLock) { Exit-OaFileLock $ledgerLock $RunLedger }
   if ($locked) { $mutex.ReleaseMutex() }
   if ($mutex) { $mutex.Dispose() }
+  Exit-OaStateFileLock $stateFileLock $stateFileLockPath
 }

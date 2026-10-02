@@ -128,7 +128,7 @@ Check 'G SKILL.md task-session guard precedes the run' {
   $guard = $skill.IndexOf('are you a task session?')
   $settings = $skill.IndexOf('## User settings')
   $guard -ge 0 -and $settings -gt $guard -and
-  $skill.Substring($guard, $settings - $guard) -match 'oa-state\.ps1 whoami'
+  $skill.Substring($guard, $settings - $guard) -match 'oa-state\.mjs whoami'
 }
 Check 'H PHASE 1 puts role_line first in every brief' {
   $p1 = $skill.IndexOf('### PHASE 1 ')

@@ -29,7 +29,7 @@ run the reaper, deploy, scan, dispatch, Telegram mirror or any other phase below
 or message another session. If unsure, check before anything else:
 
 ```powershell
-oa-state.ps1 whoami        # uses $env:COPILOT_AGENT_SESSION_ID; or pass -SessionId <id>
+oa-state.mjs whoami        # uses $env:COPILOT_AGENT_SESSION_ID; or pass -SessionId <id>
 ```
 
 `role: task` means this session is bound to `task_id`: do only that task. `coordinator` means no task
@@ -134,8 +134,15 @@ already processed in this journal") lives in the **skill's own working dir**, wh
 - **State dir:** `%LOCALAPPDATA%\overnight-agent\state\` (one `task-<ID>.json` per task). This is
   **local, not OneDrive-synced**, so it can't hit the planner's sync-conflict bug. It is the **source of
   truth** for task state — not anything inside the journal.
-- **Tool:** [`oa-state.ps1`](./oa-state.ps1) (next to this skill) reads/writes that state. Run it with
-  `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\oa-state.ps1 <command>`:
+- **Tool:** [`oa-state.mjs`](./oa-state.mjs) (next to this skill) reads/writes that state. Run it with
+  `node <skill>\oa-state.mjs <command>` (Node 20+, already required by the other skill scripts).
+  It is the Node port of `oa-state.ps1` (#124): same commands, same `-Name value` arguments, same JSON,
+  same exit codes. **Every `oa-state` command in this file means `node <skill>\oa-state.mjs`**, and so
+  does a tool message that names `oa-state.ps1 <command>` (write-turn's refusal hints still say that).
+  `oa-state.ps1` stays next to it as the **fallback**: only if `node` cannot run at all, use
+  `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\oa-state.ps1 <command>` with the same
+  arguments **for the rest of the run** -- never alternate between the two within one run. (Both take
+  the same state lock file, so a PowerShell writer and a Node writer queue rather than lose an update.)
   - **`scan`** → your per-run worklist as JSON, one row per task: `{ id, status, changed, reopened,
     has_agent_block, tracked, due_poll, poll_cadence, has_open_ask, awaiting_reply, ask_source,
     ask_declared, eligible }`.
@@ -179,10 +186,10 @@ are reusable after completion (#132), and "the search found nothing" is indistin
 search found the wrong doc" (the same shape as #346).
 
 ```powershell
-oa-state.ps1 doc -Id <ID>                                  # resolve: is this task bound, and to what?
-oa-state.ps1 doc -Id <ID> -DocId <docId> [-DocUrl <url>]   # bind, once, at create time
-oa-state.ps1 doc -Id <ID> -Observe <file>                  # what is NEW since last time? (does not advance)
-oa-state.ps1 doc -Id <ID> -Ack                             # advance the watermark
+oa-state.mjs doc -Id <ID>                                  # resolve: is this task bound, and to what?
+oa-state.mjs doc -Id <ID> -DocId <docId> [-DocUrl <url>]   # bind, once, at create time
+oa-state.mjs doc -Id <ID> -Observe <file>                  # what is NEW since last time? (does not advance)
+oa-state.mjs doc -Id <ID> -Ack                             # advance the watermark
 ```
 
 - **Create only when `bound: false`, and never search by title.** The find-or-create rule, the 404
@@ -211,7 +218,7 @@ oa-state.ps1 doc -Id <ID> -Ack                             # advance the waterma
   carried out. This is what makes attribution positive: if you never write a comment, every
   comment is provably his. **Doc comments still cannot approve anything today (#422)** — the
   mechanism exists (`neverCommentView()`, and `consentView(…, { neverComment: true })`) but is
-  deliberately opt-in and not yet wired into `oa-state.ps1 consent`, so approval stays in the
+  deliberately opt-in and not yet wired into `oa-state.mjs consent`, so approval stays in the
   journal or Telegram until it is (#421, #442).
 
 **Once a task has a doc, its Telegram topic goes quiet (#424).** This is a behaviour change you
@@ -243,10 +250,10 @@ upload any drops") would be invisible and silently stop the moment the user stop
 fixes that: it lives only in the skill state (never in the journal, so the user sees nothing), and
 `scan` reports **`due_poll: true`** on any task whose poll is due. Lifecycle:
 - When a task commits you to a recurring self-check, arm it once:
-  `oa-state.ps1 mark -Id <ID> -Poll <cadence>` (a freshly armed poll is due on the next `scan`).
+  `oa-state.mjs mark -Id <ID> -Poll <cadence>` (a freshly armed poll is due on the next `scan`).
 - Every run, after the normal `scan`, **act on any row with `due_poll: true`** (do the recurring check),
-  then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone` (stamps `last_polled` and pushes `next_due`
-  forward by the cadence). When the recurring duty ends, `oa-state.ps1 mark -Id <ID> -PollClear`.
+  then re-arm it with `oa-state.mjs mark -Id <ID> -PollDone` (stamps `last_polled` and pushes `next_due`
+  forward by the cadence). When the recurring duty ends, `oa-state.mjs mark -Id <ID> -PollClear`.
 
 **How "the user replied" is detected (the reopen fix):** the tool remembers a hash of each journal as
 you last left it, **and where your turn ended**. The second half is what makes it work: in most journals
@@ -326,7 +333,7 @@ offer is `-Ask offer` and should read like one ("say the word and I'll pick it u
 - **No machine metadata goes in the journal.** The only non-prose thing you write is the one
   self-describing sentinel line above. Status, plan version, and processed-state live in the skill's
   state store (see "The agent's memory"); keep the visible **Status:** line human-readable and in sync
-  with it via `oa-state.ps1 mark`.
+  with it via `oa-state.mjs mark`.
 - The user answers by **typing a reply** under your block (the app appends it at the bottom). You never
   ask them to tick a checkbox or touch a marker.
 - *Legacy:* older journals still contain a `<!-- oa-state {…} -->` JSON line. It's harmless — the tool
@@ -353,7 +360,7 @@ their feedback, then **overwrite the block in place** — do not stack old + new
    **one** current plan again. (Leave the user's reply itself where it is — that's their prose.)
 3. **Bump the version:** the new plan becomes `v<N+1>`. Update the heading
    (`### Proposed plan (vN+1)`) and the **Status:** line (`Proposed · plan vN+1 · <today>`), then record
-   it with `oa-state.ps1 mark -Id <ID> -Status proposed -Version <N+1> -PlanId t<ID>-v<N+1>`.
+   it with `oa-state.mjs mark -Id <ID> -Status proposed -Version <N+1> -PlanId t<ID>-v<N+1>`.
 4. Optionally add a single terse line under the Status capturing *why* it changed, e.g.
    `*v2: dropped step 3 per your note (already bought the basket).*` — one line max, so the history
    is a breadcrumb, not clutter. (Do **not** keep the full old plan text.)
@@ -374,7 +381,7 @@ message and interpret intent:
 - **Revise** — they ask for changes or give new direction ("revise…", "change X", "actually do Y").
 - **Skip** — "skip", "not now", "leave it", "drop it".
 
-After acting, record the new status with `oa-state.ps1 mark`. If their message is genuinely ambiguous,
+After acting, record the new status with `oa-state.mjs mark`. If their message is genuinely ambiguous,
 set `blocked` and ask **one** short clarifying question in **Needs from you** (or reply to their
 instruction email) rather than guessing.
 
@@ -390,7 +397,7 @@ the reader simply had no way to tell.
 So for anything on the ⛔ list, ask the fail-closed reader instead of judging the prose yourself:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\oa-state.ps1 consent -Id <ID>
+node <skill>\oa-state.mjs consent -Id <ID>
 ```
 
 It returns `consent_ok` plus a `reason`. **Proceed only on `consent_ok: true`** (an affirmative inside
@@ -429,7 +436,7 @@ you — the #227 hole. A PR number is command-shaped and never appears in narrat
 <!-- CONSENT-VOCAB:END -->
 
 That list is not decorative. `mutcheck-consent-vocab-drift.ps1` extracts every phrase between those two
-markers and fails if `$script:ConsentAffirmRe` in `oa-state.ps1` would reject any of them, so the word
+markers and fails if the consent regex in `oa-state.mjs` or `oa-state.ps1` would reject any of them, so the word
 you advertise here and the word the machine actually reads can never drift apart again (the #297
 failure mode). Add a word here only after the reader accepts it.
 
@@ -463,7 +470,7 @@ the end of the file — your turns and the user's `## <YYYY-MM-DD>` / `<!-- from
 So new user input usually lands at the very **bottom**, *after* your last turn — and the user should
 never have to know that.
 
-**You don't detect this by parsing markers — the tool does it for you.** `oa-state.ps1 scan` compares
+**You don't detect this by parsing markers — the tool does it for you.** `oa-state.mjs scan` compares
 each journal to the hash you last left behind and reports **`reopened: true`** for any task where the
 user has spoken after your last turn:
 
@@ -471,7 +478,7 @@ user has spoken after your last turn:
   execute; a new ask → re-plan as a new version (per "Revise → replace").
 - ⛔ **Except on a task the USER closed.** A reply there does **not** reopen it,
   and `scan` will not offer it to you: the row comes back `reopened_closed: true` and
-  `eligible: false`. Write **no** turn, take **no** action — just `oa-state.ps1 mark -Id <ID>` with
+  `eligible: false`. Write **no** turn, take **no** action — just `oa-state.mjs mark -Id <ID>` with
   its existing status so it stops re-surfacing, and **report it in the wrap-up under _Replies on
   closed tasks_, quoting the message**. Shiv, on task #400: *"I don't think we need to handle the
   case where a reply on a closed task is considered [a reopen]"* (GH issue #170, cause 3).
@@ -498,7 +505,7 @@ user has spoken after your last turn:
   — re-`mark`ing alone will no longer make it go quiet, by design.
 - `proposed` and `blocked` are **not** closed — they are *waiting on the user*, so a reply there is
   the input they were waiting for and reopens them normally.
-- After you respond, call `oa-state.ps1 mark -Id <ID> …` so the task goes quiet again until the user
+- After you respond, call `oa-state.mjs mark -Id <ID> …` so the task goes quiet again until the user
   next touches it.
 
 ---
@@ -544,7 +551,7 @@ Do the phases **in this order** every time.
 > next coordinator run. Nothing is lost: the bridge deduplicates journal turns by turn hash.
 
 > **Scan first (applies to PHASE 1 *and* PHASE 2):** before judging any task, run
-> **`oa-state.ps1 scan -Compact`** once and use its JSON as your worklist. Each row tells you what
+> **`oa-state.mjs scan -Compact`** once and use its JSON as your worklist. Each row tells you what
 > changed and what's `reopened` (the user spoke after your last turn — active again) or
 > `snoozed` (skip it). A reply on a task the user **closed** comes back `reopened_closed` and
 > `eligible: false` — report it, never work it (see "Reopened after close"). Don't
@@ -606,8 +613,8 @@ Do the phases **in this order** every time.
 > - **How to declare exhaustion.** Two calls, in this order, never one:
 >
 >   ```powershell
->   oa-state.ps1 mark -Id 463 -Status in-progress                       # 1. write your turn
->   oa-state.ps1 mark -Id 463 -Exhausted 'gh:197,gh:179,gh:139' `       # 2. then declare
+>   oa-state.mjs mark -Id 463 -Status in-progress                       # 1. write your turn
+>   oa-state.mjs mark -Id 463 -Exhausted 'gh:197,gh:179,gh:139' `       # 2. then declare
 >                             -ExhaustedNote 'all three blocked on review'
 >   ```
 >
@@ -633,7 +640,7 @@ Do the phases **in this order** every time.
 >   `mutcheck-priority-order.ps1`.
 > - ⚙️ **The backstop window and the strict rollback are USER SETTINGS, not constants.**
 >   `user-settings.md` → `## Overnight Agent behaviour` carries `Today gate backstop` (default
->   `6h`, accepts `off`) and `Today gate strict` (default `off`). **`oa-state.ps1` reads them
+>   `6h`, accepts `off`) and `Today gate strict` (default `off`). **`oa-state.mjs` reads them
 >   itself — you do not pass them as flags**, and there is nothing for you to remember. That is
 >   deliberate: a forgotten *path* argument fails loudly, but a forgotten *number* fails silently
 >   on the built-in default while the run looks normal, which is the same shape as the defect
@@ -674,7 +681,7 @@ Do the phases **in this order** every time.
 >   to the coordinator run ledger:
 >
 >   ```powershell
->   pwsh oa-state.ps1 decisions -RunId <runId from the preflight> `
+>   node oa-state.mjs decisions -RunId <runId from the preflight> `
 >        -ScanFile <the scan -Compact output you selected from> `
 >        -Outcomes '[{"id":"362","outcome":"dispatched","at":"...","sessionId":"..."},
 >                    {"id":"400","outcome":"capacity"}]'
@@ -702,11 +709,11 @@ write it take that lock:
 | Step | Lock | Runs in parallel with |
 | --- | --- | --- |
 | `check-critical-tools.mjs --run … --record …` | its own short capabilities + ledger lock | everything, including a running `scan` |
-| `oa-state.ps1 scan -Compact -ScanOutFile …` | the state lock, for its whole 60–90 s | everything except another state command |
+| `oa-state.mjs scan -Compact -ScanOutFile …` | the state lock, for its whole 60–90 s | everything except another state command |
 | `collect-google-tasks.ps1` | none | everything |
 | `run-telegram-mirror.ps1 -SyncDownOnly` | none | everything |
-| `oa-state.ps1 decisions -RunId …` | the short ledger lock | everything, including a running `scan` |
-| any other `oa-state.ps1` command (`mark`, `get`, `session`, `seed`, …) | the state lock | non-state steps only |
+| `oa-state.mjs decisions -RunId …` | the short ledger lock | everything, including a running `scan` |
+| any other `oa-state.mjs` command (`mark`, `get`, `session`, `seed`, …) | the state lock | non-state steps only |
 
 **Do not serialize PHASE 0 by hand, and do not retry on a busy lock.** A command that needs
 the state lock now **waits** up to 180 s (the scan's own budget) for it; `-LockWaitSeconds`
@@ -749,7 +756,7 @@ coordinator run in the ledger that gap detection and decision records rely on. A
 pass `--run <runId>` here; never invoke this script without it during a real
 coordinator run.
 
-The script reads `Critical tools` through `oa-state.ps1`, refuses names absent from the
+The script reads `Critical tools` through `oa-state.mjs`, refuses names absent from the
 configured MCP servers, and writes `%LOCALAPPDATA%\overnight-agent\capabilities.json`.
 The default is `email, google-workspace`. The same command records the coordinator start
 in `%LOCALAPPDATA%\overnight-agent\run-ledger.jsonl` (`startedAt`, trigger when known, and
@@ -780,7 +787,7 @@ instead of marking PARTIAL, while continuing independent tasks. The optional
 and emits the deterministic `skipped` reasons. Include the capability verdict and
 the blocked-tool instruction in task-session kickoffs so dependent task sessions
 cannot proceed using a tool the coordinator found down. Pass the task's required
-server names as `-RequiresTools google-workspace,email` to `oa-state.ps1 session
+server names as `-RequiresTools google-workspace,email` to `oa-state.mjs session
 -CheckDispatch` and `-ForDispatch`; these refuse an unprobed, stale or down tool
 before stamping the wake. Preserve the run's
 `degraded` status in its final report even if independent work succeeded.
@@ -895,7 +902,7 @@ user's **standing** permissions — the ones that are true across every task, so
 re-grant them in a journal every night. Run this fourth, every run:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\oa-state.ps1" gate
+node "<skill>\oa-state.mjs" gate
 ```
 
 It prints `{ path, exists, state, version, allow[], ask[], mtime }`, with every rule **verbatim**.
@@ -943,7 +950,7 @@ It prints `{ path, exists, state, version, allow[], ask[], mtime }`, with every 
 **Do not eyeball the gate and decide for yourself.** Ask it, per action, and let it answer:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "<skill>\oa-state.ps1" `
+node "<skill>\oa-state.mjs" `
   consent -Id <ID> -Action <kind> -Repo <repo>
 ```
 
@@ -1092,7 +1099,7 @@ that already exist upstream, and will redo or contradict them.
 2. **Read each linked task's real material**, not just its title — but read it **bounded**:
 
    ```powershell
-   pwsh oa-state.ps1 extract -Id <linkedID>          # bounded, read-only, ~24 KB ceiling
+   node oa-state.mjs extract -Id <linkedID>          # bounded, read-only, ~24 KB ceiling
    ```
 
    **Use `extract`. Do NOT open `journal\task-<linkedID>.md` in full as your default.** It gives you
@@ -1153,16 +1160,16 @@ as prose.
 
 For each row `scan` reported `doc_bound: true`, and any task you are about to work:
 
-1. `oa-state.ps1 doc -Id <ID>` → resolve the binding. **Never search by title.** A stored id that
+1. `oa-state.mjs doc -Id <ID>` → resolve the binding. **Never search by title.** A stored id that
    **404s is an error to report**, not a cue to create a second doc (#423). If a live task you are
    about to work is genuinely unbound, let the invariant bind it rather than binding it here — two
    owners for one act is how a binding ends up pointing at the wrong page.
 2. Fetch comments with the Google Workspace MCP's `list_document_comments` (account:
    `user-settings.md` → "Google account (Tasks)"); save the dump to a file.
-3. `oa-state.ps1 doc -Id <ID> -Observe <file>` — reports what is new, deliberately without advancing.
+3. `oa-state.mjs doc -Id <ID> -Observe <file>` — reports what is new, deliberately without advancing.
 4. Read them **fail-OPEN** via `readingView()` in `lib-doc-comments.mjs`: anything not provably your
    own reply is an instruction. ⛔ **A comment still approves nothing today** — ⛔-list actions
-   need `oa-state.ps1 consent` (#422). See the never-comment rule below for why that is now a
+   need `oa-state.mjs consent` (#422). See the never-comment rule below for why that is now a
    wiring gap rather than an impossibility.
 5. ⛔ **Never post a comment. Answer by AMENDING THE DOCUMENT.** Shiv, 2026-09-04:
    *"I don't expect you to reply to any of my comments … If I ask you a question in the document
@@ -1180,7 +1187,7 @@ For each row `scan` reported `doc_bound: true`, and any task you are about to wo
    `lib-doc-comments.mjs` re-proves that invariant against the live comment list every time it is
    consulted; an agent comment created after `NEVER_COMMENT_SINCE` breaks it and refuses consent.
    Replies written before that cutoff are `legacy` and do not break it.
-6. `oa-state.ps1 doc -Id <ID> -Ack` — **last**. Two-phase on purpose: a crash between 3 and 6
+6. `oa-state.mjs doc -Id <ID> -Ack` — **last**. Two-phase on purpose: a crash between 3 and 6
    re-reports a comment rather than dropping it (#170's direction).
 
 ⚠️ **Skipping this is success-shaped, so it is measured, not trusted.** `doc_new_comments` comes
@@ -1210,9 +1217,9 @@ an earlier phase or perform any follow-up.
    collect tasks whose stored `status` is `approved` (also continue any
    `in-progress` with reversible or gate-allowed work), **plus any `reopened` task whose newest user message is an
    approval** (e.g. "approve", "go ahead" appended at the bottom — interpret per "Reading the user's
-   decision"). Use `oa-state.ps1 get -Id <ID>` if you need a task's full state.
+   decision"). Use `oa-state.mjs get -Id <ID>` if you need a task's full state.
    **Also pick up any row with `due_poll: true`** — a time-triggered recurring check that's now due
-   (see "Polling"). Run its check, then re-arm it with `oa-state.ps1 mark -Id <ID> -PollDone`.
+   (see "Polling"). Run its check, then re-arm it with `oa-state.mjs mark -Id <ID> -PollDone`.
 
 2. **Dispatch directly, in `scan -Compact` order, with at most `concurrency` active sends.**
    Count only this run's sends accepted by `send_session_message` toward the limit; a failed delivery does
@@ -1234,13 +1241,13 @@ an earlier phase or perform any follow-up.
 
    For each task with work to hand over:
 
-   1. Run `oa-state.ps1 session -Id <ID>`. **`paused` means skip** and leave its saved binding
+   1. Run `oa-state.mjs session -Id <ID>`. **`paused` means skip** and leave its saved binding
       untouched. `reuse` uses the bound session. `create` or `replace` means create a new session
       idle, without a kickoff (a session in the configured local folder project for non-code
       work, a worktree for code), then bind it.
       For `replace`, retain the returned `kickoff_continuation` line for the message.
    2. Immediately before sending, refresh `get_sessions_status` into the run-scoped JSON file
-      and run `oa-state.ps1 session -Id <ID> -ForDispatch
+      and run `oa-state.mjs session -Id <ID> -ForDispatch
       -SessionsStatusFile <file> -DispatchInput <exact dispatch_input from scan>`.
       This rechecks eligibility, the user's pause and the brief's input fingerprint, then records
       the wake. A bound session now busy is refused with `busy_from_earlier_run`; if it throws,
@@ -1255,7 +1262,7 @@ an earlier phase or perform any follow-up.
       `delivery_mode: immediate`. The brief's first line is the emitted `role_line`, verbatim.
       Put `kickoff_continuation` next when replacing a dead session.
    4. **Silence is not death (#761).** If delivery is definitively rejected because the target
-      session is unavailable, run `oa-state.ps1 session -Id <ID> -SessionDead`; if it refuses with
+      session is unavailable, run `oa-state.mjs session -Id <ID> -SessionDead`; if it refuses with
       `session_still_alive`, keep the binding and report the conflicting evidence. A delivery that
       **could not be confirmed** is not a rejection: report uncertainty, keep the binding, and do
       not retry that task in this run. Do not infer death from unchanged `updated_at`, journal mtime,
@@ -1271,7 +1278,7 @@ an earlier phase or perform any follow-up.
       that is the answer. **Do not send a follow-up**: not "write the required turn now", not
       "execute now", not a re-ask for the same work in different words, and not a nudge because
       no journal turn appeared. Record the reason (a user opt-out or pause is
-      `oa-state.ps1 mark -Id <ID> -Status blocked -StatusBy user`), report it in the run summary,
+      `oa-state.mjs mark -Id <ID> -Status blocked -StatusBy user`), report it in the run summary,
       and move to the next eligible row.
       Measured 2026-09-28 (#734): task #472's session correctly refused — "stopped on explicit
       user opt-out … do not redispatch without an explicit user resume request" — and the
@@ -1289,7 +1296,7 @@ an earlier phase or perform any follow-up.
    the tracked active-send set and do not occupy its openings. Missing or unknown status is not evidence of
    completion: leave its opening occupied and report it if the cutoff arrives. Do not poll journals,
    re-run `scan` or call `get_session` for every task on each tick. When an opening frees, re-run
-   `oa-state.ps1 scan -Compact` with `-SessionsStatusFile <fresh snapshot>`, skip every task ID already attempted this run
+   `oa-state.mjs scan -Compact` with `-SessionsStatusFile <fresh snapshot>`, skip every task ID already attempted this run
    and each `busy_from_earlier_run` row, and send the next
    eligible prepared task in that fresh scan's order, with the same `-ForDispatch -DispatchInput`
    check immediately before each send. If no candidate remains but sessions are active, keep
@@ -1302,7 +1309,7 @@ an earlier phase or perform any follow-up.
 3. **For each task, resolve its session before doing anything else** — never create one on a hunch:
 
    ```powershell
-   oa-state.ps1 session -Id <ID>     # -> verdict: paused | create | reuse | replace
+   oa-state.mjs session -Id <ID>     # -> verdict: paused | create | reuse | replace
    ```
 
    - **`paused`** — **the user stopped this task. Do not wake it, do not create a session for it,
@@ -1338,10 +1345,10 @@ an earlier phase or perform any follow-up.
    - Mark a session dead only after a definite unavailable-target delivery rejection (or the
      read-time dead-process/workspace verdict above). Silence, an idle status, a completed
      no-change run, and unconfirmed delivery are not non-wakeability evidence. On definite
-     rejection use `oa-state.ps1 session -Id <ID> -SessionDead`; a live process refuses it with
+     rejection use `oa-state.mjs session -Id <ID> -SessionDead`; a live process refuses it with
      `session_still_alive`. Otherwise preserve the binding and report uncertainty, not `replace`.
    - **If the user tells a sub-session to stop, record it on the spot** —
-     `oa-state.ps1 mark -Id <ID> -Status blocked -StatusBy user`. That single write is what every
+     `oa-state.mjs mark -Id <ID> -Status blocked -StatusBy user`. That single write is what every
      reader derives from: `scan` reports `session_paused` and `eligible: false`, and this verdict
      becomes `paused`. A pause that is only
      described in a run summary is not recorded — prose is not on any run's read path, and a
@@ -1382,11 +1389,11 @@ an earlier phase or perform any follow-up.
     automation and app default separately until the app supports session model
     changes.
    ```powershell
-   oa-state.ps1 session -Id <ID> -SessionId <new session id> `
+   oa-state.mjs session -Id <ID> -SessionId <new session id> `
      -SessionKind code -SessionProject <repo project> `
      -SessionWorkspace <worktree path> -WorkspaceType worktree
 
-   oa-state.ps1 session -Id <ID> -SessionId <new non-code session id> `
+   oa-state.mjs session -Id <ID> -SessionId <new non-code session id> `
      -SessionKind chat -SessionProject <Non-code task project ID> `
      -SessionWorkspace "$env:LOCALAPPDATA\overnight-agent\task-chats" -WorkspaceType folder
    ```
@@ -1443,7 +1450,7 @@ an earlier phase or perform any follow-up.
      - Next: <next step, or "complete">
      ```
 
-   - Update the visible `**Status:**` line and record it with `oa-state.ps1 mark -Id <ID> -Status <s>`:
+   - Update the visible `**Status:**` line and record it with `oa-state.mjs mark -Id <ID> -Status <s>`:
      `done` if the task's scope is finished; `in-progress` if more nights are needed (classify
      and continue the next steps without proposing again); `blocked` if you hit a gated step
      after completing allowed work (write one short ask naming the exact action and its cost
@@ -1452,7 +1459,7 @@ an earlier phase or perform any follow-up.
      task goes quiet until the user replies again.
    - **Keep the session bound while the task is `in-progress`** — that binding *is* the continuity
      that stops tomorrow's run cold-starting. Release it only when the task is finished:
-     `oa-state.ps1 session -Id <ID> -SessionRelease`, which prints the safe teardown command for the
+     `oa-state.mjs session -Id <ID> -SessionRelease`, which prints the safe teardown command for the
      workspace. Run **that** command — never a raw `git worktree remove --force`, which deletes
      through a `node_modules` junction (#321) — and prune stale worktrees/branches as you go (#402).
 
@@ -1631,7 +1638,7 @@ rather than merely incomplete, which makes it the more dangerous of the two.
    Then write a concrete, right-sized plan that **explicitly builds on those upstream
    decisions** and adds a one-line **Context:** trace. For each step label it `[reversible]`,
    `[gate-allowed]` or `[gated]`. For any action kind that the safety floor or standing
-   permission could cover, run `oa-state.ps1 consent -Id <ID> -Action <kind> -Repo <repo>`
+   permission could cover, run `oa-state.mjs consent -Id <ID> -Action <kind> -Repo <repo>`
    (omit `-Repo` when irrelevant). Only `consent_ok: true, reason: gate-allowed`
    qualifies as gate-allowed without fresh approval; `gate-floor-blocks`, unread human
    input, missing/unknown gate and a non-affirmative verdict never do. A safety-floor
@@ -1650,7 +1657,7 @@ rather than merely incomplete, which makes it the more dangerous of the two.
 
 6. **Act on the classification in this wake.** If the first step is gated, write `proposed`
    with `-Ask blocking`, one short question for the gated actions naming the exact action
-   and its cost or recipient; record `oa-state.ps1 mark -Id <ID> -Status proposed -Version <n>
+   and its cost or recipient; record `oa-state.mjs mark -Id <ID> -Status proposed -Version <n>
    -PlanId t<ID>-v<n>`. Do not dispatch. Otherwise **do not write a coordinator turn**:
    leave the classified reversible and gate-allowed step prepared for PHASE 1's terminal
    drain **in this wake**, subject to ordering, concurrency and cutoff. PHASE 2 sends
@@ -1774,8 +1781,8 @@ Rules:
   user's phone replies** by skipping a batched update and advancing the Telegram offset, after which Telegram
   never redelivers it. **If a wrapper script is configured, prefer it for `sync-down` too** (it
   pins the path *and* sets the fail-open digest flag), rather than hand-rolling `node "$bridge" sync-down`.
-- ⚠️ **Fold phone replies BEFORE `oa-state.ps1 scan`, not just before `once`.** The `sync-down` in the block
-  above protects *this* phase, but the scan in PHASE 1/2 has already run by then. `oa-state.ps1 mark`
+- ⚠️ **Fold phone replies BEFORE `oa-state.mjs scan`, not just before `once`.** The `sync-down` in the block
+  above protects *this* phase, but the scan in PHASE 1/2 has already run by then. `oa-state.mjs mark`
   snapshots each journal's hash, and a fold that lands *after* the mark leaves every answered task with a
   stale hash — so the next run reports it `reopened` and re-answers it, writing new turns to tasks that were
   already finished. Run a `sync-down` pass **early**, before the scan, and treat the one here as a no-op
@@ -1834,7 +1841,7 @@ Be conservative with the board — it's the user's at-a-glance view.
 - **Never write to `planner-completed.md`, and never move or delete a row to mark it complete.**
   Completion is the **user's** action in the Focus Planner app — the app is the only thing that moves a
   row to the completed board. When the agent finishes an approved task's scope, it records `done` in its
-  own state (`oa-state.ps1 mark … -Status done`) + a journal Run log entry, and **leaves the board row
+  own state (`oa-state.mjs mark … -Status done`) + a journal Run log entry, and **leaves the board row
   untouched in `planner.md`** for the user to complete. Any archive/close behavior that keys off the
   completed board (e.g. Telegram topic archiving) then triggers only from the user's app-driven
   completion.
@@ -1888,7 +1895,7 @@ See PHASE 0.
   irreversible/hard-to-reverse action (e.g. **merging a PR**) for a plan that isn't `approved`, and
   only when the approved plan explicitly calls for it.
 - **Consent must come from outside you (#227).** For any ⛔-list action, the authorization must be
-  `oa-state.ps1 consent -Id <ID>` returning **`consent_ok: true`** — not your own reading of the prose,
+  `oa-state.mjs consent -Id <ID>` returning **`consent_ok: true`** — not your own reading of the prose,
   and not `reopened`. You write to the journal, so a reader that treats unmarked text as the human lets
   your own words authorize you. This is a **guard, not a guideline**: it is asserted by
   `mutcheck-consent-authorship.ps1`, whose six mutations each restore a different version of the hole
@@ -1903,8 +1910,8 @@ See PHASE 0.
   that page — which is why you must never post one. Every failure refuses: a missing or unparsed dump
   grants nothing. Omit the flag and the doc is never opened. Pinned by `mutcheck-doc-consent.ps1`.
 - **Ask only for words the reader accepts (#301).** The approval vocabulary is one delimited list in
-  this file (see "Approval vocabulary" above), held identical to `$script:ConsentAffirmRe` in
-  `oa-state.ps1` by `mutcheck-consent-vocab-drift.ps1`. To authorize a merge, the word is
+  this file (see "Approval vocabulary" above), held identical to the consent regex in
+  `oa-state.mjs` and `oa-state.ps1` by `mutcheck-consent-vocab-drift.ps1`. To authorize a merge, the word is
   `merge <PR number>` (e.g. `merge 300`) — command-shaped so it cannot occur in your own prose; bare
   `merge`/`merged` never approve. Its narrowness is proven load-bearing by `mutcheck-consent-vocab.ps1`.
   Never advertise a word outside that list, or the reply reads as no affirmative and is silently dropped.
@@ -1932,9 +1939,9 @@ See PHASE 0.
   fine without extra approval.) If a plan is vague about a risky step, set `blocked` and ask before
   doing it. When in doubt, prefer producing a ready-to-send draft (or an open PR) over the committing
   action.
-- **Be idempotent.** Your memory is the **skill state store** (via `oa-state.ps1`) plus the **Run log**
-  in the journal. On re-run, start from `oa-state.ps1 scan`; don't redo finished steps or create
-  duplicate deliverables — check the journal first, and call `oa-state.ps1 mark` after each turn so the
+- **Be idempotent.** Your memory is the **skill state store** (via `oa-state.mjs`) plus the **Run log**
+  in the journal. On re-run, start from `oa-state.mjs scan`; don't redo finished steps or create
+  duplicate deliverables — check the journal first, and call `oa-state.mjs mark` after each turn so the
   task goes quiet. \*\*Mark handled instruction emails as read\*\* so you don't reprocess them.
 - **Stay in the user's space cleanly.** Never edit above the sentinel. Preserve the user's notes,
   links, and formatting. Write files as UTF-8.
@@ -2061,7 +2068,7 @@ See PHASE 0.
     **Per-task windows, and reopening on the next run.** Open a task's pages in a **new window**
     (`browser_tabs` with a fresh window, not a tab in whatever the MCP happened to have open), so one
     task's work is never mixed into another's. Before your turn ends, if you had browser tabs open for
-    this task, save their URLs into this task's own state (see `oa-state.ps1`) so the **next** run can
+    this task, save their URLs into this task's own state (see `oa-state.mjs`) so the **next** run can
     reopen them — a relaunch restores **no** previous tabs on its own, since there is no CDP session to
     reattach to. Real tab groups are extension-only (GH #383) and out of scope here.
 

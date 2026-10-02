@@ -49,18 +49,23 @@ $ErrorActionPreference = 'Stop'
 # what it could not do instead of throwing.
 function Release-SessionBinding {
     param([string]$RemovedPath)
+    # Item 4: the agent's state engine is oa-state.mjs (it lives in a plugin tree, never the flat OA
+    # home). This WRITES state, so it prefers the same engine; the two do not share a lock.
     $oa = @(
+        $(if (Get-Command node -ErrorAction SilentlyContinue) { "$env:USERPROFILE\.copilot\installed-plugins\focus-planner\overnight-agent\skills\overnight-agent\oa-state.mjs" }),
+        $(if (Get-Command node -ErrorAction SilentlyContinue) { Join-Path $PSScriptRoot '..\plugins\overnight-agent\skills\overnight-agent\oa-state.mjs' }),
         (Join-Path $env:LOCALAPPDATA 'overnight-agent\oa-state.ps1'),
         "$env:USERPROFILE\.copilot\installed-plugins\focus-planner\overnight-agent\skills\overnight-agent\oa-state.ps1",
         (Join-Path $PSScriptRoot '..\plugins\overnight-agent\skills\overnight-agent\oa-state.ps1')
     ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
     if (-not $oa) {
-        Write-Host '  no oa-state.ps1 found; session binding NOT released (harmless unless this worktree was bound)' -ForegroundColor DarkGray
+        Write-Host '  no oa-state.mjs / oa-state.ps1 found; session binding NOT released (harmless unless this worktree was bound)' -ForegroundColor DarkGray
         return
     }
     try {
-        $out = & pwsh -NoProfile -ExecutionPolicy Bypass -File $oa session -WorkspaceGone $RemovedPath 2>&1
+        $out = if ($oa -like '*.mjs') { & node $oa session -WorkspaceGone $RemovedPath 2>&1 }
+                else { & pwsh -NoProfile -ExecutionPolicy Bypass -File $oa session -WorkspaceGone $RemovedPath 2>&1 }
         $json = ($out | Out-String | ConvertFrom-Json)
         if ([int]$json.marked_dead -gt 0) {
             Write-Host ("  session binding released for task(s) {0}; next verdict is 'replace', not 'reuse'" -f ($json.tasks -join ', ')) -ForegroundColor Green

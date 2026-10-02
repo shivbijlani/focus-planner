@@ -21,7 +21,9 @@ overnight-agent/
     └── overnight-agent/
         ├── SKILL.md            # The skill instructions
         ├── user-settings.md    # Template — fill in your own values after install
-        ├── oa-state.ps1        # Skill-owned per-task state (local, not synced)
+        ├── oa-state.mjs        # Skill-owned per-task state (local, not synced); node <skill>\oa-state.mjs <cmd>
+        ├── oa-state-lib/       # its modules: core / collect / plan / act / report
+        ├── oa-state.ps1        # the same CLI in PowerShell, fallback only (whole run, never mixed)
         └── check-google-token.ps1
 ```
 
@@ -122,7 +124,7 @@ Set the **app's default model to Auto** on each computer before running the
 Overnight Agent. When creating the scheduled **Overnight Agent** automation,
 select **Auto** as its model (`model: auto` in `save_workflow`). The
 `Overnight Agent model` row in external `user-settings.md` defaults to `auto`;
-`oa-state.ps1 session -Id` and `scan` report the resolved
+`oa-state.mjs session -Id` and `scan` report the resolved
 preference and whether it came from the setting or the default. At present,
 the app's idle `create_session` and `send_session_message` tools do not accept
 a model argument, so idle-created and woken task sessions inherit the **app's
@@ -140,7 +142,7 @@ second send to the same target session in one run, refuses waits that cross the 
 that hard end permits only `task_complete`. It activates only when the skill preflight has recorded
 the current coordinator session in the ledger, so it is inert in task and ordinary chat sessions.
 Before selecting work, the coordinator saves a `get_sessions_status` snapshot and passes it to
-`oa-state.ps1 scan -Compact -SessionsStatusFile <file>`. A bound session already busy is reported
+`oa-state.mjs scan -Compact -SessionsStatusFile <file>`. A bound session already busy is reported
 as `busy_from_earlier_run`, skipped without consuming this run's concurrency, and checked again
 with a fresh snapshot by `session -ForDispatch` immediately before any send. Only accepted sends
 from the current run occupy its openings.
@@ -149,7 +151,7 @@ the total tasks started during a run. It fills openings in `scan -Compact` order
 sessions with one `get_sessions_status` call about every 60 seconds, and re-scans to refill an
 opening when a session goes idle. It never sends twice to the same task in one run.
 
-For each task, the coordinator reads `oa-state.ps1 session -Id <ID>` first. A `paused` verdict
+For each task, the coordinator reads `oa-state.mjs session -Id <ID>` first. A `paused` verdict
 skips the task. `create` and `replace` create a new task session idle and bind it before sending;
 replacement messages begin with the returned `kickoff_continuation`. Immediately before each
 send, `session -Id <ID> -ForDispatch -DispatchInput <hash>` rechecks eligibility, user pause and

@@ -250,13 +250,16 @@ export async function main(args = process.argv.slice(2)) {
     // still report a gap the last real coordinator run detected, without minting a new one.
     const run = runId ? withFileLock(ledger, () => recordRunStart(ledger, { now, trigger, runId })) : null;
     const runGap = gapForAlert(run ?? {}, prior.runGap);
-    const stateScript = firstExisting(path.join(here, 'oa-state.ps1'));
-    if (!stateScript) throw new Error('oa-state.ps1 not found');
-    const command = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', stateScript, 'critical-tools'];
+    // Item 4: the state engine is oa-state.mjs; oa-state.ps1 is only the fallback when the port is absent.
+    const nodeState = firstExisting(path.join(here, 'oa-state.mjs'));
+    const stateScript = nodeState || firstExisting(path.join(here, 'oa-state.ps1'));
+    if (!stateScript) throw new Error('oa-state.mjs / oa-state.ps1 not found');
+    const command = nodeState ? [nodeState, 'critical-tools']
+      : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', stateScript, 'critical-tools'];
     if (settingsPath) command.push('-UserSettings', settingsPath);
     if (configPath) command.push('-McpConfig', configPath);
     if (stateDir) command.push('-StateDir', stateDir);
-    const policy = JSON.parse(execFileSync(shell, command, { encoding: 'utf8', timeout: 60000 }));
+    const policy = JSON.parse(execFileSync(nodeState ? process.execPath : shell, command, { encoding: 'utf8', timeout: 60000 }));
     if (configPath) process.env.MCP_PROBE_CONFIG = configPath;
     const settings = settingsFrom(policy.settingsPath);
     const results = Object.fromEntries(records.map(parseRecord));
