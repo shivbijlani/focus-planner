@@ -1,0 +1,30 @@
+{
+  "files": {},
+  "id": "mc/consent-channels/ledger-malformed-refuses",
+  "steps": [
+    {
+      "args": {
+        "DocComments": "<ROOT>/input/approved.txt",
+        "Id": "960"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "affirmative_answered": false,
+        "affirmative_author": null,
+        "affirmative_phrase": null,
+        "affirmative_unattributed": false,
+        "consent_ok": false,
+        "doc_comments_path": "<ROOT>/input/approved.txt",
+        "doc_consent_ok": false,
+        "doc_consent_reason": "sent-ledger-malformed",
+        "human_segments": 0,
+        "id": "960",
+        "path": "<ROOT>/data/journal/task-960.md",
+        "reason": "no-trailing-content",
+        "trailing_has_user": false
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

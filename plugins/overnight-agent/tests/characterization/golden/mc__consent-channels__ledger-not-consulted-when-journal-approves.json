@@ -1,0 +1,30 @@
+{
+  "files": {},
+  "id": "mc/consent-channels/ledger-not-consulted-when-journal-approves",
+  "steps": [
+    {
+      "args": {
+        "DocComments": "<ROOT>/input/approved.txt",
+        "Id": "960"
+      },
+      "command": "consent",
+      "exit": 0,
+      "json": {
+        "affirmative_answered": false,
+        "affirmative_author": "me",
+        "affirmative_phrase": "approve",
+        "affirmative_unattributed": false,
+        "consent_ok": true,
+        "doc_comments_path": "<ROOT>/input/approved.txt",
+        "doc_consent_ok": false,
+        "doc_consent_reason": "doc-consent-not-consulted",
+        "human_segments": 1,
+        "id": "960",
+        "path": "<ROOT>/data/journal/task-960.md",
+        "reason": "human-authored-affirmative",
+        "trailing_has_user": true
+      },
+      "tool": "oa-state"
+    }
+  ]
+}
