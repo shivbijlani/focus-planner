@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+  # May name the Node port, oa-state.mjs (item 4): same arguments, same arms.
   [string]$StateScript = (Join-Path $PSScriptRoot 'oa-state.ps1'),
   # May name the Node port, write-turn.mjs (item 3): same arguments, same arms.
   [string]$TurnScript = (Join-Path $PSScriptRoot 'write-turn.ps1')
@@ -21,6 +22,8 @@ $sessionsStatus = Join-Path $root 'sessions-status.json'
 $env:WRITE_TURN_OA_HOME = Join-Path $root 'home'
 $utf8 = New-Object Text.UTF8Encoding($false)
 $psExe = (Get-Process -Id $PID).Path
+. (Join-Path (Split-Path -Parent $StateScript) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $StateScript
 $moon = [char]::ConvertFromUtf32(0x1F319)
 $passed = 0
 
@@ -31,7 +34,7 @@ function Check([string]$name, [bool]$ok) {
 
 function StateCall([string[]]$arguments) {
   if ($arguments -contains '-ForDispatch') { $arguments += @('-SessionsStatusFile', $sessionsStatus) }
-  $result = & $psExe -NoProfile -File $StateScript @arguments `
+  $result = & $script:OaCmd.Exe @($script:OaCmd.Prefix + $arguments) `
     -JournalDir $journal -StateDir $state -PlannerBoard $board -SnoozeStore $snooze `
     -UserSettings $settings 2>&1
   if ($LASTEXITCODE -ne 0) { throw "state call failed: $result" }

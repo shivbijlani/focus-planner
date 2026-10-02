@@ -33,7 +33,9 @@ param([string]$ScriptPath)
 $ErrorActionPreference = 'Stop'
 # Resolved in the BODY: $PSScriptRoot is not bound while parameter defaults are evaluated.
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
-if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
 $script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
 $utf8 = New-Object Text.UTF8Encoding($false)
@@ -83,7 +85,7 @@ function Get-GateRow {
   param($Sx, [string[]]$Extra = @())
   $argv = @('scan', '-JournalDir', $Sx.JDir, '-StateDir', $Sx.SDir, '-PlannerBoard', $Sx.Board,
             '-SnoozeStore', $Sx.Store, '-UserSettings', $Sx.Settings) + $Extra
-  $text = (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @argv 2>&1 | Out-String)
+  $text = (& $script:OaCmd.Exe @($script:OaCmd.Prefix + $argv) 2>&1 | Out-String)
   try { $rows = @($text | ConvertFrom-Json) } catch { return $null }
   return ($rows | Where-Object { "$($_.id)" -eq '950' } | Select-Object -First 1)
 }
@@ -161,9 +163,12 @@ Write-Host ''
 Write-Host 'VOCABULARY -- one word means one thing across every setting'
 
 # A second private vocabulary would make two settings on the same row unreadable together.
-$src = [IO.File]::ReadAllText($ScriptPath)
+$srcFiles = if (Test-OaStateNodeTarget $ScriptPath) {
+  @(Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-lib\collect\settings.mjs')
+} else { @($ScriptPath) }
+$src = ($srcFiles | ForEach-Object { [IO.File]::ReadAllText($_) }) -join "`n"
 foreach ($w in @('default', 'settings', 'settings-malformed', 'argument')) {
-  Assert ($src -match [regex]::Escape("`$backstopSource = '$w'") -or $src -match [regex]::Escape("`$backstopSource = '$w'")) `
+  Assert ($src -match [regex]::Escape("`$backstopSource = '$w'") -or $src -match [regex]::Escape("backstopSource = '$w'")) `
     'SHARED-WORD' "the gate resolver uses the concurrency vocabulary's ``$w``" ''
 }
 

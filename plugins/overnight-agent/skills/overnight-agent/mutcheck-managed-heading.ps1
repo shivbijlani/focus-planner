@@ -36,6 +36,9 @@ $ErrorActionPreference = 'Stop'
 # Resolved in the body, not the param default: $PSScriptRoot is not populated while the
 # param block is being bound under Windows PowerShell 5.1.
 if (-not $Script) { $Script = Join-Path $PSScriptRoot 'oa-state.ps1' }
+if (-not (Test-Path $Script)) { throw "oa-state target not found at $Script" }
+. (Join-Path (Split-Path -Parent $Script) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $Script
 
 # Built from the codepoint, never typed literally. This file has no UTF-8 BOM, so a literal
 # 4-byte emoji in the source would be decoded as Latin-1 mojibake and the fixture would stop
@@ -120,10 +123,9 @@ $passes = 0
 
 function Invoke-Oa {
   param([string]$Cmd, [string]$JDir, [string]$SDir, [string]$TaskId)
-  $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Script, $Cmd,
-         '-JournalDir', $JDir, '-StateDir', $SDir)
+  $a = @($Cmd, '-JournalDir', $JDir, '-StateDir', $SDir)
   if ($TaskId) { $a += @('-Id', $TaskId) }
-  & powershell @a 2>&1
+  & $script:OaCmd.Exe @($script:OaCmd.Prefix + $a) 2>&1
 }
 
 function Assert-Reopened {

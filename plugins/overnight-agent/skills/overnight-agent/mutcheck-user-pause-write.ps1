@@ -169,10 +169,19 @@ Write-Host 'DRIFT -- the paused status set must match oa-state''s'
 # against the DERIVATION rather than against another literal: oa-state builds PausedStatus as
 # NonWorkableStatus minus ClosedStatus, so a status added to either set there shows up here.
 if (Test-Path $OaStatePath) {
-  $src = [IO.File]::ReadAllText($OaStatePath)
+  $srcPath = $OaStatePath
+  if ($OaStatePath -like '*.mjs') {
+    $srcPath = Join-Path (Split-Path -Parent $OaStatePath) 'oa-state-lib\plan\status.mjs'
+  }
+  $src = [IO.File]::ReadAllText($srcPath)
   $setOf = {
     param([string]$name)
-    $m = [regex]::Match($src, '(?m)^\s*\$script:' + $name + '\s*=\s*@\(([^\)]*)\)')
+    $pattern = if ($srcPath -like '*.mjs') {
+      '(?m)^\s*export\s+const\s+' + $name + '\s*=\s*\[([^\]]*)\]'
+    } else {
+      '(?m)^\s*\$script:' + $name + '\s*=\s*@\(([^\)]*)\)'
+    }
+    $m = [regex]::Match($src, $pattern)
     if (-not $m.Success) { return $null }
     return @($m.Groups[1].Value -split ',' | ForEach-Object { $_.Trim().Trim("'").Trim('"') } | Where-Object { $_ })
   }

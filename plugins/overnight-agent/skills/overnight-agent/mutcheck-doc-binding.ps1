@@ -84,7 +84,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
-if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
 # Resolve the PowerShell host rather than hard-coding `powershell`. The other guards in this
 # folder assume Windows PowerShell because they are run by hand on the one laptop -- which is
@@ -162,7 +164,7 @@ foreach ($id in 701, 702, 703, 704, 705, 706, 707, 708, 709, 710, 711, 712, 713)
 
 function Invoke-Oa {
   param([string[]]$OaArgs)
-  $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $OaArgs +
+  $all = $script:OaCmd.Prefix + $OaArgs +
   @('-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store)
   # Must not throw: -ExpectPreFix runs this against a build that REJECTS the new parameters, and
   # a hard failure there has to surface as a failed arm rather than a crashed harness --
@@ -176,7 +178,7 @@ function Invoke-Oa {
   # its own error at ITS terminal width and writes formatted text to stderr, so the parent only
   # ever sees the already-wrapped result. That is why the refusal arms below assert the EXIT CODE
   # and a space-free token, never a phrase -- see the note on arm D.
-  try { $out = & $script:PsExe @all 2>&1 | Out-String -Width 4096 }
+  try { $out = & $script:OaCmd.Exe @all 2>&1 | Out-String -Width 4096 }
   catch { $out = '' }
   finally {
     $script:LastOaExit = $LASTEXITCODE

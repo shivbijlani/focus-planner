@@ -174,7 +174,7 @@ export const IMPLEMENTATIONS = {
 ```
 
 **write-turn is mapped** (item 3): `skills/overnight-agent/write-turn.mjs` passes all 84 write-turn
-cases with no SKIP (`--impl node --tool write-turn`, CI job `write-turn-node`). oa-state is item 4.
+cases with no SKIP (`--impl node --tool write-turn`, CI job `write-turn-node`). **oa-state is mapped** (item 4): `skills/overnight-agent/oa-state.mjs` passes every oa-state case with no SKIP (`--impl node --tool oa-state`, CI job `oa-state-node`; see `tests/oa-state-port/README.md`).
 
 With `{ bin }` the adapter runs `node <bin> <command> --Name value ...` using the PowerShell
 parameter names verbatim (switches as `--Name`, arrays as repeated `--Name`), in the same

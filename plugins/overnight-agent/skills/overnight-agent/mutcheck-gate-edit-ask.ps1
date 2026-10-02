@@ -42,6 +42,8 @@ $ErrorActionPreference = 'Stop'
 if (-not $WriteTurnPath) { $WriteTurnPath = Join-Path $PSScriptRoot 'write-turn.ps1' }
 if (-not $OaStatePath)   { $OaStatePath   = Join-Path $PSScriptRoot 'oa-state.ps1' }
 if (-not (Test-Path $WriteTurnPath)) { throw "write-turn.ps1 not found at $WriteTurnPath" }
+if (-not (Test-Path $OaStatePath)) { throw "oa-state not found at $OaStatePath" }
+. (Join-Path (Split-Path -Parent $OaStatePath) 'oa-state-target.ps1')
 
 $script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
 
@@ -182,9 +184,10 @@ $sdir = Join-Path $root 'state'
 New-Item -ItemType Directory -Path $sdir -Force | Out-Null
 
 function Verdict([string]$gatePath) {
-  $o = (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File $OaStatePath consent -Id 960 `
-        -Action delete_data -Repo focus-planner -GatePath $gatePath -JournalDir $jdir `
-        -StateDir $sdir 2>&1 | Out-String)
+  $cmd = Get-OaStateCommand $OaStatePath
+  $o = (& $cmd.Exe @($cmd.Prefix + @('consent', '-Id', '960',
+        '-Action', 'delete_data', '-Repo', 'focus-planner', '-GatePath', $gatePath, '-JournalDir', $jdir,
+        '-StateDir', $sdir)) 2>&1 | Out-String)
   try { $j = $o | ConvertFrom-Json } catch { return $null }
   return $j
 }

@@ -1740,7 +1740,63 @@ jobs:
       - name: Characterization suite against the PowerShell implementation
         shell: pwsh
         run: node ./plugins/overnight-agent/tests/characterization/run.mjs --impl ps --jobs 4
-  # Item 3: write-turn.mjs, the Node port of the sanctioned journal writer. It is not called by
+  # Item 4: oa-state.mjs, the Node port of the state engine (collect -> plan -> act -> report),
+  # not yet called by anything. Same bar as write-turn-node: every oa-state characterization
+  # golden recorded from oa-state.ps1 must pass against the port with ZERO skips; differential
+  # runs then feed random inputs through BOTH implementations -- function by function through
+  # ps-fn-host.ps1 (journal, board, session readers) and whole commands in twin sandboxes
+  # (scan, consent, extract, session, mark/seed/resnapshot/doc sequences) -- comparing every
+  # output and file effect. windows-latest and the pinned zone, as the goldens require.
+  oa-state-node:
+    name: oa-state Node port (goldens, differential)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Pin the time zone the goldens were recorded in
+        shell: pwsh
+        run: tzutil /s "Pacific Standard Time"
+      - name: Characterization goldens, every oa-state case, against the Node port (no SKIP)
+        shell: pwsh
+        run: |
+          node ./plugins/overnight-agent/tests/characterization/run.mjs --impl node --tool oa-state --jobs 4 | Tee-Object -Variable out
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (($out -join "`n") -match 'skip 0')) { Write-Error 'the Node port left oa-state cases unmapped (SKIP)'; exit 1 }
+      - name: Differential -- readers, function by function (PowerShell vs Node)
+        shell: pwsh
+        run: |
+          $d = './plugins/overnight-agent/tests/oa-state-port'
+          node "$d/journal-diff.mjs" --n 300; if ($LASTEXITCODE) { exit 1 }
+          node "$d/board-diff.mjs" --n 200; if ($LASTEXITCODE) { exit 1 }
+          node "$d/session-diff.mjs" --n 200; if ($LASTEXITCODE) { exit 1 }
+          node "$d/round-diff.mjs" --n 4000; if ($LASTEXITCODE) { exit 1 }
+      - name: Differential -- whole commands, twin sandboxes (PowerShell vs Node)
+        shell: pwsh
+        run: |
+          $d = './plugins/overnight-agent/tests/oa-state-port'
+          node "$d/consent-diff.mjs" --n 200 --jobs 4; if ($LASTEXITCODE) { exit 1 }
+          node "$d/extract-diff.mjs" --n 200 --jobs 4; if ($LASTEXITCODE) { exit 1 }
+          node "$d/scan-diff.mjs" --n 60; if ($LASTEXITCODE) { exit 1 }
+          node "$d/session-cmd-diff.mjs" --n 60; if ($LASTEXITCODE) { exit 1 }
+          node "$d/mutate-diff.mjs" --n 60 --steps 6 --jobs 1; if ($LASTEXITCODE) { exit 1 }
+  # Every mutation check that drives the state engine, against the Node port: same arms, and a
+  # JS twin for every PowerShell mutant (tests/oa-state-port/run-mutchecks.ps1 holds the list).
+  # The PowerShell runs stay where they already are, in the jobs above.
+  oa-state-node-mutchecks:
+    name: oa-state Node port (mutation checks)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation checks against the Node port
+        shell: pwsh
+        run: ./plugins/overnight-agent/tests/oa-state-port/run-mutchecks.ps1 -Target node  # Item 3: write-turn.mjs, the Node port of the sanctioned journal writer. It is not called by
   # anything yet; this job is what earns it the right to be. The contract is the characterization
   # goldens recorded from write-turn.ps1, so the port must pass every write-turn case with ZERO
   # skips. Two differential runs then aim at what no golden thought of: every pattern the guards

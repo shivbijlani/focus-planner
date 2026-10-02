@@ -66,6 +66,8 @@ if (-not $ScriptPath) {
 if (-not $ScriptPath -or -not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found (pass -ScriptPath)" }
 if (-not $SkillPath) { $SkillPath = Join-Path (Split-Path $ScriptPath) 'SKILL.md' }
 if (-not (Test-Path $SkillPath)) { throw "SKILL.md not found beside $ScriptPath (pass -SkillPath)" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:TargetIsNode = Test-OaStateNodeTarget $ScriptPath
 
 function Read-Utf8([string]$p) { [IO.File]::ReadAllText($p, (New-Object Text.UTF8Encoding($false))) }
 
@@ -74,11 +76,13 @@ function Read-Utf8([string]$p) { [IO.File]::ReadAllText($p, (New-Object Text.UTF
 # the substring between the first and last quote on the assignment line avoids any quote-escaping
 # guesswork and stays correct even if the alternation is reordered or extended.
 function Get-AcceptedRegex([string]$src) {
-  $line = ($src -split "`n") | Where-Object { $_ -match '\$script:ConsentAffirmRe\s*=' } | Select-Object -First 1
-  if (-not $line) { throw 'could not find $script:ConsentAffirmRe in oa-state.ps1' }
+  $line = ($src -split "`n") | Where-Object { $_ -match '\bConsentAffirmRe\s*=' } | Select-Object -First 1
+  if (-not $line) { throw 'could not find ConsentAffirmRe in oa-state source' }
   $first = $line.IndexOf("'"); $last = $line.LastIndexOf("'")
   if ($first -lt 0 -or $last -le $first) { throw 'could not extract the regex literal' }
-  return $line.Substring($first + 1, $last - $first - 1)
+  $literal = $line.Substring($first + 1, $last - $first - 1)
+  if ($line -match 'export const') { $literal = $literal.Replace('\\', '\') }
+  return $literal
 }
 
 # --- extract the advertised vocabulary FROM SKILL.md ------------------------------------
@@ -96,18 +100,34 @@ function Find-Drift([string]$re, [string[]]$phrases) {
   return $rejected
 }
 
-$src = Read-Utf8 $ScriptPath
+$engineDir = Split-Path -Parent $ScriptPath
+$psPath = Join-Path $engineDir 'oa-state.ps1'
+$nodePath = Join-Path $engineDir 'oa-state-lib\collect\journal.mjs'
+$readerPath = if ($script:TargetIsNode) { $nodePath } else { $ScriptPath }
+$src = Read-Utf8 $readerPath
 $skill = Read-Utf8 $SkillPath
 $acceptedRe = Get-AcceptedRegex $src
+$psAcceptedRe = if (Test-Path $psPath) { Get-AcceptedRegex (Read-Utf8 $psPath) } else { $null }
+$nodeAcceptedRe = if (Test-Path $nodePath) { Get-AcceptedRegex (Read-Utf8 $nodePath) } else { $null }
 $advertised = Get-AdvertisedPhrases $skill
 
 Write-Host "=== BASELINE (advertised subset of accepted) ==="
 Write-Host ("reader regex : {0}" -f $acceptedRe)
+if ($psAcceptedRe) { Write-Host ("ps regex     : {0}" -f $psAcceptedRe) }
+if ($nodeAcceptedRe) { Write-Host ("node regex   : {0}" -f $nodeAcceptedRe) }
 Write-Host ("advertised   : {0}" -f ($advertised -join ' | '))
 
 $problems = 0
 
 if ($advertised.Count -eq 0) { Write-Host "  FAIL: CONSENT-VOCAB block advertises nothing"; $problems++ }
+if (-not $psAcceptedRe) { Write-Host "  FAIL: could not read oa-state.ps1 beside the target"; $problems++ }
+if (-not $nodeAcceptedRe) { Write-Host "  FAIL: could not read oa-state.mjs beside the target"; $problems++ }
+if ($psAcceptedRe -and $nodeAcceptedRe -and $psAcceptedRe -ne $nodeAcceptedRe) {
+  Write-Host "  FAIL: PowerShell and Node consent regexes differ"
+  $problems++
+} elseif ($psAcceptedRe -and $nodeAcceptedRe) {
+  Write-Host "  ok: PowerShell and Node consent regexes match"
+}
 
 $mergeForms = @($advertised | Where-Object { $_ -match '^merge\s+#?\d+$' })
 if ($mergeForms.Count -eq 0) {
@@ -123,6 +143,14 @@ if ($baseDrift.Count -gt 0) {
   $problems++
 } else {
   Write-Host "  ok: every advertised phrase is accepted by the reader"
+}
+foreach ($pair in @(@('PowerShell', $psAcceptedRe), @('Node', $nodeAcceptedRe))) {
+  if (-not $pair[1]) { continue }
+  $d = Find-Drift $pair[1] $advertised
+  if ($d.Count -gt 0) {
+    Write-Host ("  FAIL: {0} reader REJECTS advertised phrase(s): {1}" -f $pair[0], ($d -join ', '))
+    $problems++
+  }
 }
 
 if ($problems -gt 0) { Write-Host ""; Write-Host "BASELINE FAILED"; exit 1 }

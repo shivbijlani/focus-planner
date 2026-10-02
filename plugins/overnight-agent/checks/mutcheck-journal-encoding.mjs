@@ -10,17 +10,122 @@
 // exit 1 = a mutant survived (the sweep is blind to a defect it claims to guard).
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync, cpSync, readdirSync } from 'node:fs';
+import { join, dirname, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SWEEP = join(HERE, 'journal-encoding-invariant.mjs');
+const argTarget = (() => {
+  const i = process.argv.indexOf('--target');
+  return i >= 0 ? process.argv[i + 1] : null;
+})();
 const LIVE =
+  argTarget ||
+  process.env.OA_STATE_PS1 ||
   'C:\\Users\\shiv\\.copilot\\installed-plugins\\focus-planner\\overnight-agent\\skills\\overnight-agent\\oa-state.ps1';
 
 const src = readFileSync(LIVE, 'utf8');
+
+const isNodeTarget = LIVE.endsWith('.mjs');
+
+function runNodeInvariant(target) {
+  const tmp = mkdtempSync(join(tmpdir(), 'oa-enc-node-'));
+  const jdir = join(tmp, 'journal');
+  const sdir = join(tmp, 'state');
+  mkdirSync(jdir);
+  mkdirSync(sdir);
+  const id = '999001';
+  const journal = join(jdir, `task-${id}.md`);
+  const original = [
+    `# Task ${id}: encoding invariant fixture`,
+    '',
+    'Shiv note — with “curly quotes” and an emoji 🌙.',
+    '',
+    '---',
+    '<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->',
+    '',
+    '## 🌙 Overnight Agent',
+    '',
+    '**Status:** In-progress — plan v1',
+    '',
+  ].join('\n');
+  try {
+    writeFileSync(journal, Buffer.from(original, 'utf8'));
+    const before = readFileSync(journal);
+    execFileSync('node', [target, 'seed', '-Force', '-JournalDir', jdir, '-StateDir', sdir], { stdio: 'pipe' });
+    execFileSync('node', [target, 'mark', '-Id', id, '-Status', 'done', '-JournalDir', jdir, '-StateDir', sdir], { stdio: 'pipe' });
+    const after = readFileSync(journal);
+    const prefix = Buffer.from(original.trimEnd(), 'utf8');
+    if (!after.subarray(0, prefix.length).equals(prefix)) return { ok: false, detail: 'prefix bytes changed' };
+    const scan = JSON.parse(execFileSync('node', [target, 'scan', '-JournalDir', jdir, '-StateDir', sdir], { encoding: 'utf8' }));
+    const row = (Array.isArray(scan) ? scan : [scan]).find((r) => String(r.id) === id);
+    if (row?.reopened === true) return { ok: false, detail: 'self-reopened after mark' };
+    if (!after.includes(Buffer.from('🌙', 'utf8')) || after.includes(Buffer.from([0xc3, 0xb0, 0xc5, 0xb8]))) {
+      return { ok: false, detail: 'encoding marker missing or fingerprint present' };
+    }
+    return { ok: true, detail: 'prefix preserved; no self-reopen' };
+  } catch (e) {
+    return { ok: false, detail: e.message };
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function nodeMutant(name, find, replace, root) {
+  const bundle = join(root, `mutant-${name}`);
+  mkdirSync(bundle, { recursive: true });
+  writeFileSync(join(bundle, basename(LIVE)), readFileSync(LIVE));
+  cpSync(join(dirname(LIVE), 'oa-state-lib'), join(bundle, 'oa-state-lib'), { recursive: true });
+  const files = [];
+  const walk = (dir) => {
+    for (const ent of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, ent.name);
+      if (ent.isDirectory()) walk(p);
+      else if (p.endsWith('.mjs')) files.push(p);
+    }
+  };
+  walk(bundle);
+  const hits = files.filter((p) => readFileSync(p, 'utf8').includes(find));
+  if (hits.length !== 1) throw new Error(`node mutant ${name}: expected one anchor, found ${hits.length}`);
+  writeFileSync(hits[0], readFileSync(hits[0], 'utf8').replace(find, replace), 'utf8');
+  return join(bundle, basename(LIVE));
+}
+
+if (isNodeTarget) {
+  const tmp = mkdtempSync(join(tmpdir(), 'oa-mut-node-'));
+  let survived = 0;
+  try {
+    const rows = [];
+    const base = runNodeInvariant(LIVE);
+    rows.push({ verdict: base.ok ? 'PASS' : 'FAIL', name: 'baseline (unmutated)', detail: base.detail });
+    if (!base.ok) survived++;
+
+    rows.push({ verdict: 'NO-TWIN', name: 'M1/M3: PowerShell host asymmetry (Get-Content/Set-Content)', detail: 'Node has one UTF-8 file path, so the PS host-pair mutant has no meaningful JS twin; M2 covers the shared decode invariant.' });
+
+    const m2 = nodeMutant(
+      'M2',
+      "return new TextDecoder('utf-8').decode(buf);",
+      "return Buffer.from(buf).toString('latin1');",
+      tmp,
+    );
+    const r2 = runNodeInvariant(m2);
+    const killed = !r2.ok;
+    rows.push({ verdict: killed ? 'KILLED' : 'SURVIVED', name: 'M2: readAllText decodes as latin1 instead of UTF-8', detail: r2.detail });
+    if (!killed) survived++;
+
+    for (const r of rows) {
+      console.log(`${r.verdict.padEnd(9)} ${r.name}`);
+      if (r.detail) console.log(`          ${r.detail}`);
+    }
+    console.log('\nmutants killed: 1/1 node-applicable (2 PowerShell-only twins reported)');
+    if (survived) process.exit(1);
+    process.exit(0);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
 
 const MUTANTS = [
   {

@@ -13,21 +13,26 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 
+// Item 4: oa-state.mjs, the Node port of the state engine, mapped command by command as it lands.
+const OA_STATE = { bin: 'plugins/overnight-agent/skills/overnight-agent/oa-state.mjs' };
+
 export const IMPLEMENTATIONS = {
   'oa-state': {
-    seed: null,
-    scan: null,
-    get: null,
-    mark: null,
-    resnapshot: null,
-    consent: null,
-    gate: null,
-    extract: null,
-    doc: null,
-    session: null,
-    whoami: null,
-    'critical-tools': null,
-    decisions: null,
+    seed: OA_STATE,
+    scan: OA_STATE,
+    get: OA_STATE,
+    mark: OA_STATE,
+    resnapshot: OA_STATE,
+    consent: OA_STATE,
+    gate: OA_STATE,
+    extract: OA_STATE,
+    doc: OA_STATE,
+    session: OA_STATE,
+    whoami: OA_STATE,
+    'critical-tools': OA_STATE,
+    decisions: OA_STATE,
+    // Any other command word: the port's own binder must reject it, exactly as the PowerShell's does.
+    '*': OA_STATE,
   },
   // write-turn has no subcommand; the key is '' (every mode -- validate, append, json -- goes here).
   // Item 3: the Node port, driven with the PowerShell parameter names verbatim.
@@ -50,7 +55,7 @@ export default {
   name: 'node',
   describe() { return 'node ports (items 3/4) -- unmapped commands are SKIP'; },
   async run(step, ctx) {
-    const impl = IMPLEMENTATIONS[step.tool]?.[step.command || ''];
+    const impl = IMPLEMENTATIONS[step.tool]?.[step.command || ''] ?? IMPLEMENTATIONS[step.tool]?.['*'];
     if (!impl) return { status: 'skip', reason: `node: ${step.tool}${step.command ? ' ' + step.command : ''} not implemented` };
     if (typeof impl === 'function') return impl(step, ctx);
     const argv = [path.join(ctx.repoDir, impl.bin), ...(impl.argv ? impl.argv(step) : defaultArgv(step))];

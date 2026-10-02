@@ -31,7 +31,9 @@ param([string]$ScriptPath)
 $ErrorActionPreference = 'Stop'
 # Resolved in the BODY: $PSScriptRoot is not bound while parameter defaults are evaluated.
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
-if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
 $script:PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
 $utf8 = New-Object Text.UTF8Encoding($false)
@@ -82,8 +84,9 @@ function New-Sandbox {
 
 function Invoke-Oa {
   param([string]$Subject, $Sx, [string[]]$OaArgs)
-  return (& $script:PsExe -NoProfile -ExecutionPolicy Bypass -File $Subject @OaArgs `
-      -JournalDir $Sx.JDir -StateDir $Sx.SDir -PlannerBoard $Sx.Board -SnoozeStore $Sx.Store 2>&1)
+  $cmd = Get-OaStateCommand $Subject
+  return (& $cmd.Exe @($cmd.Prefix + $OaArgs +
+      @('-JournalDir', $Sx.JDir, '-StateDir', $Sx.SDir, '-PlannerBoard', $Sx.Board, '-SnoozeStore', $Sx.Store)) 2>&1)
 }
 
 # The doc object is written STRAIGHT INTO STATE rather than produced by `doc -Observe`, because
@@ -194,9 +197,12 @@ Assert ("$($p.doc_new_comments)" -eq '3' -and "$($p.doc_channel)" -eq 'stale') '
 Write-Host ''
 Write-Host 'THE THRESHOLD -- one definition, and it is the one three files already cite'
 
-$src = [IO.File]::ReadAllText($ScriptPath)
-Assert ($src -match '\$script:DocObservationFreshMinutes\s*=') 'DEFINED' `
-  'oa-state.ps1 declares the constant catchup-doc-sweep, observe-bound-docs and run-sweeps name' ''
+$srcFiles = if (Test-OaStateNodeTarget $ScriptPath) {
+  @(Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-lib\plan\status.mjs')
+} else { @($ScriptPath) }
+$src = ($srcFiles | ForEach-Object { [IO.File]::ReadAllText($_) }) -join "`n"
+Assert (($src -match '\$script:DocObservationFreshMinutes\s*=') -or ($src -match 'DocObservationFreshMinutes\s*=')) 'DEFINED' `
+  'the state engine declares the freshness constant catchup-doc-sweep, observe-bound-docs and run-sweeps name' ''
 
 # Honouring the override is what lets an arm age a channel without waiting three hours, and it
 # is also how the sweep is configured. If it stops being read, the two drift apart in silence.

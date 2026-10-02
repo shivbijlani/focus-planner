@@ -57,6 +57,8 @@ if (-not $ScriptPath) {
   foreach ($c in $candidates) { if (Test-Path $c) { $ScriptPath = (Resolve-Path $c).Path; break } }
 }
 if (-not $ScriptPath -or -not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found (pass -ScriptPath)" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:TargetIsNode = Test-OaStateNodeTarget $ScriptPath
 
 $AgentBlock = @'
 # Task {ID}: synthetic
@@ -419,8 +421,9 @@ function Invoke-Scan([string]$Script) {
   New-Item -ItemType Directory -Path $sdir -Force | Out-Null
   try {
     foreach ($id in $cases.Keys) { New-Journal -Dir $jdir -Id $id -Entries $cases[$id].entries }
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $Script seed -JournalDir $jdir -StateDir $sdir | Out-Null
-    $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $Script scan -JournalDir $jdir -StateDir $sdir
+    $cmd = Get-OaStateCommand $Script
+    & $cmd.Exe @($cmd.Prefix + @('seed', '-JournalDir', $jdir, '-StateDir', $sdir)) | Out-Null
+    $raw = & $cmd.Exe @($cmd.Prefix + @('scan', '-JournalDir', $jdir, '-StateDir', $sdir))
     $rows = ($raw -join "`n") | ConvertFrom-Json
     $byId = @{}
     foreach ($r in $rows) { $byId["$($r.id)"] = $r }
@@ -473,28 +476,40 @@ $mutations = @(
   @{
     name  = 'M1: consent falls back to the reopen reader (the original #227 bug)'
     apply = { param($s) $s -replace [regex]::Escape('return [bool](Get-ConsentFacts $trailing).consent_ok'), 'return (Test-TrailingHasUser $trailing)' }
-    hook  = 'Consent         = (Get-ConsentFacts $trailing)'
-    swap  = 'Consent         = ([pscustomobject]@{ consent_ok = (Test-TrailingHasUser $trailing); reason = "mutated"; human_segments = 0; affirmative_phrase = $null; affirmative_author = $null; affirmative_unattributed = $false; affirmative_answered = $false })'
+    hook  = 'Consent         = $consent   # #227: fail-CLOSED authorship verdict'
+    swap  = 'Consent         = ([pscustomobject]@{ consent_ok = (Test-TrailingHasUser $trailing); reason = "mutated"; human_segments = 0; affirmative_phrase = $null; affirmative_author = $null; affirmative_unattributed = $false; affirmative_answered = $false })   # mutated'
+    nodeFind = '    Consent: consent,'
+    nodeReplace = "    Consent: { consent_ok: testTrailingHasUser(trailing), reason: 'mutated', human_segments: 0, affirmative_phrase: null, affirmative_author: null, affirmative_unattributed: false, affirmative_answered: false },"
   },
   @{
     name  = 'M2: unmarked text is attributed to the human (fail OPEN instead of closed)'
     apply = { param($s) $s -replace [regex]::Escape("Author = 'unknown'; Text = `$region"), "Author = `$script:HumanAuthor; Text = `$region" }
+    nodeFind = "  if (marks.length === 0) {`r`n    if (netTrim(r).length > 0) segments.push({ Author: 'unknown', Text: r, Index: 0 });`r`n    return segments;`r`n  }"
+    nodeReplace = "  if (marks.length === 0) {`r`n    if (netTrim(r).length > 0) segments.push({ Author: HumanAuthor, Text: r, Index: 0 });`r`n    return segments;`r`n  }"
   },
   @{
     name  = 'M3: any author satisfies consent (drops the human requirement)'
     apply = { param($s) $s -replace [regex]::Escape('if ($seg.Author -eq $script:HumanAuthor) {'), 'if ($true) {' }
+    nodeFind = 'if (psEq(seg.Author, HumanAuthor)) {'
+    nodeReplace = 'if (true) {'
   },
   @{
     name  = 'M4: consent inherits provenance from the region (human spoke somewhere -> any affirmative counts)'
     apply = { param($s) $s -replace [regex]::Escape('if ($seg.Author -eq $script:HumanAuthor) {'), 'if ($result.human_segments -gt 0) {' }
+    nodeFind = 'if (psEq(seg.Author, HumanAuthor)) {'
+    nodeReplace = 'if (result.human_segments > 0) {'
   },
   @{
     name  = 'M5: #272 -- ownership runs to the next MARKER again, so an unmarked agent turn is inherited by the human'
     apply = { param($s) $s -replace [regex]::Escape('if ($h.Index -ge $start -and $h.Index -lt $end) { $cut = $h.Index; break }'), 'if ($false) { $cut = $h.Index; break }' }
+    nodeFind = 'if (h.index >= start && h.index < end) { cut = h.index; break; }'
+    nodeReplace = 'if (false) { cut = h.index; break; }'
   },
   @{
     name  = 'M6: #272 -- the heading clamp swallows the human''s own segment too (over-correction)'
     apply = { param($s) $s -replace [regex]::Escape('if ($h.Index -ge $start -and $h.Index -lt $end) { $cut = $h.Index; break }'), 'if ($h.Index -lt $end) { $cut = $start; break }' }
+    nodeFind = 'if (h.index >= start && h.index < end) { cut = h.index; break; }'
+    nodeReplace = 'if (h.index < end) { cut = start; break; }'
   },
   @{
     # The arm #320's body originally asked for. It is kept because it is genuinely
@@ -503,12 +518,16 @@ $mutations = @(
     # where the marker sits at column 0 and the anchor matches it happily.
     name  = 'M7: #320 -- the line-start anchor is removed, so a marker quoted MID-LINE attributes'
     apply = { param($s) $s -replace [regex]::Escape("`$script:ProvenanceRe  = '(?m)^[ \t]*<!--[ \t]*from:"), "`$script:ProvenanceRe  = '(?m)[ \t]*<!--[ \t]*from:" }
+    nodeFind = "export const ProvenanceRe = '(?m)^[ \\t]*<!--[ \\t]*from:"
+    nodeReplace = "export const ProvenanceRe = '(?m)[ \\t]*<!--[ \\t]*from:"
   },
   @{
     # The security half. Neutering the mask makes fenced content live markup again, so the
     # agent's own postmortem (case 953) grants it consent.
     name  = 'M8: #320 -- fenced code is treated as markup again (the agent can approve itself)'
     apply = { param($s) $s -replace [regex]::Escape('function Get-FenceMaskedText([string]$text) {'), 'function Get-FenceMaskedText([string]$text) { return $text' }
+    nodeFind = 'export function getFenceMaskedText(text) {'
+    nodeReplace = "export function getFenceMaskedText(text) { return String(text ?? '');"
   },
   @{
     # The false-negative half, and the one that proves the mask must preserve LENGTH. Masking
@@ -517,6 +536,8 @@ $mutations = @(
     # apart. This mutation drops the newline-preserving/length-preserving property.
     name  = 'M9: #320 -- the mask stops preserving length, so offsets slide off the real text'
     apply = { param($s) $s -replace [regex]::Escape('[void]$sb.Append('' '', $line.Length)'), '[void]$sb.Append('''')' }
+    nodeFind = "out += ' '.repeat(line.length);"
+    nodeReplace = "out += '';"
   },
   @{
     # M7's mirror, and the reason M7 alone is not enough. The cheapest way to make M7's
@@ -527,12 +548,16 @@ $mutations = @(
     # indistinguishable from the correct one.
     name  = 'M10: #320 crit2 -- the anchor is over-tightened to column 0, so an indented genuine marker is ignored'
     apply = { param($s) $s -replace [regex]::Escape("`$script:ProvenanceRe  = '(?m)^[ \t]*<!--[ \t]*from:"), "`$script:ProvenanceRe  = '(?m)^<!--[ \t]*from:" }
+    nodeFind = "export const ProvenanceRe = '(?m)^[ \\t]*<!--[ \\t]*from:"
+    nodeReplace = "export const ProvenanceRe = '(?m)^<!--[ \\t]*from:"
   },
   @{
     # #465's core arm: consumption removed entirely, which is the pre-#465 behaviour. A week-old
     # approval the agent already answered goes back to authorising irreversible actions.
     name  = 'M11: #465 -- an affirmative is never spent, so a served approval authorises forever'
     apply = { param($s) $s -replace [regex]::Escape('$served = @($agentTurnAt | Where-Object { $_ -gt $at }).Count -gt 0'), '$served = $false' }
+    nodeFind = 'const served = agentTurnAt.some((x) => x > at);'
+    nodeReplace = 'const served = false;'
   },
   @{
     # The over-correction, and the mirror of M11. Spending on ANY agent turn regardless of where
@@ -540,6 +565,8 @@ $mutations = @(
     # discards it. Only a case with the agent ABOVE the human (965) can see the difference.
     name  = 'M12: #465 -- position is ignored, so an agent turn ABOVE the approval also spends it'
     apply = { param($s) $s -replace [regex]::Escape('Where-Object { $_ -gt $at }'), 'Where-Object { $true }' }
+    nodeFind = 'const served = agentTurnAt.some((x) => x > at);'
+    nodeReplace = 'const served = agentTurnAt.some((x) => true);'
   },
   @{
     # Widening consumption to any machine author. A sibling skill posting on its own schedule
@@ -547,6 +574,8 @@ $mutations = @(
     # Shiv never answering.
     name  = 'M13: #465 -- ANY author''s turn spends the approval, not just this agent''s'
     apply = { param($s) $s -replace [regex]::Escape('if ($m.Groups[1].Value.Trim() -eq $script:SelfAuthor) { $agentTurnAt += $m.Index }'), 'if ($true) { $agentTurnAt += $m.Index }' }
+    nodeFind = 'if (psEq(netTrim(m[1]), SelfAuthor)) agentTurnAt.push(m.index);'
+    nodeReplace = 'if (true) agentTurnAt.push(m.index);'
   },
   @{
     # Detecting only the provenance marker and not the managed heading. This is the arm that
@@ -554,6 +583,8 @@ $mutations = @(
     # marker-only rule spends nothing on exactly the journals #465 was filed about.
     name  = 'M14: #465 -- only a provenance marker counts, so an UNSTAMPED agent turn spends nothing'
     apply = { param($s) $s -replace [regex]::Escape("foreach (`$m in [regex]::Matches(`$scan, '(?m)^[ \t]*##[^\r\n]*Overnight Agent')) {"), "foreach (`$m in @()) {" }
+    nodeFind = "for (const m of rxMatches(scan, '(?m)^[ \\t]*##[^\\r\\n]*Overnight Agent')) agentTurnAt.push(m.index);"
+    nodeReplace = 'for (const m of []) agentTurnAt.push(m.index);'
   },
   @{
     # Agent-turn detection reading raw text instead of the fence mask. A postmortem that quotes
@@ -562,6 +593,8 @@ $mutations = @(
     apply = { param($s) $s -replace [regex]::Escape('$scan = Get-FenceMaskedText $trailing
   $agentTurnAt = @()'), '$scan = $trailing
   $agentTurnAt = @()' }
+    nodeFind = "const scan = getFenceMaskedText(String(trailing ?? ''));"
+    nodeReplace = "const scan = String(trailing ?? '');"
   },
   @{
     # Returning on the first spent affirmative instead of continuing the scan. Re-approval after
@@ -573,6 +606,8 @@ $mutations = @(
       $result.consent_ok = $true'), '        return [pscustomobject]$result
       }
       $result.consent_ok = $true' }
+    nodeFind = "        continue;`r`n      }`r`n      result.consent_ok = true"
+    nodeReplace = "        return result;`r`n      }`r`n      result.consent_ok = true"
   }
 )
 
@@ -581,16 +616,21 @@ New-Item -ItemType Directory -Path $mutDir -Force | Out-Null
 $killed = 0; $survived = 0
 try {
   foreach ($m in $mutations) {
-    $mutated = & $m.apply $src
-    if ($m.hook) { $mutated = $mutated.Replace($m.hook, $m.swap) }
-    if ($mutated -eq $src) {
-      Write-Host ""
-      Write-Host "!! $($m.name): mutation did not apply (anchor text moved) -- treating as SURVIVED"
-      $survived++
-      continue
+    if ($script:TargetIsNode) {
+      $safeName = [regex]::Replace($m.name, '[^A-Za-z0-9_.-]', '_')
+      $path = New-OaStateMutant $ScriptPath $safeName $m.nodeFind $m.nodeReplace $mutDir
+    } else {
+      $mutated = & $m.apply $src
+      if ($m.hook) { $mutated = $mutated.Replace($m.hook, $m.swap) }
+      if ($mutated -eq $src) {
+        Write-Host ""
+        Write-Host "!! $($m.name): mutation did not apply (anchor text moved) -- treating as SURVIVED"
+        $survived++
+        continue
+      }
+      $path = Join-Path $mutDir ("oa-state-" + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.ps1')
+      [IO.File]::WriteAllText($path, $mutated, (New-Object Text.UTF8Encoding($false)))
     }
-    $path = Join-Path $mutDir ("oa-state-" + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.ps1')
-    [IO.File]::WriteAllText($path, $mutated, (New-Object Text.UTF8Encoding($false)))
     $f = 0
     try { $f = Test-Cases (Invoke-Scan $path) $m.name }
     catch { $f = 1; Write-Host "  (mutant threw: $($_.Exception.Message))" }

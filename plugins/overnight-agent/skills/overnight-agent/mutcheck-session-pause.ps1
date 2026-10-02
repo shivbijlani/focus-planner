@@ -75,9 +75,9 @@ if (-not $ScriptPath) {
   $here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
   $ScriptPath = Join-Path $here 'oa-state.ps1'
 }
-if (-not (Test-Path $ScriptPath)) { Write-Host "FAIL cannot find oa-state.ps1 at $ScriptPath"; exit 2 }
+if (-not (Test-Path $ScriptPath)) { Write-Host "FAIL cannot find oa-state target at $ScriptPath"; exit 2 }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
 
-$src = [IO.File]::ReadAllText($ScriptPath, (New-Object Text.UTF8Encoding($false)))
 $root = Join-Path $env:TEMP ('mutcheck-pause-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $pass = 0; $fail = 0
 
@@ -108,7 +108,8 @@ function New-World {
     [switch]$Replaced)
   $w = Join-Path $root $Name
   $sd = Join-Path $w 'state'; $jd = Join-Path $w 'journal'
-  New-Item -ItemType Directory -Force -Path $sd, $jd | Out-Null
+  $ssd = Join-Path $w 'session-state'
+  New-Item -ItemType Directory -Force -Path $sd, $jd, $ssd | Out-Null
   # A stamped agent turn, so `HasTrailingHuman` is FALSE by default -- which is the configuration
   # the bug was measured in. -UserReplied appends a MARKED user message below the turn-end stamp:
   # `HasTrailingHuman` is deliberately the strict reader (`<!-- from: me -->` required, see
@@ -145,15 +146,17 @@ function New-World {
     }
   }
   ($st | ConvertTo-Json -Depth 8) | Set-Content (Join-Path $sd "task-$Id.json") -Encoding UTF8
-  return [pscustomobject]@{ State = $sd; Journal = $jd; Id = $Id }
+  return [pscustomobject]@{ State = $sd; SessionState = $ssd; Journal = $jd; Id = $Id }
 }
 
 function Measure-Verdict([string]$Script, $World) {
+  $cmd = Get-OaStateCommand $Script
   # A COMPOSITE signature, not just the verdict. A mutation that fixed the verdict string while
   # silently dropping `paused_by_user`, or that started handing out a kickoff brief for work the
   # user stopped, would be invisible to a verdict-only probe.
-  $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $Script session -Id $World.Id `
-    -StateDir $World.State -JournalDir $World.Journal 2>$null
+  $out = & $cmd.Exe @($cmd.Prefix + @('session', '-Id', $World.Id,
+      '-StateDir', $World.State, '-SessionStateDir', $World.SessionState,
+      '-JournalDir', $World.Journal)) 2>$null
   try {
     $j = $out | ConvertFrom-Json
     $kick = if ("$($j.kickoff_continuation)") { 'kick' } else { 'nokick' }
@@ -264,31 +267,33 @@ foreach ($k in $worlds.Keys) {
 # cannot be expressed as a single pre-built state file.
 function Measure-Stamp([string]$Script, [string]$Mode) {
   $w = New-World ('stamp-' + $Mode + '-' + [guid]::NewGuid().ToString('N').Substring(0, 4)) '710'
+  $cmd = Get-OaStateCommand $Script
   # Deliberately no nested helper functions here: a function defined inside a function resolves
   # its free variables dynamically, which made the splatted argument array bind to the wrong
   # scope and pushed the real script's output onto the error stream. Straight-line calls instead.
   $pauseArgs = @('mark', '-Id', '710', '-Status', 'blocked', '-StatusBy', 'user',
-    '-StateDir', $w.State, '-JournalDir', $w.Journal)
+    '-StateDir', $w.State, '-SessionStateDir', $w.SessionState, '-JournalDir', $w.Journal)
   $resumeArgs = @('mark', '-Id', '710', '-Status', 'approved', '-StatusBy', 'user',
-    '-StateDir', $w.State, '-JournalDir', $w.Journal)
-  $peekArgs = @('session', '-Id', '710', '-StateDir', $w.State, '-JournalDir', $w.Journal)
+    '-StateDir', $w.State, '-SessionStateDir', $w.SessionState, '-JournalDir', $w.Journal)
+  $peekArgs = @('session', '-Id', '710', '-StateDir', $w.State, '-SessionStateDir', $w.SessionState,
+    '-JournalDir', $w.Journal)
 
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $Script @pauseArgs 2>&1 | Out-Null
-  $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $Script @peekArgs 2>&1
+  & $cmd.Exe @($cmd.Prefix + $pauseArgs) 2>&1 | Out-Null
+  $out = & $cmd.Exe @($cmd.Prefix + $peekArgs) 2>&1
   $first = try { "$(($out | ConvertFrom-Json).paused_at)" } catch { '' }
   if (-not $first) { return 'NOSTAMP' }
 
   if ($Mode -eq 'preserve') {
     # Two seconds is enough: Now-Iso has second resolution, so a re-stamp provably moves the value.
     Start-Sleep -Seconds 2
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $Script @pauseArgs 2>&1 | Out-Null
-    $out2 = & powershell -NoProfile -ExecutionPolicy Bypass -File $Script @peekArgs 2>&1
+    & $cmd.Exe @($cmd.Prefix + $pauseArgs) 2>&1 | Out-Null
+    $out2 = & $cmd.Exe @($cmd.Prefix + $peekArgs) 2>&1
     $second = try { "$(($out2 | ConvertFrom-Json).paused_at)" } catch { 'ERR' }
     return $(if ($first -eq $second) { 'preserved' } else { 'restamped' })
   }
   # 'clear': he resumes, so a stamp left behind would report a pause that has ended.
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $Script @resumeArgs 2>&1 | Out-Null
-  $out3 = & powershell -NoProfile -ExecutionPolicy Bypass -File $Script @peekArgs 2>&1
+  & $cmd.Exe @($cmd.Prefix + $resumeArgs) 2>&1 | Out-Null
+  $out3 = & $cmd.Exe @($cmd.Prefix + $peekArgs) 2>&1
   $after = try { "$(($out3 | ConvertFrom-Json).paused_at)" } catch { 'ERR' }
   return $(if ($after) { 'kept' } else { 'cleared' })
 }
@@ -317,14 +322,15 @@ function Measure-Refusal([string]$Build, [string]$Mode) {
     -Status 'blocked' -StatusBy 'user' -UserReplied:($Mode -eq 'replied') `
     -PausedAt $(if ($Mode -eq 'replied') { '2026-09-05T06:00:00-07:00' } else { '' })
   $markArgs = @('mark', '-Id', '712', '-Status', 'in-progress',
-    '-StateDir', $w.State, '-JournalDir', $w.Journal)
+    '-StateDir', $w.State, '-SessionStateDir', $w.SessionState, '-JournalDir', $w.Journal)
   if ($Mode -eq 'byuser') { $markArgs += @('-StatusBy', 'user') }
   # EAP is relaxed for the call only. With -ErrorActionPreference Stop at script scope, `2>&1`
   # promotes the child's stderr to a TERMINATING error, so a refusal -- the thing under test --
   # would abort the harness instead of being measured.
   $prevEap = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $Build @markArgs 2>&1
+  $cmd = Get-OaStateCommand $Build
+  $out = & $cmd.Exe @($cmd.Prefix + $markArgs) 2>&1
   $code = $LASTEXITCODE
   $ErrorActionPreference = $prevEap
   $text = ($out | Out-String)
@@ -363,9 +369,11 @@ function Measure-Dispatch([string]$Build, $World) {
     [Text.UTF8Encoding]::new($false))
   $prevEap = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $Build session -Id $World.Id `
-    -ForDispatch -DispatchInput 'deadbeef' -SessionsStatusFile $snapshot `
-    -StateDir $World.State -JournalDir $World.Journal 2>&1
+  $cmd = Get-OaStateCommand $Build
+  $out = & $cmd.Exe @($cmd.Prefix + @('session', '-Id', $World.Id,
+      '-ForDispatch', '-DispatchInput', 'deadbeef', '-SessionsStatusFile', $snapshot,
+      '-StateDir', $World.State, '-SessionStateDir', $World.SessionState,
+      '-JournalDir', $World.Journal)) 2>&1
   $code = $LASTEXITCODE
   $ErrorActionPreference = $prevEap
   $text = ($out | Out-String)
@@ -382,45 +390,99 @@ Check 'O -ForDispatch on the #472 shape is REFUSED as a user pause, by name' `
   ($baseDispatch -eq 'refused_paused') "got $baseDispatch"
 
 # --- mutations ---------------------------------------------------------------------------
+$jsVerdictFind = @'
+export function getSessionVerdict(ctx, sess, row, journalFacts, sessionProcessDead = null) {
+  if (testUserPaused(row, journalFacts)) return 'paused';
+  if (!sess) return 'create';
+  if (psStr(get(sess, 'state')) === 'dead') return 'replace';
+  let processDead = sessionProcessDead;
+'@
+$jsUserPausedFind = @'
+export function testUserPaused(row, journalFacts) {
+  if (!row) return false;
+  if (lowerInvariant(psStr(get(row, 'status_by'))) !== 'user') return false;
+  if (!ciContains(PausedStatus, lowerInvariant(psStr(get(row, 'status'))))) return false;
+  if (journalFacts && get(journalFacts, 'HasTrailingHuman') && testResumeIsAfterPause(row, journalFacts)) return false;
+  return true;
+}
+'@
+$jsResumeFind = @'
+export function testResumeIsAfterPause(row, journalFacts) {
+  if (!row || !journalFacts) return false;
+  const pausedAt = getIsoDate(get(row, 'paused_at'));
+  if (!pausedAt) return false;
+  const seenAt = getIsoDate(get(row, 'unanswered_user_message_at'));
+  if (seenAt && seenAt.compare(pausedAt) > 0) return true;
+  try {
+    const p = psStr(get(journalFacts, 'Path'));
+    if (p && testPath(p)) {
+      const written = PsDate.fromInstant(fs.statSync(p).mtimeMs, 'Local');
+      if (written.compare(pausedAt) > 0) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+'@
 $mutations = @(
   @{ n = 'the pause check removed (the #540 bug, restored)'; guards = 'B,D,E,H,K,L'
     find = '  if (Test-UserPaused $row $journalFacts) { return ''paused'' }'
-    repl = '  if ($false) { return ''paused'' }' }
+    repl = '  if ($false) { return ''paused'' }'
+    jsFind = $jsVerdictFind
+    jsRepl = $jsVerdictFind.Replace("  if (testUserPaused(row, journalFacts)) return 'paused';", "  if (false) return 'paused';") }
   @{ n = 'the pause check ranked BELOW the create branch, so an unbound paused task reads create'; guards = 'D'
     find = '  if (Test-UserPaused $row $journalFacts) { return ''paused'' }'
-    repl = '  if ($sess -and (Test-UserPaused $row $journalFacts)) { return ''paused'' }' }
+    repl = '  if ($sess -and (Test-UserPaused $row $journalFacts)) { return ''paused'' }'
+    jsFind = $jsVerdictFind
+    jsRepl = $jsVerdictFind.Replace("  if (testUserPaused(row, journalFacts)) return 'paused';", "  if (sess && testUserPaused(row, journalFacts)) return 'paused';") }
   @{ n = 'the pause check ranked BELOW the dead branch, so a paused task gets a kickoff brief'; guards = 'E'
     find = '  if (Test-UserPaused $row $journalFacts) { return ''paused'' }'
-    repl = '  if ((Test-UserPaused $row $journalFacts) -and "$($sess.state)" -ne ''dead'') { return ''paused'' }' }
+    repl = '  if ((Test-UserPaused $row $journalFacts) -and "$($sess.state)" -ne ''dead'') { return ''paused'' }'
+    jsFind = $jsVerdictFind
+    jsRepl = $jsVerdictFind.Replace("  if (testUserPaused(row, journalFacts)) return 'paused';", "  if (testUserPaused(row, journalFacts) && (!sess || psStr(get(sess, 'state')) !== 'dead')) return 'paused';") }
   @{ n = 'the status_by term dropped, so the AGENT can pause the task against the user'; guards = 'C'
     find = '  if ("$($row.status_by)".ToLowerInvariant() -ne ''user'') { return $false }'
-    repl = '  if ($false) { return $false }' }
+    repl = '  if ($false) { return $false }'
+    jsFind = $jsUserPausedFind
+    jsRepl = $jsUserPausedFind.Replace("  if (lowerInvariant(psStr(get(row, 'status_by'))) !== 'user') return false;", "  if (false) return false;") }
   @{ n = 'closed statuses folded into the paused set, conflating finished with stopped'; guards = 'G'
     find = '$script:PausedStatus = @($script:NonWorkableStatus | Where-Object { $script:ClosedStatus -notcontains $_ })'
-    repl = '$script:PausedStatus = @($script:NonWorkableStatus)' }
+    repl = '$script:PausedStatus = @($script:NonWorkableStatus)'
+    jsFind = "export const PausedStatus = NonWorkableStatus.filter((s) => !ClosedStatus.some((c) => c.toLowerCase() === s.toLowerCase()));"
+    jsRepl = 'export const PausedStatus = NonWorkableStatus;' }
   @{ n = 'a reply no longer resumes, so his own message cannot un-pause the task'; guards = 'J,M'
     find = '  if ($journalFacts -and $journalFacts.HasTrailingHuman -and (Test-ResumeIsAfterPause $row $journalFacts)) { return $false }'
-    repl = '  if ($false) { return $false }' }
+    repl = '  if ($false) { return $false }'
+    jsFind = $jsUserPausedFind
+    jsRepl = $jsUserPausedFind.Replace("  if (journalFacts && get(journalFacts, 'HasTrailingHuman') && testResumeIsAfterPause(row, journalFacts)) return false;", "  if (false) return false;") }
   @{ n = 'the ordering dropped, so the pause reads as its own resume (the #734 bug, restored)'; guards = 'K,L'
     find = '  if ($journalFacts -and $journalFacts.HasTrailingHuman -and (Test-ResumeIsAfterPause $row $journalFacts)) { return $false }'
-    repl = '  if ($journalFacts -and $journalFacts.HasTrailingHuman) { return $false }' }
+    repl = '  if ($journalFacts -and $journalFacts.HasTrailingHuman) { return $false }'
+    jsFind = $jsUserPausedFind
+    jsRepl = $jsUserPausedFind.Replace("  if (journalFacts && get(journalFacts, 'HasTrailingHuman') && testResumeIsAfterPause(row, journalFacts)) return false;", "  if (journalFacts && get(journalFacts, 'HasTrailingHuman')) return false;") }
   @{ n = 'a missing paused_at read as "resumed", so #472 dispatches again'; guards = 'K'
     find = '  if (-not $pausedAt) { return $false }'
-    repl = '  if (-not $pausedAt) { return $true }' }
+    repl = '  if (-not $pausedAt) { return $true }'
+    jsFind = $jsResumeFind
+    jsRepl = $jsResumeFind.Replace('  if (!pausedAt) return false;', '  if (!pausedAt) return true;') }
   @{ n = 'the observation stamp ignored, so only a file mtime can end a pause'; guards = 'M'
     find = '  if ($seenAt -and $seenAt -gt $pausedAt) { return $true }'
-    repl = '  if ($false) { return $true }' }
+    repl = '  if ($false) { return $true }'
+    jsFind = $jsResumeFind
+    jsRepl = $jsResumeFind.Replace('  if (seenAt && seenAt.compare(pausedAt) > 0) return true;', '  if (false) return true;') }
 )
 
 Write-Host ''
 Write-Host '== mutations (each killed by exactly the arms that claim it) =='
 foreach ($m in $mutations) {
-  if ($src.IndexOf($m.find) -lt 0) {
-    Check "$($m.n): anchor present in source" $false "not found: $($m.find)"
+  $find = if (Test-OaStateNodeTarget $ScriptPath) { $m.jsFind } else { $m.find }
+  $repl = if (Test-OaStateNodeTarget $ScriptPath) { $m.jsRepl } else { $m.repl }
+  try { $mutPath = New-OaStateMutant $ScriptPath ($m.guards -replace ',', '-') $find $repl $root }
+  catch {
+    Check "$($m.n): anchor present in source" $false $_.Exception.Message
     continue
   }
-  $mutPath = Join-Path $root ("oa-state-mut-" + ($m.guards -replace ',', '-') + ".ps1")
-  [IO.File]::WriteAllText($mutPath, $src.Replace($m.find, $m.repl), (New-Object Text.UTF8Encoding($false)))
 
   $want = @($m.guards -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
   $moved = @()
@@ -440,19 +502,24 @@ $stampMutations = @(
   @{ n = 'paused_at re-stamped on every mark, so a week-old pause reports as minutes old'
     mode = 'preserve'; want = 'restamped'
     find = '    if ($nowPaused -and -not $wasPaused) { Set-Member $st ''paused_at'' (Now-Iso) }'
-    repl = '    if ($nowPaused) { Set-Member $st ''paused_at'' (Now-Iso) }' }
+    repl = '    if ($nowPaused) { Set-Member $st ''paused_at'' (Now-Iso) }'
+    jsFind = "    if (nowPaused && !wasPaused) setMember(st, 'paused_at', nowIso());"
+    jsRepl = "    if (nowPaused) setMember(st, 'paused_at', nowIso());" }
   @{ n = 'paused_at never cleared, so a resumed task still reports when it was paused'
     mode = 'clear'; want = 'kept'
     find = '    elseif (-not $nowPaused) { Set-Member $st ''paused_at'' $null }'
-    repl = '    elseif ($false) { Set-Member $st ''paused_at'' $null }' }
+    repl = '    elseif ($false) { Set-Member $st ''paused_at'' $null }'
+    jsFind = "    else if (!nowPaused) setMember(st, 'paused_at', null);"
+    jsRepl = "    else if (false) setMember(st, 'paused_at', null);" }
 )
 foreach ($m in $stampMutations) {
-  if ($src.IndexOf($m.find) -lt 0) {
-    Check "$($m.n): anchor present in source" $false "not found: $($m.find)"
+  $find = if (Test-OaStateNodeTarget $ScriptPath) { $m.jsFind } else { $m.find }
+  $repl = if (Test-OaStateNodeTarget $ScriptPath) { $m.jsRepl } else { $m.repl }
+  try { $mutPath = New-OaStateMutant $ScriptPath ("stamp-" + $m.mode) $find $repl $root }
+  catch {
+    Check "$($m.n): anchor present in source" $false $_.Exception.Message
     continue
   }
-  $mutPath = Join-Path $root ("oa-state-mut-stamp-" + $m.mode + ".ps1")
-  [IO.File]::WriteAllText($mutPath, $src.Replace($m.find, $m.repl), (New-Object Text.UTF8Encoding($false)))
   $got = Measure-Stamp $mutPath $m.mode
   Check "$($m.n) -> the $($m.mode) probe moves (arm is load-bearing)" ($got -eq $m.want) "got $got"
 }
@@ -462,19 +529,22 @@ $refusalMutation = @{
   n = 'the agent CAN un-pause itself, so a mistaken wake launders into a permanent resume'
   find = '    if ((Test-UserPaused $st $facts) -and "$StatusBy".ToLowerInvariant() -ne ''user'') {'
   repl = '    if ($false) {'
+  jsFind = "    if (testUserPaused(st, facts) && lowerInvariant(psStr(ctx.p.StatusBy)) !== 'user') throw new Error(pausedError(ctx, st));"
+  jsRepl = "    if (false) throw new Error(pausedError(ctx, st));"
 }
-if ($src.IndexOf($refusalMutation.find) -lt 0) {
-  Check "$($refusalMutation.n): anchor present in source" $false "not found: $($refusalMutation.find)"
-}
-else {
-  $mutPath = Join-Path $root 'oa-state-mut-refusal.ps1'
-  [IO.File]::WriteAllText($mutPath, $src.Replace($refusalMutation.find, $refusalMutation.repl), (New-Object Text.UTF8Encoding($false)))
+try {
+  $find = if (Test-OaStateNodeTarget $ScriptPath) { $refusalMutation.jsFind } else { $refusalMutation.find }
+  $repl = if (Test-OaStateNodeTarget $ScriptPath) { $refusalMutation.jsRepl } else { $refusalMutation.repl }
+  $mutPath = New-OaStateMutant $ScriptPath 'refusal' $find $repl $root
   $gotA = Measure-Refusal $mutPath 'agent'
   Check "$($refusalMutation.n) -> the agent probe moves (arm is load-bearing)" ($gotA -eq 'allowed') "got $gotA"
   # ...and the legitimate paths must be untouched by that mutation, or the arm is really just
   # asserting that `mark` can fail, which any broken build satisfies.
   $gotB = Measure-Refusal $mutPath 'byuser'
   Check "$($refusalMutation.n): the -StatusBy user path is unaffected" ($gotB -eq 'allowed') "got $gotB"
+}
+catch {
+  Check "$($refusalMutation.n): anchor present in source" $false $_.Exception.Message
 }
 
 Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue

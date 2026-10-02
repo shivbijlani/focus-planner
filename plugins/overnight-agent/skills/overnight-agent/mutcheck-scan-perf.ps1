@@ -45,7 +45,10 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
-if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
+$script:IsNodeTarget = Test-OaStateNodeTarget $ScriptPath
 
 # Launch the host that actually EXISTS here -- `powershell` is Windows-only and this runs on the
 # Linux runner too. Same idiom as oa-state.Tests.ps1.
@@ -131,7 +134,14 @@ function Measure-Scan([string]$script, [string[]]$extra) {
             '-GatePath', (Join-Path $root 'agent-gate.md'),
             '-UserSettings', (Join-Path $root 'user-settings.md')) + $extra
   $sw = [Diagnostics.Stopwatch]::StartNew()
-  $out = (& $PsExe @args) -join "`n"
+  $cmd = Get-OaStateCommand $script
+  $args = $cmd.Prefix + @('scan',
+            '-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board,
+            '-PlannerCompleted', (Join-Path $root 'planner-completed.md'),
+            '-SnoozeStore', (Join-Path $root 'snooze.json'),
+            '-GatePath', (Join-Path $root 'agent-gate.md'),
+            '-UserSettings', (Join-Path $root 'user-settings.md')) + $extra
+  $out = (& $cmd.Exe @args) -join "`n"
   $sw.Stop()
   if ($LASTEXITCODE -ne 0) { throw "scan failed (exit $LASTEXITCODE): $out" }
   return [pscustomobject]@{ Seconds = $sw.Elapsed.TotalSeconds; Text = $out }
@@ -139,12 +149,13 @@ function Measure-Scan([string]$script, [string[]]$extra) {
 
 function Measure-MaskCalls([string]$script) {
   # Runs an instrumented copy and returns how many times it had to compute a fence mask.
-  $out = & $PsExe -NoProfile -ExecutionPolicy Bypass -File $script scan -Compact `
-    -JournalDir $jdir -StateDir $sdir -PlannerBoard $board `
-    -PlannerCompleted (Join-Path $root 'planner-completed.md') `
-    -SnoozeStore (Join-Path $root 'snooze.json') `
-    -GatePath (Join-Path $root 'agent-gate.md') `
-    -UserSettings (Join-Path $root 'user-settings.md') 2>&1
+  $cmd = Get-OaStateCommand $script
+  $out = & $cmd.Exe @($cmd.Prefix + @('scan', '-Compact',
+    '-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board,
+    '-PlannerCompleted', (Join-Path $root 'planner-completed.md'),
+    '-SnoozeStore', (Join-Path $root 'snooze.json'),
+    '-GatePath', (Join-Path $root 'agent-gate.md'),
+    '-UserSettings', (Join-Path $root 'user-settings.md'))) 2>&1
   $line = @($out | Where-Object { "$_" -match '^MASKCORE=(\d+)$' }) | Select-Object -First 1
   if (-not $line) { throw 'instrumented scan did not report MASKCORE' }
   return [int]([regex]::Match("$line", '^MASKCORE=(\d+)$').Groups[1].Value)
@@ -170,7 +181,7 @@ try {
   $bytes = (Get-ChildItem $jdir -Filter 'task-*.md' | Measure-Object Length -Sum).Sum
   Write-Host ("  fixture: {0} journals, {1:N1} MB" -f $Journals, ($bytes / 1MB))
 
-  & $PsExe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath seed -JournalDir $jdir -StateDir $sdir | Out-Null
+  & $script:OaCmd.Exe @($script:OaCmd.Prefix + @('seed', '-JournalDir', $jdir, '-StateDir', $sdir)) | Out-Null
 
   # --- arm 1: the budget ------------------------------------------------------------------
   $compact = Measure-Scan $ScriptPath @('-Compact')
@@ -216,7 +227,7 @@ try {
   # runner more than the code. So it counts the thing that actually changed instead: how many
   # times the fence masker has to do its work. With the memo, the same journal text is masked
   # once; without it, every reader re-masks it. A count cannot flake.
-  if ($SkipMutant) { Write-Host '  (mutant arm skipped)' }
+  if ($SkipMutant -or $script:IsNodeTarget) { Write-Host '  (mutant arm skipped for this target)' }
   else {
     $src = [IO.File]::ReadAllText($ScriptPath)
     $lookup = '  if ($t.TryGetValue($key, [ref]$hit)) { return $hit }'

@@ -18,6 +18,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
 $AgentBlock = @'
 # Task {ID}: synthetic
@@ -74,8 +76,8 @@ New-Item -ItemType Directory -Path $sdir -Force | Out-Null
 try {
   foreach ($id in $cases.Keys) { New-Journal -Dir $jdir -Id $id -Entries $cases[$id].entries }
 
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath seed -JournalDir $jdir -StateDir $sdir | Out-Null
-  $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath scan -JournalDir $jdir -StateDir $sdir
+  & $script:OaCmd.Exe @($script:OaCmd.Prefix + @('seed', '-JournalDir', $jdir, '-StateDir', $sdir)) | Out-Null
+  $raw = & $script:OaCmd.Exe @($script:OaCmd.Prefix + @('scan', '-JournalDir', $jdir, '-StateDir', $sdir))
   $rows = ($raw -join "`n") | ConvertFrom-Json
   $byId = @{}
   foreach ($r in $rows) { $byId["$($r.id)"] = $r }

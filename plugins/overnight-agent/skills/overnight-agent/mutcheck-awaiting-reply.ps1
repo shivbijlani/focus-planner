@@ -68,6 +68,8 @@ $ErrorActionPreference = 'Stop'
 
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
 if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
 $EMDASH = [char]0x2014
 
@@ -173,8 +175,8 @@ foreach ($id in 810, 811, 830, 840, 850, 860, 870, 880) {
 
 function Invoke-Oa {
   param([string[]]$OaArgs)
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @OaArgs `
-    -JournalDir $jdir -StateDir $sdir -PlannerBoard $board -SnoozeStore $store 2>&1
+  & $script:OaCmd.Exe @($script:OaCmd.Prefix + $OaArgs + @(
+    '-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store)) 2>&1
 }
 
 function Get-Rows {

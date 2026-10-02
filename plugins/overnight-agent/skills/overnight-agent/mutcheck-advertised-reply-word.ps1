@@ -155,6 +155,15 @@ Write-Host 'VOCABULARY -- the copy must not drift from the reader'
 if (Test-Path $OaStatePath) {
   $reOf = {
     param([string]$path)
+    if ($path -like '*.mjs') {
+      $readerPath = $path
+      if ([IO.Path]::GetFileName($path) -eq 'oa-state.mjs') {
+        $candidate = Join-Path (Split-Path -Parent $path) 'oa-state-lib\collect\journal.mjs'
+        if (Test-Path $candidate) { $readerPath = $candidate }
+      }
+      $m = [regex]::Match([IO.File]::ReadAllText($readerPath), "(?m)^\s*export\s+const\s+ConsentAffirmRe\s*=\s*'([^']+)'")
+      if ($m.Success) { return $m.Groups[1].Value.Replace('\\', '\') } else { return $null }
+    }
     $m = [regex]::Match([IO.File]::ReadAllText($path), '(?m)^\s*\$script:ConsentAffirmRe\s*=\s*''([^'']+)''')
     if ($m.Success) { return $m.Groups[1].Value } else { return $null }
   }

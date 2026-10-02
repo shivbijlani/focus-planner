@@ -26,7 +26,8 @@ param([string]$ScriptPath)
 $ErrorActionPreference = 'Stop'
 
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
-if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
 
 $PsExe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
 if (-not $PsExe) { $PsExe = 'pwsh' }
@@ -64,9 +65,16 @@ $outcomes = '[{"id":"362","outcome":"dispatched","at":"2026-09-29T11:09:00-07:00
 function Invoke-Decisions {
   param([string]$script, [string]$ledger, [string]$runId, [string]$now, [string]$outcomeJson = $outcomes,
         [int]$retainDays = 7)
-  $stdout = & $PsExe -NoProfile -ExecutionPolicy Bypass -File $script decisions `
-    -RunId $runId -ScanFile $scanPath -Outcomes $outcomeJson -RunLedger $ledger `
-    -DecisionNow $now -RetainDays $retainDays -StateDir (Join-Path $root 'state') 2>&1
+  if (Test-OaStateNodeTarget $script) {
+    $cmd = Get-OaStateCommand $script
+    $stdout = & $cmd.Exe @($cmd.Prefix + @('decisions',
+      '-RunId', $runId, '-ScanFile', $scanPath, '-Outcomes', $outcomeJson, '-RunLedger', $ledger,
+      '-DecisionNow', $now, '-RetainDays', "$retainDays", '-StateDir', (Join-Path $root 'state'))) 2>&1
+  } else {
+    $stdout = & $PsExe -NoProfile -ExecutionPolicy Bypass -File $script decisions `
+      -RunId $runId -ScanFile $scanPath -Outcomes $outcomeJson -RunLedger $ledger `
+      -DecisionNow $now -RetainDays $retainDays -StateDir (Join-Path $root 'state') 2>&1
+  }
   return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = ($stdout -join "`n") }
 }
 
@@ -126,9 +134,16 @@ function Test-Record {
   $arrayScan = Join-Path $root "$tag-array.json"
   [IO.File]::WriteAllText($arrayScan, '[{"id":"245","order":2,"section":"today","eligible":false}]',
     [Text.UTF8Encoding]::new($false))
-  $refused = & $PsExe -NoProfile -ExecutionPolicy Bypass -File $script decisions -RunId 'run-3' `
-    -ScanFile $arrayScan -RunLedger (Join-Path $root "$tag-array.jsonl") `
-    -DecisionNow '2026-09-29T11:30:00-07:00' -StateDir (Join-Path $root 'state') 2>&1
+  if (Test-OaStateNodeTarget $script) {
+    $cmd = Get-OaStateCommand $script
+    $refused = & $cmd.Exe @($cmd.Prefix + @('decisions', '-RunId', 'run-3',
+      '-ScanFile', $arrayScan, '-RunLedger', (Join-Path $root "$tag-array.jsonl"),
+      '-DecisionNow', '2026-09-29T11:30:00-07:00', '-StateDir', (Join-Path $root 'state'))) 2>&1
+  } else {
+    $refused = & $PsExe -NoProfile -ExecutionPolicy Bypass -File $script decisions -RunId 'run-3' `
+      -ScanFile $arrayScan -RunLedger (Join-Path $root "$tag-array.jsonl") `
+      -DecisionNow '2026-09-29T11:30:00-07:00' -StateDir (Join-Path $root 'state') 2>&1
+  }
   $ok6 = ($LASTEXITCODE -ne 0) -and (($refused -join "`n") -match 'decisions_requires_compact_scan')
 
   return [pscustomobject]@{
@@ -148,35 +163,49 @@ try {
   Assert $live.CompactRequired 'a full scan array is refused, not half-recorded'
 
   # --- mutants: each one deletes a property above, and must be killed -----------------------
-  $src = [IO.File]::ReadAllText($ScriptPath)
+  $isNode = Test-OaStateNodeTarget $ScriptPath
   $mutations = @(
     @{ Name = 'today-rows'; Property = 'TodayNamed'
        Find = "if (-not (`$outcomes.ContainsKey(`$id) -or `$r.eligible -or `$section -eq 'today')) { continue }"
-       Replace = "if (-not (`$outcomes.ContainsKey(`$id) -or `$r.eligible)) { continue }" },
+       Replace = "if (-not (`$outcomes.ContainsKey(`$id) -or `$r.eligible)) { continue }"
+       NodeFind = "if (!(outcomes.has(id) || psTruthy(get(r, 'eligible')) || sectionLower === 'today')) continue;"
+       NodeReplace = "if (!(outcomes.has(id) || psTruthy(get(r, 'eligible')))) continue;" },
     @{ Name = 'retention'; Property = 'Bounded'
        Find = '  if ($retainDays -le 0) { return }'
-       Replace = '  if ($retainDays -ge 0) { return }' },
+       Replace = '  if ($retainDays -ge 0) { return }'
+       NodeFind = '  if (retainDays <= 0) return;'
+       NodeReplace = '  if (retainDays >= 0) return;' },
     @{ Name = 'vocabulary'; Property = 'ClosedVocabulary'
        Find = "    if (`$script:DecisionOutcomeWords -notcontains `$word) {"
-       Replace = "    if (`$false) {" },
+       Replace = "    if (`$false) {"
+       NodeFind = "    if (!DecisionOutcomeWords.some((x) => x.toLowerCase() === word.toLowerCase())) {"
+       NodeReplace = "    if (false) {" },
     @{ Name = 'ineligible-cause'; Property = 'TodayNamed'
        Find = "    if (-not `$cause) { `$cause = 'unknown' }"
-       Replace = "    `$cause = 'unknown'" },
+       Replace = "    `$cause = 'unknown'"
+       NodeFind = "    if (!cause) cause = 'unknown';"
+       NodeReplace = "    cause = 'unknown';" },
     @{ Name = 'compact-required'; Property = 'CompactRequired'
        Find = "  if (-not (`$scan.PSObject.Properties['summary'] -and `$scan.PSObject.Properties['rows'])) {"
-       Replace = '  if ($false) {' },
+       Replace = '  if ($false) {'
+       NodeFind = "  if (!(has(scan, 'summary') && has(scan, 'rows'))) {"
+       NodeReplace = '  if (false) {' },
     @{ Name = 'persistence'; Property = 'Appended'
        Find = '  [IO.File]::AppendAllText($RunLedger, "$line`n", (New-Object Text.UTF8Encoding($false)))'
-       Replace = '' },
+       Replace = ''
+       NodeFind = '  fs.appendFileSync(ctx.p.RunLedger, `${json.text}\n`, ''utf8'');'
+       NodeReplace = '' },
     @{ Name = 'local-timestamps'; Property = 'Appended'
        Find = "  if (`$value -is [datetimeoffset]) { return `$value.ToUniversalTime().UtcDateTime.ToString('o') }"
-       Replace = "  if (`$value -is [datetimeoffset]) { return `$value.ToString('o') }" }
+       Replace = "  if (`$value -is [datetimeoffset]) { return `$value.ToString('o') }"
+       NodeFind = "  if (typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'utcMs')) return formatUtcO(value.utcMs);"
+       NodeReplace = "  if (false && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'utcMs')) return formatUtcO(value.utcMs);" }
   )
 
   foreach ($m in $mutations) {
-    if ($src.Split($m.Find).Count -ne 2) { throw "$($m.Name): mutation target not found (the code moved)" }
-    $path = Join-Path $root "oa-state-$($m.Name).ps1"
-    [IO.File]::WriteAllText($path, $src.Replace($m.Find, $m.Replace), [Text.UTF8Encoding]::new($true))
+    $find = if ($isNode) { $m.NodeFind } else { $m.Find }
+    $replace = if ($isNode) { $m.NodeReplace } else { $m.Replace }
+    $path = New-OaStateMutant $ScriptPath $m.Name $find $replace $root
     $killed = $false
     try {
       $result = Test-Record -script $path -tag $m.Name

@@ -25,6 +25,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
 
 $AgentBlock = @'
 # Task {ID}: synthetic
@@ -106,13 +107,14 @@ $cases = [ordered]@{
 
 function Invoke-Cases {
   param([string]$Script)
+  $cmd = Get-OaStateCommand $Script
   $root = Join-Path $env:TEMP ("oa-mut-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
   $jdir = Join-Path $root 'journal'; $sdir = Join-Path $root 'state'
   New-Item -ItemType Directory -Path $jdir, $sdir -Force | Out-Null
   try {
     foreach ($id in $cases.Keys) { New-Journal -Dir $jdir -Id $id -Entries $cases[$id].entries }
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $Script seed -JournalDir $jdir -StateDir $sdir | Out-Null
-    $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $Script scan -JournalDir $jdir -StateDir $sdir
+    & $cmd.Exe @($cmd.Prefix + @('seed', '-JournalDir', $jdir, '-StateDir', $sdir)) | Out-Null
+    $raw = & $cmd.Exe @($cmd.Prefix + @('scan', '-JournalDir', $jdir, '-StateDir', $sdir))
     $rows = ($raw -join "`n") | ConvertFrom-Json
     $out = @{}
     foreach ($r in $rows) { $out["$($r.id)"] = [bool]$r.reopened }
@@ -140,18 +142,12 @@ if ($baseFail.Count) {
 Write-Host "baseline: $($cases.Count)/$($cases.Count) correct"
 
 # --- 2. Mutant: neuter the guard, keep the recovery -----------------------------------
-$src = Get-Content -Raw $ScriptPath
-$mutant = [regex]::Replace(
-  $src,
-  '(function Test-IsRunLogBodyOnly\(\[string\]\$region\) \{)',
-  "`$1`n  return `$true   # MUTANT: guard neutered"
-)
-if ($mutant -eq $src) {
-  Write-Host "`nMUTATION FAILED TO APPLY - Test-IsRunLogBodyOnly not found. The check proved nothing."
-  exit 1
+$mutRoot = Join-Path $env:TEMP ("oa-state-mutant-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+if (Test-OaStateNodeTarget $ScriptPath) {
+  $mutPath = New-OaStateMutant $ScriptPath 'runlog' 'export function testIsRunLogBodyOnly(region) {' 'export function testIsRunLogBodyOnly(region) { return true;' $mutRoot
+} else {
+  $mutPath = New-OaStateMutant $ScriptPath 'runlog' 'function Test-IsRunLogBodyOnly([string]$region) {' "function Test-IsRunLogBodyOnly([string]`$region) {`n  return `$true   # MUTANT: guard neutered" $mutRoot
 }
-$mutPath = Join-Path $env:TEMP ("oa-state-mutant-" + [guid]::NewGuid().ToString('N').Substring(0, 8) + ".ps1")
-[System.IO.File]::WriteAllText($mutPath, $mutant, [System.Text.UTF8Encoding]::new($false))
 
 try {
   $mut = Invoke-Cases -Script $mutPath
@@ -185,4 +181,4 @@ try {
   Write-Host "         So raw user text below a run log is protected by real logic, not by luck."
   exit 0
 }
-finally { Remove-Item -Force $mutPath -ErrorAction SilentlyContinue }
+finally { Remove-Item -Recurse -Force $mutRoot -ErrorAction SilentlyContinue }

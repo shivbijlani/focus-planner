@@ -47,6 +47,11 @@ if (-not $ScriptPath) {
   $here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
   $ScriptPath = Join-Path $here 'oa-state.ps1'
 }
+$ScriptPath = (Resolve-Path $ScriptPath).Path
+$TargetDir = Split-Path -Parent $ScriptPath
+. (Join-Path $TargetDir 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
+$script:IsNodeTarget = Test-OaStateNodeTarget $ScriptPath
 $skillDir = Split-Path -Parent $ScriptPath
 
 # Launch the host that actually EXISTS here: `powershell` is Windows-only and would die on the
@@ -80,18 +85,40 @@ if ($env:OS -eq 'Windows_NT') { $lockPath = $lockPath.ToLowerInvariant() }
 $sha = [Security.Cryptography.SHA256]::Create()
 try { $lockKey = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($lockPath)))).Replace('-', '') }
 finally { $sha.Dispose() }
-$mutex = New-Object Threading.Mutex($false, "oa-state-$lockKey")
+$mutex = if ($script:IsNodeTarget) { $null } else { New-Object Threading.Mutex($false, "oa-state-$lockKey") }
+$lockFile = Join-Path ([IO.Path]::GetTempPath()) ("oa-state-$lockKey.lock")
+$lockStream = $null
 $held = $false
 
+function Enter-TestStateLock {
+  if ($script:IsNodeTarget) {
+    $script:lockStream = [IO.File]::Open($lockFile, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    $bytes = [Text.Encoding]::UTF8.GetBytes("$PID")
+    $script:lockStream.Write($bytes, 0, $bytes.Length)
+    $script:lockStream.Flush()
+    return $true
+  }
+  return $mutex.WaitOne(10000)
+}
+
+function Exit-TestStateLock {
+  if ($script:IsNodeTarget) {
+    if ($script:lockStream) { $script:lockStream.Dispose(); $script:lockStream = $null }
+    Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue
+    return
+  }
+  $mutex.ReleaseMutex()
+}
+
 function Oa-Args([string[]]$OaArgs) {
-  return @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $OaArgs +
+  return $script:OaCmd.Prefix + $OaArgs +
   @('-StateDir', $sdir, '-UserSettings', $settings, '-McpConfig', $config, '-RunLedger', $ledger)
 }
 function Invoke-Oa {
   param([string[]]$OaArgs)
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  $out = & $script:PsExe @(Oa-Args $OaArgs) 2>&1 | Out-String -Width 4096
+  $out = & $script:OaCmd.Exe @(Oa-Args $OaArgs) 2>&1 | Out-String -Width 4096
   $ErrorActionPreference = $prev
   return [pscustomobject]@{ Output = $out; ExitCode = $LASTEXITCODE }
 }
@@ -102,7 +129,7 @@ function Start-Oa {
   $stdout = Join-Path $root "$Tag.out"
   $stderr = Join-Path $root "$Tag.err"
   return [pscustomobject]@{
-    Process = Start-Process -FilePath $script:PsExe -ArgumentList (Oa-Args $OaArgs) -PassThru `
+    Process = Start-Process -FilePath $script:OaCmd.Exe -ArgumentList (Oa-Args $OaArgs) -PassThru `
       -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     Out     = $stdout
     Err     = $stderr
@@ -116,7 +143,7 @@ function Check([string]$name, [scriptblock]$body) {
 }
 
 try {
-  $held = $mutex.WaitOne(10000)
+  $held = Enter-TestStateLock
   if (-not $held) { throw 'mutcheck could not take its own state lock' }
 
   # --- A: critical-tools must not need the state lock ----------------------------------------
@@ -171,7 +198,7 @@ try {
   $c = Start-Oa @('whoami') 'waiter'
   Start-Sleep -Seconds 12
   $stillRunning = -not $c.Process.HasExited
-  $mutex.ReleaseMutex()
+  Exit-TestStateLock
   $held = $false
   $null = $c.Process.WaitForExit(120000)
   $cOut = (Get-Content -LiteralPath $c.Out -Raw -ErrorAction SilentlyContinue) +
@@ -181,15 +208,15 @@ try {
   Check 'C-- rather than failing with state_lock_timeout' { "$cOut" -notmatch 'state_lock_timeout' }
 
   # --- D: the wait is bounded, so a STUCK holder is reported and not waited on for ever ---------
-  $held = $mutex.WaitOne(10000)
+  $held = Enter-TestStateLock
   if (-not $held) { throw 'mutcheck could not retake its own state lock' }
   $d = Invoke-Oa @('whoami', '-LockWaitSeconds', '1')
   Check 'D a bounded wait still fails when the holder never lets go' { $d.ExitCode -ne 0 }
   Check 'D- and it says the holder is stuck, not merely busy' { $d.Output -match 'state_lock_timeout' }
 }
 finally {
-  if ($held) { $mutex.ReleaseMutex() }
-  $mutex.Dispose()
+  if ($held) { Exit-TestStateLock }
+  if ($mutex) { $mutex.Dispose() }
 }
 
 # --- report --------------------------------------------------------------------------------------

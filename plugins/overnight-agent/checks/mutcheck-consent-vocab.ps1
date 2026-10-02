@@ -53,6 +53,8 @@ if (-not $ScriptPath) {
   foreach ($c in $candidates) { if (Test-Path $c) { $ScriptPath = (Resolve-Path $c).Path; break } }
 }
 if (-not $ScriptPath -or -not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found (pass -ScriptPath)" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:TargetIsNode = Test-OaStateNodeTarget $ScriptPath
 
 $AgentBlock = @'
 # Task {ID}: synthetic
@@ -130,8 +132,9 @@ function Invoke-Scan([string]$Script) {
   New-Item -ItemType Directory -Path $sdir -Force | Out-Null
   try {
     foreach ($id in $cases.Keys) { New-Journal -Dir $jdir -Id $id -Entries $cases[$id].entries }
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $Script seed -JournalDir $jdir -StateDir $sdir | Out-Null
-    $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $Script scan -JournalDir $jdir -StateDir $sdir
+    $cmd = Get-OaStateCommand $Script
+    & $cmd.Exe @($cmd.Prefix + @('seed', '-JournalDir', $jdir, '-StateDir', $sdir)) | Out-Null
+    $raw = & $cmd.Exe @($cmd.Prefix + @('scan', '-JournalDir', $jdir, '-StateDir', $sdir))
     $rows = ($raw -join "`n") | ConvertFrom-Json
     $byId = @{}
     foreach ($r in $rows) { $byId["$($r.id)"] = [bool]$r.consent_ok }
@@ -174,16 +177,22 @@ $mutations = @(
     name = 'M_pos'
     desc = 'reader drops the command-shaped `merge <n>` token (the original #301 bug)'
     apply = { param($s) $s -replace [regex]::Escape('|merge[ \t]+#?\d+'), '' }
+    nodeFind = '|merge[ \\t]+#?\\d+'
+    nodeReplace = ''
   },
   @{
     name = 'M_bare'
     desc = 'reader accepts BARE `merge` (the PR number made optional) -- the unsafe widening'
     apply = { param($s) $s -replace [regex]::Escape('merge[ \t]+#?\d+'), 'merge(?:[ \t]+#?\d+)?' }
+    nodeFind = 'merge[ \\t]+#?\\d+'
+    nodeReplace = 'merge(?:[ \\t]+#?\\d+)?'
   },
   @{
     name = 'M_author'
     desc = 'any author satisfies consent (drops the #227 human-attribution gate)'
     apply = { param($s) $s -replace [regex]::Escape('if ($seg.Author -eq $script:HumanAuthor) {'), 'if ($true) {' }
+    nodeFind = 'if (psEq(seg.Author, HumanAuthor)) {'
+    nodeReplace = 'if (true) {'
   }
 )
 
@@ -199,14 +208,18 @@ try {
   foreach ($m in $mutations) {
     Write-Host ""
     Write-Host "=== $($m.name): $($m.desc) ==="
-    $mutated = & $m.apply $src
-    if ($mutated -eq $src) {
-      Write-Host "  !! mutation did not apply (anchor text moved) -- FAIL"
-      $problems++
-      continue
+    if ($script:TargetIsNode) {
+      $path = New-OaStateMutant $ScriptPath $m.name $m.nodeFind $m.nodeReplace $mutDir
+    } else {
+      $mutated = & $m.apply $src
+      if ($mutated -eq $src) {
+        Write-Host "  !! mutation did not apply (anchor text moved) -- FAIL"
+        $problems++
+        continue
+      }
+      $path = Join-Path $mutDir ("oa-state-" + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.ps1')
+      [IO.File]::WriteAllText($path, $mutated, (New-Object Text.UTF8Encoding($false)))
     }
-    $path = Join-Path $mutDir ("oa-state-" + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.ps1')
-    [IO.File]::WriteAllText($path, $mutated, (New-Object Text.UTF8Encoding($false)))
 
     $killSet = @()
     try { $killSet = @(Get-Failures (Invoke-Scan $path)) }

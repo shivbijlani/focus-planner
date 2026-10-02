@@ -45,7 +45,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
-if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
 $Journal = @'
 # Task {ID}: synthetic
@@ -84,14 +86,14 @@ foreach ($id in 601, 602, 603, 604, 605) {
 
 function Invoke-Oa {
   param([string[]]$OaArgs)
-  $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $OaArgs +
+  $all = $script:OaCmd.Prefix + $OaArgs +
   @('-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $store)
   # Must not throw: the whole point of -ExpectPreFix is to run this against a build that
   # REJECTS the new parameters. A hard failure there has to surface as a failed arm, not as a
   # crashed harness -- otherwise "pre-fix fails" is indistinguishable from "harness is broken".
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  try { $out = & powershell @all 2>&1 | Out-String }
+  try { $out = & $script:OaCmd.Exe @all 2>&1 | Out-String }
   catch { $out = '' }
   finally { $ErrorActionPreference = $prev; $global:LASTEXITCODE = 0 }
   return $out

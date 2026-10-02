@@ -30,7 +30,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $ScriptPath) { $ScriptPath = Join-Path $PSScriptRoot 'oa-state.ps1' }
-if (-not (Test-Path $ScriptPath)) { throw "oa-state.ps1 not found at $ScriptPath" }
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 
 # A journal whose agent turn is finished and carries no open ask, so `Test-Workable` depends
 # purely on status -- keeping this check about the BOARD parse and nothing else.
@@ -112,10 +114,10 @@ function Invoke-Scan {
   $snooze = Join-Path $root 'snooze.json'
   try {
     foreach ($id in $Ids) { New-Journal -Dir $jdir -Id $id }
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath seed `
-      -JournalDir $jdir -StateDir $sdir -PlannerBoard $board -SnoozeStore $snooze | Out-Null
-    $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath scan `
-      -JournalDir $jdir -StateDir $sdir -PlannerBoard $board -SnoozeStore $snooze
+    & $script:OaCmd.Exe @($script:OaCmd.Prefix + @('seed',
+      '-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $snooze)) | Out-Null
+    $raw = & $script:OaCmd.Exe @($script:OaCmd.Prefix + @('scan',
+      '-JournalDir', $jdir, '-StateDir', $sdir, '-PlannerBoard', $board, '-SnoozeStore', $snooze))
     $rows = ($raw -join "`n") | ConvertFrom-Json
     $byId = @{}
     foreach ($r in $rows) { $byId["$($r.id)"] = $r }

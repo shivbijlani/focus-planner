@@ -54,10 +54,10 @@ if (-not $ScriptPath) {
   $here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
   $ScriptPath = Join-Path $here 'oa-state.ps1'
 }
-if (-not (Test-Path $ScriptPath)) { Write-Host "FAIL cannot find oa-state.ps1 at $ScriptPath"; exit 2 }
+if (-not (Test-Path $ScriptPath)) { Write-Host "FAIL cannot find oa-state target at $ScriptPath"; exit 2 }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
 
 $utf8 = New-Object Text.UTF8Encoding($false)
-$src = [IO.File]::ReadAllText($ScriptPath, $utf8)
 $root = Join-Path ([IO.Path]::GetTempPath()) ('mutcheck-bindback-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $pass = 0; $fail = 0
 
@@ -83,7 +83,8 @@ $TaskId = '471'
 function New-World([string]$Name) {
   $w = Join-Path $root $Name
   $sd = Join-Path $w 'state'; $jd = Join-Path $w 'journal'
-  New-Item -ItemType Directory -Force -Path $sd, $jd | Out-Null
+  $ssd = Join-Path $w 'session-state'
+  New-Item -ItemType Directory -Force -Path $sd, $jd, $ssd | Out-Null
   [IO.File]::WriteAllText((Join-Path $jd "task-$TaskId.md"),
     "# Task $TaskId`: fixture`r`n`r`nUser notes.`r`n", $utf8)
   $board = Join-Path $w 'planner.md'
@@ -97,21 +98,23 @@ function New-World([string]$Name) {
   $runWs = Join-Path $w 'run-session-workspace'
   New-Item -ItemType Directory -Force -Path $runWs | Out-Null
   return [pscustomobject]@{
-    Root = $w; State = $sd; Journal = $jd; Board = $board
+    Root = $w; State = $sd; SessionState = $ssd; Journal = $jd; Board = $board
     Store = (Join-Path $w 'snooze.json'); Settings = (Join-Path $w 'settings.md'); RunWs = $runWs
   }
 }
 
 function Invoke-Oa([string]$Script, $World, [string[]]$OaArgs) {
-  $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Script) + $OaArgs +
+  $cmd = Get-OaStateCommand $Script
+  $all = $cmd.Prefix + $OaArgs +
   @('-JournalDir', $World.Journal, '-StateDir', $World.State, '-PlannerBoard', $World.Board,
+    '-SessionStateDir', $World.SessionState,
     '-SnoozeStore', $World.Store, '-PlannerCompleted', (Join-Path $World.Root 'absent.md'),
     '-UserSettings', $World.Settings, '-RunWorkspace', $World.RunWs)
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   # -Width is not cosmetic on the JSON-bearing calls: the default wraps captured output at the
   # host's render width, which splits a long JSON line and defeats ConvertFrom-Json.
-  try { $out = & $psExe @all 2>&1 | Out-String -Width 4096 }
+  try { $out = & $cmd.Exe @all 2>&1 | Out-String -Width 4096 }
   catch { $out = "$_" }
   finally { $ErrorActionPreference = $prev; $global:LASTEXITCODE = 0 }
   return "$out"
@@ -247,12 +250,14 @@ Check 'F: and that legacy binding is not rewritten backwards' `
 # refused for some OTHER reason looks identical from outside.
 $mutFind = '    if ($sess -and "$($sess.session_id)" -ne $SessionId -and $lineage -contains $SessionId) {'
 $mutRepl = '    if ($false) {'
-if ($src.IndexOf($mutFind) -lt 0) {
-  Check 'G: mutation anchor present in source' $false "not found: $mutFind"
-}
-else {
-  $mutPath = Join-Path $root 'oa-state-mut-nobackguard.ps1'
-  [IO.File]::WriteAllText($mutPath, $src.Replace($mutFind, $mutRepl), $utf8)
+$jsMutFind = "    if (sess && oldSessionId !== ctx.p.SessionId && lineage.some((x) => lowerInvariant(x) === lowerInvariant(ctx.p.SessionId))) {"
+$jsMutRepl = '    if (false) {'
+try {
+  $mutPath = if (Test-OaStateNodeTarget $ScriptPath) {
+    New-OaStateMutant $ScriptPath 'nobackguard' $jsMutFind $jsMutRepl $root
+  } else {
+    New-OaStateMutant $ScriptPath 'nobackguard' $mutFind $mutRepl $root
+  }
   $wG = New-Chain $mutPath 'G'
   $outG = Invoke-Bind $mutPath $wG $S2
   $sessG = Get-Bound $mutPath $wG
@@ -263,6 +268,9 @@ else {
   Check 'G: and the mutant reproduces #471 exactly (42d1a304 bound, prior 9294bd58)' `
     ($null -ne $sessG -and "$($sessG.session_id)" -eq $S2 -and "$($sessG.prior_session_id)" -eq $S3) `
     "session_id=$($sessG.session_id) prior=$($sessG.prior_session_id)"
+}
+catch {
+  Check 'G: mutation anchor present in source' $false $_.Exception.Message
 }
 
 Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue

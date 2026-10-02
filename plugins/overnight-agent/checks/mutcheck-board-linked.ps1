@@ -68,6 +68,8 @@ $script:script = $null
 foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { $script:script = (Resolve-Path $c).Path; break } }
 if (-not $script:script) { throw ("oa-state.ps1 not found. Tried:`n  " + (($candidates | Where-Object { $_ }) -join "`n  ")) }
 Write-Host "target: $($script:script)"
+. (Join-Path (Split-Path -Parent $script:script) 'oa-state-target.ps1')
+$script:IsNodeTarget = Test-OaStateNodeTarget $script:script
 $src = [IO.File]::ReadAllText($script:script, $enc)
 
 $pass = 0; $fail = 0
@@ -138,7 +140,8 @@ function New-Sandbox {
 function Invoke-Extract {
   param([string]$ScriptPath, [string]$Root, [string]$Id, [string]$BoardPath, [int]$TimeoutSec = 90)
   if (-not $BoardPath) { $BoardPath = Join-Path $Root 'planner.md' }
-  $a = @('-NoProfile', '-File', $ScriptPath, 'extract', '-Id', $Id,
+  $cmd = Get-OaStateCommand $ScriptPath
+  $a = $cmd.Prefix + @('extract', '-Id', $Id,
          '-JournalDir', (Join-Path $Root 'journal'),
          '-StateDir', (Join-Path $Root 'state'),
          '-PlannerBoard', $BoardPath,
@@ -146,7 +149,7 @@ function Invoke-Extract {
          '-SnoozeStore', (Join-Path $Root 'snooze.json'))
   $so = Join-Path $Root ('o-' + [Guid]::NewGuid().ToString('N').Substring(0, 6) + '.txt')
   $se = "$so.err"
-  $p = Start-Process -FilePath 'pwsh' -ArgumentList $a -NoNewWindow -PassThru `
+  $p = Start-Process -FilePath $cmd.Exe -ArgumentList $a -NoNewWindow -PassThru `
        -RedirectStandardOutput $so -RedirectStandardError $se
   if (-not $p.WaitForExit($TimeoutSec * 1000)) {
     try { $p.Kill($true) } catch { }
@@ -181,6 +184,16 @@ function Get-LinkedResolved([string]$out) {
 
 function New-Mutant {
   param([hashtable[]]$Edits, [string]$Dir)
+  if ($script:IsNodeTarget) {
+    $target = $script:script
+    $n = 0
+    foreach ($e in $Edits) {
+      $n++
+      if (-not $e.JsFind) { throw "node mutation anchor missing for edit $n" }
+      $target = New-OaStateMutant $target ("board-linked-$n") $e.JsFind $e.JsReplace $Dir
+    }
+    return $target
+  }
   $t = $src
   foreach ($e in $Edits) {
     if ($t.IndexOf($e.Find, [StringComparison]::Ordinal) -lt 0) {
@@ -280,6 +293,8 @@ $root = New-Sandbox
 $m1 = New-Mutant -Dir $root -Edits @(@{
   Find    = '  $board = Get-BoardLinkFacts -Id $Id'
   Replace = '  $board = [pscustomobject]@{ Read = $true; RowFound = $true; Ids = @(); Note = ''''; Path = "$PlannerBoard" }'
+  JsFind  = '  const board = getBoardLinkFactsFromBoard(ctx, id);'
+  JsReplace = "  const board = { Read: true, RowFound: true, Ids: [], Note: '', Path: `${ctx.p.PlannerBoard}` };"
 })
 $o = Invoke-Extract -ScriptPath $m1 -Root $root -Id '861'
 $l = Get-LinkedResolved $o.Out
@@ -294,6 +309,8 @@ $root = New-Sandbox
 $m2 = New-Mutant -Dir $root -Edits @(@{
   Find    = '  $links = Get-LinkedFacts -Id $Id -JournalIds @($ptr.Linked)'
   Replace = '  $links = Get-LinkedFacts -Id $Id -JournalIds @()'
+  JsFind  = '  const links = getLinkedFacts(ctx, Id, [...ptr.Linked]);'
+  JsReplace = '  const links = getLinkedFacts(ctx, Id, []);'
 })
 $o = Invoke-Extract -ScriptPath $m2 -Root $root -Id '866'
 $l = Get-LinkedResolved $o.Out
@@ -308,6 +325,8 @@ $root = New-Sandbox
 $m3 = New-Mutant -Dir $root -Edits @(@{
   Find    = '  foreach ($n in @($JournalIds)) { if ($n -and $merged -notcontains $n) { $merged += $n } }'
   Replace = '  if (-not $merged.Count) { foreach ($n in @($JournalIds)) { if ($n -and $merged -notcontains $n) { $merged += $n } } }'
+  JsFind  = '  for (const n of journalIds ?? []) if (n && !merged.includes(n)) merged.push(n);'
+  JsReplace = '  if (!merged.length) for (const n of journalIds ?? []) if (n && !merged.includes(n)) merged.push(n);'
 })
 $o = Invoke-Extract -ScriptPath $m3 -Root $root -Id '862'
 $l = Get-LinkedResolved $o.Out
@@ -325,6 +344,10 @@ $m4 = New-Mutant -Dir $root -Edits @(@{
     return "- linked: (board not read'
   Replace = '  if ($false) {
     return "- linked: (board not read'
+  JsFind  = '  if (!facts.BoardRead) {
+    return `- linked: (board not read'
+  JsReplace = '  if (false) {
+    return `- linked: (board not read'
 })
 $o = Invoke-Extract -ScriptPath $m4 -Root $root -Id '867' -BoardPath (Join-Path $root 'no-such-board.md')
 $l = Get-LinkedLine $o.Out
@@ -340,6 +363,9 @@ $m5 = New-Mutant -Dir $root -Edits @(@{
   Find    = '  $idx = if ($LinkedIndex -ge $script:BoardLinkedMinIndex -and $LinkedIndex -le $last) { $LinkedIndex } else { $last }'
   Replace = '  $idx = if ($LinkedIndex -ge $script:BoardLinkedMinIndex) { $LinkedIndex } else { $last }
   if ($idx -gt $last) { return @() }'
+  JsFind  = '  const idx = linkedIndex >= BoardLinkedMinIndex && linkedIndex <= last ? linkedIndex : last;'
+  JsReplace = '  const idx = linkedIndex >= BoardLinkedMinIndex ? linkedIndex : last;
+  if (idx > last) return [];'
 })
 $o = Invoke-Extract -ScriptPath $m5 -Root $root -Id '863'
 $l = Get-LinkedResolved $o.Out
@@ -356,6 +382,8 @@ $root = New-Sandbox
 $m6 = New-Mutant -Dir $root -Edits @(@{
   Find    = "  `$clean = [regex]::Replace(`$Line, '<!--.*?-->', '')"
   Replace = '  $clean = $Line'
+  JsFind  = "  const clean = rxReplace(String(line ?? ''), '<!--.*?-->', '');"
+  JsReplace = "  const clean = String(line ?? '');"
 })
 $o = Invoke-Extract -ScriptPath $m6 -Root $root -Id '865'
 $l = Get-LinkedResolved $o.Out

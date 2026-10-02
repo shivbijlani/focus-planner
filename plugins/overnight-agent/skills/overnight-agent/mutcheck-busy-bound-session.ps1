@@ -2,7 +2,9 @@
 param([string]$ScriptPath = (Join-Path $PSScriptRoot 'oa-state.ps1'))
 
 $ErrorActionPreference = 'Stop'
-$psExe = (Get-Process -Id $PID).Path
+if (-not (Test-Path $ScriptPath)) { throw "oa-state target not found at $ScriptPath" }
+. (Join-Path (Split-Path -Parent $ScriptPath) 'oa-state-target.ps1')
+$script:OaCmd = Get-OaStateCommand $ScriptPath
 $root = Join-Path ([IO.Path]::GetTempPath()) ('oa-busy-' + [guid]::NewGuid().ToString('N'))
 $state = Join-Path $root 'state'
 $journal = Join-Path $root 'journal'
@@ -14,9 +16,11 @@ $utf8 = [Text.UTF8Encoding]::new($false)
 $ids = @(468, 228, 476, 464, 370, 423, 329, 405, 374, 289, 175, 353, 399, 400)
 
 function Invoke-State([string]$script, [string[]]$arguments) {
-  $output = & $psExe -NoProfile -File $script @arguments -StateDir $state -JournalDir $journal `
-    -PlannerBoard $board -PlannerCompleted (Join-Path $root 'completed.md') `
-    -SnoozeStore (Join-Path $root 'snooze.json') -UserSettings (Join-Path $root 'settings.md') 2>&1
+  $cmd = Get-OaStateCommand $script
+  $output = & $cmd.Exe @($cmd.Prefix + $arguments + @(
+      '-StateDir', $state, '-JournalDir', $journal,
+      '-PlannerBoard', $board, '-PlannerCompleted', (Join-Path $root 'completed.md'),
+      '-SnoozeStore', (Join-Path $root 'snooze.json'), '-UserSettings', (Join-Path $root 'settings.md'))) 2>&1
   return [pscustomobject]@{ Exit = $LASTEXITCODE; Text = ($output | Out-String -Width 4096) }
 }
 
@@ -83,17 +87,26 @@ try {
   }
   Write-Host 'PASS: busy 468 skipped, idle 228 sent at concurrency 1, 12 rows remain, decision recorded'
 
-  $source = [IO.File]::ReadAllText($ScriptPath)
   $mutants = @(
-    @{ Name = 'busy-read'; Find = "if (`$activity -eq 'busy')"; Replace = "if (`$activity -eq 'idle')"; Kills = 'Scan' },
-    @{ Name = 'dispatch-guard'; Find = 'if ($row.dispatch_skip_reason) {'; Replace = 'if ($false) {'; Kills = 'BusyRefused' },
+    @{
+      Name = 'busy-read'; Find = "if (`$activity -eq 'busy')"; Replace = "if (`$activity -eq 'idle')"; Kills = 'Scan'
+      JsFind = "dispatch_skip_reason: activity === 'busy' ? 'busy_from_earlier_run'"
+      JsReplace = "dispatch_skip_reason: activity === 'idle' ? 'busy_from_earlier_run'"
+    },
+    @{
+      Name = 'dispatch-guard'; Find = 'if ($row.dispatch_skip_reason) {'; Replace = 'if ($false) {'; Kills = 'BusyRefused'
+      JsFind = "if (row && psStr(get(row, 'dispatch_skip_reason'))) {"
+      JsReplace = 'if (false) {'
+    },
     @{ Name = 'decision-reason'; Find = "if (`$row.eligible -and `$row.PSObject.Properties['dispatch_skip_reason'] -and `"`$(`$row.dispatch_skip_reason)`") {"
-       Replace = 'if ($false) {'; Kills = 'Decision' }
+       Replace = 'if ($false) {'; Kills = 'Decision'
+       JsFind = "if (psTruthy(get(row, 'eligible')) && has(row, 'dispatch_skip_reason') && psStr(get(row, 'dispatch_skip_reason'))) {"
+       JsReplace = 'if (false) {' }
   )
   foreach ($mutant in $mutants) {
-    if ($source.Split($mutant.Find).Count -ne 2) { throw "mutation target missing: $($mutant.Name)" }
-    $mutated = Join-Path $root "oa-$($mutant.Name).ps1"
-    [IO.File]::WriteAllText($mutated, $source.Replace($mutant.Find, $mutant.Replace), $utf8)
+    $find = if (Test-OaStateNodeTarget $ScriptPath) { $mutant.JsFind } else { $mutant.Find }
+    $replace = if (Test-OaStateNodeTarget $ScriptPath) { $mutant.JsReplace } else { $mutant.Replace }
+    $mutated = New-OaStateMutant $ScriptPath $mutant.Name $find $replace $root
     $outcome = Check-Scenario $mutated $mutant.Name
     if ($outcome.($mutant.Kills)) { throw "mutant survived: $($mutant.Name)" }
     Write-Host "KILLED: $($mutant.Name) by $($mutant.Kills)"
