@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getFenceMaskedText, getJournalFacts } from '../collect/journal.mjs';
 import { getDocMetaFromJournal as getDocMetaFromJournalFromDoc } from '../collect/doc.mjs';
-import { readAgentGate, getGateVerdict } from './gate.mjs';
+import { readAgentGate, getGateVerdict, readApprovalChannels, getApprovalOffReason, sentLedgerPath } from './gate.mjs';
 import { joinPath } from '../core/context.mjs';
 import { readJournalText, testPath } from '../core/fsx.mjs';
 import { fromJson } from '../core/psjson.mjs';
@@ -37,6 +37,9 @@ export function getDocCommentConsent(ctx, dumpPath, docId) {
   }
   const live = joinPath(ctx.p.StateDir, 'doc-comment-ledger.json');
   if (testPath(live)) ledgers.push(live);
+  // The sent-messages ledger (.jsonl): a comment the agent recorded as sent is the agent's.
+  const sent = sentLedgerPath();
+  if (sent && testPath(sent)) ledgers.push(sent);
 
   try {
     const r = spawnSync(process.execPath, [script, dumpPath, `${docId ?? ''}`, ...ledgers], { encoding: 'utf8', windowsHide: true });
@@ -98,16 +101,21 @@ export function cmdConsent(ctx) {
 
   const facts = getJournalFacts(p);
   const c = facts.Consent;
+  // Where he can approve: a channel switched off in agent-gate.md's `## Approvals` never grants.
+  const approvals = readApprovalChannels(ctx.p.GatePath);
+  const appCh = approvals.app;
+  const docCh = approvals['google-doc'];
+  const journalOk = !!c.consent_ok && appCh.enabled;
   let docConsent = null;
-  if (DocComments && !c.consent_ok) {
+  if (DocComments && !journalOk && docCh.enabled) {
     const meta = getDocMetaFromJournalFromDoc(p);
     docConsent = getDocCommentConsent(ctx, DocComments, meta ? meta.doc_id : '');
   }
 
   const out = {
     id: facts.Id,
-    consent_ok: !!c.consent_ok,
-    reason: `${c.reason}`,
+    consent_ok: journalOk,
+    reason: c.consent_ok && !appCh.enabled ? getApprovalOffReason(appCh, 'app') : `${c.reason}`,
     human_segments: Number(c.human_segments),
     affirmative_phrase: c.affirmative_phrase,
     affirmative_author: c.affirmative_author,
@@ -119,7 +127,9 @@ export function cmdConsent(ctx) {
   if (DocComments) {
     const ok = !!(docConsent && docConsent.consent_ok);
     out.doc_consent_ok = ok;
-    out.doc_consent_reason = docConsent ? `${docConsent.reason}` : 'doc-consent-not-consulted';
+    out.doc_consent_reason = docConsent ? `${docConsent.reason}`
+      : !journalOk && !docCh.enabled ? getApprovalOffReason(docCh, 'google-doc')
+      : 'doc-consent-not-consulted';
     out.doc_comments_path = `${DocComments}`;
     if (ok) {
       out.consent_ok = true;

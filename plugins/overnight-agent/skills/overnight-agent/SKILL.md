@@ -1909,6 +1909,15 @@ See PHASE 0.
   the journal declines**, and it is **revoked automatically** the moment any agent comment appears on
   that page — which is why you must never post one. Every failure refuses: a missing or unparsed dump
   grants nothing. Omit the flag and the doc is never opened. Pinned by `mutcheck-doc-consent.ps1`.
+  **A comment whose id is in the sent-messages ledger is yours, signature or not** (that is what the
+  ledger is for, so record every comment or message you send); a ledger that exists but cannot be
+  read in full refuses.
+- **He decides which channels can approve (`## Approvals` in agent-gate.md).** Defaults: `app: editor`
+  (the journal) and `google-doc: no-signature + not-in-sent-ledger`. A channel he sets to `off` never
+  grants, and neither does one given a rule the reader cannot enforce: `consent` then reports
+  `approvals-channel-off:<channel>` or `approvals-channel-unrecognised:<channel>`, and the gated-dispatch
+  floor refuses the same way. Teams and mail have no reader here, so they never approve. You never
+  write that file. Pinned by `mutcheck-consent-channels.ps1`.
 - **Ask only for words the reader accepts (#301).** The approval vocabulary is one delimited list in
   this file (see "Approval vocabulary" above), held identical to the consent regex in
   `oa-state.mjs` and `oa-state.ps1` by `mutcheck-consent-vocab-drift.ps1`. To authorize a merge, the word is

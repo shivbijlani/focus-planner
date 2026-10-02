@@ -1750,6 +1750,86 @@ function Read-AgentGate([string]$path) {
   return [pscustomobject]$result
 }
 
+# --- WHERE HE CAN APPROVE (spec: Decisions, "Where a user can approve") ---------------------------
+#
+# Each approval channel has a rule, set in an `## Approvals` section of agent-gate.md (the file he
+# owns and the agent never writes), with these defaults:
+#
+#   app: editor                                   the journal, written through the app's editor
+#   google-doc: no-signature + not-in-sent-ledger his catch-up-doc comment; the agent posts AS him,
+#                                                 so a comment counts only when it carries no
+#                                                 agent signature AND its id is not in the
+#                                                 sent-messages ledger write-turn keeps
+#
+# Only those two channels have a reader in this engine. Teams and mail have none, so they can never
+# approve here whatever the file says (a channel that is not enabled can never approve). Telegram
+# replies reach the journal through the bridge, which folds only his chat.
+#
+# FAIL CLOSED. `off` (or never / disabled / none / no) switches a channel off; any OTHER value is a
+# rule this engine does not know how to enforce, so the channel is OFF too -- never the default.
+# A gate file that exists but cannot be read switches every channel off. An absent file, an absent
+# section or an absent line is the default.
+$script:ApprovalChannelDefaults = [ordered]@{ 'app' = 'editor'; 'google-doc' = 'no-signature + not-in-sent-ledger' }
+
+function Get-ApprovalRuleVerdict([string]$channel, [string]$rule) {
+  $v = ([regex]::Replace($rule.Replace('`', ''), '\s+', ' ')).Trim().ToLowerInvariant()
+  if (@('off', 'never', 'disabled', 'none', 'no') -contains $v) { return 'off' }
+  if ($channel -eq 'app') { if ($v -eq 'editor') { return 'enabled' }; return 'unrecognised' }
+  $tokens = @($v.Split('+') | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+  if ($tokens.Count -eq 2 -and $tokens -contains 'no-signature' -and $tokens -contains 'not-in-sent-ledger') { return 'enabled' }
+  return 'unrecognised'
+}
+
+function Read-ApprovalChannels([string]$path) {
+  $out = [ordered]@{}
+  foreach ($k in $script:ApprovalChannelDefaults.Keys) {
+    $out[$k] = [pscustomobject]@{ enabled = $true; reason = ''; rule = $script:ApprovalChannelDefaults[$k]; source = 'default' }
+  }
+  if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return $out }
+  $text = $null
+  try { $text = [IO.File]::ReadAllText($path, (New-Object Text.UTF8Encoding($false))) }
+  catch {
+    foreach ($k in @($out.Keys)) { $out[$k] = [pscustomobject]@{ enabled = $false; reason = 'unreadable'; rule = ''; source = 'agent-gate' } }
+    return $out
+  }
+  $lines = ($text -replace "`r`n", "`n" -replace "`r", "`n") -split "`n"
+  $start = -1; $depth = 0
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    $h = [regex]::Match($lines[$i], $script:GateHeadingRe)
+    if ($h.Success -and $h.Groups[2].Value.Trim().ToLowerInvariant() -eq 'approvals') { $start = $i; $depth = $h.Groups[1].Value.Length; break }
+  }
+  if ($start -lt 0) { return $out }
+  for ($j = $start + 1; $j -lt $lines.Count; $j++) {
+    $n = [regex]::Match($lines[$j], $script:GateHeadingRe)
+    if ($n.Success -and $n.Groups[1].Value.Length -le $depth) { break }
+    $m = [regex]::Match($lines[$j], '^\s*(?:[-*+]\s+)?`?([A-Za-z][A-Za-z-]*)`?\s*:\s*(.*?)\s*$')
+    if (-not $m.Success) { continue }
+    $name = $m.Groups[1].Value.ToLowerInvariant()
+    if (-not $out.Contains($name)) { continue }
+    $verdict = Get-ApprovalRuleVerdict $name $m.Groups[2].Value
+    # Once off, a channel stays off: a second line can only narrow, never re-open it.
+    if (-not $out[$name].enabled) { continue }
+    $out[$name] = [pscustomobject]@{
+      enabled = ($verdict -eq 'enabled'); reason = $(if ($verdict -eq 'enabled') { '' } else { $verdict })
+      rule = $m.Groups[2].Value.Trim(); source = 'agent-gate'
+    }
+  }
+  return $out
+}
+
+function Get-ApprovalOffReason($channel, [string]$name) { "approvals-channel-$($channel.reason):$name" }
+
+# The sent-messages ledger write-turn keeps (`write-turn.mjs record-sent`), resolved exactly as the
+# writer resolves it, so the reader never looks somewhere the writer did not write.
+function Get-SentLedgerPath {
+  $oaHome = if ($env:WRITE_TURN_OA_HOME) { $env:WRITE_TURN_OA_HOME }
+  elseif ($env:OVERNIGHT_AGENT_HOME) { $env:OVERNIGHT_AGENT_HOME }
+  elseif ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'overnight-agent' }
+  else { $null }
+  if (-not $oaHome) { return $null }
+  return (Join-Path $oaHome 'sent-messages.jsonl')
+}
+
 function Get-GateRepoTokens([string]$rule) {
   $out = @()
   foreach ($m in [regex]::Matches("$rule", $script:GateRepoTokenRe)) {
@@ -4744,6 +4824,10 @@ function Get-DocCommentConsent {
   }
   $live = Join-Path $StateDir 'doc-comment-ledger.json'
   if (Test-Path -LiteralPath $live) { $ledgers += $live }
+  # The sent-messages ledger (.jsonl): a comment whose id the agent recorded as sent is the agent's,
+  # signature or not. doc-consent.mjs refuses when it exists but cannot be read in full.
+  $sent = Get-SentLedgerPath
+  if ($sent -and (Test-Path -LiteralPath $sent)) { $ledgers += $sent }
 
   try {
     $argv = @($script, $DumpPath, "$DocId") + $ledgers
@@ -4903,8 +4987,13 @@ function Cmd-Consent {
   # FAIL CLOSED IN EVERY DIRECTION. `doc-consent.mjs` answers on stdout and returns 1 for "no
   # consent"; a missing node, a missing file, an unparsed dump or a crash all leave
   # `consent_ok` false. The one thing this must never do is treat an ABSENT answer as a yes.
+  # Where he can approve: a channel switched off in agent-gate.md's `## Approvals` never grants.
+  $approvals = Read-ApprovalChannels $GatePath
+  $appCh = $approvals['app']
+  $docCh = $approvals['google-doc']
+  $journalOk = [bool]$c.consent_ok -and $appCh.enabled
   $docConsent = $null
-  if ($DocComments -and -not $c.consent_ok) {
+  if ($DocComments -and -not $journalOk -and $docCh.enabled) {
     # The doc id comes from the JOURNAL stamp, not from stored state, for this command's own
     # stated reason: consent is a property of the journal as it stands right now. Reading the
     # binding out of state would let a field the agent writes choose which document is allowed
@@ -4915,8 +5004,8 @@ function Cmd-Consent {
 
   $out = [ordered]@{
     id                       = $facts.Id
-    consent_ok               = [bool]$c.consent_ok
-    reason                   = "$($c.reason)"
+    consent_ok               = $journalOk
+    reason                   = $(if ($c.consent_ok -and -not $appCh.enabled) { Get-ApprovalOffReason $appCh 'app' } else { "$($c.reason)" })
     human_segments           = [int]$c.human_segments
     affirmative_phrase       = $c.affirmative_phrase
     affirmative_author       = $c.affirmative_author
@@ -4936,7 +5025,9 @@ function Cmd-Consent {
   if ($DocComments) {
     $ok = [bool]($docConsent -and $docConsent.consent_ok)
     $out['doc_consent_ok'] = $ok
-    $out['doc_consent_reason'] = $(if ($docConsent) { "$($docConsent.reason)" } else { 'doc-consent-not-consulted' })
+    $out['doc_consent_reason'] = $(if ($docConsent) { "$($docConsent.reason)" }
+      elseif (-not $journalOk -and -not $docCh.enabled) { Get-ApprovalOffReason $docCh 'google-doc' }
+      else { 'doc-consent-not-consulted' })
     $out['doc_comments_path'] = "$DocComments"
     if ($ok) {
       $out['consent_ok'] = $true
@@ -5954,13 +6045,19 @@ function Assert-GatedPlanConsent($st, $facts) {
   $gated = @(Get-GatedPlanSteps $facts)
   if ($gated.Count -eq 0) { return }
   $c = $facts.Consent
-  if ($c.consent_ok) { return }
-  $reason = "$($c.reason)"
+  $approvals = Read-ApprovalChannels $GatePath
+  if ($c.consent_ok -and $approvals['app'].enabled) { return }
+  $reason = if ($c.consent_ok) { Get-ApprovalOffReason $approvals['app'] 'app' } else { "$($c.reason)" }
   if ($DocComments) {
-    $meta = Get-DocMetaFromJournal $facts.Path $facts.Content
-    $doc = Get-DocCommentConsent -DumpPath $DocComments -DocId $(if ($meta) { $meta.doc_id } else { '' })
-    if ($doc -and $doc.consent_ok) { return }
-    $reason = "$reason; doc: $(if ($doc) { "$($doc.reason)" } else { 'doc-consent-not-consulted' })"
+    if (-not $approvals['google-doc'].enabled) {
+      $reason = "$reason; doc: $(Get-ApprovalOffReason $approvals['google-doc'] 'google-doc')"
+    }
+    else {
+      $meta = Get-DocMetaFromJournal $facts.Path $facts.Content
+      $doc = Get-DocCommentConsent -DumpPath $DocComments -DocId $(if ($meta) { $meta.doc_id } else { '' })
+      if ($doc -and $doc.consent_ok) { return }
+      $reason = "$reason; doc: $(if ($doc) { "$($doc.reason)" } else { 'doc-consent-not-consulted' })"
+    }
   }
   $step = $gated[0]
   if ($step.Length -gt 120) { $step = $step.Substring(0, 117) + '...' }

@@ -242,6 +242,36 @@ directly — both are the same file.
 
 The comments tie the design directly to consent: this file exists because a journal marker such as `<!-- from: me -->` is still written by software, so standing permissions need a human-authored surface instead.
 
+#### `## Approvals` — where the user can approve
+
+An optional section of the same file names, per channel, the rule a reply must meet to count as the user's approval. The defaults apply when the section, or a channel's line, is absent. A channel set to `off` (or `never`, `disabled`, `none`, `no`) never approves. So does a channel given any other rule, because a rule the reader cannot enforce must not fall back to a weaker one. The agent reads the section and never writes it. The app editor preserves it, since it is not one of the two managed lists.
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
+```markdown
+## Approvals
+- app: editor
+- telegram: sender-id
+- teams: no-signature + not-in-sent-ledger
+- mail: no-signature + not-in-sent-ledger
+- google-doc: no-signature + not-in-sent-ledger
+```
+
+| Channel | Default rule | Read by the consumer engine |
+| --- | --- | --- |
+| `app` | `editor`: the journal, written through the app's editor (`<!-- from: me -->`) | yes: `consent` and the gated-dispatch floor |
+| `google-doc` | `no-signature + not-in-sent-ledger`: a catch-up-doc comment with no agent signature whose id is not in the sent-messages ledger | yes: `consent -DocComments` |
+| `telegram` | `sender-id`: enforced by the bridge, which folds only the user's chat into the journal | via the journal |
+| `teams`, `mail` | `no-signature + not-in-sent-ledger` | no reader, so they never approve here |
+
+Refusals name the channel: `approvals-channel-off:<channel>`, `approvals-channel-unrecognised:<channel>`, or `approvals-channel-unreadable:<channel>` (the file exists but cannot be read). Pinned by `mutcheck-consent-channels.ps1` and the `mc-consent-channels` goldens.
+
+</details>
+
 ### `user-settings.md`
 
 This markdown file is the live configuration source the app edits and the Overnight Agent reads at run time. The bundled plugin copy is only a template.

@@ -210,7 +210,9 @@ Three duties make it the sanctioned writer rather than one writer among several:
   outside the planner (mail, Teams, Google Doc comments, Telegram); `write-turn.mjs was-sent` answers
   whether a message id is the agent's own. Teams, mail and Google Doc replies are posted as the user,
   so the consent reader can only accept one there when it has no agent signature and its id is not in
-  this ledger (Data formats § 3). The consent reader does not consult it yet.
+  this ledger (Data formats § 3). The consent reader consults it: a Google Doc comment whose id is in
+  the ledger is the agent's, and a ledger that exists but cannot be read in full refuses. Which
+  channels may approve at all is set by the `## Approvals` section of `agent-gate.md`.
 
 Its contract is the characterization goldens recorded from `write-turn.ps1`
 (`plugins/overnight-agent/tests/characterization`), which both implementations pass, plus
