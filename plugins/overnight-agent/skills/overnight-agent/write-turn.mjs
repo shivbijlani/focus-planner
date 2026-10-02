@@ -29,8 +29,9 @@
     G18 an unverified agent-gate edit ask                G19 a proposed plan's first step
   G6 is not a refusal: a journal with no OVERNIGHT-AGENT sentinel gets one on append.
   G20 a target that is not this task's own journal (agent-gate.md, user-settings.md, a path in
-      -Id, a symlink out of -JournalDir). G21 a hand-written `oa-by` identity stamp. Neither can be
-      switched off with -DisableGuard: they are what make the tool the ONLY way an agent writes.
+      -Id, a symlink out of -JournalDir). G21 a hand-written `oa-by` identity stamp. G22 a turn
+      into a snoozed task. None can be switched off with -DisableGuard: they are what make the tool
+      the ONLY way an agent writes.
 
   Every appended turn carries `<!-- oa-by: session=<id> host=<host> -->` under its provenance
   marker and `oa-ask` stamp: which agent wrote it, from which machine (-Author, else
@@ -1124,6 +1125,99 @@ function protectedTargetFinding(journalDir, id, journal) {
   return null;
 }
 
+// G22: no turn into a task that is snoozed today-or-later.
+function ymdParts(raw) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(raw ?? '').trim());
+  if (!m) return null;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  const dt = new Date(y, mo - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+  return { y, mo, d, text: `${m[1]}-${m[2]}-${m[3]}` };
+}
+
+function writeSnoozeActive(raw) {
+  const p = ymdParts(raw);
+  if (!p) return null;
+  const now = new Date();
+  const today = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate();
+  const key = p.y * 10000 + p.mo * 100 + p.d;
+  // TODAY-COMPARISON-MUTANT-ANCHOR: today itself is still snoozed.
+  return key >= today ? p.text : null;
+}
+
+function writeBoardRowId(line) {
+  const s = String(line ?? '');
+  if (!psMatch(s, '^\\s*\\|')) return null;
+  const first = s.trim().replace(/^\|+|\|+$/g, '').split(/\|/)[0];
+  if (first === undefined || first === null) return null;
+  const m = psMatch(String(first).trim(), '^(\\d+)');
+  return m ? m[1] : null;
+}
+
+function writeSnoozeVerdict(taskId, journalDir) {
+  if (!taskId) return null;
+  const plannerDir = path.dirname(journalDir);
+  const storePath = path.join(plannerDir, 'snooze.json');
+  const boardPath = path.join(plannerDir, 'planner.md');
+
+  // STORE-READ-MUTANT-ANCHOR: store ignored
+  if (testPath(storePath)) {
+    try {
+      const raw = readAllText(storePath);
+      if (raw.trim().length > 0) {
+        let json = JSON.parse(raw);
+        for (const wrapper of ['tasks', 'snoozed']) {
+          const v = get(json, wrapper);
+          if (v) { json = v; break; }
+        }
+        if (json && typeof json === 'object') {
+          for (const [name, rawVal] of Object.entries(json)) {
+            if (!/^\d+$/.test(name)) continue;
+            if (name !== String(taskId)) continue;
+            let val = rawVal;
+            if (typeof val !== 'string') val = get(val, 'until');
+            const active = writeSnoozeActive(String(val ?? ''));
+            if (active) return { kind: 'active', until: active, source: 'snooze.json', snippet: `snooze_until=${active}` };
+            return null;
+          }
+        }
+      }
+    } catch {
+      // MALFORMED-STORE-MUTANT-ANCHOR: malformed store must refuse rather than read as empty.
+      return { kind: 'malformed', until: '', source: 'snooze.json', snippet: 'snooze.json' };
+    }
+  }
+
+  if (testPath(boardPath)) {
+    for (const line of splitLines(readAllText(boardPath))) {
+      const tid = writeBoardRowId(line);
+      if (tid !== String(taskId)) continue;
+      const m = psMatch(line, '<!--\\s*snooze:(\\d{4}-\\d{2}-\\d{2})\\s*-->');
+      if (m) {
+        const active = writeSnoozeActive(m[1]);
+        if (active) return { kind: 'active', until: active, source: 'planner.md', snippet: `snooze_until=${active}` };
+      }
+    }
+  }
+  return null;
+}
+
+function snoozeWriteFinding(id, verdict) {
+  if (!verdict) return null;
+  if (verdict.kind === 'malformed') {
+    return newFinding('G22', 1, verdict.snippet,
+      'cannot verify the snooze store; fix snooze.json. A malformed snooze.json could hide a task ' +
+      'the user explicitly postponed, so write-turn refuses to append a turn until the store is readable. ' +
+      'This guard cannot be disabled');
+  }
+  // G22-FINDING-MUTANT-ANCHOR: the snooze write guard is load-bearing.
+  return newFinding('G22', 1, verdict.snippet,
+    `task ${id} is snoozed until ${verdict.until} by ${verdict.source}, and a snoozed task gets no ` +
+    'agent turn until that date has passed. Snooze is the executable eligibility floor: no plan, ' +
+    'execution, board edit, or journal edit is allowed while it is active, even when the journal has ' +
+    'a fresh human reply. This guard cannot be disabled');
+}
+
 // [int] conversion of WRITE_TURN_WAKE_WINDOW_MIN (default 45).
 function wakeWindow(raw) {
   if (!raw) return 45;
@@ -1189,16 +1283,23 @@ function run(argv, out) {
   const body = readAllText(bodyFile);
   if (netTrim(body).length === 0) throw fail('body file is empty');
 
-  // The pointer guards and G17 are properties of the DESTINATION, resolved before validation so
+  // The pointer guards and G17/G22 are properties of the DESTINATION, resolved before validation so
   // `-Validate` with an `-Id` reaches the same verdict as the real write.
   const journal = id ? joinPS(journalDir, `task-${id}.md`) : null;
   const doc = journal ? journalDocMeta(journal) : null;
   ctx.pauseVerdict = userPauseVerdict(ctx, id, journal);
+  const snoozeVerdict = writeSnoozeVerdict(id, journalDir);
 
   let findings = turnBodyFindings(ctx, body, disabled, doc, ask);
   if (id && !ciContains(disabled, 'G12')) {
     const wake = wakeTurnFinding(ctx, journal, id);
     if (wake) findings = [...findings, wake];
+  }
+  // G22 is fail-closed and not disableable: a snoozed task is outside every agent phase until
+  // the wake date has passed.
+  if (snoozeVerdict) {
+    const snooze = snoozeWriteFinding(id, snoozeVerdict);
+    if (snooze) findings = [...findings, snooze];
   }
   if (id) {
     const prot = protectedTargetFinding(journalDir, id, journal);

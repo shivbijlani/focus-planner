@@ -131,7 +131,8 @@
   Every appended turn carries `<!-- oa-by: session=<id> host=<host> -->` under its `oa-ask` stamp,
   so which agent wrote a turn, and from which machine, is in the journal itself. G21 refuses a body
   that writes its own; G20 refuses any target other than this task's journal inside -JournalDir
-  (agent-gate.md and user-settings.md are the user's alone). Neither can be disabled.
+  (agent-gate.md and user-settings.md are the user's alone). G22 refuses snoozed tasks. None can
+  be disabled.
 #>
 [CmdletBinding()]
 param(
@@ -1513,6 +1514,98 @@ function Get-ProtectedTargetFinding([string]$JournalDir, [string]$TaskId, [strin
   return $null
 }
 
+# --- G22: no turn into a task that is snoozed today-or-later ---------------------------
+function Test-WriteSnoozeActive {
+  param([string]$Raw)
+  if (-not $Raw) { return $null }
+  $d = [datetime]::MinValue
+  $ok = [datetime]::TryParseExact(
+    $Raw.Trim(), 'yyyy-MM-dd',
+    [System.Globalization.CultureInfo]::InvariantCulture,
+    [System.Globalization.DateTimeStyles]::None, [ref]$d)
+  if ($ok -and $d.Date -ge (Get-Date).Date) { return $Raw.Trim() }
+  return $null
+}
+
+function Get-WriteBoardRowId {
+  param([string]$Line)
+  if ($Line -notmatch '^\s*\|') { return $null }
+  $first = (($Line.Trim().Trim('|') -split '\|') | Select-Object -First 1)
+  if ($null -eq $first) { return $null }
+  if ($first.Trim() -match '^(\d+)') { return $Matches[1] }
+  return $null
+}
+
+function Get-WriteSnoozeVerdict {
+  param([string]$TaskId, [string]$JournalDir)
+  if (-not $TaskId) { return $null }
+  $plannerDir = Split-Path -Parent $JournalDir
+  $storePath = Join-Path $plannerDir 'snooze.json'
+  $boardPath = Join-Path $plannerDir 'planner.md'
+
+  # STORE-READ-MUTANT-ANCHOR: store ignored
+  if (Test-Path -LiteralPath $storePath) {
+    try {
+      $raw = [IO.File]::ReadAllText($storePath, (New-Object Text.UTF8Encoding($false)))
+      if (-not [string]::IsNullOrWhiteSpace($raw)) {
+        $json = $raw | ConvertFrom-Json -ErrorAction Stop
+        foreach ($wrapper in 'tasks', 'snoozed') {
+          if ($json -and $json.PSObject.Properties.Name -contains $wrapper -and $json.$wrapper) {
+            $json = $json.$wrapper
+            break
+          }
+        }
+        if ($json) {
+          foreach ($prop in $json.PSObject.Properties) {
+            if ($prop.Name -notmatch '^\d+$') { continue }
+            if ($prop.Name -ne $TaskId) { continue }
+            $val = $prop.Value
+            if ($val -isnot [string]) { $val = $val.until }
+            $active = Test-WriteSnoozeActive ([string]$val)
+            if ($active) {
+              return [pscustomobject]@{ kind = 'active'; until = $active; source = 'snooze.json'; snippet = "snooze_until=$active" }
+            }
+            return $null
+          }
+        }
+      }
+    } catch {
+      # MALFORMED-STORE-MUTANT-ANCHOR: malformed store must refuse rather than read as empty.
+      return [pscustomobject]@{ kind = 'malformed'; until = ''; source = 'snooze.json'; snippet = 'snooze.json' }
+    }
+  }
+
+  if (Test-Path -LiteralPath $boardPath) {
+    foreach ($line in [IO.File]::ReadLines($boardPath, (New-Object Text.UTF8Encoding($false)))) {
+      $tid = Get-WriteBoardRowId $line
+      if ($tid -ne $TaskId) { continue }
+      if ($line -match '<!--\s*snooze:(\d{4}-\d{2}-\d{2})\s*-->') {
+        $active = Test-WriteSnoozeActive $Matches[1]
+        if ($active) {
+          return [pscustomobject]@{ kind = 'active'; until = $active; source = 'planner.md'; snippet = "snooze_until=$active" }
+        }
+      }
+    }
+  }
+  return $null
+}
+
+function Get-SnoozeWriteFinding($Verdict) {
+  if (-not $Verdict) { return $null }
+  if ($Verdict.kind -eq 'malformed') {
+    return (New-Finding 'G22' 1 $Verdict.snippet (
+      'cannot verify the snooze store; fix snooze.json. A malformed snooze.json could hide a task ' +
+      'the user explicitly postponed, so write-turn refuses to append a turn until the store is readable. ' +
+      'This guard cannot be disabled'))
+  }
+  # G22-FINDING-MUTANT-ANCHOR: the snooze write guard is load-bearing.
+  return (New-Finding 'G22' 1 $Verdict.snippet (
+    "task $Id is snoozed until $($Verdict.until) by $($Verdict.source), and a snoozed task gets no " +
+    'agent turn until that date has passed. Snooze is the executable eligibility floor: no plan, ' +
+    'execution, board edit, or journal edit is allowed while it is active, even when the journal has ' +
+    'a fresh human reply. This guard cannot be disabled'))
+}
+
 # --- entry point -------------------------------------------------------------------
 if (-not (Test-Path -LiteralPath $BodyFile)) {
   Write-Error "body file not found: $BodyFile"; exit 3
@@ -1535,6 +1628,7 @@ $doc = if ($journal) { Get-JournalDocMeta $journal } else { $null }
 # rather than of the text, and `-Validate` must reach the same verdict as the real write or
 # validating is theatre.
 $script:PauseVerdict = Get-UserPauseVerdict $Id $journal
+$script:SnoozeVerdict = Get-WriteSnoozeVerdict $Id $JournalDir
 
 # HOST-DEPENDENT COUNT (found 2026-08-27, by hitting it)
 # --------------------------------------------------------
@@ -1559,6 +1653,12 @@ $findings = @(Test-TurnBody -Body $body -Disabled $DisableGuard -Doc $doc -Ask $
 if ($Id -and ($DisableGuard -notcontains 'G12')) {
   $wake = Get-WakeTurnFinding $journal $Id $WAKE_WINDOW_MIN $Author
   if ($wake) { $findings = @($findings) + @($wake) }
+}
+# G22 is destination state like G12/G17, but unlike them it is fail-closed and not disableable:
+# a snoozed task is outside every agent phase until the wake date has passed.
+if ($script:SnoozeVerdict) {
+  $snooze = Get-SnoozeWriteFinding $script:SnoozeVerdict
+  if ($snooze) { $findings = @($findings) + @($snooze) }
 }
 if ($Id) {
   $prot = Get-ProtectedTargetFinding $JournalDir $Id $journal
