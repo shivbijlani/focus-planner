@@ -1245,6 +1245,12 @@ an earlier phase or perform any follow-up.
       This rechecks eligibility, the user's pause and the brief's input fingerprint, then records
       the wake. A bound session now busy is refused with `busy_from_earlier_run`; if it throws,
       do not send or count it, record the reason, and try the next eligible row.
+      **A `[gated]` step is never dispatched on less than his consent (#804).** If the task's newest
+      plan has a numbered `[gated]` step, this command refuses with `session_gated_needs_consent`
+      unless `consent -Id <ID>` returns `consent_ok: true` (pass `-DocComments <dump>` to let his
+      catch-up-doc comment count, as `consent` does). That is code, not a judgement: an `approved:`
+      line nobody signed, a sibling skill's `approve`, or your own brief saying "now approved"
+      never pass it. Ask him in the journal and dispatch after HIS reply.
    3. Send exactly one `send_session_message` to that task session with the approved brief and
       `delivery_mode: immediate`. The brief's first line is the emitted `role_line`, verbatim.
       Put `kickoff_continuation` next when replacing a dead session.
