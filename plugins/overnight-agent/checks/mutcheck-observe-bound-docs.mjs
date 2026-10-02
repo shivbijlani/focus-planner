@@ -149,7 +149,7 @@ async function suite(modPath) {
   void sep;
 
   // B5/B6 -- ITEM 4: THE NODE ENGINE WINS WHERE IT EXISTS. This pass writes state (doc -Observe)
-  // and the two engines do not share a lock, so it must use the engine the agent runs. The Node
+  // and a run keeps to one engine (they share one state lock file), so it uses the one the agent runs. The Node
   // bundle lives only in a plugin tree; from the flat home that is the installed plugin's copy.
   const pluginNode = join(pluginHere, '..', 'skills', 'overnight-agent', 'oa-state.mjs');
   const profile = join('C:', 'Users', 'u');

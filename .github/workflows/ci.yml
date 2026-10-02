@@ -468,6 +468,26 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-phase0-lock-scope.ps1
 
+  # The two state engines exclude each other (#124 cut-over). oa-state.ps1 locked the store with a
+  # named mutex and oa-state.mjs with a lock FILE, so each excluded only its own kind; after the
+  # cut-over PowerShell writers remain (the SKILL fallback, a pre-deploy task session, check
+  # scripts) and a PowerShell `mark` racing a Node `mark` could lose an update. oa-state.ps1 now
+  # takes Node's lock file first, then its mutex. The guard races a real writer of each engine
+  # against the other's REAL lock held across a slow read-modify-write: both updates must land.
+  # Mutants: PowerShell drops the shared lock, either side renames it, the dead-holder reclaim is
+  # removed, -LockWaitSeconds is ignored again.
+  engine-lock:
+    name: The state engines exclude each other
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mutation check (a PowerShell and a Node writer racing one task both land)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-engine-lock.ps1
+
   # Only the USER closes a task, and an unanswered message survives a re-snapshot (GH #501).
   #
   # Two defects, one root cause, and both were measured on the live board on 2026-09-04. Task #245

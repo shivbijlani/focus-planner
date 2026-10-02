@@ -166,8 +166,8 @@ function createDoc(title, id, taskTitle) {
 function bind(id, docId) {
   const skill = process.env.OA_SKILL_DIR ||
     path.join(process.env.USERPROFILE || '', '.copilot', 'installed-plugins', 'focus-planner', 'overnight-agent', 'skills', 'overnight-agent');
-  // Item 4: bind with the engine the agent runs (oa-state.mjs); the two engines do not share a
-  // lock, so a writer must not pick the other one. oa-state.ps1 only when the port is absent.
+  // Item 4: bind with the engine the agent runs (oa-state.mjs); the engines share one state lock
+  // file, but a run keeps to one. oa-state.ps1 only when the port is absent.
   const nodeEngine = path.join(skill, 'oa-state.mjs');
   const oa = fs.existsSync(nodeEngine) ? nodeEngine : path.join(skill, 'oa-state.ps1');
   // -DocUrl is not decoration. The journal stamp carries it, and write-turn.ps1's G10 accepts a

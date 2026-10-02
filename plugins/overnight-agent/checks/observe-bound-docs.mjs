@@ -224,7 +224,7 @@ export const ageLabel = (ms) =>
 export function resolveOaState({ here, env = {}, exists = () => false } = {}) {
   if (env.OA_STATE_PS1) return env.OA_STATE_PS1;
   // Item 4: the engine the agent runs is oa-state.mjs, and this pass WRITES state (doc -Observe),
-  // so it must use the same engine -- the two do not share a lock. The Node bundle has
+  // so it uses the same engine (both take one state lock file, but a run keeps to one). The Node bundle has
   // subdirectories and so lives only in a plugin tree, never in the flat OA home; from the flat
   // home it is the installed plugin's copy. oa-state.ps1 is the fallback when no port is there.
   const installed = env.USERPROFILE

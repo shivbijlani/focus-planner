@@ -141,8 +141,8 @@ already processed in this journal") lives in the **skill's own working dir**, wh
   does a tool message that names `oa-state.ps1 <command>` (write-turn's refusal hints still say that).
   `oa-state.ps1` stays next to it as the **fallback**: only if `node` cannot run at all, use
   `powershell -NoProfile -ExecutionPolicy Bypass -File <skill>\oa-state.ps1 <command>` with the same
-  arguments **for the rest of the run** -- never alternate between the two within one run, because they
-  do not share a lock.
+  arguments **for the rest of the run** -- never alternate between the two within one run. (Both take
+  the same state lock file, so a PowerShell writer and a Node writer queue rather than lose an update.)
   - **`scan`** → your per-run worklist as JSON, one row per task: `{ id, status, changed, reopened,
     has_agent_block, tracked, due_poll, poll_cadence, has_open_ask, awaiting_reply, ask_source,
     ask_declared, eligible }`.
