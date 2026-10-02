@@ -1,0 +1,240 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mc-consent-channels",
+    "mutcheck-doc-consent",
+    "mutcheck-gated-dispatch"
+  ],
+  "note": "Item 4 step 5 (#124): the consent reader consults the sent-messages ledger and the per-channel ## Approvals rules. Recorded from oa-state.ps1.",
+  "cases": [
+    {
+      "id": "mc/consent-channels/ledger-hit-refuses",
+      "note": "his-looking doc comment AAAA1 is in the sent ledger as google-doc: the agent sent it, so it is not consent",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "960",
+        "DocComments": "{input}\\approved.txt"
+      },
+      "files": {
+        "input/approved.txt": "Found 1 comments in document DOC123:\n\nComment ID: AAAA1\nAuthor: Shiv Bijlani\nCreated: 2026-09-09T15:33:45.386Z\nQuoted text: Pending\nContent: Yes approved\n",
+        "data/journal/task-960.md": "# Task 960: consent channels\n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->\n\n## 2020-03-01\n\n<!-- from: me -->\nframing only, nothing approved here\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** working.\n\n<!-- /overnight-agent turn-end -->\n",
+        "home/sent-messages.jsonl": "{\"v\":1,\"at\":\"2026-09-09T08:00:00-07:00\",\"task_id\":\"960\",\"by\":\"session-x\",\"host\":\"char-host\",\"channel\":\"google-doc\",\"message_id\":\"AAAA1\"}\n"
+      }
+    },
+    {
+      "id": "mc/consent-channels/ledger-other-channel-grants",
+      "note": "the same id recorded on a DIFFERENT channel (teams) does not make the doc comment the agent's",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "960",
+        "DocComments": "{input}\\approved.txt"
+      },
+      "files": {
+        "input/approved.txt": "Found 1 comments in document DOC123:\n\nComment ID: AAAA1\nAuthor: Shiv Bijlani\nCreated: 2026-09-09T15:33:45.386Z\nQuoted text: Pending\nContent: Yes approved\n",
+        "data/journal/task-960.md": "# Task 960: consent channels\n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->\n\n## 2020-03-01\n\n<!-- from: me -->\nframing only, nothing approved here\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** working.\n\n<!-- /overnight-agent turn-end -->\n",
+        "home/sent-messages.jsonl": "{\"v\":1,\"at\":\"2026-09-09T08:00:00-07:00\",\"task_id\":\"960\",\"by\":\"session-x\",\"host\":\"char-host\",\"channel\":\"teams\",\"message_id\":\"AAAA1\"}\n"
+      }
+    },
+    {
+      "id": "mc/consent-channels/ledger-other-id-grants",
+      "note": "a different google-doc id in the ledger leaves his comment his",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "960",
+        "DocComments": "{input}\\approved.txt"
+      },
+      "files": {
+        "input/approved.txt": "Found 1 comments in document DOC123:\n\nComment ID: AAAA1\nAuthor: Shiv Bijlani\nCreated: 2026-09-09T15:33:45.386Z\nQuoted text: Pending\nContent: Yes approved\n",
+        "data/journal/task-960.md": "# Task 960: consent channels\n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->\n\n## 2020-03-01\n\n<!-- from: me -->\nframing only, nothing approved here\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** working.\n\n<!-- /overnight-agent turn-end -->\n",
+        "home/sent-messages.jsonl": "{\"v\":1,\"at\":\"2026-09-09T08:00:00-07:00\",\"task_id\":\"960\",\"by\":\"session-x\",\"host\":\"char-host\",\"channel\":\"google-doc\",\"message_id\":\"BBBB2\"}\n"
+      }
+    },
+    {
+      "id": "mc/consent-channels/ledger-malformed-refuses",
+      "note": "a ledger line that cannot be parsed might be the very comment: refuse",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "960",
+        "DocComments": "{input}\\approved.txt"
+      },
+      "files": {
+        "input/approved.txt": "Found 1 comments in document DOC123:\n\nComment ID: AAAA1\nAuthor: Shiv Bijlani\nCreated: 2026-09-09T15:33:45.386Z\nQuoted text: Pending\nContent: Yes approved\n",
+        "data/journal/task-960.md": "# Task 960: consent channels\n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->\n\n## 2020-03-01\n\n<!-- from: me -->\nframing only, nothing approved here\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** working.\n\n<!-- /overnight-agent turn-end -->\n",
+        "home/sent-messages.jsonl": "{\"v\":1,\"at\":\"2026-09-09T08:00:00-07:00\",\"task_id\":\"960\",\"by\":\"session-x\",\"host\":\"char-host\",\"channel\":\"teams\",\"message_id\":\"T1\"}\n{not json\n"
+      }
+    },
+    {
+      "id": "mc/consent-channels/ledger-not-consulted-when-journal-approves",
+      "note": "his journal approval still wins first; the doc (and its ledger) is not consulted",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "960",
+        "DocComments": "{input}\\approved.txt"
+      },
+      "files": {
+        "input/approved.txt": "Found 1 comments in document DOC123:\n\nComment ID: AAAA1\nAuthor: Shiv Bijlani\nCreated: 2026-09-09T15:33:45.386Z\nQuoted text: Pending\nContent: Yes approved\n",
+        "data/journal/task-960.md": "# Task 960: consent channels\n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->\n\n## 2020-03-01\n\n<!-- from: me -->\nframing only, nothing approved here\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** working.\n\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n",
+        "home/sent-messages.jsonl": "{\"v\":1,\"at\":\"2026-09-09T08:00:00-07:00\",\"task_id\":\"960\",\"by\":\"session-x\",\"host\":\"char-host\",\"channel\":\"google-doc\",\"message_id\":\"AAAA1\"}\n"
+      }
+    },
+    {
+      "id": "mc/consent-channels/approvals-defaults-explicit",
+      "note": "the documented defaults written out: same as no section (doc comment grants)",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "960",
+        "DocComments": "{input}\\approved.txt"
+      },
+      "files": {
+        "input/approved.txt": "Found 1 comments in document DOC123:\n\nComment ID: AAAA1\nAuthor: Shiv Bijlani\nCreated: 2026-09-09T15:33:45.386Z\nQuoted text: Pending\nContent: Yes approved\n",
+        "data/journal/task-960.md": "# Task 960: consent channels\n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->\n\n## 2020-03-01\n\n<!-- from: me -->\nframing only, nothing approved here\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** working.\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/agent-gate.md": "<!-- planner-agent-gate v1 -->\n# Agent gate\n\n## Do not gate (reversible)\n- Reading files\n\n## Always ask (safety floor)\n- Spending money\n\n## Approvals\n- app: editor\n- telegram: sender-id\n- teams: no-signature + not-in-sent-ledger\n- mail: no-signature + not-in-sent-ledger\n- google-doc: no-signature + not-in-sent-ledger\n"
+      }
+    },
+    {
+      "id": "mc/consent-channels/approvals-doc-off",
+      "note": "google-doc: off -- his doc comment can never approve; the doc is not even read",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "960",
+        "DocComments": "{input}\\approved.txt"
+      },
+      "files": {
+        "input/approved.txt": "Found 1 comments in document DOC123:\n\nComment ID: AAAA1\nAuthor: Shiv Bijlani\nCreated: 2026-09-09T15:33:45.386Z\nQuoted text: Pending\nContent: Yes approved\n",
+        "data/journal/task-960.md": "# Task 960: consent channels\n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->\n\n## 2020-03-01\n\n<!-- from: me -->\nframing only, nothing approved here\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** working.\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/agent-gate.md": "<!-- planner-agent-gate v1 -->\n# Agent gate\n\n## Do not gate (reversible)\n- Reading files\n\n## Always ask (safety floor)\n- Spending money\n\n## Approvals\n- google-doc: off\n"
+      }
+    },
+    {
+      "id": "mc/consent-channels/approvals-app-off",
+      "note": "app: off -- his journal approve does not count (no doc dump passed)",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "960"
+      },
+      "files": {
+        "input/approved.txt": "Found 1 comments in document DOC123:\n\nComment ID: AAAA1\nAuthor: Shiv Bijlani\nCreated: 2026-09-09T15:33:45.386Z\nQuoted text: Pending\nContent: Yes approved\n",
+        "data/journal/task-960.md": "# Task 960: consent channels\n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->\n\n## 2020-03-01\n\n<!-- from: me -->\nframing only, nothing approved here\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** working.\n\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n",
+        "data/agent-gate.md": "<!-- planner-agent-gate v1 -->\n# Agent gate\n\n## Do not gate (reversible)\n- Reading files\n\n## Always ask (safety floor)\n- Spending money\n\n## Approvals\n- app: off\n"
+      }
+    },
+    {
+      "id": "mc/consent-channels/approvals-app-off-doc-grants",
+      "note": "app: off with the doc channel on: the doc comment is consulted and grants",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "960",
+        "DocComments": "{input}\\approved.txt"
+      },
+      "files": {
+        "input/approved.txt": "Found 1 comments in document DOC123:\n\nComment ID: AAAA1\nAuthor: Shiv Bijlani\nCreated: 2026-09-09T15:33:45.386Z\nQuoted text: Pending\nContent: Yes approved\n",
+        "data/journal/task-960.md": "# Task 960: consent channels\n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->\n\n## 2020-03-01\n\n<!-- from: me -->\nframing only, nothing approved here\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** working.\n\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n",
+        "data/agent-gate.md": "<!-- planner-agent-gate v1 -->\n# Agent gate\n\n## Do not gate (reversible)\n- Reading files\n\n## Always ask (safety floor)\n- Spending money\n\n## Approvals\n- app: off\n"
+      }
+    },
+    {
+      "id": "mc/consent-channels/approvals-weaker-rule-refuses",
+      "note": "google-doc: no-signature (dropping the ledger) is a rule this engine will not run: the channel is off",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "960",
+        "DocComments": "{input}\\approved.txt"
+      },
+      "files": {
+        "input/approved.txt": "Found 1 comments in document DOC123:\n\nComment ID: AAAA1\nAuthor: Shiv Bijlani\nCreated: 2026-09-09T15:33:45.386Z\nQuoted text: Pending\nContent: Yes approved\n",
+        "data/journal/task-960.md": "# Task 960: consent channels\n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->\n\n## 2020-03-01\n\n<!-- from: me -->\nframing only, nothing approved here\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** working.\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/agent-gate.md": "<!-- planner-agent-gate v1 -->\n# Agent gate\n\n## Do not gate (reversible)\n- Reading files\n\n## Always ask (safety floor)\n- Spending money\n\n## Approvals\n- google-doc: no-signature\n"
+      }
+    },
+    {
+      "id": "mc/consent-channels/approvals-unknown-app-rule-refuses",
+      "note": "app: anything-but-editor is unrecognised: off, fail closed",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "960"
+      },
+      "files": {
+        "input/approved.txt": "Found 1 comments in document DOC123:\n\nComment ID: AAAA1\nAuthor: Shiv Bijlani\nCreated: 2026-09-09T15:33:45.386Z\nQuoted text: Pending\nContent: Yes approved\n",
+        "data/journal/task-960.md": "# Task 960: consent channels\n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->\n\n## 2020-03-01\n\n<!-- from: me -->\nframing only, nothing approved here\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** working.\n\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n",
+        "data/agent-gate.md": "<!-- planner-agent-gate v1 -->\n# Agent gate\n\n## Do not gate (reversible)\n- Reading files\n\n## Always ask (safety floor)\n- Spending money\n\n## Approvals\n- app: telegram-only\n"
+      }
+    },
+    {
+      "id": "mc/consent-channels/approvals-second-line-cannot-reopen",
+      "note": "google-doc: off then google-doc: <default> -- once off, a later line cannot re-open it",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "960",
+        "DocComments": "{input}\\approved.txt"
+      },
+      "files": {
+        "input/approved.txt": "Found 1 comments in document DOC123:\n\nComment ID: AAAA1\nAuthor: Shiv Bijlani\nCreated: 2026-09-09T15:33:45.386Z\nQuoted text: Pending\nContent: Yes approved\n",
+        "data/journal/task-960.md": "# Task 960: consent channels\n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->\n\n## 2020-03-01\n\n<!-- from: me -->\nframing only, nothing approved here\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** working.\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/agent-gate.md": "<!-- planner-agent-gate v1 -->\n# Agent gate\n\n## Do not gate (reversible)\n- Reading files\n\n## Always ask (safety floor)\n- Spending money\n\n## Approvals\n- google-doc: off\n- google-doc: no-signature + not-in-sent-ledger\n"
+      }
+    },
+    {
+      "id": "mc/consent-channels/approvals-section-ends-at-heading",
+      "note": "a google-doc: off line under a LATER heading is not in the Approvals section",
+      "tool": "oa-state",
+      "command": "consent",
+      "args": {
+        "Id": "960",
+        "DocComments": "{input}\\approved.txt"
+      },
+      "files": {
+        "input/approved.txt": "Found 1 comments in document DOC123:\n\nComment ID: AAAA1\nAuthor: Shiv Bijlani\nCreated: 2026-09-09T15:33:45.386Z\nQuoted text: Pending\nContent: Yes approved\n",
+        "data/journal/task-960.md": "# Task 960: consent channels\n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->\n\n## 2020-03-01\n\n<!-- from: me -->\nframing only, nothing approved here\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: offer -->\n**Status:** working.\n\n<!-- /overnight-agent turn-end -->\n",
+        "data/agent-gate.md": "<!-- planner-agent-gate v1 -->\n# Agent gate\n\n## Do not gate (reversible)\n- Reading files\n\n## Always ask (safety floor)\n- Spending money\n\n## Approvals\n- app: editor\n\n## Notes\n- google-doc: off\n"
+      }
+    },
+    {
+      "id": "mc/consent-channels/gated-dispatch-his-approval-granted",
+      "note": "control: his journal approval of a [gated] plan, default channels: dispatch allowed",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 961 | task 961 |\n",
+        "data/journal/task-961.md": "# Task 961: consent channels\n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->\n\n## 2020-03-01\n\n<!-- from: me -->\nframing only, nothing approved here\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed\n\n### Proposed plan (v1)\n1. [gated] Order the Bosch 300 with installation, $899 charged to the card on file.\n\n**Needs from you:** approve the $899 order?\n\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n",
+        "data/agent-gate.md": "",
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-961\",\"activity\":{\"status\":\"idle\"}}]}",
+        "state/task-961.json": "{\"id\":\"961\",\"status\":\"proposed\",\"status_by\":\"agent\",\"version\":1,\"plan_id\":\"t961-v1\",\"processed_file_hash\":\"\",\"has_agent_block\":true,\"seeded\":false,\"updated\":\"2020-03-01T12:00:00Z\",\"session\":{\"session_id\":\"S-961\",\"kind\":\"chat\",\"project\":\"p\",\"workspace\":\"\",\"workspace_type\":\"folder\",\"created_at\":\"2020-03-01T00:00:00Z\",\"last_woken_at\":\"\",\"state\":\"live\",\"prior_session_id\":\"\",\"replaced_at\":\"\"}}"
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "961",
+        "CheckDispatch": true,
+        "SessionsStatusFile": "{home}/sessions.json"
+      }
+    },
+    {
+      "id": "mc/consent-channels/gated-dispatch-app-off-refused",
+      "note": "the same approval with app: off: the floor refuses, naming the channel",
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 961 | task 961 |\n",
+        "data/journal/task-961.md": "# Task 961: consent channels\n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->\n\n## 2020-03-01\n\n<!-- from: me -->\nframing only, nothing approved here\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed\n\n### Proposed plan (v1)\n1. [gated] Order the Bosch 300 with installation, $899 charged to the card on file.\n\n**Needs from you:** approve the $899 order?\n\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n",
+        "data/agent-gate.md": "<!-- planner-agent-gate v1 -->\n# Agent gate\n\n## Do not gate (reversible)\n- Reading files\n\n## Always ask (safety floor)\n- Spending money\n\n## Approvals\n- app: off\n",
+        "home/sessions.json": "{\"sessions\":[{\"id\":\"S-961\",\"activity\":{\"status\":\"idle\"}}]}",
+        "state/task-961.json": "{\"id\":\"961\",\"status\":\"proposed\",\"status_by\":\"agent\",\"version\":1,\"plan_id\":\"t961-v1\",\"processed_file_hash\":\"\",\"has_agent_block\":true,\"seeded\":false,\"updated\":\"2020-03-01T12:00:00Z\",\"session\":{\"session_id\":\"S-961\",\"kind\":\"chat\",\"project\":\"p\",\"workspace\":\"\",\"workspace_type\":\"folder\",\"created_at\":\"2020-03-01T00:00:00Z\",\"last_woken_at\":\"\",\"state\":\"live\",\"prior_session_id\":\"\",\"replaced_at\":\"\"}}"
+      },
+      "tool": "oa-state",
+      "command": "session",
+      "args": {
+        "Id": "961",
+        "CheckDispatch": true,
+        "SessionsStatusFile": "{home}/sessions.json"
+      }
+    }
+  ]
+}

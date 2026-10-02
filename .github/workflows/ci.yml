@@ -1450,6 +1450,12 @@ jobs:
       - name: Mutation check (grants only when asked; floor and invariant still bite)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-consent.ps1
+      # Where he can approve (#124 item 4 step 5): a doc comment whose id is in write-turn's
+      # sent-messages ledger is the agent's, and agent-gate.md's ## Approvals section can switch a
+      # channel off (an unenforceable rule is off too); the gated-dispatch floor obeys the same.
+      - name: Mutation check (sent-messages ledger and per-channel approval rules)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-consent-channels.ps1
 
   # A BOM-less .ps1 containing non-ASCII is decoded as Windows-1252 by the PowerShell 5.1
   # engine BEFORE the script runs, so the bytes the parser sees are not the bytes on disk.
@@ -1808,6 +1814,9 @@ jobs:
           node "$d/scan-diff.mjs" --n 60; if ($LASTEXITCODE) { exit 1 }
           node "$d/session-cmd-diff.mjs" --n 60; if ($LASTEXITCODE) { exit 1 }
           node "$d/mutate-diff.mjs" --n 60 --steps 6 --jobs 1; if ($LASTEXITCODE) { exit 1 }
+          # #815: his real approval paths (app composer, task-paper comment, Telegram fold -- the REAL
+          # writers) still grant under the default ## Approvals channels, on both engines.
+          node "$d/approval-paths.mjs"; if ($LASTEXITCODE) { exit 1 }
   # Every mutation check that drives the state engine, against the Node port: same arms, and a
   # JS twin for every PowerShell mutant (tests/oa-state-port/run-mutchecks.ps1 holds the list).
   # The PowerShell runs stay where they already are, in the jobs above.

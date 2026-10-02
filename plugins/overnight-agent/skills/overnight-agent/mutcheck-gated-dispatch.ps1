@@ -1,4 +1,4 @@
-﻿<#
+<#
   mutcheck-gated-dispatch.ps1 -- the floor, in code (#804): `session -CheckDispatch/-ForDispatch`
   refuses a task whose newest plan has a numbered `[gated]` step unless the consent reader returns
   `consent_ok: true` for it.
@@ -118,15 +118,15 @@ function Test-Arms([string]$engine, [string]$label) {
 $mutants = if ($isNode) {
   @(
     @{ n = 'M1'; kills = 'A'; find = '  assertGatedPlanConsent(ctx, st, facts);'; repl = '  void assertGatedPlanConsent;' },
-    @{ n = 'M2'; kills = 'A'; find = '  if (c && c.consent_ok) return;'; repl = '  if (facts.HasTrailingUser) return;' },
-    @{ n = 'M3'; kills = 'B'; find = '  if (c && c.consent_ok) return;'; repl = '  if (false) return;' },
+    @{ n = 'M2'; kills = 'A'; find = '  if (c && c.consent_ok && approvals.app.enabled) return;'; repl = '  if (facts.HasTrailingUser) return;' },
+    @{ n = 'M3'; kills = 'B'; find = '  if (c && c.consent_ok && approvals.app.enabled) return;'; repl = '  if (false) return;' },
     @{ n = 'M4'; kills = 'C'; find = "export const GatedStepRe = '(?m)^[ \\t]*[1-9][0-9]*\\.[ \\t]+\\[gated\\][ \\t]+(.*)$';"; repl = "export const GatedStepRe = '(?m)^[ \\t]*[1-9][0-9]*\\.[ \\t]+\\[[a-z-]+\\][ \\t]+(.*)$';" }
   )
 } else {
   @(
     @{ n = 'M1'; kills = 'A'; find = "  Assert-GatedPlanConsent `$st `$facts`r`n}"; repl = "}" },
-    @{ n = 'M2'; kills = 'A'; find = '  if ($c.consent_ok) { return }'; repl = '  if ($facts.HasTrailingUser) { return }' },
-    @{ n = 'M3'; kills = 'B'; find = '  if ($c.consent_ok) { return }'; repl = '  if ($false) { return }' },
+    @{ n = 'M2'; kills = 'A'; find = "  if (`$c.consent_ok -and `$approvals['app'].enabled) { return }"; repl = '  if ($facts.HasTrailingUser) { return }' },
+    @{ n = 'M3'; kills = 'B'; find = "  if (`$c.consent_ok -and `$approvals['app'].enabled) { return }"; repl = '  if ($false) { return }' },
     @{ n = 'M4'; kills = 'C'; find = "`$script:GatedStepRe = '(?m)^[ \t]*[1-9][0-9]*\.[ \t]+\[gated\][ \t]+(.*)$'"; repl = "`$script:GatedStepRe = '(?m)^[ \t]*[1-9][0-9]*\.[ \t]+\[[a-z-]+\][ \t]+(.*)$'" }
   )
 }

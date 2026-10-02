@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import { rx, rxMatches, psIsMatch, lowerInvariant, isNullOrWhiteSpace, netTrim, netTrimEnd } from '../core/net.mjs';
 import { readAllText } from '../core/fsx.mjs';
 import { PsDate } from '../core/psdate.mjs';
+import { joinPath } from '../core/context.mjs';
 
 // --- structure: kept in lockstep with src/config/agentGate.js -----------------------------
 export const GateHeadingRe = '^\\s{0,3}(#{1,6})\\s+(.*?)\\s*#*\\s*$';
@@ -147,6 +148,64 @@ export function readAgentGate(p) {
 }
 
 const trimEndChars = (s, chars) => netTrimEnd(s, chars);
+
+// --- where he can approve: agent-gate.md `## Approvals` (oa-state.ps1 Read-ApprovalChannels) ----
+// Defaults; `off` switches a channel off; ANY other value is a rule this engine cannot enforce, so
+// the channel is off too (fail closed). An unreadable gate file switches every channel off.
+export const ApprovalChannelDefaults = { app: 'editor', 'google-doc': 'no-signature + not-in-sent-ledger' };
+
+export function getApprovalRuleVerdict(channel, rule) {
+  const v = lowerInvariant(`${rule ?? ''}`.split('`').join('').replace(/\s+/g, ' ').trim());
+  if (['off', 'never', 'disabled', 'none', 'no'].includes(v)) return 'off';
+  if (channel === 'app') return v === 'editor' ? 'enabled' : 'unrecognised';
+  const tokens = [...new Set(v.split('+').map((t) => t.trim()).filter(Boolean))];
+  if (tokens.length === 2 && tokens.includes('no-signature') && tokens.includes('not-in-sent-ledger')) return 'enabled';
+  return 'unrecognised';
+}
+
+export function readApprovalChannels(p) {
+  const out = {};
+  for (const k of Object.keys(ApprovalChannelDefaults)) {
+    out[k] = { enabled: true, reason: '', rule: ApprovalChannelDefaults[k], source: 'default' };
+  }
+  let isLeaf = false;
+  try { isLeaf = !isNullOrWhiteSpace(p) && fs.statSync(p).isFile(); } catch { isLeaf = false; }
+  if (!isLeaf) return out;
+  let text;
+  try { text = readAllText(p); } catch {
+    for (const k of Object.keys(out)) out[k] = { enabled: false, reason: 'unreadable', rule: '', source: 'agent-gate' };
+    return out;
+  }
+  const lines = String(text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  let start = -1;
+  let depth = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const h = rx(lines[i], GateHeadingRe);
+    if (h && lowerInvariant(netTrim(h[2])) === 'approvals') { start = i; depth = h[1].length; break; }
+  }
+  if (start < 0) return out;
+  for (let j = start + 1; j < lines.length; j++) {
+    const n = rx(lines[j], GateHeadingRe);
+    if (n && n[1].length <= depth) break;
+    const m = rx(lines[j], '^\\s*(?:[-*+]\\s+)?`?([A-Za-z][A-Za-z-]*)`?\\s*:\\s*(.*?)\\s*$');
+    if (!m) continue;
+    const name = lowerInvariant(m[1]);
+    if (!Object.hasOwn(out, name)) continue;
+    if (!out[name].enabled) continue;
+    const verdict = getApprovalRuleVerdict(name, m[2]);
+    out[name] = { enabled: verdict === 'enabled', reason: verdict === 'enabled' ? '' : verdict, rule: netTrim(m[2]), source: 'agent-gate' };
+  }
+  return out;
+}
+
+export function getApprovalOffReason(channel, name) { return `approvals-channel-${channel.reason}:${name}`; }
+
+// The sent-messages ledger write-turn keeps, resolved exactly as the writer resolves it.
+export function sentLedgerPath() {
+  const env = process.env;
+  const home = env.WRITE_TURN_OA_HOME || env.OVERNIGHT_AGENT_HOME || (env.LOCALAPPDATA ? joinPath(env.LOCALAPPDATA, 'overnight-agent') : null);
+  return home ? joinPath(home, 'sent-messages.jsonl') : null;
+}
 
 export function getGateRepoTokens(rule) {
   const out = [];

@@ -8,6 +8,7 @@ import { readState, writeState, nowIso } from '../collect/state.mjs';
 import { getJournalFacts, getAgentEndIndex, getNewestAgentTurn, getFenceMaskedText } from '../collect/journal.mjs';
 import { getDocMetaFromJournal } from '../collect/doc.mjs';
 import { getDocCommentConsent } from '../plan/consent.mjs';
+import { readApprovalChannels, getApprovalOffReason } from '../plan/gate.mjs';
 import { getAgentModelSettings } from '../collect/settings.mjs';
 import {
   assertChatWorkspace,
@@ -97,13 +98,18 @@ export function assertGatedPlanConsent(ctx, st, facts) {
   const gated = getGatedPlanSteps(facts);
   if (!gated.length) return;
   const c = facts.Consent;
-  if (c && c.consent_ok) return;
-  let reason = psStr(c?.reason);
+  const approvals = readApprovalChannels(ctx.p.GatePath);
+  if (c && c.consent_ok && approvals.app.enabled) return;
+  let reason = c && c.consent_ok ? getApprovalOffReason(approvals.app, 'app') : psStr(c?.reason);
   if (ctx.p.DocComments) {
-    const meta = getDocMetaFromJournal(facts.Path, facts.Content);
-    const doc = getDocCommentConsent(ctx, ctx.p.DocComments, meta ? meta.doc_id : '');
-    if (doc && psTruthy(get(doc, 'consent_ok'))) return;
-    reason = `${reason}; doc: ${doc ? psStr(get(doc, 'reason')) : 'doc-consent-not-consulted'}`;
+    if (!approvals['google-doc'].enabled) {
+      reason = `${reason}; doc: ${getApprovalOffReason(approvals['google-doc'], 'google-doc')}`;
+    } else {
+      const meta = getDocMetaFromJournal(facts.Path, facts.Content);
+      const doc = getDocCommentConsent(ctx, ctx.p.DocComments, meta ? meta.doc_id : '');
+      if (doc && psTruthy(get(doc, 'consent_ok'))) return;
+      reason = `${reason}; doc: ${doc ? psStr(get(doc, 'reason')) : 'doc-consent-not-consulted'}`;
+    }
   }
   let step = gated[0];
   if (step.length > 120) step = `${step.substring(0, 117)}...`;
