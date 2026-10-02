@@ -1769,18 +1769,18 @@ jobs:
         shell: pwsh
         run: |
           $d = './plugins/overnight-agent/tests/oa-state-port'
-          node "$d/journal-diff.mjs" --n 150; if ($LASTEXITCODE) { exit 1 }
-          node "$d/board-diff.mjs" --n 80; if ($LASTEXITCODE) { exit 1 }
-          node "$d/session-diff.mjs" --n 80; if ($LASTEXITCODE) { exit 1 }
+          node "$d/journal-diff.mjs" --n 300; if ($LASTEXITCODE) { exit 1 }
+          node "$d/board-diff.mjs" --n 200; if ($LASTEXITCODE) { exit 1 }
+          node "$d/session-diff.mjs" --n 200; if ($LASTEXITCODE) { exit 1 }
       - name: Differential -- whole commands, twin sandboxes (PowerShell vs Node)
         shell: pwsh
         run: |
           $d = './plugins/overnight-agent/tests/oa-state-port'
-          node "$d/consent-diff.mjs" --n 60 --jobs 4; if ($LASTEXITCODE) { exit 1 }
-          node "$d/extract-diff.mjs" --n 60 --jobs 4; if ($LASTEXITCODE) { exit 1 }
-          node "$d/scan-diff.mjs" --n 12; if ($LASTEXITCODE) { exit 1 }
-          node "$d/session-cmd-diff.mjs" --n 15; if ($LASTEXITCODE) { exit 1 }
-          node "$d/mutate-diff.mjs" --n 15 --steps 6 --jobs 1; if ($LASTEXITCODE) { exit 1 }
+          node "$d/consent-diff.mjs" --n 200 --jobs 4; if ($LASTEXITCODE) { exit 1 }
+          node "$d/extract-diff.mjs" --n 200 --jobs 4; if ($LASTEXITCODE) { exit 1 }
+          node "$d/scan-diff.mjs" --n 60; if ($LASTEXITCODE) { exit 1 }
+          node "$d/session-cmd-diff.mjs" --n 60; if ($LASTEXITCODE) { exit 1 }
+          node "$d/mutate-diff.mjs" --n 60 --steps 6 --jobs 1; if ($LASTEXITCODE) { exit 1 }
   # Every mutation check that drives the state engine, against the Node port: same arms, and a
   # JS twin for every PowerShell mutant (tests/oa-state-port/run-mutchecks.ps1 holds the list).
   # The PowerShell runs stay where they already are, in the jobs above.
