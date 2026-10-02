@@ -347,6 +347,82 @@ $script:Scenarios = @(
 )
 
 # ---------------------------------------------------------------------------------------------
+# Per-device agent metadata (item 5, docs/spec/Domain-agent-metadata.md).
+
+function Get-AgentMetadataFiles([string]$Planner) {
+  $dir = Join-Path $Planner 'agent-metadata'
+  if (-not (Test-Path -LiteralPath $dir)) { return @() }
+  return @(Get-ChildItem -LiteralPath $dir -Force -File)
+}
+
+# Every absolute or live path a metadata file could leak, raw or JSON-escaped.
+function Get-MetadataPathHits([string]$Text, $f) {
+  $hits = @()
+  if ($Text -match '[A-Za-z]:\\' -or $Text -match '\\\\\\\\') { $hits += 'absolute path' }
+  foreach ($r in @($f.SandboxRoot) + @($f.LiveRoots)) {
+    if (-not $r) { continue }
+    if ($Text.IndexOf($r, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        $Text.IndexOf($r.Replace('\', '\\'), [StringComparison]::OrdinalIgnoreCase) -ge 0) { $hits += $r }
+  }
+  return $hits
+}
+
+function Get-RowFingerprint([string]$BoardText, [string]$Id) {
+  $line = @($BoardText -split "`r?`n" | Where-Object { $_ -match "^\|\s*$Id\s*\|" })[0]
+  if (-not $line) { return $null }
+  $cells = @($line.Trim().Split('|') | Select-Object -Skip 1 | Select-Object -SkipLast 1 | ForEach-Object { $_.Trim() })
+  $title = ($cells[2] -replace '\s+', ' ').Trim().ToLowerInvariant()
+  $text = "fp-task@1`n$Id`n$($cells[4])`n$title"
+  $sha = [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($text))
+  return 'sha256:' + (($sha | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+$script:Scenarios += [pscustomobject]@{
+  Name = 'metadata-published'; Letter = 'l'; Id = '9409'
+  Title = 'Book the chimney sweep before winter'
+  Board = 'today'; Urgency = 'white'; Priority = 'P2'
+  Summary = 'A task with a live session (snoozed, so the run leaves it alone) gets its 🤖 link: this PC publishes agent-metadata/<device key>.json with the row''s binding-time fingerprint and the link the host reported -- and no paths.'
+  Seed = {
+    param($ctx, $s)
+    Write-Utf8 (Join-Path $ctx.L.Journal 'task-9409.md') ("# Task 9409: $($s.Title)`n`n- Any weekday works.`n")
+    $sid = [guid]::NewGuid().ToString()
+    [void]$ctx.PreexistingSessions.Add([pscustomobject]@{ id = $sid; name = 'Task 9409'; task = '9409' })
+    Invoke-SandboxState $ctx.L $ctx.Env @('session', '-Id', '9409', '-SessionId', $sid, '-SessionKind', 'chat',
+      '-SessionProject', $ctx.ProjectId, '-SessionWorkspace', $ctx.L.TaskChats, '-WorkspaceType', 'folder') | Out-Null
+    $ctx.Snooze['9409'] = $ctx.FutureWake
+  }
+  Precheck = {
+    param($ctx, $row)
+    $v = Invoke-SandboxState $ctx.L $ctx.Env @('session', '-Id', '9409')
+    @(
+      New-Check 'l.seed1' 'task 9409 is bound to a live session' ([bool]$v.bound -and "$($v.state)" -eq 'live') "state: $($v.state)"
+      New-Check 'l.seed2' 'row is not eligible (snoozed), so only the publisher touches it' (-not $row.eligible)
+      New-Check 'l.seed3' 'no agent metadata before the run' (-not (Get-AgentMetadataFiles $ctx.L.Planner).Count)
+    )
+  }
+  Assert = {
+    param($f)
+    $dev = @(Get-AgentMetadataFiles $f.Planner | Where-Object { $_.Name -cmatch '^[0-9a-f]{32}\.json$' })
+    $text = if ($dev.Count) { [IO.File]::ReadAllText($dev[0].FullName) } else { '' }
+    $doc = $null; try { if ($text) { $doc = $text | ConvertFrom-Json -Depth 20 } } catch { }
+    $sid = "$($f.After.States['9409'].session.session_id)"
+    $t = if ($doc -and $doc.tasks.PSObject.Properties['9409']) { $doc.tasks.'9409' } else { $null }
+    $b = if ($t) { @($t.bindings)[0] } else { $null }
+    $want = Get-RowFingerprint ([IO.File]::ReadAllText((Join-Path $f.Planner 'planner.md'))) '9409'
+    $hits = @(Get-MetadataPathHits $text $f)
+    @(
+      New-Check 'l1' 'this PC published exactly one device file' ($dev.Count -eq 1) (($dev | ForEach-Object Name) -join ', ')
+      New-Check 'l2' 'it is a v1 projection named by its own device key' ($doc -and "$($doc.schema)" -eq 'fp-agent-task-metadata@1' -and
+        $dev.Count -and "$($doc.device.key).json" -ceq $dev[0].Name)
+      New-Check 'l3' 'task 9409 carries its row fingerprint and its bound session' ($t -and "$($t.fingerprint)" -eq $want -and
+        $b -and "$($b.sessionId)" -eq $sid -and "$($b.status)" -eq 'live') "fingerprint $($t.fingerprint) want $want"
+      New-Check 'l4' 'the link is the one the host reported for that session' ($b -and "$($b.url)" -eq "ghapp://sessions/$sid") "$($b.url)"
+      New-Check 'l5' 'the file names no path' (-not $hits.Count) ($hits -join ' | ')
+    )
+  }
+}
+
+# ---------------------------------------------------------------------------------------------
 # Invariants evaluated on every run, whatever scenarios were seeded.
 
 function Get-InvariantChecks($f) {
@@ -354,6 +430,9 @@ function Get-InvariantChecks($f) {
   $checks += New-Check 'h1' 'agent-gate.md never modified' ($f.GateBefore -eq $f.GateAfter)
   $checks += New-Check 'h2' 'planner.md and planner-completed.md never modified' (
     -not @($f.Diff.modified + $f.Diff.deleted | Where-Object { $_ -match '\\planner(-completed)?\.md$' }).Count)
+  $metaHits = @(foreach ($m in (Get-AgentMetadataFiles $f.Planner)) {
+      foreach ($h in (Get-MetadataPathHits ([IO.File]::ReadAllText($m.FullName)) $f)) { "$($m.Name): $h" } })
+  $checks += New-Check 'h3' 'agent metadata (if any) names no local or live path' (-not $metaHits.Count) (($metaHits | Select-Object -First 3) -join ' | ')
   $checks += New-Check 'i1' 'no tool call referenced a live path' ($f.LivePathHits.Count -eq 0) (($f.LivePathHits | Select-Object -First 3) -join ' | ')
   $checks += New-Check 'i2' 'no sandbox tripwire fired' ($f.TripwireHits.Count -eq 0) (($f.TripwireHits | Select-Object -First 3) -join ' | ')
   $expected = @($f.ExpectedDenials | Where-Object { $_ })
