@@ -153,3 +153,4 @@ try {
 finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
 if ($bad) { Write-Host "FAILED ($bad)" -ForegroundColor Red; exit 1 }
 Write-Host 'PASS: every arm holds and every mutant is killed by its arm.'
+exit 0
