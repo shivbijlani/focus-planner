@@ -1737,6 +1737,9 @@ jobs:
       - name: Pin the time zone the goldens were recorded in
         shell: pwsh
         run: tzutil /s "Pacific Standard Time"
+      - name: Normaliser (minute stamps cannot straddle a bucket edge)
+        shell: pwsh
+        run: node --test ./plugins/overnight-agent/tests/characterization/lib/normalize.test.mjs
       - name: Characterization suite against the PowerShell implementation
         shell: pwsh
         run: node ./plugins/overnight-agent/tests/characterization/run.mjs --impl ps --jobs 4

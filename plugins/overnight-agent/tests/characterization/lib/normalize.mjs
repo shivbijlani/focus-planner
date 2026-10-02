@@ -49,6 +49,21 @@ export function makeNormalizer({ t0, pathTokens, keepGuids = new Set() }) {
   variants.sort((a, b) => b[0].length - a[0].length);
   const pathRes = variants.map(([v, token]) => [new RegExp(escapeRe(v), 'g'), token]);
   const t0Day = localMidnight(t0);
+  const t0Minute = Math.floor(t0 / 60000) * 60000;
+
+  // A `yyyyMMdd-HHmm` stamp is MINUTE precision, while T0 has milliseconds, so `stamp - T0` for a
+  // stamp written while the case runs falls in (-1 min, +a few min] -- straddling the bucket edge
+  // at 0. Which side it landed on depended on whether the minute rolled over between T0 and the
+  // write (or T0 sat in a minute's first second, inside the 1 s allowance), so the same case
+  // recorded <STAMP-5m> and replayed <STAMP+0m>: a flaky gate on every PR. Minute stamps are
+  // therefore compared in whole minutes against T0's own minute, with the bucket edge moved 4
+  // minutes out: a stamp from T0's minute through the next 3 (and the minute before) is
+  // <STAMP-5m>, exactly what every existing golden recorded, and no realistic step lands on an
+  // edge. Tokens are not minute stamps in any fixture.
+  function stampBucket(stampMs) {
+    const minutes = Math.round((stampMs - t0Minute) / 60000);
+    return Math.floor((minutes - 4) / BUCKET_MIN) * BUCKET_MIN;
+  }
 
   function paths(s) {
     for (const [re, token] of pathRes) s = s.replace(re, token);
@@ -73,7 +88,7 @@ export function makeNormalizer({ t0, pathTokens, keepGuids = new Set() }) {
     s = s.replace(STAMP_RE, (m, y, mo, d, h, mi) => {
       const ms = new Date(+y, +mo - 1, +d, +h, +mi).getTime();
       if (Number.isNaN(ms) || Math.abs(ms - t0) > WINDOW_DAYS * DAY_MS) return m;
-      return fmtDelta('STAMP', bucket(ms - t0), 'm');
+      return fmtDelta('STAMP', stampBucket(ms), 'm');
     });
     s = s.replace(DATE_RE, (m, y, mo, d) => {
       const ms = new Date(+y, +mo - 1, +d).getTime();
