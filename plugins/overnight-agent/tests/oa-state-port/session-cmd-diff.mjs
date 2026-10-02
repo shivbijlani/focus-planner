@@ -295,34 +295,6 @@ function psRequest(p, command, args, envExtra = {}) {
   };
 }
 
-function runPs(p, command, args, envExtra = {}) {
-  const merged = { ...commonArgs(p), ...args };
-  const env = {
-    ...process.env,
-    OVERNIGHT_AGENT_HOME: p.home,
-    OVERNIGHT_AGENT_PLANNER_DIR: p.data,
-    COPILOT_HOME: p.home,
-    ...envExtra,
-  };
-  const r = spawnSync(process.env.CHAR_PWSH || 'pwsh', [
-    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-    '-File', rel(skill, 'oa-state.ps1'),
-    ...psArgv(command, merged),
-  ], { cwd: repo, env, encoding: 'utf8', windowsHide: true, timeout: 90000 });
-  return { exit: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
-}
-
-function psArgv(command, args) {
-  const argv = [command];
-  for (const [k, v] of Object.entries(args)) {
-    if (v === true) argv.push(`-${k}`);
-    else if (v === false || v === null || v === undefined) continue;
-    else if (Array.isArray(v)) for (const x of v) argv.push(`-${k}`, String(x));
-    else argv.push(`-${k}`, String(v));
-  }
-  return argv;
-}
-
 function nodeArgv(command, args) {
   const argv = [command];
   for (const [k, v] of Object.entries(args)) {

@@ -4,65 +4,11 @@ import { readJournalText, testPath, writeAllTextUtf8 } from '../core/fsx.mjs';
 import { asArray, get, has, isNullOrWhiteSpace, psStr, psIsMatch, psMatch, psSplit, rx, rxMatches, rxTest, netTrimEnd } from '../core/net.mjs';
 import { fromJson } from '../core/psjson.mjs';
 import { nowIso } from './state.mjs';
+import { getFenceMaskedText } from './journal.mjs';
 import { parseDateTime, PsDate } from '../core/psdate.mjs';
 import { DocObservationFreshMinutes } from '../plan/status.mjs';
 
 export const DocMetaRe = '<!--\\s*doc-meta\\s+docId=(?<id>[A-Za-z0-9_\\-]+)(?:\\s+docUrl=(?<url>\\S+))?\\s*-->';
-const FenceOpenRe = '^[ ]{0,3}(?<f>`{3,}|~{3,})(?<info>[^\\r\\n]*)$';
-const FenceCloseRe = '^[ ]{0,3}(?<f>`{3,}|~{3,})[ \\t]*$';
-
-function getFenceMaskedText(text) {
-  const s = String(text ?? '');
-  if (!s) return s;
-  if (!s.includes('`') && !s.includes('~')) return s;
-  let out = '';
-  let i = 0;
-  let inFence = false;
-  let fenceChar = '';
-  let fenceLen = 0;
-  while (i < s.length) {
-    const nl = s.indexOf('\n', i);
-    const lineEnd = nl < 0 ? s.length : nl;
-    const raw = s.slice(i, lineEnd);
-    const line = netTrimEnd(raw, ['\r']);
-    let couldFence = false;
-    const probe = Math.min(4, line.length);
-    for (let p = 0; p < probe; p++) {
-      const ch = line[p];
-      if (ch === '`' || ch === '~') { couldFence = true; break; }
-      if (ch !== ' ') break;
-    }
-    let mask = false;
-    if (!inFence) {
-      if (couldFence) {
-        const m = rx(line, FenceOpenRe);
-        if (m) {
-          const f = m.groups.f;
-          const info = m.groups.info;
-          if (!(f[0] === '`' && info.includes('`'))) {
-            inFence = true; fenceChar = f[0]; fenceLen = f.length; mask = true;
-          }
-        }
-      }
-    } else {
-      mask = true;
-      if (couldFence) {
-        const c = rx(line, FenceCloseRe);
-        if (c) {
-          const cf = c.groups.f;
-          if (cf[0] === fenceChar && cf.length >= fenceLen) inFence = false;
-        }
-      }
-    }
-    if (mask) out += ' '.repeat(line.length) + raw.slice(line.length);
-    else out += raw;
-    if (nl < 0) break;
-    out += '\n';
-    i = nl + 1;
-  }
-  return out;
-}
-
 export function getDocMetaFromJournal(path, content = null) {
   let text = content;
   if (text === null || text === undefined || text === '') text = readJournalText(path);

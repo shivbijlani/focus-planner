@@ -11,19 +11,8 @@ import { readJournalText, testPath } from '../core/fsx.mjs';
 import { fromJson } from '../core/psjson.mjs';
 import { rx } from '../core/net.mjs';
 
-export const DocMetaRe = '<!--\\s*doc-meta\\s+docId=(?<id>[A-Za-z0-9_\\-]+)(?:\\s+docUrl=(?<url>\\S+))?\\s*-->';
-
 const here = path.dirname(fileURLToPath(import.meta.url));
 const skillRoot = path.resolve(here, '..', '..');
-
-export function getDocMetaFromJournal(p, content = null) {
-  let text = content;
-  if (text === null || text === undefined || text === '') text = readJournalText(p);
-  if (!text) return null;
-  const m = rx(getFenceMaskedText(text), DocMetaRe);
-  if (!m) return null;
-  return { doc_id: m.groups?.id ?? m[1], doc_url: m.groups?.url !== undefined ? m.groups.url : '' };
-}
 
 export function getDocCommentConsent(ctx, dumpPath, docId) {
   const candidates = [

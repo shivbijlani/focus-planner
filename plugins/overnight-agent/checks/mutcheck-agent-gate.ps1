@@ -728,8 +728,8 @@ $mutations = @(
       param($s)
       $s -replace [regex]::Escape("merge_pr              = @('\bmerg(?:e|es|ed|ing)\b|\bauto-?merges?\b|\bland(?:s|ed|ing)? (?:the |a |it )?(?:pr|pull request)\b')"), "merge_pr              = @('\bmerg(?:e|es|ed|ing)\b|\bcreat(?:e|es|ed|ing)\b|\bpublish(?:es|ed|ing)?\b')"
     }
-    nodeFind = "merge_pr: ['\\\\bmerg(?:e|es|ed|ing)\\\\b|\\\\bauto-?merges?\\\\b|\\\\bland(?:s|ed|ing)? (?:the |a |it )?(?:pr|pull request)\\\\b'],"
-    nodeReplace = "merge_pr: ['\\\\bmerg(?:e|es|ed|ing)\\\\b|\\\\bcreat(?:e|es|ed|ing)\\\\b|\\\\bpublish(?:es|ed|ing)?\\\\b'],"
+    nodeFind = "merge_pr: ['\\bmerg(?:e|es|ed|ing)\\b|\\bauto-?merges?\\b|\\bland(?:s|ed|ing)? (?:the |a |it )?(?:pr|pull request)\\b'],"
+    nodeReplace = "merge_pr: ['\\bmerg(?:e|es|ed|ing)\\b|\\bcreat(?:e|es|ed|ing)\\b|\\bpublish(?:es|ed|ing)?\\b'],"
   },
   @{
     name  = 'M5: an ABSENT gate file yields a permissive default instead of no rules'
@@ -795,8 +795,8 @@ $mutations = @(
     $gate = Read-AgentGate $GatePath'
       $out -replace [regex]::Escape('if ($Action) { Add-GateFallthrough $out $gate }'), 'Add-GateFallthrough $out $gate'
     }
-    nodeFind = '  const { Id, Action, Repo, DocComments } = ctx.p;'
-    nodeReplace = "  let { Id, Action, Repo, DocComments } = ctx.p;`n  if (!Action) Action = 'send_email_self';"
+    nodeFind = "  if (Action) addGateFallthrough(ctx, out, gate);`r`n  ctx.emitJson(out, { depth: 4 });"
+    nodeReplace = "  addGateFallthrough(ctx, out, gate);`r`n  ctx.emitJson(out, { depth: 4 });"
   },
   # M8 and M9 are the two halves of the same guarantee and BOTH name arm H, which is allowed:
   # the aim check requires each mutation to be caught by exactly one arm, not each arm to have
@@ -886,7 +886,8 @@ try {
     Write-Host ""
     Write-Host "--- $($m.name)"
     if ($script:TargetIsNode) {
-      $path = New-OaStateMutant $ScriptPath $m.name $m.nodeFind $m.nodeReplace $mutDir
+      $safeName = [regex]::Replace($m.name, '[^A-Za-z0-9_.-]', '_')
+      $path = New-OaStateMutant $ScriptPath $safeName $m.nodeFind $m.nodeReplace $mutDir
     } else {
       $mutated = & $m.apply $src
       if ($mutated -eq $src) {

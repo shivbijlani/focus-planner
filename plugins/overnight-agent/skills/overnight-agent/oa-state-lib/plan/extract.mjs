@@ -172,67 +172,6 @@ export function getJournalPointers(content, p) {
   return { Status: status, Linked: linked, Deliverables: deliverables };
 }
 
-export function getBoardRowId(line) {
-  const s = String(line ?? '');
-  if (!psIsMatch(s, '^\\s*\\|')) return null;
-  const first = psSplit(netTrim(s).replace(/^\|+|\|+$/g, ''), '\\|')[0];
-  const m = rx(netTrim(first ?? ''), '^(\\d+)');
-  return m ? m[1] : null;
-}
-
-export function getBoardRowLinkedIds(line, linkedIndex = -1) {
-  const clean = rxMatches(String(line ?? ''), '<!--.*?-->', { s: true }).reduce((acc, m) => acc.replace(m[0], ''), String(line ?? ''));
-  const cells = psSplit(netTrim(clean).replace(/^\|+|\|+$/g, ''), '\\|').map((x) => netTrim(x));
-  let last = cells.length - 1;
-  while (last >= 0 && netTrim(cells[last]).length === 0) last--;
-  if (last < 5) return [];
-  const idx = linkedIndex >= 5 && linkedIndex <= last ? linkedIndex : last;
-  const cell = cells[idx];
-  if (psIsMatch(cell, '^\\d{4}-\\d{2}-\\d{2}')) return [];
-  const ids = [];
-  for (const m of rxMatches(cell, '(?<!\\d)\\d{1,6}(?!\\d)')) if (!ids.includes(m[0])) ids.push(m[0]);
-  return ids;
-}
-
-export function getBoardMap(ctx) {
-  const map = new Map();
-  if (!testPath(ctx.p.PlannerBoard)) return map;
-  const lines = psSplit(readJournalText(ctx.p.PlannerBoard), '\\r?\\n');
-  let section = 'other';
-  let pos = 0;
-  let linkedIdx = -1;
-  for (const line of lines) {
-    if (psIsMatch(line, '^##\\s*Today\\b')) { section = 'today'; linkedIdx = -1; continue; }
-    if (psIsMatch(line, '^##\\s*Deferred\\b')) { section = 'deferred'; linkedIdx = -1; continue; }
-    if (psIsMatch(line, '^##\\s')) { section = 'other'; linkedIdx = -1; continue; }
-    if (psIsMatch(line, '^\\s*\\|') && psIsMatch(line, '\\bLinked\\s*ID\\b')) {
-      const hdr = psSplit(netTrim(line).replace(/^\|+|\|+$/g, ''), '\\|').map((x) => netTrim(x));
-      for (let i = 0; i < hdr.length; i++) if (psIsMatch(hdr[i], '^Linked\\s*ID$')) { linkedIdx = i; break; }
-    }
-    const id = getBoardRowId(line);
-    if (!id) continue;
-    const cells = psSplit(netTrim(line).replace(/^\|+|\|+$/g, ''), '\\|').map((x) => netTrim(x));
-    const wp = cells.length >= 4 && psIsMatch(cells[3], '^(P[0-9])$') ? rx(cells[3], '^(P[0-9])$')[1] : null;
-    pos++;
-    map.set(id, { section, urgency: cells.length >= 2 ? cells[1] : '', work_priority: wp, board_pos: pos, linked: getBoardRowLinkedIds(line, linkedIdx) });
-  }
-  return map;
-}
-
-export function getBoardLinkFacts(ctx, id) {
-  const facts = { Read: false, RowFound: false, Ids: [], Note: '', Path: `${ctx.p.PlannerBoard}` };
-  if (netTrim(`${ctx.p.PlannerBoard ?? ''}`).length === 0) { facts.Note = 'no planner board path configured'; return facts; }
-  if (!testPath(ctx.p.PlannerBoard)) { facts.Note = `no board file at ${ctx.p.PlannerBoard}`; return facts; }
-  let map;
-  try { map = getBoardMap(ctx); } catch (e) { facts.Note = `board unreadable: ${e.message}`; return facts; }
-  facts.Read = true;
-  const row = map.get(`${id}`);
-  if (!row) { facts.Note = `no board row for task ${id}`; return facts; }
-  facts.RowFound = true;
-  facts.Ids = [...(row.linked ?? [])];
-  return facts;
-}
-
 export function getLinkedFacts(ctx, id, journalIds) {
   const board = getBoardLinkFactsFromBoard(ctx, id);
   let merged = [];

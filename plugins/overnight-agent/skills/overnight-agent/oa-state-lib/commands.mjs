@@ -12,7 +12,7 @@ import { cmdDecisions } from './report/decisions.mjs';
 import { cmdSeed } from './act/seed.mjs';
 import { cmdMark } from './act/mark.mjs';
 import { cmdResnapshot } from './act/resnapshot.mjs';
-import { cmdDoc } from './act/doc.mjs';
+import { cmdDoc } from './act/doc-binding.mjs';
 import { cmdSession } from './act/session.mjs';
 
 const notPorted = (name) => Object.assign(() => { throw new Error(`oa-state.mjs: '${name}' is not ported yet; use oa-state.ps1`); }, { notPorted: true });

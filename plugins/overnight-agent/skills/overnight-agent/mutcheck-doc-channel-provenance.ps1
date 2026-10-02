@@ -118,8 +118,8 @@ function Build-Fixture {
   $sx = New-Sandbox
   foreach ($id in 940, 941, 942, 943) { [void](Invoke-Oa $Subject $sx @('mark', '-Id', "$id", '-Status', 'in-progress')) }
   Set-Channel $sx '940' ''                                                      # never observed
-  Set-Channel $sx '941' ([datetime]::UtcNow.ToString('o'))                      # observed now
-  Set-Channel $sx '942' ([datetime]::UtcNow.AddDays(-5).ToString('o'))          # observed 5 days ago
+  Set-Channel $sx '941' ([datetime]::Now.ToString('o'))                         # observed now
+  Set-Channel $sx '942' ([datetime]::Now.AddDays(-5).ToString('o'))             # observed 5 days ago
   return $sx
 }
 
@@ -185,7 +185,7 @@ Assert ("$((Get-Row $r2 '940').doc_channel)" -eq 'unread') 'UNPARSEABLE' `
   'a stamp nobody can evaluate is not evidence of a read' "got $((Get-Row $r2 '940').doc_channel)"
 
 $sx3 = Build-Fixture $ScriptPath
-Set-Channel $sx3 '942' ([datetime]::UtcNow.AddDays(-5).ToString('o')) -Pending 3
+Set-Channel $sx3 '942' ([datetime]::Now.AddDays(-5).ToString('o')) -Pending 3
 $r3 = Get-Rows $ScriptPath $sx3
 $p = Get-Row $r3 '942'
 # Pending comments and staleness are independent facts. A stale channel with 3 unacked comments
@@ -210,7 +210,7 @@ $sx4 = Build-Fixture $ScriptPath
 $old = $env:OA_DOC_FRESH_MINUTES
 try {
   $env:OA_DOC_FRESH_MINUTES = '1'
-  Set-Channel $sx4 '941' ([datetime]::UtcNow.AddMinutes(-5).ToString('o'))
+  Set-Channel $sx4 '941' ([datetime]::Now.AddMinutes(-5).ToString('o'))
   $r4 = Get-Rows $ScriptPath $sx4
   Assert ("$((Get-Row $r4 '941').doc_channel)" -eq 'stale') 'THRESHOLD-BINDS' `
     'the freshness window is read from the constant rather than hardcoded at the use site' `

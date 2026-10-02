@@ -484,8 +484,8 @@ $mutations = @(
   @{
     name  = 'M2: unmarked text is attributed to the human (fail OPEN instead of closed)'
     apply = { param($s) $s -replace [regex]::Escape("Author = 'unknown'; Text = `$region"), "Author = `$script:HumanAuthor; Text = `$region" }
-    nodeFind = "if (marks.length === 0) { if (netTrim(r).length > 0) segments.push({ Author: 'unknown', Text: r, Index: 0 }); return segments; }"
-    nodeReplace = "if (marks.length === 0) { if (netTrim(r).length > 0) segments.push({ Author: HumanAuthor, Text: r, Index: 0 }); return segments; }"
+    nodeFind = "  if (marks.length === 0) {`r`n    if (netTrim(r).length > 0) segments.push({ Author: 'unknown', Text: r, Index: 0 });`r`n    return segments;`r`n  }"
+    nodeReplace = "  if (marks.length === 0) {`r`n    if (netTrim(r).length > 0) segments.push({ Author: HumanAuthor, Text: r, Index: 0 });`r`n    return segments;`r`n  }"
   },
   @{
     name  = 'M3: any author satisfies consent (drops the human requirement)'
@@ -518,8 +518,8 @@ $mutations = @(
     # where the marker sits at column 0 and the anchor matches it happily.
     name  = 'M7: #320 -- the line-start anchor is removed, so a marker quoted MID-LINE attributes'
     apply = { param($s) $s -replace [regex]::Escape("`$script:ProvenanceRe  = '(?m)^[ \t]*<!--[ \t]*from:"), "`$script:ProvenanceRe  = '(?m)[ \t]*<!--[ \t]*from:" }
-    nodeFind = "export const ProvenanceRe = '(?m)^[ \\\\t]*<!--[ \\\\t]*from:"
-    nodeReplace = "export const ProvenanceRe = '(?m)[ \\\\t]*<!--[ \\\\t]*from:"
+    nodeFind = "export const ProvenanceRe = '(?m)^[ \\t]*<!--[ \\t]*from:"
+    nodeReplace = "export const ProvenanceRe = '(?m)[ \\t]*<!--[ \\t]*from:"
   },
   @{
     # The security half. Neutering the mask makes fenced content live markup again, so the
@@ -548,8 +548,8 @@ $mutations = @(
     # indistinguishable from the correct one.
     name  = 'M10: #320 crit2 -- the anchor is over-tightened to column 0, so an indented genuine marker is ignored'
     apply = { param($s) $s -replace [regex]::Escape("`$script:ProvenanceRe  = '(?m)^[ \t]*<!--[ \t]*from:"), "`$script:ProvenanceRe  = '(?m)^<!--[ \t]*from:" }
-    nodeFind = "export const ProvenanceRe = '(?m)^[ \\\\t]*<!--[ \\\\t]*from:"
-    nodeReplace = "export const ProvenanceRe = '(?m)^<!--[ \\\\t]*from:"
+    nodeFind = "export const ProvenanceRe = '(?m)^[ \\t]*<!--[ \\t]*from:"
+    nodeReplace = "export const ProvenanceRe = '(?m)^<!--[ \\t]*from:"
   },
   @{
     # #465's core arm: consumption removed entirely, which is the pre-#465 behaviour. A week-old
@@ -583,7 +583,7 @@ $mutations = @(
     # marker-only rule spends nothing on exactly the journals #465 was filed about.
     name  = 'M14: #465 -- only a provenance marker counts, so an UNSTAMPED agent turn spends nothing'
     apply = { param($s) $s -replace [regex]::Escape("foreach (`$m in [regex]::Matches(`$scan, '(?m)^[ \t]*##[^\r\n]*Overnight Agent')) {"), "foreach (`$m in @()) {" }
-    nodeFind = "for (const m of rxMatches(scan, '(?m)^[ \\\\t]*##[^\\\\r\\\\n]*Overnight Agent')) agentTurnAt.push(m.index);"
+    nodeFind = "for (const m of rxMatches(scan, '(?m)^[ \\t]*##[^\\r\\n]*Overnight Agent')) agentTurnAt.push(m.index);"
     nodeReplace = 'for (const m of []) agentTurnAt.push(m.index);'
   },
   @{
@@ -606,8 +606,8 @@ $mutations = @(
       $result.consent_ok = $true'), '        return [pscustomobject]$result
       }
       $result.consent_ok = $true' }
-    nodeFind = "        continue;`n      }`n      result.consent_ok = true"
-    nodeReplace = "        return result;`n      }`n      result.consent_ok = true"
+    nodeFind = "        continue;`r`n      }`r`n      result.consent_ok = true"
+    nodeReplace = "        return result;`r`n      }`r`n      result.consent_ok = true"
   }
 )
 
@@ -617,7 +617,8 @@ $killed = 0; $survived = 0
 try {
   foreach ($m in $mutations) {
     if ($script:TargetIsNode) {
-      $path = New-OaStateMutant $ScriptPath $m.name $m.nodeFind $m.nodeReplace $mutDir
+      $safeName = [regex]::Replace($m.name, '[^A-Za-z0-9_.-]', '_')
+      $path = New-OaStateMutant $ScriptPath $safeName $m.nodeFind $m.nodeReplace $mutDir
     } else {
       $mutated = & $m.apply $src
       if ($m.hook) { $mutated = $mutated.Replace($m.hook, $m.swap) }
