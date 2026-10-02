@@ -223,7 +223,16 @@ export const ageLabel = (ms) =>
  */
 export function resolveOaState({ here, env = {}, exists = () => false } = {}) {
   if (env.OA_STATE_PS1) return env.OA_STATE_PS1;
+  // Item 4: the engine the agent runs is oa-state.mjs, and this pass WRITES state (doc -Observe),
+  // so it must use the same engine -- the two do not share a lock. The Node bundle has
+  // subdirectories and so lives only in a plugin tree, never in the flat OA home; from the flat
+  // home it is the installed plugin's copy. oa-state.ps1 is the fallback when no port is there.
+  const installed = env.USERPROFILE
+    ? path.join(env.USERPROFILE, '.copilot', 'installed-plugins', 'focus-planner', 'overnight-agent', 'skills', 'overnight-agent')
+    : null;
   const candidates = [
+    path.join(here, '..', 'skills', 'overnight-agent', 'oa-state.mjs'), // plugin tree, Node
+    ...(installed ? [path.join(installed, 'oa-state.mjs')] : []),         // installed plugin, Node
     path.join(here, 'oa-state.ps1'),                                    // OA home (flat)
     path.join(here, '..', 'skills', 'overnight-agent', 'oa-state.ps1'), // plugin tree
   ];
@@ -354,9 +363,10 @@ if (!isMain) {
       fs.writeFileSync(dump, fetched.stdout, 'utf8');
       // -Observe refuses a dump that is not positive evidence of a listing, so a transport error
       // cannot be recorded here as "read, and empty".
+      const docArgs = ['doc', '-Id', String(t.id), '-Observe', dump];
       const obs = spawnSync(
-        'powershell',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', OA_STATE, 'doc', '-Id', String(t.id), '-Observe', dump],
+        OA_STATE.endsWith('.mjs') ? process.execPath : 'powershell',
+        OA_STATE.endsWith('.mjs') ? [OA_STATE, ...docArgs] : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', OA_STATE, ...docArgs],
         { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
       );
       if (obs.status !== 0) {

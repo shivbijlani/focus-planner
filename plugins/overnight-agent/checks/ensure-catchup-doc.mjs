@@ -164,26 +164,20 @@ function createDoc(title, id, taskTitle) {
 }
 
 function bind(id, docId) {
-  const oa = path.join(
-    process.env.OA_SKILL_DIR ||
-      path.join(
-        process.env.USERPROFILE || '',
-        '.copilot',
-        'installed-plugins',
-        'focus-planner',
-        'overnight-agent',
-        'skills',
-        'overnight-agent',
-      ),
-    'oa-state.ps1',
-  );
+  const skill = process.env.OA_SKILL_DIR ||
+    path.join(process.env.USERPROFILE || '', '.copilot', 'installed-plugins', 'focus-planner', 'overnight-agent', 'skills', 'overnight-agent');
+  // Item 4: bind with the engine the agent runs (oa-state.mjs); the two engines do not share a
+  // lock, so a writer must not pick the other one. oa-state.ps1 only when the port is absent.
+  const nodeEngine = path.join(skill, 'oa-state.mjs');
+  const oa = fs.existsSync(nodeEngine) ? nodeEngine : path.join(skill, 'oa-state.ps1');
   // -DocUrl is not decoration. The journal stamp carries it, and write-turn.ps1's G10 accepts a
   // turn that names the doc by URL as well as by id; binding without it leaves the stamp id-only
   // and quietly narrows what counts as a valid pointer turn.
   const url = `https://docs.google.com/document/d/${docId}/edit`;
+  const docArgs = ['doc', '-Id', id, '-DocId', docId, '-DocUrl', url];
   const r = spawnSync(
-    'powershell',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', oa, 'doc', '-Id', id, '-DocId', docId, '-DocUrl', url],
+    oa.endsWith('.mjs') ? process.execPath : 'powershell',
+    oa.endsWith('.mjs') ? [oa, ...docArgs] : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', oa, ...docArgs],
     { encoding: 'utf8' },
   );
   return r.status === 0;

@@ -16,7 +16,7 @@ if (start < 0 || end < 0) throw new Error('PHASE 1 dispatch section not found');
 
 const phase = source.slice(start, end);
 const rules = [
-  ['refill', 'When an opening frees, re-run\n   `oa-state.ps1 scan -Compact`'],
+  ['refill', 'When an opening frees, re-run\n   `oa-state.mjs scan -Compact`'],
   ['native-idle-poll', 'call the native app tool **`get_sessions_status`** about every 60 seconds, **once per\n   interval**'],
   ['idle-frees-opening', 'an\n   `idle` session has finished and frees one opening'],
   ['no-repeat', 'skip every task ID already attempted this run'],
