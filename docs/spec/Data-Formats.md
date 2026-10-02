@@ -448,6 +448,47 @@ bad arguments exit 3.
 
 </details>
 
+### Per-device agent metadata — `agent-metadata/<device-key>.json`
+
+One small JSON file per PC that runs the Overnight Agent, in the planner folder, written only by that
+PC through the sanctioned write tool and read by the app to show the 🤖 session link on a board row.
+It carries, per task, the binding-time fingerprint of the row (SHA-256 of the normalised
+`[ID, Added, Task title]`) and the task's live session bindings — never tokens, local paths,
+journal text or agent state. The full contract (envelope, device key derivation, normalisation
+rules, publisher and reader rules, and the test vectors) is [Domain-agent-metadata](Domain-agent-metadata).
+
+> [!NOTE]
+> **Technical detail: envelope at a glance** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
+```json
+{
+  "schema": "fp-agent-task-metadata@1",
+  "device": { "key": "<32 hex>", "id": "<random uuid>", "name": "SHIV-DESKTOP" },
+  "planner": { "board": "planner.md" },
+  "revision": 42,
+  "publishedAt": "2026-10-02T21:30:05.120Z",
+  "lastSeenAt": "2026-10-02T21:30:05.120Z",
+  "heartbeatMinutes": 30,
+  "truncated": false,
+  "tasks": { "468": { "fingerprint": "sha256:<64 hex>", "bindings": [
+    { "source": "copilot-app", "sessionId": "<id>", "status": "live", "boundAt": "…", "verifiedAt": "…",
+      "url": "ghapp://sessions/<id>" } ] } }
+}
+```
+
+| Invariant | Why it exists |
+| --- | --- |
+| File name stem = `device.key` = derived from `device.id`. | Conflict copies (`<key> (1).json`) and hand-copied files are ignored without guessing. |
+| A device writes only its own file, atomically. | Two PCs on one synced folder can never conflict. |
+| The fingerprint is captured at binding time and reused until a wake or explicit revalidation. | A title/date edit or a reused task ID hides the link instead of pointing it at the wrong session. |
+| A `url` is published only when the host reported it, and only `https://` or `ghapp://sessions/<same id>`. | No synthesised or unsafe links. |
+| `lastSeenAt` older than max(15 min, 2 × `heartbeatMinutes`) = stale, not removed. | An asleep PC is not a deleted binding. |
+
+</details>
+
 ## 4. Telegram bridge state — `state.json`
 
 The Telegram bridge keeps operational JSON in a separate state directory, outside the repo and outside OneDrive. Unlike journals and boards, this is **host-local machinery**, not planner content.
