@@ -30,12 +30,36 @@ function containerString(v) {
   return psStr(v);
 }
 
+// A .NET Double, for the values the PowerShell computes as [double] ([Math]::Round, `/`).
+// ConvertTo-Json writes those differently from an integer: 6.0, -0.0, 1E+20. Plain JS numbers
+// keep the integer rendering (what Int32/Int64 values and parsed JSON integers produce).
+export class NetDouble {
+  constructor(v) { this.v = v; }
+  toJSON() { return this.v; }
+  valueOf() { return this.v; }
+  toString() { return Object.is(this.v, -0) ? '-0' : String(this.v); }
+}
+export const netDouble = (v) => new NetDouble(v);
+const DBL = '\u0000NETDOUBLE:';
+function netDoubleJson(x) {
+  if (Object.is(x, -0)) return '-0.0';
+  if (!Number.isFinite(x)) return JSON.stringify(String(x));
+  // .NET's shortest round-trip form: scientific when the decimal exponent is >= 17 or < -4 (measured).
+  const a = Math.abs(x);
+  if (a !== 0 && (a >= 1e17 || a < 1e-4)) {
+    const m = /^(-?[\d.]+)e([+-])(\d+)$/.exec(x.toExponential());
+    return `${m[1]}E${m[2]}${m[3].padStart(2, '0')}`;
+  }
+  return Number.isInteger(x) ? `${x}.0` : String(x);
+}
+
 // Returns { text, truncated }. `value` is serialised as the -InputObject (no pipeline unrolling).
 export function toJson(value, { depth = 2, compress = false } = {}) {
   let truncated = false;
   const walk = (v, level) => {
     if (v === undefined || v === null) return null;
     if (v instanceof PsDate) return v.toJsonString();
+    if (v instanceof NetDouble) return DBL + netDoubleJson(v.v) + '\u0000';
     if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') return v;
     if (typeof v === 'bigint') return Number(v);
     if (typeof v !== 'object') return psStr(v);
@@ -46,7 +70,8 @@ export function toJson(value, { depth = 2, compress = false } = {}) {
     return out;
   };
   const shaped = walk(value, 0);
-  const text = compress ? JSON.stringify(shaped) : JSON.stringify(shaped, null, 2);
+  let text = compress ? JSON.stringify(shaped) : JSON.stringify(shaped, null, 2);
+  text = text.replace(/"\\u0000NETDOUBLE:([^\\\\"]*)\\u0000"/g, '$1');
   return { text, truncated, depth };
 }
 

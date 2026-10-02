@@ -7,7 +7,7 @@ folder, the characterization goldens and the mutation checks are what earn it th
 | Proof | Command | CI job |
 |---|---|---|
 | Every oa-state golden, zero SKIP | `node tests/characterization/run.mjs --impl node --tool oa-state` | `oa-state-node` |
-| Readers, function by function vs PowerShell | `node journal-diff.mjs --n 300`, `board-diff.mjs --n 200`, `session-diff.mjs --n 200` | `oa-state-node` |
+| Readers, function by function vs PowerShell | `node journal-diff.mjs --n 300`, `board-diff.mjs --n 200`, `session-diff.mjs --n 200`, `round-diff.mjs` ([Math]::Round) | `oa-state-node` |
 | Whole commands, twin sandboxes vs PowerShell | `consent-diff.mjs --n 200`, `extract-diff.mjs --n 200`, `scan-diff.mjs --n 60`, `session-cmd-diff.mjs --n 60`, `mutate-diff.mjs --n 60 --steps 6` | `oa-state-node` |
 | Mutation checks against both engines | `pwsh -File run-mutchecks.ps1 [-Target node|ps] [-Filter <regex>]` | `oa-state-node-mutchecks` |
 | Live data, read-only (local only) | `node tests/characterization/run.mjs --shadow --sample 100000` | never |

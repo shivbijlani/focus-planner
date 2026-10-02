@@ -7,8 +7,9 @@ import {
   ManagedHeadingRe, LegacyStateRe, NeedsFromYouRe, YourCallRe,
 } from '../collect/journal.mjs';
 import { joinPath, splitParent } from '../core/context.mjs';
+import { netDouble } from '../core/psjson.mjs';
 import { fileNameWithoutExtension, readJournalText, testPath } from '../core/fsx.mjs';
-import { netTrim, netTrimEnd, psIsMatch, psReplace, psSplit, rx, rxMatches, roundHalfEven } from '../core/net.mjs';
+import { netTrim, netTrimEnd, psIsMatch, psReplace, psSplit, rx, rxMatches, roundHalfEven, netRound } from '../core/net.mjs';
 import { getBoardLinkFacts as getBoardLinkFactsFromBoard } from '../collect/board.mjs';
 
 export function getUtf8ByteCount(s) {
@@ -166,7 +167,7 @@ export function getJournalPointers(content, p) {
         .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'accent' }));
     } catch { files = []; }
     for (const name of files) {
-      try { deliverables.push({ name, kb: Math.round((fs.statSync(joinPath(dir, name)).size / 1024) * 10) / 10 }); } catch {}
+      try { deliverables.push({ name, kb: netDouble(netRound(fs.statSync(joinPath(dir, name)).size / 1024, 1)) }); } catch {}
     }
   }
   return { Status: status, Linked: linked, Deliverables: deliverables };
@@ -207,7 +208,7 @@ export function formatLinkedPointer(facts) {
 }
 
 const kb = (b) => {
-  const v = Math.round((b / 1024) * 10) / 10;
+  const v = netRound(b / 1024, 1);
   return Object.is(v, -0) ? '-0' : String(v);
 };
 
@@ -299,7 +300,7 @@ export function cmdExtract(ctx) {
   w(`# task-${Id} -- BOUNDED EXTRACT (read-only)`);
   w('');
   w(`source: ${p}`);
-  w(`source ${kb(sourceBytes)} KB / emitted ${kb(emitted)} KB (ceiling ${kb(ceiling)} KB, ~${Math.round((emitted / 4 / 1000) * 10) / 10}K tokens)`);
+  w(`source ${kb(sourceBytes)} KB / emitted ${kb(emitted)} KB (ceiling ${kb(ceiling)} KB, ~${netRound(emitted / 4 / 1000, 1)}K tokens)`);
   w('');
   w(`This is a BOUNDED extract, not the whole journal. Every line below is VERBATIM from the source; nothing is summarised. ${elided > 0 ? `${kb(elided)} KB was NOT shown -- open the file directly if you need it.` : 'Nothing was elided: this is the complete journal.'}`);
   const section = (title, slice, note) => {

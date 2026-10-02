@@ -299,6 +299,7 @@ export function psStr(v) {
   if (typeof v === 'number') return fmtNumber(v);
   if (typeof v === 'bigint') return v.toString();
   if (v instanceof PsDate) return v.toInvariantString();
+  if (v.constructor?.name === 'NetDouble') return v.toString();
   if (Array.isArray(v)) return v.map(psStr).join(' ');
   return '@{' + Object.entries(v).map(([k, x]) => `${k}=${Array.isArray(x) ? 'System.Object[]' : psStr(x)}`).join('; ') + '}';
 }
@@ -365,6 +366,15 @@ export function roundHalfEven(x) {
   if (d > 0.5) return f + 1;
   if (d < 0.5) return f;
   return f % 2 === 0 ? f : f + 1;
+}
+
+// [Math]::Round(x, digits): .NET scales, rounds half to EVEN, and scales back -- so 5.25 KB is
+// 5.2, where JS Math.round would say 5.3 (found by the live-data shadow on a 5,376-byte file).
+export function netRound(x, digits = 0) {
+  if (!Number.isFinite(x) || Math.abs(x) >= 1e16) return x;
+  const p = 10 ** digits;
+  const r = roundHalfEven(x * p) / p;
+  return r === 0 && (x < 0 || Object.is(x, -0)) ? -0 : r;
 }
 
 // en-US `{0:N0}`.

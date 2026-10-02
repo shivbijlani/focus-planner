@@ -1772,6 +1772,7 @@ jobs:
           node "$d/journal-diff.mjs" --n 300; if ($LASTEXITCODE) { exit 1 }
           node "$d/board-diff.mjs" --n 200; if ($LASTEXITCODE) { exit 1 }
           node "$d/session-diff.mjs" --n 200; if ($LASTEXITCODE) { exit 1 }
+          node "$d/round-diff.mjs" --n 4000; if ($LASTEXITCODE) { exit 1 }
       - name: Differential -- whole commands, twin sandboxes (PowerShell vs Node)
         shell: pwsh
         run: |

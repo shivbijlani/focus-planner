@@ -4,11 +4,12 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { joinPath, splitParent } from '../core/context.mjs';
 import { ensureDir, isFile, readJournalText, testPath, writeAllTextUtf8 } from '../core/fsx.mjs';
-import { fromJson, toJson } from '../core/psjson.mjs';
+import { fromJson, toJson, netDouble } from '../core/psjson.mjs';
 import { PsDate, parseDateTime, parseExactYmd } from '../core/psdate.mjs';
 import {
   asArray, ciContains, get, has, lowerInvariant, netTrim, psIsMatch, psMatch, psReplace,
   psSplit, psStr, psTruthy, rx, rxMatches, rxReplace, setMember,
+  netRound,
 } from '../core/net.mjs';
 import { getSha256, getFenceMaskedText, getJournalFacts } from '../collect/journal.mjs';
 import { readState, testPollDue } from '../collect/state.mjs';
@@ -256,7 +257,7 @@ function compareRows(a, b) {
 export function cmdScan(ctx) {
   const start = performance.now();
   const rows = getScanRows(ctx);
-  const seconds = Math.round(((performance.now() - start) / 1000) * 100) / 100;
+  const seconds = netDouble(netRound((performance.now() - start) / 1000, 2));
   const full = toJson(rows, { depth: 8 }).text;
 
   if (ctx.p.ScanOutFile) {
