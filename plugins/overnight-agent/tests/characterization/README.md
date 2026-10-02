@@ -48,7 +48,7 @@ That observation is compared with `golden/<case id>.json`.
 | an ISO timestamp within ±45 days of the case clock T0 | `<NOW+Nm>` -- minutes from T0, floored to 5-minute buckets | clock |
 | PowerShell's invariant `MM/dd/yyyy HH:mm:ss` rendering within ±45 days | `<INVTIME+Nm>` (kept distinct from ISO: the format is observable) | clock |
 | a `yyyy-MM-dd` date within ±45 days | `<DATE+Nd>` | clock |
-| a `yyyyMMdd-HHmm` / `yyyyMMddHHmm` stamp within ±45 days | `<STAMP+Nm>` | clock (write-turn backups) |
+| a `yyyyMMdd-HHmm` / `yyyyMMddHHmm` stamp within ±45 days | `<STAMP+Nm>` -- whole minutes from T0's own minute, edge moved 4 minutes out, so a stamp written during the case is always `<STAMP-5m>` (`lib/normalize.test.mjs`) | clock (write-turn backups); minute precision, so comparing it to a millisecond T0 straddled the 0 edge and flaked |
 | a GUID the case did not supply (fixture, overlay, arguments) | `<GUID>` | generated identifiers; supplied GUIDs stay verbatim |
 | a number under a key ending `seconds` / `_ms` / `duration` / `elapsed` | `<DURATION>` | wall-clock timing |
 | ANSI colour escapes | removed | presentation |
