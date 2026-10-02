@@ -1799,6 +1799,23 @@ Rules:
 - **Never print the token** in your summary. If the vault lookup or the CLI fails (e.g. no token, network),
   note it briefly in the wrap-up and carry on — a failed mirror must never abort the run.
 
+### Publish this PC's agent metadata (last step before the wrap-up)
+
+After the dispatch drain, when this run's session bindings have settled, publish this PC's task
+sessions so the planner app can show the 🤖 link on the right board row
+(`docs/spec/Domain-agent-metadata.md`):
+
+1. Save one `list_sessions_and_chats` response, as returned, to a run-scoped file (in `$env:TEMP`
+   or the OA home — never the planner folder).
+2. Run `node <skill>\write-turn.mjs publish-metadata -SessionsListFile <file>`.
+
+It writes exactly one file, `agent-metadata/<this PC's key>.json` in the planner folder, and prints
+a JSON receipt. **Never create, edit or delete anything in `agent-metadata/` yourself** — another
+PC's file is that PC's, and the tool is the only writer of this PC's. Do not pass `-Revalidate`
+unless he asked for a task's link to be re-confirmed. A failure (exit 1 or 3) must never abort the
+run: report it as one line under **Other tool failures**. A `foreign_writer_suspected` warning means
+another machine shares this PC's agent identity (a copied agent home); report it the same way.
+
 ### Wrap up
 
 Report back to the user a short summary:

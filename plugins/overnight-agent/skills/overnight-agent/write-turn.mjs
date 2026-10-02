@@ -42,6 +42,11 @@
     node write-turn.mjs was-sent -Channel teams -MessageId <id>
   Both print JSON; the ledger is <OA home>/sent-messages.jsonl (docs/spec/Data-Formats.md).
 
+  Per-device agent metadata (the 🤖 session link; docs/spec/Domain-agent-metadata.md) is published
+  here too, so it is written by the sanctioned tool and nothing else:
+    node write-turn.mjs publish-metadata [-SessionsListFile <host session list>] [-Revalidate <id>]
+  It writes only <planner>/agent-metadata/<this device's key>.json (agent-metadata.mjs).
+
   Usage (PowerShell-style names, GNU `--name` and `--name=value` are accepted too):
     node write-turn.mjs -Id 448 -BodyFile turn.md -Ask offer             # validate, back up, append
     node write-turn.mjs -Id 448 -BodyFile turn.md -Ask blocking -Validate  # validate only
@@ -1390,11 +1395,30 @@ function ledgerCommand(cmd, argv, out) {
   return 0;
 }
 
+function publishMetadata(argv, out) {
+  // Lazy: write-turn.mjs stays one self-contained file for every other path (mutation checks copy
+  // it alone and run the copy); only this subcommand needs its sibling module.
+  const fail = (e) => {
+    const code = e instanceof Exit ? e.code : (Number.isInteger(e?.code) ? e.code : 1);
+    if (e?.message) process.stderr.write(e.message + EOL);
+    process.exitCode = code;
+  };
+  import('./agent-metadata.mjs').then((m) => {
+    try {
+      process.exitCode = m.publishMetadataCommand(argv, {
+        oaHome: oaHomeDir,
+        out: (o) => out(JSON.stringify(o, null, 2).replace(/\n/g, EOL) + EOL),
+      });
+    } catch (e) { fail(e); }
+  }, fail);
+}
+
 function main() {
   const out = (s) => process.stdout.write(s);
   try {
     const argv = process.argv.slice(2);
     if (argv[0] === 'record-sent' || argv[0] === 'was-sent') { process.exitCode = ledgerCommand(argv[0], argv.slice(1), out); return; }
+    if (argv[0] === 'publish-metadata') { publishMetadata(argv.slice(1), out); return; }
     process.exitCode = run(argv, out);
   } catch (e) {
     if (e instanceof Exit) {

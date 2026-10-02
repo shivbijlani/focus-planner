@@ -1863,6 +1863,12 @@ jobs:
       - name: Sent-messages ledger and protected-target guard (node --test)
         shell: pwsh
         run: node --test ./plugins/overnight-agent/tests/write-turn-port/ledger.test.mjs
+      - name: Per-device agent metadata publisher (node --test; item 5, docs/spec/Domain-agent-metadata.md)
+        shell: pwsh
+        run: node --test ./plugins/overnight-agent/tests/agent-metadata/publish.test.mjs
+      - name: Mutation check -- every publisher rule is load-bearing
+        shell: pwsh
+        run: node ./plugins/overnight-agent/checks/mutcheck-agent-metadata.mjs
       - name: Differential -- regex translation vs .NET
         shell: pwsh
         run: node ./plugins/overnight-agent/tests/write-turn-port/regex-diff.mjs --n 400

@@ -252,9 +252,12 @@ renames or deletes any other file in the folder. The write is atomic: the full c
 back-off when the sync client briefly holds the file; if every attempt fails the previous file is
 left intact and the command fails. `revision` is one more than the larger of the private ledger's
 last revision and the revision in the current file. `publishedAt` changes only when `tasks`
-changes; `lastSeenAt` changes on every publish. The state lock shared by both state engines is held
-while the per-task state is read, and a per-device publisher lock in the agent home serialises two
-publishers on the same PC.
+changes; `lastSeenAt` changes on every publish. The state engines write each per-task state file
+atomically, so the publisher reads them without the state lock (it never writes state); a state
+file that cannot be read keeps whatever was published for that task rather than dropping it. A
+per-device publisher lock in the agent home serialises two publishers on the same PC. A capture is
+kept while its row is missing from the board, so a task deleted and recreated under the same ID is
+compared with the original row rather than recaptured from the new one.
 
 **Caps.** At most 500 tasks (lowest IDs first), 4 bindings per task (sorted by session ID) and
 256 KiB per file; anything over a cap is dropped deterministically and `truncated` is set.
@@ -263,10 +266,9 @@ publishers on the same PC.
 cannot conflict. A sync client may still leave conflict copies (`<key> (1).json`, `<key>-PC.json`)
 or a half-synced file; readers ignore any name that is not exactly `<32 hex>.json` and any file that
 does not validate, so these are harmless and the publisher leaves them alone. If the current file's
-`revision` is higher than the last revision this device wrote, or its `device.name` differs from this
-device's, another machine is writing with the same device ID (a cloned agent home): the publisher
-still writes (its own key, its own file) but reports `foreign_writer_suspected` so the run can tell
-the user.
+`revision` is higher than the last revision this device wrote, another machine is writing with the
+same device ID (a cloned agent home): the publisher still writes (its own key, its own file) but
+reports `foreign_writer_suspected` so the run can tell the user.
 
 > [!NOTE]
 > **Technical detail: command and receipt** Optional implementation detail; the surrounding section states the product behavior.
@@ -413,3 +415,12 @@ write tool with its own fixtures, mutation checks and the end-to-end sandbox ass
 sandbox planner folder gains a metadata file with no live paths in it; then the app reader, the row
 badge and the smoke tests for S1–S5. Until the publisher ships, no file exists and the app shows
 nothing new.
+
+**Publisher (shipped).** `plugins/overnight-agent/skills/overnight-agent/agent-metadata.mjs`, run
+as `write-turn.mjs publish-metadata`; the coordinator runs it as the last step before its wrap-up.
+Its contract tests are `plugins/overnight-agent/tests/agent-metadata/publish.test.mjs` (every
+vector in `tests/agent-metadata/vectors.json`, the machine-readable copy of the tables above), and
+`plugins/overnight-agent/checks/mutcheck-agent-metadata.mjs` proves each rule is load-bearing. The
+end-to-end sandbox scenario `metadata-published` (l1–l5) and invariant h3 check a real run. The
+PowerShell state engine has no publisher of its own and needs none: the publisher reads the state
+files either engine writes.
