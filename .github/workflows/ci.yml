@@ -1814,6 +1814,9 @@ jobs:
           node "$d/scan-diff.mjs" --n 60; if ($LASTEXITCODE) { exit 1 }
           node "$d/session-cmd-diff.mjs" --n 60; if ($LASTEXITCODE) { exit 1 }
           node "$d/mutate-diff.mjs" --n 60 --steps 6 --jobs 1; if ($LASTEXITCODE) { exit 1 }
+          # #815: his real approval paths (app composer, task-paper comment, Telegram fold -- the REAL
+          # writers) still grant under the default ## Approvals channels, on both engines.
+          node "$d/approval-paths.mjs"; if ($LASTEXITCODE) { exit 1 }
   # Every mutation check that drives the state engine, against the Node port: same arms, and a
   # JS twin for every PowerShell mutant (tests/oa-state-port/run-mutchecks.ps1 holds the list).
   # The PowerShell runs stay where they already are, in the jobs above.
