@@ -1,0 +1,187 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-snooze-write"
+  ],
+  "cases": [
+    {
+      "id": "mc/snooze-write/store-snoozed-refused",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9406",
+        "Ask": "none"
+      },
+      "files": {
+        "data/journal/task-9406.md": "# Task 9406: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n",
+        "data/snooze.json": {
+          "9406": "{{DATE+3d}}"
+        }
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "A real append into a task snoozed by snooze.json is refused before any write."
+    },
+    {
+      "id": "mc/snooze-write/board-marker-refused",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9406",
+        "Ask": "none",
+        "Validate": true
+      },
+      "files": {
+        "data/journal/task-9406.md": "# Task 9406: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n",
+        "data/planner.md": "| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |\n| 9406 | 🟡 | Fixture | Sydney rollout | {{DATE-10d}} | | <!-- snooze:{{DATE+3d}} -->\n"
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "Legacy planner.md snooze markers are still honoured when the structured store is absent."
+    },
+    {
+      "id": "mc/snooze-write/store-wins-over-board-passed-allows",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9406",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-9406.md": "# Task 9406: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n",
+        "data/snooze.json": {
+          "9406": "{{DATE-1d}}"
+        },
+        "data/planner.md": "| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |\n| 9406 | 🟡 | Fixture | Sydney rollout | {{DATE-10d}} | | <!-- snooze:{{DATE+3d}} -->\n"
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "A task id present in snooze.json follows the store even when an old board marker says future."
+    },
+    {
+      "id": "mc/snooze-write/store-today-refused-json",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9406",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-9406.md": "# Task 9406: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n",
+        "data/snooze.json": {
+          "9406": "{{DATE}}"
+        }
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "The snooze date itself is still active."
+    },
+    {
+      "id": "mc/snooze-write/store-yesterday-allows",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9406",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-9406.md": "# Task 9406: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n",
+        "data/snooze.json": {
+          "9406": "{{DATE-1d}}"
+        }
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "A past snooze date is not active."
+    },
+    {
+      "id": "mc/snooze-write/other-task-snoozed-allows",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9406",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-9406.md": "# Task 9406: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n",
+        "data/snooze.json": {
+          "9407": "{{DATE+3d}}"
+        }
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "A different task's snooze does not block this task."
+    },
+    {
+      "id": "mc/snooze-write/tasks-wrapper-until-object-refused",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9406",
+        "Ask": "none",
+        "Validate": true
+      },
+      "files": {
+        "data/journal/task-9406.md": "# Task 9406: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n",
+        "data/snooze.json": {
+          "tasks": {
+            "9406": {
+              "until": "{{DATE+3d}}"
+            }
+          }
+        }
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "The tasks wrapper and { until } value shape are both accepted."
+    },
+    {
+      "id": "mc/snooze-write/snoozed-wrapper-refused",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9406",
+        "Ask": "none",
+        "Validate": true
+      },
+      "files": {
+        "data/journal/task-9406.md": "# Task 9406: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n",
+        "data/snooze.json": {
+          "snoozed": {
+            "9406": "{{DATE+3d}}"
+          }
+        }
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "The snoozed wrapper is accepted."
+    },
+    {
+      "id": "mc/snooze-write/malformed-store-refused",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9406",
+        "Ask": "none",
+        "Validate": true
+      },
+      "files": {
+        "data/journal/task-9406.md": "# Task 9406: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n",
+        "data/snooze.json": "{ this is not json"
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "The write guard fails closed when snooze.json exists but cannot be parsed."
+    },
+    {
+      "id": "mc/snooze-write/disable-guard-g22-still-refused",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9406",
+        "Ask": "none",
+        "Validate": true,
+        "DisableGuard": [
+          "G22"
+        ]
+      },
+      "files": {
+        "data/journal/task-9406.md": "# Task 9406: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n",
+        "data/snooze.json": {
+          "9406": "{{DATE+3d}}"
+        }
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nDid the thing.\n\n**Needs from you:** nothing.\n",
+      "note": "G22 is not bypassed by -DisableGuard."
+    }
+  ]
+}
