@@ -4,12 +4,12 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { joinPath, splitParent } from '../core/context.mjs';
 import { ensureDir, isFile, readJournalText, testPath, writeAllTextUtf8 } from '../core/fsx.mjs';
-import { fromJson, toJson, netDouble } from '../core/psjson.mjs';
+import { fromJson, toJson, netDouble, psNewlines } from '../core/psjson.mjs';
 import { PsDate, parseDateTime, parseExactYmd } from '../core/psdate.mjs';
 import {
   asArray, ciContains, get, has, lowerInvariant, netTrim, psIsMatch, psMatch, psReplace,
   psSplit, psStr, psTruthy, rx, rxMatches, rxReplace, setMember,
-  netRound,
+  netRound, addMemberForce,
 } from '../core/net.mjs';
 import { getSha256, getFenceMaskedText, getJournalFacts } from '../collect/journal.mjs';
 import { readState, testPollDue } from '../collect/state.mjs';
@@ -184,7 +184,8 @@ export function getScanRows(ctx) {
     if (!Object.prototype.hasOwnProperty.call(r, 'doc_observed_at')) setMember(r, 'doc_observed_at', null);
     if (!Object.prototype.hasOwnProperty.call(r, 'doc_channel')) setMember(r, 'doc_channel', null);
   }
-  for (const r of rows) setMember(r, 'reopened_closed', !!testReopenedClosed(r));
+  // Add-Member -Force in oa-state.ps1: the existing `reopened_closed: false` moves to the end.
+  for (const r of rows) addMemberForce(r, 'reopened_closed', !!testReopenedClosed(r));
 
   rows = rows.sort(compareRows);
 
@@ -264,13 +265,13 @@ export function cmdScan(ctx) {
     const dir = splitParent(ctx.p.ScanOutFile);
     if (dir && !testPath(dir)) ensureDir(dir);
     const payload = ctx.p.Compact ? toJson(newCompactScan(rows, seconds), { depth: 8 }).text : full;
-    writeAllTextUtf8(ctx.p.ScanOutFile, payload);
+    writeAllTextUtf8(ctx.p.ScanOutFile, psNewlines(payload));
     ctx.emitJson(newScanSummary(rows, seconds, ctx.p.ScanOutFile), { depth: 4 });
     return;
   }
 
   if (ctx.p.Compact) { ctx.emitJson(newCompactScan(rows, seconds), { depth: 8 }); return; }
-  ctx.out(full);
+  ctx.out(psNewlines(full));
 }
 
 export function newScanSummary(rows, seconds, outFile = '') {
