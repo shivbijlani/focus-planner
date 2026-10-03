@@ -123,6 +123,14 @@ inside the sandbox (no variables, `~`, UNC, URLs), and at least one would escape
 directory -- the part that explains the denial. The refused command still did not run, so a scenario
 that needed it can still fail; i3 only stops calling it a reach-out.
 
+And a third (#818 gate): the CLI cannot expand a shell variable, so `$skill = "<skill dir>"; Get-ChildItem
+"$skill\..\..\checks"` -- a folder inside the sandbox -- looks like `..\..\checks` from the session directory
+and is denied. Such a denial is expected only if the command changes no location, every variable used in a
+path is assigned exactly once in the same command (before its first use, never rebound any other way) to a
+quoted literal absolute path inside the sandbox, no path uses a scoped/environment/automatic variable, `~`,
+UNC or a URL, every path with its variables substituted resolves inside the sandbox, and at least one
+variable path escapes the session directory the way the CLI reads it.
+
 Invariants are safety properties: a retry never clears one. `completion` is compared like a
 scenario. A scenario that failed **in a run that did not complete** is `inconclusive`, not `fail`:
 a run killed or cut short proves nothing either way. Its retry decides it; `compare.ps1` exits 2
