@@ -489,6 +489,43 @@ rules, publisher and reader rules, and the test vectors) is [Domain-agent-metada
 
 </details>
 
+### Agent lanes — `agent-lanes.json`
+
+Present only when the user has set up lanes (two or more PCs running the agent). It says which lanes
+each PC serves, which PCs also take tasks with no lane (catch-all), and which tasks the user has
+assigned to a lane from the app. The app is its only writer; every agent reads it and none can write
+it (it is protected like `agent-gate.md`). When it is absent, lanes are off and every PC behaves as
+it always has. A task can also carry a lane in its board row as a `#lane:<name>` tag, and inherits
+its first parent's lane through `Linked ID`. The full contract — resolution rules, validation, engine
+and app behaviour, and test vectors — is [Domain-lanes](Domain-lanes).
+
+> [!NOTE]
+> **Technical detail: file at a glance.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
+```json
+{
+  "schema": "fp-agent-lanes@1",
+  "revision": 3,
+  "updatedAt": "2026-10-03T12:00:00.000Z",
+  "devices": {
+    "86b8ff7cab63af69cc52ff83591b0ffd": { "name": "WORK-LAPTOP", "lanes": ["ado"], "catchAll": false }
+  },
+  "tasks": { "10": "ado" }
+}
+```
+
+| Invariant | Why it exists |
+| --- | --- |
+| Absent file = lanes off everywhere. | A single-PC user never sees or is affected by lanes. |
+| Written only by the app; G20 refuses it as an agent write target. | An agent must not be able to give itself work. |
+| Any invalid part invalidates the whole file, and an invalid file means no PC picks new work. | Dropping one entry would silently widen that PC to catch-all. |
+| Device keys are the per-device metadata keys. | One device identity, not two. |
+
+</details>
+
 ## 4. Telegram bridge state — `state.json`
 
 The Telegram bridge keeps operational JSON in a separate state directory, outside the repo and outside OneDrive. Unlike journals and boards, this is **host-local machinery**, not planner content.

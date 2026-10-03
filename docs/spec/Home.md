@@ -50,6 +50,7 @@ generation pipeline (`scripts`). See [Architecture](Architecture) for how they c
 | [Technical Architecture](Technical-Architecture) | Optional architectural ideas, diagrams, and principles, without implementation code. |
 | [Data-Formats](Data-Formats) | Every persisted format — board, journals, agent/bridge state — with annotated real samples and invariants. |
 | [Domain-agent-metadata](Domain-agent-metadata) | Per-device agent metadata files and the 🤖 session link: fingerprints, publisher and reader rules, test vectors. |
+| [Domain-lanes](Domain-lanes) | Lanes: scope each agent PC to part of the plan — `#lane:` tags, app assignments and inheritance, `agent-lanes.json`, engine and app rules, test vectors. |
 | [Domain-app](Domain-app) | The board UI and its pure content-transformation core. |
 | [Domain-config](Domain-config) | Agent gate, user settings, `AGENTS.md`, and their write-safety guarantees. |
 | [Domain-diagnostics](Domain-diagnostics) | Structured, no-content-leak logging shared across storage providers. |
