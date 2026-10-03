@@ -257,6 +257,7 @@ function Invoke-Attempt($Scenarios, [int]$Attempt, [string]$SessionRoot, [string
     LivePathHits = @($analysis.livePathHits); TripwireHits = @($analysis.tripwireHits)
     DeniedCalls = @($analysis.deniedCalls); ExpectedDenials = @($analysis.expectedDenials); Provenance = $analysis.provenance
     FinalMessage = "$($analysis.finalMessage)"
+    Planner = $L.Planner; SandboxRoot = $L.Root; LiveRoots = @(Get-LiveRoots)
     Run = [pscustomobject]@{ timedOut = $timedOut; completed = [bool]$result.Count; exitCode = $exitCode
       durationSec = ($end - $start).TotalSeconds }
   }
