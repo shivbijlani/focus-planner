@@ -1,0 +1,104 @@
+{
+  "files": {
+    "state/task-940.json": {
+      "bom": true,
+      "change": "modified",
+      "json": {
+        "has_agent_block": true,
+        "id": "940",
+        "plan_id": "t940-v1",
+        "processed_file_hash": "",
+        "seeded": false,
+        "session": null,
+        "status": "in-progress",
+        "status_by": "agent",
+        "updated": "<NOW+0m>",
+        "version": 1
+      }
+    }
+  },
+  "id": "lanes/session-device-a-refuses-other-lane",
+  "steps": [
+    {
+      "args": {
+        "CheckDispatch": true,
+        "Id": "940",
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions.json"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_lane_not_served: task 940 is in lane 'home' (from its #lane: tag); this PC serves 'ado'. Another PC works it -- do not dispatch or bind it here."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "DispatchInput": "x",
+        "ForDispatch": true,
+        "Id": "940",
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions.json"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_lane_not_served: task 940 is in lane 'home' (from its #lane: tag); this PC serves 'ado'. Another PC works it -- do not dispatch or bind it here."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Force": true,
+        "Id": "940",
+        "SessionId": "S-NEW"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_lane_not_served: task 940 is in lane 'home' (from its #lane: tag); this PC serves 'ado'. Another PC works it -- do not dispatch or bind it here."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "Id": "940",
+        "SessionRelease": true
+      },
+      "command": "session",
+      "exit": 0,
+      "json": {
+        "bound": false,
+        "concurrency": 2,
+        "concurrency_source": "settings",
+        "created_at": null,
+        "dispatch_authorised": false,
+        "dispatch_eligible": false,
+        "id": "940",
+        "kickoff_continuation": null,
+        "kind": null,
+        "last_woken_at": null,
+        "model": "auto",
+        "model_source": "settings",
+        "paused_at": null,
+        "paused_by_user": false,
+        "prior_session_id": null,
+        "prior_session_ids": [],
+        "process_dead": false,
+        "project": null,
+        "released": true,
+        "role_line": "You are the task session for planner task #940. Do this task only. Do not run `/overnight-agent` or load the overnight-agent skill, and do not dispatch, create or wake other sessions.",
+        "session_id": null,
+        "state": null,
+        "teardown_command": null,
+        "verdict": "create",
+        "workspace": null,
+        "workspace_missing": false,
+        "workspace_type": null
+      },
+      "tool": "oa-state"
+    }
+  ]
+}

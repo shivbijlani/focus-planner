@@ -26,8 +26,12 @@ import {
 } from '../collect/sessions.mjs';
 import { testUserPaused } from '../plan/pause.mjs';
 import { getScanRows } from '../plan/scan.mjs';
+import { assertLaneServed } from '../plan/lanes.mjs';
 
 export function assertTaskDispatch(ctx, st, sess, facts) {
+  // Lanes first (docs/spec/Domain-lanes.md): a task another PC serves is not this PC's to wake,
+  // whatever else is true of it. A no-op when lanes are off.
+  assertLaneServed(ctx, psStr(get(st, 'id')));
   const requires = asArray(ctx.p.RequiresTools);
   if (requires.length) {
     if (!testPath(ctx.p.CapabilitiesPath)) {
@@ -226,6 +230,7 @@ export function cmdSession(ctx) {
     );
     dirty = true;
   } else if (ctx.p.SessionId) {
+    assertLaneServed(ctx, ctx.p.Id);
     let prior = '';
     let lineage = getSessionLineage(sess);
     const oldSessionId = psStr(get(sess, 'session_id'));

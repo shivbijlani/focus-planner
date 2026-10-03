@@ -3718,6 +3718,320 @@ function Get-SessionActivities {
   return ,$activities
 }
 
+# ---- Lanes (docs/spec/Domain-lanes.md) -----------------------------------------------------
+# Which tasks THIS PC's agent may work. READ ONLY: `agent-lanes.json` (beside planner.md) is the
+# app's file alone -- nothing here writes it and write-turn's G20 refuses it as a target, because a
+# PC that could edit it could give itself any task. Its ABSENCE turns lanes off, and with lanes off
+# nothing in scan or session changes by a single byte (Read-Lanes returns $null and every caller
+# short-circuits). oa-state-lib/plan/lanes.mjs is the twin; the characterization goldens pin both.
+$script:LanesFile = 'agent-lanes.json'
+$script:LanesSchema = 'fp-agent-lanes@1'
+$script:LaneReserved = @('none', 'any', 'all', 'catchall', 'default')
+$script:LanesMaxBytes = 256 * 1024
+$script:LaneWalkMaxDepth = 16
+$script:LaneTagRe = '(?<![\p{L}\p{N}])#[Ll][Aa][Nn][Ee]:([A-Za-z0-9_-]*)'
+$script:ScanLanes = $null
+
+function Test-LaneName($name, [switch]$AllowNone) {
+  if ($name -isnot [string] -or -not [regex]::IsMatch($name, '^[a-z][a-z0-9-]{0,31}$')) { return $false }
+  if ($name -ceq 'none') { return [bool]$AllowNone }
+  return -not ($script:LaneReserved -ccontains $name)
+}
+
+function ConvertTo-CanonicalTaskId([string]$id) {
+  $s = [regex]::Replace("$id", '^0+(?=\d)', '')
+  if ($s -match '^\d+$') { return $s } else { return $null }
+}
+
+# A JSON object as an ordered map of its members (last duplicate wins, first position kept), the
+# way JavaScript's JSON.parse sees it. $null when the element is not an object.
+function ConvertFrom-LaneJsonObject($el) {
+  if ($el.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) { return $null }
+  # Ordinal: JSON member names are case-sensitive (`[ordered]@{}` would fold "Lanes" into "lanes").
+  $m = New-Object System.Collections.Specialized.OrderedDictionary ([StringComparer]::Ordinal)
+  foreach ($p in $el.EnumerateObject()) {
+    if ($m.Contains($p.Name)) { $m[$p.Name] = $p.Value } else { $m.Add($p.Name, $p.Value) }
+  }
+  return ,$m
+}
+
+function Read-LanesFileBytes([string]$path) {
+  $bytes = [IO.File]::ReadAllBytes($path)
+  if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+    return (New-Object Text.UTF8Encoding($false)).GetString($bytes, 3, $bytes.Length - 3)
+  }
+  return (New-Object Text.UTF8Encoding($false)).GetString($bytes)
+}
+
+# The file as a verdict: $null = absent (lanes OFF); otherwise state ok|invalid, reason, devices,
+# tasks. Any violation invalidates the WHOLE file (fail closed): dropping one device's entry would
+# silently widen that PC to catch-all. Keys are checked before values so the reason reported never
+# depends on key order.
+function Read-AgentLanesFile([string]$path) {
+  $bad = { param($reason) [pscustomobject]@{ state = 'invalid'; reason = $reason; devices = @{}; tasks = @{} } }
+  $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+  if (-not $item) { return $null }
+  if ($item.PSIsContainer) { return (& $bad 'not_a_file') }
+  if ($item.Length -gt $script:LanesMaxBytes) { return (& $bad 'too_large') }
+  try { $text = Read-LanesFileBytes $path } catch { return (& $bad 'unreadable') }
+  if ($text.Trim().Length -eq 0) { return (& $bad 'empty') }
+  try { $docHandle = [System.Text.Json.JsonDocument]::Parse($text) } catch { return (& $bad 'not_json') }
+  try {
+    $doc = ConvertFrom-LaneJsonObject $docHandle.RootElement
+    if ($null -eq $doc) { return (& $bad 'not_object') }
+    if (-not $doc.Contains('schema') -or $doc['schema'].ValueKind -ne [System.Text.Json.JsonValueKind]::String -or
+        $doc['schema'].GetString() -cne $script:LanesSchema) { return (& $bad 'schema') }
+    $devices = @{}
+    if ($doc.Contains('devices')) {
+      $dm = ConvertFrom-LaneJsonObject $doc['devices']
+      if ($null -eq $dm) { return (& $bad 'devices') }
+      if ($dm.Count -gt 64) { return (& $bad 'too_many_devices') }
+      foreach ($k in $dm.Keys) { if ($k -cnotmatch '^[0-9a-f]{32}$') { return (& $bad 'device_key') } }
+      foreach ($k in $dm.Keys) {
+        $e = ConvertFrom-LaneJsonObject $dm[$k]
+        if ($null -eq $e) { return (& $bad 'device_entry') }
+        $lanes = New-Object System.Collections.Generic.List[string]
+        if ($e.Contains('lanes')) {
+          if ($e['lanes'].ValueKind -ne [System.Text.Json.JsonValueKind]::Array) { return (& $bad 'device_lanes') }
+          if ($e['lanes'].GetArrayLength() -gt 16) { return (& $bad 'too_many_lanes') }
+          foreach ($l in $e['lanes'].EnumerateArray()) {
+            if ($l.ValueKind -ne [System.Text.Json.JsonValueKind]::String) { return (& $bad 'device_lanes') }
+            $name = $l.GetString()
+            if (-not (Test-LaneName $name)) { return (& $bad 'device_lanes') }
+            if (-not $lanes.Contains($name)) { $lanes.Add($name) }
+          }
+        }
+        $catchAll = $false
+        if ($e.Contains('catchAll')) {
+          $kind = $e['catchAll'].ValueKind
+          if ($kind -eq [System.Text.Json.JsonValueKind]::True) { $catchAll = $true }
+          elseif ($kind -ne [System.Text.Json.JsonValueKind]::False) { return (& $bad 'device_catch_all') }
+        }
+        $sorted = [string[]]$lanes.ToArray()
+        [Array]::Sort($sorted, [StringComparer]::Ordinal)
+        $devices[$k] = [pscustomobject]@{ lanes = @($sorted); catchAll = $catchAll }
+      }
+    }
+    $tasks = @{}
+    if ($doc.Contains('tasks')) {
+      $tm = ConvertFrom-LaneJsonObject $doc['tasks']
+      if ($null -eq $tm) { return (& $bad 'tasks') }
+      if ($tm.Count -gt 2000) { return (& $bad 'too_many_tasks') }
+      foreach ($k in $tm.Keys) { if ($k -cnotmatch '^(?:0|[1-9][0-9]*)$') { return (& $bad 'task_id') } }
+      foreach ($k in $tm.Keys) {
+        $v = $tm[$k]
+        if ($v.ValueKind -ne [System.Text.Json.JsonValueKind]::String -or -not (Test-LaneName $v.GetString() -AllowNone)) {
+          return (& $bad 'task_lane')
+        }
+      }
+      foreach ($k in $tm.Keys) { $tasks[$k] = $tm[$k].GetString() }
+    }
+    return [pscustomobject]@{ state = 'ok'; reason = $null; devices = $devices; tasks = $tasks }
+  }
+  finally { $docHandle.Dispose() }
+}
+
+# This PC's device key, from the device.json the per-device publisher created in the agent home
+# (the parent of the state folder). Never created here: a PC with no identity has never announced,
+# so it cannot have been assigned anything.
+function Read-LaneDeviceKey([string]$stateDir) {
+  $file = Join-Path (Split-Path -Parent $stateDir) 'device.json'
+  if (-not (Test-Path -LiteralPath $file)) { return [pscustomobject]@{ state = 'none'; key = $null } }
+  $corrupt = [pscustomobject]@{ state = 'corrupt'; key = $null }
+  try {
+    $h = [System.Text.Json.JsonDocument]::Parse((Read-LanesFileBytes $file))
+  } catch { return $corrupt }
+  try {
+    $doc = ConvertFrom-LaneJsonObject $h.RootElement
+    if ($null -eq $doc -or -not $doc.Contains('schema') -or -not $doc.Contains('id')) { return $corrupt }
+    if ($doc['schema'].ValueKind -ne [System.Text.Json.JsonValueKind]::String -or $doc['schema'].GetString() -cne 'fp-agent-device@1') { return $corrupt }
+    if ($doc['id'].ValueKind -ne [System.Text.Json.JsonValueKind]::String) { return $corrupt }
+    $id = $doc['id'].GetString()
+    if ($id -cnotmatch '^[0-9a-fA-F-]{36}$') { return $corrupt }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $hash = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("fp-device@1`n$($id.ToLowerInvariant())")) }
+    finally { $sha.Dispose() }
+    $hex = -join ($hash | ForEach-Object { $_.ToString('x2') })
+    return [pscustomobject]@{ state = 'ok'; key = $hex.Substring(0, 32) }
+  }
+  finally { $h.Dispose() }
+}
+
+# Board facts lanes need: per canonical ID, the #lane: tags of EVERY row and the Linked IDs of the
+# row Get-BoardMap keeps (the last). The Task cell is located by its table's own header.
+function Read-LaneBoard {
+  $tags = @{}
+  $linked = @{}
+  if (-not (Test-Path $PlannerBoard)) { return [pscustomobject]@{ tags = $tags; linked = $linked } }
+  $taskIdx = -1
+  $linkedIdx = -1
+  foreach ($line in ((Read-JournalText $PlannerBoard) -split "`r?`n")) {
+    if ($line -match '^##\s') { $taskIdx = -1; $linkedIdx = -1; continue }
+    if ($line -notmatch '^\s*\|') { continue }
+    $cells = @((($line.Trim().Trim('|') -split '\|') | ForEach-Object { $_.Trim() }))
+    if ($line -match '(?i)\bLinked\s*ID\b') {
+      for ($i = 0; $i -lt $cells.Count; $i++) { if ($cells[$i] -match '(?i)^Linked\s*ID$') { $linkedIdx = $i; break } }
+    }
+    $rawId = Get-BoardRowId $line
+    if (-not $rawId) {
+      for ($i = 0; $i -lt $cells.Count; $i++) { if ($cells[$i].ToLowerInvariant() -ceq 'task') { $taskIdx = $i; break } }
+      continue
+    }
+    $id = ConvertTo-CanonicalTaskId $rawId
+    if (-not $id) { continue }
+    if (-not $tags.ContainsKey($id)) { $tags[$id] = New-Object System.Collections.Generic.List[string] }
+    if ($taskIdx -ge 0 -and $taskIdx -lt $cells.Count) {
+      $cell = [regex]::Replace($cells[$taskIdx], '<!--.*?-->', '')
+      foreach ($m in [regex]::Matches($cell, $script:LaneTagRe)) { $tags[$id].Add($m.Groups[1].Value.ToLowerInvariant()) }
+    }
+    $linked[$id] = @(@(Get-BoardRowLinkedIds -Line $line -LinkedIndex $linkedIdx) |
+      ForEach-Object { ConvertTo-CanonicalTaskId $_ } | Where-Object { $_ })
+  }
+  return [pscustomobject]@{ tags = $tags; linked = $linked }
+}
+
+function Get-OwnLane([string]$id, $board, $tasks) {
+  $names = New-Object System.Collections.Generic.List[string]
+  $tagCount = 0
+  if ($board.tags.ContainsKey($id)) { foreach ($n in $board.tags[$id]) { $names.Add($n); $tagCount++ } }
+  if ($tasks.ContainsKey($id)) { $names.Add($tasks[$id]) }
+  if ($names.Count -eq 0) { return $null }
+  $source = if ($tagCount -gt 0) { 'tag' } else { 'map' }
+  $distinct = New-Object System.Collections.Generic.List[string]
+  foreach ($n in $names) { if (-not $distinct.Contains($n)) { $distinct.Add($n) } }
+  $cand = [string[]]$distinct.ToArray()
+  [Array]::Sort($cand, [StringComparer]::Ordinal)
+  foreach ($n in $cand) {
+    if (-not (Test-LaneName $n -AllowNone)) {
+      return [pscustomobject]@{ lane = $null; source = $source; problem = 'invalid'; candidates = @($cand) }
+    }
+  }
+  if ($cand.Count -gt 1) { return [pscustomobject]@{ lane = $null; source = $source; problem = 'conflict'; candidates = @($cand) } }
+  $lane = if ($cand[0] -ceq 'none') { $null } else { $cand[0] }
+  return [pscustomobject]@{ lane = $lane; source = $source; problem = $null; candidates = @() }
+}
+
+# Depth-first through Linked ID, parents in the order written; no task is visited twice in one
+# resolution (that also cuts cycles), and the walk stops after $script:LaneWalkMaxDepth levels.
+function Resolve-TaskLane([string]$id, $board, $tasks) {
+  $self = Get-OwnLane $id $board $tasks
+  if ($self) {
+    return [pscustomobject]@{ lane = $self.lane; source = $self.source; from = $null; problem = $self.problem; candidates = @($self.candidates) }
+  }
+  $visited = New-Object 'System.Collections.Generic.HashSet[string]'
+  [void]$visited.Add($id)
+  $stack = New-Object System.Collections.Generic.List[object]
+  # An explicit stack of (task, depth, next-parent-index) frames, so a deep chain cannot hit
+  # PowerShell's recursion limit and the order is exactly the recursive depth-first order.
+  $stack.Add(@($id, 0, 0))
+  while ($stack.Count -gt 0) {
+    $frame = $stack[$stack.Count - 1]
+    $tid = $frame[0]; $depth = $frame[1]; $next = $frame[2]
+    $parents = @(if ($board.linked.ContainsKey($tid)) { $board.linked[$tid] })
+    if ($depth -ge $script:LaneWalkMaxDepth -or $next -ge $parents.Count) { $stack.RemoveAt($stack.Count - 1); continue }
+    $frame[2] = $next + 1
+    $p = [string]$parents[$next]
+    if (-not $visited.Add($p)) { continue }
+    $o = Get-OwnLane $p $board $tasks
+    if ($o) {
+      return [pscustomobject]@{ lane = $o.lane; source = 'inherited'; from = $p; problem = $o.problem; candidates = @($o.candidates) }
+    }
+    $stack.Add(@($p, ($depth + 1), 0))
+  }
+  return [pscustomobject]@{ lane = $null; source = $null; from = $null; problem = $null; candidates = @() }
+}
+
+# Everything one command needs, or $null when lanes are off (no agent-lanes.json).
+function Read-Lanes {
+  $cfg = Read-AgentLanesFile (Join-Path (Split-Path -Parent $PlannerBoard) $script:LanesFile)
+  if ($null -eq $cfg) { return $null }
+  $device = Read-LaneDeviceKey $StateDir
+  $board = Read-LaneBoard
+  $state = 'ok'; $reason = $null
+  if ($cfg.state -ne 'ok') { $state = 'invalid'; $reason = $cfg.reason }
+  elseif ($device.state -eq 'corrupt') {
+    $state = 'device_identity_corrupt'
+    $reason = 'device.json in the agent home is not a readable fp-agent-device@1 file'
+  }
+  $entry = if ($state -eq 'ok' -and $device.key -and $cfg.devices.ContainsKey($device.key)) { $cfg.devices[$device.key] } else { $null }
+  return [pscustomobject]@{
+    state    = $state
+    reason   = $reason
+    device   = $device.key
+    assigned = [bool]$entry
+    serves   = @(if ($entry) { $entry.lanes })
+    catchAll = [bool]($state -eq 'ok' -and $(if ($entry) { $entry.catchAll } else { $true }))
+    board    = $board
+    tasks    = $cfg.tasks
+  }
+}
+
+function Get-LaneFacts($lanes, [string]$id) {
+  $cid = ConvertTo-CanonicalTaskId $id
+  if (-not $cid) { $cid = $id }
+  $r = Resolve-TaskLane $cid $lanes.board $lanes.tasks
+  $served = $false
+  if ($lanes.state -eq 'ok' -and -not $r.problem) {
+    $served = if ($null -eq $r.lane) { [bool]$lanes.catchAll } else { [bool]($lanes.serves -ccontains $r.lane) }
+  }
+  Add-Member -InputObject $r -NotePropertyName 'served' -NotePropertyValue $served -Force
+  return $r
+}
+
+function Add-LaneFields($lanes, $row) {
+  $f = Get-LaneFacts $lanes "$($row.id)"
+  Add-Member -InputObject $row -NotePropertyName 'lane' -NotePropertyValue $f.lane -Force
+  Add-Member -InputObject $row -NotePropertyName 'lane_source' -NotePropertyValue $f.source -Force
+  Add-Member -InputObject $row -NotePropertyName 'lane_from' -NotePropertyValue $f.from -Force
+  Add-Member -InputObject $row -NotePropertyName 'lane_problem' -NotePropertyValue $f.problem -Force
+  Add-Member -InputObject $row -NotePropertyName 'lane_candidates' -NotePropertyValue @($f.candidates) -Force
+  Add-Member -InputObject $row -NotePropertyName 'lane_served_here' -NotePropertyValue ([bool]$f.served) -Force
+}
+
+function New-LanesSummary($lanes, $rows) {
+  [ordered]@{
+    state            = $lanes.state
+    reason           = $lanes.reason
+    device           = $lanes.device
+    assigned         = [bool]$lanes.assigned
+    serves           = @($lanes.serves)
+    catch_all        = [bool]$lanes.catchAll
+    rows_out_of_lane = @($rows | Where-Object { $_.PSObject.Properties['lane_served_here'] -and -not $_.lane_served_here }).Count
+  }
+}
+
+# The dispatch / bind floor: throws when this PC must not wake or bind a session for task $id.
+function Assert-LaneServed([string]$id) {
+  $lanes = Read-Lanes
+  if ($null -eq $lanes) { return }
+  if ($lanes.state -eq 'invalid') {
+    throw ("session_lanes_config_invalid: $($script:LanesFile) does not validate ($($lanes.reason)); no task is " +
+      'dispatched or bound on this PC until he fixes it in the app. Do not dispatch it.')
+  }
+  $f = Get-LaneFacts $lanes $id
+  if ($f.served) { return }
+  if ($f.problem -eq 'conflict') {
+    throw ("session_lane_conflict: task $id has conflicting lanes ($(@($f.candidates) -join ', ')); no PC works it " +
+      'until he resolves it on the board or in the app. Do not dispatch or bind it.')
+  }
+  if ($f.problem -eq 'invalid') {
+    throw ("session_lane_invalid: task $id names an invalid lane ($(@($f.candidates) -join ', ')); no PC works it " +
+      'until he fixes it. Do not dispatch or bind it.')
+  }
+  if ($lanes.state -eq 'device_identity_corrupt') {
+    throw ("session_lane_not_served: this PC's device identity is unreadable, so it serves no lane; task $id " +
+      'is not dispatched or bound here. Do not dispatch it.')
+  }
+  $where = if ($f.source -eq 'tag') { 'from its #lane: tag' } elseif ($f.source -eq 'map') { 'from his assignment in the app' } else { "inherited from task $($f.from)" }
+  $what = if ($null -eq $f.lane) {
+    "task $id has no lane ($(if ($f.source) { $where } else { 'none set' }))"
+  } else { "task $id is in lane '$($f.lane)' ($where)" }
+  $parts = @($lanes.serves | ForEach-Object { "'$_'" })
+  if ($lanes.catchAll) { $parts += 'tasks with no lane' }
+  $serves = if ($parts.Count) { $parts -join ', ' } else { 'nothing' }
+  throw "session_lane_not_served: $what; this PC serves $serves. Another PC works it -- do not dispatch or bind it here."
+}
+
 function Get-ScanRows {
   $activities = Get-SessionActivities
   $agentModel = Get-AgentModelSettings
@@ -4089,6 +4403,14 @@ function Get-ScanRows {
     @{ Expression = { $_.board_pos } }, `
     @{ Expression = { [int]$_.id } }
 
+  # Lanes (docs/spec/Domain-lanes.md): with an agent-lanes.json beside the board, a row this PC
+  # does not serve is never eligible here and never holds the Today gate here. Without one (lanes
+  # off) nothing below changes.
+  $lanes = Read-Lanes
+  $script:ScanLanes = $lanes
+  if ($lanes) { foreach ($r in $rows) { Add-LaneFields $lanes $r } }
+  $notHere = { param($row) [bool]($lanes -and -not $row.lane_served_here) }
+
   # The gate is computed from the WHOLE set, so it cannot be evaluated per-row in the loop above.
   # NOTE this counts rows that still hold the gate SHUT, which is narrower than "workable": a
   # Today row the run has DECLARED EXHAUSTED stays workable (and eligible, at its own board rank)
@@ -4097,14 +4419,15 @@ function Get-ScanRows {
   $todayHash = Get-TodaySectionHash
   $verdicts = @{}
   foreach ($r in $rows) {
-    if ($r.section -eq 'today') { $verdicts["$($r.id)"] = (Get-TodayGateVerdict $r $todayHash) }
+    if ($r.section -eq 'today' -and -not (& $notHere $r)) { $verdicts["$($r.id)"] = (Get-TodayGateVerdict $r $todayHash) }
   }
   $todayHolding = @($verdicts.Values | Where-Object { $_.holds }).Count
   $order = 0
   foreach ($r in $rows) {
     $order++
     $eligible = $false
-    if (-not $r.snoozed) {
+    if (& $notHere $r) { $eligible = $false }
+    elseif (-not $r.snoozed) {
       # #170 cause 3: `reopened` beating the gate is rule 4, and it is right -- a live reply is
       # the highest-value work there is. But it must be a reply on work that is still OPEN.
       # This shortcut is the SECOND place the old "a reply always wins" rule lived, above the
@@ -4130,7 +4453,7 @@ function Get-ScanRows {
     $planReview = [bool]($r.status -eq 'proposed' -and $r.status_by -eq 'agent' -and
       $r.on_board -and -not $r.snoozed -and -not $r.session_paused -and
       -not $r.reopened -and -not $r.unanswered_user -and
-      ($r.section -eq 'today' -or $todayHolding -eq 0))
+      ($r.section -eq 'today' -or $todayHolding -eq 0) -and -not (& $notHere $r))
     Add-Member -InputObject $r -NotePropertyName 'plan_review_due' -NotePropertyValue $planReview -Force
     # Auditable: which Today rows are actually holding the backlog shut this run (#223 is
     # explicit that selection must be data, not the agent's judgement).
@@ -4140,7 +4463,7 @@ function Get-ScanRows {
     # audited afterwards without re-deriving anything: either it says `declared_exhausted` and
     # the declaration is right there in `exhaustion`, or it does not and the skip was a bug.
     Add-Member -InputObject $r -NotePropertyName 'today_release_reason' `
-      -NotePropertyValue $(if ($null -ne $v) { "$($v.reason)" } else { $null }) -Force
+      -NotePropertyValue $(if ($null -ne $v) { "$($v.reason)" } elseif ($r.section -eq 'today' -and (& $notHere $r)) { 'lane_not_served' } else { $null }) -Force
     # The tunables AS RESOLVED for this run, on every Today row. Reporting the value that was
     # actually in force -- rather than the one someone believes they configured -- is what makes
     # a settings file auditable instead of merely present: a row that says `backstop_hours: 6`
@@ -4189,7 +4512,7 @@ function New-ScanSummary($rows, [double]$seconds, [string]$outFile) {
   # The counts a caller needs to know the read SUCCEEDED, rather than inferring it from a
   # payload it could not finish reading. `rows_total` being 0 is a different fact from an empty
   # eligible list, and both used to be invisible behind half a megabyte of JSON.
-  [ordered]@{
+  $summary = [ordered]@{
     scan_seconds   = $seconds
     rows_total     = @($rows).Count
     rows_eligible  = @($rows | Where-Object { $_.eligible }).Count
@@ -4200,6 +4523,8 @@ function New-ScanSummary($rows, [double]$seconds, [string]$outFile) {
     today_holding  = @($rows | Where-Object { $_.holds_today_gate }).Count
     out_file       = if ($outFile) { $outFile } else { $null }
   }
+  if ($script:ScanLanes) { $summary['lanes'] = [pscustomobject](New-LanesSummary $script:ScanLanes $rows) }
+  $summary
 }
 
 # The fields a run actually consumes to SELECT and DISPATCH work. Everything omitted is either
@@ -4216,7 +4541,8 @@ $script:CompactFields = @(
   'session_activity', 'dispatch_skip_reason',
   'session_process_dead', 'replacements_24h',
   'session_workspace_missing',
-  'plan_review_due', 'dispatch_input', 'no_journal_reason'
+  'plan_review_due', 'dispatch_input', 'no_journal_reason',
+  'lane', 'lane_source', 'lane_from', 'lane_problem', 'lane_candidates', 'lane_served_here'
 )
 
 function Test-CompactRowNeeded($r) {
@@ -4235,6 +4561,10 @@ function Test-CompactRowNeeded($r) {
   #
   # An ineligible, quiet, unchanged row is the case this mode exists to drop -- it is counted in
   # the summary and nothing reads its fields.
+  #
+  # Lanes: a row another PC serves is that PC's business. It is counted in summary.lanes
+  # (rows_out_of_lane) and never listed here, whatever else is true of it.
+  if ($r.PSObject.Properties['lane_served_here'] -and -not $r.lane_served_here) { return $false }
   if ($r.eligible) { return $true }
   if ($r.dispatch_skip_reason) { return $true }
   if ($r.plan_review_due) { return $true }
@@ -5962,6 +6292,9 @@ function Get-DispatchInput($st, $facts) {
 }
 
 function Assert-TaskDispatch($st, $sess, $facts) {
+  # Lanes first (docs/spec/Domain-lanes.md): a task another PC serves is not this PC's to wake,
+  # whatever else is true of it. A no-op when lanes are off.
+  Assert-LaneServed "$($st.id)"
   if ($RequiresTools.Count) {
     if (-not (Test-Path -LiteralPath $CapabilitiesPath)) {
       throw 'session_capabilities_missing: run the critical-tool preflight before dispatch'
@@ -6230,6 +6563,7 @@ function Cmd-Session {
     $dirty = $true
   }
   elseif ($SessionId) {
+    Assert-LaneServed "$Id"
     $prior = ''
     $lineage = @(Get-SessionLineage $sess)
     if ($sess -and "$($sess.session_id)" -ne $SessionId -and $lineage -contains $SessionId) {

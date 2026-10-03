@@ -1113,7 +1113,9 @@ function turnBodyFindings(ctx, body, disabled, doc, ask) {
 // planner's consent rules (agent-gate.md, user-settings.md) are the user's alone (spec: the agent
 // can never write agent-gate.md), so an -Id carrying a path, a target outside -JournalDir, or a
 // journal that is a link to a protected file is refused. Not disableable.
-const PROTECTED_FILES = ['agent-gate.md', 'user-settings.md'];
+// agent-lanes.json (docs/spec/Domain-lanes.md) is the same class: which PC may work which task is
+// the user's decision, and an agent that could write it could give itself any task.
+const PROTECTED_FILES = ['agent-gate.md', 'user-settings.md', 'agent-lanes.json'];
 function protectedTargetFinding(journalDir, id, journal) {
   const refuse = (why) => newFinding('G20', 1, `-Id ${id}`,
     `${why} write-turn writes exactly one file, journal/task-<id>.md; agent-gate.md and ` +

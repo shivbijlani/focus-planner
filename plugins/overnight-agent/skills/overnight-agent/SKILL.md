@@ -569,6 +569,14 @@ Do the phases **in this order** every time.
 > something you can read in one result, and `-Compact` is ~48 KB carrying every row you are
 > allowed to work plus the rows explaining why the rest are gated.
 
+> **Lanes (only when the planner folder has `agent-lanes.json`; docs/spec/Domain-lanes.md).** He
+> may run this agent on several PCs and assign each one part of the plan. `scan -Compact` then
+> leaves out every task another PC serves and reports them only as `summary.lanes.rows_out_of_lane`;
+> `session` refuses to check, wake or bind one (`session_lane_not_served`, `session_lane_conflict`,
+> `session_lane_invalid`, `session_lanes_config_invalid`). Those refusals are final for this run:
+> do not work the task inline, do not write a turn into it, and never touch `agent-lanes.json` --
+> only he assigns lanes, in the app. With no such file nothing here applies.
+
 > **Work the rows in the order `scan` gives you (#223).** The scan output is already sorted, and
 > ordering is **data, not judgement** — do not re-derive it in your head. Each row carries
 > `order` (its rank this run), `section` (`today`/`deferred`/`other`), `work_priority`, `urgency`,

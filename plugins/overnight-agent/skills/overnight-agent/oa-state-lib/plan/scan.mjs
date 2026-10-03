@@ -22,6 +22,11 @@ import { DocObservationFreshMinutes, PausedStatus } from './status.mjs';
 import {
   getSessionActivities, getTodayGateVerdict, testReopenedClosed, testUnansweredUser, testWorkable,
 } from './workable.mjs';
+import { readLanes, addLaneFields, newLanesSummary } from './lanes.mjs';
+
+// The lanes in force for the last getScanRows (null = lanes off: no agent-lanes.json). Read by the
+// summaries, which have no ctx; oa-state.ps1 keeps the same value in $script:ScanLanes.
+export let ScanLanes = null;
 
 export function getScanRows(ctx) {
   const activities = getSessionActivities(ctx);
@@ -189,15 +194,24 @@ export function getScanRows(ctx) {
 
   rows = rows.sort(compareRows);
 
+  // Lanes (docs/spec/Domain-lanes.md): with an agent-lanes.json beside the board, a row this PC
+  // does not serve is never eligible here and never holds the Today gate here. Without one
+  // (lanes off) nothing below changes.
+  const lanes = readLanes(ctx);
+  ScanLanes = lanes;
+  if (lanes) for (const r of rows) addLaneFields(lanes, r);
+  const notHere = (r) => !!(lanes && !r.lane_served_here);
+
   const todayHash = Board.getTodaySectionHash(ctx);
   const verdicts = {};
-  for (const r of rows) if (r.section === 'today') verdicts[psStr(r.id)] = getTodayGateVerdict(ctx, r, todayHash);
+  for (const r of rows) if (r.section === 'today' && !notHere(r)) verdicts[psStr(r.id)] = getTodayGateVerdict(ctx, r, todayHash);
   const todayHolding = Object.values(verdicts).filter((v) => v.holds).length;
   let order = 0;
   for (const r of rows) {
     order++;
     let eligible = false;
-    if (!r.snoozed) {
+    if (notHere(r)) eligible = false;
+    else if (!r.snoozed) {
       if (testReopenedClosed(r)) eligible = false;
       else if (r.reopened) eligible = true;
       else if (testUnansweredUser(r)) eligible = true;
@@ -209,10 +223,11 @@ export function getScanRows(ctx) {
     setMember(r, 'eligible', eligible);
     const planReview = !!(r.status === 'proposed' && r.status_by === 'agent'
       && r.on_board && !r.snoozed && !r.session_paused && !r.reopened && !r.unanswered_user
-      && (r.section === 'today' || todayHolding === 0));
+      && (r.section === 'today' || todayHolding === 0) && !notHere(r));
     setMember(r, 'plan_review_due', planReview);
     setMember(r, 'holds_today_gate', !!(v !== undefined && v !== null && v.holds));
-    setMember(r, 'today_release_reason', v !== undefined && v !== null ? psStr(v.reason) : null);
+    setMember(r, 'today_release_reason', v !== undefined && v !== null ? psStr(v.reason)
+      : r.section === 'today' && notHere(r) ? 'lane_not_served' : null);
     if (r.section === 'today') {
       setMember(r, 'gate_backstop_hours', Number(ctx.BackstopHours));
       setMember(r, 'gate_strict', !!ctx.GateStrict);
@@ -285,6 +300,7 @@ export function newScanSummary(rows, seconds, outFile = '') {
     rows_no_journal: asArray(rows).filter((r) => !r.has_journal).length,
     today_holding: asArray(rows).filter((r) => r.holds_today_gate).length,
     out_file: outFile ? outFile : null,
+    ...(ScanLanes ? { lanes: newLanesSummary(ScanLanes, asArray(rows)) } : {}),
   };
 }
 
@@ -299,9 +315,12 @@ export const CompactFields = [
   'session_process_dead', 'replacements_24h',
   'session_workspace_missing',
   'plan_review_due', 'dispatch_input', 'no_journal_reason',
+  'lane', 'lane_source', 'lane_from', 'lane_problem', 'lane_candidates', 'lane_served_here',
 ];
 
 export function testCompactRowNeeded(r) {
+  // Another PC's lane: its business, counted in summary.lanes.rows_out_of_lane, never listed here.
+  if (Object.prototype.hasOwnProperty.call(r, 'lane_served_here') && !r.lane_served_here) return false;
   if (r.eligible) return true;
   if (r.dispatch_skip_reason) return true;
   if (r.plan_review_due) return true;

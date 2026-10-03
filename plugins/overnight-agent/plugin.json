@@ -1,7 +1,7 @@
 {
   "name": "overnight-agent",
   "description": "Autonomously makes progress on your planner tasks overnight. Dispatches reversible or standing-rule-allowed steps immediately and asks only before gated actions.",
-  "version": "1.57.44",
+  "version": "1.57.45",
   "author": {
     "name": "Shiv Bijlani",
     "url": "https://github.com/shivbijlani"
