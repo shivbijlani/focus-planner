@@ -1489,7 +1489,9 @@ function Test-TurnBody {
 # agent-gate.md and user-settings.md hold the consent rules and are the user's alone (spec: the
 # agent can never write agent-gate.md). An -Id carrying a path, a target outside -JournalDir, or
 # a journal that is a link to a protected file is refused. Not disableable.
-$script:ProtectedFiles = @('agent-gate.md', 'user-settings.md')
+# agent-lanes.json (docs/spec/Domain-lanes.md) is the same class: which PC may work which task is
+# the user's decision, and an agent that could write it could give itself any task.
+$script:ProtectedFiles = @('agent-gate.md', 'user-settings.md', 'agent-lanes.json')
 function Get-ProtectedTargetFinding([string]$JournalDir, [string]$TaskId, [string]$Journal) {
   $tail = ' write-turn writes exactly one file, journal/task-<id>.md; agent-gate.md and ' +
     'user-settings.md hold the consent rules and only the user writes them. This guard cannot be disabled'

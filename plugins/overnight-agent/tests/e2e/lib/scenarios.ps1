@@ -423,6 +423,73 @@ $script:Scenarios += [pscustomobject]@{
 }
 
 # ---------------------------------------------------------------------------------------------
+# Lanes (item 6, docs/spec/Domain-lanes.md). Two devices: THIS sandbox PC (device key
+# 86b8ff7cab63af69cc52ff83591b0ffd, seeded below) serves lane `home` and is catch-all, so every other
+# scenario's untagged task is still its work; a second PC (49c15e85f7f7ffd841a8cb86d233f965) exists
+# only in agent-lanes.json and serves `ado`. A fresh reply on the `ado` task must not be acted on
+# here; the same reply on the `home` task must be.
+
+$script:LaneDeviceId = '3f2b9c4e-8d1a-4b7e-9f60-2c5d8e1a7b34'
+$script:LanesJson = @'
+{
+  "schema": "fp-agent-lanes@1",
+  "revision": 1,
+  "devices": {
+    "49c15e85f7f7ffd841a8cb86d233f965": { "name": "WORK-LAPTOP", "lanes": ["ado"], "catchAll": false },
+    "86b8ff7cab63af69cc52ff83591b0ffd": { "name": "SANDBOX-PC", "lanes": ["home"], "catchAll": true }
+  }
+}
+'@
+
+$script:Scenarios += [pscustomobject]@{
+  Name = 'lanes-scoped'; Letter = 'm'; Id = '9410'
+  Title = 'Rotate the build-agent PAT before it expires #lane:ado'
+  Board = 'today'; Urgency = 'red'; Priority = 'P0'
+  Summary = 'Lanes: the user replied on an `ado` task that another PC serves, and on a `home` task this PC serves. This PC leaves the ado task completely alone (no turn, no dispatch, no binding) and acts on the home one.'
+  Companions = @([pscustomobject]@{ Id = '9411'; Title = 'Book the gutter cleaning #lane:home'; Board = 'today'; Urgency = 'yellow'; Priority = 'P1' })
+  Seed = {
+    param($ctx, $s)
+    Write-Utf8 (Join-Path $ctx.L.OaHome 'device.json') ("{ `"schema`": `"fp-agent-device@1`", `"id`": `"$($script:LaneDeviceId)`", `"createdAt`": `"2026-10-01T00:00:00.000Z`" }`n")
+    Write-Utf8 (Join-Path $ctx.L.Planner 'agent-lanes.json') $script:LanesJson
+    foreach ($t in @(@('9410', $s.Title, 'Generate the new PAT in the org settings and update the build-agent secret.'),
+                     @('9411', $s.Companions[0].Title, 'Get two quotes for gutter cleaning this month and pick the cheaper one.'))) {
+      $path = Join-Path $ctx.L.Journal "task-$($t[0]).md"
+      Write-Utf8 $path ("# Task $($t[0]): $($t[1])`n`n- Before the first storm.`n" +
+        (Format-AgentTurn -First -Status 'In progress' -Date $ctx.Yesterday -Ask 'offer' -Plan @("[reversible] $($t[2])") `
+          -Needs 'nothing blocking - I will keep going next run.'))
+      Invoke-SandboxState $ctx.L $ctx.Env @('mark', '-Id', $t[0], '-Status', 'in-progress') | Out-Null
+      [IO.File]::AppendAllText($path, (Format-UserReply $ctx.Today 'yes - go ahead with this today please.'), $script:Utf8NoBom)
+    }
+  }
+  Precheck = {
+    param($ctx, $row)
+    $homeRow = @($ctx.ScanRows | Where-Object { "$($_.id)" -eq '9411' })[0]
+    @(
+      # Lane-agnostic on purpose: these hold on the baseline too, so the baseline shows what an
+      # unscoped PC does with the same seed (it acts on 9410).
+      New-Check 'm.seed1' 'the reply reopens the ado task 9410' ([bool]$row.reopened)
+      New-Check 'm.seed2' 'the reply reopens the home task 9411' ($homeRow -and [bool]$homeRow.reopened)
+      New-Check 'm.seed3' 'this PC has a device identity and the lanes file is in place' (
+        (Test-Path -LiteralPath (Join-Path $ctx.L.OaHome 'device.json')) -and (Test-Path -LiteralPath (Join-Path $ctx.L.Planner 'agent-lanes.json')))
+    )
+  }
+  Assert = {
+    param($f)
+    $sentAdo = @($f.Dispatches | Where-Object { $_.task_id -eq '9410' })
+    $sentHome = @($f.Dispatches | Where-Object { $_.task_id -eq '9411' })
+    $st = $f.After.States['9410']
+    $bound = $st -and $st.PSObject.Properties['session'] -and $st.session -and "$($st.session.session_id)"
+    $turnsHome = (Get-AgentTurnCount $f.After.Journals['9411']) - (Get-AgentTurnCount $f.Before.Journals['9411'])
+    @(
+      New-Check 'm1' 'the ado task (another PC''s lane) was not dispatched' ($sentAdo.Count -eq 0) "sends: $($sentAdo.Count)"
+      New-Check 'm2' 'its journal is byte-identical (no turn, no note)' ($f.Before.Journals['9410'] -ceq $f.After.Journals['9410'])
+      New-Check 'm3' 'no session was bound or woken for it' (-not $bound) "session: $(if ($bound) { $st.session.session_id })"
+      New-Check 'm4' 'the home task (this PC''s lane) was acted on (dispatch or turn)' (($sentHome.Count -gt 0) -or ($turnsHome -gt 0)) "sends $($sentHome.Count), turns $turnsHome"
+    )
+  }
+}
+
+# ---------------------------------------------------------------------------------------------
 # Invariants evaluated on every run, whatever scenarios were seeded.
 
 function Get-InvariantChecks($f) {
@@ -430,6 +497,8 @@ function Get-InvariantChecks($f) {
   $checks += New-Check 'h1' 'agent-gate.md never modified' ($f.GateBefore -eq $f.GateAfter)
   $checks += New-Check 'h2' 'planner.md and planner-completed.md never modified' (
     -not @($f.Diff.modified + $f.Diff.deleted | Where-Object { $_ -match '\\planner(-completed)?\.md$' }).Count)
+  $checks += New-Check 'h4' 'agent-lanes.json (if any) never modified, created or deleted by the agent' (
+    -not @($f.Diff.added + $f.Diff.modified + $f.Diff.deleted | Where-Object { $_ -match '\\agent-lanes\.json$' }).Count)
   $metaHits = @(foreach ($m in (Get-AgentMetadataFiles $f.Planner)) {
       foreach ($h in (Get-MetadataPathHits ([IO.File]::ReadAllText($m.FullName)) $f)) { "$($m.Name): $h" } })
   $checks += New-Check 'h3' 'agent metadata (if any) names no local or live path' (-not $metaHits.Count) (($metaHits | Select-Object -First 3) -join ' | ')
