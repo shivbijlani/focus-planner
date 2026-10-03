@@ -14,7 +14,7 @@
     C  session -CheckDispatch for the home task                 -> session_lane_not_served
     D  session -SessionId (bind) for the home task              -> session_lane_not_served, binding unchanged
     E  the same planner with NO agent-lanes.json                -> the home task is eligible (off is off)
-    G  agent-lanes.json that does not parse                     -> the ado task is not eligible (fail closed)
+    G  agent-lanes.json that does not parse                     -> the home task with his reply (eligible when lanes are off) is not (fail closed)
   MUTANTS (each must be killed by the arm named):
     M1 scan ignores lanes for eligibility                       -> A
     M2 out-of-lane Today rows still hold the Today gate         -> B
@@ -117,7 +117,7 @@ function Test-Arms([string]$engine, [string]$label) {
   $after = [IO.File]::ReadAllText((Join-Path $lanes 'state\task-940.json'))
   $checks.D = ($r.exit -ne 0 -and $r.text -match 'session_lane_not_served' -and $before -ceq $after)
   $checks.E = ((Get-Eligible $engine $off '940') -eq $true)
-  $checks.G = ((Get-Eligible $engine $invalid '941') -eq $false)
+  $checks.G = ((Get-Eligible $engine $invalid '940') -eq $false)
   foreach ($k in $checks.Keys) {
     if (-not $checks[$k]) { $failed += $k }
     if ($label -eq 'baseline') { Write-Host ("  {0} {1}" -f $(if ($checks[$k]) { 'PASS' } else { 'FAIL' }), $k) }
