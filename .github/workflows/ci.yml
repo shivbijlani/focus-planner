@@ -1873,7 +1873,7 @@ jobs:
           if (-not (($out -join "`n") -match 'skip 0')) { Write-Error 'the Node port left write-turn cases unmapped (SKIP)'; exit 1 }
       - name: Sent-messages ledger and protected-target guard (node --test)
         shell: pwsh
-        run: node --test ./plugins/overnight-agent/tests/write-turn-port/ledger.test.mjs
+        run: node --test ./plugins/overnight-agent/tests/write-turn-port/ledger.test.mjs ./plugins/overnight-agent/tests/write-turn-port/g20-unreadable-target.test.mjs
       - name: Per-device agent metadata publisher (node --test; item 5, docs/spec/Domain-agent-metadata.md)
         shell: pwsh
         run: node --test ./plugins/overnight-agent/tests/agent-metadata/publish.test.mjs

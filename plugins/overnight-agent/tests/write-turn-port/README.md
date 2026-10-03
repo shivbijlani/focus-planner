@@ -17,6 +17,9 @@ run) and re-validates each journal's newest agent turn against its own task with
 
 `ledger.test.mjs` (`node --test`) pins what has no PowerShell twin: the sent-messages ledger
 (`record-sent` / `was-sent`) and G20 against a journal that is a link to `agent-gate.md`.
+`g20-unreadable-target.test.mjs` (`node --test`, both engines) pins that G20's refusal never depends on
+the protected file being readable: G20 is decided before any destination guard opens the target, so a
+path-shaped `-Id` exits 2 even when `agent-gate.md` cannot be read (a transient lock once made it exit 1).
 
 Exit 0 means identical. Two tolerances, both stated in the code: PowerShell's own error decoration
 (`Write-Error: <script>:<line>`) is stripped from stderr, and a displayed `<n> min` age may differ by

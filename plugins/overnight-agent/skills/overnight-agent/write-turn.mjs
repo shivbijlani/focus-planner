@@ -1291,13 +1291,18 @@ function run(argv, out) {
   // The pointer guards and G17/G22 are properties of the DESTINATION, resolved before validation so
   // `-Validate` with an `-Id` reaches the same verdict as the real write.
   const journal = id ? joinPS(journalDir, `task-${id}.md`) : null;
-  const doc = journal ? journalDocMeta(journal) : null;
-  ctx.pauseVerdict = userPauseVerdict(ctx, id, journal);
-  const snoozeVerdict = writeSnoozeVerdict(id, journalDir);
+  // G20 is decided FIRST. When it refuses, the target is not this task's journal (`x/../../agent-gate`
+  // resolves to agent-gate.md), so no destination guard may open it: reading it made the refusal depend
+  // on that file being readable, and a transient lock exited 1 instead of refusing with 2.
+  const prot = id ? protectedTargetFinding(journalDir, id, journal) : null;
+  const dest = prot ? null : journal;
+  const doc = dest ? journalDocMeta(dest) : null;
+  ctx.pauseVerdict = dest ? userPauseVerdict(ctx, id, dest) : null;
+  const snoozeVerdict = dest ? writeSnoozeVerdict(id, journalDir) : null;
 
   let findings = turnBodyFindings(ctx, body, disabled, doc, ask);
-  if (id && !ciContains(disabled, 'G12')) {
-    const wake = wakeTurnFinding(ctx, journal, id);
+  if (dest && !ciContains(disabled, 'G12')) {
+    const wake = wakeTurnFinding(ctx, dest, id);
     if (wake) findings = [...findings, wake];
   }
   // G22 is fail-closed and not disableable: a snoozed task is outside every agent phase until
@@ -1306,10 +1311,7 @@ function run(argv, out) {
     const snooze = snoozeWriteFinding(id, snoozeVerdict);
     if (snooze) findings = [...findings, snooze];
   }
-  if (id) {
-    const prot = protectedTargetFinding(journalDir, id, journal);
-    if (prot) findings = [...findings, prot];
-  }
+  if (prot) findings = [...findings, prot];
   const hasAsk = turnHasAsk(body);
   const askVal = lowerInvariant(netTrim(ask));
   const bodyLen = netTrim(body).length;
