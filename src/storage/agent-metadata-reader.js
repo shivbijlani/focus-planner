@@ -160,6 +160,19 @@ export function createAgentMetadataReader({ listDir, read, now = () => Date.now(
     get generation() { return generation },
     get enabled() { return enabled },
     /**
+     * Every device that has announced itself (a valid file in agent-metadata/), for the lanes
+     * panel and the "waiting for a PC" state (docs/spec/Domain-lanes.md).
+     * @returns {{ key, name, stale, lastSeenMs }[]} sorted by key
+     */
+    devices() {
+      const t = now()
+      return [...devices.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([key, d]) => {
+        const p = d.projection
+        const staleAfter = p.heartbeat ? Math.max(LIMITS.staleFloorMs, 2 * p.heartbeat * 60000) : LIMITS.staleFloorMs
+        return { key, name: p.name, stale: d.unavailable || t - p.lastSeenMs > staleAfter, lastSeenMs: p.lastSeenMs }
+      })
+    },
+    /**
      * Live bindings whose binding-time fingerprint matches this row's fingerprint.
      * @returns {{ deviceKey, deviceName, sessionId, url, stale, lastSeenMs }[]}
      */
