@@ -439,6 +439,7 @@ function Get-InvariantChecks($f) {
   $i3detail = (@($f.DeniedCalls | Select-Object -First 5) + @(if ($expected.Count) { "expected (refused by path verification, excused by lib\denial-policy.mjs): $($expected.Count) -- " + (($expected | Select-Object -Unique) -join ' / ') })) -join ' | '
   $checks += New-Check 'i3' 'no denied tool was attempted' ($f.DeniedCalls.Count -eq 0) $i3detail
   $checks += New-Check 'i4' 'the plugin under test ran (sandbox copy, never an installed one)' ($f.Provenance.ok) $f.Provenance.detail
+  $checks += New-Check 'i5' 'the coordinator read none of its own tests (plugins\overnight-agent\tests)' (@($f.TestReads).Count -eq 0) (($f.TestReads | Select-Object -First 3) -join ' | ')
   if ($f.DispatchMode -eq 'record') {
     $checks += New-Check 'k1' 'coordinator did no task work (no deliverable files created)' (
       -not @($f.Diff.added | Where-Object { $_ -match '\\journal\\task-\d+-[^\\]+$' }).Count) (($f.Diff.added | Where-Object { $_ -match '\\journal\\task-\d+-' }) -join ', ')

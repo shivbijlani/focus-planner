@@ -152,12 +152,26 @@ function Invoke-SandboxState($L, [hashtable]$Env, [string[]]$Arguments, [switch]
 
 # Export the source under test into <sandbox>\repo. -Ref is either a directory (a worktree,
 # copied as-is including uncommitted changes) or a git ref (exported with git archive).
+#
+# THE PLUGIN'S tests\ NEVER REACH THE SANDBOX. The coordinator under test can read anything in the
+# plugin copy it loads, and tests\e2e (README, scenarios.ps1) describes exactly what each run is
+# scored on, as do tests\characterization and the port tests -- measured: a coordinator read
+# tests\e2e\README.md on main db57aae. A test the subject can read is not a measurement. Nothing the
+# product runs needs that folder (scripts, checks and extensions only), so it is removed after
+# either export path, and Remove-PluginTests asserts it is gone.
+function Remove-PluginTests([string]$Dest) {
+  $tests = Join-Path $Dest 'plugins\overnight-agent\tests'
+  if (Test-Path -LiteralPath $tests) { Remove-Item -LiteralPath $tests -Recurse -Force }
+  if (Test-Path -LiteralPath $tests) { throw "could not remove the plugin's tests\ from the sandbox copy: $tests" }
+}
+
 function Export-SourceUnderTest([string]$Ref, [string]$RepoRoot, [string]$Dest) {
   New-Item -ItemType Directory -Force -Path $Dest | Out-Null
   if ($Ref -and (Test-Path -LiteralPath $Ref -PathType Container)) {
     $src = (Resolve-Path -LiteralPath $Ref).Path
     $null = & robocopy $src $Dest /MIR /XD node_modules .git dist /XF *.log /NFL /NDL /NJH /NJS /NP
     if ($LASTEXITCODE -ge 8) { throw "robocopy failed ($LASTEXITCODE) exporting $src" }
+    Remove-PluginTests $Dest
     $sha = (& git -C $src rev-parse HEAD 2>$null)
     $dirty = [bool](& git -C $src status --porcelain 2>$null)
     return [pscustomobject]@{ kind = 'worktree'; ref = $src; sha = "$sha"; dirty = $dirty }
@@ -171,6 +185,7 @@ function Export-SourceUnderTest([string]$Ref, [string]$RepoRoot, [string]$Dest) 
     & tar -xf $tar -C $Dest
     if ($LASTEXITCODE -ne 0) { throw "tar extract failed for $Ref" }
   } finally { Remove-Item -LiteralPath $tar -Force -ErrorAction SilentlyContinue }
+  Remove-PluginTests $Dest
   return [pscustomobject]@{ kind = 'ref'; ref = $Ref; sha = "$sha"; dirty = $false }
 }
 

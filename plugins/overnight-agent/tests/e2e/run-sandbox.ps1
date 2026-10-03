@@ -254,7 +254,7 @@ function Invoke-Attempt($Scenarios, [int]$Attempt, [string]$SessionRoot, [string
   $facts = [pscustomobject]@{
     Before = $before; After = $after; Diff = $diff; Dispatches = $dispatches; DispatchMode = $Dispatch
     GateBefore = $gateBefore; GateAfter = $gateAfter
-    LivePathHits = @($analysis.livePathHits); TripwireHits = @($analysis.tripwireHits)
+    LivePathHits = @($analysis.livePathHits); TripwireHits = @($analysis.tripwireHits); TestReads = @($analysis.testReads)
     DeniedCalls = @($analysis.deniedCalls); ExpectedDenials = @($analysis.expectedDenials); Provenance = $analysis.provenance
     FinalMessage = "$($analysis.finalMessage)"
     Planner = $L.Planner; SandboxRoot = $L.Root; LiveRoots = @(Get-LiveRoots)
