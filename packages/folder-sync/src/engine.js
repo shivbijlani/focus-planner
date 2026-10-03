@@ -137,12 +137,14 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     navigator.serviceWorker.addEventListener('message', async (evt) => {
       const msg = evt.data
       if (!msg || msg.type !== 'remote-update') return
-      const content = await mirrorRead(msg.name)
-      if (content == null) {
-        await localAdapter.deleteFile(msg.name)
-      } else {
-        await localAdapter.writeFile(msg.name, content)
-      }
+      await exclusive(async () => {
+        const content = await mirrorRead(msg.name)
+        if (content == null) {
+          await localAdapter.deleteFile(msg.name)
+        } else {
+          await localAdapter.writeFile(msg.name, content)
+        }
+      })
       // Tell consumer to refresh
       for (const fn of listeners) {
         try { fn({ ...status, lastRemoteUpdate: { name: msg.name, at: Date.now() } }) } catch { /* ignore */ }
@@ -154,6 +156,18 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     for (const fn of listeners) {
       try { fn(status) } catch { /* ignore */ }
     }
+  }
+
+  // ONE lane for every operation that touches both the active store and the mirror: a local
+  // write/delete (active first, then mirror) and the two mirror→active replays below. Without it a
+  // replay that lands between a local write's two awaits sees active ≠ mirror and copies the OLD
+  // mirror content back over the new active file -- a lost write the UI then re-reads (#826: a
+  // task added within a second of load vanished from the board).
+  let lane = Promise.resolve()
+  function exclusive(fn) {
+    const run = lane.then(fn, fn)
+    lane = run.then(() => {}, () => {})
+    return run
   }
 
   // Replay the SW's IDB mirror into the consumer-visible active store. This
@@ -180,28 +194,23 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
         // rewrites into the app store only triggers a no-op file-tree refresh.
         if (!isConsumerVisibleMirrorPath(name)) continue
         scanned++
-        const rec = await idbGet(META_STORE, k)
-        if (!rec) continue
-        let activeContent = ''
-        try { activeContent = await localAdapter.readFile(name) } catch { activeContent = '' }
-        const action = planMirrorSync({
-          mirrorDeleted: !!rec.deleted,
-          mirrorContent: rec.content,
-          activeContent,
+        const outcome = await exclusive(async () => {
+          const rec = await idbGet(META_STORE, k)
+          if (!rec) return 'skip'
+          let activeContent = ''
+          try { activeContent = await localAdapter.readFile(name) } catch { activeContent = '' }
+          const action = planMirrorSync({
+            mirrorDeleted: !!rec.deleted,
+            mirrorContent: rec.content,
+            activeContent,
+          })
+          try {
+            if (action === 'write') await localAdapter.writeFile(name, rec.content)
+            else if (action === 'delete') await localAdapter.deleteFile(name)
+          } catch { return 'skip' }
+          return action
         })
-        try {
-          if (action === 'write') {
-            await localAdapter.writeFile(name, rec.content)
-            changed.push(name)
-            writes++
-          } else if (action === 'delete') {
-            await localAdapter.deleteFile(name)
-            changed.push(name)
-            deletes++
-          } else {
-            skipped++
-          }
-        } catch { /* ignore a single file failure */ }
+        if (outcome === 'write') { changed.push(name); writes++ } else if (outcome === 'delete') { changed.push(name); deletes++ } else skipped++
       }
       diag('folder-sync.reconcile', 'mirror-reconcile-summary', {
         scanned,
@@ -373,15 +382,20 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
       return localAdapter.readFile(name)
     },
     async writeFile(name, contents) {
-      const res = await localAdapter.writeFile(name, contents)
-      await mirrorWrite(name, contents)
+      const res = await exclusive(async () => {
+        const r = await localAdapter.writeFile(name, contents)
+        await mirrorWrite(name, contents)
+        return r
+      })
       await enqueue(name)
       nudgeSW('write')
       return res
     },
     async deleteFile(name) {
-      await localAdapter.deleteFile(name)
-      await mirrorDelete(name)
+      await exclusive(async () => {
+        await localAdapter.deleteFile(name)
+        await mirrorDelete(name)
+      })
       await enqueue(name) // SW will see local missing → delete remote
       nudgeSW('delete')
     },

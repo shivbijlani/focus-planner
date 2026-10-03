@@ -10,7 +10,11 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   workers: process.env.CI ? 2 : undefined,
-  timeout: 45_000,
+  // Per-test budget. CI runs each test in ~1 s, so 45 s there still fails a hang fast. A dev box is
+  // often shared with the agent's sandbox runs: measured (#826) with two of them running, ordinary
+  // tests took 15-22 s and the longest 40-70 s, so local runs get a budget that does not turn load
+  // into red. Assertions and their own timeouts are the same everywhere.
+  timeout: process.env.CI ? 45_000 : 120_000,
   expect: { timeout: 10_000 },
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
