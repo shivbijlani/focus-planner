@@ -231,6 +231,19 @@ function assertEqual(a, b, label) {
   if (ja !== jb) throw new Error(`${label}\nPS ${ja.slice(0, 1200)}\nNODE ${jb.slice(0, 1200)}`);
 }
 
+function rawText(s, root, t0) {
+  const norm = makeNormalizer({ t0, pathTokens: [['<ROOT>', root], ['<REPO>', REPO], ['<SKILL>', SKILL]] });
+  return norm.text(s ?? '').replace(/("[A-Za-z_]*(?:seconds|elapsed|duration)(?:_ms)?":\s*)[0-9.Ee+-]+/g, '$10');
+}
+
+function assertSameBytes(a, b, label) {
+  if (a === b) return;
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  const show = (s) => JSON.stringify(s.slice(Math.max(0, i - 60), i + 60));
+  throw new Error(`${label}: first byte difference at ${i}\nPS   ${show(a)}\nNODE ${show(b)}`);
+}
+
 async function functionDiffs(workRoot, n, seed) {
   const ps = await createPsHost({ params: { StateDir: path.join(workRoot, 'fn-state'), JournalDir: path.join(workRoot, 'fn-journal') }, cwd: REPO });
   let psClosed = false;
@@ -307,6 +320,13 @@ async function main() {
       const nr = runScan('node', nodeRoot, nodeArgs);
       assertEqual(normalizedResult(pr, psRoot, t0), normalizedResult(nr, nodeRoot, t0), `case ${i} ${v.name} result`);
       if (v.name === 'outfile') assertEqual(tree(psRoot, t0), tree(nodeRoot, t0), `case ${i} ${v.name} tree`);
+      // stdout (and the out file) is the contract BYTE for byte: key order and line endings too.
+      // Everything above compares parsed JSON with sorted keys, which is blind to both.
+      assertSameBytes(rawText(pr.stdout, psRoot, t0), rawText(nr.stdout, nodeRoot, t0), `case ${i} ${v.name} stdout bytes`);
+      if (v.name === 'outfile') {
+        const f = (r) => fs.readFileSync(path.join(r, 'scan-full.json'), 'utf8');
+        assertSameBytes(rawText(f(psRoot), psRoot, t0), rawText(f(nodeRoot), nodeRoot, t0), `case ${i} outfile bytes`);
+      }
     }
   }
   if (!opts.keep) fs.rmSync(runWork, { recursive: true, force: true });

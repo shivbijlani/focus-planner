@@ -377,7 +377,7 @@ Assert ((Get-Row $rows3 '912').eligible -eq $true) 'M3_NARROW' 'while an in-prog
 #      justification for not reanimating closed work is that the nudge STAYS VISIBLE. Drop the
 #      report and that justification is gone -- a loud failure has become a silent one.
 $m4 = New-Mutant 'M4' '      -NotePropertyValue ([bool](Test-ReopenedClosed $r)) -Force' '      -NotePropertyValue $false -Force' `
-  "  for (const r of rows) setMember(r, 'reopened_closed', !!testReopenedClosed(r));" "  for (const r of rows) setMember(r, 'reopened_closed', false);"
+  "  for (const r of rows) addMemberForce(r, 'reopened_closed', !!testReopenedClosed(r));" "  for (const r of rows) addMemberForce(r, 'reopened_closed', false);"
 $sx4 = New-Sandbox 'm4'
 Initialize-Sandbox $m4 $sx4
 $rows4 = Get-Rows $m4 $sx4

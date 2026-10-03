@@ -9,6 +9,7 @@
 // `WARNING: Resulting JSON is truncated as serialization has exceeded the set depth of N.`
 // Pipeline input is collected: `$x | ConvertTo-Json` with one item emits that item (not a
 // one-element array), and with no items emits nothing at all.
+import os from 'node:os';
 import { PsDate, jsonDateOrNull } from './psdate.mjs';
 import { psStr } from './net.mjs';
 
@@ -74,6 +75,10 @@ export function toJson(value, { depth = 2, compress = false } = {}) {
   text = text.replace(/"\\u0000NETDOUBLE:([^\\\\"]*)\\u0000"/g, '$1');
   return { text, truncated, depth };
 }
+
+// ConvertTo-Json joins its lines with [Environment]::NewLine (CRLF on Windows); JSON.stringify uses LF.
+// Every place the port emits or writes ConvertTo-Json text goes through this, so the bytes match.
+export const psNewlines = (s) => (os.EOL === '\n' ? s : String(s).replace(/\r?\n/g, os.EOL));
 
 export const truncationWarning = (depth) => `WARNING: Resulting JSON is truncated as serialization has exceeded the set depth of ${depth}.`;
 

@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { toJson } from './psjson.mjs';
+import { toJson, psNewlines } from './psjson.mjs';
 
 function decodeUtf32(buf, start, le) {
   let s = '';
@@ -62,7 +62,7 @@ export function ensureDir(d) {
 export function writeJsonAtomic(p, obj) {
   const tmp = `${p}.${crypto.randomUUID().replace(/-/g, '')}.tmp`;
   try {
-    writeAllTextUtf8Bom(tmp, toJson(obj, { depth: 12 }).text);
+    writeAllTextUtf8Bom(tmp, psNewlines(toJson(obj, { depth: 12 }).text));
     fs.renameSync(tmp, p);
   } finally {
     if (testPath(tmp)) fs.rmSync(tmp, { force: true });

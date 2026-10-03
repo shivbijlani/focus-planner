@@ -346,6 +346,14 @@ export function setMember(obj, name, value) {
   const p = prop(obj, name);
   obj[p.has ? p.key : name] = value;
 }
+// `Add-Member -NotePropertyName <name> -NotePropertyValue <v> -Force`: REPLACES the member, so an
+// existing property moves to the END of the object (unlike setMember / `.name = v`, which keep
+// its place). Key order is part of the emitted JSON, so the port must move it too.
+export function addMemberForce(obj, name, value) {
+  const p = prop(obj, name);
+  if (p.has) delete obj[p.key];
+  obj[name] = value;
+}
 // `@($x)`: $null -> empty, scalar -> [scalar], array -> itself.
 export const asArray = (v) => (v === null || v === undefined ? [] : Array.isArray(v) ? v : [v]);
 

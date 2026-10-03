@@ -13,6 +13,7 @@ const REPO = path.resolve(HERE, '..', '..', '..', '..');
 const PS = path.join(REPO, 'plugins', 'overnight-agent', 'skills', 'overnight-agent', 'oa-state.ps1');
 const NODE = path.join(REPO, 'plugins', 'overnight-agent', 'skills', 'overnight-agent', 'oa-state.mjs');
 let SCRATCH = null;
+let okSteps = 0;
 
 function parseArgs(argv) {
   const o = { n: 20, seed: 12345, steps: 6, keep: false, jobs: 1 };
@@ -94,7 +95,12 @@ function obsText(kind, ids) {
 }
 
 function stepArgs(step, dirs) {
-  const common = ['-JournalDir', dirs.journal, '-StateDir', dirs.state, '-PlannerBoard', dirs.board, '-PlannerCompleted', dirs.completed];
+  // EVERY path inside the sandbox root. Before this, the unbound defaults (session-state, MCP config,
+  // gate, snooze store, settings) resolved outside OA_SANDBOX_ROOT, so every step on BOTH engines
+  // stopped at the same oa_sandbox_violation and the comparison never reached a real write.
+  const common = ['-JournalDir', dirs.journal, '-StateDir', dirs.state, '-PlannerBoard', dirs.board, '-PlannerCompleted', dirs.completed,
+    '-GatePath', path.join(dirs.root, 'planner', 'agent-gate.md'), '-SnoozeStore', path.join(dirs.root, 'planner', 'snooze.json'),
+    '-UserSettings', path.join(dirs.root, 'planner', 'user-settings.md')];
   const a = [step.command, ...common];
   for (const [k, v] of Object.entries(step.args || {})) {
     if (v === true) a.push(`-${k}`);
@@ -117,7 +123,7 @@ function runProcess(cmd, argv, opts) {
 
 function runImpl(impl, step, dirs, root) {
   const args = stepArgs(step, dirs);
-  const env = { ...process.env, OA_SANDBOX_ROOT: root };
+  const env = { ...process.env, OA_SANDBOX_ROOT: root, OVERNIGHT_AGENT_HOME: path.join(root, 'home'), COPILOT_HOME: path.join(root, 'copilot') };
   if (impl === 'ps') {
     return runProcess('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', PS, ...args], { cwd: REPO, env });
   }
@@ -156,7 +162,8 @@ function tree(root, normalizer) {
     const buf = fs.readFileSync(path.join(root, rel));
     const bom = buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf;
     if (/^state\/task-\d+\.json$/.test(rel)) {
-      result[rel] = { bom, json: normalizer.value(JSON.parse(decodeUtf8Bom(buf))) };
+      // json: the values; text: the exact serialisation (key order, line endings) -- both are the contract.
+      result[rel] = { bom, json: normalizer.value(JSON.parse(decodeUtf8Bom(buf))), text: normalizer.text(decodeUtf8Bom(buf)) };
     } else {
       result[rel] = { bom, bytes: buf.toString('base64') };
     }
@@ -212,17 +219,27 @@ async function runSequence(o, s) {
   const nodeRoot = path.join(SCRATCH, `seq-${s}-node`);
   makeBase(base, r); copyDir(base, psRoot); copyDir(base, nodeRoot);
   const dirs = (root) => ({ journal: path.join(root, 'planner', 'journal'), state: path.join(root, 'state'), board: path.join(root, 'planner', 'planner.md'), completed: path.join(root, 'planner', 'planner-completed.md'), root });
+  // ONE clock per sequence, taken before any step runs -- the goldens' rule (one T0 per case). A
+  // per-step T0 put the previous step's writes ~1-5 s BEFORE it, right on the normaliser's 5-minute
+  // bucket edge, and PowerShell's slower start decided which side each engine's identical write fell.
+  const t0 = Date.now();
   for (let i = 0; i < o.steps; i++) {
     if (process.env.MUTATE_DIFF_PROGRESS) console.error('progress seq=' + s + ' step=' + i);
     const step = randomStep(r, s, i, [psRoot, nodeRoot]);
     if (process.env.MUTATE_DIFF_PROGRESS) console.error('step ' + JSON.stringify(step));
-    const t0 = Date.now();
     const normalizer = makeNormalizer({ t0, pathTokens: [['<ROOT>', psRoot], ['<ROOT>', nodeRoot], ['<REPO>', REPO]] });
     const [pr, nr] = await Promise.all([runImpl('ps', step, dirs(psRoot), psRoot), runImpl('node', step, dirs(nodeRoot), nodeRoot)]);
     const po = normaliseRun(pr, normalizer);
     const no = normaliseRun(nr, normalizer);
+    if (po.exit === 0) okSteps++;
     let diff = firstDifference(po, no);
     if (!diff) diff = firstDifference(tree(psRoot, normalizer), tree(nodeRoot, normalizer));
+    // stdout byte for byte (key order, line endings), timing values aside; parsed comparison is blind to both.
+    if (!diff) {
+      const raw = (s) => normalizer.text(s ?? '').replace(/("[A-Za-z_]*(?:seconds|elapsed|duration)(?:_ms)?":\s*)[0-9.Ee+-]+/g, '$10');
+      const a = raw(pr.stdout); const b = raw(nr.stdout);
+      if (a !== b) { let k = 0; while (k < a.length && k < b.length && a[k] === b[k]) k++; diff = `stdout bytes differ at ${k}: ps ${JSON.stringify(a.slice(Math.max(0, k - 40), k + 40))} node ${JSON.stringify(b.slice(Math.max(0, k - 40), k + 40))}`; }
+    }
     if (diff) {
       throw new Error(`mutate-diff mismatch seed=${o.seed} seq=${s} step=${i} ${JSON.stringify(step)}: ${diff}
 ps: ${stableStringify(po)}
@@ -241,8 +258,10 @@ async function main() {
     await Promise.all(Array.from({ length: jobs }, async () => {
       while (next < o.n) await runSequence(o, next++);
     }));
+    // A run in which no step succeeded compared nothing but identical refusals: that is not evidence.
+    if (okSteps === 0) throw new Error('mutate-diff: no step exited 0 on either engine -- the sandbox is not wired, nothing was compared');
     success = true;
-    console.log(`mutate-diff: ${o.n} sequences x ${o.steps} steps (${o.n * o.steps} steps), seed ${o.seed}: 0 differences`);
+    console.log(`mutate-diff: ${o.n} sequences x ${o.steps} steps (${o.n * o.steps} steps, ${okSteps} exit 0), seed ${o.seed}: 0 differences`);
   } finally {
     if (success && !o.keep) rm(SCRATCH);
   }

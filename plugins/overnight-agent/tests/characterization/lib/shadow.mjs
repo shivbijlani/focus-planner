@@ -70,6 +70,29 @@ function readOnlyPlan(ids, sample) {
   return plan;
 }
 
+// Every object's keys in emitted order, by JSON path: stdout is the contract, and its key order is
+// part of it even though every other comparison here (and every golden) is canonical.
+export function keyOrder(v, at = '$', out = []) {
+  if (Array.isArray(v)) v.forEach((x, i) => keyOrder(x, `${at}[${i}]`, out));
+  else if (v && typeof v === 'object') { out.push(`${at}: ${Object.keys(v).join(',')}`); for (const k of Object.keys(v)) keyOrder(v[k], `${at}.${k}`, out); }
+  return out;
+}
+function firstKeyOrderDifference(a, b) {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) if (a[i] !== b[i]) return { ps: a[i] ?? null, node: b[i] ?? null };
+  return null;
+}
+const strip = (o) => { if (!o || !('keys' in o)) return o; const { keys, raw, ...rest } = o; return rest; };
+// Raw stdout as emitted (CR kept), with the normaliser's path/time folding and timing values zeroed.
+function rawText(n, s) {
+  return n.text(s ?? '').replace(/("[A-Za-z_]*(?:seconds|elapsed|duration)(?:_ms)?":\s*)[0-9.Ee+-]+/g, '$10');
+}
+function firstTextDifference(a, b) {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  const show = (s) => JSON.stringify(s.slice(Math.max(0, i - 40), i + 40));
+  return { at: i, ps: show(a), node: show(b) };
+}
+
 export async function runShadow(o) {
   if (process.env.CI) throw new Error('shadow mode is local-only and refuses to run under CI');
   const live = locateLiveData(o.data);
@@ -92,7 +115,7 @@ export async function runShadow(o) {
     const impls = { ps: await o.loadAdapter('ps'), node: await o.loadAdapter('node') };
     const before = snapshot(root);
     const report = { generated: new Date().toISOString(), data: live.dir, state: liveState, commands: [] };
-    const tally = { same: 0, differ: 0, node_skip: 0, ps_error: 0 };
+    const tally = { same: 0, differ: 0, node_skip: 0, ps_error: 0, key_order: 0, bytes: 0 };
     for (const step of plan) {
       const args = resolveArgs(step.tool, step.args, dirs);
       const obs = {};
@@ -100,13 +123,20 @@ export async function runShadow(o) {
         const res = await impl.run({ tool: step.tool, command: step.command, args }, { root, dirs, cwd: dirs.cwd, env, skillDir: o.skillDir, repoDir: o.repoDir, timeoutSeconds: 900 });
         if (res.status === 'skip') { obs[name] = { skip: res.reason }; continue; }
         const parsed = tryParseJson(res.stdout);
-        obs[name] = { exit: res.exit, out: parsed !== undefined ? n.value(parsed) : n.text(res.stdout), stderr: cleanStderr(n.text(res.stderr).split(/\r?\n/)) };
+        obs[name] = { exit: res.exit, out: parsed !== undefined ? n.value(parsed) : n.text(res.stdout), stderr: cleanStderr(n.text(res.stderr).split(/\r?\n/)), keys: parsed !== undefined ? keyOrder(parsed) : null, raw: rawText(n, res.stdout) };
       }
       const entry = { command: `${step.tool} ${step.command} ${JSON.stringify(step.args || {})}` };
       if (obs.ps.exit !== 0) tally.ps_error++;
       if (obs.node.skip) { tally.node_skip++; entry.verdict = 'node-skip'; }
-      else if (stableStringify(obs.ps) === stableStringify(obs.node)) { tally.same++; entry.verdict = 'same'; }
-      else { tally.differ++; entry.verdict = 'differ'; entry.first_difference = firstDifference(obs.ps, obs.node); entry.ps = obs.ps; entry.node = obs.node; }
+      else if (stableStringify(strip(obs.ps)) === stableStringify(strip(obs.node))) {
+        // Same values. The goldens compare JSON canonically, so key ORDER is only ever checked here.
+        const a = JSON.stringify(obs.ps.keys); const b = JSON.stringify(obs.node.keys);
+        if (a !== b) { tally.key_order++; entry.verdict = 'key-order'; entry.ps_keys = firstKeyOrderDifference(obs.ps.keys, obs.node.keys); }
+        // Then the exact bytes (line endings, spacing), timing values aside.
+        else if (obs.ps.raw === obs.node.raw) { tally.same++; entry.verdict = 'same'; }
+        else { tally.bytes++; entry.verdict = 'bytes'; entry.first_byte_difference = firstTextDifference(obs.ps.raw, obs.node.raw); }
+      }
+      else { tally.differ++; entry.verdict = 'differ'; entry.first_difference = firstDifference(strip(obs.ps), strip(obs.node)); entry.ps = strip(obs.ps); entry.node = strip(obs.node); }
       report.commands.push(entry);
       process.stdout.write(`${entry.verdict.padEnd(9)} ${entry.command}\n`);
     }
@@ -117,10 +147,10 @@ export async function runShadow(o) {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const file = path.join(outDir, `shadow-${stamp}.json`);
     fs.writeFileSync(file, JSON.stringify(report, null, 2));
-    console.log(`\nsame ${tally.same}  differ ${tally.differ}  node-skip ${tally.node_skip}  ps-nonzero-exit ${tally.ps_error}`);
+    console.log(`\nsame ${tally.same}  differ ${tally.differ}  key-order ${tally.key_order}  bytes ${tally.bytes}  node-skip ${tally.node_skip}  ps-nonzero-exit ${tally.ps_error}`);
     if (report.sandbox_writes.length) console.log(`note: read-only commands wrote ${report.sandbox_writes.length} sandbox file(s): ${report.sandbox_writes.slice(0, 5).join(', ')}`);
     console.log(`report: ${file}`);
-    return tally.differ ? 1 : 0;
+    return tally.differ || tally.key_order || tally.bytes ? 1 : 0;
   } finally {
     if (!o.keep) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }

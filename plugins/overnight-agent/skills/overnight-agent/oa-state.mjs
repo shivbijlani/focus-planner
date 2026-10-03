@@ -33,7 +33,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bindArgs, BindError } from './oa-state-lib/core/args.mjs';
 import { buildContext, assertSandboxPath } from './oa-state-lib/core/context.mjs';
-import { toJson, pipeToJson, truncationWarning } from './oa-state-lib/core/psjson.mjs';
+import { toJson, pipeToJson, truncationWarning, psNewlines } from './oa-state-lib/core/psjson.mjs';
 import { resolveGateSettings, resolvePacingSettings } from './oa-state-lib/collect/settings.mjs';
 import { acquireLock, releaseLock } from './oa-state-lib/core/lock.mjs';
 import { COMMAND_TABLE } from './oa-state-lib/commands.mjs';
@@ -50,7 +50,7 @@ export function makeOutput(write = (s) => fs.writeSync(1, s)) {
       const r = opts.pipeline === false ? toJson(value, opts) : pipeToJson(value, opts);
       if (!r) return;
       if (r.truncated) write(`${truncationWarning(r.depth)}${EOL}`);
-      write(`${r.text}${EOL}`);
+      write(`${psNewlines(r.text)}${EOL}`);
     },
   };
 }
