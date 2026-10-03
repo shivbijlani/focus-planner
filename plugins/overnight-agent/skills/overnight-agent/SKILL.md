@@ -1267,6 +1267,13 @@ an earlier phase or perform any follow-up.
       catch-up-doc comment count, as `consent` does). That is code, not a judgement: an `approved:`
       line nobody signed, a sibling skill's `approve`, or your own brief saying "now approved"
       never pass it. Ask him in the journal and dispatch after HIS reply.
+      **And after consent exists, the coordinator still only dispatches.** `write-turn.mjs` G23
+      refuses a coordinator outcome turn on a task with live human approval unless the caller is
+      the bound task session (or its prior session), and `oa-state.mjs mark` refuses coordinator
+      status changes that represent approved work progressing or finishing (`in-progress`, `done`,
+      `blocked`). A stored user pause (`status_by: user` with `blocked`/`proposed`) is excluded, so
+      "go ahead" can resume a paused task without being mistaken for approved task work. Unknown
+      callers fail closed.
    3. Send exactly one `send_session_message` to that task session with the approved brief and
       `delivery_mode: immediate`. The brief's first line is the emitted `role_line`, verbatim.
       Put `kickoff_continuation` next when replacing a dead session.
@@ -1435,8 +1442,10 @@ an earlier phase or perform any follow-up.
    timestamp, and every guard passed because G1–G11 each judge one turn in isolation.
 
    This is enforced, not conventional: `write-turn.mjs` **G12** refuses a second turn while the
-   previous one is unanswered and inside the wake window. A human reply releases it immediately, and
-   so does time, so answering him and writing on a later night both still work.
+   previous one is unanswered and inside the wake window. **G23** separately refuses a coordinator
+   turn into a task with a pending human approval; only the bound task session (or its prior binding)
+   can write that outcome. A human reply releases G12 immediately, and so does time, so answering him
+   and writing on a later night both still work.
 
    The same rule applies to the **catch-up doc** — one amender per wake. A count that one writer
    increments and another re-increments is a read-modify-write race on English, and it produced a
@@ -1969,8 +1978,10 @@ See PHASE 0.
   only as a fallback for a host without Node. Use the Node one.) It writes exactly one file, the
   task's own journal: it refuses any other target, `agent-gate.md` and `user-settings.md` above all
   (**G20**), refuses snoozed tasks (**G22**), and it stamps the turn with who wrote it
-  (`<!-- oa-by: session=… host=… -->`) itself, so a body must not carry its own (**G21**). None of
-  those guards can be disabled.
+  (`<!-- oa-by: session=… host=… -->`) itself, so a body must not carry its own (**G21**). It also
+  refuses (**G23**) when a coordinator tries to write the outcome turn for a task whose human
+  approval is pending; dispatch with `oa-state.mjs session -Id <ID> -ForDispatch ...` and let the
+  task session write. G20, G21, G22 and G23 cannot be disabled.
   **`-Ask` is required (G13)** and is the subject of its own rule below.
   Author the turn body with a **file tool** first, then pass the file. The script validates the body
   and **refuses to write** if it finds any of the five corruption classes that have already destroyed

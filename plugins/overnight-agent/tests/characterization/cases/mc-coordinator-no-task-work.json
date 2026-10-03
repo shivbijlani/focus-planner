@@ -1,0 +1,328 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-coordinator-no-task-work"
+  ],
+  "cases": [
+    {
+      "id": "mc/coordinator-no-task-work/write-approved-coordinator-refused",
+      "tool": "write-turn",
+      "args": {
+        "Id": "970",
+        "Ask": "none",
+        "Validate": true,
+        "Author": "coordinator-session"
+      },
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 970 | task 970 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-970.md": "# Task 970: task 970\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed\n\n### Proposed plan (v1)\n1. [gated] Do the approved work.\n\n**Needs from you:** approve?\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n",
+        "state/task-970.json": {
+          "id": "970",
+          "status": "proposed",
+          "status_by": "agent",
+          "version": 1,
+          "plan_id": "t970-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z",
+          "session": {
+            "session_id": "task-session-970",
+            "kind": "chat",
+            "project": "p",
+            "workspace": "",
+            "workspace_type": "folder",
+            "created_at": "2020-03-01T00:00:00Z",
+            "last_woken_at": "",
+            "state": "live",
+            "prior_session_id": "prior-task-session-970",
+            "replaced_at": ""
+          }
+        }
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-02\n\n<!-- from: overnight-agent -->\n\n**Status:** Done · 2020-03-02\n\nDid the approved work.\n\n**Needs from you:** nothing.\n",
+      "note": "G23 refuses a coordinator-authored turn when consent is currently live."
+    },
+    {
+      "id": "mc/coordinator-no-task-work/write-approved-bound-session-allowed",
+      "tool": "write-turn",
+      "args": {
+        "Id": "971",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true,
+        "Author": "task-session-971"
+      },
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 971 | task 971 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-971.md": "# Task 971: task 971\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed\n\n### Proposed plan (v1)\n1. [gated] Do the approved work.\n\n**Needs from you:** approve?\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n",
+        "state/task-971.json": {
+          "id": "971",
+          "status": "proposed",
+          "session": {
+            "session_id": "task-session-971",
+            "prior_session_id": ""
+          }
+        }
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-02\n\n<!-- from: overnight-agent -->\n\n**Status:** Done · 2020-03-02\n\nDid the approved work.\n\n**Needs from you:** nothing.\n",
+      "note": "The bound task session owns the approved outcome turn."
+    },
+    {
+      "id": "mc/coordinator-no-task-work/write-no-approval-coordinator-allowed",
+      "tool": "write-turn",
+      "args": {
+        "Id": "972",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true,
+        "Author": "coordinator-session"
+      },
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 972 | task 972 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-972.md": "# Task 972: task 972\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — 2020-03-01\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress\n\nNo approval is pending.\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-972.json": {
+          "id": "972",
+          "status": "in-progress",
+          "session": {
+            "session_id": "task-session-972",
+            "prior_session_id": ""
+          }
+        }
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-02\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-02\n\nCoordinator bookkeeping only.\n\n**Needs from you:** nothing.\n",
+      "note": "When the consent reader says no pending approval, G23 is quiet."
+    },
+    {
+      "id": "mc/coordinator-no-task-work/write-answered-approval-coordinator-allowed",
+      "tool": "write-turn",
+      "args": {
+        "Id": "973",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true,
+        "Author": "coordinator-session"
+      },
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 973 | task 973 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-973.md": "# Task 973: task 973\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — ask\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed\n\n**Needs from you:** approve?\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n\n## 🌙 Overnight Agent — answered\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: none -->\n**Status:** In progress\n\nAlready answered the approval.\n<!-- /overnight-agent turn-end -->\n",
+        "state/task-973.json": {
+          "id": "973",
+          "status": "in-progress",
+          "session": {
+            "session_id": "task-session-973",
+            "prior_session_id": ""
+          }
+        }
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-03\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · 2020-03-03\n\nBookkeeping after spent approval.\n\n**Needs from you:** nothing.\n",
+      "note": "A spent approval is not pending consent, so G23 stays quiet."
+    },
+    {
+      "id": "mc/coordinator-no-task-work/write-disable-g23-still-refused",
+      "tool": "write-turn",
+      "args": {
+        "Id": "974",
+        "Ask": "none",
+        "Validate": true,
+        "Author": "coordinator-session",
+        "DisableGuard": [
+          "G23"
+        ]
+      },
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 974 | task 974 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-974.md": "# Task 974: task 974\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — ask\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed\n\n**Needs from you:** approve?\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n",
+        "state/task-974.json": {
+          "id": "974",
+          "status": "proposed",
+          "session": {
+            "session_id": "task-session-974",
+            "prior_session_id": ""
+          }
+        }
+      },
+      "body": "## 🌙 Overnight Agent — 2020-03-02\n\n<!-- from: overnight-agent -->\n\n**Status:** Done · 2020-03-02\n\nDid the approved work.\n\n**Needs from you:** nothing.\n",
+      "note": "G23 is not disableable via -DisableGuard."
+    },
+    {
+      "id": "mc/coordinator-no-task-work/mark-approved-work-coordinator-refused",
+      "tool": "oa-state",
+      "command": "mark",
+      "args": {
+        "Id": "975",
+        "Status": "in-progress",
+        "TurnBy": "coordinator-session"
+      },
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 975 | task 975 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-975.md": "# Task 975: task 975\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — ask\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed\n\n**Needs from you:** approve?\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n",
+        "state/task-975.json": {
+          "id": "975",
+          "status": "proposed",
+          "session": {
+            "session_id": "task-session-975",
+            "prior_session_id": ""
+          }
+        }
+      },
+      "note": "A coordinator cannot mark approved work as in-progress."
+    },
+    {
+      "id": "mc/coordinator-no-task-work/mark-approved-work-task-session-allowed",
+      "tool": "oa-state",
+      "command": "mark",
+      "args": {
+        "Id": "976",
+        "Status": "done",
+        "TurnBy": "task-session-976"
+      },
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 976 | task 976 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-976.md": "# Task 976: task 976\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — ask\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed\n\n**Needs from you:** approve?\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n",
+        "state/task-976.json": {
+          "id": "976",
+          "status": "proposed",
+          "session": {
+            "session_id": "task-session-976",
+            "prior_session_id": ""
+          },
+          "version": 1,
+          "plan_id": "t976-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "note": "The bound task session may mark approved work done."
+    },
+    {
+      "id": "mc/coordinator-no-task-work/mark-approved-status-coordinator-allowed",
+      "tool": "oa-state",
+      "command": "mark",
+      "args": {
+        "Id": "977",
+        "Status": "approved",
+        "TurnBy": "coordinator-session"
+      },
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 977 | task 977 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-977.md": "# Task 977: task 977\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — ask\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed\n\n**Needs from you:** approve?\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n",
+        "state/task-977.json": {
+          "id": "977",
+          "status": "proposed",
+          "session": {
+            "session_id": "task-session-977",
+            "prior_session_id": ""
+          },
+          "version": 1,
+          "plan_id": "t977-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "note": "Recording the approval status itself is allowed; doing/finishing statuses are owned by the task session."
+    },
+    {
+      "id": "mc/coordinator-no-task-work/mark-status-by-user-allowed",
+      "tool": "oa-state",
+      "command": "mark",
+      "args": {
+        "Id": "978",
+        "Status": "blocked",
+        "StatusBy": "user",
+        "TurnBy": "coordinator-session"
+      },
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 978 | task 978 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-978.md": "# Task 978: task 978\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — ask\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed\n\n**Needs from you:** approve?\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n",
+        "state/task-978.json": {
+          "id": "978",
+          "status": "proposed",
+          "session": {
+            "session_id": "task-session-978",
+            "prior_session_id": ""
+          },
+          "version": 1,
+          "plan_id": "t978-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "note": "The user-pause/user-status path remains legal."
+    },
+    {
+      "id": "mc/coordinator-no-task-work/mark-no-status-allowed",
+      "tool": "oa-state",
+      "command": "mark",
+      "args": {
+        "Id": "979",
+        "TurnBy": "coordinator-session"
+      },
+      "files": {
+        "data/planner.md": "## Today\n\n| ID | Task |\n|---|---|\n| 979 | task 979 |\n",
+        "data/planner-completed.md": "",
+        "data/snooze.json": "{}",
+        "data/user-settings.md": "",
+        "data/agent-gate.md": "",
+        "data/journal/task-979.md": "# Task 979: task 979\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — ask\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed\n\n**Needs from you:** approve?\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n",
+        "state/task-979.json": {
+          "id": "979",
+          "status": "proposed",
+          "session": {
+            "session_id": "task-session-979",
+            "prior_session_id": ""
+          },
+          "version": 1,
+          "plan_id": "t979-v1",
+          "processed_file_hash": "",
+          "has_agent_block": true,
+          "seeded": false,
+          "updated": "2020-03-01T12:00:00Z"
+        }
+      },
+      "note": "A mark with no -Status is bookkeeping and remains allowed."
+    }
+  ]
+}
