@@ -102,7 +102,7 @@ anything in it, and the sidebar file tree does not show it.
 | `revision` | Integer ≥ 1, strictly increasing on every write by this device. |
 | `publishedAt` | ISO-8601 UTC; when `tasks` last changed. |
 | `lastSeenAt` | ISO-8601 UTC; when the device last wrote this file (every publish, even with no change). |
-| `heartbeatMinutes` | Integer 1–1440: how often the device intends to publish. Optional; default 15. |
+| `heartbeatMinutes` | Integer 1–1440: how often the device intends to publish. Optional; when absent the stale threshold is 15 minutes. |
 | `truncated` | `true` when caps forced entries to be dropped (see *Caps*). |
 | `tasks` | Object keyed by canonical task ID (decimal digits, no leading zeros). At most 500 keys. |
 | `tasks[id].fingerprint` | `sha256:` + 64 lower-case hex: the binding-time fingerprint of the row. |
@@ -335,7 +335,7 @@ links*; a failing `url` hides that binding (it does not fall back to a link-less
 
 | State | When | Effect |
 | --- | --- | --- |
-| fresh | Read and valid; `lastSeenAt` within max(15 min, 2 × `heartbeatMinutes`) of now. | Links shown. |
+| fresh | Read and valid; `lastSeenAt` within max(15 min, 2 × `heartbeatMinutes`) of now (15 min when `heartbeatMinutes` is absent). | Links shown. |
 | stale | Read and valid but `lastSeenAt` is older than that. | Links shown, dimmed, tooltip "last seen …". Never treated as removal. |
 | unavailable | The read failed, timed out, was throttled, or the file did not validate this time. | The last good copy from this app session is kept and shown as stale; with no good copy, nothing is shown. A transient failure is never a deletion. |
 | removed | A successful listing no longer contains the file, or a successful read no longer contains the task / binding. | That device's links (or that task's) disappear. |
@@ -438,3 +438,12 @@ vector in `tests/agent-metadata/vectors.json`, the machine-readable copy of the 
 end-to-end sandbox scenario `metadata-published` (l1–l5) and invariant h3 check a real run. The
 PowerShell fallback engine does not publish; the publisher reads the state files either engine
 writes, so the next Node command catches up.
+
+**Reader and badge (shipped).** `src/storage/agent-metadata-reader.js` (listing, limits, states),
+`src/agentMetadata/fingerprint.js` (the app's copy of the normalisation, run against the same
+`vectors.json`), `src/useAgentMetadata.js` (one reader per storage provider, shared by every row)
+and `src/AgentSessionLinks.jsx` (the 🤖 / "🤖 N" badge beside 📔 · 💬 · 📄). The local providers
+gained a `listDir(dir)` that lists any file type — the sidebar trees list only markdown — and a
+provider without it simply shows no badge. `src/fileTreeFilter.js` hides `agent-metadata/` from
+the sidebar. Tests: the reader suite runs S1–S17 plus the limits, and the Playwright smoke suite
+(`e2e/agent-metadata.spec.js`) covers S1, S2, S3 and S5 in a real browser.

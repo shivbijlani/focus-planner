@@ -118,6 +118,15 @@ export class IndexedDbProvider {
     return await allPaths()
   }
 
+  /** File names directly inside `dir`, or null when nothing is stored under it. */
+  async listDir(dir) {
+    const prefix = `${dir}/`
+    const names = (await allPaths())
+      .filter((p) => p.startsWith(prefix) && !p.slice(prefix.length).includes('/'))
+      .map((p) => p.slice(prefix.length))
+    return names.length ? names : null
+  }
+
   /** Wipe all stored files. */
   async clear() {
     await clear(filesStore)

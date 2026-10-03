@@ -219,6 +219,24 @@ export class OneDriveProvider {
     return ids
   }
 
+  /** File names directly inside `dir`, or null when the folder does not exist. Throws on 429. */
+  async listDir(dir) {
+    await this._ensureToken()
+    const names = []
+    let next = `${APPROOT}:/${dir}:/children?$select=name,file`
+    let first = true
+    while (next) {
+      const res = await fetch(next, { headers: this._authHeader() })
+      if (first && res.status === 404) return null
+      if (!res.ok) throw Object.assign(new Error(`OneDrive list failed: ${res.status}`), { status: res.status, headers: res.headers })
+      const data = await res.json()
+      for (const item of data.value ?? []) if (item.file) names.push(item.name)
+      next = data['@odata.nextLink'] ?? null
+      first = false
+    }
+    return names
+  }
+
   // ── Private helpers ──────────────────────────────────
 
   /**

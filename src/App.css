@@ -1443,6 +1443,58 @@ tr.highlight-flash {
   text-decoration: none;
 }
 
+/* 🤖 agent session link (docs/spec/Domain-agent-metadata.md). Same weight as the other row
+   icons; a link whose PC has not refreshed it recently is dimmed further, never removed. */
+.agent-session-link.is-stale {
+  opacity: 0.4;
+}
+
+span.agent-session-link {
+  cursor: default;
+}
+
+.agent-session-multi {
+  position: relative;
+  display: inline-flex;
+}
+
+.agent-session-count {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+}
+
+.agent-session-menu {
+  position: absolute;
+  top: 1.6em;
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 12em;
+  padding: 4px;
+  border-radius: 6px;
+  background: #13284d;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.agent-session-menu-item {
+  display: block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  color: inherit;
+  opacity: 0.9;
+}
+
+.agent-session-menu-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  opacity: 1;
+}
+
 /* Journal header trio: 💬 · 📔 (here) · 📄 */
 .jc-trio {
   display: inline-flex;
