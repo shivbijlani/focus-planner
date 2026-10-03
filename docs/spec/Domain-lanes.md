@@ -360,6 +360,10 @@ offer a different lane, since that would create a conflict; the user edits the t
 **Broken file.** When the file does not validate, a banner says agents are paused until it is fixed;
 the panel shows the reason and offers to replace it with an empty valid file.
 
+**An empty file reads as absent in the app.** Browser storage cannot tell a missing file from an
+empty one, so the app treats both as "lanes off". The app never writes an empty file; an engine,
+which can tell, still treats a hand-made empty file as invalid (fail closed).
+
 > [!NOTE]
 > **Technical detail: app visibility scenarios.** Smoke and unit tests cover these.
 
@@ -453,3 +457,11 @@ of the tables above); the characterization cases `cases/lanes.json` pin E2–E10
 PowerShell engine and the Node engine passes the same goldens; `mutcheck-lanes.ps1` proves each rule
 load-bearing on both engines; `tests/write-turn-port/g20-lanes.test.mjs` covers G20; and the
 end-to-end sandbox scenario `lanes-scoped` (m1–m4) with invariant h4 checks a real run.
+
+**App (shipped).** `src/lanes/lanes.js` (validation, resolution and the row view; runs the same
+`vectors.json`), `src/useLanes.js` (one store per storage provider, refreshed at most every 5
+minutes unless forced; every write re-reads the file first), `src/LaneChip.jsx` (the row chip),
+`src/LanesSettings.jsx` (the Settings section and the row menu's Lane… picker), and
+`useAnnouncedDevices` beside the 🤖 hook (the metadata reader's new `devices()`). Tests:
+`src/lanes/lanes.test.js` and the Playwright smoke suite `e2e/lanes.spec.js` (A1–A10, including
+that a single-PC user sees nothing new).

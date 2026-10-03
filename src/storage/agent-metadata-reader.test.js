@@ -308,3 +308,20 @@ describe('agent metadata reader — limits', () => {
     expect([...p.tasks.keys()]).toEqual(['468'])
   })
 })
+
+describe('agent metadata reader — announced devices (docs/spec/Domain-lanes.md)', () => {
+  it('lists every valid device file with its name, freshness and last seen, sorted by key; none without the folder', async () => {
+    const a = await device(1); const b = await device(2); const files = {}
+    put(files, a, projection(a))
+    put(files, b, projection(b, { lastSeenAt: '2026-10-02T19:00:00Z', tasks: {} }))
+    files['agent-metadata/not-a-key.json'] = '{}'
+    const { reader } = await setup(files)
+    const list = reader.devices()
+    expect(list.map((d) => d.key)).toEqual([a.key, b.key].sort())
+    const byName = Object.fromEntries(list.map((d) => [d.name, d]))
+    expect(byName['PC-1']).toMatchObject({ stale: false, lastSeenMs: Date.parse('2026-10-02T21:25:00Z') })
+    expect(byName['PC-2']).toMatchObject({ stale: true, lastSeenMs: Date.parse('2026-10-02T19:00:00Z') })
+    const none = await setup({ 'planner.md': '' })
+    expect(none.reader.devices()).toEqual([])
+  })
+})
