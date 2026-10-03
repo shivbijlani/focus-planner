@@ -60,7 +60,8 @@ is **inherited**.
    task has no own lane, each ID in its Linked ID cell is resolved in the order written, and the
    first one that resolves to anything (a lane, an explicit `none`, a conflict or an invalid lane)
    decides. A parent that is not on the board (completed or deleted) contributes only its lanes-file
-   assignment. Cycles are cut where they close, and the walk stops after 16 levels.
+   assignment. The walk is depth-first, never visits a task twice in one resolution (which also cuts
+   cycles), and stops after 16 levels.
 
 Rules that make this predictable:
 
@@ -127,7 +128,7 @@ result, `lane_from` is the ID of the ancestor whose own source decided it (not t
 Linked IDs are the IDs the board reader already extracts from the `Linked ID` cell (a date there is
 not an ID), canonicalised (leading zeros stripped). When an ID has more
 than one row on the board, the tags of every row count. `lane_candidates` lists the distinct names
-seen (sorted) for a conflict or an invalid lane.
+seen (sorted ordinally) for a conflict or an invalid lane, and is empty otherwise.
 
 </details>
 
@@ -226,7 +227,7 @@ Each run, the engine works out which device it is and what that device serves:
 | This PC | Serves |
 | --- | --- |
 | Lanes off (no file) | Everything — today's behaviour, byte for byte. |
-| File invalid | **Nothing**: no task is eligible, dispatched or bound here until the file is fixed. |
+| File invalid | **Nothing**: no task is eligible, dispatched or bound here until the file is fixed. (Rows still report the lane their board tags give them.) |
 | No device identity yet (`device.json` absent in the agent home) | It cannot have been assigned anything, so it is **unassigned**. |
 | Device identity unreadable or corrupt | **Nothing** (it cannot know which entry is its own). |
 | Its key is not in `devices` (unassigned) | Catch-all: every task with no lane. |
