@@ -6517,6 +6517,36 @@ function Set-ExhaustionDeclaration {
   return ($st | ConvertTo-Json -Depth 6)
 }
 
+$script:ApprovedWorkStatus = @('in-progress', 'done', 'blocked')
+$script:UserPauseStatusForApprovedWorkGuard = @('proposed', 'blocked')
+function Test-TaskSessionOwnsStatusChange($State) {
+  $caller = if ($TurnBy) { $TurnBy } elseif ($env:COPILOT_AGENT_SESSION_ID) { $env:COPILOT_AGENT_SESSION_ID } else { '' }
+  if (-not $caller -or -not $State -or -not $State.PSObject.Properties['session'] -or -not $State.session) { return $false }
+  $ids = @()
+  foreach ($k in @('session_id', 'prior_session_id')) {
+    if ($State.session.PSObject.Properties[$k] -and $State.session.$k) { $ids += "$($State.session.$k)" }
+  }
+  if ($State.session.PSObject.Properties['prior_session_ids'] -and $State.session.prior_session_ids) {
+    $ids += @($State.session.prior_session_ids | ForEach-Object { "$_" } | Where-Object { $_ })
+  }
+  foreach ($sid in $ids) {
+    if ([string]::Equals($sid, $caller, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  return $false
+}
+
+function Get-ApprovedWorkMarkError($State) {
+  $caller = if ($TurnBy) { $TurnBy } elseif ($env:COPILOT_AGENT_SESSION_ID) { $env:COPILOT_AGENT_SESSION_ID } else { 'unknown' }
+  $bound = if ($State -and $State.PSObject.Properties['session'] -and $State.session -and
+      $State.session.PSObject.Properties['session_id'] -and $State.session.session_id) {
+    "$($State.session.session_id)"
+  } else { 'no bound task session' }
+  return ("approved_task_status_owned_by_task_session: task $Id has a pending human approval, " +
+    "but caller '$caller' is not the bound task session ($bound). The coordinator must dispatch it " +
+    "with ``oa-state.ps1 session -Id $Id -ForDispatch ...``; the task session owns approved work " +
+    'status changes (in-progress/done/blocked). Unknown callers fail closed.')
+}
+
 function Cmd-Mark {
   if (-not $Id) { throw 'mark requires -Id' }
   $path = Join-Path $JournalDir "task-$Id.md"
@@ -6556,6 +6586,14 @@ function Cmd-Mark {
         'Only he clears a pause: either he replies in the journal below the newest turn, or a run ' +
         "records his decision with ``-StatusBy user``. Marking it as the agent would erase the " +
         'instruction as a side effect of reporting work he asked you to stop (#540).')
+    }
+    $statusLower = "$Status".ToLowerInvariant()
+    $storedStatus = "$($st.status)".ToLowerInvariant()
+    $storedStatusBy = "$($st.status_by)".ToLowerInvariant()
+    if ("$StatusBy".ToLowerInvariant() -ne 'user' -and $script:ApprovedWorkStatus -contains $statusLower -and
+        -not ($storedStatusBy -eq 'user' -and $script:UserPauseStatusForApprovedWorkGuard -contains $storedStatus) -and
+        $facts.Consent -and [bool]$facts.Consent.consent_ok -and -not (Test-TaskSessionOwnsStatusChange $st)) {
+      throw (Get-ApprovedWorkMarkError $st)
     }
     $wasPaused = (Test-UserPaused $st $facts)
     $st.status = $Status

@@ -1403,6 +1403,28 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-snooze-write.ps1 -ScriptPath ./plugins/overnight-agent/skills/overnight-agent/write-turn.mjs
 
+  # THE COORDINATOR DISPATCHES APPROVED WORK; IT DOES NOT DO IT (#804).
+  #
+  # A human approval in a journal authorizes the bound task session's outcome turn, not a shortcut
+  # where the coordinator writes the result or marks the work done itself. The check drives both
+  # sanctioned surfaces: write-turn G23 and oa-state mark. Most quiet arms are as important as the
+  # refusal: coordinator bookkeeping without pending approval, -Status approved, -StatusBy user, and
+  # status-less mark calls remain legal.
+  #
+  # Hermetic: synthetic planner/state under TEMP driving the real PowerShell tools. No live store,
+  # no network. The Node-port job below runs the same script against write-turn.mjs/oa-state.mjs.
+  coordinator-no-task-work:
+    name: Coordinator cannot do approved task work
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check (approved work belongs to the task session)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-coordinator-no-task-work.ps1
+
   # A TURN CAN ADVERTISE A REPLY WORD ITS OWN READER REJECTS (GH #491).
   #
   # `oa-state.ps1` decides whether Shiv approved by matching his reply against one fixed
@@ -1902,6 +1924,7 @@ jobs:
             @{ f = "$skill/mutcheck-gate-edit-ask.ps1";         node = @('-WriteTurnPath', $wt); ps = $null },
             @{ f = "$skill/mutcheck-user-pause-write.ps1";      node = @('-WriteTurnPath', $wt); ps = $null },
             @{ f = "$skill/mutcheck-snooze-write.ps1";          node = @('-ScriptPath', $wt);    ps = $null },
+            @{ f = "$skill/mutcheck-coordinator-no-task-work.ps1"; node = @('-ScriptPath', $wt); ps = $null },
             @{ f = "$skill/mutcheck-shipped-pick.ps1";          node = @('-WriteTurnPath', $wt); ps = $null },
             @{ f = "$skill/mutcheck-plan-dispatch.ps1";         node = @('-TurnScript', $wt);    ps = $null }
           )

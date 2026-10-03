@@ -443,7 +443,19 @@ function New-Mutant([string]$name, [string]$find, [string]$replace) {
   # An absent anchor is still a failure; it is simply reported as an unkilled mutant below.
   $src = [IO.File]::ReadAllText($Target)
   if ($src -notmatch [regex]::Escape($find)) { return $null }
-  $p = Join-Path $root ("mutant-$name" + [IO.Path]::GetExtension($Target))
+  $dir = Join-Path $root "mutant-$name"
+  New-Item -ItemType Directory -Path $dir -Force | Out-Null
+  $p = Join-Path $dir ([IO.Path]::GetFileName($Target))
+  # #804/G23 asks write-turn's sibling consent engine. Source mutants used to be copied as a
+  # lone file, making G23 fail closed on "engine not found" and causing every pointer arm to fail
+  # for the wrong reason. Copy the sibling engine beside the mutant so the matrix isolates G9-G11.
+  $sourceDir = Split-Path -Parent $Target
+  foreach ($sibling in @('oa-state.ps1', 'oa-state.mjs')) {
+    $sp = Join-Path $sourceDir $sibling
+    if (Test-Path $sp) { Copy-Item -LiteralPath $sp -Destination (Join-Path $dir $sibling) -Force }
+  }
+  $lib = Join-Path $sourceDir 'oa-state-lib'
+  if (Test-Path $lib) { Copy-Item -LiteralPath $lib -Destination (Join-Path $dir 'oa-state-lib') -Recurse -Force }
   [IO.File]::WriteAllText($p, $src.Replace($find, $replace), $utf8)
   return $p
 }

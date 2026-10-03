@@ -281,7 +281,20 @@ function New-Mutant {
   }
   $src = [IO.File]::ReadAllText($Source, $utf8)
   if (-not $src.Contains($Find)) { throw "mutant $Name : anchor not found in $Source -> $Find" }
-  $dst = Join-Path $root ("mutant-$Name-" + [IO.Path]::GetFileName($Source))
+  $dir = Join-Path $root "mutant-$Name"
+  New-Item -ItemType Directory -Path $dir -Force | Out-Null
+  $dst = Join-Path $dir ([IO.Path]::GetFileName($Source))
+  # #804/G23 asks write-turn's sibling consent engine. A lone source-mutant copy makes G23
+  # fail closed on "engine not found", masking the G13 arm this harness is trying to mutate.
+  # Copy the sibling engine beside the mutant so these fixtures can prove "no pending approval"
+  # and keep the mutation isolated to the declared-ask behavior.
+  $sourceDir = Split-Path -Parent $Source
+  foreach ($sibling in @('oa-state.ps1', 'oa-state.mjs')) {
+    $sp = Join-Path $sourceDir $sibling
+    if (Test-Path $sp) { Copy-Item -LiteralPath $sp -Destination (Join-Path $dir $sibling) -Force }
+  }
+  $lib = Join-Path $sourceDir 'oa-state-lib'
+  if (Test-Path $lib) { Copy-Item -LiteralPath $lib -Destination (Join-Path $dir 'oa-state-lib') -Recurse -Force }
   [IO.File]::WriteAllText($dst, $src.Replace($Find, $Replace), $utf8)
   return $dst
 }

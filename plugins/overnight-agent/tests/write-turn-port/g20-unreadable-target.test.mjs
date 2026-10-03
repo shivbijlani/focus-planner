@@ -24,7 +24,10 @@ function sandbox() {
   const root = mkdtempSync(path.join(tmpdir(), 'oa-g20-unreadable-'));
   mkdirSync(path.join(root, 'data', 'journal'), { recursive: true });
   mkdirSync(path.join(root, 'data', 'agent-gate.md'));
+  mkdirSync(path.join(root, 'oa-home', 'state'), { recursive: true });
   writeFileSync(path.join(root, 'body.md'), '## \u{1F319} Overnight Agent \u2014 2020-03-09\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress\n\nDid the thing.\n\n**Needs from you:** nothing.\n');
+  writeFileSync(path.join(root, 'data', 'journal', 'task-970.md'), '# Task 970: approved\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## \u{1F319} Overnight Agent \u2014 ask\n\n<!-- from: overnight-agent -->\n<!-- oa-ask: blocking -->\n**Status:** Proposed\n\n**Needs from you:** approve?\n<!-- /overnight-agent turn-end -->\n\n## 2020-03-02\n\n<!-- from: me -->\napprove\n');
+  writeFileSync(path.join(root, 'oa-home', 'state', 'task-970.json'), JSON.stringify({ id: '970', status: 'proposed', session: { session_id: 'task-session-970' } }));
   return root;
 }
 
@@ -34,7 +37,7 @@ const engines = {
 };
 
 for (const [name, run] of Object.entries(engines)) {
-  for (const id of ['x/../../agent-gate', 'x\\..\\..\\agent-gate']) {
+  for (const id of ['970/../../agent-gate', '970\\..\\..\\agent-gate']) {
     test(`${name}: G20 refuses -Id ${id} with exit 2 although the target cannot be read`, () => {
       const root = sandbox();
       try {
@@ -44,7 +47,7 @@ for (const [name, run] of Object.entries(engines)) {
         const r = run(['-JournalDir', path.join(root, 'data', 'journal'), '-Id', id, '-Ask', 'none', '-BodyFile', path.join(root, 'body.md')], env);
         assert.equal(r.status, 2, `exit ${r.status}\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
         assert.match(r.stdout, /G20 line 1: -Id must be a task id, not a path\./);
-        assert.doesNotMatch(r.stdout, /\bG(12|17|22) line/);
+        assert.doesNotMatch(r.stdout, /\bG(12|17|22|23) line/);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

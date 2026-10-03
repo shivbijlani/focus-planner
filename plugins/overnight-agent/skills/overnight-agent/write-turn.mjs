@@ -27,6 +27,7 @@
     G14 a question declared as not needing him           G15 proposing already-shipped work
     G16 an advertised reply word the reader rejects      G17 a turn into a user-paused task
     G18 an unverified agent-gate edit ask                G19 a proposed plan's first step
+    G23 a coordinator outcome turn for a human-approved task whose task session owns the work
   G6 is not a refusal: a journal with no OVERNIGHT-AGENT sentinel gets one on append.
   G20 a target that is not this task's own journal (agent-gate.md, user-settings.md, a path in
       -Id, a symlink out of -JournalDir). G21 a hand-written `oa-by` identity stamp. G22 a turn
@@ -578,8 +579,8 @@ function humanSpokeLast(journalPath) {
   }
 }
 
-function makeContext({ id, journalDir, oaHome, author, issueResolver, wakeWindowMin }) {
-  return { id, journalDir, oaHome, author, issueResolver, wakeWindowMin, g15Note: null, pauseAdvisory: null, pauseVerdict: null };
+function makeContext({ id, journalDir, oaHome, author, issueResolver, oaState, wakeWindowMin }) {
+  return { id, journalDir, oaHome, author, issueResolver, oaState, wakeWindowMin, g15Note: null, pauseAdvisory: null, pauseVerdict: null };
 }
 
 // G17's evidence (#627). null means "not provably paused" and is returned for every uncertainty;
@@ -605,6 +606,81 @@ function userPauseVerdict(ctx, taskId, journalPath) {
   if (humanSpokeLast(journalPath)) return null;
   const mm = /"paused_at"\s*:\s*"([^"]*)"/.exec(raw);
   return { status, at: mm ? mm[1] : '' };
+}
+
+function boundTaskSessionVerdict(ctx, taskId) {
+  const caller = ctx.author ? ctx.author : (process.env.COPILOT_AGENT_SESSION_ID || '');
+  const statePath = path.join(ctx.oaHome, 'state', `task-${taskId}.json`);
+  const ids = [];
+  let status = '';
+  let statusBy = '';
+  let stateOk = false;
+  if (testPath(statePath)) {
+    try {
+      const st = readJsonLoose(statePath);
+      status = lowerInvariant(psStr(get(st, 'status')));
+      statusBy = lowerInvariant(psStr(get(st, 'status_by')));
+      const sess = get(st, 'session');
+      if (psTruthy(sess)) {
+        for (const key of ['session_id', 'prior_session_id']) {
+          const v = get(sess, key);
+          if (psTruthy(v)) ids.push(psStr(v));
+        }
+        const prior = get(sess, 'prior_session_ids');
+        const arr = Array.isArray(prior) ? prior : (prior === undefined || prior === null ? [] : [prior]);
+        for (const v of arr) if (psTruthy(v)) ids.push(psStr(v));
+      }
+      stateOk = true;
+    } catch {
+      stateOk = false;
+    }
+  }
+  const bound = !!(caller && ids.some((sid) => ciEq(sid, caller)));
+  return { caller, ids, bound, stateOk, status, statusBy };
+}
+
+function consentVerdictFromEngine(ctx, taskId) {
+  if (!testPath(ctx.oaState)) return { ok: false, reason: `engine not found at ${ctx.oaState}` };
+  const plannerDir = path.dirname(ctx.journalDir);
+  const args = [
+    ctx.oaState, 'consent',
+    '-Id', taskId,
+    '-JournalDir', ctx.journalDir,
+    '-StateDir', path.join(ctx.oaHome, 'state'),
+    '-PlannerBoard', path.join(plannerDir, 'planner.md'),
+    '-PlannerCompleted', path.join(plannerDir, 'planner-completed.md'),
+    '-SnoozeStore', path.join(plannerDir, 'snooze.json'),
+    '-GatePath', path.join(plannerDir, 'agent-gate.md'),
+    '-UserSettings', path.join(plannerDir, 'user-settings.md'),
+  ];
+  const r = spawnSync(process.execPath, args, { windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  if (r.error) return { ok: false, reason: `could not run engine (${r.error.message})` };
+  const stdout = r.stdout ? r.stdout.toString('utf8') : '';
+  const stderr = r.stderr ? r.stderr.toString('utf8') : '';
+  if (r.status !== 0) return { ok: false, reason: netTrim(stderr || stdout || `engine exited ${r.status}`) };
+  const text = netTrim(stdout);
+  if (!text) return { ok: false, reason: 'engine printed nothing' };
+  try { return { ok: true, verdict: JSON.parse(text) }; } catch {
+    return { ok: false, reason: `engine output was not JSON: ${text.slice(0, Math.min(120, text.length))}` };
+  }
+}
+
+function approvedTaskOwnerFinding(ctx, taskId) {
+  if (!taskId) return null;
+  const owner = boundTaskSessionVerdict(ctx, taskId);
+  if (owner.bound) return null;
+  if (owner.statusBy === 'user' && ['proposed', 'blocked'].includes(owner.status)) return null;
+  const consent = consentVerdictFromEngine(ctx, taskId);
+  if (consent.ok && !psTruthy(get(consent.verdict, 'consent_ok'))) return null;
+  const reason = consent.ok
+    ? `consent_ok=true (${psStr(get(consent.verdict, 'reason'))})`
+    : `consent could not be checked (${consent.reason})`;
+  const caller = owner.caller || 'unknown';
+  const binding = owner.ids.length ? owner.ids.join(', ') : 'no bound task session';
+  return newFinding('G23', 1, reason,
+    `task ${taskId} has a pending human approval, but caller '${caller}' is not the bound task session (${binding}). ` +
+    `The coordinator must dispatch it with \`oa-state.ps1 session -Id ${taskId} -ForDispatch ...\`; ` +
+    'the task session owns the approved work and writes the outcome turn. Unknown callers fail closed. This guard cannot be disabled');
 }
 
 // G12 -- ONE TURN PER WAKE (#473, #475, #477, #532). The only guard that is a property of the
@@ -1282,7 +1358,8 @@ function run(argv, out) {
   const issueResolver = process.env.WRITE_TURN_ISSUE_RESOLVER
     ? process.env.WRITE_TURN_ISSUE_RESOLVER
     : [here, '..', '..', 'checks', 'issue-shipped.mjs'].join(SEP);
-  const ctx = makeContext({ id, journalDir, oaHome, author, issueResolver, wakeWindowMin: wakeWindow(process.env.WRITE_TURN_WAKE_WINDOW_MIN) });
+  const oaState = path.join(here, 'oa-state.mjs');
+  const ctx = makeContext({ id, journalDir, oaHome, author, issueResolver, oaState, wakeWindowMin: wakeWindow(process.env.WRITE_TURN_WAKE_WINDOW_MIN) });
 
   if (!testPath(bodyFile)) throw fail(`body file not found: ${bodyFile}`);
   const body = readAllText(bodyFile);
@@ -1310,6 +1387,10 @@ function run(argv, out) {
   if (snoozeVerdict) {
     const snooze = snoozeWriteFinding(id, snoozeVerdict);
     if (snooze) findings = [...findings, snooze];
+  }
+  if (dest) {
+    const approvedOwner = approvedTaskOwnerFinding(ctx, id);
+    if (approvedOwner) findings = [...findings, approvedOwner];
   }
   if (prot) findings = [...findings, prot];
   const hasAsk = turnHasAsk(body);
