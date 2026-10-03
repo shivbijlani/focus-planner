@@ -132,6 +132,22 @@ export async function listFiles(dirHandle) {
   return listRecursive(dirHandle)
 }
 
+/** File names directly inside `path` (any extension), or null when the folder does not exist. */
+export async function listDirectory(dirHandle, path) {
+  if (!dirHandle) return null
+  let dir = dirHandle
+  try {
+    for (const part of path.split('/').filter(Boolean)) dir = await dir.getDirectoryHandle(part)
+  } catch {
+    return null
+  }
+  const names = []
+  for await (const [name, handle] of dir.entries()) {
+    if (handle.kind === 'file') names.push(name)
+  }
+  return names
+}
+
 export async function getMaxJournalId(dirHandle) {
   try {
     const journalDir = await dirHandle.getDirectoryHandle('journal')

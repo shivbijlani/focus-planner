@@ -43,6 +43,8 @@ import { deleteJournalForTask } from './journalDelete.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { renderJournalLines } from './markdown/markdownRender.jsx'
 import { useTaskDoc, journalDeepLink } from './docsIndex.js'
+import { useAgentSessionLinks } from './useAgentMetadata.js'
+import AgentSessionLinks from './AgentSessionLinks.jsx'
 import { hideDocsFolder, hideAgentMetadataFolder } from './fileTreeFilter.js'
 
 // Docs' task chip / 📔 link opens the planner at `#journal=<id>` (plans/docs-app-design.md §3).
@@ -1060,6 +1062,8 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
   const journalProvider = getActiveProvider()
   // Docs (#3.2 of plans/docs-app-design.md): the task's catch-up doc, when docs/index.json binds one.
   const taskDoc = useTaskDoc(journalProvider, taskId)
+  // 🤖 agent session links (docs/spec/Domain-agent-metadata.md): none unless an agent published one.
+  const agentLinks = useAgentSessionLinks(journalProvider, row)
   
   // Check and read the journal as one queued operation. The provider is captured
   // now and namespaces de-duplication, so a source switch cannot reuse an
@@ -1444,6 +1448,7 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
                                 ) : null}
                               </a>
                             )}
+                            <AgentSessionLinks links={agentLinks} />
                           </span>
                         )}
                       </span>

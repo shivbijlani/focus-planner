@@ -4,7 +4,7 @@
 import {
   pickFolder, restoreFolder, forgetFolder,
   readFile, writeFile, deleteFile,
-  journalExists, listFiles,
+  journalExists, listFiles, listDirectory,
   getMaxJournalId, getJournalIds, scaffoldIfEmpty,
 } from './fsa.js'
 
@@ -56,6 +56,12 @@ export class FSAProvider {
     // never crashes on a null handle.
     if (!this._handle) await this.restore().catch(() => null)
     return listFiles(this._handle)
+  }
+
+  /** File names directly inside `dir`, or null when it does not exist. */
+  async listDir(dir) {
+    if (!this._handle) await this.restore().catch(() => null)
+    return listDirectory(this._handle, dir)
   }
 
   async checkJournal(taskId, { signal } = {}) {
