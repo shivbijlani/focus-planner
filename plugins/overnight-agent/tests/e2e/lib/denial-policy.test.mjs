@@ -117,6 +117,48 @@ test('cd-relative rule does not excuse a non-permission refusal', () => {
   assert.equal(classifyDenial({ ...call(coordMeasured), name: 'create' }, opts).expected, false);
 });
 
+// --- The variable-relative rule (#818 gate) -------------------------------------------------------
+// Measured on candidate-818 run 1 (20261002-193532-candidate-818): a read of the checks folder
+// through a variable the same command assigned to the skill dir.
+const varMeasured = `$skill = "${SKILL}"\nGet-ChildItem "$skill\\..\\..\\checks" -ErrorAction SilentlyContinue | Select-Object Name\n` +
+  `Write-Output "---planner---"\nGet-ChildItem "${ROOT}\\home\\OneDrive\\Apps\\Focus Planner\\" -ErrorAction SilentlyContinue\n`;
+const varExpected = {
+  'measured: checks folder through $skill': varMeasured,
+  'single-quoted literal, ${braced} use': `\${skill} = '${SKILL}'\nGet-Content "\${skill}\\..\\..\\checks\\x.mjs"`,
+  'down to the sandbox root itself': `$s = "${SKILL}"\nGet-ChildItem "$s\\..\\..\\..\\..\\.."`,
+  'two variables, both literal and in-sandbox': `$a = "${SKILL}"; $b = "${ROOT}\\home"\nCopy-Item "$a\\..\\..\\checks\\x.md" "$b\\x.md"`,
+};
+for (const [name, command] of Object.entries(varExpected)) {
+  test(`variable-relative denial is expected: ${name}`, () => {
+    const v = classifyDenial(call(command), opts);
+    assert.equal(v.expected, true, v.reason);
+  });
+}
+const varMutations = {
+  'variable assigned a path outside the sandbox': `$skill = "C:\\Users\\u\\.copilot\\skills\\x"\nGet-ChildItem "$skill\\..\\..\\checks"`,
+  'variable reassigned between assignment and use': `$skill = "${SKILL}"\n$skill = "C:\\Users\\u"\nGet-ChildItem "$skill\\..\\..\\checks"`,
+  'variable reassigned with +=': `$skill = "${SKILL}"\n$skill += "\\..\\..\\..\\..\\..\\.."\nGet-ChildItem "$skill\\..\\x"`,
+  'variable from the environment': `Get-ChildItem "$env:USERPROFILE\\..\\..\\x"`,
+  'scoped variable': `$script:skill = "${SKILL}"\nGet-ChildItem "$script:skill\\..\\..\\checks"`,
+  'variable never assigned (a parameter or automatic)': `Get-ChildItem "$PSScriptRoot\\..\\..\\checks"`,
+  'variable used before it is assigned': `Get-ChildItem "$skill\\..\\..\\checks"\n$skill = "${SKILL}"`,
+  'variable resolving above the sandbox root': `$skill = "${SKILL}"\nGet-ChildItem "$skill\\..\\..\\..\\..\\..\\..\\x"`,
+  'variable assigned a non-literal': `$skill = "$env:TEMP\\x"\nGet-ChildItem "$skill\\..\\..\\checks"`,
+  'variable bound by Set-Variable as well': `$skill = "${SKILL}"\nSet-Variable skill C:\\Users\\u\nGet-ChildItem "$skill\\..\\..\\checks"`,
+  'loop variable': `$skill = "${SKILL}"\nforeach ($skill in @('C:\\x')) { Get-ChildItem "$skill\\..\\..\\checks" }`,
+  'combined with a location change': `$skill = "${SKILL}"\ncd "${SKILL}"\nGet-ChildItem "$skill\\..\\..\\checks"`,
+  'an absolute live path alongside': `$skill = "${SKILL}"\nGet-ChildItem "$skill\\..\\..\\checks" C:\\Users\\u\\.copilot`,
+  'a deny-tool rule alongside': `$skill = "${SKILL}"\nGet-ChildItem "$skill\\..\\..\\checks"; git push origin HEAD`,
+  'in-sandbox variable path the CLI could verify (no escape)': `$skill = "${SKILL}"\nGet-Content "$skill\\SKILL.md"`,
+  'a URL alongside': `$skill = "${SKILL}"\nnode "$skill\\..\\x.mjs" https://example.com`,
+};
+for (const [name, command] of Object.entries(varMutations)) {
+  test(`variable-relative mutation still fails i3: ${name}`, () => {
+    const v = classifyDenial(call(command), opts);
+    assert.equal(v.expected, false, `classified expected: ${v.reason}`);
+  });
+}
+
 // End to end through analyze-events.mjs: the measured denials pass; one unexpected denial among
 // them still lands in deniedCalls (the field i3 counts).
 test('analyze-events: expected denials are excused, an unexpected one is still counted', () => {

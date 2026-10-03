@@ -80,6 +80,70 @@ export function classifyCdRelative(command, sandboxRoot) {
   return { expected: true, reason: "in-sandbox path relative to the command's own cd, which the CLI resolves against the session directory" };
 }
 
+// The variable-relative rule (#818 gate; measured on candidate-818 run 1, 2026-10-02): the CLI
+// cannot expand a shell variable, so `$skill = "<sandbox>\...\skills\overnight-agent"` followed by
+// `Get-ChildItem "$skill\..\..\checks"` looks to it like `..\..\checks` from the session directory
+// -- outside -- and is denied, although PowerShell reads a folder inside the sandbox. Such a denial
+// is EXPECTED only if, besides the tool / code / category and deny-rule conditions,
+//   - the command changes no location (the cd-relative rule is separate, and does not take variables);
+//   - every variable used in a path is assigned EXACTLY ONCE in the command, to a quoted literal
+//     absolute path inside the sandbox, BEFORE its first use, and is never reassigned or bound any
+//     other way (Set-/New-Variable, foreach, param, [ref], -OutVariable and friends);
+//   - no path uses a scoped or environment variable (`$env:`, `$script:`, ...), an automatic one,
+//     `~`, `%VAR%`, a wildcard, a UNC prefix, a driveless root or a URL;
+//   - every path, with its variables substituted, resolves inside the sandbox;
+//   - at least one variable path, read the way the CLI reads it (the variable dropped, the rest
+//     resolved against the session directory), escapes the sandbox -- what explains the denial.
+const VAR_REF_RE = /\$(?:\{([^}]+)\}|([A-Za-z_][\w]*(?::[A-Za-z_][\w]*)?))/g;
+const BINDING_RE = /\b(?:set-variable|new-variable|clear-variable|remove-variable|sv|nv)\b|\bparam\s*\(|\[ref\]|-(?:outvariable|ov|errorvariable|ev|pipelinevariable|pv|warningvariable|wv|informationvariable|iv)\b/i;
+
+export function classifyVarRelative(command, sandboxRoot) {
+  const no = (reason) => ({ expected: false, reason });
+  if (!sandboxRoot) return no('no sandbox root to resolve against');
+  if ([...command.matchAll(LOCATION_RE)].length) return no('command changes location');
+  if (/\b[a-z][a-z0-9+.-]*:\/\//i.test(command)) return no('command names a URL');
+  const tokens = command.split(/[\s"'`;|&(),=]+/).filter((t) => /[\\/]/.test(t));
+  const varTokens = tokens.filter((t) => t.includes('$'));
+  if (!varTokens.length) return no('no path uses a variable');
+  if (BINDING_RE.test(command)) return no('command binds a variable some other way');
+  const values = new Map();
+  for (const t of varTokens) {
+    for (const m of t.matchAll(VAR_REF_RE)) {
+      const name = (m[1] ?? m[2]).toLowerCase();
+      if (values.has(name)) continue;
+      if (name.includes(':')) return no(`path ${t} uses the scoped or environment variable $${name}`);
+      const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const assigns = [...command.matchAll(new RegExp(`\\$(?:\\{${esc}\\}|${esc}(?![\\w:]))\\s*(?:[-+*/%]|\\?\\?)?=(?!=)`, 'gi'))];
+      if (assigns.length !== 1) return no(assigns.length ? `$${name} is assigned more than once` : `$${name} is never assigned in the command`);
+      if (new RegExp(`\\bforeach\\s*\\(\\s*\\$${esc}\\b`, 'i').test(command)) return no(`$${name} is a loop variable`);
+      const lit = new RegExp(`\\$(?:\\{${esc}\\}|${esc})\\s*=\\s*(?:"([^"\`$%]*)"|'([^']*)')`, 'i').exec(command.slice(assigns[0].index));
+      if (!lit) return no(`$${name} is not assigned a quoted literal`);
+      const value = lit[1] ?? lit[2];
+      if (!/^[a-z]:[\\/]/i.test(value) || /[~*?%]/.test(value)) return no(`$${name} is not a literal absolute path`);
+      if (!inside(value, sandboxRoot)) return no(`$${name} is assigned a path outside the sandbox`);
+      const firstUse = command.search(new RegExp(`\\$(?:\\{${esc}\\}|${esc})(?![\\w:])(?!\\s*=(?!=))`, 'i'));
+      if (firstUse >= 0 && firstUse < assigns[0].index) return no(`$${name} is used before it is assigned`);
+      values.set(name, value);
+    }
+  }
+  let explains = false;
+  for (const t of tokens) {
+    const sub = t.replace(VAR_REF_RE, (m, a, b) => values.get((a ?? b).toLowerCase()) ?? m);
+    if (/[$%~*?<>]/.test(sub) || sub.startsWith('\\\\')) return no(`path ${t} cannot be resolved here`);
+    const abs = /^[a-z]:[\\/]/i.test(sub);
+    if (!abs && /^[\\/]/.test(sub)) return no(`path ${t} is rooted without a drive`);
+    if (!abs && /^[a-z]:/i.test(sub)) return no(`path ${t} is drive-relative`);
+    const resolved = abs ? path.win32.normalize(sub) : path.win32.resolve(sandboxRoot, sub);
+    if (!inside(resolved, sandboxRoot)) return no(`path ${t} resolves outside the sandbox`);
+    if (t.includes('$')) {
+      const asCli = t.replace(VAR_REF_RE, '').replace(/^[\\/]+/, '');
+      if (asCli && !inside(path.win32.resolve(sandboxRoot, asCli), sandboxRoot)) explains = true;
+    }
+  }
+  if (!explains) return no('no variable path escapes the session directory, so path verification does not explain the denial');
+  return { expected: true, reason: 'in-sandbox path through a variable assigned a literal in-sandbox path in the same command, which the CLI cannot expand' };
+}
+
 // `shell(git push)` -> matches a command containing `git push`; `web_fetch` -> the tool name.
 export function denyRuleHit(name, command, denyRules) {
   for (const rule of denyRules || []) {
@@ -107,7 +171,9 @@ export function classifyDenial(call, { sandboxRoot, denyRules = [] } = {}) {
   const lower = command.toLowerCase();
   if (!HYGIENE_SCRIPTS.some((s) => lower.includes(s))) {
     const cd = classifyCdRelative(command, sandboxRoot);
-    return cd.expected ? cd : no(`command names no PHASE 0 hygiene script, and ${cd.reason}`);
+    if (cd.expected) return cd;
+    const v = classifyVarRelative(command, sandboxRoot);
+    return v.expected ? v : no(`command names no PHASE 0 hygiene script, ${cd.reason}, and ${v.reason}`);
   }
   let masked = norm(command);
   if (sandboxRoot) {
