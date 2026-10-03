@@ -69,3 +69,15 @@ export function hideDocsFolder(items) {
   if (!Array.isArray(items)) return items
   return items.filter((item) => !(item?.type === 'directory' && item.name === DOCS_DIR && (item.path || item.name) === DOCS_DIR))
 }
+
+export const AGENT_METADATA_DIR = 'agent-metadata'
+
+/**
+ * Remove the top-level `agent-metadata/` folder (per-device files the Overnight Agent publishes
+ * for the 🤖 session link, docs/spec/Domain-agent-metadata.md). Machine files, never edited by
+ * hand, so the sidebar must look exactly as it did before an agent published one.
+ */
+export function hideAgentMetadataFolder(items) {
+  if (!Array.isArray(items)) return items
+  return items.filter((item) => !(item?.type === 'directory' && item.name === AGENT_METADATA_DIR && (item.path || item.name) === AGENT_METADATA_DIR))
+}

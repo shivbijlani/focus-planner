@@ -43,7 +43,7 @@ import { deleteJournalForTask } from './journalDelete.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { renderJournalLines } from './markdown/markdownRender.jsx'
 import { useTaskDoc, journalDeepLink } from './docsIndex.js'
-import { hideDocsFolder } from './fileTreeFilter.js'
+import { hideDocsFolder, hideAgentMetadataFolder } from './fileTreeFilter.js'
 
 // Docs' task chip / 📔 link opens the planner at `#journal=<id>` (plans/docs-app-design.md §3).
 // Captured once at load: init can run more than once (StrictMode, source switches), and the
@@ -4973,7 +4973,7 @@ function App() {
 
   const loadFiles = async () => {
     try {
-      const data = hideDocsFolder(await storage.getFiles())
+      const data = hideAgentMetadataFolder(hideDocsFolder(await storage.getFiles()))
       setFiles(prev => sameFileTree(prev, data) ? prev : data)
     } catch (err) {
       console.error('Failed to load files:', err)
