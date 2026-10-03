@@ -684,4 +684,129 @@ Real committed sample from `packages/mcp-cred-vault/mcp-secrets.example.json`:
 
 </details>
 
+## 7. Docs — catch-up document files
+
+A long-running task's journal eventually becomes too long to re-read on every wake. Rather than
+inventing a new document format, **Docs** reuses the journal's own markdown grammar and stores
+state as one JSON registry plus three files per document, all under a `docs/` folder beside
+`planner.md`: `docs/index.json` (registry: which task owns which doc, and a per-doc summary),
+`docs/<id>/doc.md` (the document body, publisher-owned), `docs/<id>/review.json` (the user's
+span-anchored comments, app-owned), and `docs/<id>/response.json` (the publisher's per-comment
+dispositions). [Domain-docs-core](Domain-docs-core) is the package that parses, anchors and merges
+these four shapes; this section is their byte-level contract.
+
+As of this snapshot, the reader half (parsing, anchoring, and writing `review.json` through the
+Docs app) is implemented; the publisher that writes `doc.md`/`response.json` (`fp-docs`, described in
+`plans/docs-app-design.md`) is not yet built. The samples below are the target shape both halves
+must agree on.
+
+Annotated sample, built from `packages/docs-core/src/doc.js`, `packages/docs-core/src/review.js`,
+and `plans/docs-app-design.md` §4:
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail: <code>docs/index.json</code></strong></summary>
+
+```json
+{
+  "version": 1,
+  "tasks": { "123": "d-7kx2m4" },
+  "docs": {
+    "d-7kx2m4": {
+      "title": "Task 123: Mortgage refinance options",
+      "task": 123,
+      "primary": true,
+      "rev": 4,
+      "updatedAt": "2026-09-30T21:40:00Z",
+      "links": ["d-9a1c0q"],
+      "openDispositions": { "needs-you": 1 }
+    },
+    "d-9a1c0q": { "title": "Mortgage options brief", "primary": false, "rev": 2, "updatedAt": "…", "links": [] }
+  }
+}
+```
+
+</details>
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail: <code>docs/d-7kx2m4/doc.md</code></strong></summary>
+
+```markdown
+<!-- docs v1 id=d-7kx2m4 rev=4 published=2026-09-30T21:40:00Z by=overnight-agent -->
+# Task 123: Mortgage refinance options
+
+<!-- @b1 -->
+**Status: 2 options ready — tell me which one to lock.**
+
+<!-- @b2 -->
+See the [Mortgage options brief](doc:d-9a1c0q) for the numbers.
+```
+
+</details>
+
+> [!NOTE]
+> **Technical detail: concrete example** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail: <code>docs/d-7kx2m4/review.json</code> and <code>response.json</code></strong></summary>
+
+```json
+{
+  "version": 1,
+  "comments": {
+    "c_01j9": {
+      "rev": 3,
+      "anchor": { "block": "b7", "endBlock": "b7", "quote": "fixed 30-year at 5.9%", "prefix": "Option B is a ", "suffix": " with no points" },
+      "intent": "question",
+      "body": "Is this with or without the escrow change?",
+      "createdAt": "2026-09-30T22:01:10Z",
+      "reviewId": "rv_01j9",
+      "status": "open",
+      "clock": 1727733670000
+    }
+  },
+  "reviews": { "rv_01j9": { "submittedAt": "2026-09-30T22:03:00Z", "rev": 3 } },
+  "readRev": 3
+}
+```
+
+```json
+{
+  "version": 1,
+  "rev": 4,
+  "revisions": [{ "rev": 4, "at": "…", "summary": "Answered escrow question; added option C" }],
+  "dispositions": { "c_01j9": { "status": "answered", "rev": 4, "blocks": ["b7"], "note": "Without — escrow in b9." } },
+  "ackedReview": "rv_01j9"
+}
+```
+
+</details>
+
+> [!NOTE]
+> **Technical detail: concrete reference.** Optional implementation detail; the surrounding section states the product behavior.
+
+<details>
+<summary><strong>Show technical detail</strong></summary>
+
+| Invariant | Why it exists | Enforced / relied on by |
+| --- | --- | --- |
+| Each task has at most one primary doc; `index.json.tasks` is the only binding. | A title-search binding can silently duplicate on rename; a durable id cannot. | `index.json.tasks`, `plans/docs-app-design.md` §4.1 |
+| `doc.md` blocks are delimited by publisher-assigned `<!-- @bN -->` anchors, carried across revisions by similarity. | Comments must survive a full rewrite of the surrounding prose, not just an unchanged file. | `parseDoc()` in `packages/docs-core/src/doc.js` |
+| Content before the first anchor becomes block `b0`. | A hand-edited doc with no anchors yet must still render and be commentable. | `parseDoc()` in `packages/docs-core/src/doc.js` |
+| An anchor is a block id plus a W3C TextQuote (`quote`/`prefix`/`suffix`), not an offset. | Offsets break on any edit; quote+context survives re-anchoring the span after a rewrite. | `packages/docs-core/src/anchor.js` |
+| Re-anchoring tries the same block, then any block, then gives up as `outdated` — never silently drops a comment. | A comment on content the agent moved, not deleted, must stay visible. | `reanchor()` in `packages/docs-core/src/anchor.js` |
+| `review.json` comments merge across devices by id, using the same clock-ordered record rules as `planner.md`. | Phone and desktop can both add comments offline without a second merge algorithm to maintain. | `mergeReviews()` in `packages/docs-core/src/review.js`, reusing `packages/folder-sync/src/merge.js` |
+| A comment's status is derived from `review.json` + `response.json` at read time, never stored a third way. | `open` / `needs-you` / `resolved` must always agree with the two files that are the actual source of truth. | `commentStatus()`, `deriveDocState()` in `packages/docs-core/src/review.js` |
+| `doc:<id>` links form the *review set*: a primary doc plus everything it reaches, cycle-safe, depth-capped. | The agent must know the full scope a submitted review wakes, without walking an unbounded or cyclic graph. | `reviewSet()` in `packages/docs-core/src/links.js` |
+| The catch-up threshold is measured in *visible* words (comments/markers stripped), from one shared function. | The app and the (future) publisher must never disagree about whether a task has crossed the doc threshold. | `journalReadLoad()` in `packages/docs-core/src/readLoad.js` |
+
+</details>
+
+See also [Domain-docs-core](Domain-docs-core) and [Domain-folder-sync](Domain-folder-sync).
+
 See also [Domain-app](Domain-app), [Domain-config](Domain-config), [Domain-folder-sync](Domain-folder-sync), [Domain-telegram-bridge](Domain-telegram-bridge), [Domain-mcp-cred-vault](Domain-mcp-cred-vault), and [Domain-overnight-agent](Domain-overnight-agent).
