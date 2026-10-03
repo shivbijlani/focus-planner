@@ -17,10 +17,17 @@ export function addDaysIso(days) {
   return d.toISOString().split('T')[0]
 }
 
-/** Wait until the board has rendered (storage restored, planner.md loaded). */
+/**
+ * Wait until the board has rendered (storage restored, planner.md loaded). This is the app-ready
+ * signal: the sections only render once the board file has been read. A cold boot right after a
+ * navigation can take well over the default 10 s on a loaded machine (#826: the old document's
+ * teardown waits on in-flight raster work), so the readiness wait gets its own allowance. It waits
+ * for the same thing; it never relaxes what a test then asserts.
+ */
+export const BOOT_TIMEOUT = 60_000
 export async function waitForBoard(page) {
-  await expect(page.getByTestId('task-section-Today')).toBeVisible()
-  await expect(page.getByTestId('task-section-Deferred')).toBeVisible()
+  await expect(page.getByTestId('task-section-Today')).toBeVisible({ timeout: BOOT_TIMEOUT })
+  await expect(page.getByTestId('task-section-Deferred')).toBeVisible({ timeout: BOOT_TIMEOUT })
 }
 
 /** Load the app into a fresh origin state and wait for the board. */

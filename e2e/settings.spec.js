@@ -9,6 +9,15 @@ async function openSettings(page) {
   return dialog
 }
 
+// #826: a click inside the open Settings dialog that navigates (switching or reconnecting a source,
+// starting an OAuth sign-in) repaints the dialog's large scrolling layer, and Chromium tears the old
+// document down only after that raster job finishes. The job is ~0.2 s of work, but on a CPU-starved
+// machine (measured: the shared 4-core dev box at 100%) its raster thread waits 13-40 s for CPU, so
+// these few tests get the slow-test allowance. Nothing they assert is relaxed.
+function navigatesFromSettingsDialog() {
+  test.slow()
+}
+
 test('agent gate editor: add a line, save, and it survives a reload', async ({ page }) => {
   await openPlanner(page)
   const openGate = async () => {
@@ -127,17 +136,20 @@ test('legacy multi-source state opens only the saved active source and shows a d
 })
 
 test('switching a saved storage source in Settings reloads the board from that choice', async ({ page }) => {
-  await openPlanner(page)
+  navigatesFromSettingsDialog()
   const savedSources = [
     { id: 's1', name: 'Work', providerType: 'local-storage' },
     { id: 's2', name: 'Personal', providerType: 'local-storage' },
   ]
-  await page.evaluate((sources) => {
+  // Seed the saved sources before the first load (instead of load, seed, reload). Only when absent,
+  // so the app's own choice survives the reload the switch performs.
+  await page.addInitScript((sources) => {
+    if (localStorage.getItem('fp-sources')) return
     localStorage.setItem('fp-sources', JSON.stringify(sources))
     localStorage.setItem('fp-active-source', 's1')
   }, savedSources)
-  await page.reload()
-  await waitForBoard(page)
+  await openPlanner(page)
+  expect(await page.evaluate(() => localStorage.getItem('fp-active-source'))).toBe('s1')
 
   const dialog = await openSettings(page)
   await dialog.getByRole('button', { name: 'Use Personal' }).click()
@@ -168,6 +180,7 @@ test('failed active-source restore falls back without changing saved choices and
 })
 
 test('canceling reconnect then switching sources leaves the selected source active after reload', async ({ page }) => {
+  navigatesFromSettingsDialog()
   await page.addInitScript(() => {
     window.showDirectoryPicker = async () => { throw new DOMException('User cancelled', 'AbortError') }
   })
@@ -200,6 +213,7 @@ test('canceling reconnect then switching sources leaves the selected source acti
 })
 
 test('canceling a Settings OAuth source switch restores the previous folder in the error session', async ({ page }) => {
+  navigatesFromSettingsDialog()
   await page.addInitScript(() => {
     const filesKey = 'e2e-fsa-files'
     const readFiles = () => JSON.parse(localStorage.getItem(filesKey) || '{}')
