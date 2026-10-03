@@ -45,6 +45,37 @@ assert.equal(call({
   toolName: 'send_session_message',
   toolArgs: { session_id: 'task-b', message: 'work' },
 }, [start, firstSend.record]).decision, 'pass');
+assert.equal(call({
+  toolName: 'create',
+  toolArgs: { path: 'journal\\task-9408-budget-review.md', content: 'work' },
+  env: { USERPROFILE: 'C:\\Users\\shiv' },
+  cwd: 'C:\\Users\\shiv\\OneDrive\\Apps\\Focus Planner',
+}).decision, 'deny');
+assert.match(call({
+  toolName: 'edit',
+  toolArgs: { path: 'C:\\Users\\shiv\\OneDrive\\Apps\\Focus Planner\\journal\\task-9408.md' },
+  env: { USERPROFILE: 'C:\\Users\\shiv' },
+  cwd: 'C:\\work',
+}).reason, /planner folder/);
+assert.equal(call({
+  toolName: 'create',
+  toolArgs: { path: 'C:\\Users\\shiv\\.copilot\\installed-plugins\\focus-planner\\overnight-agent\\skills\\overnight-agent\\.turn-9408.md' },
+  env: { USERPROFILE: 'C:\\Users\\shiv' },
+  cwd: 'C:\\work',
+}).decision, 'pass');
+assert.equal(call({
+  toolName: 'create',
+  toolArgs: { path: 'journal\\task-9408.md' },
+  env: { OVERNIGHT_AGENT_PLANNER_DIR: 'C:\\planner-copy' },
+  cwd: 'C:\\planner-copy',
+}).decision, 'deny');
+assert.equal(call({
+  sessionId: 'task-session',
+  toolName: 'create',
+  toolArgs: { path: 'C:\\Users\\shiv\\OneDrive\\Apps\\Focus Planner\\journal\\task-9408.md' },
+  env: { USERPROFILE: 'C:\\Users\\shiv' },
+  cwd: 'C:\\work',
+}).active, false);
 
 assert.equal(verifyCoordinatorGuard([
   start, firstSend.record,
@@ -66,6 +97,9 @@ const mutations = [
   ['task-complete-exception', "tool !== 'task_complete'", "tool === 'task_complete'"],
   ['sleep-crossing', "at.getTime() + sleepMs >= hardEnd.getTime()", "at.getTime() + sleepMs < hardEnd.getTime()"],
   ['duplicate-send', "entry.targetSessionId === target", "entry.targetSessionId !== target"],
+  ['planner-write-rule', "FILE_WRITE_TOOLS.has(tool)", "false && FILE_WRITE_TOOLS.has(tool)"],
+  ['planner-path-check', "isUnderDir(targetPath, plannerDirFromEnv(env), cwd)", "!isUnderDir(targetPath, plannerDirFromEnv(env), cwd)"],
+  ['planner-active-only', "if (!run) return { active: false };", "if (!run) { /* mutated: active outside coordinator run */ }"],
 ];
 const temp = mkdtempSync(path.join(tmpdir(), 'oa-coordinator-guard-'));
 try {
@@ -97,6 +131,20 @@ try {
         toolName: 'send_session_message', toolArgs: { session_id: 'task-a' },
         now: '2026-09-29T14:40:00.000Z',
       }).decision, 'deny');
+      assert.equal(policy.decideToolUse({
+        entries: [start], sessionId: 'coordinator', toolName: 'create',
+        toolArgs: { path: 'journal\\task-9408-budget-review.md' },
+        env: { USERPROFILE: 'C:\\Users\\shiv' },
+        cwd: 'C:\\Users\\shiv\\OneDrive\\Apps\\Focus Planner',
+        now: '2026-09-29T14:40:00.000Z',
+      }).decision, 'deny');
+      assert.equal(policy.decideToolUse({
+        entries: [start], sessionId: 'coordinator', toolName: 'create',
+        toolArgs: { path: 'C:\\Users\\shiv\\.copilot\\installed-plugins\\focus-planner\\overnight-agent\\skills\\overnight-agent\\.turn-9408.md' },
+        env: { USERPROFILE: 'C:\\Users\\shiv' },
+        cwd: 'C:\\work',
+        now: '2026-09-29T14:40:00.000Z',
+      }).decision, 'pass');
     } catch {
       killed = true;
     }

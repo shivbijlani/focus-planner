@@ -1,7 +1,7 @@
 // mark.mjs -- Add-TurnTerminator, Set-ExhaustionDeclaration, Cmd-Mark.
 import { joinPath } from '../core/context.mjs';
 import { readJournalText, testPath, writeAllTextUtf8 } from '../core/fsx.mjs';
-import { get, has, psStr, psTruthy, setMember, toInt, netTrim, psSplit, lowerInvariant } from '../core/net.mjs';
+import { ciEq, get, has, psStr, psTruthy, setMember, toInt, netTrim, psSplit, lowerInvariant } from '../core/net.mjs';
 import { PsDate, parseDateTime, tryParseDateTime } from '../core/psdate.mjs';
 import { getAgentEndIndex, getFenceMaskedText, getJournalFacts, TurnEndMarker, TurnEndRe } from '../collect/journal.mjs';
 import { newPollObject, newRecheckObject, nowIso, parsePollMinutes, readState, writeState } from '../collect/state.mjs';
@@ -41,6 +41,34 @@ function pausedError(ctx, st) {
     'Only he clears a pause: either he replies in the journal below the newest turn, or a run ' +
     'records his decision with `-StatusBy user`. Marking it as the agent would erase the ' +
     'instruction as a side effect of reporting work he asked you to stop (#540).';
+}
+
+const approvedWorkStatuses = ['in-progress', 'done', 'blocked'];
+const userPauseStatuses = ['proposed', 'blocked'];
+
+function taskSessionOwnsStatusChange(ctx, st) {
+  const caller = ctx.p.TurnBy || process.env.COPILOT_AGENT_SESSION_ID || '';
+  if (!caller || !st || !has(st, 'session') || !psTruthy(get(st, 'session'))) return false;
+  const sess = get(st, 'session');
+  const ids = [];
+  for (const key of ['session_id', 'prior_session_id']) {
+    const v = get(sess, key);
+    if (psTruthy(v)) ids.push(psStr(v));
+  }
+  const prior = get(sess, 'prior_session_ids');
+  const arr = Array.isArray(prior) ? prior : (prior === undefined || prior === null ? [] : [prior]);
+  for (const v of arr) if (psTruthy(v)) ids.push(psStr(v));
+  return ids.some((sid) => ciEq(sid, caller));
+}
+
+function approvedWorkMarkError(ctx, st) {
+  const caller = ctx.p.TurnBy || process.env.COPILOT_AGENT_SESSION_ID || 'unknown';
+  const sess = st && has(st, 'session') && psTruthy(get(st, 'session')) ? get(st, 'session') : null;
+  const bound = sess && psTruthy(get(sess, 'session_id')) ? psStr(get(sess, 'session_id')) : 'no bound task session';
+  return `approved_task_status_owned_by_task_session: task ${ctx.p.Id} has a pending human approval, ` +
+    `but caller '${caller}' is not the bound task session (${bound}). The coordinator must dispatch it ` +
+    `with \`oa-state.ps1 session -Id ${ctx.p.Id} -ForDispatch ...\`; the task session owns approved work ` +
+    'status changes (in-progress/done/blocked). Unknown callers fail closed.';
 }
 
 export function setExhaustionDeclaration(ctx) {
@@ -91,6 +119,16 @@ export function cmdMark(ctx) {
 
   if (ctx.p.Status) {
     if (testUserPaused(st, facts) && lowerInvariant(psStr(ctx.p.StatusBy)) !== 'user') throw new Error(pausedError(ctx, st));
+    const status = lowerInvariant(psStr(ctx.p.Status));
+    const statusBy = lowerInvariant(psStr(ctx.p.StatusBy));
+    const storedStatus = lowerInvariant(psStr(get(st, 'status')));
+    const storedStatusBy = lowerInvariant(psStr(get(st, 'status_by')));
+    const consent = get(facts, 'Consent');
+    if (statusBy !== 'user' && approvedWorkStatuses.includes(status) &&
+        !(storedStatusBy === 'user' && userPauseStatuses.includes(storedStatus)) &&
+        consent && psTruthy(get(consent, 'consent_ok')) && !taskSessionOwnsStatusChange(ctx, st)) {
+      throw new Error(approvedWorkMarkError(ctx, st));
+    }
     const wasPaused = testUserPaused(st, facts);
     st.status = ctx.p.Status;
     setMember(st, 'status_by', ctx.p.StatusBy ? lowerInvariant(ctx.p.StatusBy) : 'agent');
@@ -145,4 +183,3 @@ export function cmdMark(ctx) {
   writeState(ctx, st);
   ctx.emitJson(st, { depth: 6 });
 }
-
