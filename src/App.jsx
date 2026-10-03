@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useLayoutEffect, useCallback } from 'react'
+import { useState, useEffect, useRef, useMemo, useLayoutEffect, useCallback, useContext } from 'react'
 import { createPortal } from 'react-dom'
 import './App.css'
 import './mobile-board.css'
@@ -43,8 +43,12 @@ import { deleteJournalForTask } from './journalDelete.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { renderJournalLines } from './markdown/markdownRender.jsx'
 import { useTaskDoc, journalDeepLink } from './docsIndex.js'
-import { useAgentSessionLinks } from './useAgentMetadata.js'
+import { useAgentSessionLinks, useAnnouncedDevices } from './useAgentMetadata.js'
 import AgentSessionLinks from './AgentSessionLinks.jsx'
+import LaneChip from './LaneChip.jsx'
+import LanesSettingsSection, { LanePicker } from './LanesSettings.jsx'
+import { LanesBoardContext, useLanes } from './useLanes.js'
+import { canonicalTaskId, laneView, readLaneBoard, resolveTaskLane } from './lanes/lanes.js'
 import { hideDocsFolder, hideAgentMetadataFolder } from './fileTreeFilter.js'
 
 // Docs' task chip / 📔 link opens the planner at `#journal=<id>` (plans/docs-app-design.md §3).
@@ -1040,6 +1044,38 @@ function renderIconsWithTooltips(text, keyOffset = 0) {
 }
 
 // Task row component with expandable todos
+// The board text rows resolve inherited lanes against, parsed once per distinct board.
+let laneBoardCache = { text: null, board: null }
+function laneBoardFor(text) {
+  if (laneBoardCache.text !== text) laneBoardCache = { text, board: readLaneBoard(text) }
+  return laneBoardCache.board
+}
+
+/** The row's lane view (docs/spec/Domain-lanes.md), or null when lanes are off or invalid. */
+function useRowLane(provider, taskId) {
+  const lanes = useLanes(provider)
+  const boardText = useContext(LanesBoardContext)
+  const on = lanes.status === 'ok'
+  const devices = useAnnouncedDevices(on ? provider : null)
+  return useMemo(() => {
+    const id = canonicalTaskId(taskId)
+    if (!on || !id) return null
+    return laneView(resolveTaskLane(id, laneBoardFor(boardText), lanes.config.tasks), lanes.config, devices)
+  }, [on, taskId, boardText, lanes.config, devices])
+}
+
+/** A broken agent-lanes.json pauses every PC's agent (fail closed); say so on the board. */
+function LanesBrokenBanner() {
+  const lanes = useLanes(getActiveProvider())
+  if (lanes.status !== 'invalid') return null
+  return (
+    <div className="lanes-banner" role="alert" data-testid="lanes-banner">
+      ⚠ <code>agent-lanes.json</code> is broken ({lanes.config.reason}). Agents on every PC are paused until it is
+      fixed in Settings → Devices &amp; lanes.
+    </div>
+  )
+}
+
 function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScrollToPriorities, onContextMenu, rawLine, onChangePriority, onPromoteTodo, onRenameTask, onChangeLinkedId, taskLookup, taskPriorityLookup, activeTaskIds, linkedIdMap, adoLookup, loadOrder = 0, onClearSearch }) {
   const taskId = extractTaskId(row)
   const readStateId = journalReadStateId(sourceId, taskId)
@@ -1064,6 +1100,8 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
   const taskDoc = useTaskDoc(journalProvider, taskId)
   // 🤖 agent session links (docs/spec/Domain-agent-metadata.md): none unless an agent published one.
   const agentLinks = useAgentSessionLinks(journalProvider, row)
+  // Lanes (docs/spec/Domain-lanes.md): a chip only when agent-lanes.json exists and validates.
+  const laneInfo = useRowLane(journalProvider, taskId)
   
   // Check and read the journal as one queued operation. The provider is captured
   // now and namespaces de-duplication, so a source switch cannot reuse an
@@ -1378,6 +1416,7 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
                             💤 Snoozed until {formatSnoozeDate(activeSnoozeUntil)}
                           </span>
                         )}
+                        <LaneChip view={laneInfo} />
                         {journalPath && !isMobile && (
                           <span className="journal-icons">
                             {/* #373/#389: the task list row offers two entry points —
@@ -1698,6 +1737,10 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
   // #346: separate state for the kebab's "Change priority" submenu.
   const [priorityMenu, setPriorityMenu] = useState(null)
   const [snoozePicker, setSnoozePicker] = useState(null)
+  // Lanes (docs/spec/Domain-lanes.md): the row menu offers "Lane…" only when lanes are set up.
+  const [lanePicker, setLanePicker] = useState(null)
+  const sectionLanes = useLanes(getActiveProvider())
+  const sectionBoardText = useContext(LanesBoardContext)
   const isMobile = useIsMobile()
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [adoLinkDialog, setAdoLinkDialog] = useState(null)
@@ -1853,6 +1896,20 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
       icon: '✅',
       action: () => onMoveToCompleted(rawLine, row, title)
     })
+
+    const laneId = canonicalTaskId(taskId)
+    if (sectionLanes.status === 'ok' && laneId) {
+      options.push({
+        label: 'Lane…',
+        icon: '🛤️',
+        action: () => setLanePicker({
+          taskId: laneId,
+          resolution: resolveTaskLane(laneId, laneBoardFor(sectionBoardText), sectionLanes.config.tasks),
+          tags: laneBoardFor(sectionBoardText).tags[laneId] ?? [],
+          assigned: sectionLanes.config.tasks[laneId] ?? null,
+        }),
+      })
+    }
 
     // Mobile #373: the rail shows ONE icon; its counterpart lives in the kebab.
     // With Telegram the rail icon is 💬 Chat → Telegram, so 📔 Journal goes here.
@@ -2096,6 +2153,13 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
           currentSnoozeUntil={snoozePicker.currentSnoozeUntil}
           onClose={() => setSnoozePicker(null)}
           onSave={(date) => onSnoozeTask(snoozePicker.rawLine, date)}
+        />
+      )}
+      {lanePicker && (
+        <LanePicker
+          picker={lanePicker}
+          config={sectionLanes.config}
+          onClose={() => setLanePicker(null)}
         />
       )}
       {showAddDialog && (
@@ -3424,6 +3488,8 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, sourceId, search:
         </div>
       )}
 
+      <LanesBrokenBanner />
+      <LanesBoardContext.Provider value={content}>
       {taskSections.map((section, i) => (
         <TaskSection
           key={i}
@@ -3458,6 +3524,7 @@ function FocusPlanView({ content, onNavigate, onContentUpdate, sourceId, search:
           onToggleTaskSetting={handleToggleTaskSetting}
         />
       ))}
+      </LanesBoardContext.Provider>
 
       {hasRenderableSkills(skills) && (
         <SkillsSection headers={skills.headers} rows={skills.rows} notes={skills.notes} />
@@ -4620,6 +4687,8 @@ function StorageFooter({ syncStatus, onDataChanged, onOpenFile }) {
                 }}
               />
             </div>
+
+            <LanesSettingsSection />
 
             <div className="settings-dialog-subtle settings-agent-settings-hint">
               <span>
