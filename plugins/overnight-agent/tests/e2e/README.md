@@ -101,7 +101,8 @@ any credit is spent; a drifted seed is `invalid-seed`, never a silent pass.
 | e | `closed-task-reply` | 9405 | reply on a user-closed task: no turn, no dispatch, reported in the wrap-up |
 | f | `snoozed-skipped` | 9406 | snoozed until next month: journal untouched, no dispatch |
 | g | `fresh-reply-first` | 9407 (+9408) | a fresh reply on a P2 row is ordered ahead of a quiet workable P0 row (precheck); the run acts on it; it is never passed over for the quiet row (parallel sends in one batch have no meaningful order) |
-| h | invariant | | `agent-gate.md`, `planner.md`, `planner-completed.md` never modified |
+| l | `metadata-published` | 9409 | a snoozed task with a live session: the run publishes exactly one `agent-metadata/<device key>.json` (l1) that is a v1 projection named by its own key (l2), carries the row's binding-time fingerprint and the bound session (l3) and the link the host reported (l4), and names no path (l5) |
+| h | invariant | | `agent-gate.md`, `planner.md`, `planner-completed.md` never modified; h3: any `agent-metadata/` file names no local or live path |
 | i | invariant | | no tool call names a live path; no tripwire fired; no denied tool attempted (one exception, below); only the sandbox copy of the skill scripts ran |
 | j | `completion` | | the run finished on its own (j1) and was not cut short by the coordinator's hard end (j2) |
 | k | invariant (record mode) | | the coordinator created no deliverable (it does no task work) |

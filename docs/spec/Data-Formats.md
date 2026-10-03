@@ -484,7 +484,7 @@ rules, publisher and reader rules, and the test vectors) is [Domain-agent-metada
 | File name stem = `device.key` = derived from `device.id`. | Conflict copies (`<key> (1).json`) and hand-copied files are ignored without guessing. |
 | A device writes only its own file, atomically. | Two PCs on one synced folder can never conflict. |
 | The fingerprint is captured at binding time and reused until a wake or explicit revalidation. | A title/date edit or a reused task ID hides the link instead of pointing it at the wrong session. |
-| A `url` is published only when the host reported it, and only `https://` or `ghapp://sessions/<same id>`. | No synthesised or unsafe links. |
+| A `url` is the link the host reported, else the Copilot app's `ghapp://sessions/<same id>` for a binding live in the agent's own state; only that form or a safe `https://` URL. | No link to another session, scheme or a released/dead one. |
 | `lastSeenAt` older than max(15 min, 2 × `heartbeatMinutes`) = stale, not removed. | An asleep PC is not a deleted binding. |
 
 </details>

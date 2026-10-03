@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { filterPlannerTree, hideDocsFolder } from './fileTreeFilter.js'
+import { filterPlannerTree, hideDocsFolder, hideAgentMetadataFolder } from './fileTreeFilter.js'
 
 // Mirrors the noisy real-world tree from the screenshot.
 const sampleTree = [
@@ -137,6 +137,29 @@ describe('filterPlannerTree', () => {
     ]
     expect(hideDocsFolder(tree).map((i) => i.path)).toEqual(['journal', 'docs.md', 'misc'])
     expect(hideDocsFolder(undefined)).toBeUndefined()
+  })
+
+  it('hideAgentMetadataFolder removes only the top-level agent-metadata/ folder', () => {
+    const tree = [
+      { name: 'agent-metadata', type: 'directory', path: 'agent-metadata', children: [] },
+      { name: 'journal', type: 'directory', path: 'journal', children: [
+        { name: 'agent-metadata', type: 'directory', path: 'journal/agent-metadata', children: [] },
+      ] },
+      { name: 'agent-metadata.md', type: 'file', path: 'agent-metadata.md' },
+      { name: 'docs', type: 'directory', path: 'docs', children: [] },
+    ]
+    expect(hideAgentMetadataFolder(tree).map((i) => i.path)).toEqual(['journal', 'agent-metadata.md', 'docs'])
+    expect(hideAgentMetadataFolder(undefined)).toBeUndefined()
+  })
+
+  it('filterPlannerTree never shows agent-metadata/ either', () => {
+    const tree = [
+      { name: 'planner.md', type: 'file', path: 'planner.md' },
+      { name: 'agent-metadata', type: 'directory', path: 'agent-metadata', children: [
+        { name: 'task-1.md', type: 'file', path: 'agent-metadata/task-1.md' },
+      ] },
+    ]
+    expect(filterPlannerTree(tree).map((i) => i.name)).toEqual(['planner.md'])
   })
 
   it('tolerates empty / nullish input', () => {

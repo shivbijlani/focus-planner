@@ -37,6 +37,7 @@ import { toJson, pipeToJson, truncationWarning, psNewlines } from './oa-state-li
 import { resolveGateSettings, resolvePacingSettings } from './oa-state-lib/collect/settings.mjs';
 import { acquireLock, releaseLock } from './oa-state-lib/core/lock.mjs';
 import { COMMAND_TABLE } from './oa-state-lib/commands.mjs';
+import { autoPublish } from './oa-state-lib/act/agent-metadata.mjs';
 
 const EOL = os.EOL;
 const writeErr = (s) => fs.writeSync(2, s);
@@ -110,6 +111,12 @@ export function main(argv, io = makeOutput()) {
     resolvePacingSettings(ctx);
     const run = COMMAND_TABLE[command];
     run(ctx);
+    // Per-device agent metadata (docs/spec/Domain-agent-metadata.md): after a command that changes
+    // a session binding or its liveness, and on every scan as a heartbeat, republish this PC's
+    // file. Silent and best-effort: it never changes this command's output or exit code.
+    if ((ctx.exitCode ?? 0) === 0) {
+      autoPublish({ command, stateDir: p.StateDir, plannerBoard: p.PlannerBoard, explicit: ctx.explicit });
+    }
     return ctx.exitCode ?? 0;
   } catch (e) {
     writeErr(`${e && e.message !== undefined ? e.message : String(e)}${EOL}`);

@@ -150,9 +150,11 @@ const tools = [
   },
   {
     name: 'list_sessions_and_chats',
-    description: 'List all sessions with ids, names and paths.',
+    description: 'List all sessions with ids, names, paths and app_url (the Copilot app link, ghapp://sessions/<id>).',
     inputSchema: { type: 'object', properties: {} },
-    run: () => loadSessions().map(view),
+    // The real host reports app_url for every session; the metadata publisher only publishes a
+    // link the host reported, so the stub reports it the same way.
+    run: () => loadSessions().map((s) => ({ ...view(s), app_url: `ghapp://sessions/${s.id}` })),
   },
 ];
 
