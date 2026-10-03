@@ -34,13 +34,14 @@ Every core design decision in this system exists to make that safe:
 
 ## How the pieces fit together
 
-Twelve domains divide the system: a browser-facing board (`app`), the on-disk formats and their
+Thirteen domains divide the system: a browser-facing board (`app`), the on-disk formats and their
 shared config (`config`, `storage`), a bidirectional sync engine (`folder-sync`), an autonomous
 overnight worker (`overnight-agent`), a Telegram mirror (`telegram-bridge`), a static journal
-publisher (`task-paper`), supporting services (`mcp-cred-vault`, `install-prompt`, `diagnostics`),
-the server and build entry points (`root`), and repository tooling including this spec's own
-generation pipeline (`scripts`). See [Architecture](Architecture) for how they compose at runtime and
-[Rebuilding](Rebuilding) for the order to build them in.
+publisher (`task-paper`), the framework-free catch-up-doc parsing core (`docs-core`), supporting
+services (`mcp-cred-vault`, `install-prompt`, `diagnostics`), the server and build entry points
+(`root`), and repository tooling including this spec's own generation pipeline (`scripts`). See
+[Architecture](Architecture) for how they compose at runtime and [Rebuilding](Rebuilding) for the
+order to build them in.
 
 ## Pages
 
@@ -54,6 +55,7 @@ generation pipeline (`scripts`). See [Architecture](Architecture) for how they c
 | [Domain-app](Domain-app) | The board UI and its pure content-transformation core. |
 | [Domain-config](Domain-config) | Agent gate, user settings, `AGENTS.md`, and their write-safety guarantees. |
 | [Domain-diagnostics](Domain-diagnostics) | Structured, no-content-leak logging shared across storage providers. |
+| [Domain-docs-core](Domain-docs-core) | Framework-free parsing, anchoring and merge logic for catch-up docs: `doc.md`, `review.json`, `response.json`. |
 | [Domain-folder-sync](Domain-folder-sync) | The CRDT merge engine and service-worker sync client. |
 | [Domain-install-prompt](Domain-install-prompt) | The install/onboarding prompt UI (and its untested-code gap). |
 | [Domain-mcp-cred-vault](Domain-mcp-cred-vault) | Schema-validated credential storage for MCP servers. |

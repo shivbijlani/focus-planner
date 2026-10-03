@@ -19,6 +19,11 @@ loop itself lives under `plugins/overnight-agent/`.
 | --- | --- | --- |
 | OS-dispatched supervision | `plugins/overnight-agent/checks/install-oa-supervisor.ps1`, `oa-supervisor.ps1`, `oa-supervisor-daemon.ps1`, `supervisor-liveness-sweep.ps1`, `supervisor-replay.mjs` | The agent's own `*/30` schedule going stuck/dead, or the app tree leaking CPU |
 | Optional reliability/browser/update-check tray | `plugins/overnight-agent/checks/oa-supervisor-tray.ps1`, `oa-supervisor-startup.ps1`, `install-oa-reliability-tray.ps1`, `reliability-supervisor.mjs`, `consumer-browser-watchdog.mjs`, `consumer-update-check.mjs`, `oa-user-settings.mjs` | The desktop app itself hanging over a longer horizon (M/N preventive restart), stuck/closed browser automation slots, and a stale plugin install — each opt-in, via one `HKCU` Run entry |
+
+`reliability-supervisor.mjs` is large enough (1,882 lines) that it carries its own co-located
+`node:test` self-test file, `plugins/overnight-agent/checks/reliability-supervisor.tests.mjs`,
+rather than relying solely on a separate `mutcheck-*` arm — the same self-test pattern `oa-state.mjs`
+uses to prove byte-for-byte parity with its PowerShell counterpart.
 | Stuck-run and orphan repair | `plugins/overnight-agent/checks/stuck-run-sweep.mjs`, `orphan-liveness-sweep.mjs` | A `running` row, live ask, or live journal becoming invisible and permanently blocking progress |
 | Silent remedy | `plugins/overnight-agent/checks/oa-supervisor.ps1` | Alert fatigue from “red but unactioned” findings |
 | Deploy propagation | `version-bump-sweep.mjs`, `installed-skill-drift-sweep.mjs`, `installed-capability-sweep.mjs`, `sync-oa-home.ps1`, `SKILL.md` | Merged fixes not reaching the bytes the machine actually executes |
