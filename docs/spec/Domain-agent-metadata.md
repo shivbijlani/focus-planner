@@ -207,10 +207,19 @@ both suites run every one.
 ## Publisher rules (agent side)
 
 The publisher is part of the sanctioned write tool — the only path by which an agent changes files
-in the planner folder — as a subcommand of the agent's journal writer. The Overnight Agent
-coordinator runs it once per run, after the session bindings for that run have settled. It works
-whichever state engine (Node or the PowerShell fallback) produced the bindings, because it only
-reads their result.
+in the planner folder. **It does not depend on the coordinator remembering a step**: the Node state
+engine republishes this PC's file itself, through the same atomic write, after every command that
+binds, wakes, replaces, kills or releases a session (`session`) or changes a task's state (`mark`,
+`seed`, `resnapshot`), so a binding is published the moment it is made. `scan`, which every run
+performs, refreshes `lastSeenAt` as a heartbeat (and publishes in full when this PC has no file
+yet). The write is skipped when the projection is unchanged and the file was written less than 5
+minutes ago. This automatic publish is silent and best-effort — it never changes the command's
+output or exit code — and it runs only when the command found the state store and the board from
+the run's own environment (the live agent, or the sandbox through `OVERNIGHT_AGENT_HOME` /
+`OVERNIGHT_AGENT_PLANNER_DIR`); an invocation pointed elsewhere with `-StateDir` or `-PlannerBoard`
+(tests, recorded goldens, tools, shadow runs) never publishes, and `OA_AGENT_METADATA=off` turns it
+off. The explicit `write-turn.mjs publish-metadata` command remains for manual use and backfill. The
+PowerShell fallback engine does not publish; the next Node command after a fallback run catches up.
 
 **What goes in.** A task is published when all of these hold: its per-task state has a `session`
 whose `state` is `live`; its ID has a row in `planner.md` (any table; completed tasks have moved to
@@ -221,8 +230,8 @@ published.
 
 **Binding-time capture.** The publisher keeps a private ledger in the agent home
 (`agent-metadata-publisher.json`, never synced) mapping `(task ID, session ID)` to the fingerprint
-captured for it. The first publish that sees a pair captures the fingerprint of the row as it is
-then — normally minutes after the bind, in the same run. A later publish **reuses the captured
+captured for it. The first publish that sees a pair — the one the bind itself triggers — captures
+the fingerprint of the row as it is then. A later publish **reuses the captured
 fingerprint even if the row has changed**: that is what makes an edit, or a reused ID, hide the link.
 
 **Revalidation.** The captured fingerprint is replaced with the current row's fingerprint only when:
@@ -231,20 +240,20 @@ time) — the coordinator just handed that session the current row, so the bindi
 (b) a different session is bound (a new pair, captured fresh); or (c) the publisher is run with an
 explicit `-Revalidate <id>` for that task. Nothing else revalidates.
 
-**Safe links.** A binding's `url` is published only when the host's own session list (a snapshot of
-the Copilot app's session list passed to the publisher) contains that session and reports a link for
-it, and the link is one of:
+**Safe links.** A binding's `url` is one of:
 
 - `ghapp://sessions/<sessionId>` where `<sessionId>` is exactly the binding's session ID (compared
-  case-insensitively) — the Copilot app's own session link; or
+  case-insensitively) — the Copilot app's own link for its session; or
 - an `https://` URL with a host, no user name or password, no whitespace or control characters, at
   most 2048 characters.
 
-A link is never synthesised from the session ID: a link the host did not report is not published
-(the enterprise product learned this when a synthesised link opened a 404). When a list snapshot is
-given and the session is absent from it, the binding is left out (the session is gone from the app).
-When no snapshot is given, the last observed `url` and `verifiedAt` from the private ledger are
-reused, and a never-observed binding is published without a `url`.
+When the publisher is given the host's own session list (`-SessionsListFile`), the link the host
+reported for that session is used (and `verifiedAt` set); a session absent from that list is left
+out (it is gone from the app). Otherwise a live `copilot-app` binding gets the Copilot app's link
+form for exactly its own session ID — the form the host reports for every session it lists — and
+`verifiedAt` stays as last observed (or `null`). No link is ever made for a session that is not
+live in the agent's own state, for another session ID, or with another scheme (the enterprise
+product learned the cost of rendering a link for a session that no longer existed: a 404).
 
 **Writing.** The publisher writes only `agent-metadata/<own key>.json`. It never reads-to-modify,
 renames or deletes any other file in the folder. The write is atomic: the full content goes to
@@ -252,9 +261,12 @@ renames or deletes any other file in the folder. The write is atomic: the full c
 back-off when the sync client briefly holds the file; if every attempt fails the previous file is
 left intact and the command fails. `revision` is one more than the larger of the private ledger's
 last revision and the revision in the current file. `publishedAt` changes only when `tasks`
-changes; `lastSeenAt` changes on every publish. The state lock shared by both state engines is held
-while the per-task state is read, and a per-device publisher lock in the agent home serialises two
-publishers on the same PC.
+changes; `lastSeenAt` changes on every publish. The state engines write each per-task state file
+atomically, so the publisher reads them without the state lock (it never writes state); a state
+file that cannot be read keeps whatever was published for that task rather than dropping it. A
+per-device publisher lock in the agent home serialises two publishers on the same PC. A capture is
+kept while its row is missing from the board, so a task deleted and recreated under the same ID is
+compared with the original row rather than recaptured from the new one.
 
 **Caps.** At most 500 tasks (lowest IDs first), 4 bindings per task (sorted by session ID) and
 256 KiB per file; anything over a cap is dropped deterministically and `truncated` is set.
@@ -263,10 +275,9 @@ publishers on the same PC.
 cannot conflict. A sync client may still leave conflict copies (`<key> (1).json`, `<key>-PC.json`)
 or a half-synced file; readers ignore any name that is not exactly `<32 hex>.json` and any file that
 does not validate, so these are harmless and the publisher leaves them alone. If the current file's
-`revision` is higher than the last revision this device wrote, or its `device.name` differs from this
-device's, another machine is writing with the same device ID (a cloned agent home): the publisher
-still writes (its own key, its own file) but reports `foreign_writer_suspected` so the run can tell
-the user.
+`revision` is higher than the last revision this device wrote, another machine is writing with the
+same device ID (a cloned agent home): the publisher still writes (its own key, its own file) but
+reports `foreign_writer_suspected` so the run can tell the user.
 
 > [!NOTE]
 > **Technical detail: command and receipt** Optional implementation detail; the surrounding section states the product behavior.
@@ -385,9 +396,13 @@ agent's state files. Publisher output reports paths relative to the planner fold
 These were not settled by the product owner; the most conservative choice was taken and each is easy
 to revisit:
 
-1. **Copilot app links are allowed alongside `https`.** The consumer host reports
-   `ghapp://sessions/<id>` for every session; an `https`-only rule would mean no link ever. The
-   `ghapp` form is accepted only for the exact session ID of the binding.
+1. **Copilot app links are allowed alongside `https`, and derived for live bindings.** The consumer
+   host reports `ghapp://sessions/<id>` for every session; an `https`-only rule would mean no link
+   ever. With publishing driven by the state engine there is no host session list at hand, so a
+   live `copilot-app` binding gets that link form for exactly its own session ID; a host list, when
+   given, still wins and still drops a session it no longer lists. The residual risk is a session
+   deleted in the app while the agent still holds it live: its link opens nothing until the agent
+   marks it dead or releases it.
 2. **Only `live` bindings are shown.** A dead session may still open its transcript, but a dead or
    deleted session may also open nothing; hiding it avoids a broken link.
 3. **Wake revalidates.** Waking the bound session hands it the current row, so it re-captures the
@@ -396,7 +411,7 @@ to revisit:
 4. **Bootstrap trusts the current row.** Bindings that existed before the first publish are captured
    against the row as it is at that first publish. A binding that already pointed at a reused ID
    at that moment is not detected.
-5. **Stale threshold scales with the publisher's cadence.** The consumer agent publishes once per
+5. **Stale threshold scales with the publisher's cadence.** The heartbeat rides on the scan of each
    30-minute run, so a fixed 15-minute threshold would show every link as stale half the time;
    `max(15 min, 2 × heartbeatMinutes)` keeps the enterprise 15 minutes as the floor.
 6. **No link-less fallback for unsafe links.** A binding whose `url` fails validation is hidden, not
@@ -413,3 +428,13 @@ write tool with its own fixtures, mutation checks and the end-to-end sandbox ass
 sandbox planner folder gains a metadata file with no live paths in it; then the app reader, the row
 badge and the smoke tests for S1–S5. Until the publisher ships, no file exists and the app shows
 nothing new.
+
+**Publisher (shipped).** `plugins/overnight-agent/skills/overnight-agent/oa-state-lib/act/agent-metadata.mjs`; the
+Node state engine (`oa-state.mjs`) calls it after every binding-changing command and on each scan,
+and `write-turn.mjs publish-metadata` runs it by hand. SKILL.md has no step for it.
+Its contract tests are `plugins/overnight-agent/tests/agent-metadata/publish.test.mjs` (every
+vector in `tests/agent-metadata/vectors.json`, the machine-readable copy of the tables above), and
+`plugins/overnight-agent/checks/mutcheck-agent-metadata.mjs` proves each rule is load-bearing. The
+end-to-end sandbox scenario `metadata-published` (l1–l5) and invariant h3 check a real run. The
+PowerShell fallback engine does not publish; the publisher reads the state files either engine
+writes, so the next Node command catches up.

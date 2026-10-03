@@ -1,0 +1,40 @@
+{
+  "_comment": "Test vectors for per-device agent metadata (docs/spec/Domain-agent-metadata.md). Shared by the publisher's node:test suite and the app reader's vitest suite; both run every entry.",
+  "fingerprints": [
+    { "name": "V1 baseline", "id": "468", "added": "2026-09-02", "title": "Work GitHub issues", "text": "fp-task@1\n468\n2026-09-02\nwork github issues", "fingerprint": "sha256:9945c3c23d25ea6448ffaeb4ca719b074eb20db11e3920c9b3ae2a7c42c21815" },
+    { "name": "V2 case and spacing", "id": "468", "added": "2026-09-02", "title": "  work   GITHUB\tissues ", "fingerprint": "sha256:9945c3c23d25ea6448ffaeb4ca719b074eb20db11e3920c9b3ae2a7c42c21815" },
+    { "name": "V3 emoji added", "id": "468", "added": "2026-09-02", "title": "🚀 Work GitHub issues ✅", "fingerprint": "sha256:9945c3c23d25ea6448ffaeb4ca719b074eb20db11e3920c9b3ae2a7c42c21815" },
+    { "name": "V4 snooze marker", "id": "468", "added": "2026-09-02", "title": "Work GitHub issues <!-- snooze:2026-10-09 -->", "fingerprint": "sha256:9945c3c23d25ea6448ffaeb4ca719b074eb20db11e3920c9b3ae2a7c42c21815" },
+    { "name": "V5 US date", "id": "468", "added": "9/2/2026", "title": "Work GitHub issues", "fingerprint": "sha256:9945c3c23d25ea6448ffaeb4ca719b074eb20db11e3920c9b3ae2a7c42c21815" },
+    { "name": "V6 slash ISO date", "id": "468", "added": "2026/9/2", "title": "Work GitHub issues", "fingerprint": "sha256:9945c3c23d25ea6448ffaeb4ca719b074eb20db11e3920c9b3ae2a7c42c21815" },
+    { "name": "V7 leading zeros", "id": "0468", "added": "2026-09-02", "title": "Work GitHub issues", "fingerprint": "sha256:9945c3c23d25ea6448ffaeb4ca719b074eb20db11e3920c9b3ae2a7c42c21815" },
+    { "name": "V8 tracker link in the ID cell", "id": "468,[12345](https://dev.azure.com/x)", "added": "2026-09-02", "title": "Work GitHub issues", "fingerprint": "sha256:9945c3c23d25ea6448ffaeb4ca719b074eb20db11e3920c9b3ae2a7c42c21815" },
+    { "name": "V9 full-width and no-break space", "id": "４６８", "added": "2026-09-02", "title": "Work\u00a0ＧｉｔＨｕｂ issues", "fingerprint": "sha256:9945c3c23d25ea6448ffaeb4ca719b074eb20db11e3920c9b3ae2a7c42c21815" },
+    { "name": "V10 title edited", "id": "468", "added": "2026-09-02", "title": "Work GitLab issues", "fingerprint": "sha256:709b3190ed8f9a81a6e3fc6b9ea69cde73ef519b85cd276d11b9fb6653359905" },
+    { "name": "V11 date edited", "id": "468", "added": "2026-09-03", "title": "Work GitHub issues", "fingerprint": "sha256:db0d477f53f5aa943b89a4aa196cee25b8ca4b4024ad1da6e0f25e11d07128dc" },
+    { "name": "V12 id reused", "id": "469", "added": "2026-09-02", "title": "Work GitHub issues", "fingerprint": "sha256:35c1337c0190acb991a5e1d7c790607b47f6123cddf2281c5de7a5ca4471041f" },
+    { "name": "V13 empty Added", "id": "468", "added": "", "title": "Work GitHub issues", "fingerprint": "sha256:e53a335d866d1aa024e4b970c8cca8e0cc845bf3298461961cf5b5053c784cdc" },
+    { "name": "V14 impossible date kept as text", "id": "468", "added": "2026-02-30", "title": "Work GitHub issues", "fingerprint": "sha256:cf8ba2a1401965221b0a8251bd73a1ba6dc67bcb9d221709fa4f22290982068a" },
+    { "name": "V15 free-text date", "id": "468", "added": "Sept 2", "title": "Work GitHub issues", "text": "fp-task@1\n468\nsept 2\nwork github issues", "fingerprint": "sha256:ca6cb914b85e67c04de7d89ace0639bd50ac70a67ae35a7994bcd71112ea0354" },
+    { "name": "V16 no digits in the ID", "id": "abc", "added": "2026-09-02", "title": "Work GitHub issues", "fingerprint": null },
+    { "name": "V17 ZWJ emoji sequence", "id": "468", "added": "2026-09-02", "title": "Work 👨‍👩‍👧 GitHub issues", "fingerprint": "sha256:9945c3c23d25ea6448ffaeb4ca719b074eb20db11e3920c9b3ae2a7c42c21815" },
+    { "name": "V18 punctuation is kept", "id": "468", "added": "2026-09-02", "title": "Work GitHub issues!", "fingerprint": "sha256:4f32d20ff057228053020ba0f4dd91871eaf4e7245f1624da6a89510b58fec23" }
+  ],
+  "deviceKeys": [
+    { "id": "00000000-0000-4000-8000-000000000000", "key": "49c15e85f7f7ffd841a8cb86d233f965" },
+    { "id": "3f2b9c4e-8d1a-4b7e-9f60-2c5d8e1a7b34", "key": "86b8ff7cab63af69cc52ff83591b0ffd" }
+  ],
+  "urls": [
+    { "url": "ghapp://sessions/8864eba8-24dc-468a-a7c7-cb5efd2b6085", "sessionId": "8864eba8-24dc-468a-a7c7-cb5efd2b6085", "safe": true },
+    { "url": "ghapp://sessions/8864EBA8-24dc-468a-a7c7-cb5efd2b6085", "sessionId": "8864eba8-24dc-468a-a7c7-cb5efd2b6085", "safe": true },
+    { "url": "ghapp://sessions/other-session", "sessionId": "8864eba8-24dc-468a-a7c7-cb5efd2b6085", "safe": false },
+    { "url": "ghapp://sessions/8864eba8-24dc-468a-a7c7-cb5efd2b6085/extra", "sessionId": "8864eba8-24dc-468a-a7c7-cb5efd2b6085", "safe": false },
+    { "url": "https://github.com/copilot/tasks/abc", "sessionId": "abc", "safe": true },
+    { "url": "https://user:pw@example.com/x", "sessionId": "abc", "safe": false },
+    { "url": "http://example.com/x", "sessionId": "abc", "safe": false },
+    { "url": "javascript:alert(1)", "sessionId": "abc", "safe": false },
+    { "url": "https://example.com/a b", "sessionId": "abc", "safe": false },
+    { "url": "HTTPS://example.com/x", "sessionId": "abc", "safe": false },
+    { "url": "", "sessionId": "abc", "safe": false }
+  ]
+}
