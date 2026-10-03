@@ -443,3 +443,13 @@ end-to-end sandbox scenario with two device identities in which the agent works 
 leaves `agent-lanes.json` untouched); then the app (lanes reader and resolver run against the same
 vectors, the panel, chips and row menu, and smoke tests for A1–A3 proving a single-PC user sees no
 change). Until the engine slice ships, the file has no effect.
+
+**Engines (shipped).** `plugins/overnight-agent/skills/overnight-agent/oa-state-lib/plan/lanes.mjs`
+(the Node engine the agent runs) and the twin functions in `oa-state.ps1` (`Read-Lanes`,
+`Resolve-TaskLane`, `Assert-LaneServed`, …); `scan` and `session` call them, and both write tools'
+G20 lists `agent-lanes.json`. Tests: `plugins/overnight-agent/tests/lanes/lanes.test.mjs` runs every
+resolution, validation and served-here vector in `tests/lanes/vectors.json` (the machine-readable copy
+of the tables above); the characterization cases `cases/lanes.json` pin E2–E10 and R1–R25 from the
+PowerShell engine and the Node engine passes the same goldens; `mutcheck-lanes.ps1` proves each rule
+load-bearing on both engines; `tests/write-turn-port/g20-lanes.test.mjs` covers G20; and the
+end-to-end sandbox scenario `lanes-scoped` (m1–m4) with invariant h4 checks a real run.
