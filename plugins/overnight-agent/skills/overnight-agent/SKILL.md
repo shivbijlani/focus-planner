@@ -285,7 +285,8 @@ it, and `scan` treats everything past that stamp as the user speaking. On the ne
   board, below).
 - **`snoozed: true`** (+ `snooze_until`) means the user snoozed it and the date hasn't passed. **Skip it
   entirely, in every phase** — no plan, no execution, no board/journal edit, even if status is
-  `approved`; report it only as *"skipped (snoozed until DATE)"*. Sole override: `reopened` beats it. (#391)
+  `approved` or `reopened`; report it only as *"skipped (snoozed until DATE)"*. A reply waits for
+  the wake date. (#391, #816)
 
 You **do not** ask the user to tick a box or edit a marker. Approve / revise / skip are just things they
 **say** in plain English; you interpret intent (see "Reading the user's decision"). If `scan` and a
@@ -1959,8 +1960,9 @@ See PHASE 0.
   (`write-turn.ps1` beside it is the same tool in PowerShell -- same arguments, same refusals -- kept
   only as a fallback for a host without Node. Use the Node one.) It writes exactly one file, the
   task's own journal: it refuses any other target, `agent-gate.md` and `user-settings.md` above all
-  (**G20**), and it stamps the turn with who wrote it (`<!-- oa-by: session=… host=… -->`) itself, so a
-  body must not carry its own (**G21**). Neither guard can be disabled.
+  (**G20**), refuses snoozed tasks (**G22**), and it stamps the turn with who wrote it
+  (`<!-- oa-by: session=… host=… -->`) itself, so a body must not carry its own (**G21**). None of
+  those guards can be disabled.
   **`-Ask` is required (G13)** and is the subject of its own rule below.
   Author the turn body with a **file tool** first, then pass the file. The script validates the body
   and **refuses to write** if it finds any of the five corruption classes that have already destroyed
