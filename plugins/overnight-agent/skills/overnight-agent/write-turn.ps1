@@ -1622,13 +1622,20 @@ if ($body.Trim().Length -eq 0) { Write-Error 'body file is empty'; exit 3 }
 # No `-Id` (linting a fragment) or a journal that does not exist yet -> $doc stays null and
 # G9-G11 are inert, exactly like a task with no doc.
 $journal = if ($Id) { Join-Path $JournalDir "task-$Id.md" } else { $null }
-$doc = if ($journal) { Get-JournalDocMeta $journal } else { $null }
+# G20 is decided FIRST, from the -Id and the path alone. When it refuses, the target is not this
+# task's journal -- a path-shaped -Id such as `x/../../agent-gate` resolves to agent-gate.md itself --
+# so nothing below may open it. Reading it anyway made the refusal depend on that file being readable:
+# a transient lock (AV, sync, indexer) threw under ErrorAction Stop and exited 1 instead of refusing
+# with 2 (measured on CI, sw/g20/path-in-id-refused). The destination guards are inert for such a target.
+$prot = if ($Id) { Get-ProtectedTargetFinding $JournalDir $Id $journal } else { $null }
+$dest = if ($prot) { $null } else { $journal }
+$doc = if ($dest) { Get-JournalDocMeta $dest } else { $null }
 
 # #627: computed HERE, beside $doc, for the same reason -- it is a property of the DESTINATION
 # rather than of the text, and `-Validate` must reach the same verdict as the real write or
 # validating is theatre.
-$script:PauseVerdict = Get-UserPauseVerdict $Id $journal
-$script:SnoozeVerdict = Get-WriteSnoozeVerdict $Id $JournalDir
+$script:PauseVerdict = if ($dest) { Get-UserPauseVerdict $Id $dest } else { $null }
+$script:SnoozeVerdict = if ($dest) { Get-WriteSnoozeVerdict $Id $JournalDir } else { $null }
 
 # HOST-DEPENDENT COUNT (found 2026-08-27, by hitting it)
 # --------------------------------------------------------
@@ -1650,8 +1657,8 @@ $findings = @(Test-TurnBody -Body $body -Disabled $DisableGuard -Doc $doc -Ask $
 # property of the DESTINATION, not of the text: the same body is fine on a fresh wake and a
 # duplicate on a spent one. `-Validate` sees it too, so a validate step gives the same verdict
 # as the real write - which is the only thing that makes validating worth doing.
-if ($Id -and ($DisableGuard -notcontains 'G12')) {
-  $wake = Get-WakeTurnFinding $journal $Id $WAKE_WINDOW_MIN $Author
+if ($dest -and ($DisableGuard -notcontains 'G12')) {
+  $wake = Get-WakeTurnFinding $dest $Id $WAKE_WINDOW_MIN $Author
   if ($wake) { $findings = @($findings) + @($wake) }
 }
 # G22 is destination state like G12/G17, but unlike them it is fail-closed and not disableable:
@@ -1660,10 +1667,7 @@ if ($script:SnoozeVerdict) {
   $snooze = Get-SnoozeWriteFinding $script:SnoozeVerdict
   if ($snooze) { $findings = @($findings) + @($snooze) }
 }
-if ($Id) {
-  $prot = Get-ProtectedTargetFinding $JournalDir $Id $journal
-  if ($prot) { $findings = @($findings) + @($prot) }
-}
+if ($prot) { $findings = @($findings) + @($prot) }
 $findings = @($findings)
 $hasAsk = Test-TurnAsk -Body $body
 $askVal = "$Ask".Trim().ToLowerInvariant()
