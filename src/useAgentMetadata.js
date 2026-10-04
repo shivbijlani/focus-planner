@@ -94,3 +94,34 @@ export function useAgentSessionLinks(provider, row) {
   if (state.key !== key || state.provider !== provider) return []
   return state.links
 }
+
+/** Every announced device ({ key, name, stale, lastSeenMs }), refreshed with the session links. */
+export function useAnnouncedDevices(provider) {
+  const [state, setState] = useState({ provider: null, devices: [] })
+  const [tick, setTick] = useState(0)
+
+  useEffect(() => {
+    ensureWired()
+    const on = () => setTick((t) => t + 1)
+    listeners.add(on)
+    return () => { listeners.delete(on) }
+  }, [])
+
+  useEffect(() => {
+    const reader = readerFor(provider)
+    if (!reader) return undefined
+    activeProvider = provider
+    let cancelled = false
+    reader.refresh().then(() => {
+      if (cancelled) return
+      setState({ provider, devices: reader.devices() })
+      if (reader.generation !== notifiedGeneration.get(reader)) {
+        notifiedGeneration.set(reader, reader.generation)
+        notify()
+      }
+    }, () => {})
+    return () => { cancelled = true }
+  }, [provider, tick])
+
+  return state.provider === provider ? state.devices : []
+}
