@@ -1,0 +1,54 @@
+{
+  "files": {},
+  "id": "lanes/invalid-file-stops-everything",
+  "steps": [
+    {
+      "args": {
+        "Compact": true
+      },
+      "command": "scan",
+      "exit": 0,
+      "json": {
+        "rows": [],
+        "summary": {
+          "lanes": {
+            "assigned": false,
+            "catch_all": false,
+            "device": "49c15e85f7f7ffd841a8cb86d233f965",
+            "reason": "not_json",
+            "rows_out_of_lane": 29,
+            "serves": [],
+            "state": "invalid"
+          },
+          "omitted_reason": "ineligible, not holding the Today gate, quiet, and nothing due - use -OutFile for the full worklist",
+          "out_file": null,
+          "rows_due_poll": 2,
+          "rows_eligible": 0,
+          "rows_no_journal": 0,
+          "rows_omitted": 29,
+          "rows_reopened": 15,
+          "rows_returned": 0,
+          "rows_total": 29,
+          "rows_unanswered": 9,
+          "scan_seconds": "<DURATION>",
+          "today_holding": 0
+        }
+      },
+      "tool": "oa-state"
+    },
+    {
+      "args": {
+        "CheckDispatch": true,
+        "Id": "940",
+        "SessionsStatusFile": "<ROOT>/lad/overnight-agent/sessions.json"
+      },
+      "command": "session",
+      "exit": 1,
+      "stderr": [
+        "session_lanes_config_invalid: agent-lanes.json does not validate (not_json); no task is dispatched or bound on this PC until he fixes it in the app. Do not dispatch it."
+      ],
+      "stdout": [],
+      "tool": "oa-state"
+    }
+  ]
+}
