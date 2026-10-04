@@ -46,13 +46,20 @@ describe('Docs reader validation', () => {
     const parsed = validateIndexText(JSON.stringify(index({
       futureField: 'ignored',
       docs: {
-        [primaryId]: entry(primaryId, true, { futureDocField: true }),
+        [primaryId]: entry(primaryId, true, { futureDocField: true, nextBlockId: 12 }),
         [linkedId]: entry(linkedId, false),
       },
     })))
     expect(parsed).not.toHaveProperty('futureField')
     expect(parsed.docs[primaryId]).not.toHaveProperty('futureDocField')
+    expect(parsed.docs[primaryId].nextBlockId).toBe(12)
     expect(parsed.tasks).toEqual({ '845': primaryId })
+    expect(() => validateIndexText(JSON.stringify(index({
+      docs: {
+        [primaryId]: entry(primaryId, true, { nextBlockId: 0 }),
+        [linkedId]: entry(linkedId, false),
+      },
+    })))).toThrow(/invalid nextBlockId/)
   })
 
   it('validates review and response schemas while ignoring unknown fields', () => {

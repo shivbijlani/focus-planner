@@ -7,7 +7,7 @@ import process from 'node:process'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   DOCS_LIMITS, docBodyByteLength, historyPath, responsePath, reviewSet, validateDocText,
-  validateIndexText, validateResponseText,
+  validateIndexText, validateResponseText, validateReviewText,
 } from '../../docs-core/src/index.js'
 import { SAMPLE_DOC_FILES, SAMPLE_JOURNAL, SAMPLE_PRIMARY_ID, SAMPLE_TASK_ID, SAMPLE_TITLE } from '../../../e2e/fixtures/docs-sample.js'
 import { lintDraft, publish, readStatus, writeAtomically } from './publisher.js'
@@ -79,12 +79,14 @@ describe('fp-docs draft validation', () => {
     ['CRLF', draft().replace(/\n/g, '\r\n'), /D01 encoding/],
     ['corruption marker', draft().replace('concise summary', 'cafÃ© summary'), /D01 encoding/],
     ['raw HTML', draft().replace('A concise summary', '<div>A concise summary</div>'), /D02 grammar/],
+    ['unsupported strikethrough', draft().replace('concise summary', '~~concise~~ summary'), /D02 grammar/],
     ['missing status', draft({ status: 'Status is ready.' }), /D03 catch-up/],
     ['missing section', draft().replace('## Evidence\n\nThe evidence is in the [supporting notes](https://example.com/evidence).\n\n', ''), /D03 catch-up.*Evidence/],
     ['claim without evidence link', draft({ additions: 'The task is verified.' }), /D03 catch-up.*claim has no evidence link/],
     ['bare task number', draft({ additions: 'See #123 for context.' }), /D03 catch-up.*bare task reference/],
     ['missing document target', draft({ link: 'doc:d-missing001' }), /D04 link.*not listed/],
     ['malformed external URL', draft().replace('https://example.com/evidence', 'http://['), /D04 link.*malformed external URL/],
+    ['unsafe URL scheme', draft().replace('https://example.com/evidence', 'javascript:alert(1)'), /D04 link.*malformed external URL/],
     ['oversized document', draft().replace('A concise summary', `A ${'x'.repeat(DOCS_LIMITS.docBytes)} summary`), /D07 size/],
   ])('rejects %s', async (_label, text, expected) => {
     const root = await rootDir()
@@ -95,7 +97,28 @@ describe('fp-docs draft validation', () => {
     const root = await rootDir()
     const result = await lintDraft({ draft: draft(), root })
     expect(result).toMatchObject({ title: `Task ${taskId}: Sample catch-up task`, links: [] })
+    await expect(lintDraft({
+      draft: draft().replace('A concise summary', 'Use `~~text~~` and `[doc](doc:d-missing)` as code examples'),
+      root,
+    })).resolves.toMatchObject({ title: `Task ${taskId}: Sample catch-up task`, links: [] })
     expect(await fs.readdir(path.join(root, 'docs')).catch(() => [])).toEqual([])
+  })
+
+  it('identifies a malformed index as a data error', async () => {
+    const root = await rootDir()
+    await put(root, 'docs/index.json', '{')
+    await expect(lintDraft({ draft: draft(), root })).rejects.toThrow(/D09 data.*not valid JSON/)
+    await put(root, 'docs/index.json', '')
+    await expect(lintDraft({ draft: draft(), root })).rejects.toThrow(/D09 data.*is empty/)
+  })
+
+  it('does not probe local addresses when --check-links is requested', async () => {
+    const root = await rootDir()
+    await expect(lintDraft({
+      draft: draft().replace('https://example.com/evidence', 'http://127.0.0.1/metadata'),
+      root,
+      checkLinks: true,
+    })).rejects.toThrow(/D04 link.*private or local network targets/)
   })
 })
 
@@ -113,6 +136,7 @@ describe('fp-docs publish', () => {
       expect(match.id).toBe(previous.id)
     }
     expect(republished.blocks.find((block) => block.lines[0] === 'A newly added detail.').id).toBe('b12')
+    expect(republished.index.docs[first.id].nextBlockId).toBe(13)
     expect(await fs.readFile(path.join(root, historyPath(first.id, 1)), 'utf8')).toBe(first.docText)
     const indexText = await fs.readFile(path.join(root, 'docs/index.json'), 'utf8')
     const responseText = await fs.readFile(path.join(root, responsePath(first.id)), 'utf8')
@@ -133,7 +157,26 @@ describe('fp-docs publish', () => {
       })
     }
     const files = await fs.readdir(path.join(root, 'docs/d-sample845/history'))
-    expect(files.sort()).toEqual(Array.from({ length: 20 }, (_, i) => `r${String(i + 2).padStart(4, '0')}.md`))
+    expect(files.sort()).toEqual(Array.from({ length: 20 }, (_, i) => `r${String(i + 3).padStart(4, '0')}.md`))
+  })
+
+  it('does not reuse retired block ids after their snapshots rotate out', async () => {
+    const root = await rootDir()
+    const expanded = `${draft()}\n${Array.from({ length: 100 }, (_, i) => `Historical paragraph ${i}.`).join('\n\n')}\n`
+    const first = await publish({
+      root, task: taskId, draft: expanded, summary: 'Many blocks', force: true, makeId: () => 'd-sample845',
+    })
+    expect(first.index.docs[first.id].nextBlockId).toBe(112)
+    await publish({ root, task: taskId, draft: draft(), summary: 'Retire old blocks', baseRev: 1 })
+    for (let rev = 3; rev <= 23; rev++) {
+      await publish({
+        root, task: taskId, draft: draft(), summary: `Revision ${rev}`, baseRev: rev - 1,
+      })
+    }
+    const final = await publish({
+      root, task: taskId, draft: `${draft()}\nLate new paragraph.\n`, summary: 'New block', baseRev: 23,
+    })
+    expect(final.blocks.at(-1).id).toBe('b112')
   })
 
   it('refuses a changed publisher stamp unless explicitly adopted', async () => {
@@ -160,21 +203,86 @@ describe('fp-docs publish', () => {
     await expect(publish({ root, task: taskId, draft: draft(), summary: 'Update', baseRev: 1 }))
       .rejects.toThrow(/D10 external edit/)
     expect(await fs.readFile(docPathname, 'utf8')).toBe(edited)
+    const adopted = await publish({
+      root, task: taskId, draft: draft(), summary: 'Adopted body edit', baseRev: 1, adoptExternalEdit: true,
+    })
+    expect(adopted.rev).toBe(2)
   })
 
   it('validates and writes the e2e sample through the existing Docs reader validators', async () => {
     const root = await rootDir()
     await seedSample(root)
-    const sampleDraft = draft({ link: `doc:d-support845` })
-    const result = await publish({
-      root, task: SAMPLE_TASK_ID, draft: sampleDraft, summary: 'Publisher e2e fixture',
-      baseRev: 1, now: publishedAt,
-    })
+    const draftWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), 'fp-docs-draft-'))
+    roots.push(draftWorkspace)
+    const sampleDraft = path.join(draftWorkspace, 'sample-draft.md')
+    await fs.writeFile(sampleDraft, draft({ link: 'doc:d-support845' }))
+    const cli = path.resolve('packages/docs-publisher/bin/fp-docs.js')
+    const result = spawnSync(process.execPath, [
+      cli, 'publish', '--task', String(SAMPLE_TASK_ID), '--draft', sampleDraft,
+      '--summary', 'Publisher e2e fixture', '--base-rev', '1',
+    ], { encoding: 'utf8', env: { ...process.env, PLANNER_PATH: root } })
+    expect(result.status, result.stderr).toBe(0)
     const index = validateIndexText(await fs.readFile(path.join(root, 'docs/index.json'), 'utf8'))
     const response = validateResponseText(await fs.readFile(path.join(root, responsePath(SAMPLE_PRIMARY_ID)), 'utf8'))
+    const reviewText = await fs.readFile(path.join(root, `docs/${SAMPLE_PRIMARY_ID}/review.json`), 'utf8').catch((error) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    const review = validateReviewText(reviewText)
     const doc = await fs.readFile(path.join(root, `docs/${SAMPLE_PRIMARY_ID}/doc.md`), 'utf8')
-    expect(result.id).toBe(SAMPLE_PRIMARY_ID)
+    expect(result.stdout).toMatch(new RegExp(`Published ${SAMPLE_PRIMARY_ID} revision 2`))
     expect(validateDocText(doc, { docId: SAMPLE_PRIMARY_ID, entry: index.docs[SAMPLE_PRIMARY_ID], response }).title).toBe(SAMPLE_TITLE)
+    expect(review.readRev).toBe(0)
+  })
+
+  it('creates a supporting doc from a new alias and rewrites doc:new links', async () => {
+    const root = await rootDir()
+    const ids = ['d-support845', 'd-primary845']
+    const result = await publish({
+      root,
+      task: taskId,
+      draft: draft({ link: 'doc:new:notes' }),
+      linked: [{ alias: 'notes', draft: '# Supporting notes\n\nContext for the primary document.\n' }],
+      summary: 'Publish with supporting notes',
+      force: true,
+      makeId: () => ids.shift(),
+    })
+    expect(result.id).toBe('d-primary845')
+    expect(result.index.docs[result.id].links).toEqual(['d-support845'])
+    const linked = await fs.readFile(path.join(root, 'docs/d-primary845/doc.md'), 'utf8')
+    expect(linked).toContain('(doc:d-support845)')
+    expect(validateIndexText(await fs.readFile(path.join(root, 'docs/index.json'), 'utf8')).docs['d-support845'].primary).toBe(false)
+    expect(validateResponseText(await fs.readFile(path.join(root, 'docs/d-support845/response.json'), 'utf8')).rev).toBe(1)
+  })
+
+  it('copies a Telegram deep link from task journal metadata into the primary index entry', async () => {
+    const root = await rootDir()
+    await put(root, `journal/task-${taskId}.md`, SAMPLE_JOURNAL)
+    const result = await publish({
+      root, task: taskId, draft: draft(), summary: 'Primary with Telegram metadata',
+      force: true, makeId: () => 'd-sample845',
+    })
+    expect(result.index.docs[result.id].telegramUrl).toBe('https://t.me/focusplanner_sample')
+  })
+
+  it('requires and checks the base revision when updating a linked document', async () => {
+    const root = await rootDir()
+    await seedSample(root)
+    const linkedDraft = '# Supporting sample notes\n\nUpdated linked context.\n'
+    await expect(publish({
+      root, task: taskId, draft: draft({ link: 'doc:d-support845' }), summary: 'Update linked',
+      baseRev: 1, linked: [{ id: 'd-support845', draft: linkedDraft }],
+    })).rejects.toThrow(/D11 linked input.*requires --linked-base-rev/)
+    await expect(publish({
+      root, task: taskId, draft: draft({ link: 'doc:d-support845' }), summary: 'Stale linked update',
+      baseRev: 1, linked: [{ id: 'd-support845', baseRev: 2, draft: linkedDraft }],
+    })).rejects.toThrow(/D06 concurrency.*--linked-base-rev/)
+    const result = await publish({
+      root, task: taskId, draft: draft({ link: 'doc:d-support845' }), summary: 'Update linked',
+      baseRev: 1, linked: [{ id: 'd-support845', baseRev: 1, draft: linkedDraft }],
+    })
+    expect(result.linked[0]).toMatchObject({ id: 'd-support845', rev: 2 })
+    expect(validateResponseText(await fs.readFile(path.join(root, 'docs/d-support845/response.json'), 'utf8')).rev).toBe(2)
   })
 
   it('status reports the shared threshold result and primary revision', async () => {
@@ -184,10 +292,18 @@ describe('fp-docs publish', () => {
     expect(status).toMatchObject({
       task: taskId,
       threshold: 'reached',
-      primary: { id: 'd-sample845', rev: 1 },
+      primary: { id: 'd-sample845', rev: 1, readStatus: 'unread' },
       linkedDocs: [],
       openCount: 0,
     })
+  })
+
+  it('uses the configured threshold for first publication', async () => {
+    const root = await rootDir()
+    await put(root, `journal/task-${taskId}.md`, 'one two three')
+    await put(root, 'user-settings.md', '| Catch-up doc threshold | 3 |')
+    const result = await publish({ root, task: taskId, draft: draft(), summary: 'Threshold met' })
+    expect(result.rev).toBe(1)
   })
 })
 
@@ -197,11 +313,30 @@ describe('fp-docs CLI', () => {
     const cli = path.resolve('packages/docs-publisher/bin/fp-docs.js')
     const env = { ...process.env, PLANNER_PATH: root }
     const result = spawnSync(process.execPath, [cli, 'status', '--task', String(taskId), '--json'], { encoding: 'utf8', env })
-    expect(result.status).toBe(0)
+    expect(result.status, result.stderr).toBe(0)
     expect(JSON.parse(result.stdout)).toMatchObject({ task: taskId, threshold: 'reached', primary: null })
     const invalid = spawnSync(process.execPath, [cli, 'status', '--task', `0${taskId}`], { encoding: 'utf8', env })
     expect(invalid.status).toBe(1)
     expect(invalid.stderr).toMatch(/canonical positive integer/)
+  })
+
+  it('runs publish with the documented new linked-doc flag', async () => {
+    const root = await rootDir()
+    const primaryFile = path.join(root, 'primary.md')
+    const linkedFile = path.join(root, 'linked.md')
+    await fs.writeFile(primaryFile, draft({ link: 'doc:new:notes' }))
+    await fs.writeFile(linkedFile, '# Supporting notes\n\nLinked context.\n')
+    const cli = path.resolve('packages/docs-publisher/bin/fp-docs.js')
+    const result = spawnSync(process.execPath, [
+      cli, 'publish', '--task', String(taskId), '--draft', primaryFile,
+      '--summary', 'CLI publish', '--force', '--linked', `new:notes=${linkedFile}`,
+    ], { encoding: 'utf8', env: { ...process.env, PLANNER_PATH: root } })
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toMatch(/Published d-[a-z0-9]+ revision 1/)
+    const index = validateIndexText(await fs.readFile(path.join(root, 'docs/index.json'), 'utf8'))
+    const primary = index.docs[index.tasks[String(taskId)]]
+    expect(primary.links).toHaveLength(1)
+    expect(index.docs[primary.links[0]].primary).toBe(false)
   })
 })
 
@@ -271,6 +406,10 @@ describe('fp-docs size limits and atomic writes', () => {
     const aggregateBytes = await Promise.all(reviewSet(index, 'd-root845', 3).map(async (id) =>
       docBodyByteLength(await fs.readFile(path.join(root, `docs/${id}/doc.md`), 'utf8'))))
     expect(aggregateBytes.reduce((sum, bytes) => sum + bytes, 0)).toBeGreaterThan(DOCS_LIMITS.reviewSetBytes)
+    await expect(lintDraft({
+      root,
+      draft: draft({ link: `doc:${ids[0]}`, additions: `[another note](doc:${ids[1]})` }),
+    })).rejects.toThrow(/D07 size/)
     await expect(publish({
       root, task: taskId, draft: draft({
         link: `doc:${ids[0]}`,
@@ -303,5 +442,26 @@ describe('fp-docs size limits and atomic writes', () => {
     ], { io })).rejects.toThrow('injected rename failure')
     expect(await fs.readFile(first, 'utf8')).toBe('old-a')
     expect(await fs.readFile(second, 'utf8')).toBe('old-b')
+  })
+
+  it('removes newly created directories after a failed atomic publish', async () => {
+    const root = await rootDir()
+    let renames = 0
+    const io = new Proxy(fs, {
+      get(target, property) {
+        if (property === 'rename') return async (...args) => {
+          renames++
+          if (renames === 2) throw new Error('injected rename failure')
+          return fs.rename(...args)
+        }
+        const value = target[property]
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    await expect(writeAtomically([
+      { path: path.join(root, 'docs/new/a.txt'), content: 'a' },
+      { path: path.join(root, 'docs/new/b.txt'), content: 'b' },
+    ], { io })).rejects.toThrow('injected rename failure')
+    await expect(fs.access(path.join(root, 'docs'))).rejects.toThrow()
   })
 })

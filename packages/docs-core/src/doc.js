@@ -230,7 +230,7 @@ function normalizedBlock(block) {
 function tokenSimilarity(left, right) {
   const a = new Set(blockTokens(left))
   const b = new Set(blockTokens(right))
-  if (!a.size && !b.size) return 1
+  if (!a.size || !b.size) return 0
   let intersection = 0
   for (const token of a) if (b.has(token)) intersection++
   return intersection / (a.size + b.size - intersection)
@@ -242,7 +242,8 @@ function tokenSimilarity(left, right) {
  */
 export function assignBlockIds(blocks, previous = [], nextId = 1) {
   const current = (blocks || []).map((block) => ({ ...block }))
-  const old = (previous || []).map((block) => ({ ...block }))
+  const old = (previous || []).filter((block) => /^b[1-9][0-9]*$/.test(block.id || '')).map((block) => ({ ...block }))
+  if (!Number.isSafeInteger(nextId) || nextId < 1) throw new RangeError('next block id must be a positive safe integer')
   const usedCurrent = new Set()
   const usedOld = new Set()
   const assign = (currentIndex, oldIndex) => {
