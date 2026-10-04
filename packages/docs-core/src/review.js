@@ -2,10 +2,8 @@
 // (plans/docs-app-design.md §4.3, §4.4, §6).
 //
 // review.json is app-owned but can be written by more than one device, so comments merge
-// by id with the folder-sync record rules (per-record last-write-wins on `clock`, ties
-// broken deterministically) — the same code that merges planner.md rows.
+// by id with last-write-wins on `clock` and a deterministic serialization tie-break.
 
-import { mergeCollections } from '../../folder-sync/src/merge.js'
 import { validateIndexText } from './validate.js'
 
 export const REVIEW_VERSION = 1
@@ -61,25 +59,25 @@ export function parseIndex(text) {
   return validateIndexText(text)
 }
 
-function toCollection(review) {
-  const records = {}
-  const meta = {}
-  for (const [id, c] of Object.entries(review.comments || {})) {
-    const { clock, ...rest } = c
-    records[id] = rest
-    meta[id] = { clock: Number.isFinite(clock) ? clock : 0, deleted: false }
-  }
-  return { records, meta }
-}
-
 /** Merge two review.json snapshots. Pure; returns a new review. */
 export function mergeReviews(a, b) {
   const A = a || emptyReview()
   const B = b || emptyReview()
-  const merged = mergeCollections(toCollection(A), toCollection(B), { normalizeZeroClock: false })
   const comments = {}
-  for (const [id, rec] of Object.entries(merged.records)) {
-    comments[id] = { ...rec, clock: merged.meta[id]?.clock ?? 0 }
+  for (const id of new Set([...Object.keys(A.comments || {}), ...Object.keys(B.comments || {})])) {
+    const left = A.comments?.[id]
+    const right = B.comments?.[id]
+    if (!left) { comments[id] = right; continue }
+    if (!right) { comments[id] = left; continue }
+    const leftClock = Number.isFinite(left.clock) ? left.clock : 0
+    const rightClock = Number.isFinite(right.clock) ? right.clock : 0
+    if (leftClock !== rightClock) {
+      comments[id] = leftClock > rightClock ? left : right
+      continue
+    }
+    const leftText = JSON.stringify(left)
+    const rightText = JSON.stringify(right)
+    comments[id] = leftText >= rightText ? left : right
   }
   const reviews = { ...(B.reviews || {}), ...(A.reviews || {}) }
   return {

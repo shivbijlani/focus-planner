@@ -9,6 +9,7 @@ import {
   assignBlockIds, docBodyByteLength, docPath, extractDocLinks, historyPath, journalReadLoad,
   parseDoc, parseDraftBlocks, parseDocHeader, parseDocHref, reviewPath, reviewSet, responsePath, validateDocText,
   validateIndexText, validateResponseText, validateReviewText, DOCS_LIMITS, fencedLineMask,
+  commentStatus, reanchor,
 } from '../../docs-core/src/index.js'
 import { deriveDocState } from '../../docs-core/src/review.js'
 import { splitLines, walkVisibleLines } from '../../docs-core/src/grammar.js'
@@ -798,6 +799,88 @@ export async function readStatus({ root, task, io = fs.promises, threshold } = {
     docs,
     openCount,
   }
+}
+
+function visibleInlineText(text) {
+  return text
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, (_match, a, b) => a ?? b)
+    .replace(/\*([^*]+)\*|_([^_]+)_/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+}
+
+function visibleBlockText(block) {
+  if (block.kind === 'code') {
+    const open = block.lines[0].trim().match(/^(`{3,}|~{3,})/)
+    const close = block.lines.at(-1)?.trim()
+    const closed = open && typeof close === 'string'
+      && close.startsWith(open[1][0].repeat(open[1].length))
+      && close.replace(/[`~]/g, '') === ''
+    return block.lines.slice(1, closed ? -1 : undefined).join('\n')
+  }
+  if (block.kind === 'rule') return ''
+  if (block.kind === 'table') {
+    const rows = block.lines.filter((line) => !/^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(line.trim()))
+    return rows
+      .map((line) => line.trim().replace(/^\|/, '').replace(/\|\s*$/, '').split('|').map((cell) => visibleInlineText(cell.trim())).join(''))
+      .join('')
+  }
+  return block.lines.map((line) => {
+    const text = line.trim()
+    const checkbox = text.match(/^(?:[-*+]|\d+[.)])\s*\[([ xX])\]\s*(.+)/)
+    if (checkbox) return `${checkbox[1].toLowerCase() === 'x' ? 'DONE' : 'TODO'}${visibleInlineText(checkbox[2])}`
+    const todo = text.match(/^-\s*(TODO|DONE):\s*(.+)/i)
+    if (todo) return `${todo[1].toUpperCase()}${visibleInlineText(todo[2])}`
+    const numbered = text.match(/^(\d+[.)])\s+(.+)/)
+    if (numbered) return `${numbered[1]} ${visibleInlineText(numbered[2])}`
+    return visibleInlineText(text.replace(/^#{2,6}\s+/, '').replace(/^>\s?/, '').replace(/^(?:[-*+]\s+|\d+[.)]\s+)/, ''))
+  }).join('')
+}
+
+export async function readComments({ root, task, io = fs.promises } = {}) {
+  const taskId = String(Number(task))
+  const { index } = await loadIndex(root, io)
+  const primaryId = index.tasks[taskId]
+  const docs = []
+  if (!primaryId) return { task: Number(task), docs }
+
+  let reviewSetBytes = 0
+  for (const id of reviewSet(index, primaryId, 3)) {
+    const entry = index.docs[id]
+    const [docText, reviewText, responseText] = await Promise.all([
+      readFileText(root, docPath(id), io),
+      readFileText(root, reviewPath(id), io),
+      readFileText(root, responsePath(id), io),
+    ])
+    try {
+      if (!docText) fail('D04 link', `linked document ${id} is missing`, 'publish the target or remove the link')
+      const review = validateReviewText(reviewText)
+      const response = validateResponseText(responseText)
+      const parsed = validateDocText(docText, { docId: id, entry, response })
+      reviewSetBytes += docBodyByteLength(docText)
+      if (reviewSetBytes > DOCS_LIMITS.reviewSetBytes) {
+        fail('D07 size', `task review set exceeds ${DOCS_LIMITS.reviewSetBytes} bytes`, 'reduce the linked documents')
+      }
+      const blockTexts = Object.fromEntries(parsed.blocks.map((block) => [block.id, visibleBlockText(block)]))
+      const comments = Object.entries(review.comments).flatMap(([commentId, comment]) => {
+        const state = commentStatus(comment, response.dispositions[commentId])
+        if (state === 'resolved') return []
+        return [{
+          id: commentId,
+          ...comment,
+          state,
+          placement: reanchor(comment.anchor, blockTexts),
+        }]
+      })
+      if (comments.length) docs.push({ id, title: entry.title, rev: entry.rev, comments })
+    } catch (error) {
+      if (error instanceof DocsPublisherError) throw error
+      if (/D07 size/.test(error.message)) fail('D07 size', error.message, `reduce docs/${id}`)
+      fail('D09 data', error.message, `repair docs/${id} before reading comments`)
+    }
+  }
+  return { task: Number(task), docs }
 }
 
 async function catchupThreshold(root, io) {
