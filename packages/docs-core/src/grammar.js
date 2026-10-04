@@ -43,6 +43,24 @@ export function splitLines(content) {
   return String(content || '').replace(/^\uFEFF/, '').split(/\r?\n/)
 }
 
+function isWholeComment(text) {
+  return text.startsWith('<!--') && text.endsWith('-->') && text.indexOf('-->', 4) === text.length - 3
+}
+
+function stripInlineComments(line) {
+  let visible = ''
+  let cursor = 0
+  while (cursor < line.length) {
+    const start = line.indexOf('<!--', cursor)
+    if (start === -1) return { visible: visible + line.slice(cursor), open: false }
+    visible += line.slice(cursor, start)
+    const end = line.indexOf('-->', start + 4)
+    if (end === -1) return { visible, open: true }
+    cursor = end + 3
+  }
+  return { visible, open: false }
+}
+
 export function trimBlankEnds(arr) {
   let start = 0
   let end = arr.length
@@ -72,12 +90,11 @@ export function walkVisibleLines(lines, { onLine, onComment } = {}) {
       inComment = false
     }
     const trimmed = line.trim()
-    if (onComment && /^<!--(?:(?!-->)[\s\S])*-->$/.test(trimmed)) {
+    if (onComment && isWholeComment(trimmed)) {
       if (onComment(trimmed, idx) === true) continue
     }
-    let visible = line.replace(/<!--[\s\S]*?-->/g, '')
-    const open = visible.indexOf('<!--')
-    if (open !== -1) { visible = visible.slice(0, open); inComment = true }
+    const { visible, open } = stripInlineComments(line)
+    if (open) inComment = true
     const wasBlank = rawLine.trim() === ''
     if (!wasBlank && visible.trim() === '') continue // purely a comment
     onLine?.(wasBlank ? '' : visible, { idx, fenced: false })
