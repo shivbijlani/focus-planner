@@ -3308,13 +3308,27 @@ $script:DocObservationFreshMinutes = if ($env:OA_DOC_FRESH_MINUTES) { [int]$env:
 # inside a number that looked measured.
 function Get-DocChannelState($doc) {
   if (-not $doc -or -not "$($doc.doc_id)") { return $null }
-  $observed = "$($doc.observed_at)"
-  if (-not $observed) { return 'unread' }
-  $parsed = [datetime]::MinValue
-  # An unparseable stamp is NOT fresh. It is a stamp nobody can evaluate, and reading it as
-  # current would manufacture exactly the false confidence this field exists to remove.
-  if (-not [datetime]::TryParse($observed, [ref]$parsed)) { return 'unread' }
-  $age = ([datetime]::Now - $parsed.ToLocalTime()).TotalMinutes
+  $raw = $doc.observed_at
+  if ($null -eq $raw -or -not "$raw") { return 'unread' }
+  # #808: ConvertFrom-Json has already turned the stored ISO stamp into a [datetime]. Rendering it
+  # back to text ("$x") drops its offset, TryParse then yields Kind=Unspecified, and ToLocalTime()
+  # reads that as UTC -- shifting the age by the host's UTC offset (7-8 h in Seattle; 0 on the UTC
+  # CI runners, which is why nothing saw it). Use the parsed value by its kind; parse a string only
+  # as an instant with its own offset (no offset = local, as written by Now-Iso).
+  $local = $null
+  if ($raw -is [datetime]) {
+    $local = if ($raw.Kind -eq [DateTimeKind]::Utc) { $raw.ToLocalTime() } else { $raw }
+  }
+  elseif ($raw -is [datetimeoffset]) { $local = $raw.LocalDateTime }
+  else {
+    $dto = [datetimeoffset]::MinValue
+    # An unparseable stamp is NOT fresh. It is a stamp nobody can evaluate, and reading it as
+    # current would manufacture exactly the false confidence this field exists to remove.
+    if (-not [datetimeoffset]::TryParse("$raw", [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::AssumeLocal, [ref]$dto)) { return 'unread' }
+    $local = $dto.LocalDateTime
+  }
+  $age = ([datetime]::Now - $local).TotalMinutes
   if ($age -ge $script:DocObservationFreshMinutes) { return 'stale' }
   return 'fresh'
 }
