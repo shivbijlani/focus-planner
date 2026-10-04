@@ -131,7 +131,8 @@
   Every appended turn carries `<!-- oa-by: session=<id> host=<host> -->` under its `oa-ask` stamp,
   so which agent wrote a turn, and from which machine, is in the journal itself. G21 refuses a body
   that writes its own; G20 refuses any target other than this task's journal inside -JournalDir
-  (agent-gate.md and user-settings.md are the user's alone). G22 refuses snoozed tasks. G23
+  (agent-gate.md and user-settings.md are the user's alone). G22 refuses snoozed tasks. G24
+  refuses a task the user closed (Test-UserClosed), even with a reply below it. G23
   refuses a coordinator-authored outcome turn on a task whose journal currently carries a human
   approval. The coordinator must dispatch; the bound task session writes the outcome. None can be
   disabled.
@@ -1693,6 +1694,74 @@ function Get-SnoozeWriteFinding($Verdict) {
     'a fresh human reply. This guard cannot be disabled'))
 }
 
+# --- G24: no turn into a task the USER closed (#825) ------------------------------------
+# "Closed" is exactly oa-state's Test-UserClosed: a status in ('done','skip') AND one of
+#   the row is on planner-completed.md (he moved it there in the app), or
+#   status_by is 'user' (absent reads as 'agent'), or
+#   the row is on neither planner.md nor the completed board.
+# There is no reply exemption: a reply on a closed task is `reopened_closed`, which is reported in
+# the run summary and never worked (#170 cause 3). Inputs are read lazily, cheapest first, so a
+# board that does not decide the verdict is never opened; one that must be read and cannot be
+# fails CLOSED.
+function Test-WriteBoardHasRow {
+  param([string]$Path, [string]$TaskId)
+  if (-not (Test-Path -LiteralPath $Path)) { return $false }
+  foreach ($line in [IO.File]::ReadLines($Path, (New-Object Text.UTF8Encoding($false)))) {
+    if ((Get-WriteBoardRowId $line) -eq $TaskId) { return $true }
+  }
+  return $false
+}
+
+function Get-WriteClosedVerdict {
+  param([string]$TaskId, [string]$JournalDir)
+  if (-not $TaskId) { return $null }
+  $statePath = Join-Path $OA_HOME "state\task-$TaskId.json"
+  if (-not (Test-Path -LiteralPath $statePath)) { return $null }
+  $plannerDir = Split-Path -Parent $JournalDir
+  $source = "state\task-$TaskId.json"
+  try {
+    $raw = [IO.File]::ReadAllText($statePath)
+    $st = if ([string]::IsNullOrWhiteSpace($raw)) { $null } else { $raw | ConvertFrom-Json -ErrorAction Stop }
+    if (-not $st) { return $null }
+    $status = "$($st.status)".ToLowerInvariant()
+    # CLOSED-STATUS-MUTANT-ANCHOR: only done/skip can be closed.
+    if (@('done', 'skip') -notcontains $status) { return $null }
+    $by = if ($st.PSObject.Properties['status_by'] -and $st.status_by) { "$($st.status_by)".ToLowerInvariant() } else { 'agent' }
+    $snippet = "status=$status status_by=$by"
+    # STATUS-BY-USER-MUTANT-ANCHOR
+    if ($by -eq 'user') { return [pscustomobject]@{ kind = 'closed'; why = 'status_by: user'; snippet = $snippet } }
+    $source = 'planner-completed.md'
+    # COMPLETED-BOARD-MUTANT-ANCHOR
+    if (Test-WriteBoardHasRow (Join-Path $plannerDir 'planner-completed.md') $TaskId) {
+      return [pscustomobject]@{ kind = 'closed'; why = 'it is on planner-completed.md'; snippet = "$snippet completed_board=true" }
+    }
+    $source = 'planner.md'
+    # OFF-BOARD-MUTANT-ANCHOR
+    if (-not (Test-WriteBoardHasRow (Join-Path $plannerDir 'planner.md') $TaskId)) {
+      return [pscustomobject]@{ kind = 'closed'; why = 'it is on neither board'; snippet = "$snippet on_board=false" }
+    }
+    return $null
+  }
+  catch {
+    # UNREADABLE-INPUT-MUTANT-ANCHOR: an input that must be read and cannot be refuses.
+    return [pscustomobject]@{ kind = 'unreadable'; why = $source; snippet = $source }
+  }
+}
+
+function Get-ClosedWriteFinding($Verdict) {
+  if (-not $Verdict) { return $null }
+  if ($Verdict.kind -eq 'unreadable') {
+    return (New-Finding 'G24' 1 $Verdict.snippet (
+      "cannot verify whether task $Id is closed: $($Verdict.why) could not be read. write-turn refuses " +
+      'rather than risk a turn into a task the user closed; fix the file, then retry. This guard cannot be disabled'))
+  }
+  # G24-FINDING-MUTANT-ANCHOR: the closed-task write guard is load-bearing.
+  return (New-Finding 'G24' 1 $Verdict.snippet (
+    "task $Id is closed by the user: $($Verdict.why); report it in the run summary under Replies on closed tasks; " +
+    "don't write to it and don't retry. Only the user can reopen a task he closed, even when he has " +
+    'replied below it. This guard cannot be disabled'))
+}
+
 # --- entry point -------------------------------------------------------------------
 if (-not (Test-Path -LiteralPath $BodyFile)) {
   Write-Error "body file not found: $BodyFile"; exit 3
@@ -1723,6 +1792,7 @@ $doc = if ($dest) { Get-JournalDocMeta $dest } else { $null }
 # validating is theatre.
 $script:PauseVerdict = if ($dest) { Get-UserPauseVerdict $Id $dest } else { $null }
 $script:SnoozeVerdict = if ($dest) { Get-WriteSnoozeVerdict $Id $JournalDir } else { $null }
+$script:ClosedVerdict = if ($dest) { Get-WriteClosedVerdict $Id $JournalDir } else { $null }
 
 # HOST-DEPENDENT COUNT (found 2026-08-27, by hitting it)
 # --------------------------------------------------------
@@ -1753,6 +1823,11 @@ if ($dest -and ($DisableGuard -notcontains 'G12')) {
 if ($script:SnoozeVerdict) {
   $snooze = Get-SnoozeWriteFinding $script:SnoozeVerdict
   if ($snooze) { $findings = @($findings) + @($snooze) }
+}
+# G24, same shape as G22: fail-closed, not disableable, no reply exemption.
+if ($script:ClosedVerdict) {
+  $closed = Get-ClosedWriteFinding $script:ClosedVerdict
+  if ($closed) { $findings = @($findings) + @($closed) }
 }
 if ($dest) {
   $approvedOwner = Get-ApprovedTaskOwnerFinding $Id $Author
