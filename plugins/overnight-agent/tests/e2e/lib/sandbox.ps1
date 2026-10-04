@@ -176,28 +176,35 @@ function Remove-PluginTests([string]$Dest) {
 $script:TestPathFull = '(?i)plugins[\\/]+overnight-agent[\\/]+tests(?![\w-])'
 $script:TestPathLoose = '(?i)(?<![\w-])tests[\\/]+e2e(?![\w-])'
 function Find-TestPathLeaks($L) {
-  $hits = @()
   $textExt = @('.md', '.txt', '.json', '.jsonl', '.mjs', '.js', '.ps1', '.psm1', '.yml', '.yaml', '.csv', '.html')
-  $scan = {
-    param([string]$Root, [string[]]$Patterns, [string[]]$SkipUnder)
-    if (-not (Test-Path -LiteralPath $Root)) { return }
-    foreach ($f in (Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction SilentlyContinue)) {
-      $full = $f.FullName
-      if (@($SkipUnder | Where-Object { $full.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }).Count) { continue }
-      if ($textExt -notcontains $f.Extension.ToLowerInvariant() -or $f.Length -gt 4MB) { continue }
-      $text = [IO.File]::ReadAllText($full)
-      foreach ($p in $Patterns) {
-        $m = [regex]::Match($text, $p)
-        if ($m.Success) { $script:leakHits += "$($full.Substring($L.Root.Length).TrimStart('\')): '$($m.Value)'"; break }
-      }
+  # Enumerate from ONE resolved root item and compare nothing by string prefix: a temp root given as an
+  # 8.3 short path (CI: C:\Users\RUNNER~1\...) enumerates children under their long names, so a prefix
+  # test against the layout's own strings silently stops excluding repo\ (measured on CI, #840).
+  $root = Get-Item -LiteralPath $L.Root -Force
+  $hits = [System.Collections.Generic.List[string]]::new()
+  $check = {
+    param($File, [string[]]$Patterns)
+    if ($textExt -notcontains $File.Extension.ToLowerInvariant() -or $File.Length -gt 4MB) { return }
+    $text = [IO.File]::ReadAllText($File.FullName)
+    foreach ($p in $Patterns) {
+      $m = [regex]::Match($text, $p)
+      if ($m.Success) { $hits.Add("$($File.FullName.Substring($root.FullName.Length).TrimStart('\', '/')): '$($m.Value)'"); break }
     }
   }
-  $script:leakHits = @()
-  $repo = $L.Repo.TrimEnd('\') + '\'
-  & $scan $L.Root @($script:TestPathFull, $script:TestPathLoose) @($repo)
-  & $scan $L.PluginDir @($script:TestPathFull) @()
-  $hits = @($script:leakHits)
-  return , $hits
+  $both = @($script:TestPathFull, $script:TestPathLoose)
+  foreach ($top in (Get-ChildItem -LiteralPath $root.FullName -Force)) {
+    if ($top.PSIsContainer -and $top.Name -ieq 'repo') {
+      # The product copy: only the full plugin tests path is a leak (see above).
+      $plugin = Join-Path $top.FullName 'plugins\overnight-agent'
+      if (Test-Path -LiteralPath $plugin) {
+        foreach ($f in (Get-ChildItem -LiteralPath $plugin -Recurse -File -Force -ErrorAction SilentlyContinue)) { & $check $f @($script:TestPathFull) }
+      }
+      continue
+    }
+    $files = if ($top.PSIsContainer) { Get-ChildItem -LiteralPath $top.FullName -Recurse -File -Force -ErrorAction SilentlyContinue } else { @($top) }
+    foreach ($f in $files) { & $check $f $both }
+  }
+  return , @($hits)
 }
 function Assert-NoTestPathLeak($L) {
   $hits = Find-TestPathLeaks $L

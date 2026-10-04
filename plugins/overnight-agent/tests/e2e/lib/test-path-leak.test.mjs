@@ -19,10 +19,12 @@ const pwsh = process.env.CHAR_PWSH || 'pwsh';
 // Builds a minimal sandbox: the real settings template, a planner journal, the harness MCP server copy,
 // and a product copy whose source comments cite `tests/e2e/run-sandbox.ps1` (legitimate). `edits`
 // mutate it; returns the leak list Find-TestPathLeaks reports.
-function leaks(edits = {}, { settingsLine = null } = {}) {
-  const dir = mkdtempSync(path.join(tmpdir(), 'oa-leak-'));
+function leaks(edits = {}, { settingsLine = null, short = false } = {}) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'oa-leak-long-folder-name-'));
   try {
-    const root = path.join(dir, 'sandbox');
+    // short: the root as an 8.3 path, as CI's temp is (C:\Users\RUNNER~1\...).
+    const base = short ? spawnSync('cmd', ['/d', '/s', '/c', '"for %I in ("' + dir + '") do @echo %~sI"'], { encoding: 'utf8', windowsVerbatimArguments: true }).stdout.trim() : dir;
+    const root = path.join(base || dir, 'sandbox');
     const ps = [
       `$ErrorActionPreference = 'Stop'`,
       `. '${path.join(here, 'sandbox.ps1')}'`,
@@ -67,6 +69,10 @@ for (const [name, [edits, opts]] of Object.entries(mutations)) {
     assert.ok(h.length >= 1, `expected a leak, got none`);
   });
 }
+
+test('the shipped harness is clean when the sandbox root is an 8.3 short path (CI temp shape)', () => {
+  assert.deepEqual(leaks({}, { short: true }), []);
+});
 
 test('a product source comment citing tests/e2e/run-sandbox.ps1 is not a leak', () => {
   assert.deepEqual(leaks({ 'repo\\plugins\\overnight-agent\\checks\\x.ps1': '# Sandbox mode (tests/e2e/run-sandbox.ps1): inert unless set' }), []);
