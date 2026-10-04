@@ -213,8 +213,7 @@ Use the moon first instead.
   # This one genuinely carries BOTH defects and must say so: G4 is defined by there
   # being no heading above the marker, so giving it an anchor to isolate G4 would
   # delete the very condition under test. Asserting both keeps the fixture honest.
-  # `In progress`, not `Proposed`: since #739 a Proposed status with no classified plan trips G19,
-  # which would make this fixture assert a third defect while claiming to test G4.
+  # `In progress` keeps this fixture focused on the structural marker guards.
   @{ name = 'g4-stray-marker';  expect = @('G4', 'G5'); nl = 'LF';   body = @'
 <!-- from: overnight-agent -->
 

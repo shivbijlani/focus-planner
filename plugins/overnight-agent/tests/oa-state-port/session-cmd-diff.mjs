@@ -75,7 +75,7 @@ $body = $body.Replace('$PSScriptRoot', "'" + $SkillRoot.Replace("'", "''") + "'"
 $resetParams = @{
   Command = 'scan'; Id = ''; Force = $false; SessionDead = $false; SessionRelease = $false
   WorkspaceGone = ''; SessionId = ''; SessionKind = $null; SessionProject = ''; SessionWorkspace = ''
-  WorkspaceType = $null; CheckDispatch = $false; ForDispatch = $false; PlanDispatch = $false
+  WorkspaceType = $null; CheckDispatch = $false; ForDispatch = $false
   DispatchInput = ''; RequiresTools = @(); LockWaitSeconds = 0
   StateDir = ''; JournalDir = ''; PlannerBoard = ''; PlannerCompleted = ''; SnoozeStore = ''
   UserSettings = ''; GatePath = ''; SessionStateDir = ''; CapabilitiesPath = ''; SessionsStatusFile = ''
@@ -407,7 +407,7 @@ function makeCommand(seq, step, psPath, nodePath) {
   if (kind === 5) return ['session', { Id: id, SessionId: g, SessionKind: 'code', SessionProject: 'focus-planner', SessionWorkspace: wt, WorkspaceType: 'branch', Force: true }];
   if (kind === 6) return ['session', { Id: id, CheckDispatch: true, RequiresTools: pick([['email'], ['downer'], []]) }];
   if (kind === 7) return ['session', { Id: id, ForDispatch: true, DispatchInput: seq % 4 === 0 ? getDispatchInput(psPath, id) : 'stale-input', RequiresTools: seq % 3 === 0 ? ['email'] : [] }];
-  if (kind === 8) return ['session', { Id: id, ForDispatch: true, PlanDispatch: true, DispatchInput: seq % 4 === 0 ? getDispatchInput(psPath, id) : 'stale-input' }];
+  if (kind === 8) return ['session', { Id: id, CheckDispatch: true, RequiresTools: ['email'] }];
   return ['whoami', { SessionId: pick([guid(seq, 1), guid(seq, 2), g, '99999999-9999-4999-8999-999999999999']) }];
 }
 

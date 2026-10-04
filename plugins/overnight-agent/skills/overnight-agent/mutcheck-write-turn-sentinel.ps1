@@ -100,6 +100,20 @@ function Invoke-WriteTurn([string]$ScriptPath, [string]$dir, [string]$id) {
   return $LASTEXITCODE
 }
 
+function Invoke-Validate([string]$ScriptPath, [string[]]$Extra = @()) {
+  $wtArgs = @('-BodyFile', $bodyFile, '-Ask', 'none', '-Validate', '-Json') + $Extra
+  $out = if ($ScriptPath -like '*.mjs') {
+    & node $ScriptPath @wtArgs 2>&1 | Out-String
+  } else {
+    & $PsHost -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @wtArgs 2>&1 | Out-String
+  }
+  $start = $out.IndexOf('{')
+  if ($start -lt 0) { throw "write-turn validate printed no JSON: $out" }
+  try { return $out.Substring($start) | ConvertFrom-Json } catch {
+    throw "write-turn validate printed invalid JSON: $out"
+  }
+}
+
 function Count-Sentinel([string]$text) {
   ([regex]::Matches($text, [regex]::Escape($SENTINEL))).Count
 }

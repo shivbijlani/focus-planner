@@ -1126,33 +1126,6 @@ function turnBodyFindings(ctx, body, disabled, doc, ask) {
     }
   }
 
-  // G19 (#739): a Proposed plan must open with a [gated] step under -Ask blocking, and every
-  // numbered step after the status line must be classified.
-  if (on('G19')) {
-    let proposedLine = -1;
-    let firstStep = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (inFence[i]) continue;
-      if (psMatch(lines[i], '^[ \\t]*\\*\\*Status:\\*\\*[ \\t]*Proposed\\b')) proposedLine = i;
-      if (proposedLine >= 0 && firstStep < 0 && psMatch(lines[i], '^[ \\t]*1\\.[ \\t]+')) firstStep = i;
-    }
-    if (proposedLine >= 0) {
-      if (!ciEq(ask, 'blocking') || firstStep < 0 || !psMatch(lines[firstStep], '^[ \\t]*1\\.[ \\t]+\\[gated\\][ \\t]+')) {
-        findings.push(newFinding('G19', proposedLine + 1, netTrim(lines[proposedLine]),
-          'proposed parks the task: its first numbered step must be [gated] and -Ask blocking. ' +
-          'For reversible or gate-allowed first steps, dispatch them this wake and write the ' +
-          'outcome as in-progress/done (or blocked only when gated work remains)'));
-      }
-      for (let i = proposedLine + 1; i < lines.length; i++) {
-        if (inFence[i] || !psMatch(lines[i], '^[ \\t]*[1-9][0-9]*\\.[ \\t]+')) continue;
-        if (!psMatch(lines[i], '^[ \\t]*[1-9][0-9]*\\.[ \\t]+\\[(reversible|gate-allowed|gated)\\][ \\t]+')) {
-          findings.push(newFinding('G19', i + 1, netTrim(lines[i]),
-            'classify each proposed plan step as [reversible], [gate-allowed] or [gated]'));
-        }
-      }
-    }
-  }
-
   // G13 (#560): the author must DECLARE the ask; last, so real damage is reported alongside it.
   if (on('G13')) {
     const askVal = lowerInvariant(netTrim(ask));
@@ -1588,7 +1561,13 @@ function run(argv, out) {
   }
 
   const turn = addAskStamp(netTrimEnd(body), askVal, identityStamp(author)).replace(/\r?\n/g, nl);
-  writeAllText(journal, existing + sep + prefix + turn + nl);
+  const journalOutput = existing + sep + prefix + turn + nl;
+  const sentinelCount = (journalOutput.match(/<!-- OVERNIGHT-AGENT do not edit this line/g) || []).length;
+  if (sentinelCount !== 1) {
+    say(`[write-turn] REFUSED - journal must contain exactly one OVERNIGHT-AGENT sentinel (found ${sentinelCount}); nothing written.`);
+    return 2;
+  }
+  writeAllText(journal, journalOutput);
   if (!P.Json) say(`[write-turn] appended ${bodyLen} chars to task-${id}.md (ask: ${askVal}, backup: task-${id}.bak-${stamp}.md)`);
   return 0;
 }

@@ -101,6 +101,9 @@ try {
   Check 'new task without an agent block is ordinarily eligible' ($new.eligible -and -not $new.has_agent_block)
   $newDispatch = StateCall @('session', '-Id', '901', '-ForDispatch', '-DispatchInput', $new.dispatch_input)
   Check 'new task uses ordinary dispatch authority' ($newDispatch.dispatch_authorised -and $newDispatch.dispatch_eligible)
+  $staleInput = Invoke-State @('session', '-Id', '901', '-ForDispatch', '-DispatchInput', 'stale')
+  Check 'ForDispatch still refuses a stale scan fingerprint' `
+    ($script:StateExit -ne 0 -and ((@($staleInput) | Out-String) -match 'session_input_changed'))
 
   $paused = ScanRow '902'
   Check 'user pause remains ineligible' (-not $paused.eligible -and $paused.session_paused) `

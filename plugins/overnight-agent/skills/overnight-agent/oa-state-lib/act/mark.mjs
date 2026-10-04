@@ -43,34 +43,8 @@ function pausedError(ctx, st) {
     'instruction as a side effect of reporting work he asked you to stop (#540).';
 }
 
-const approvedWorkStatuses = ['in-progress', 'done', 'blocked'];
 const userPauseStatuses = ['proposed', 'blocked'];
 const approvedWorkStatuses = ['in-progress', 'done', 'blocked'];
-
-function taskSessionOwnsStatusChange(ctx, st) {
-  const caller = ctx.p.TurnBy || process.env.COPILOT_AGENT_SESSION_ID || '';
-  if (!caller || !st || !has(st, 'session') || !psTruthy(get(st, 'session'))) return false;
-  const sess = get(st, 'session');
-  const ids = [];
-  for (const key of ['session_id', 'prior_session_id']) {
-    const v = get(sess, key);
-    if (psTruthy(v)) ids.push(psStr(v));
-  }
-  const prior = get(sess, 'prior_session_ids');
-  const arr = Array.isArray(prior) ? prior : (prior === undefined || prior === null ? [] : [prior]);
-  for (const v of arr) if (psTruthy(v)) ids.push(psStr(v));
-  return ids.some((sid) => ciEq(sid, caller));
-}
-
-function approvedWorkMarkError(ctx, st) {
-  const caller = ctx.p.TurnBy || process.env.COPILOT_AGENT_SESSION_ID || 'unknown';
-  const sess = st && has(st, 'session') && psTruthy(get(st, 'session')) ? get(st, 'session') : null;
-  const bound = sess && psTruthy(get(sess, 'session_id')) ? psStr(get(sess, 'session_id')) : 'no bound task session';
-  return `approved_task_status_owned_by_task_session: task ${ctx.p.Id} has a pending human approval, ` +
-    `but caller '${caller}' is not the bound task session (${bound}). The coordinator must dispatch it ` +
-    `with \`oa-state.ps1 session -Id ${ctx.p.Id} -ForDispatch ...\`; the task session owns approved work ` +
-    'status changes (in-progress/done/blocked). Unknown callers fail closed.';
-}
 
 function taskSessionOwnsStatusChange(ctx, st) {
   const caller = ctx.p.TurnBy || process.env.COPILOT_AGENT_SESSION_ID || '';

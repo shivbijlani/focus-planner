@@ -221,10 +221,6 @@ export function getScanRows(ctx) {
     const v = verdicts[psStr(r.id)];
     setMember(r, 'order', order);
     setMember(r, 'eligible', eligible);
-    const planReview = !!(r.status === 'proposed' && r.status_by === 'agent'
-      && r.on_board && !r.snoozed && !r.session_paused && !r.reopened && !r.unanswered_user
-      && (r.section === 'today' || todayHolding === 0) && !notHere(r));
-    setMember(r, 'plan_review_due', planReview);
     setMember(r, 'holds_today_gate', !!(v !== undefined && v !== null && v.holds));
     setMember(r, 'today_release_reason', v !== undefined && v !== null ? psStr(v.reason)
       : r.section === 'today' && notHere(r) ? 'lane_not_served' : null);
@@ -314,7 +310,7 @@ export const CompactFields = [
   'session_activity', 'dispatch_skip_reason',
   'session_process_dead', 'replacements_24h',
   'session_workspace_missing',
-  'plan_review_due', 'dispatch_input', 'no_journal_reason',
+  'dispatch_input', 'no_journal_reason',
   'lane', 'lane_source', 'lane_from', 'lane_problem', 'lane_candidates', 'lane_served_here',
 ];
 
@@ -323,7 +319,6 @@ export function testCompactRowNeeded(r) {
   if (Object.prototype.hasOwnProperty.call(r, 'lane_served_here') && !r.lane_served_here) return false;
   if (r.eligible) return true;
   if (r.dispatch_skip_reason) return true;
-  if (r.plan_review_due) return true;
   if (r.holds_today_gate) return true;
   if (r.reopened_closed) return true;
   if (r.unanswered_user) return true;

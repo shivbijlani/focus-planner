@@ -8,8 +8,7 @@
   no agent signature AND its id is not in the sent-messages ledger write-turn keeps
   (`<OA home>\sent-messages.jsonl`). And each channel's rule lives in agent-gate.md's
   `## Approvals` section (defaults app: editor; google-doc: no-signature + not-in-sent-ledger);
-  a channel switched off -- or given a rule this engine cannot enforce -- never approves. The
-  gated-dispatch floor (#813) asks the same reader.
+  a channel switched off -- or given a rule this engine cannot enforce -- never approves.
 
     A  his-looking doc comment whose id is in the ledger (google-doc)  -> refused
     B  the same id recorded on ANOTHER channel (teams)                 -> granted
@@ -17,14 +16,12 @@
     D  app: off, his journal approve                                   -> refused
     E  google-doc: off, his doc comment                                -> refused
     F  google-doc: no-signature (drops the ledger: weaker)             -> refused
-    G  [gated] plan, his journal approve, app: off: session -CheckDispatch -> refused
     H  control: defaults, no ledger, his doc comment                   -> granted
 
   MUTANTS (engine = the -ScriptPath target; doc-consent.mjs is shared by both engines)
     M1 consent ignores the app channel          -> D      M5 the engine never passes the ledger -> A
-    M2 consent ignores the google-doc channel   -> E      M6 doc-consent tolerates a bad line   -> C
-    M3 an unrecognised rule counts as enabled   -> F      M7 doc-consent ignores the channel    -> B
-    M4 the gated floor ignores the channels     -> G
+    M2 consent ignores the google-doc channel   -> E      M4 doc-consent tolerates a bad line   -> C
+    M3 an unrecognised rule counts as enabled   -> F      M6 doc-consent ignores the channel    -> B
 
   Hermetic: a flat copy of the engine + doc-consent.mjs + lib-doc-comments.mjs under TEMP.
 
@@ -90,15 +87,14 @@ $arms = [ordered]@{
   D = @{ reply = $hisApprove; gate = (Get-Approvals @('app: off')); ledger = $null; doc = $false; expect = $false }
   E = @{ reply = ''; gate = (Get-Approvals @('google-doc: off')); ledger = $null; doc = $true; expect = $false }
   F = @{ reply = ''; gate = (Get-Approvals @('google-doc: no-signature')); ledger = $null; doc = $true; expect = $false }
-  G = @{ gated = $true; reply = $hisApprove; gate = (Get-Approvals @('app: off')); ledger = $null; doc = $false; expect = $false }
   H = @{ reply = ''; gate = ''; ledger = $null; doc = $true; expect = $true }
 }
 
 function Get-ArmVerdict([string]$engine, [string]$tag, [string]$k, $arm) {
   $sx = Join-Path $root "$tag-$k"
   $id = '960'
-  $body = if ($arm.gated) { "**Status:** Proposed`n`n### Proposed plan (v1)`n1. [gated] Order the Bosch 300, `$899 charged to the card on file.`n`n**Needs from you:** approve?`n" } else { "**Status:** working.`n" }
-  $t = $turn.Replace('{ask}', $(if ($arm.gated) { 'blocking' } else { 'offer' })).Replace('{body}', $body)
+  $body = "**Status:** working.`n"
+  $t = $turn.Replace('{ask}', 'offer').Replace('{body}', $body)
   Write-Utf8 (Join-Path $sx "data\journal\task-$id.md") ("# Task ${id}: channels`n<!-- doc-meta docId=DOC123 docUrl=https://docs.google.com/document/d/DOC123/edit -->`n`nnotes`n`n---`n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->`n`n" + $t + $arm.reply)
   Write-Utf8 (Join-Path $sx 'data\planner.md') "## Today`n`n| ID | Task |`n|---|---|`n| $id | t |`n"
   foreach ($f in 'planner-completed.md', 'user-settings.md') { Write-Utf8 (Join-Path $sx "data\$f") '' }
@@ -119,18 +115,12 @@ function Get-ArmVerdict([string]$engine, [string]$tag, [string]$k, $arm) {
     '-SnoozeStore', (Join-Path $sx 'data\snooze.json'), '-GatePath', (Join-Path $sx 'data\agent-gate.md'),
     '-UserSettings', (Join-Path $sx 'data\user-settings.md'), '-SessionStateDir', (Join-Path $oaHome 'session-state'),
     '-McpConfig', (Join-Path $oaHome 'mcp.json'))
-  $a = if ($arm.gated) { @('session', '-Id', $id, '-CheckDispatch', '-SessionsStatusFile', (Join-Path $oaHome 'sessions.json')) }
-  else { @('consent', '-Id', $id) + $(if ($arm.doc) { @('-DocComments', (Join-Path $sx 'input\comments.txt')) } else { @() }) }
+  $a = @('consent', '-Id', $id) + $(if ($arm.doc) { @('-DocComments', (Join-Path $sx 'input\comments.txt')) } else { @() })
   $cmd = Get-OaStateCommand $engine
   $prevHome = $env:OVERNIGHT_AGENT_HOME; $prevWt = $env:WRITE_TURN_OA_HOME
   $env:OVERNIGHT_AGENT_HOME = $oaHome; $env:WRITE_TURN_OA_HOME = $null
   try { $text = & $cmd.Exe @($cmd.Prefix + $a + $common) 2>&1 | Out-String; $code = $LASTEXITCODE }
   finally { $env:OVERNIGHT_AGENT_HOME = $prevHome; $env:WRITE_TURN_OA_HOME = $prevWt }
-  if ($arm.gated) {
-    if ($code -eq 0) { return $true }
-    if ($text -match 'session_gated_needs_consent') { return $false }
-    return "other: exit $code $($text.Trim() -replace '\s+', ' ')"
-  }
   try { $j = $text | ConvertFrom-Json } catch { return "unparsable: $($text.Trim() -replace '\s+', ' ')" }
   return [bool]$j.consent_ok
 }
@@ -151,7 +141,6 @@ $engineMutants = if ($isNode) {
     @{ n = 'M1'; kills = 'D'; find = 'const journalOk = !!c.consent_ok && appCh.enabled;'; repl = 'const journalOk = !!c.consent_ok;' },
     @{ n = 'M2'; kills = 'E'; find = 'if (DocComments && !journalOk && docCh.enabled) {'; repl = 'if (DocComments && !journalOk) {' },
     @{ n = 'M3'; kills = 'F'; find = "if (tokens.length === 2 && tokens.includes('no-signature') && tokens.includes('not-in-sent-ledger')) return 'enabled';"; repl = "if (tokens.length > 0) return 'enabled';" },
-    @{ n = 'M4'; kills = 'G'; find = 'if (c && c.consent_ok && approvals.app.enabled) return;'; repl = 'if (c && c.consent_ok) return;' },
     @{ n = 'M5'; kills = 'A'; find = 'if (sent && testPath(sent)) ledgers.push(sent);'; repl = 'void sent;' }
   )
 } else {
@@ -159,13 +148,12 @@ $engineMutants = if ($isNode) {
     @{ n = 'M1'; kills = 'D'; find = '$journalOk = [bool]$c.consent_ok -and $appCh.enabled'; repl = '$journalOk = [bool]$c.consent_ok' },
     @{ n = 'M2'; kills = 'E'; find = 'if ($DocComments -and -not $journalOk -and $docCh.enabled) {'; repl = 'if ($DocComments -and -not $journalOk) {' },
     @{ n = 'M3'; kills = 'F'; find = "if (`$tokens.Count -eq 2 -and `$tokens -contains 'no-signature' -and `$tokens -contains 'not-in-sent-ledger') { return 'enabled' }"; repl = "if (`$tokens.Count -gt 0) { return 'enabled' }" },
-    @{ n = 'M4'; kills = 'G'; find = "if (`$c.consent_ok -and `$approvals['app'].enabled) { return }"; repl = 'if ($c.consent_ok) { return }' },
     @{ n = 'M5'; kills = 'A'; find = 'if ($sent -and (Test-Path -LiteralPath $sent)) { $ledgers += $sent }'; repl = '$null = $sent' }
   )
 }
 $sharedMutants = @(
-  @{ n = 'M6'; kills = 'C'; find = "      row = JSON.parse(line)`n    } catch {`n      return { refuse: 'sent-ledger-malformed', ids: [] }`n    }"; repl = "      row = JSON.parse(line)`n    } catch {`n      continue`n    }" },
-  @{ n = 'M7'; kills = 'B'; find = "if (row.channel.toLowerCase() === 'google-doc') ids.push(row.message_id)"; repl = 'ids.push(row.message_id)' }
+  @{ n = 'M4'; kills = 'C'; find = "      row = JSON.parse(line)`n    } catch {`n      return { refuse: 'sent-ledger-malformed', ids: [] }`n    }"; repl = "      row = JSON.parse(line)`n    } catch {`n      continue`n    }" },
+  @{ n = 'M6'; kills = 'B'; find = "if (row.channel.toLowerCase() === 'google-doc') ids.push(row.message_id)"; repl = 'ids.push(row.message_id)' }
 )
 
 $bad = 0

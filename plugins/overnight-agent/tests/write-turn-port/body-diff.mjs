@@ -131,7 +131,7 @@ function genCase(k) {
   if (c.args.Ask === '' && chance(0.5)) delete c.args.Ask;
   if (chance(0.55) || !useId) c.args.Validate = true;
   if (chance(0.5)) c.args.Json = true;
-  if (chance(0.25)) c.args.DisableGuard = pick(['G12', 'G7', 'g13', 'G15', 'G3', 'G11', 'G19', 'G16', 'G20', 'G21']);
+  if (chance(0.25)) c.args.DisableGuard = pick(['G12', 'G7', 'g13', 'G15', 'G3', 'G11', 'G16', 'G20', 'G21', 'G24', 'G25']);
   if (chance(0.3)) c.env.COPILOT_AGENT_SESSION_ID = pick(['sess-A', 'AGENT']);
   if (chance(0.3)) c.env.WRITE_TURN_HOST = pick(['host-1', 'AGENT-PC', 'a b/c']);
   if (chance(0.3)) c.env.CHAR_SHIPPED = pick(['640,641', '!fail', '900']);
