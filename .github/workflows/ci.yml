@@ -1358,6 +1358,27 @@ jobs:
       - name: Mutation check (never-observed and observed-empty are distinguishable)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-channel-provenance.ps1
+      # #808: the runner is UTC, so a freshness bug that shifts by the host's UTC offset passed here
+      # while failing on the live host in Seattle. The same arms, outside UTC -- west and east of it
+      # (a half-hour offset too) -- and against the Node engine the agent runs.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check outside UTC (America/Los_Angeles, oa-state.ps1)
+        shell: pwsh
+        env:
+          TZ: America/Los_Angeles
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-channel-provenance.ps1
+      - name: Mutation check outside UTC (Asia/Kolkata, oa-state.ps1)
+        shell: pwsh
+        env:
+          TZ: Asia/Kolkata
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-channel-provenance.ps1
+      - name: Mutation check outside UTC (America/Los_Angeles, oa-state.mjs)
+        shell: pwsh
+        env:
+          TZ: America/Los_Angeles
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-channel-provenance.ps1 -ScriptPath ./plugins/overnight-agent/skills/overnight-agent/oa-state.mjs
 
   # A PAUSE BINDS SELECTION BUT NOT WORK (GH #627).
   #
