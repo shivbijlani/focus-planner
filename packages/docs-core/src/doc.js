@@ -196,13 +196,76 @@ export function statusLine(blocks) {
   return null
 }
 
+function stripInlineCode(text) {
+  let output = ''
+  let cursor = 0
+  while (cursor < text.length) {
+    const open = text.indexOf('`', cursor)
+    if (open === -1) return output + text.slice(cursor)
+    output += text.slice(cursor, open)
+    let delimiterEnd = open
+    while (text[delimiterEnd] === '`') delimiterEnd++
+    const delimiterLength = delimiterEnd - open
+    let search = delimiterEnd
+    let close = -1
+    while (search < text.length) {
+      const candidate = text.indexOf('`', search)
+      if (candidate === -1) break
+      let candidateEnd = candidate
+      while (text[candidateEnd] === '`') candidateEnd++
+      if (candidateEnd - candidate === delimiterLength) {
+        close = candidateEnd
+        break
+      }
+      search = candidateEnd
+    }
+    if (close === -1) return output + text.slice(open)
+    output += text.slice(delimiterEnd, close - delimiterLength)
+    cursor = close
+  }
+  return output
+}
+
 /** Rough plain text of a block (markdown syntax removed) — for search and diffing. */
+function stripInlineLinks(line) {
+  let output = ''
+  let cursor = 0
+  while (cursor < line.length) {
+    const labelStart = line[cursor] === '!' && line[cursor + 1] === '[' ? cursor + 1 : cursor
+    if (line[labelStart] !== '[') {
+      output += line[cursor++]
+      continue
+    }
+    let labelEnd = labelStart + 1
+    while (labelEnd < line.length && line[labelEnd] !== ']' && line[labelEnd] !== '\n') labelEnd++
+    if (line[labelEnd] !== ']') {
+      output += line.slice(cursor, labelEnd)
+      cursor = labelEnd
+      continue
+    }
+    const destinationStart = labelEnd + 1
+    if (line[destinationStart] !== '(') {
+      output += line.slice(cursor, destinationStart)
+      cursor = destinationStart
+      continue
+    }
+    let destinationEnd = destinationStart + 1
+    while (destinationEnd < line.length && line[destinationEnd] !== ')' && line[destinationEnd] !== '\n') destinationEnd++
+    if (line[destinationEnd] !== ')') {
+      output += line.slice(cursor, destinationEnd)
+      cursor = destinationEnd
+      continue
+    }
+    output += line.slice(labelStart + 1, labelEnd)
+    cursor = destinationEnd + 1
+  }
+  return output
+}
+
 export function blockPlainText(block) {
   return (block?.lines || [])
-    .map((l) => l
-      .replace(/^\s*(#{1,6}|>|[-*+]|\d+[.)])\s+/, '')
-      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
-      .replace(/[*_`]/g, '')
+    .map((line) => stripInlineCode(stripInlineLinks(line.replace(/^\s*(#{1,6}|>|[-*+]|\d+[.)])\s+/, '')))
+      .replace(/[*_]/g, '')
       .replace(/^\|/, '').replace(/\|$/, '').replace(/\|/g, ' '))
     .join('\n')
     .trim()

@@ -25,7 +25,55 @@ const REQUIRED_SECTIONS = [
 const ID_RE = /^d-[a-z0-9]{6,}$/
 
 function withoutInlineCode(line) {
-  return line.replace(/(`+).*?\1/g, '')
+  let output = ''
+  let cursor = 0
+  while (cursor < line.length) {
+    const open = line.indexOf('`', cursor)
+    if (open === -1) return output + line.slice(cursor)
+    output += line.slice(cursor, open)
+    let delimiterEnd = open
+    while (line[delimiterEnd] === '`') delimiterEnd++
+    const delimiterLength = delimiterEnd - open
+    let search = delimiterEnd
+    let close = -1
+    while (search < line.length) {
+      const candidate = line.indexOf('`', search)
+      if (candidate === -1) break
+      let candidateEnd = candidate
+      while (line[candidateEnd] === '`') candidateEnd++
+      if (candidateEnd - candidate === delimiterLength) {
+        close = candidateEnd
+        break
+      }
+      search = candidateEnd
+    }
+    if (close === -1) return output + line.slice(open)
+    cursor = close
+  }
+  return output
+}
+
+function markdownDestinations(source) {
+  const destinations = []
+  let cursor = 0
+  while (cursor < source.length) {
+    const open = source.indexOf('](', cursor)
+    if (open === -1) break
+    const start = open + 2
+    const close = source.indexOf(')', start)
+    if (close === -1) break
+    const inside = source.slice(start, close).trim()
+    let destination = inside
+    if (destination.startsWith('<')) {
+      const end = destination.indexOf('>')
+      destination = end === -1 ? destination : destination.slice(1, end)
+    } else {
+      destination = destination.split(/\s/, 1)[0] || ''
+    }
+    if (destination) destinations.push(destination)
+    cursor = close + 1
+  }
+  return destinations
 }
 
 export class DocsPublisherError extends Error {
@@ -114,15 +162,16 @@ function draftModel(text, { primary = true } = {}) {
   const bareTask = primary ? bodyText.match(/(?:^|\s)#([1-9][0-9]*)(?=\s|$|[.,;:])/) : null
   if (bareTask) fail('D03 catch-up', `bare task reference #${bareTask[1]}`, 'replace it with a link or ordinary prose')
 
-  const linkSource = visible.map(({ line, fenced }) => fenced ? '' : withoutInlineCode(line)).join('\n')
+  const linkSource = visible.filter(({ fenced }) => !fenced)
+    .map(({ line }) => withoutInlineCode(line)).join('\n')
   const links = extractDocLinks(linkSource)
-  const markdownLinks = [...linkSource.matchAll(/\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g)]
-  for (const [, href] of markdownLinks) {
+  for (const href of markdownDestinations(linkSource)) {
     if (href.startsWith('doc:')) {
       if (!parseDocHref(href)) fail('D04 link', `malformed Docs link: ${href}`, 'use doc:<valid-id>[#bN]')
     } else {
       try {
         if (!/^(https?:|mailto:)/i.test(href)) throw new Error('unsupported URL scheme')
+        if (/\s/.test(href)) throw new Error('whitespace in URL')
         const url = new URL(href)
         if (!url.protocol || url.username || url.password) throw new Error('invalid or credential-bearing URL')
       } catch {
@@ -281,7 +330,7 @@ export async function lintDraft({ draft, root, io = fs.promises, checkLinks = fa
 }
 
 async function checkExternalLinks(text) {
-  const urls = [...text.matchAll(/\]\((https?:\/\/[^)\s]+)\)/g)].map((match) => match[1])
+  const urls = markdownDestinations(markdownLinkSource(text)).filter((url) => /^https?:\/\//i.test(url))
   for (const url of urls) {
     try {
       await checkExternalUrl(url)
@@ -289,6 +338,16 @@ async function checkExternalLinks(text) {
       fail('D04 link', `external URL is unreachable: ${url} (${error.message})`, 'repair or remove the link')
     }
   }
+}
+
+function markdownLinkSource(text) {
+  const lines = []
+  walkVisibleLines(splitLines(text), {
+    onLine: (line, { fenced }) => {
+      if (!fenced) lines.push(withoutInlineCode(line))
+    },
+  })
+  return lines.join('\n')
 }
 
 async function checkExternalUrl(url, redirects = 0) {
@@ -559,7 +618,10 @@ export async function publish({
             if (!oldParsed.title || !oldParsed.blocks.length) throw new Error('external document is not valid Markdown')
             const stamp = parseDocHeader(oldDocText)
             if (stamp?.id !== target.id || stamp.rev !== oldEntry.rev) throw new Error('external document identity or revision does not match the index')
-            const adopted = oldDocText.replace(/^<!--.*?-->/, `<!-- docs v1 id=${target.id} rev=${oldEntry.rev} published=${stamp.published} by=fp-docs -->`)
+            const headerEnd = oldDocText.indexOf('\n')
+            const firstLine = headerEnd === -1 ? oldDocText : oldDocText.slice(0, headerEnd)
+            if (!firstLine.startsWith('<!--') || !firstLine.endsWith('-->')) throw new Error('external document header is not on the first line')
+            const adopted = `<!-- docs v1 id=${target.id} rev=${oldEntry.rev} published=${stamp.published} by=fp-docs -->${headerEnd === -1 ? '' : oldDocText.slice(headerEnd)}`
             validateDocText(adopted, { docId: target.id, entry: oldEntry, response: oldResponse })
             const adoptedDraft = adopted
               .split('\n')

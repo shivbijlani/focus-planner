@@ -96,6 +96,7 @@ describe('changes and outline', () => {
   })
   it('strips markdown for plain text', () => {
     expect(blockPlainText({ lines: ['- **bold** [x](doc:d-aaaaaa)'] })).toBe('bold x')
+    expect(blockPlainText({ lines: ['`code words` [image alt](https://example.com)'] })).toBe('code words image alt')
   })
 
   it('carries unique exact and similar block ids without reusing retired ids', () => {
