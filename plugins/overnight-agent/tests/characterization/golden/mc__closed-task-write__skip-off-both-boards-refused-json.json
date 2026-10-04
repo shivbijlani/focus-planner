@@ -1,0 +1,34 @@
+{
+  "files": {},
+  "id": "mc/closed-task-write/skip-off-both-boards-refused-json",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Id": "9405",
+        "Json": true,
+        "Validate": true
+      },
+      "exit": 2,
+      "json": {
+        "ask": "none",
+        "docBound": false,
+        "docId": "",
+        "findings": [
+          {
+            "guard": "G24",
+            "line": 1,
+            "snippet": "status=skip status_by=agent on_board=false",
+            "why": "task 9405 is closed by the user: it is on neither board; report it in the run summary under Replies on closed tasks; don't write to it and don't retry. Only the user can reopen a task he closed, even when he has replied below it. This guard cannot be disabled"
+          }
+        ],
+        "g15Note": "",
+        "hasAsk": true,
+        "id": "9405",
+        "length": 163,
+        "ok": false
+      },
+      "tool": "write-turn"
+    }
+  ]
+}

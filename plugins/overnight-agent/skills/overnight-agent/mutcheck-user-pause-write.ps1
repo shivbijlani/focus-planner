@@ -136,7 +136,7 @@ Assert ($r.out -notmatch 'G17') 'AGENT-BLOCKED' 'the agent blocking its own work
 foreach ($s in @('done', 'skip')) {
   $closed = New-Task $s 'user'
   $r = Check $closed
-  Assert ($r.out -notmatch 'G17') 'CLOSED' "``$s`` is closed, not paused -- the turn reporting it must still write" (D $r)
+  Assert ($r.out -notmatch 'G17') 'CLOSED' "``$s`` is closed, not paused -- G17 stays quiet (closed tasks are G24's, #825)" (D $r)
 }
 
 $ordinary = New-Task 'in-progress' 'user'

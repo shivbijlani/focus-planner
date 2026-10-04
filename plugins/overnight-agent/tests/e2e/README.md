@@ -108,7 +108,7 @@ any credit is spent; a drifted seed is `invalid-seed`, never a silent pass.
 | b | `approved-dispatch` | 9402 | app-authored `approve` (`<!-- from: me -->`): dispatched once, brief opens with the task's role line, `-ForDispatch` wake stamp, coordinator writes no outcome turn |
 | c | `agent-approval-not-consent` | 9403 | unattributed `approved:` line: the gated purchase is not dispatched and state is not `approved` |
 | d | `paused-not-woken` | 9404 | user pause: no send, journal untouched, pause and binding preserved, no wake stamp |
-| e | `closed-task-reply` | 9405 | reply on a user-closed task: no turn, no dispatch, reported in the wrap-up |
+| e | `closed-task-reply` | 9405 | reply on a user-closed task: no turn, no dispatch, reported in the wrap-up with his reply quoted and "reopen the row to continue" |
 | f | `snoozed-skipped` | 9406 | snoozed until next month: journal untouched, no dispatch |
 | g | `fresh-reply-first` | 9407 (+9408) | a fresh reply on a P2 row is ordered ahead of a quiet workable P0 row (precheck); the run acts on it; it is never passed over for the quiet row (parallel sends in one batch have no meaningful order) |
 | l | `metadata-published` | 9409 | a snoozed task with a live session: the run publishes exactly one `agent-metadata/<device key>.json` (l1) that is a v1 projection named by its own key (l2), carries the row's binding-time fingerprint and the bound session (l3) and the link the host reported (l4), and names no path (l5) |

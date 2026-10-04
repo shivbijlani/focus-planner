@@ -31,7 +31,8 @@
   G6 is not a refusal: a journal with no OVERNIGHT-AGENT sentinel gets one on append.
   G20 a target that is not this task's own journal (agent-gate.md, user-settings.md, a path in
       -Id, a symlink out of -JournalDir). G21 a hand-written `oa-by` identity stamp. G22 a turn
-      into a snoozed task. None can be switched off with -DisableGuard: they are what make the tool
+      into a snoozed task. G24 a turn into a task the user closed, even with his reply below it.
+      None can be switched off with -DisableGuard: they are what make the tool
       the ONLY way an agent writes.
 
   Every appended turn carries `<!-- oa-by: session=<id> host=<host> -->` under its provenance
@@ -1301,6 +1302,97 @@ function snoozeWriteFinding(id, verdict) {
     'a fresh human reply. This guard cannot be disabled');
 }
 
+// G24 (#825): no turn into a task the USER closed -- exactly oa-state's testUserClosed: status
+// done/skip AND (on planner-completed.md OR status_by user OR on neither board). No reply
+// exemption: a reply on a closed task is `reopened_closed`, reported and never worked. Inputs are
+// read lazily, cheapest first; one that must be read and cannot be fails CLOSED.
+function writeBoardHasRow(p, taskId) {
+  if (!testPath(p)) return false;
+  for (const line of splitLines(readAllText(p))) if (writeBoardRowId(line) === String(taskId)) return true;
+  return false;
+}
+
+function writeClosedVerdict(ctx, taskId) {
+  if (!taskId) return null;
+  const statePath = path.join(ctx.oaHome, 'state', `task-${taskId}.json`);
+  if (!testPath(statePath)) return null;
+  const plannerDir = path.dirname(ctx.journalDir);
+  let source = `state\\task-${taskId}.json`;
+  try {
+    const st = readJsonLoose(statePath);
+    if (!psTruthy(st)) return null;
+    const status = lowerInvariant(psStr(get(st, 'status')));
+    // CLOSED-STATUS-MUTANT-ANCHOR: only done/skip can be closed.
+    if (!['done', 'skip'].includes(status)) return null;
+    const rawBy = get(st, 'status_by');
+    const by = psTruthy(rawBy) ? lowerInvariant(psStr(rawBy)) : 'agent';
+    const snippet = `status=${status} status_by=${by}`;
+    // STATUS-BY-USER-MUTANT-ANCHOR
+    if (by === 'user') return { kind: 'closed', why: 'status_by: user', snippet };
+    source = 'planner-completed.md';
+    // COMPLETED-BOARD-MUTANT-ANCHOR
+    if (writeBoardHasRow(path.join(plannerDir, 'planner-completed.md'), taskId)) {
+      return { kind: 'closed', why: 'it is on planner-completed.md', snippet: `${snippet} completed_board=true` };
+    }
+    source = 'planner.md';
+    // OFF-BOARD-MUTANT-ANCHOR
+    if (!writeBoardHasRow(path.join(plannerDir, 'planner.md'), taskId)) {
+      return { kind: 'closed', why: 'it is on neither board', snippet: `${snippet} on_board=false` };
+    }
+    return null;
+  } catch {
+    // UNREADABLE-INPUT-MUTANT-ANCHOR: an input that must be read and cannot be refuses.
+    return { kind: 'unreadable', why: source, snippet: source };
+  }
+}
+
+function closedWriteFinding(id, verdict) {
+  if (!verdict) return null;
+  if (verdict.kind === 'unreadable') {
+    return newFinding('G24', 1, verdict.snippet,
+      `cannot verify whether task ${id} is closed: ${verdict.why} could not be read. write-turn refuses ` +
+      'rather than risk a turn into a task the user closed; fix the file, then retry. This guard cannot be disabled');
+  }
+  // REPLY-CARRIED-MUTANT-ANCHOR: his reply since the close must reach the run report, never be dropped.
+  if (verdict.reply !== null && verdict.reply !== undefined) {
+    return newFinding('G24', 1, verdict.snippet,
+      `task ${id} is closed by the user: ${verdict.why}. He replied since the close: "${verdict.reply}". ` +
+      `Put that reply in the run report to him under Replies on closed tasks, with task ${id} and ` +
+      "\"reopen the row to continue\"; don't write to it and don't retry. Only the user can reopen a task " +
+      'he closed. This guard cannot be disabled');
+  }
+  // G24-FINDING-MUTANT-ANCHOR: the closed-task write guard is load-bearing.
+  return newFinding('G24', 1, verdict.snippet,
+    `task ${id} is closed by the user: ${verdict.why}; report it in the run summary under Replies on closed tasks; ` +
+    "don't write to it and don't retry. Only the user can reopen a task he closed, even when he has " +
+    'replied below it. This guard cannot be disabled');
+}
+
+// His reply since the close, for G24's report: the text under the newest `<!-- from: me -->` marker
+// that sits below the newest managed turn (the same positions G12/G17 read), up to the next comment
+// or heading, whitespace-collapsed and cut at 160 characters. null when there is none or the journal
+// cannot be read -- the generic G24 message still tells the agent to report the task.
+function closedReplyQuote(journalPath) {
+  try {
+    if (!journalPath || !testPath(journalPath)) return null;
+    const raw = readAllText(journalPath);
+    const pos = managedPositions(fenceMaskedText(raw));
+    if (!pos || pos.lastHuman < 0 || pos.lastHuman <= pos.lastTurn) return null;
+    const lines = raw.slice(pos.sentinel + pos.lastHuman).split(/\r?\n/).slice(1);
+    const kept = [];
+    for (const l of lines) {
+      if (/^[ \t]*(<!--|##[ \t])/.test(l)) break;
+      if (l.trim()) kept.push(l.trim());
+    }
+    let q = kept.join(' ').replace(/\s+/g, ' ').trim();
+    if (!q) return null;
+    if (q.length > 160) q = `${q.slice(0, 160)}...`;
+    return q;
+  } catch {
+    return null;
+  }
+}
+
 // [int] conversion of WRITE_TURN_WAKE_WINDOW_MIN (default 45).
 function wakeWindow(raw) {
   if (!raw) return 45;
@@ -1378,6 +1470,8 @@ function run(argv, out) {
   const doc = dest ? journalDocMeta(dest) : null;
   ctx.pauseVerdict = dest ? userPauseVerdict(ctx, id, dest) : null;
   const snoozeVerdict = dest ? writeSnoozeVerdict(id, journalDir) : null;
+  const closedVerdict = dest ? writeClosedVerdict(ctx, id) : null;
+  if (closedVerdict && closedVerdict.kind === 'closed') closedVerdict.reply = closedReplyQuote(dest);
 
   let findings = turnBodyFindings(ctx, body, disabled, doc, ask);
   if (dest && !ciContains(disabled, 'G12')) {
@@ -1389,6 +1483,11 @@ function run(argv, out) {
   if (snoozeVerdict) {
     const snooze = snoozeWriteFinding(id, snoozeVerdict);
     if (snooze) findings = [...findings, snooze];
+  }
+  // G24, same shape as G22: fail-closed, not disableable, no reply exemption.
+  if (closedVerdict) {
+    const closed = closedWriteFinding(id, closedVerdict);
+    if (closed) findings = [...findings, closed];
   }
   if (dest) {
     const approvedOwner = approvedTaskOwnerFinding(ctx, id);
