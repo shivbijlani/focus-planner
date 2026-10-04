@@ -279,7 +279,7 @@ bytes. When the file exists:
 
 - every row gains `lane`, `lane_source`, `lane_from`, `lane_problem`, `lane_candidates` and
   `lane_served_here`;
-- a row not served here is never `eligible`, never `plan_review_due`, and never holds the Today gate
+- a row not served here is never `eligible` and never holds the Today gate
   on this PC (its `today_release_reason` is `lane_not_served`), so another PC's Today task cannot stall
   this PC's Deferred work;
 - the compact worklist leaves out rows not served here (they are another PC's business) and reports

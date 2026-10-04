@@ -102,10 +102,22 @@ try {
 
   $skill = [IO.File]::ReadAllText($SkillPath)
   $stateSource = [IO.File]::ReadAllText($StateScript)
+  $skillDir = Split-Path -Parent $StateScript
+  $scanSource = [IO.File]::ReadAllText((Join-Path $skillDir 'oa-state-lib\plan\scan.mjs'))
+  $sessionSource = [IO.File]::ReadAllText((Join-Path $skillDir 'oa-state-lib\act\session.mjs'))
+  $argsSource = [IO.File]::ReadAllText((Join-Path $skillDir 'oa-state-lib\core\args.mjs'))
+  $writerSource = [IO.File]::ReadAllText((Join-Path $skillDir 'write-turn.mjs'))
+  $livenessSource = [IO.File]::ReadAllText((Join-Path $skillDir '..\..\checks\recurring-liveness-sweep.mjs'))
   Check 'task sessions are sent in autopilot' ($skill.Contains('`mode: autopilot`'))
   Check 'read-only portal access is not gated by model sensitivity' ($skill.Contains('read-only portal access even if the') -and $skill.Contains('model considers the data sensitive'))
   Check 'unrequested email is an offer, not a blocker' ($skill.Contains('sending an email') -and $skill.Contains('`-Ask offer` after the task is done'))
-  Check 'proposal review dispatch path is removed' (-not $skill.Contains('PlanDispatch') -and -not $skill.Contains('plan_review_due') -and -not $stateSource.Contains('PlanDispatch') -and -not $stateSource.Contains('plan_review_due'))
+  Check 'only a user pause counts as a not-yet-started proposal' ($livenessSource.Contains("String(st.status_by).toLowerCase() === 'user'"))
+  Check 'plan-review dispatch and gated-plan approval paths are removed' `
+    (-not $skill.Contains('PlanDispatch') -and -not $skill.Contains('plan_review_due') `
+      -and -not $stateSource.Contains('PlanDispatch') -and -not $stateSource.Contains('plan_review_due') `
+      -and -not $scanSource.Contains('plan_review_due') -and -not $sessionSource.Contains('PlanDispatch') `
+      -and -not $sessionSource.Contains('assertGatedPlanConsent') -and -not $argsSource.Contains('PlanDispatch') `
+      -and -not $writerSource.Contains('G19'))
 
   Write-Host "mutcheck-autopilot-dispatch: $passed passed"
 }
