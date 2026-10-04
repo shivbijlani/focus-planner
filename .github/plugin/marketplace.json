@@ -12,7 +12,7 @@
     {
       "name": "overnight-agent",
       "description": "Autonomously dispatches eligible planner tasks to their own autopilot sessions; only irreversible actions require consent under the reversibility rules and agent-gate.md.",
-      "version": "1.57.54",
+      "version": "1.57.55",
       "source": "./plugins/overnight-agent",
       "author": {
         "name": "Shiv Bijlani",

@@ -126,6 +126,11 @@ try {
   $argsSource = [IO.File]::ReadAllText((Join-Path $skillDir 'oa-state-lib\core\args.mjs'))
   $writerSource = [IO.File]::ReadAllText((Join-Path $skillDir 'write-turn.mjs'))
   $livenessSource = [IO.File]::ReadAllText((Join-Path $skillDir '..\..\checks\recurring-liveness-sweep.mjs'))
+  $gatedFloorPresent = if ($StateScript -like '*.mjs') {
+    $sessionSource.Contains('assertGatedPlanConsent')
+  } else {
+    $stateSource.Contains('Assert-GatedPlanConsent')
+  }
   Check 'task sessions are sent in autopilot' ($skill.Contains('`mode: autopilot`'))
   Check 'task sessions must check action consent before irreversible actions' `
     ($skill.Contains('checks `consent -Id <ID> -Action <kind> -Repo <repo>` immediately before each irreversible') -and
@@ -137,7 +142,7 @@ try {
     (-not $skill.Contains('PlanDispatch') -and -not $skill.Contains('plan_review_due') `
       -and -not $stateSource.Contains('PlanDispatch') -and -not $stateSource.Contains('plan_review_due') `
       -and -not $scanSource.Contains('plan_review_due') -and -not $sessionSource.Contains('PlanDispatch') `
-      -and $stateSource.Contains('Assert-GatedPlanConsent') -and $sessionSource.Contains('assertGatedPlanConsent') `
+      -and $gatedFloorPresent `
       -and -not $argsSource.Contains('PlanDispatch') `
       -and -not $writerSource.Contains('G19'))
 
