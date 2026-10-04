@@ -10,6 +10,7 @@ import DocView from './DocView.jsx'
 export default function DocsApp() {
   const [boot, setBoot] = useState(null)
   const [index, setIndex] = useState(undefined)
+  const [indexError, setIndexError] = useState(null)
   const [route, setRoute] = useState(() => parseRoute(window.location.hash))
   const [reloadKey, setReloadKey] = useState(0)
 
@@ -17,7 +18,13 @@ export default function DocsApp() {
     bootStorage().then(setBoot).catch((e) => setBoot({ error: String(e?.message || e) }))
   }, [])
 
-  const refreshIndex = useCallback(() => loadIndex().then(setIndex).catch(() => setIndex(null)), [])
+  const refreshIndex = useCallback(() => loadIndex().then((next) => {
+    setIndex(next)
+    setIndexError(null)
+  }).catch((e) => {
+    setIndex(null)
+    setIndexError(String(e?.message || e))
+  }), [])
   useEffect(() => { if (boot && !boot.error) refreshIndex() }, [boot, refreshIndex])
 
   // Pulled remote changes under docs/ (the agent republished, another device commented).
@@ -63,6 +70,7 @@ export default function DocsApp() {
 
   if (!boot) return <div className="dx-loading">Opening Docs…</div>
   if (boot.error) return <div className="dx-empty-page"><p>Couldn't open storage: {boot.error}</p></div>
+  if (indexError) return <div className="dx-empty-page" role="alert"><h1>Docs unavailable</h1><p>{indexError}</p></div>
   if (!boot.hasSources && !index) {
     return (
       <div className="dx-empty-page">

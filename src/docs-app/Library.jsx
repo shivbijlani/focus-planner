@@ -8,6 +8,7 @@ const TABS = [['needs', 'Needs you'], ['recent', 'Recent'], ['all', 'All']]
 
 export default function Library({ index, onOpenDoc, plannerHref, reloadKey }) {
   const [summaries, setSummaries] = useState({})
+  const [loadError, setLoadError] = useState(null)
   const [tab, setTab] = useState(() => sessionStorage.getItem('fp-docs-tab') || 'needs')
   const [q, setQ] = useState('')
 
@@ -16,7 +17,12 @@ export default function Library({ index, onOpenDoc, plannerHref, reloadKey }) {
     let cancelled = false
     const ids = Object.keys(index?.docs || {})
     Promise.all(ids.map(async (id) => [id, await loadReviewSummary(id)])).then((pairs) => {
-      if (!cancelled) setSummaries(Object.fromEntries(pairs))
+      if (!cancelled) {
+        setSummaries(Object.fromEntries(pairs))
+        setLoadError(null)
+      }
+    }).catch((e) => {
+      if (!cancelled) setLoadError(String(e?.message || e))
     })
     return () => { cancelled = true }
   }, [index, reloadKey])
@@ -52,6 +58,7 @@ export default function Library({ index, onOpenDoc, plannerHref, reloadKey }) {
         })}
       </div>
       {!index && <div className="dx-empty-page"><p>No documents yet.</p><p className="dx-hint">Catch-up docs appear here once a task's journal gets long enough for the agent to write one.</p></div>}
+      {loadError && <div className="dx-empty-page" role="alert"><p>Docs data is invalid or unavailable.</p><p>{loadError}</p></div>}
       {index && list.length === 0 && <p className="dx-empty">{tab === 'needs' ? 'Nothing needs you. 🎉' : 'No documents match.'}</p>}
       <ul className="lib-list">
         {list.map((c) => (

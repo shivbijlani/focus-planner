@@ -18,9 +18,32 @@ const ANCHOR_RE = /^<!--\s*@(b\d+)\s*-->$/
 
 function parseAttrs(body) {
   const attrs = {}
-  const re = /([\w-]+)=("([^"]*)"|'([^']*)'|(\S+))/g
-  let m
-  while ((m = re.exec(body || ''))) attrs[m[1]] = m[3] ?? m[4] ?? m[5] ?? ''
+  const text = String(body || '')
+  let i = 0
+  while (i < text.length) {
+    while (i < text.length && /\s/.test(text[i])) i++
+    const keyStart = i
+    while (i < text.length && /[\w-]/.test(text[i])) i++
+    if (i === keyStart || text[i] !== '=') {
+      while (i < text.length && !/\s/.test(text[i])) i++
+      continue
+    }
+    const key = text.slice(keyStart, i++)
+    if (i >= text.length) continue
+    const quote = text[i] === '"' || text[i] === "'" ? text[i] : null
+    if (quote) {
+      const valueStart = ++i
+      while (i < text.length && text[i] !== quote) i++
+      if (i < text.length) {
+        attrs[key] = text.slice(valueStart, i++)
+        continue
+      }
+      i = valueStart - 1
+    }
+    const valueStart = i
+    while (i < text.length && !/\s/.test(text[i])) i++
+    if (i > valueStart) attrs[key] = text.slice(valueStart, i)
+  }
   return attrs
 }
 

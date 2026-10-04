@@ -57,6 +57,11 @@ describe('parseDoc', () => {
     expect(d.header.id).toBe('d-aaaaaa')
     expect(d.blocks).toHaveLength(1)
   })
+
+  it('parses quoted header attributes and scans malformed long attributes linearly', () => {
+    expect(parseDocHeader('<!-- docs v1 id="d-aaaaaa" rev=2 -->')).toMatchObject({ id: 'd-aaaaaa', rev: 2 })
+    expect(parseDocHeader(`<!-- docs v1 ${'-'.repeat(20_000)} -->`).id).toBeNull()
+  })
 })
 
 describe('changes and outline', () => {
@@ -79,6 +84,9 @@ describe('grammar', () => {
   })
   it('visible lines drop comments including multi-line ones', () => {
     expect(visibleLines('a\n<!-- x\ny -->\nb <!-- z --> c')).toEqual(['a', 'b  c'])
+  })
+  it('strips an unterminated comment with repeated open markers without rescanning', () => {
+    expect(visibleLines(`visible ${'<!--'.repeat(20_000)}`)).toEqual(['visible '])
   })
 })
 

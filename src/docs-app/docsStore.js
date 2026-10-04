@@ -3,40 +3,70 @@
 import * as storage from '../storage/storage.js'
 import {
   DOCS_INDEX, docPath, reviewPath, responsePath, historyPath,
-  parseIndex, parseDoc, parseReview, parseResponse, serializeReview, mergeReviews, emptyReview,
-  submitDrafts, reopenComment,
+  parseIndex, serializeReview, mergeReviews, emptyReview,
+  submitDrafts, reopenComment, reviewSet, DOCS_LIMITS, docBodyByteLength,
+  validateDocText, validateReviewText, validateResponseText,
 } from '../../packages/docs-core/src/index.js'
 
 async function readText(path) {
-  try { return (await storage.read(path)) || '' } catch { return '' }
+  return (await storage.read(path)) ?? ''
 }
 
 export async function loadIndex() {
   return parseIndex(await readText(DOCS_INDEX))
 }
 
-export async function loadDoc(docId) {
-  const [docText, reviewText, responseText] = await Promise.all([
-    readText(docPath(docId)), readText(reviewPath(docId)), readText(responsePath(docId)),
+export async function validateReviewSet(index, primaryId, read = readText) {
+  const ids = reviewSet(index, primaryId)
+  let totalBytes = 0
+  const texts = new Map()
+  for (const id of ids) {
+    const text = await read(docPath(id))
+    if (!text) throw new Error(`Missing document body for ${id}`)
+    validateDocText(text, { docId: id, entry: index.docs[id] })
+    totalBytes += docBodyByteLength(text)
+    if (totalBytes > DOCS_LIMITS.reviewSetBytes) {
+      throw new Error(`D07 size: task review set exceeds ${DOCS_LIMITS.reviewSetBytes} bytes`)
+    }
+    texts.set(id, text)
+  }
+  return texts
+}
+
+export async function loadDoc(docId, index) {
+  const entry = index?.docs?.[docId]
+  if (!entry) throw new Error(`Document ${docId} is not listed in docs/index.json`)
+  const primaryIds = Object.entries(index.docs)
+    .filter(([id, doc]) => doc.primary && reviewSet(index, id).includes(docId))
+    .map(([id]) => id)
+  const bodies = new Map()
+  for (const primaryId of primaryIds) {
+    const set = await validateReviewSet(index, primaryId)
+    for (const [id, text] of set) bodies.set(id, text)
+  }
+  const docText = bodies.get(docId) ?? await readText(docPath(docId))
+  if (!docText) throw new Error(`Missing document body for ${docId}`)
+  const [reviewText, responseText] = await Promise.all([
+    readText(reviewPath(docId)), readText(responsePath(docId)),
   ])
-  if (!docText) return null
+  const response = validateResponseText(responseText)
   return {
     id: docId,
     text: docText,
-    parsed: parseDoc(docText),
-    review: parseReview(reviewText),
-    response: parseResponse(responseText),
+    parsed: validateDocText(docText, { docId, entry, response }),
+    review: validateReviewText(reviewText),
+    response,
   }
 }
 
-export async function loadHistory(docId, rev) {
+export async function loadHistory(docId, rev, entry) {
   const text = await readText(historyPath(docId, rev))
-  return text ? parseDoc(text) : null
+  return text ? validateDocText(text, { docId, entry, expectedRev: rev }) : null
 }
 
 export async function loadReviewSummary(docId) {
   const [reviewText, responseText] = await Promise.all([readText(reviewPath(docId)), readText(responsePath(docId))])
-  return { review: parseReview(reviewText), response: parseResponse(responseText) }
+  return { review: validateReviewText(reviewText), response: validateResponseText(responseText) }
 }
 
 // ── review.json writes: read → merge → write, with If-Match when the provider has it ──
@@ -59,13 +89,14 @@ export async function updateReview(docId, mutate, { attempts = 3 } = {}) {
     let etag = null
     if (conditional) {
       const r = await provider.readWithEtag(path)
-      current = parseReview(r.content)
+      current = validateReviewText(r.content)
       etag = r.etag
     } else {
-      current = parseReview(await readText(path))
+      current = validateReviewText(await readText(path))
     }
     const next = mergeReviews(current, mutate(current) || current)
     const text = serializeReview(next)
+    validateReviewText(text)
     if (!conditional) {
       await storage.write(path, text)
       return next

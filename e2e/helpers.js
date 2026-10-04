@@ -67,6 +67,16 @@ export async function writeFile(page, path, content) {
   `, [path, content])
 }
 
+/** Remove a file straight from the IndexedDB provider's store. */
+export async function removeFile(page, path) {
+  await idbRequest(page, `
+    const tx = db.transaction('files', 'readwrite')
+    tx.objectStore('files').delete(arg)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  `, path)
+}
+
 /** List every stored path. */
 export async function listFiles(page) {
   return idbRequest(page, `

@@ -5,7 +5,8 @@
 // no extra reads beyond that one file, so folders without Docs see no change.
 import { useEffect, useState } from 'react'
 import {
-  DOCS_INDEX, parseIndex, reviewPath, responsePath, parseReview, parseResponse, deriveDocState, docHref,
+  DOCS_INDEX, parseIndex, reviewPath, responsePath, deriveDocState, docHref,
+  validateReviewText, validateResponseText,
 } from '../packages/docs-core/src/index.js'
 import { onLocalChange } from './storage/storage.js'
 
@@ -21,7 +22,7 @@ async function loadTaskDocs(provider) {
     const entry = index.docs?.[docId]
     if (!entry) return
     const [r, s] = await Promise.all([read(reviewPath(docId)), read(responsePath(docId))])
-    const st = deriveDocState({ entry, review: parseReview(r), response: parseResponse(s) })
+    const st = deriveDocState({ entry, review: validateReviewText(r), response: validateResponseText(s) })
     tasks[String(taskId)] = { docId, unread: st.unread, needsYou: st.needsYou, rev: st.rev, title: entry.title }
   }))
   return { index, tasks }
@@ -60,6 +61,30 @@ function ensureSubscribed() {
 export function docsAppHref(docId) {
   const base = import.meta.env?.BASE_URL || '/'
   return `${base}docs.html${docHref(docId)}`
+}
+
+export function taskLinkPlan({ mobile = false, hasDoc = false, hasTelegram = false, hasJournal = false } = {}) {
+  const desktop = [
+    ...(hasTelegram ? ['telegram'] : []),
+    ...(hasJournal ? ['journal'] : []),
+    ...(hasDoc ? ['doc'] : []),
+  ]
+  if (!mobile) return { desktop, rail: null, overflow: [] }
+  const rail = hasDoc ? 'doc' : hasTelegram ? 'telegram' : hasJournal ? 'journal' : null
+  return { desktop, rail, overflow: desktop.filter((link) => link !== rail) }
+}
+
+export function mobileTaskMenuLinks({ hasDoc = false, hasTelegram = false, hasJournal = false } = {}) {
+  if (hasDoc) {
+    return [
+      ...(hasTelegram ? [{ key: 'telegram', label: 'Open Telegram', icon: '💬' }] : []),
+      ...(hasJournal ? [{ key: 'journal', label: 'Open journal', icon: '📔' }] : []),
+    ]
+  }
+  if (!hasJournal) return []
+  return hasTelegram
+    ? [{ key: 'journal', label: 'Open journal', icon: '📔' }]
+    : [{ key: 'chat', label: 'Open chat', icon: '💬' }]
 }
 
 /** { docId, unread, needsYou, href } for a task's primary doc, or null. */

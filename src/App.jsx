@@ -42,7 +42,7 @@ import * as ops from './focusPlanOps.js'
 import { deleteJournalForTask } from './journalDelete.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { renderJournalLines } from './markdown/markdownRender.jsx'
-import { useTaskDoc, journalDeepLink } from './docsIndex.js'
+import { useTaskDoc, journalDeepLink, taskLinkPlan, mobileTaskMenuLinks } from './docsIndex.js'
 import { useAgentSessionLinks, useAnnouncedDevices } from './useAgentMetadata.js'
 import AgentSessionLinks from './AgentSessionLinks.jsx'
 import LaneChip from './LaneChip.jsx'
@@ -1098,6 +1098,12 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
   const journalProvider = getActiveProvider()
   // Docs (#3.2 of plans/docs-app-design.md): the task's catch-up doc, when docs/index.json binds one.
   const taskDoc = useTaskDoc(journalProvider, taskId)
+  const taskLinks = taskLinkPlan({
+    mobile: isMobile,
+    hasDoc: !!taskDoc,
+    hasTelegram: !!telegram?.url,
+    hasJournal: !!journalPath,
+  })
   // 🤖 agent session links (docs/spec/Domain-agent-metadata.md): none unless an agent published one.
   const agentLinks = useAgentSessionLinks(journalProvider, row)
   // Lanes (docs/spec/Domain-lanes.md): a chip only when agent-lanes.json exists and validates.
@@ -1417,7 +1423,7 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
                           </span>
                         )}
                         <LaneChip view={laneInfo} />
-                        {journalPath && !isMobile && (
+                        {!isMobile && taskLinks.desktop.length > 0 && (
                           <span className="journal-icons">
                             {/* #373/#389: the task list row offers two entry points —
                                 a Journal icon and a Chat icon. #389: the 📔 Journal
@@ -1450,7 +1456,7 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
                                 With no Telegram link there is no separate chat surface
                                 (the 📔 Journal icon already opens the readable chat view),
                                 so we render nothing rather than a dead second icon. */}
-                            {telegram?.url && (
+                            {taskLinks.desktop.includes('telegram') && telegram?.url && (
                               <a
                                 href={telegram.url}
                                 className="journal-link journal-link-chat journal-link-tg"
@@ -1472,7 +1478,7 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
                             {/* Docs §3.2: the third link of the trio — 📄 the task's catch-up
                                 doc — only when docs/index.json binds one. Its badge is about
                                 the DOC (unread revision / needs you); ★ stays on 📔. */}
-                            {taskDoc && (
+                            {taskLinks.desktop.includes('doc') && taskDoc && (
                               <a
                                 href={taskDoc.href}
                                 className="journal-link journal-link-doc"
@@ -1578,7 +1584,7 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
             {!isEditing && (
               <>
                 <div className="row-actions">
-                  {taskDoc ? (
+                  {taskLinks.rail === 'doc' ? (
                     // Docs §3.2 / Q10 default: when the task has a catch-up doc, the single
                     // rail slot shows 📄 (the doc is the thing to read); 💬 Telegram and
                     // 📔 Journal move to the kebab.
@@ -1598,8 +1604,7 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
                         ) : null}
                       </span>
                     </a>
-                  ) : journalPath && (
-                    telegram?.url ? (
+                  ) : taskLinks.rail === 'telegram' ? (
                       // #352: Telegram-active tasks show the 💬 Chat icon, which
                       // opens the Telegram thread externally (↗ badge).
                       <a
@@ -1613,7 +1618,7 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
                       >
                         💬
                       </a>
-                    ) : (
+                  ) : taskLinks.rail === 'journal' && journalPath ? (
                       // #373: with no Telegram, the single mobile rail icon falls
                       // back to 📔 Journal; #389: it opens the readable journal (chat
                       // thread), with raw source a tap away via the in-view toggle.
@@ -1641,8 +1646,7 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
                           ) : null}
                         </span>
                       </a>
-                    )
-                  )}
+                  ) : null}
                   <button
                     type="button"
                     className="row-action-btn row-kebab-btn"
@@ -1915,42 +1919,24 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
     // With Telegram the rail icon is 💬 Chat → Telegram, so 📔 Journal goes here.
     // Without Telegram the rail falls back to 📔 Journal, so in-app 💬 Chat goes here.
     // Docs §3.2: with a catch-up doc the rail is 📄, so BOTH 💬 Telegram and 📔 Journal go here.
-    if (isMobile && taskDoc) {
-      if (telegram?.url) {
+    const mobileMenuLinks = mobileTaskMenuLinks({
+      hasDoc: !!taskDoc,
+      hasTelegram: !!telegram?.url,
+      hasJournal: !!journalPath,
+    })
+    if (isMobile) {
+      for (const link of mobileMenuLinks) {
         options.push({
-          label: 'Open Telegram',
-          icon: '💬',
-          action: () => { window.open(telegram.url, '_blank', 'noopener,noreferrer') }
-        })
-      }
-      if (journalPath && taskId) {
-        options.push({
-          label: 'Open journal',
-          icon: '📔',
+          label: link.label,
+          icon: link.icon,
           action: () => {
+            if (link.key === 'telegram') {
+              window.open(telegram.url, '_blank', 'noopener,noreferrer')
+              return
+            }
             readStateService.emitJournalOpened(rowReadStateId)
             onNavigate(qualifiedJournalPath, null, 'chat')
-          }
-        })
-      }
-    } else if (isMobile && journalPath && taskId) {
-      if (telegram?.url) {
-        options.push({
-          label: 'Open journal',
-          icon: '📔',
-          action: () => {
-            readStateService.emitJournalOpened(rowReadStateId)
-            onNavigate(qualifiedJournalPath, null, 'chat')
-          }
-        })
-      } else {
-        options.push({
-          label: 'Open chat',
-          icon: '💬',
-          action: () => {
-            readStateService.emitJournalOpened(rowReadStateId)
-            onNavigate(qualifiedJournalPath, null, 'chat')
-          }
+          },
         })
       }
     }
