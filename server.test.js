@@ -122,7 +122,7 @@ describe('server.js API', () => {
     expect((await api('DELETE', '/api/file?path=../planner-old/x.md')).status).toBe(403)
     expect((await api('GET', '/api/todos?path=../planner-old/x.md')).status).toBe(403)
 
-    expect(await readFile(path.join(tmp, 'planner-config.json'), 'utf-8')).toContain(plannerDir)
+    expect(JSON.parse(await readFile(path.join(tmp, 'planner-config.json'), 'utf-8')).plannerPath).toBe(plannerDir)
     expect(await readFile(path.join(tmp, 'planner-old', 'x.md'), 'utf-8')).toBe('sibling content')
     expect(await readFile(absolutePath, 'utf-8')).toBe('absolute content')
   })
