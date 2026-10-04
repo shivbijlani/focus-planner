@@ -38,7 +38,6 @@
               "941"
             ],
             "order": 4,
-            "plan_review_due": false,
             "poll_cadence": null,
             "priorities_rank": 999999,
             "recheck_kind": null,
@@ -89,7 +88,6 @@
             "lane_source": "map",
             "linked": [],
             "order": 17,
-            "plan_review_due": false,
             "poll_cadence": null,
             "priorities_rank": 999999,
             "recheck_kind": null,
