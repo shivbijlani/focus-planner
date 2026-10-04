@@ -23,10 +23,10 @@ specification**; it ships with S3.
   task has a primary doc; otherwise it shows 💬 when Telegram is available, or 📔 when it is not.
   The other links are in the ⋮ menu. Desktop shows the available links side by side. This decision
   may be replaced after mobile use is reviewed.
-- Similarity matching for block ids is deliberately conservative: exact normalized blocks match
-  first; otherwise only a unique one-to-one best match with token Jaccard similarity of at least
-  0.8 carries an id. Ambiguous matches receive a new id, and comments that cannot re-anchor become
-  outdated, never deleted.
+- Similarity matching for block ids is deliberately conservative: exact normalized word-token
+  sequences match first; otherwise only a unique one-to-one best match with token Jaccard
+  similarity of at least 0.8 carries an id. Ambiguous matches receive a new id, and comments that
+  cannot re-anchor become outdated, never deleted.
 - The review-set depth cap is **3 links from the primary**: the primary is depth 0 and linked docs
   at depths 1–3 are included. This makes the example cap operational and deterministic.
 - “Visible word” means a Unicode letter/number word after hidden HTML comments and Markdown
@@ -106,8 +106,9 @@ docs/
 
 </details>
 
-Document ids are stable across title and body changes. A primary doc is never replaced by a
-second primary for the same task; supporting documents may be linked from multiple primaries.
+Document ids use `d-` followed by at least six lower-case letters or digits and remain stable
+across title and body changes. A primary doc is never replaced by a second primary for the same
+task; supporting documents may be linked from multiple primaries.
 `docs/index.json` is the gate and the complete library listing, so the library does not need to read
 journals to render its cards.
 
@@ -142,10 +143,10 @@ Root fields:
 | `tasks` | Required object keyed by canonical positive decimal task id (no leading zero); each value is the primary doc id. |
 | `docs` | Required object keyed by doc id; each value describes one doc. |
 
-Each `docs[id]` entry has required `title` (non-empty), `primary` (boolean), `rev` (integer ≥ 1),
-`updatedAt` (UTC ISO-8601 timestamp), `links` (unique doc ids, in document order), and optional
-`task` (positive integer), `telegramUrl` (well-formed URI copied from the task journal's `tg-meta`),
-and `openDispositions` (`needs-you` to a nonnegative count).
+Each `docs[id]` entry has required `title` (non-empty after trimming), `primary` (boolean),
+`rev` (integer ≥ 1), `updatedAt` (UTC ISO-8601 timestamp), `links` (unique doc ids, in document
+order), and optional `task` (positive integer), `telegramUrl` (well-formed URI copied from the
+task journal's `tg-meta`), and `openDispositions` (`needs-you` to a nonnegative count).
 
 A primary has `primary: true`, a `task`, and exactly one matching `tasks[task] = id` entry.
 A supporting doc has `primary: false` and no `task` or `telegramUrl`. Every task binding points to an existing
@@ -155,7 +156,9 @@ comments remain authoritative in each `review.json`.
 
 ### `doc.md` — rendered body and stable block anchors
 
-The first line is one publisher-owned HTML comment:
+The first line is one publisher-owned HTML comment with these fields: `docs v1` (format version),
+`id` (the directory and index doc id), `rev` (positive integer), `published` (UTC ISO-8601), and
+`by=fp-docs` (the sanctioned writer).
 
 > [!NOTE]
 > **Technical detail: revision stamp.** This marker is not visible in the rendered document.
@@ -169,7 +172,9 @@ The first line is one publisher-owned HTML comment:
 
 </details>
 
-It is followed by one H1 title and the body in the journal renderer's Markdown subset. Raw HTML
+It is followed by one H1 title, which must equal the index `title`, and the body in the journal
+renderer's Markdown subset. The stamped id and revision must agree with the directory, response,
+and index. Raw HTML
 is refused except for valid HTML comments. Supported visible blocks include headings, paragraphs,
 lists and checkboxes, tables, blockquotes, fenced code, inline emphasis/code, and links; journal
 `TODO:`/`DONE:` prefixes remain text/task markers. The first visible body line of a primary is a bold
@@ -190,8 +195,9 @@ anchorable rendered blocks. Metadata comments and block markers are not visible 
 
 On publish, the publisher matches old and new rendered blocks one-to-one:
 
-1. Normalize visible text to Unicode NFC, lowercase, collapse whitespace, and remove punctuation
-   for comparison. Match exact normalized blocks first, only where the match is unambiguous.
+1. Normalize visible text to Unicode NFC and lowercase, then tokenize into Unicode letter/number
+   words, optionally joined by an internal apostrophe or hyphen. Equal token sequences are exact
+   normalized matches; match them first, only where the match is unambiguous.
 2. For remaining blocks, compute token-set Jaccard similarity. Carry an old id only if the pair
    is each other's unique highest-scoring match among unmatched blocks and scores at least 0.8.
    Resolve all such mutual pairs, then repeat on the remaining blocks.
@@ -201,8 +207,9 @@ On publish, the publisher matches old and new rendered blocks one-to-one:
 An anchor combines the block id with a W3C TextQuote selector: the exact selected `quote`, with
 optional `prefix` and `suffix` context.
 
-For each comment, anchor resolution tries the original quote in its original block, then the
-same exact quote anywhere in the current doc. A unique match is displayed at that location; an
+For each comment, anchor resolution tries the original quote in its original block, using prefix
+and suffix context to disambiguate repeated quote occurrences; it then tries that contextualized
+exact quote anywhere in the current doc. A unique match is displayed at that location; an
 ambiguous or absent match is **outdated**. `anchor` keeps the user's original quote and context so
 the app can retry on later revisions and show what the user selected. Re-anchoring never changes
 comment intent or text, and outdated comments remain in `review.json` and the comments panel
@@ -224,7 +231,7 @@ A sent comment requires:
 | `createdAt` | UTC ISO-8601 timestamp. |
 | `reviewId` | Id of a submitted review batch. Absence means a device-local draft and is not valid in synced `review.json`. |
 | `status` | `open` or `reopened`. |
-| `clock` | Nonnegative integer logical record clock used by folder-sync merge. |
+| `clock` | Nonnegative epoch-millisecond logical record clock; a later write to the same comment uses a greater value. Folder-sync uses it to merge replicas. |
 
 Reopened comments also carry `reopenedAt` and `reopenedRev`. `reviews[id]` records `submittedAt`
 and the document `rev` reviewed. Sending drafts assigns them a shared review id and writes them
@@ -232,7 +239,9 @@ together; before Send, drafts stay on that device and the agent is not woken.
 
 When writes race, a provider's If-Match/ETag is conditional: after a 412, the app fetches the latest
 file, merges comment records by id and clock, and retries against the fetched version. For the same
-comment id, the higher clock wins; equal clocks use folder-sync's deterministic content tie-break.
+comment id, the higher clock wins; equal clocks use folder-sync's deterministic content tie-break:
+the lexicographically greater compact JSON serialization of the comment record wins. Identical
+serialized records are equivalent.
 Different comment ids survive together. `readRev` takes the maximum. Review batch records are
 unioned by id, with the local record taking precedence only when the ids conflict. A delete is a
 tombstone, so a stale replica cannot resurrect an explicitly deleted record; normal UI disposition
@@ -330,7 +339,8 @@ back to the task in Focus Planner.
 - **Comments:** long-press a selection for 💬 Comment or one-tap ✅ Approve; if native selection
   fails, tap-hold a paragraph. A bottom sheet offers approve, question, do-more, and note intents
   plus Save draft. Highlights do not mutate document content; if native text highlighting is
-  unavailable, use a `<mark>` fallback. The panel distinguishes Open, Outdated, and Resolved and
+  unavailable, use the CSS Custom Highlight API or a `<mark>` fallback without mutating document
+  content. The panel distinguishes Open, Outdated, and Resolved and
   can reopen a resolved comment. Send batches drafts so the agent wakes once for the batch.
 - **Task links:** desktop shows the available Telegram, Journal, and Catch-up icons side by side.
   Mobile follows provisional Q10 in Spec decisions. The Telegram URL is copied from the journal's
