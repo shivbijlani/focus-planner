@@ -66,8 +66,9 @@ export function isMassDeletion({ deletableCount, toDeleteCount }) {
  *    (propagates a missed remote deletion); it never deletes what's already gone.
  *  - content is only written when the active copy differs, so it can't clobber an
  *    up-to-date file, and an absent active copy (read as '') gets rehydrated.
- *  Local edits mirror synchronously, so the mirror is never staler than the
- *  active store — making "mirror wins" the correct repair direction.
+ *  A local edit writes the active store and then the mirror inside the engine's single lane
+ *  (engine.js `exclusive`), and this replay runs in that same lane, so it never observes the
+ *  half-written state between the two — making "mirror wins" the correct repair direction.
  *
  * @param {object} args
  * @param {boolean} args.mirrorDeleted   Mirror entry is a tombstone.

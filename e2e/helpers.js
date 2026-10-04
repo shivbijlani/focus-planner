@@ -17,10 +17,17 @@ export function addDaysIso(days) {
   return d.toISOString().split('T')[0]
 }
 
-/** Wait until the board has rendered (storage restored, planner.md loaded). */
+/**
+ * Wait until the board has rendered (storage restored, planner.md loaded). This is the app-ready
+ * signal: the sections only render once the board file has been read. A cold boot right after a
+ * navigation can take well over the default 10 s on a loaded machine (#826: the old document's
+ * teardown waits on in-flight raster work), so the readiness wait gets its own allowance. It waits
+ * for the same thing; it never relaxes what a test then asserts.
+ */
+export const BOOT_TIMEOUT = 60_000
 export async function waitForBoard(page) {
-  await expect(page.getByTestId('task-section-Today')).toBeVisible()
-  await expect(page.getByTestId('task-section-Deferred')).toBeVisible()
+  await expect(page.getByTestId('task-section-Today')).toBeVisible({ timeout: BOOT_TIMEOUT })
+  await expect(page.getByTestId('task-section-Deferred')).toBeVisible({ timeout: BOOT_TIMEOUT })
 }
 
 /** Load the app into a fresh origin state and wait for the board. */
@@ -115,13 +122,18 @@ export async function rowIds(page, title) {
   )
 }
 
-/** Expand a collapsed section (Deferred and Priorities start collapsed). */
+/**
+ * Expand a collapsed section (Deferred and Priorities start collapsed). The header toggles, and the
+ * app can toggle it too (after an add it clicks collapsed headers to reveal the new row, #268), so
+ * a single check-then-click can cancel out (#826). Retry until it reads open; it never accepts less.
+ */
 export async function expandSection(page, title) {
-  const icon = section(page, title).locator('h2.section-header .collapse-icon')
-  if ((await icon.textContent()).trim() === '▶') {
-    await section(page, title).locator('h2.section-header').click()
-  }
-  await expect(icon).toHaveText('▼')
+  const header = section(page, title).locator('h2.section-header')
+  const icon = header.locator('.collapse-icon')
+  await expect(async () => {
+    if ((await icon.textContent()).trim() === '▶') await header.click()
+    await expect(icon).toHaveText('▼', { timeout: 1_000 })
+  }).toPass({ timeout: 15_000 })
 }
 
 /** Add a task through the section's "+" Add-Task form. */

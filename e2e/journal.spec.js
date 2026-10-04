@@ -148,11 +148,13 @@ test('state made through the UI persists across a reload', async ({ page }) => {
   await page.reload()
   await waitForBoard(page)
 
+  // The board can paint before every row has settled after a reload, so the board-state checks
+  // retry until they match (#826) -- the expected values are unchanged.
   expect(await readFile(page, PLAN_FILE)).toBe(before)
-  expect(await rowIds(page, 'Today')).toEqual(['2', '1'])
+  await expect.poll(() => rowIds(page, 'Today')).toEqual(['2', '1'])
   await expect(row(page, '2').locator('.priority-icon-btn')).toHaveText('🔴')
   await expandSection(page, 'Deferred')
-  expect((await rowIds(page, 'Deferred')).sort()).toEqual(['3', '4'])
+  await expect.poll(async () => (await rowIds(page, 'Deferred')).sort()).toEqual(['3', '4'])
   await expect(row(page, '4').locator('.linked-id-link')).toHaveText('1')
   await expandSection(page, 'Priorities')
   await expect(section(page, 'Priorities').locator('.priority-item')).toContainText(['Alpha'])
