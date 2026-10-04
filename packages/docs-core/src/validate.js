@@ -25,6 +25,12 @@ export function docsByteLength(value) {
   return new TextEncoder().encode(String(value ?? '')).byteLength
 }
 
+export function docBodyByteLength(value) {
+  const text = String(value ?? '').replace(/^\uFEFF/, '')
+  const newline = text.indexOf('\n')
+  return docsByteLength(newline === -1 ? text : text.slice(newline + 1))
+}
+
 function reject(message) {
   throw new DocsDataError(message)
 }
@@ -190,7 +196,7 @@ export function validateResponseText(text) {
 
 export function validateDocText(text, { docId, entry, response, expectedRev } = {}) {
   const content = String(text ?? '')
-  if (docsByteLength(content) > DOCS_LIMITS.docBytes) {
+  if (docBodyByteLength(content) > DOCS_LIMITS.docBytes) {
     reject(`D07 size: ${docId || 'doc.md'} exceeds ${DOCS_LIMITS.docBytes} bytes`)
   }
   const firstLine = content.replace(/^\uFEFF/, '').split(/\r?\n/, 1)[0]

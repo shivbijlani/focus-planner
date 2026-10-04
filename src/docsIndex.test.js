@@ -17,6 +17,7 @@ describe('Docs task link gate and placement', () => {
   it('shows available desktop links side by side in trio order', () => {
     expect(taskLinkPlan({ hasDoc: true, hasJournal: true, hasTelegram: true }))
       .toEqual({ desktop: ['telegram', 'journal', 'doc'], rail: null, overflow: [] })
+    expect(taskLinkPlan({ hasDoc: true }).desktop).toEqual(['doc'])
   })
 
   it('uses the document, then Telegram, then Journal for the mobile rail', () => {

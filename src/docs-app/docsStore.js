@@ -4,7 +4,7 @@ import * as storage from '../storage/storage.js'
 import {
   DOCS_INDEX, docPath, reviewPath, responsePath, historyPath,
   parseIndex, serializeReview, mergeReviews, emptyReview,
-  submitDrafts, reopenComment, reviewSet, DOCS_LIMITS, docsByteLength,
+  submitDrafts, reopenComment, reviewSet, DOCS_LIMITS, docBodyByteLength,
   validateDocText, validateReviewText, validateResponseText,
 } from '../../packages/docs-core/src/index.js'
 
@@ -24,7 +24,7 @@ export async function validateReviewSet(index, primaryId, read = readText) {
     const text = await read(docPath(id))
     if (!text) throw new Error(`Missing document body for ${id}`)
     validateDocText(text, { docId: id, entry: index.docs[id] })
-    totalBytes += docsByteLength(text)
+    totalBytes += docBodyByteLength(text)
     if (totalBytes > DOCS_LIMITS.reviewSetBytes) {
       throw new Error(`D07 size: task review set exceeds ${DOCS_LIMITS.reviewSetBytes} bytes`)
     }

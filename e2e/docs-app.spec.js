@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
-import { journalReadLoad } from '../packages/docs-core/src/index.js'
-import { planWith, removeFile, row, seedPlan, writeFile } from './helpers.js'
+import { journalReadLoad, reviewPath } from '../packages/docs-core/src/index.js'
+import { planWith, readFile, removeFile, row, seedPlan, writeFile } from './helpers.js'
 import {
   SAMPLE_DOC_FILES, SAMPLE_JOURNAL, SAMPLE_PRIMARY_ID, SAMPLE_TASK_ID, SAMPLE_TITLE,
 } from './fixtures/docs-sample.js'
@@ -21,6 +21,9 @@ test('over-threshold sample opens its primary document and follows a linked docu
   await expect(page).toHaveURL(new RegExp(`docs\\.html#\\/d\\/${SAMPLE_PRIMARY_ID}`))
   await expect(page.locator('.dv-title')).toHaveText(SAMPLE_TITLE)
   await expect(page.locator('#blk-b1')).toBeVisible()
+  await expect(page.locator('.dv-page textarea, .dv-page [contenteditable="true"]')).toHaveCount(0)
+  await page.locator('.dv-foot').scrollIntoViewIfNeeded()
+  await expect.poll(async () => JSON.parse(await readFile(page, reviewPath(SAMPLE_PRIMARY_ID)) || '{}').readRev).toBe(1)
   await page.getByRole('link', { name: 'supporting sample notes' }).click()
   await expect(page.locator('.dv-title')).toHaveText('Supporting sample notes')
   await expect(page.locator('.dv-linked-from')).toContainText(SAMPLE_TITLE)

@@ -1423,7 +1423,7 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
                           </span>
                         )}
                         <LaneChip view={laneInfo} />
-                        {!isMobile && taskLinks.desktop.includes('journal') && (
+                        {!isMobile && taskLinks.desktop.length > 0 && (
                           <span className="journal-icons">
                             {/* #373/#389: the task list row offers two entry points —
                                 a Journal icon and a Chat icon. #389: the 📔 Journal
