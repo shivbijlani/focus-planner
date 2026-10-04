@@ -479,7 +479,8 @@ user has spoken after your last turn:
   execute; a new ask → re-plan as a new version (per "Revise → replace").
 - ⛔ **Except on a task the USER closed.** A reply there does **not** reopen it,
   and `scan` will not offer it to you: the row comes back `reopened_closed: true` and
-  `eligible: false`. Write **no** turn, take **no** action — just `oa-state.mjs mark -Id <ID>` with
+  `eligible: false`. Write **no** turn (`write-turn` refuses it: **G24**), take **no** action — just
+  `oa-state.mjs mark -Id <ID>` with
   its existing status so it stops re-surfacing, and **report it in the wrap-up under _Replies on
   closed tasks_, quoting the message**. Shiv, on task #400: *"I don't think we need to handle the
   case where a reply on a closed task is considered [a reopen]"* (GH issue #170, cause 3).
@@ -1977,11 +1978,12 @@ See PHASE 0.
   (`write-turn.ps1` beside it is the same tool in PowerShell -- same arguments, same refusals -- kept
   only as a fallback for a host without Node. Use the Node one.) It writes exactly one file, the
   task's own journal: it refuses any other target, `agent-gate.md` and `user-settings.md` above all
-  (**G20**), refuses snoozed tasks (**G22**), and it stamps the turn with who wrote it
+  (**G20**), refuses snoozed tasks (**G22**) and tasks the user closed (**G24**: report those in
+  the wrap-up, never retry), and it stamps the turn with who wrote it
   (`<!-- oa-by: session=… host=… -->`) itself, so a body must not carry its own (**G21**). It also
   refuses (**G23**) when a coordinator tries to write the outcome turn for a task whose human
   approval is pending; dispatch with `oa-state.mjs session -Id <ID> -ForDispatch ...` and let the
-  task session write. G20, G21, G22 and G23 cannot be disabled.
+  task session write. G20, G21, G22, G23 and G24 cannot be disabled.
   **`-Ask` is required (G13)** and is the subject of its own rule below.
   Author the turn body with a **file tool** first, then pass the file. The script validates the body
   and **refuses to write** if it finds any of the five corruption classes that have already destroyed

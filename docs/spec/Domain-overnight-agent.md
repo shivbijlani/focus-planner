@@ -206,7 +206,10 @@ Three duties make it the sanctioned writer rather than one writer among several:
 - **Files no agent writes.** The only target is `journal/task-<id>.md` inside `-JournalDir`. An `-Id`
   carrying a path, a target outside the folder, or a journal that is a link to `agent-gate.md` or
   `user-settings.md` is refused (G20). A snoozed task is refused until the snooze date has passed
-  (G22).
+  (G22). A task the user closed (oa-state's `Test-UserClosed`: `done`/`skip` and on
+  planner-completed.md, or `status_by: user`, or on neither board) is refused even when he has
+  replied below it (G24); such a reply is `reopened_closed`, reported and never worked. G24 fails
+  closed when the state or board that decides it cannot be read.
 - **Approved work stays in the task session.** If the fail-closed consent reader says the journal
   currently has Shiv's pending approval, G23 refuses an outcome turn from any caller other than the
   task's bound `session.session_id` or recorded prior session. Unknown callers fail closed. The
@@ -215,7 +218,7 @@ Three duties make it the sanctioned writer rather than one writer among several:
   `-Status approved`, `-StatusBy user`, timers, rechecks, and status-less turn-end stamping legal.
   Stored user-pause states (`status_by: user` with `blocked`/`proposed`) are excluded so a human
   "go ahead" that resumes a pause is not mistaken for approval of gated work.
-  G20, G21, G22 and G23 cannot be disabled with `-DisableGuard`.
+  G20, G21, G22, G23 and G24 cannot be disabled with `-DisableGuard`.
 - **Sent-messages ledger.** `write-turn.mjs record-sent` records each message the agent sends
   outside the planner (mail, Teams, Google Doc comments, Telegram); `write-turn.mjs was-sent` answers
   whether a message id is the agent's own. Teams, mail and Google Doc replies are posted as the user,
