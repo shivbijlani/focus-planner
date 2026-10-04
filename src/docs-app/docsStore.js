@@ -61,7 +61,7 @@ export async function loadDoc(docId, index) {
 
 export async function loadHistory(docId, rev, entry) {
   const text = await readText(historyPath(docId, rev))
-  return text ? validateDocText(text, { docId, entry }) : null
+  return text ? validateDocText(text, { docId, entry, expectedRev: rev }) : null
 }
 
 export async function loadReviewSummary(docId) {

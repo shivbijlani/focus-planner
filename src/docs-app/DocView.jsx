@@ -47,7 +47,7 @@ function useIsWide() {
     const on = () => setWide(m.matches)
     m.addEventListener?.('change', on)
     return () => m.removeEventListener?.('change', on)
-  }, [docId, entry])
+  }, [])
   return wide
 }
 

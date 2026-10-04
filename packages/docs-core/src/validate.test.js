@@ -68,6 +68,24 @@ describe('Docs reader validation', () => {
     expect(() => validateIndexText('{"version":1,"tasks":{}}')).toThrow(/tasks, and docs/)
     expect(() => validateReviewText('{"version":1,"comments":{},"reviews":{}}')).toThrow(/readRev/)
     expect(() => validateResponseText('{"version":1,"rev":1,"revisions":[],"dispositions":{}}')).toThrow(/revisions/)
+    expect(() => validateIndexText(JSON.stringify({
+      version: 1,
+      tasks: { '845': primaryId },
+      docs: { [primaryId]: { ...entry(primaryId, true), links: undefined } },
+    }))).toThrow(/linked document ids/)
+    expect(() => validateResponseText(JSON.stringify(response({
+      revisions: [{ rev: 1, at, summary: '' }],
+    })))).toThrow(/invalid revision/)
+    expect(() => validateReviewText(JSON.stringify({
+      version: 1,
+      comments: {
+        c_one: {
+          rev: 1, anchor: { block: 'b1' }, intent: 'question', body: 'why?',
+          createdAt: at, reviewId: 'rv_one', status: 'open', clock: 1,
+        },
+      },
+      reviews: {}, readRev: 0,
+    }))).toThrow(/required fields/)
   })
 
   it('validates document stamp and title against its index entry', () => {

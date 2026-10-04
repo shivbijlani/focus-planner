@@ -38,9 +38,9 @@ function integer(value, min = 0) {
 }
 
 function timestamp(value) {
-  return typeof value === 'string'
-    && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(value)
-    && Number.isFinite(Date.parse(value))
+  if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(value)) return false
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 19) === value.slice(0, 19)
 }
 
 function uri(value) {
@@ -188,7 +188,7 @@ export function validateResponseText(text) {
   }
 }
 
-export function validateDocText(text, { docId, entry, response } = {}) {
+export function validateDocText(text, { docId, entry, response, expectedRev } = {}) {
   const content = String(text ?? '')
   if (docsByteLength(content) > DOCS_LIMITS.docBytes) {
     reject(`D07 size: ${docId || 'doc.md'} exceeds ${DOCS_LIMITS.docBytes} bytes`)
@@ -203,7 +203,8 @@ export function validateDocText(text, { docId, entry, response } = {}) {
   if (!parsed.title || (entry && parsed.title !== entry.title)) {
     reject(`Document title does not match the Docs index for ${docId}`)
   }
-  if (entry && header.rev !== entry.rev) reject(`Document revision does not match the Docs index for ${docId}`)
+  if (expectedRev !== undefined && header.rev !== expectedRev) reject(`Document revision does not match the requested history revision for ${docId}`)
+  if (entry && expectedRev === undefined && header.rev !== entry.rev) reject(`Document revision does not match the Docs index for ${docId}`)
   if (response && response.rev !== header.rev) reject(`Document revision does not match response.json for ${docId}`)
   return parsed
 }
