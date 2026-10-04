@@ -15,8 +15,6 @@ command from the Focus Planner plugin marketplace.
 ```
 overnight-agent/
 ├── plugin.json                 # Plugin manifest
-├── extensions/
-│   └── coordinator-guard/      # Mechanical cutoff and one-send enforcement
 └── skills/
     └── overnight-agent/
         ├── SKILL.md            # The skill instructions
@@ -136,11 +134,11 @@ session-model enforcement requires an app API.
 
 ### Direct dispatch
 
-The coordinator sends task briefs directly with `send_session_message`; the plugin extension only
-guards that path. It records each coordinator tool attempt in the existing run ledger, refuses a
-second send to the same target session in one run, refuses waits that cross the hard end, and after
-that hard end permits only `task_complete`. It activates only when the skill preflight has recorded
-the current coordinator session in the ledger, so it is inert in task and ordinary chat sessions.
+The coordinator sends task briefs directly with `send_session_message`. The plugin declares no
+extensions and registers no tool hooks, so loading it requires no extension permission prompt.
+The cutoff, hard end and one-send-per-task rules remain coordinator instructions in `SKILL.md`,
+not mechanical tool restrictions. The existing run ledger still records run starts and decision
+records for after-the-fact review; user-pause and agent-gate checks remain on the dispatch path.
 Before selecting work, the coordinator saves a `get_sessions_status` snapshot and passes it to
 `oa-state.mjs scan -Compact -SessionsStatusFile <file>`. A bound session already busy is reported
 as `busy_from_earlier_run`, skipped without consuming this run's concurrency, and checked again
@@ -165,8 +163,8 @@ The coordinator checks its start cutoff before every send: the next local **:00 
 first prompt, minus `Overnight Agent start buffer` from `user-settings.md` (default `5m`). For a
 10:30 next run, no send starts at or after 10:25. Valid buffer values are whole minutes `0`–`29`,
 optionally suffixed `m`; if an existing value cannot be read or parsed, the coordinator sends
-nothing and reports the problem. The start buffer remains coordinator guidance; the extension
-mechanically enforces the separate one-minute hard end.
+nothing and reports the problem. The separate hard end is one minute before the next run:
+at or after it, the skill instructs the coordinator to stop, write its one-line wrap-up and exit.
 The coordinator stops starting tasks at that cutoff, without waiting for active tasks to finish.
 
 **Upgrading from the earlier extension:** current installs no longer create the user-level loader
