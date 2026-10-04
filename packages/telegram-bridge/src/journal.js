@@ -183,9 +183,26 @@ export function latestAgentTurn(content, { includeTurnEnd = false } = {}) {
  * `<!-- from: me -->` chat entry — exactly the shape the Focus Planner app
  * appends, so the existing oa-state reopen loop picks it up unchanged.
  */
-export function appendUserReply(content, { text, date }) {
+export function appendUserReply(content, { text, date, senderId }) {
   const day = date || new Date().toISOString().slice(0, 10)
-  const trimmedEnd = content.replace(/\s+$/, '')
-  const entry = `## ${day}\n\n${FROM_ME}\n${text.trim()}\n`
+  const trimmedEnd = content.trimEnd()
+  const stamp = senderId == null ? '' : `<!-- via: telegram sender=${senderId} -->\n`
+  if (stamp) {
+    const headers = [...trimmedEnd.matchAll(/^## \d{4}-\d{2}-\d{2}$/gm)]
+    const lastHeader = headers.at(-1)
+    const marker = `## ${day}\n\n${FROM_ME}\n`
+    const markerStart = trimmedEnd.lastIndexOf(marker)
+    if (lastHeader && lastHeader.index === markerStart) {
+      const markerEnd = markerStart + marker.length
+      const existingText = trimmedEnd.slice(markerEnd)
+      if (!existingText.includes(FROM_ME) && !existingText.includes('<!-- from: overnight-agent -->')) {
+        if (existingText.startsWith(stamp)) {
+          const mergedText = existingText.trimEnd()
+          return `${trimmedEnd.slice(0, markerEnd)}${mergedText}\n${text.trim()}\n`
+        }
+      }
+    }
+  }
+  const entry = `## ${day}\n\n${FROM_ME}\n${stamp}${text.trim()}\n`
   return `${trimmedEnd}\n\n${entry}`
 }

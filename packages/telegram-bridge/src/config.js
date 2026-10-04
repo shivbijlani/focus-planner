@@ -34,12 +34,16 @@ async function resolvePlannerPath({ env, repoRoot }) {
  * @param {object} [opts]
  * @param {NodeJS.ProcessEnv} [opts.env]
  * @param {string} [opts.repoRoot] path of the focus-planner repo root
- * @returns {Promise<{token,chatId,plannerPath,journalDir,stateDir,taskAllowlist,archiveCompleted}>}
+ * @returns {Promise<{token,chatId,ownerUserId,plannerPath,journalDir,stateDir,taskAllowlist,archiveCompleted}>}
  */
 export async function loadConfig({ env = process.env, repoRoot } = {}) {
   const root = repoRoot || path.resolve(process.cwd())
   const token = env.TELEGRAM_BOT_TOKEN || ''
   const chatId = env.TELEGRAM_CHAT_ID || ''
+  const rawOwnerUserId = (env.TELEGRAM_BRIDGE_OWNER_USER_ID || '').trim()
+  const parsedOwnerUserId = /^\d+$/.test(rawOwnerUserId) ? Number(rawOwnerUserId) : NaN
+  const ownerUserId =
+    Number.isSafeInteger(parsedOwnerUserId) && parsedOwnerUserId > 0 ? parsedOwnerUserId : null
   const plannerPath = await resolvePlannerPath({ env, repoRoot: root })
   const stateDir = env.TELEGRAM_BRIDGE_STATE_DIR || DEFAULT_STATE_DIR
 
@@ -140,6 +144,7 @@ export async function loadConfig({ env = process.env, repoRoot } = {}) {
   return {
     token,
     chatId,
+    ownerUserId,
     plannerPath,
     journalDir: path.join(plannerPath, 'journal'),
     completedBoardPath: path.join(plannerPath, 'planner-completed.md'),
