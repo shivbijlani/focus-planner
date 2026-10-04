@@ -232,78 +232,86 @@ $script:IssueResolver = if ($env:WRITE_TURN_ISSUE_RESOLVER) { $env:WRITE_TURN_IS
                         else { [IO.Path]::Combine($PSScriptRoot, '..', '..', 'checks', 'issue-shipped.mjs') }
 $script:OaStatePs1 = [IO.Path]::Combine($PSScriptRoot, 'oa-state.ps1')
 
-function Get-TaskSessionBinding([string]$TaskId) {
-  $path = Join-Path (Join-Path $OA_HOME 'state') "task-$TaskId.json"
-  $caller = if ($Author) { "$Author" } elseif ($env:COPILOT_AGENT_SESSION_ID) { "$env:COPILOT_AGENT_SESSION_ID" } else { '' }
-  try {
-    $state = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
-    $session = if ($state.PSObject.Properties['session']) { $state.session } else { $null }
-  } catch {
-    return @{ caller = $caller; ids = @(); bound = $false; statusBy = ''; status = ''; reason = "state could not be read at $path" }
-  }
+function Test-TaskSessionCaller([string]$TaskId, [string]$TurnAuthor) {
+  $caller = if ($TurnAuthor) { $TurnAuthor } elseif ($env:COPILOT_AGENT_SESSION_ID) { $env:COPILOT_AGENT_SESSION_ID } else { '' }
   $ids = @()
-  if ($session) {
-    foreach ($key in @('session_id', 'prior_session_id')) {
-      if ($session.PSObject.Properties[$key] -and $session.$key) { $ids += "$($session.$key)" }
+  $status = ''
+  $statusBy = ''
+  $statePath = Join-Path $OA_HOME "state\task-$TaskId.json"
+  $stateOk = $false
+  if (Test-Path -LiteralPath $statePath) {
+    try {
+      $st = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+      $status = "$($st.status)".ToLowerInvariant()
+      $statusBy = "$($st.status_by)".ToLowerInvariant()
+      if ($st -and $st.PSObject.Properties['session'] -and $st.session) {
+        foreach ($key in @('session_id', 'prior_session_id')) {
+          if ($st.session.PSObject.Properties[$key] -and $st.session.$key) { $ids += "$($st.session.$key)" }
+        }
+        if ($st.session.PSObject.Properties['prior_session_ids'] -and $st.session.prior_session_ids) {
+          $ids += @($st.session.prior_session_ids | ForEach-Object { "$_" } | Where-Object { $_ })
+        }
+      }
+      $stateOk = $true
     }
-    if ($session.PSObject.Properties['prior_session_ids'] -and $session.prior_session_ids) {
-      $ids += @($session.prior_session_ids | ForEach-Object { "$_" } | Where-Object { $_ })
+    catch { $stateOk = $false }
+  }
+  $bound = $false
+  if ($caller) {
+    foreach ($sid in $ids) {
+      if ([string]::Equals($sid, $caller, [StringComparison]::OrdinalIgnoreCase)) { $bound = $true; break }
     }
   }
-  $bound = $caller -and @($ids | Where-Object {
-    [string]::Equals($_, $caller, [StringComparison]::OrdinalIgnoreCase)
-  }).Count -gt 0
-  return @{
-    caller = $caller; ids = $ids; bound = [bool]$bound
-    statusBy = if ($state.PSObject.Properties['status_by']) { "$($state.status_by)" } else { '' }
-    status = if ($state.PSObject.Properties['status']) { "$($state.status)" } else { '' }
-    reason = ''
-  }
+  return [pscustomobject]@{ caller = $caller; ids = @($ids); bound = $bound; stateOk = $stateOk; status = $status; statusBy = $statusBy }
 }
 
-function Get-TaskConsentVerdict([string]$TaskId) {
-  $engine = Join-Path $PSScriptRoot 'oa-state.ps1'
-  if (-not (Test-Path -LiteralPath $engine)) { return @{ ok = $false; reason = "engine not found at $engine" } }
+function Get-ConsentFromEngine([string]$TaskId) {
+  if (-not (Test-Path -LiteralPath $script:OaStatePs1)) {
+    return @{ ok = $false; reason = "engine not found at $script:OaStatePs1" }
+  }
   $plannerDir = Split-Path -Parent $JournalDir
-  $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $engine, 'consent', '-Id', $TaskId,
-    '-JournalDir', $JournalDir, '-StateDir', (Join-Path $OA_HOME 'state'),
+  $argv = @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script:OaStatePs1, 'consent',
+    '-Id', $TaskId,
+    '-JournalDir', $JournalDir,
+    '-StateDir', (Join-Path $OA_HOME 'state'),
     '-PlannerBoard', (Join-Path $plannerDir 'planner.md'),
     '-PlannerCompleted', (Join-Path $plannerDir 'planner-completed.md'),
     '-SnoozeStore', (Join-Path $plannerDir 'snooze.json'),
     '-GatePath', (Join-Path $plannerDir 'agent-gate.md'),
-    '-UserSettings', (Join-Path $plannerDir 'user-settings.md'))
-  $exe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
+    '-UserSettings', (Join-Path $plannerDir 'user-settings.md')
+  )
+  $exe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell' }
   try {
     $out = & $exe @argv 2>&1
     $code = $LASTEXITCODE
-  } catch {
-    return @{ ok = $false; reason = "could not run consent reader ($($_.Exception.Message))" }
+  }
+  catch {
+    return @{ ok = $false; reason = "could not run engine ($($_.Exception.Message))" }
   }
   $text = (@($out) | Out-String).Trim()
-  if ($code -ne 0) {
-    $reason = if ($text) { $text } else { "engine exited $code" }
-    return @{ ok = $false; reason = $reason }
-  }
+  if ($code -ne 0) { return @{ ok = $false; reason = $(if ($text) { $text } else { "engine exited $code" }) } }
   if (-not $text) { return @{ ok = $false; reason = 'consent reader printed nothing' } }
-  try { return @{ ok = $true; verdict = ($text | ConvertFrom-Json -ErrorAction Stop) } } catch {
-    return @{ ok = $false; reason = 'consent reader output was not JSON' }
+  try { return @{ ok = $true; verdict = ($text | ConvertFrom-Json) } }
+  catch {
+    return @{ ok = $false; reason = 'consent reader output was not JSON: ' + $text.Substring(0, [Math]::Min(120, $text.Length)) }
   }
 }
 
 function Get-ApprovedTaskOwnerFinding([string]$TaskId, [string]$TurnAuthor) {
   if (-not $TaskId) { return $null }
-  $owner = Get-TaskSessionBinding $TaskId
+  $owner = Test-TaskSessionCaller $TaskId $TurnAuthor
   if ($owner.bound) { return $null }
-  if ($owner.statusBy -eq 'user' -and @('proposed', 'blocked') -contains $owner.status.ToLowerInvariant()) { return $null }
-  $consent = Get-TaskConsentVerdict $TaskId
+  if ($owner.statusBy -eq 'user' -and @('proposed', 'blocked') -contains $owner.status) { return $null }
+  $consent = Get-ConsentFromEngine $TaskId
   if ($consent.ok -and -not [bool]$consent.verdict.consent_ok) { return $null }
   $reason = if ($consent.ok) { "consent_ok=true ($($consent.verdict.reason))" } else { "consent could not be checked ($($consent.reason))" }
-  $caller = if ($TurnAuthor) { "$TurnAuthor" } elseif ($owner.caller) { "$($owner.caller)" } else { 'unknown' }
-  $binding = if ($owner.ids.Count) { $owner.ids -join ', ' } else { 'no bound task session' }
-  return New-Finding 'G23' 1 $reason (
+  $caller = if ($owner.caller) { $owner.caller } else { 'unknown' }
+  $binding = if (@($owner.ids).Count) { (@($owner.ids) -join ', ') } else { 'no bound task session' }
+  return (New-Finding 'G23' 1 $reason (
     "task $TaskId has a pending human approval, but caller '$caller' is not the bound task session ($binding). " +
     "The coordinator must dispatch it with ``oa-state.ps1 session -Id $TaskId -ForDispatch ...``; " +
-    'the task session owns the approved work and writes the outcome turn. Unknown callers fail closed. This guard cannot be disabled')
+    'the task session owns the approved work and writes the outcome turn. Unknown callers fail closed. This guard cannot be disabled'))
 }
 
 # --- #627 the user pause, read on the WRITE side -----------------------------------------
