@@ -1353,11 +1353,44 @@ function closedWriteFinding(id, verdict) {
       `cannot verify whether task ${id} is closed: ${verdict.why} could not be read. write-turn refuses ` +
       'rather than risk a turn into a task the user closed; fix the file, then retry. This guard cannot be disabled');
   }
+  // REPLY-CARRIED-MUTANT-ANCHOR: his reply since the close must reach the run report, never be dropped.
+  if (verdict.reply !== null && verdict.reply !== undefined) {
+    return newFinding('G24', 1, verdict.snippet,
+      `task ${id} is closed by the user: ${verdict.why}. He replied since the close: "${verdict.reply}". ` +
+      `Put that reply in the run report to him under Replies on closed tasks, with task ${id} and ` +
+      "\"reopen the row to continue\"; don't write to it and don't retry. Only the user can reopen a task " +
+      'he closed. This guard cannot be disabled');
+  }
   // G24-FINDING-MUTANT-ANCHOR: the closed-task write guard is load-bearing.
   return newFinding('G24', 1, verdict.snippet,
     `task ${id} is closed by the user: ${verdict.why}; report it in the run summary under Replies on closed tasks; ` +
     "don't write to it and don't retry. Only the user can reopen a task he closed, even when he has " +
     'replied below it. This guard cannot be disabled');
+}
+
+// His reply since the close, for G24's report: the text under the newest `<!-- from: me -->` marker
+// that sits below the newest managed turn (the same positions G12/G17 read), up to the next comment
+// or heading, whitespace-collapsed and cut at 160 characters. null when there is none or the journal
+// cannot be read -- the generic G24 message still tells the agent to report the task.
+function closedReplyQuote(journalPath) {
+  try {
+    if (!journalPath || !testPath(journalPath)) return null;
+    const raw = readAllText(journalPath);
+    const pos = managedPositions(fenceMaskedText(raw));
+    if (!pos || pos.lastHuman < 0 || pos.lastHuman <= pos.lastTurn) return null;
+    const lines = raw.slice(pos.sentinel + pos.lastHuman).split(/\r?\n/).slice(1);
+    const kept = [];
+    for (const l of lines) {
+      if (/^[ \t]*(<!--|##[ \t])/.test(l)) break;
+      if (l.trim()) kept.push(l.trim());
+    }
+    let q = kept.join(' ').replace(/\s+/g, ' ').trim();
+    if (!q) return null;
+    if (q.length > 160) q = `${q.slice(0, 160)}...`;
+    return q;
+  } catch {
+    return null;
+  }
 }
 
 // [int] conversion of WRITE_TURN_WAKE_WINDOW_MIN (default 45).
@@ -1438,6 +1471,7 @@ function run(argv, out) {
   ctx.pauseVerdict = dest ? userPauseVerdict(ctx, id, dest) : null;
   const snoozeVerdict = dest ? writeSnoozeVerdict(id, journalDir) : null;
   const closedVerdict = dest ? writeClosedVerdict(ctx, id) : null;
+  if (closedVerdict && closedVerdict.kind === 'closed') closedVerdict.reply = closedReplyQuote(dest);
 
   let findings = turnBodyFindings(ctx, body, disabled, doc, ask);
   if (dest && !ciContains(disabled, 'G12')) {

@@ -94,7 +94,10 @@ $arms = @(
   @{ name = 'skip-off-both-boards-refused'; refused = $true
      setup = { param($w) Set-State $w 'skip' 'agent' } },
   @{ name = 'reply-after-close-still-refused'; refused = $true
+     expect = 'He replied since the close: "one more thing - can you also check whether the Subaru emissions test is due\?"[\s\S]*reopen the row to continue'
      setup = { param($w) Set-State $w 'done' 'agent'; Set-Completed $w; Add-Reply $w } },
+  @{ name = 'closed-without-reply-no-quote-refused'; refused = $true; reject = 'He replied since the close'
+     setup = { param($w) Set-State $w 'done' 'agent'; Set-Completed $w } },
   @{ name = 'absent-status-by-off-board-refused'; refused = $true
      setup = { param($w) Set-State $w 'done' '' } },
   @{ name = 'corrupt-state-refused'; refused = $true
@@ -121,6 +124,8 @@ function Test-Arm([string]$Path, $Arm) {
     & $Arm.setup $w
     $r = Invoke-Subject $Path $w '9405' @($Arm.extra)
     $isRefused = ($r.code -eq 2 -and $r.out -match 'G24 line')
+    if ($Arm.expect -and ($r.out -replace '\s+', ' ') -notmatch $Arm.expect) { $isRefused = $false }
+    if ($Arm.reject -and $r.out -match $Arm.reject) { $isRefused = $false }
     $ok = if ($Arm.refused) { $isRefused }
           elseif ($Arm.g24only) { $r.out -notmatch 'G24' }
           else { ($r.code -eq 0 -and $r.out -notmatch 'G24') }
@@ -156,6 +161,7 @@ $mutants = if ($script:IsNode) {
     @{ name = 'off-board not closed';            needle = "if (!writeBoardHasRow(path.join(plannerDir, 'planner.md'), taskId)) {"; replacement = 'if (false) {' },
     @{ name = 'unreadable input allows';         needle = "return { kind: 'unreadable', why: source, snippet: source };"; replacement = 'return null;' },
     @{ name = 'reply exemption added';           needle = 'const closedVerdict = dest ? writeClosedVerdict(ctx, id) : null;'; replacement = 'const closedVerdict = dest && !/from: me/.test(readAllText(dest)) ? writeClosedVerdict(ctx, id) : null;' },
+    @{ name = 'reply dropped from the report';   needle = 'if (verdict.reply !== null && verdict.reply !== undefined) {'; replacement = 'if (false) {' },
     @{ name = 'guard made disableable';          needle = 'if (closedVerdict) {'; replacement = "if (closedVerdict && !ciContains(disabled, 'G24')) {" }
   )
 } else {
@@ -167,6 +173,7 @@ $mutants = if ($script:IsNode) {
     @{ name = 'off-board not closed';            needle = "if (-not (Test-WriteBoardHasRow (Join-Path `$plannerDir 'planner.md') `$TaskId)) {"; replacement = 'if ($false) {' },
     @{ name = 'unreadable input allows';         needle = "return [pscustomobject]@{ kind = 'unreadable'; why = `$source; snippet = `$source }"; replacement = 'return $null' },
     @{ name = 'reply exemption added';           needle = '$script:ClosedVerdict = if ($dest) {'; replacement = '$script:ClosedVerdict = if ($dest -and ([IO.File]::ReadAllText($dest) -notmatch ''from: me'')) {' },
+    @{ name = 'reply dropped from the report';   needle = 'if ($null -ne $Verdict.reply) {'; replacement = 'if ($false) {' },
     @{ name = 'guard made disableable';          needle = 'if ($script:ClosedVerdict) {'; replacement = "if (`$script:ClosedVerdict -and (`$DisableGuard -notcontains 'G24')) {" }
   )
 }

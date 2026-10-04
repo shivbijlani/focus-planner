@@ -482,7 +482,7 @@ user has spoken after your last turn:
   `eligible: false`. Write **no** turn (`write-turn` refuses it: **G24**), take **no** action — just
   `oa-state.mjs mark -Id <ID>` with
   its existing status so it stops re-surfacing, and **report it in the wrap-up under _Replies on
-  closed tasks_, quoting the message**. Shiv, on task #400: *"I don't think we need to handle the
+  closed tasks_, quoting the message and saying "reopen the row to continue"**. Shiv, on task #400: *"I don't think we need to handle the
   case where a reply on a closed task is considered [a reopen]"* (GH issue #170, cause 3).
   The asymmetry is deliberate: a missed nudge on closed work is cheap **and stays visible**, whereas
   silently reanimating finished work is invisible and is the actual complaint. Measured 2026-08-22:
@@ -1615,7 +1615,8 @@ rather than merely incomplete, which makes it the more dangerous of the two.
    - **`reopened_closed: true`** → the reply landed on a task **the user closed** (on
      `planner-completed.md`, an explicit user `skip`/`done`, or on neither board).
      **Do not work it and do not write a turn.** Re-`mark` it with its existing status and report it in
-     the wrap-up under **Replies on closed tasks**, quoting the message (GH issue #170, cause 3).
+     the wrap-up under **Replies on closed tasks**, quoting the message and saying "reopen the row to
+     continue" (GH issue #170, cause 3; #825).
    - **`unanswered_user: true`** → one of his messages is still sitting unanswered below your last
      turn, on open work. Pick it up exactly like `reopened`. **Re-`mark`ing will not clear it** — only
      a turn written under his message does (GH issue #501).
@@ -1840,8 +1841,9 @@ Report back to the user a short summary:
 - **Skipped:** anything intentionally left.
 - **Replies on closed tasks:** any task that came back `reopened_closed` — the user replied to work
   they had already closed. **Quote the message** and name the task, so the nudge is visible even
-  though no turn was written. Say that a word from them (or moving the row back onto the board)
-  reopens it. Omit this line entirely when there were none.
+  though no turn was written, and end it with **"reopen the row to continue"**: only moving the row
+  back onto planner.md reopens it; a reply alone does not (`write-turn` refuses the turn, **G24**,
+  and its refusal quotes the reply for you). Omit this line entirely when there were none.
 - **Unanswered messages:** any task that came back `unanswered_user: true` and that you did **not**
   answer with a turn this run. **Quote the message**, name the task, and say how long it has been
   waiting (`unanswered_user_at`). Unlike the line above, this is open work you *could* have picked up,

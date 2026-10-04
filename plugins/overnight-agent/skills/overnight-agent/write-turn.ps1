@@ -1748,12 +1748,53 @@ function Get-WriteClosedVerdict {
   }
 }
 
+# His reply since the close, for G24's report: the text under the newest `<!-- from: me -->` marker
+# that sits below the newest managed turn (the same positions G12/G17 read), up to the next comment
+# or heading, whitespace-collapsed and cut at 160 characters. $null when there is none or the
+# journal cannot be read -- the generic G24 message still tells the agent to report the task.
+function Get-ClosedReplyQuote([string]$journalPath) {
+  try {
+    if (-not $journalPath -or -not (Test-Path -LiteralPath $journalPath)) { return $null }
+    $raw = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $journalPath))
+    $scan = Get-FenceMaskedText $raw
+    $sentinel = $scan.LastIndexOf('OVERNIGHT-AGENT do not edit')
+    if ($sentinel -lt 0) { return $null }
+    $managed = $scan.Substring($sentinel)
+    $lastTurn = -1
+    foreach ($m in [regex]::Matches($managed, '(?m)^[ \t]*##[ \t][^\r\n]*')) {
+      if ($m.Value -match $script:ManagedTurnRe) { $lastTurn = $m.Index }
+    }
+    $lastHuman = -1
+    foreach ($m in [regex]::Matches($managed, '(?m)^[ \t]*<!--[ \t]*from:[ \t]*me[ \t]*-->[ \t]*$')) { $lastHuman = $m.Index }
+    if ($lastHuman -lt 0 -or $lastHuman -le $lastTurn) { return $null }
+    $lines = @($raw.Substring($sentinel + $lastHuman) -split "\r?\n" | Select-Object -Skip 1)
+    $kept = New-Object System.Collections.Generic.List[string]
+    foreach ($l in $lines) {
+      if ($l -match '^[ \t]*(<!--|##[ \t])') { break }
+      if ($l.Trim()) { $kept.Add($l.Trim()) }
+    }
+    $q = ([regex]::Replace(($kept -join ' '), '\s+', ' ')).Trim()
+    if (-not $q) { return $null }
+    if ($q.Length -gt 160) { $q = $q.Substring(0, 160) + '...' }
+    return $q
+  }
+  catch { return $null }
+}
+
 function Get-ClosedWriteFinding($Verdict) {
   if (-not $Verdict) { return $null }
   if ($Verdict.kind -eq 'unreadable') {
     return (New-Finding 'G24' 1 $Verdict.snippet (
       "cannot verify whether task $Id is closed: $($Verdict.why) could not be read. write-turn refuses " +
       'rather than risk a turn into a task the user closed; fix the file, then retry. This guard cannot be disabled'))
+  }
+  # REPLY-CARRIED-MUTANT-ANCHOR: his reply since the close must reach the run report, never be dropped.
+  if ($null -ne $Verdict.reply) {
+    return (New-Finding 'G24' 1 $Verdict.snippet (
+      "task $Id is closed by the user: $($Verdict.why). He replied since the close: `"$($Verdict.reply)`". " +
+      "Put that reply in the run report to him under Replies on closed tasks, with task $Id and " +
+      "`"reopen the row to continue`"; don't write to it and don't retry. Only the user can reopen a task " +
+      'he closed. This guard cannot be disabled'))
   }
   # G24-FINDING-MUTANT-ANCHOR: the closed-task write guard is load-bearing.
   return (New-Finding 'G24' 1 $Verdict.snippet (
@@ -1793,6 +1834,9 @@ $doc = if ($dest) { Get-JournalDocMeta $dest } else { $null }
 $script:PauseVerdict = if ($dest) { Get-UserPauseVerdict $Id $dest } else { $null }
 $script:SnoozeVerdict = if ($dest) { Get-WriteSnoozeVerdict $Id $JournalDir } else { $null }
 $script:ClosedVerdict = if ($dest) { Get-WriteClosedVerdict $Id $JournalDir } else { $null }
+if ($script:ClosedVerdict -and $script:ClosedVerdict.kind -eq 'closed') {
+  $script:ClosedVerdict | Add-Member -NotePropertyName reply -NotePropertyValue (Get-ClosedReplyQuote $dest) -Force
+}
 
 # HOST-DEPENDENT COUNT (found 2026-08-27, by hitting it)
 # --------------------------------------------------------

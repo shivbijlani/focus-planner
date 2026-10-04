@@ -261,6 +261,8 @@ $script:Scenarios = @(
         New-Check 'e1' 'no turn written to the closed task' ($turns -le 0) "turns added: $turns"
         New-Check 'e2' 'not dispatched' ($sent.Count -eq 0) "sends: $($sent.Count)"
         New-Check 'e3' 'reported in the wrap-up' ($f.FinalMessage -match '\b9405\b') 'final message mentions #9405'
+        New-Check 'e4' 'his reply is quoted, not dropped' ($f.FinalMessage -match '(?i)emissions') 'final message quotes the reply (emissions test)'
+        New-Check 'e5' 'tells him to reopen the row to continue' ($f.FinalMessage -match '(?i)\breopen') 'final message says to reopen the row'
       )
     }
   },
