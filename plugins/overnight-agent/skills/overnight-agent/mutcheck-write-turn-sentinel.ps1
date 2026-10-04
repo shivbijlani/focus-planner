@@ -170,12 +170,10 @@ Assert ($duplicateExit -ne 0 -and $duplicateAfter -ceq $duplicateBefore) 'a jour
 
 $bodyWithSentinel = $body + "`n$SENTINEL; the agent manages everything below it -->"
 [IO.File]::WriteAllText($bodyFile, $bodyWithSentinel, (New-Object Text.UTF8Encoding($false)))
-$guarded = & $psExe -NoProfile -ExecutionPolicy Bypass -File $writeTurn `
-  -BodyFile $bodyFile -Ask none -Validate -Json | ConvertFrom-Json
-Assert (@($guarded.findings | Where-Object { $_.guard -eq 'G20' }).Count -eq 1) 'G20 refuses a turn body that tries to write its own sentinel'
-$unguarded = & $psExe -NoProfile -ExecutionPolicy Bypass -File $writeTurn `
-  -BodyFile $bodyFile -Ask none -Validate -Json -DisableGuard G20 | ConvertFrom-Json
-Assert (@($unguarded.findings | Where-Object { $_.guard -eq 'G20' }).Count -eq 0) 'disabling G20 exposes the duplicate-sentinel body'
+$guarded = Invoke-Validate $writeTurn
+Assert (@($guarded.findings | Where-Object { $_.guard -eq 'G25' }).Count -eq 1) 'G25 refuses a turn body that tries to write its own sentinel'
+$unguarded = Invoke-Validate $writeTurn @('-DisableGuard', 'G25')
+Assert (@($unguarded.findings | Where-Object { $_.guard -eq 'G25' }).Count -eq 0) 'disabling G25 exposes the duplicate-sentinel body'
 [IO.File]::WriteAllText($bodyFile, $body, (New-Object Text.UTF8Encoding($false)))
 
 # ---------------------------------------------------------------- mutation

@@ -131,11 +131,9 @@
   Every appended turn carries `<!-- oa-by: session=<id> host=<host> -->` under its `oa-ask` stamp,
   so which agent wrote a turn, and from which machine, is in the journal itself. G21 refuses a body
   that writes its own; G20 refuses any target other than this task's journal inside -JournalDir
-  (agent-gate.md and user-settings.md are the user's alone). G22 refuses snoozed tasks. G24
-  refuses a task the user closed (Test-UserClosed), even with a reply below it. G23
-  refuses a coordinator-authored outcome turn on a task whose journal currently carries a human
-  approval. The coordinator must dispatch; the bound task session writes the outcome. None can be
-  disabled.
+  (agent-gate.md and user-settings.md are the user's alone). G22 refuses snoozed tasks. G23 keeps
+  consented action outcomes in the task session. G24 refuses a task the user closed, even when he
+  replies below it. G25 refuses a body-written journal sentinel. These guards cannot be disabled.
 #>
 [CmdletBinding()]
 param(
@@ -233,6 +231,80 @@ if ($env:OA_SANDBOX_ROOT) {
 $script:IssueResolver = if ($env:WRITE_TURN_ISSUE_RESOLVER) { $env:WRITE_TURN_ISSUE_RESOLVER }
                         else { [IO.Path]::Combine($PSScriptRoot, '..', '..', 'checks', 'issue-shipped.mjs') }
 $script:OaStatePs1 = [IO.Path]::Combine($PSScriptRoot, 'oa-state.ps1')
+
+function Get-TaskSessionBinding([string]$TaskId) {
+  $path = Join-Path (Join-Path $OA_HOME 'state') "task-$TaskId.json"
+  $caller = if ($Author) { "$Author" } elseif ($env:COPILOT_AGENT_SESSION_ID) { "$env:COPILOT_AGENT_SESSION_ID" } else { '' }
+  try {
+    $state = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
+    $session = if ($state.PSObject.Properties['session']) { $state.session } else { $null }
+  } catch {
+    return @{ caller = $caller; ids = @(); bound = $false; statusBy = ''; status = ''; reason = "state could not be read at $path" }
+  }
+  $ids = @()
+  if ($session) {
+    foreach ($key in @('session_id', 'prior_session_id')) {
+      if ($session.PSObject.Properties[$key] -and $session.$key) { $ids += "$($session.$key)" }
+    }
+    if ($session.PSObject.Properties['prior_session_ids'] -and $session.prior_session_ids) {
+      $ids += @($session.prior_session_ids | ForEach-Object { "$_" } | Where-Object { $_ })
+    }
+  }
+  $bound = $caller -and @($ids | Where-Object {
+    [string]::Equals($_, $caller, [StringComparison]::OrdinalIgnoreCase)
+  }).Count -gt 0
+  return @{
+    caller = $caller; ids = $ids; bound = [bool]$bound
+    statusBy = if ($state.PSObject.Properties['status_by']) { "$($state.status_by)" } else { '' }
+    status = if ($state.PSObject.Properties['status']) { "$($state.status)" } else { '' }
+    reason = ''
+  }
+}
+
+function Get-TaskConsentVerdict([string]$TaskId) {
+  $engine = Join-Path $PSScriptRoot 'oa-state.ps1'
+  if (-not (Test-Path -LiteralPath $engine)) { return @{ ok = $false; reason = "engine not found at $engine" } }
+  $plannerDir = Split-Path -Parent $JournalDir
+  $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $engine, 'consent', '-Id', $TaskId,
+    '-JournalDir', $JournalDir, '-StateDir', (Join-Path $OA_HOME 'state'),
+    '-PlannerBoard', (Join-Path $plannerDir 'planner.md'),
+    '-PlannerCompleted', (Join-Path $plannerDir 'planner-completed.md'),
+    '-SnoozeStore', (Join-Path $plannerDir 'snooze.json'),
+    '-GatePath', (Join-Path $plannerDir 'agent-gate.md'),
+    '-UserSettings', (Join-Path $plannerDir 'user-settings.md'))
+  $exe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'powershell' }
+  try {
+    $out = & $exe @argv 2>&1
+    $code = $LASTEXITCODE
+  } catch {
+    return @{ ok = $false; reason = "could not run consent reader ($($_.Exception.Message))" }
+  }
+  $text = (@($out) | Out-String).Trim()
+  if ($code -ne 0) {
+    $reason = if ($text) { $text } else { "engine exited $code" }
+    return @{ ok = $false; reason = $reason }
+  }
+  if (-not $text) { return @{ ok = $false; reason = 'consent reader printed nothing' } }
+  try { return @{ ok = $true; verdict = ($text | ConvertFrom-Json -ErrorAction Stop) } } catch {
+    return @{ ok = $false; reason = 'consent reader output was not JSON' }
+  }
+}
+
+function Get-ApprovedTaskOwnerFinding([string]$TaskId, [string]$TurnAuthor) {
+  if (-not $TaskId) { return $null }
+  $owner = Get-TaskSessionBinding $TaskId
+  if ($owner.bound) { return $null }
+  if ($owner.statusBy -eq 'user' -and @('proposed', 'blocked') -contains $owner.status.ToLowerInvariant()) { return $null }
+  $consent = Get-TaskConsentVerdict $TaskId
+  if ($consent.ok -and -not [bool]$consent.verdict.consent_ok) { return $null }
+  $reason = if ($consent.ok) { "consent_ok=true ($($consent.verdict.reason))" } else { "consent could not be checked ($($consent.reason))" }
+  $caller = if ($TurnAuthor) { "$TurnAuthor" } elseif ($owner.caller) { "$($owner.caller)" } else { 'unknown' }
+  $binding = if ($owner.ids.Count) { $owner.ids -join ', ' } else { 'no bound task session' }
+  return New-Finding 'G23' 1 $reason (
+    "task $TaskId has a pending human approval, but caller '$caller' is not the bound task session ($binding). " +
+    "The coordinator must dispatch it with ``oa-state.ps1 session -Id $TaskId -ForDispatch ...``; " +
+    'the task session owns the approved work and writes the outcome turn. Unknown callers fail closed. This guard cannot be disabled')
+}
 
 # --- #627 the user pause, read on the WRITE side -----------------------------------------
 # Kept in step with `$script:PausedStatus` in oa-state.ps1, which is derived there as
@@ -1320,12 +1392,12 @@ function Test-TurnBody {
     }
   }
 
-  # --- G20: the writer, not a task turn, owns the journal sentinel ----------------
-  if (& $on 'G20') {
+  # --- G25: the writer, not a task turn, owns the journal sentinel ----------------
+  if (& $on 'G25') {
     $sentinel = [regex]::Match($Body, '<!--\s*OVERNIGHT-AGENT\s+do not edit this line\b')
     if ($sentinel.Success) {
       $line = ($Body.Substring(0, $sentinel.Index) -split "`r?`n").Count
-      $findings += New-Finding 'G20' $line $sentinel.Value (
+      $findings += New-Finding 'G25' $line $sentinel.Value (
         'the journal sentinel is structural and must be written once by write-turn.ps1, not copied ' +
         'into a task turn; remove it from this body')
     }

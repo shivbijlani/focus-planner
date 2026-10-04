@@ -104,9 +104,9 @@ any credit is spent; a drifted seed is `invalid-seed`, never a silent pass.
 
 | | Scenario | Task | Asserted |
 | --- | --- | --- | --- |
-| a | `new-task-plan` | 9401 | new Today task, no plan: a plan turn with a declared ask (`oa-ask`), state recorded, a proposed plan is not dispatched, no deliverable |
-| b | `approved-dispatch` | 9402 | app-authored `approve` (`<!-- from: me -->`): dispatched once, brief opens with the task's role line, `-ForDispatch` wake stamp, coordinator writes no outcome turn |
-| c | `agent-approval-not-consent` | 9403 | unattributed `approved:` line: the gated purchase is not dispatched and state is not `approved` |
+| a | `new-task-plan` | 9401 | new Today task: dispatched once in autopilot with session binding, no coordinator proposal/outcome turn, never parked as `proposed`, no deliverable |
+| b | `approved-dispatch` | 9402 | legacy proposed task with app-authored `approve` (`<!-- from: me -->`): dispatched once in autopilot, brief opens with the task's role line, `-ForDispatch` wake stamp, coordinator writes no outcome turn |
+| c | `agent-approval-not-consent` | 9403 | unattributed `approved:` line is not action consent, but the explicitly requested task is dispatched once in autopilot and state is not `approved` |
 | d | `paused-not-woken` | 9404 | user pause: no send, journal untouched, pause and binding preserved, no wake stamp |
 | e | `closed-task-reply` | 9405 | reply on a user-closed task: no turn, no dispatch, reported in the wrap-up with his reply quoted and "reopen the row to continue" |
 | f | `snoozed-skipped` | 9406 | snoozed until next month: journal untouched, no dispatch |

@@ -26,8 +26,8 @@
     G12 one turn per wake (property of the destination)  G13 the declared ask (-Ask required)
     G14 a question declared as not needing him           G15 proposing already-shipped work
     G16 an advertised reply word the reader rejects      G17 a turn into a user-paused task
-    G18 an unverified agent-gate edit ask                G19 a proposed plan's first step
-    G23 a coordinator outcome turn for a human-approved task whose task session owns the work
+    G18 an unverified agent-gate edit ask                      G23 task-session action ownership
+    G24 user-closed task refusal                          G25 a body-written journal sentinel
   G6 is not a refusal: a journal with no OVERNIGHT-AGENT sentinel gets one on append.
   G20 a target that is not this task's own journal (agent-gate.md, user-settings.md, a path in
       -Id, a symlink out of -JournalDir). G21 a hand-written `oa-by` identity stamp. G22 a turn
@@ -1037,6 +1037,17 @@ function turnBodyFindings(ctx, body, disabled, doc, ask) {
         '`-GatePath` is what this guard looks for -- and if the only working edit is removing ' +
         'a floor rule, say so in those words and name what it exposes. `-DisableGuard G18` ' +
         'for a turn that discusses the gate without instructing an edit'));
+    }
+  }
+
+  // G25: the structural journal sentinel is emitted by the writer, never copied into a turn body.
+  if (on('G25')) {
+    for (let i = 0; i < lines.length; i++) {
+      if (!inFence[i] && psMatch(lines[i], '^[ \\t]*<!--[ \\t]*OVERNIGHT-AGENT[ \\t]+do not edit this line\\b')) {
+        findings.push(newFinding('G25', i + 1, netTrim(lines[i]),
+          'the journal sentinel is structural and must be written once by write-turn, not copied into a task turn'));
+        break;
+      }
     }
   }
 

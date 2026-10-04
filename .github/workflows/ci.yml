@@ -1195,15 +1195,6 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-declared-ask.ps1
 
-  plan-dispatch:
-    name: Reversible plan dispatch
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Mutation check (old proposals re-evaluated, gated steps still wait)
-        shell: pwsh
-        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-plan-dispatch.ps1
-
   # THE SAFETY FLOOR ITSELF, AND IT HAS NEVER RUN IN CI (GH #302).
   #
   # `mutcheck-agent-gate.ps1` is the suite that proves the floor outranks the allow list and
@@ -1920,9 +1911,9 @@ jobs:
   # use, translated from .NET regex semantics, compared match-for-match against .NET itself; and
   # random turns x random destinations x random flags run through BOTH implementations in twin
   # sandboxes, comparing exit code, output and every file effect. Finally every mutation check
-  # that drives write-turn runs against the port as well -- and the three that ran nowhere in CI
-  # (mutcheck-write-turn, -sentinel, turn-ask; the first had rotted when G19 landed) now run
-  # against the PowerShell too. windows-latest: those three drive Windows PowerShell, as
+  # that drives write-turn runs against the port as well -- including focused checks that ran nowhere in CI
+  # (mutcheck-write-turn, -sentinel, turn-ask, coordinator ownership) now run
+  # against the PowerShell too. windows-latest: the PowerShell checks drive Windows PowerShell, as
   # production does, and the goldens are Windows-recorded.
   write-turn-node:
     name: write-turn Node port (goldens, differential, mutation checks)
@@ -1978,8 +1969,7 @@ jobs:
             @{ f = "$skill/mutcheck-snooze-write.ps1";          node = @('-ScriptPath', $wt);    ps = $null },
             @{ f = "$skill/mutcheck-closed-task-write.ps1";     node = @('-ScriptPath', $wt);    ps = $null },
             @{ f = "$skill/mutcheck-coordinator-no-task-work.ps1"; node = @('-ScriptPath', $wt); ps = $null },
-            @{ f = "$skill/mutcheck-shipped-pick.ps1";          node = @('-WriteTurnPath', $wt); ps = $null },
-            @{ f = "$skill/mutcheck-plan-dispatch.ps1";         node = @('-TurnScript', $wt);    ps = $null }
+            @{ f = "$skill/mutcheck-shipped-pick.ps1";          node = @('-WriteTurnPath', $wt); ps = $null }
           )
           # ps = $null: the PowerShell run already has its own job elsewhere in this workflow.
           foreach ($r in $runs) {
@@ -1994,6 +1984,17 @@ jobs:
             }
           }
           if ($failed.Count) { $failed | ForEach-Object { Write-Host "FAILED: $_" }; exit 1 }
+      - name: The coordinator cannot write a consented task's outcome
+        shell: pwsh
+        run: |
+          $skill = './plugins/overnight-agent/skills/overnight-agent'
+          foreach ($engine in @(
+            @{ write = "$skill/write-turn.ps1"; state = "$skill/oa-state.ps1" },
+            @{ write = "$skill/write-turn.mjs"; state = "$skill/oa-state.mjs" }
+          )) {
+            & pwsh -NoProfile -File "$skill/mutcheck-coordinator-no-task-work.ps1" -WriteTurnPath $engine.write -OaStatePath $engine.state
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
   # sync-oa-home.ps1 deploys .ps1/.mjs/.js into the flat OA home BY BASENAME and refuses a name
   # that exists at two paths in the plugin -- so a test fixture that reuses a deployable name

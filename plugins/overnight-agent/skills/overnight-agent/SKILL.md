@@ -1911,7 +1911,9 @@ See PHASE 0.
   (`<!-- oa-by: session=… host=… -->`) itself, so a body must not carry its own (**G21**). It also
   refuses (**G23**) when a coordinator tries to write the outcome turn for a task whose human
   approval is pending; dispatch with `oa-state.mjs session -Id <ID> -ForDispatch ...` and let the
-  task session write. G20, G21, G22, G23 and G24 cannot be disabled.
+  task session write. It also refuses (**G25**) if a turn body tries to add another journal sentinel.
+  G20, G21, G22, G23, G24 and G25
+  cannot be disabled.
   **`-Ask` is required (G13)** and is the subject of its own rule below.
   Author the turn body with a **file tool** first, then pass the file. The script validates the body
   and **refuses to write** if it finds any of the five corruption classes that have already destroyed

@@ -247,8 +247,8 @@ Some preamble the turn opens with.
 Body text.
 '@ }
 
-  # G20 -- the journal sentinel belongs to write-turn.ps1, not the appended body.
-  @{ name = 'g20-body-sentinel'; expect = @('G20'); nl = 'LF'; body = @'
+  # G25 -- the journal sentinel belongs to the writer, not the appended body.
+  @{ name = 'g25-body-sentinel'; expect = @('G25'); nl = 'LF'; body = @'
 ## MOON Overnight Agent -- 2026-09-29 reply
 
 <!-- from: overnight-agent -->
@@ -355,7 +355,7 @@ if ($failures.Count -gt 0) {
 # --- 2. mutation: disabling guard G must change EXACTLY G's own fixtures -------------
 Write-Host ''
 Write-Host '--- mutation (disable one guard at a time) ---'
-foreach ($g in @('G1', 'G2', 'G3', 'G4', 'G5', 'G7', 'G20')) {
+foreach ($g in @('G1', 'G2', 'G3', 'G4', 'G5', 'G7', 'G25')) {
   $ownFixtures = @($fixtures | Where-Object { $_.expect -contains $g })
   if ($ownFixtures.Count -eq 0) { $failures += "no fixture exercises $g"; continue }
 
