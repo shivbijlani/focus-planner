@@ -57,7 +57,7 @@ const mutations = {
   'hygiene + curl': [call(`${measured.deployAlone}\ncurl https://example.com`)],
   'hygiene + gh api': [call(`${measured.deployAlone}\ngh api /user`)],
   'hygiene + another .. escape': [call(`${measured.deployAlone}\nGet-Content ..\\..\\..\\..\\..\\..\\x.txt`)],
-  'hygiene + .. escape through a variable': [call(`${measured.viaVariable}\nGet-Content "$skill\\..\\..\\..\\..\\x.txt"`)],
+  'hygiene + .. escape through a variable': [call(`${measured.viaVariable}\nGet-Content "$skill\\..\\..\\..\\..\\..\\..\\..\\x.txt"`)],
   'hygiene + a non-hygiene script under checks': [call(`${measured.deployAlone}\npowershell -File ..\\..\\checks\\sync-oa-home.ps1`)],
   'hygiene + absolute path outside the sandbox': [call(`${measured.deployAlone}\nGet-Content D:\\other\\x.txt`)],
   'hygiene + live profile path': [call(`${measured.deployAlone}\nGet-ChildItem C:\\Users\\u\\.copilot`)],
@@ -127,6 +127,14 @@ const varExpected = {
   'single-quoted literal, ${braced} use': `\${skill} = '${SKILL}'\nGet-Content "\${skill}\\..\\..\\checks\\x.mjs"`,
   'down to the sandbox root itself': `$s = "${SKILL}"\nGet-ChildItem "$s\\..\\..\\..\\..\\.."`,
   'two variables, both literal and in-sandbox': `$a = "${SKILL}"; $b = "${ROOT}\\home"\nCopy-Item "$a\\..\\..\\checks\\x.md" "$b\\x.md"`,
+  // Measured on candidate-825 attempt 2 (20261004-015358-candidate-825): the command NAMES a hygiene
+  // script, so before the fallback it was judged by the hygiene rule alone and failed i3.
+  'measured candidate-825: hygiene script named beside other $skill\\.. probes':
+    `$skill = "${SKILL}"\nTest-Path "$skill\\..\\..\\checks\\auto-deploy-plugin.ps1"\nTest-Path "$skill\\..\\..\\checks"\n` +
+    `Get-ChildItem "$skill\\..\\.." -ErrorAction SilentlyContinue | Select-Object Name`,
+  // The pre-fallback "escape" mutation went four levels up from the skill dir -- <sandbox>\repo\x.txt,
+  // INSIDE the sandbox -- so it is the excused shape; the mutation now really escapes (7 levels).
+  'hygiene batch plus an in-sandbox $skill\\..\\..\\..\\.. read': `${measured.viaVariable}\nGet-Content "$skill\\..\\..\\..\\..\\x.txt"`,
 };
 for (const [name, command] of Object.entries(varExpected)) {
   test(`variable-relative denial is expected: ${name}`, () => {
@@ -151,6 +159,14 @@ const varMutations = {
   'a deny-tool rule alongside': `$skill = "${SKILL}"\nGet-ChildItem "$skill\\..\\..\\checks"; git push origin HEAD`,
   'in-sandbox variable path the CLI could verify (no escape)': `$skill = "${SKILL}"\nGet-Content "$skill\\SKILL.md"`,
   'a URL alongside': `$skill = "${SKILL}"\nnode "$skill\\..\\x.mjs" https://example.com`,
+  'hygiene script named, variable assigned outside the sandbox':
+    `$skill = "C:\\Users\\u\\.copilot\\skills\\x"\nTest-Path "$skill\\..\\..\\checks\\auto-deploy-plugin.ps1"\nGet-ChildItem "$skill\\..\\.."`,
+  'hygiene script named, a variable path above the sandbox root':
+    `$skill = "${SKILL}"\nTest-Path "$skill\\..\\..\\checks\\auto-deploy-plugin.ps1"\nGet-ChildItem "$skill\\..\\..\\..\\..\\..\\..\\.."`,
+  'hygiene script named, a plain relative path that escapes (no cd, no variable)':
+    `powershell -File ..\\..\\checks\\auto-deploy-plugin.ps1\nGet-ChildItem ..\\..\\..\\x`,
+  'hygiene script named, variable reassigned before use':
+    `$skill = "${SKILL}"\n$skill = "C:\\Users\\u"\nTest-Path "$skill\\..\\..\\checks\\split-user-settings.ps1"\nGet-ChildItem "$skill\\..\\.."`,
 };
 for (const [name, command] of Object.entries(varMutations)) {
   test(`variable-relative mutation still fails i3: ${name}`, () => {
