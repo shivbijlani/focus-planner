@@ -1,0 +1,152 @@
+{
+  "fixture": "base",
+  "covers": [
+    "mutcheck-closed-task-write"
+  ],
+  "cases": [
+    {
+      "id": "mc/closed-task-write/completed-board-refused",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9405",
+        "Ask": "none"
+      },
+      "files": {
+        "data/journal/task-9405.md": "# Task 9405: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — {{DATE-2d}}\n\n<!-- from: overnight-agent -->\n\n**Status:** Done · {{DATE-2d}}\n\nRenewed online.\n\n**Needs from you:** nothing.\n",
+        "state/task-9405.json": {
+          "id": "9405",
+          "status": "done",
+          "status_by": "agent"
+        },
+        "data/planner-completed.md": "# Completed\n\n| ID | 🎯 | Task | Work Priority | Completed | Linked ID |\n|----|----|------|---------------|-----------|-----------|\n| 9405 | ✅ | Fixture | - | {{DATE-1d}} | |\n"
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nChecked the emissions test.\n\n**Needs from you:** nothing.\n",
+      "note": "A real append into a task on planner-completed.md is refused and nothing is written, though the agent (not the user) set done."
+    },
+    {
+      "id": "mc/closed-task-write/reply-after-close-refused-json",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9405",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-9405.md": "# Task 9405: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — {{DATE-2d}}\n\n<!-- from: overnight-agent -->\n\n**Status:** Done · {{DATE-2d}}\n\nRenewed online.\n\n**Needs from you:** nothing.\n\n## {{DATE}}\n\n<!-- from: me -->\n\none more thing - can you also check whether the emissions test is due?\n",
+        "state/task-9405.json": {
+          "id": "9405",
+          "status": "done",
+          "status_by": "agent"
+        },
+        "data/planner-completed.md": "# Completed\n\n| ID | 🎯 | Task | Work Priority | Completed | Linked ID |\n|----|----|------|---------------|-----------|-----------|\n| 9405 | ✅ | Fixture | - | {{DATE-1d}} | |\n"
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nChecked the emissions test.\n\n**Needs from you:** nothing.\n",
+      "note": "His reply below the close does not reopen it (#170 cause 3): the e1 shape, refused."
+    },
+    {
+      "id": "mc/closed-task-write/status-by-user-on-board-refused",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9405",
+        "Ask": "none",
+        "Validate": true
+      },
+      "files": {
+        "data/journal/task-9405.md": "# Task 9405: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — {{DATE-2d}}\n\n<!-- from: overnight-agent -->\n\n**Status:** Done · {{DATE-2d}}\n\nRenewed online.\n\n**Needs from you:** nothing.\n",
+        "state/task-9405.json": {
+          "id": "9405",
+          "status": "done",
+          "status_by": "user"
+        },
+        "data/planner.md": "| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 9405 | 🟡 | Fixture | - | {{DATE-10d}} | |\n"
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nChecked the emissions test.\n\n**Needs from you:** nothing.\n",
+      "note": "He set done himself; still on the board does not matter."
+    },
+    {
+      "id": "mc/closed-task-write/skip-off-both-boards-refused-json",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9405",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-9405.md": "# Task 9405: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — {{DATE-2d}}\n\n<!-- from: overnight-agent -->\n\n**Status:** Done · {{DATE-2d}}\n\nRenewed online.\n\n**Needs from you:** nothing.\n",
+        "state/task-9405.json": {
+          "id": "9405",
+          "status": "skip"
+        }
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nChecked the emissions test.\n\n**Needs from you:** nothing.\n",
+      "note": "Closed and on neither board is closed, with status_by absent (reads as agent)."
+    },
+    {
+      "id": "mc/closed-task-write/agent-done-on-board-allows",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9405",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-9405.md": "# Task 9405: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — {{DATE-2d}}\n\n<!-- from: overnight-agent -->\n\n**Status:** Done · {{DATE-2d}}\n\nRenewed online.\n\n**Needs from you:** nothing.\n",
+        "state/task-9405.json": {
+          "id": "9405",
+          "status": "done",
+          "status_by": "agent"
+        },
+        "data/planner.md": "| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 9405 | 🟡 | Fixture | - | {{DATE-10d}} | |\n"
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nChecked the emissions test.\n\n**Needs from you:** nothing.\n",
+      "note": "The agent's own done on a row still on planner.md is not a user close."
+    },
+    {
+      "id": "mc/closed-task-write/open-status-on-completed-board-allows",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9405",
+        "Ask": "none",
+        "Validate": true,
+        "Json": true
+      },
+      "files": {
+        "data/journal/task-9405.md": "# Task 9405: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — {{DATE-2d}}\n\n<!-- from: overnight-agent -->\n\n**Status:** Done · {{DATE-2d}}\n\nRenewed online.\n\n**Needs from you:** nothing.\n",
+        "state/task-9405.json": {
+          "id": "9405",
+          "status": "in-progress",
+          "status_by": "agent"
+        },
+        "data/planner-completed.md": "# Completed\n\n| ID | 🎯 | Task | Work Priority | Completed | Linked ID |\n|----|----|------|---------------|-----------|-----------|\n| 9405 | ✅ | Fixture | - | {{DATE-1d}} | |\n"
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nChecked the emissions test.\n\n**Needs from you:** nothing.\n",
+      "note": "Only done/skip can be closed: an open status on the completed board is not."
+    },
+    {
+      "id": "mc/closed-task-write/disable-guard-g24-still-refused",
+      "tool": "write-turn",
+      "args": {
+        "Id": "9405",
+        "Ask": "none",
+        "Validate": true,
+        "DisableGuard": [
+          "G24"
+        ]
+      },
+      "files": {
+        "data/journal/task-9405.md": "# Task 9405: Fixture\n\nUser notes.\n\n---\n<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->\n\n## 🌙 Overnight Agent — {{DATE-2d}}\n\n<!-- from: overnight-agent -->\n\n**Status:** Done · {{DATE-2d}}\n\nRenewed online.\n\n**Needs from you:** nothing.\n",
+        "state/task-9405.json": {
+          "id": "9405",
+          "status": "done",
+          "status_by": "user"
+        },
+        "data/planner.md": "| ID | 🎯 | Task | Mngr Priority | Added | Linked ID |\n|----|----|------|---------------|-------|-----------|\n| 9405 | 🟡 | Fixture | - | {{DATE-10d}} | |\n"
+      },
+      "body": "## 🌙 Overnight Agent — {{DATE}}\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress · {{DATE}}\n\nChecked the emissions test.\n\n**Needs from you:** nothing.\n",
+      "note": "G24 is not bypassed by -DisableGuard."
+    }
+  ]
+}

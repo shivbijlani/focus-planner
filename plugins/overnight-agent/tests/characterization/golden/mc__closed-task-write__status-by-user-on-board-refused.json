@@ -1,0 +1,20 @@
+{
+  "files": {},
+  "id": "mc/closed-task-write/status-by-user-on-board-refused",
+  "steps": [
+    {
+      "args": {
+        "Ask": "none",
+        "Id": "9405",
+        "Validate": true
+      },
+      "exit": 2,
+      "stdout": [
+        "[write-turn] REFUSED - 1 guard violation(s); nothing written.",
+        "  G24 line 1: task 9405 is closed by the user: status_by: user; report it in the run summary under Replies on closed tasks; don't write to it and don't retry. Only the user can reopen a task he closed, even when he has replied below it. This guard cannot be disabled",
+        "      | status=done status_by=user"
+      ],
+      "tool": "write-turn"
+    }
+  ]
+}
