@@ -40,11 +40,15 @@ test('phone rail gives the primary doc priority and puts Telegram and Journal in
   const actions = page.getByRole('dialog', { name: 'Task actions' })
   await expect(actions.getByRole('button', { name: 'Open Telegram' })).toBeVisible()
   await expect(actions.getByRole('button', { name: 'Open journal' })).toBeVisible()
-  await page.screenshot({ path: test.info().outputPath('docs-phone-board.png'), fullPage: true })
+  const boardScreenshot = test.info().outputPath('docs-phone-board.png')
+  await page.screenshot({ path: boardScreenshot, fullPage: true })
+  await test.info().attach('Phone-width Docs task row', { path: boardScreenshot, contentType: 'image/png' })
   await page.keyboard.press('Escape')
   await task.locator('.doc-action').click()
   await expect(page.locator('.dv-title')).toHaveText(SAMPLE_TITLE)
-  await page.screenshot({ path: test.info().outputPath('docs-phone-reader.png'), fullPage: true })
+  const readerScreenshot = test.info().outputPath('docs-phone-reader.png')
+  await page.screenshot({ path: readerScreenshot, fullPage: true })
+  await test.info().attach('Phone-width Docs reader', { path: readerScreenshot, contentType: 'image/png' })
 })
 
 test('without docs/index.json the planner renders no Docs task links', async ({ page }) => {
