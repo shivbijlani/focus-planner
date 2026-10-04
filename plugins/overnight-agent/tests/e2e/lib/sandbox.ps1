@@ -165,6 +165,47 @@ function Remove-PluginTests([string]$Dest) {
   if (Test-Path -LiteralPath $tests) { throw "could not remove the plugin's tests\ from the sandbox copy: $tests" }
 }
 
+# Removing tests\ is not enough if the sandbox still TELLS the subject where they live: measured on
+# 20261003-203652-candidate-828-rebased, the coordinator read the seeded user-settings.md ("...sandbox
+# run (plugins/overnight-agent/tests/e2e)") and globbed that folder as its 4th call. Every seeded,
+# sandbox-visible text is scanned before the run. Harness-written text (planner, homes, the harness
+# MCP server whose tool descriptions the subject sees, everything outside repo\) must name neither
+# the plugin's tests folder nor `tests/e2e`. The product copy (repo\plugins\overnight-agent: SKILL.md,
+# scripts, README) must not name `plugins/overnight-agent/tests`; its source comments may cite
+# `tests/e2e/run-sandbox.ps1` relative to the plugin, a folder the export has already removed.
+$script:TestPathFull = '(?i)plugins[\\/]+overnight-agent[\\/]+tests(?![\w-])'
+$script:TestPathLoose = '(?i)(?<![\w-])tests[\\/]+e2e(?![\w-])'
+function Find-TestPathLeaks($L) {
+  $hits = @()
+  $textExt = @('.md', '.txt', '.json', '.jsonl', '.mjs', '.js', '.ps1', '.psm1', '.yml', '.yaml', '.csv', '.html')
+  $scan = {
+    param([string]$Root, [string[]]$Patterns, [string[]]$SkipUnder)
+    if (-not (Test-Path -LiteralPath $Root)) { return }
+    foreach ($f in (Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+      $full = $f.FullName
+      if (@($SkipUnder | Where-Object { $full.StartsWith($_, [StringComparison]::OrdinalIgnoreCase) }).Count) { continue }
+      if ($textExt -notcontains $f.Extension.ToLowerInvariant() -or $f.Length -gt 4MB) { continue }
+      $text = [IO.File]::ReadAllText($full)
+      foreach ($p in $Patterns) {
+        $m = [regex]::Match($text, $p)
+        if ($m.Success) { $script:leakHits += "$($full.Substring($L.Root.Length).TrimStart('\')): '$($m.Value)'"; break }
+      }
+    }
+  }
+  $script:leakHits = @()
+  $repo = $L.Repo.TrimEnd('\') + '\'
+  & $scan $L.Root @($script:TestPathFull, $script:TestPathLoose) @($repo)
+  & $scan $L.PluginDir @($script:TestPathFull) @()
+  $hits = @($script:leakHits)
+  return , $hits
+}
+function Assert-NoTestPathLeak($L) {
+  $hits = Find-TestPathLeaks $L
+  if ($hits.Count) {
+    throw "the sandbox tells the subject where its tests are (it must not; see Find-TestPathLeaks): $($hits -join ' | ')"
+  }
+}
+
 function Export-SourceUnderTest([string]$Ref, [string]$RepoRoot, [string]$Dest) {
   New-Item -ItemType Directory -Force -Path $Dest | Out-Null
   if ($Ref -and (Test-Path -LiteralPath $Ref -PathType Container)) {

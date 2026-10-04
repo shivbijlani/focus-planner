@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// sandbox-app-mcp.mjs -- a stand-in for the Copilot app's session tools, for tests/e2e only.
+// sandbox-app-mcp.mjs -- a stand-in for the Copilot app's session tools, for the sandbox harness only.
 //
 // A headless `copilot -p` run has no app host, so the native tools the coordinator dispatches
 // with (create_session, send_session_message, get_sessions_status, ...) do not exist there.
