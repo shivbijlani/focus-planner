@@ -37,6 +37,18 @@ jobs:
       - name: Production build
         run: npm run build
 
+  server-test-windows:
+    name: Server API tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test -- server.test.js
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
