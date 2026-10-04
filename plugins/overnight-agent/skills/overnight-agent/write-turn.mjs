@@ -480,6 +480,7 @@ const H2PrefixRe = '^[ \\t]*##[ \\t]+';
 const AgentMarkerRe = '^[ \\t]*<!--[ \\t]*from:[ \\t]*overnight-agent[ \\t]*-->';
 const SENTINEL_FIND = 'OVERNIGHT-AGENT do not edit';
 const SENTINEL_LINE = '<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->';
+const SENTINEL_STRUCTURAL_RE = '(?i)^[ \\t]*<!--[ \\t]*OVERNIGHT-AGENT[ \\t]+do[ \\t]+not[ \\t]+edit[ \\t]+this[ \\t]+line\\b';
 
 const isH2 = (l) => psMatch(l, H2Re) && !psMatch(l, H3Re);
 const afterH2 = (l) => netRe(H2PrefixRe).replaceFirst(l, '');
@@ -542,6 +543,49 @@ function fenceMaskedText(text) {
     if (fence) parts[i] = ' '.repeat(parts[i].length);
   }
   return parts.join('');
+}
+
+function maskInlineCodeSpans(text) {
+  const chars = text.split('');
+  for (let i = 0; i < chars.length;) {
+    if (chars[i] !== '`') { i++; continue; }
+
+    const start = i;
+    while (i < chars.length && chars[i] === '`') i++;
+    const delimiterLength = i - start;
+    let closing = -1;
+    let j = i;
+    while (j < chars.length) {
+      if (chars[j] !== '`') { j++; continue; }
+      const runStart = j;
+      while (j < chars.length && chars[j] === '`') j++;
+      if (j - runStart === delimiterLength) { closing = runStart; break; }
+    }
+    if (closing < 0) { i = start + delimiterLength; continue; }
+
+    const end = closing + delimiterLength;
+    for (let k = start; k < end; k++) {
+      if (chars[k] !== '\n' && chars[k] !== '\r') chars[k] = ' ';
+    }
+    i = end;
+  }
+  return chars.join('');
+}
+
+function sentinelScanText(text) {
+  return maskInlineCodeSpans(fenceMaskedText(text));
+}
+
+function structuralSentinelCounts(text) {
+  let structural = 0;
+  let canonical = 0;
+  for (const line of splitLines(sentinelScanText(text))) {
+    if (psMatch(line, SENTINEL_STRUCTURAL_RE)) {
+      structural++;
+      if (line.trim() === SENTINEL_LINE) canonical++;
+    }
+  }
+  return { structural, canonical };
 }
 
 // READ ONLY, from the JOURNAL (never state): the task's catch-up doc binding, fences masked.
@@ -1042,10 +1086,11 @@ function turnBodyFindings(ctx, body, disabled, doc, ask) {
 
   // G25: the structural journal sentinel is emitted by the writer, never copied into a turn body.
   if (on('G25')) {
+    const sentinelLines = splitLines(sentinelScanText(body));
     for (let i = 0; i < lines.length; i++) {
-      if (!inFence[i] && psMatch(lines[i], '^[ \\t]*<!--[ \\t]*OVERNIGHT-AGENT[ \\t]+do not edit this line\\b')) {
+      if (psMatch(sentinelLines[i], SENTINEL_STRUCTURAL_RE)) {
         findings.push(newFinding('G25', i + 1, netTrim(lines[i]),
-          'the journal sentinel is structural and must be written once by write-turn, not copied into a task turn'));
+          'the journal sentinel is structural and must be written once by write-turn, not copied into a task turn; remove it from this body'));
         break;
       }
     }
@@ -1555,16 +1600,17 @@ function run(argv, out) {
 
   // G6: the Telegram bridge skips a journal with no sentinel, so open the managed block here.
   let prefix = '';
-  if (!psMatch(existing, '<!-- OVERNIGHT-AGENT do not edit this line')) {
+  const existingSentinels = structuralSentinelCounts(existing);
+  if (existingSentinels.structural === 0) {
     prefix = '---' + nl + SENTINEL_LINE + nl + nl;
     if (!P.Json) say('[write-turn] journal had no OVERNIGHT-AGENT sentinel - adding it (the Telegram bridge skips tasks without one).');
   }
 
   const turn = addAskStamp(netTrimEnd(body), askVal, identityStamp(author)).replace(/\r?\n/g, nl);
   const journalOutput = existing + sep + prefix + turn + nl;
-  const sentinelCount = (journalOutput.match(/<!-- OVERNIGHT-AGENT do not edit this line/g) || []).length;
-  if (sentinelCount !== 1) {
-    say(`[write-turn] REFUSED - journal must contain exactly one OVERNIGHT-AGENT sentinel (found ${sentinelCount}); nothing written.`);
+  const sentinelCounts = structuralSentinelCounts(journalOutput);
+  if (sentinelCounts.structural !== 1 || sentinelCounts.canonical !== 1) {
+    say(`[write-turn] REFUSED - journal must contain exactly one OVERNIGHT-AGENT sentinel (found ${sentinelCounts.structural}); nothing written.`);
     return 2;
   }
   writeAllText(journal, journalOutput);

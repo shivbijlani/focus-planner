@@ -197,8 +197,8 @@ Write-Host ''
 Write-Host 'MUTATION (guard disabled)'
 $src = [IO.File]::ReadAllText($writeTurn, (New-Object Text.UTF8Encoding($false)))
 $isNode = $writeTurn -like '*.mjs'
-$needle = if ($isNode) { "if (!psMatch(existing, '<!-- OVERNIGHT-AGENT do not edit this line')) {" }
-          else { "if (`$existing -notmatch [regex]::Escape('<!-- OVERNIGHT-AGENT do not edit this line')) {" }
+$needle = if ($isNode) { 'if (existingSentinels.structural === 0) {' }
+          else { 'if ($existingSentinels.structural -eq 0) {' }
 if (-not $src.Contains($needle)) {
   Write-Host '  FAIL - could not locate the guard to mutate; the check is stale.' -ForegroundColor Red
   $failures += 'mutation site not found'

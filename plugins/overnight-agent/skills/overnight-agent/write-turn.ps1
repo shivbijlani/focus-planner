@@ -231,6 +231,8 @@ if ($env:OA_SANDBOX_ROOT) {
 $script:IssueResolver = if ($env:WRITE_TURN_ISSUE_RESOLVER) { $env:WRITE_TURN_ISSUE_RESOLVER }
                         else { [IO.Path]::Combine($PSScriptRoot, '..', '..', 'checks', 'issue-shipped.mjs') }
 $script:OaStatePs1 = [IO.Path]::Combine($PSScriptRoot, 'oa-state.ps1')
+$script:SentinelLine = '<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->'
+$script:StructuralSentinelRe = '(?i)^[ \t]*<!--[ \t]*OVERNIGHT-AGENT[ \t]+do[ \t]+not[ \t]+edit[ \t]+this[ \t]+line\b'
 
 # --- #627 the user pause, read on the WRITE side -----------------------------------------
 # Kept in step with `$script:PausedStatus` in oa-state.ps1, which is derived there as
@@ -361,6 +363,50 @@ function Get-FenceMaskedText([string]$text) {
     if ($fence) { $lines[$i] = ' ' * $lines[$i].Length }
   }
   return ($lines -join '')
+}
+
+function Get-InlineCodeMaskedText([string]$text) {
+  $chars = $text.ToCharArray()
+  $i = 0
+  while ($i -lt $chars.Length) {
+    if ($chars[$i] -ne [char]96) { $i++; continue }
+
+    $start = $i
+    while ($i -lt $chars.Length -and $chars[$i] -eq [char]96) { $i++ }
+    $delimiterLength = $i - $start
+    $closing = -1
+    $j = $i
+    while ($j -lt $chars.Length) {
+      if ($chars[$j] -ne [char]96) { $j++; continue }
+      $runStart = $j
+      while ($j -lt $chars.Length -and $chars[$j] -eq [char]96) { $j++ }
+      if (($j - $runStart) -eq $delimiterLength) { $closing = $runStart; break }
+    }
+    if ($closing -lt 0) { $i = $start + $delimiterLength; continue }
+
+    $end = $closing + $delimiterLength
+    for ($k = $start; $k -lt $end; $k++) {
+      if ($chars[$k] -ne [char]10 -and $chars[$k] -ne [char]13) { $chars[$k] = ' ' }
+    }
+    $i = $end
+  }
+  return (-join $chars)
+}
+
+function Get-SentinelScanText([string]$text) {
+  return (Get-InlineCodeMaskedText (Get-FenceMaskedText $text))
+}
+
+function Get-StructuralSentinelCounts([string]$text) {
+  $structural = 0
+  $canonical = 0
+  foreach ($line in (Get-SentinelScanText $text) -split "`r?`n") {
+    if ($line -match $script:StructuralSentinelRe) {
+      $structural++
+      if ($line.Trim() -ceq $script:SentinelLine) { $canonical++ }
+    }
+  }
+  return [pscustomobject]@{ structural = $structural; canonical = $canonical }
 }
 
 function Get-JournalDocMeta([string]$path) {
@@ -1320,12 +1366,14 @@ function Test-TurnBody {
 
   # --- G25: the writer, not a task turn, owns the journal sentinel ----------------
   if (& $on 'G25') {
-    $sentinel = [regex]::Match($Body, '<!--\s*OVERNIGHT-AGENT\s+do not edit this line\b')
-    if ($sentinel.Success) {
-      $line = ($Body.Substring(0, $sentinel.Index) -split "`r?`n").Count
-      $findings += New-Finding 'G25' $line $sentinel.Value (
-        'the journal sentinel is structural and must be written once by write-turn.ps1, not copied ' +
-        'into a task turn; remove it from this body')
+    $sentinelLines = (Get-SentinelScanText $Body) -split "`r?`n"
+    for ($i = 0; $i -lt $sentinelLines.Count; $i++) {
+      if ($sentinelLines[$i] -match $script:StructuralSentinelRe) {
+        $findings += New-Finding 'G25' ($i + 1) $lines[$i].Trim() (
+          'the journal sentinel is structural and must be written once by write-turn, not copied ' +
+          'into a task turn; remove it from this body')
+        break
+      }
     }
   }
 
@@ -1972,9 +2020,10 @@ $sep = if ($existing.EndsWith("`n")) { $nl } else { $nl + $nl }
 # Append-only, like the rest of this script: when the marker is absent we emit
 # it immediately above the new turn, which opens the managed block here and
 # leaves every byte above untouched.
-$sentinelLine = '<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->'
+$sentinelLine = $script:SentinelLine
 $prefix = ''
-if ($existing -notmatch [regex]::Escape('<!-- OVERNIGHT-AGENT do not edit this line')) {
+$existingSentinels = Get-StructuralSentinelCounts $existing
+if ($existingSentinels.structural -eq 0) {
   $prefix = '---' + $nl + $sentinelLine + $nl + $nl
   if (-not $Json) {
     Write-Host '[write-turn] journal had no OVERNIGHT-AGENT sentinel - adding it (the Telegram bridge skips tasks without one).' -ForegroundColor Yellow
@@ -1982,9 +2031,9 @@ if ($existing -notmatch [regex]::Escape('<!-- OVERNIGHT-AGENT do not edit this l
 }
 
 $out = $existing + $sep + $prefix + ((Add-AskStamp -Body $body.TrimEnd() -Ask $askVal -By (Get-IdentityStamp $Author)) -replace "`r?`n", $nl) + $nl
-$sentinelCount = [regex]::Matches($out, [regex]::Escape('<!-- OVERNIGHT-AGENT do not edit this line')).Count
-if ($sentinelCount -ne 1) {
-  Write-Host "[write-turn] REFUSED - journal must contain exactly one OVERNIGHT-AGENT sentinel (found $sentinelCount); nothing written." -ForegroundColor Red
+$sentinelCounts = Get-StructuralSentinelCounts $out
+if ($sentinelCounts.structural -ne 1 -or $sentinelCounts.canonical -ne 1) {
+  Write-Host "[write-turn] REFUSED - journal must contain exactly one OVERNIGHT-AGENT sentinel (found $($sentinelCounts.structural)); nothing written." -ForegroundColor Red
   exit 2
 }
 
