@@ -122,13 +122,18 @@ export async function rowIds(page, title) {
   )
 }
 
-/** Expand a collapsed section (Deferred and Priorities start collapsed). */
+/**
+ * Expand a collapsed section (Deferred and Priorities start collapsed). The header toggles, and the
+ * app can toggle it too (after an add it clicks collapsed headers to reveal the new row, #268), so
+ * a single check-then-click can cancel out (#826). Retry until it reads open; it never accepts less.
+ */
 export async function expandSection(page, title) {
-  const icon = section(page, title).locator('h2.section-header .collapse-icon')
-  if ((await icon.textContent()).trim() === '▶') {
-    await section(page, title).locator('h2.section-header').click()
-  }
-  await expect(icon).toHaveText('▼')
+  const header = section(page, title).locator('h2.section-header')
+  const icon = header.locator('.collapse-icon')
+  await expect(async () => {
+    if ((await icon.textContent()).trim() === '▶') await header.click()
+    await expect(icon).toHaveText('▼', { timeout: 1_000 })
+  }).toPass({ timeout: 15_000 })
 }
 
 /** Add a task through the section's "+" Add-Task form. */

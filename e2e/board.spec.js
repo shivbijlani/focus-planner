@@ -101,9 +101,12 @@ test('adding straight to Deferred keeps Linked ID and Wake in their own columns 
   }))
 
   await addTask(page, 'Deferred', { task: 'Deferred child', priority: '⚪', linked: '1' })
+  // The add is written after the dialog closes; the app then reveals the new row itself (#268) by
+  // expanding the collapsed section. Wait for that before touching the header (#826).
+  const child = section(page, 'Deferred').locator('tr[data-task-id="2"]')
+  await expect(child).toBeVisible()
   await expandSection(page, 'Deferred')
 
-  const child = section(page, 'Deferred').locator('tr[data-task-id="2"]')
   await expect(child).toBeVisible()
   await expect(child.locator('.linked-id-link')).toHaveText('1')
   await expect(child.locator('.snooze-badge')).toHaveCount(0)
