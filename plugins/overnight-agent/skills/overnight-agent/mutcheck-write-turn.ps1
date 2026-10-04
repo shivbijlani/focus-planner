@@ -1,4 +1,4 @@
-<#
+﻿<#
   mutcheck-write-turn.ps1 -- proves every guard in write-turn.ps1 is load-bearing.
 
   Two things are being established, and the second is the one that matters:
