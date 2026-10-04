@@ -169,6 +169,17 @@ export function classifyDenial(call, { sandboxRoot, denyRules = [] } = {}) {
   const rule = denyRuleHit(call.name, command, denyRules);
   if (rule) return no(`command matches deny rule ${rule}`);
   const lower = command.toLowerCase();
+  // The variable-relative rule re-resolves EVERY path and excuses only a fully in-sandbox command
+  // through variables assigned literal in-sandbox paths (#822). It is tried whenever the hygiene rule
+  // does not excuse the call -- including when the command merely NAMES a hygiene script
+  // (`Test-Path "$skill\..\..\checks\auto-deploy-plugin.ps1"` beside `Get-ChildItem "$skill\..\.."`,
+  // measured on candidate-825). Before, naming the script routed the call to the hygiene rule alone,
+  // whose `..` check rejected the in-sandbox probe. The cd-relative rule is deliberately NOT a
+  // fallback here: a hygiene call after a `cd` stays judged by the hygiene rule alone.
+  const fallback = (why) => {
+    const v = classifyVarRelative(command, sandboxRoot);
+    return v.expected ? v : no(`${why}, and ${v.reason}`);
+  };
   if (!HYGIENE_SCRIPTS.some((s) => lower.includes(s))) {
     const cd = classifyCdRelative(command, sandboxRoot);
     if (cd.expected) return cd;
@@ -180,8 +191,8 @@ export function classifyDenial(call, { sandboxRoot, denyRules = [] } = {}) {
     const root = norm(sandboxRoot).replace(/\\+$/, '');
     masked = masked.split(root).join('<sandbox>');
   }
-  if (absolutePath.test(masked)) return no('command names an absolute path outside the sandbox');
+  if (absolutePath.test(masked)) return fallback('command names an absolute path outside the sandbox');
   const rest = masked.replace(hygienePath, '<hygiene>');
-  if (dotdotSegment.test(rest)) return no('command has a ".." path that is not a PHASE 0 hygiene script');
+  if (dotdotSegment.test(rest)) return fallback('command has a ".." path that is not a PHASE 0 hygiene script');
   return { expected: true, reason: 'PHASE 0 hygiene script refused by path verification' };
 }

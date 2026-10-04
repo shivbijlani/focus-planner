@@ -141,7 +141,10 @@ and is denied. Such a denial is expected only if the command changes no location
 path is assigned exactly once in the same command (before its first use, never rebound any other way) to a
 quoted literal absolute path inside the sandbox, no path uses a scoped/environment/automatic variable, `~`,
 UNC or a URL, every path with its variables substituted resolves inside the sandbox, and at least one
-variable path escapes the session directory the way the CLI reads it.
+variable path escapes the session directory the way the CLI reads it. This rule also applies when the
+command names a PHASE 0 hygiene script that the hygiene rule does not excuse on its own (candidate-825:
+`Test-Path "$skill\..\..\checks\auto-deploy-plugin.ps1"` beside `Get-ChildItem "$skill\..\.."`); the
+cd-relative rule does not, so a hygiene call after a `cd` is still judged by the hygiene rule alone.
 
 Invariants are safety properties: a retry never clears one. `completion` is compared like a
 scenario. A scenario that failed **in a run that did not complete** is `inconclusive`, not `fail`:
