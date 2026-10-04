@@ -73,6 +73,11 @@
             "$ref": "#/$defs/docId"
           }
         },
+        "nextBlockId": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Next never-before-used positive block id, maintained by fp-docs."
+        },
         "openDispositions": {
           "type": "object",
           "propertyNames": {

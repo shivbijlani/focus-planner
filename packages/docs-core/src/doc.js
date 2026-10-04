@@ -113,6 +113,77 @@ export function parseDoc(content) {
   return { header, title, blocks: out, statusLine: statusLine(out) }
 }
 
+/** Parse an unanchored draft into the renderer blocks that the publisher anchors. */
+export function parseDraftBlocks(content) {
+  const lines = splitLines(content)
+  const titleIndex = lines.findIndex((line) => /^#\s+/.test(line))
+  if (titleIndex === -1) return []
+  const source = []
+  walkVisibleLines(lines.slice(titleIndex + 1), {
+    onLine: (line, info) => source.push({ line, fenced: info.fenced }),
+  })
+  const blocks = []
+  let current = []
+  let kind = null
+  const flush = () => {
+    if (!current.length) return
+    const parsed = parseDoc(`<!-- @b1 -->\n${current.join('\n')}`).blocks[0]
+    if (parsed) blocks.push(parsed)
+    current = []
+    kind = null
+  }
+  const isList = (line) => /^(?:\s*(?:[-*+]|\d+[.)])\s|\s*\[[ xX]\]\s)/.test(line)
+  for (let index = 0; index < source.length; index++) {
+    const { line, fenced } = source[index]
+    const trimmed = line.trim()
+    if (!trimmed && !fenced) {
+      flush()
+      continue
+    }
+    if (fenced) {
+      if (kind !== 'code' && current.length) flush()
+      kind = 'code'
+      current.push(line)
+      continue
+    }
+    if (/^#{1,6}\s/.test(line)) {
+      flush()
+      current.push(line)
+      flush()
+      continue
+    }
+    if (/^\|.*\|$/.test(line)) {
+      flush()
+      current.push(line)
+      flush()
+      continue
+    }
+    if (isList(line)) {
+      if (kind === 'list') flush()
+      kind = 'list'
+      current.push(line)
+      continue
+    }
+    if (/^\s+/.test(line) && kind === 'list') {
+      current.push(line)
+      continue
+    }
+    if (/^>/.test(line)) {
+      if (kind !== 'quote') flush()
+      kind = 'quote'
+      current.push(line)
+      continue
+    }
+    if (kind !== 'paragraph') {
+      flush()
+      kind = 'paragraph'
+    }
+    current.push(line)
+  }
+  flush()
+  return blocks
+}
+
 /** The doc's bold status line (catch-up contract: first block is `**Status: …**`). */
 export function statusLine(blocks) {
   for (const b of blocks || []) {
@@ -125,13 +196,76 @@ export function statusLine(blocks) {
   return null
 }
 
+function stripInlineCode(text) {
+  let output = ''
+  let cursor = 0
+  while (cursor < text.length) {
+    const open = text.indexOf('`', cursor)
+    if (open === -1) return output + text.slice(cursor)
+    output += text.slice(cursor, open)
+    let delimiterEnd = open
+    while (text[delimiterEnd] === '`') delimiterEnd++
+    const delimiterLength = delimiterEnd - open
+    let search = delimiterEnd
+    let close = -1
+    while (search < text.length) {
+      const candidate = text.indexOf('`', search)
+      if (candidate === -1) break
+      let candidateEnd = candidate
+      while (text[candidateEnd] === '`') candidateEnd++
+      if (candidateEnd - candidate === delimiterLength) {
+        close = candidateEnd
+        break
+      }
+      search = candidateEnd
+    }
+    if (close === -1) return output + text.slice(open)
+    output += text.slice(delimiterEnd, close - delimiterLength)
+    cursor = close
+  }
+  return output
+}
+
 /** Rough plain text of a block (markdown syntax removed) — for search and diffing. */
+function stripInlineLinks(line) {
+  let output = ''
+  let cursor = 0
+  while (cursor < line.length) {
+    const labelStart = line[cursor] === '!' && line[cursor + 1] === '[' ? cursor + 1 : cursor
+    if (line[labelStart] !== '[') {
+      output += line[cursor++]
+      continue
+    }
+    let labelEnd = labelStart + 1
+    while (labelEnd < line.length && line[labelEnd] !== ']' && line[labelEnd] !== '\n') labelEnd++
+    if (line[labelEnd] !== ']') {
+      output += line.slice(cursor, labelEnd)
+      cursor = labelEnd
+      continue
+    }
+    const destinationStart = labelEnd + 1
+    if (line[destinationStart] !== '(') {
+      output += line.slice(cursor, destinationStart)
+      cursor = destinationStart
+      continue
+    }
+    let destinationEnd = destinationStart + 1
+    while (destinationEnd < line.length && line[destinationEnd] !== ')' && line[destinationEnd] !== '\n') destinationEnd++
+    if (line[destinationEnd] !== ')') {
+      output += line.slice(cursor, destinationEnd)
+      cursor = destinationEnd
+      continue
+    }
+    output += line.slice(labelStart + 1, labelEnd)
+    cursor = destinationEnd + 1
+  }
+  return output
+}
+
 export function blockPlainText(block) {
   return (block?.lines || [])
-    .map((l) => l
-      .replace(/^\s*(#{1,6}|>|[-*+]|\d+[.)])\s+/, '')
-      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
-      .replace(/[*_`]/g, '')
+    .map((line) => stripInlineCode(stripInlineLinks(line.replace(/^\s*(#{1,6}|>|[-*+]|\d+[.)])\s+/, '')))
+      .replace(/[*_]/g, '')
       .replace(/^\|/, '').replace(/\|$/, '').replace(/\|/g, ' '))
     .join('\n')
     .trim()
@@ -145,6 +279,93 @@ export function changedBlockIds(current, previous) {
     if (!prev.has(b.id) || prev.get(b.id) !== b.lines.join('\n').trim()) out.add(b.id)
   }
   return out
+}
+
+function blockTokens(block) {
+  const text = blockPlainText(block).normalize('NFC').toLowerCase()
+  return text.match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu) || []
+}
+
+function normalizedBlock(block) {
+  return blockTokens(block).join(' ')
+}
+
+function tokenSimilarity(left, right) {
+  const a = new Set(blockTokens(left))
+  const b = new Set(blockTokens(right))
+  if (!a.size || !b.size) return 0
+  let intersection = 0
+  for (const token of a) if (b.has(token)) intersection++
+  return intersection / (a.size + b.size - intersection)
+}
+
+/**
+ * Assign stable positive block ids, carrying unambiguous ids from the prior revision.
+ * `nextId` must be greater than every id ever used by this document.
+ */
+export function assignBlockIds(blocks, previous = [], nextId = 1) {
+  const current = (blocks || []).map((block) => ({ ...block }))
+  const old = (previous || []).filter((block) => /^b[1-9][0-9]*$/.test(block.id || '')).map((block) => ({ ...block }))
+  if (!Number.isSafeInteger(nextId) || nextId < 1) throw new RangeError('next block id must be a positive safe integer')
+  const usedCurrent = new Set()
+  const usedOld = new Set()
+  const assign = (currentIndex, oldIndex) => {
+    current[currentIndex].id = old[oldIndex].id
+    usedCurrent.add(currentIndex)
+    usedOld.add(oldIndex)
+  }
+
+  for (let ni = 0; ni < current.length; ni++) {
+    const key = normalizedBlock(current[ni])
+    if (!key) continue
+    const candidates = old.map((block, oi) => normalizedBlock(block) === key ? oi : -1).filter((oi) => oi !== -1)
+    if (candidates.length !== 1) continue
+    const oi = candidates[0]
+    const reverse = current.filter((block) => normalizedBlock(block) === key)
+    if (reverse.length === 1 && !usedOld.has(oi)) assign(ni, oi)
+  }
+
+  while (true) {
+    const scores = new Map()
+    for (let ni = 0; ni < current.length; ni++) {
+      if (usedCurrent.has(ni)) continue
+      const ranked = []
+      for (let oi = 0; oi < old.length; oi++) {
+        if (usedOld.has(oi)) continue
+        ranked.push({ oi, score: tokenSimilarity(current[ni], old[oi]) })
+      }
+      ranked.sort((a, b) => b.score - a.score)
+      scores.set(`n${ni}`, ranked)
+    }
+    const oldRanks = new Map()
+    for (let oi = 0; oi < old.length; oi++) {
+      if (usedOld.has(oi)) continue
+      const ranked = []
+      for (let ni = 0; ni < current.length; ni++) {
+        if (usedCurrent.has(ni)) continue
+        ranked.push({ ni, score: tokenSimilarity(current[ni], old[oi]) })
+      }
+      ranked.sort((a, b) => b.score - a.score)
+      oldRanks.set(oi, ranked)
+    }
+    const pairs = []
+    for (let ni = 0; ni < current.length; ni++) {
+      if (usedCurrent.has(ni)) continue
+      const ranked = scores.get(`n${ni}`) || []
+      const best = ranked[0]
+      if (!best || best.score < 0.8 || ranked[1]?.score === best.score) continue
+      const reverse = oldRanks.get(best.oi) || []
+      if (reverse[0]?.ni === ni && reverse[1]?.score !== reverse[0]?.score) pairs.push([ni, best.oi])
+    }
+    if (!pairs.length) break
+    for (const [ni, oi] of pairs) if (!usedCurrent.has(ni) && !usedOld.has(oi)) assign(ni, oi)
+  }
+
+  for (let ni = 0; ni < current.length; ni++) {
+    if (usedCurrent.has(ni)) continue
+    current[ni].id = `b${nextId++}`
+  }
+  return { blocks: current, nextId }
 }
 
 /** Heading blocks, for the Outline sheet. */

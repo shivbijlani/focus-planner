@@ -146,7 +146,8 @@ Root fields:
 Each `docs[id]` entry has required `title` (non-empty after trimming), `primary` (boolean),
 `rev` (integer ≥ 1), `updatedAt` (UTC ISO-8601 timestamp), `links` (unique doc ids, in document
 order), and optional `task` (positive integer), `telegramUrl` (well-formed URI copied from the
-task journal's `tg-meta`), and `openDispositions` (`needs-you` to a nonnegative count).
+task journal's `tg-meta`), `nextBlockId` (the next never-used positive block id maintained by
+`fp-docs`), and `openDispositions` (`needs-you` to a nonnegative count).
 
 A primary has `primary: true`, a `task`, and exactly one matching `tasks[task] = id` entry.
 A supporting doc has `primary: false` and no `task` or `telegramUrl`. Every task binding points to an existing
@@ -349,10 +350,10 @@ back to the task in Focus Planner.
 
 ## `fp-docs` publisher contract
 
-`fp-docs` is a Node CLI in the overnight-agent plugin, wrapped by a `docs-publish` skill. It builds
-on the sanctioned Node write-tool conventions in `write-turn.mjs`. Drafts come from the caller's
-workspace; the Docs root is resolved from configuration and is never accepted as a command-line
-path. Agent reads of docs are allowed; comments are consumed through `fp-docs comments`.
+`fp-docs` is a Node CLI in `packages/docs-publisher`; overnight-agent skill wiring is separate.
+It builds on the sanctioned Node write-tool conventions in `write-turn.mjs`. Drafts come from the
+caller's workspace; the Docs root is resolved from configuration and is never accepted as a
+command-line path. Agent reads of docs are allowed; comments are consumed through `fp-docs comments`.
 
 | Command | Contract |
 | --- | --- |

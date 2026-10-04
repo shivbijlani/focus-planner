@@ -83,6 +83,7 @@ function checkDocEntry(id, entry) {
   if (new Set(entry.links).size !== entry.links.length) reject(`Docs ${id} has duplicate links`)
   if (entry.task !== undefined && !integer(entry.task, 1)) reject(`Docs ${id} has an invalid task id`)
   if (entry.telegramUrl !== undefined && !uri(entry.telegramUrl)) reject(`Docs ${id} has an invalid telegramUrl`)
+  if (entry.nextBlockId !== undefined && !integer(entry.nextBlockId, 1)) reject(`Docs ${id} has an invalid nextBlockId`)
   if (entry.openDispositions !== undefined) {
     const counts = entry.openDispositions
     if (!object(counts) || Object.keys(counts).some((key) => key !== 'needs-you' || !integer(counts[key]))) {
@@ -92,7 +93,7 @@ function checkDocEntry(id, entry) {
   if (entry.primary ? entry.task === undefined : entry.task !== undefined || entry.telegramUrl !== undefined) {
     reject(`Docs ${id} has an invalid primary/task binding`)
   }
-  return known(entry, ['title', 'task', 'primary', 'rev', 'updatedAt', 'telegramUrl', 'links', 'openDispositions'])
+  return known(entry, ['title', 'task', 'primary', 'rev', 'updatedAt', 'telegramUrl', 'links', 'openDispositions', 'nextBlockId'])
 }
 
 export function validateIndexText(text) {
