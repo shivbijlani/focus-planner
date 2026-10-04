@@ -8,12 +8,14 @@
         "Id": "955",
         "Validate": true
       },
-      "exit": 0,
+      "exit": 2,
       "stdout": [
+        "[write-turn] REFUSED - 1 guard violation(s); nothing written.",
+        "  G24 line 1: cannot verify whether task 955 is closed: state\\task-955.json could not be read. write-turn refuses rather than risk a turn into a task the user closed; fix the file, then retry. This guard cannot be disabled",
+        "      | state\\task-955.json",
         "[write-turn] NOTE - could not check whether the user paused this task.",
         "      G17 could not read state for task 955; pause not checked",
-        "      G17 did not run, so this turn may be continuing work he stopped.",
-        "[write-turn] clean (validate only - nothing written)."
+        "      G17 did not run, so this turn may be continuing work he stopped."
       ],
       "tool": "write-turn"
     }

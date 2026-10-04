@@ -9,17 +9,24 @@
         "Json": true,
         "Validate": true
       },
-      "exit": 0,
+      "exit": 2,
       "json": {
         "ask": "none",
         "docBound": false,
         "docId": "",
-        "findings": [],
+        "findings": [
+          {
+            "guard": "G24",
+            "line": 1,
+            "snippet": "status=done status_by=user",
+            "why": "task 954 is closed by the user: status_by: user; report it in the run summary under Replies on closed tasks; don't write to it and don't retry. Only the user can reopen a task he closed, even when he has replied below it. This guard cannot be disabled"
+          }
+        ],
         "g15Note": "",
         "hasAsk": true,
         "id": "954",
         "length": 150,
-        "ok": true
+        "ok": false
       },
       "tool": "write-turn"
     }
