@@ -27,6 +27,7 @@ let child
 let base
 let tmp
 let plannerDir
+let absolutePath
 
 async function api(method, route, body) {
   const res = await fetch(`${base}${route}`, {
@@ -48,6 +49,10 @@ beforeAll(async () => {
   await writeFile(path.join(plannerDir, 'journal', 'task-2.md'), '')
   const configPath = path.join(tmp, 'planner-config.json')
   await writeFile(configPath, JSON.stringify({ plannerPath: plannerDir }))
+  await mkdir(path.join(tmp, 'planner-old'))
+  await writeFile(path.join(tmp, 'planner-old', 'x.md'), 'sibling content')
+  absolutePath = path.join(tmp, 'absolute.md')
+  await writeFile(absolutePath, 'absolute content')
 
   const port = await freePort()
   base = `http://127.0.0.1:${port}`
@@ -107,10 +112,19 @@ describe('server.js API', () => {
     await expect(access(path.join(tmp, 'escape.md'))).rejects.toThrow()
   })
 
-  // Broken on main: the guard is a raw string startsWith, so a sibling whose
-  // name begins with the planner folder's name is reachable. Refs #790.
-  it.skip('refuses sibling paths that share the planner folder prefix (#790)', async () => {
+  it('refuses sibling-prefix, absolute, and encoded traversal paths (#790)', async () => {
     expect((await api('GET', '/api/file?path=../planner-config.json')).status).toBe(403)
+    expect((await api('GET', '/api/file?path=../planner-old/x.md')).status).toBe(403)
+    expect((await api('GET', '/api/file?path=%2e%2e%2fplanner-config.json')).status).toBe(403)
+    expect((await api('GET', `/api/file?path=${encodeURIComponent(absolutePath)}`)).status).toBe(403)
+
+    expect((await api('PUT', '/api/file?path=../planner-config.json', { content: 'overwritten' })).status).toBe(403)
+    expect((await api('DELETE', '/api/file?path=../planner-old/x.md')).status).toBe(403)
+    expect((await api('GET', '/api/todos?path=../planner-old/x.md')).status).toBe(403)
+
+    expect(await readFile(path.join(tmp, 'planner-config.json'), 'utf-8')).toContain(plannerDir)
+    expect(await readFile(path.join(tmp, 'planner-old', 'x.md'), 'utf-8')).toBe('sibling content')
+    expect(await readFile(absolutePath, 'utf-8')).toBe('absolute content')
   })
 
   it('DELETE /api/file removes a file', async () => {
