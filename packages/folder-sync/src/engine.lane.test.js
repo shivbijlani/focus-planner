@@ -9,6 +9,11 @@ vi.mock('./idb.js', () => ({
   idbSet: async (_store, k, v) => { meta.set(k, v) },
   idbKeys: async () => [...meta.keys()],
   idbDel: async (_store, k) => { meta.delete(k) },
+  idbCompareAndSet: async (_store, expected, writes) => {
+    if (expected.some(([k, v]) => JSON.stringify(meta.get(k)) !== JSON.stringify(v))) return false
+    for (const [k, v] of writes) meta.set(k, v)
+    return true
+  },
 }))
 vi.mock('./queue.js', () => ({ enqueue: async () => {}, peekAll: async () => [] }))
 vi.mock('./auth/tokenStore.js', () => ({ getTokens: async () => null, clearTokens: async () => {} }))
@@ -92,5 +97,45 @@ describe('engine: local writes and the mirror replay share one lane (#826)', () 
     await vi.advanceTimersByTimeAsync(100)
     expect(local.files.has('journal/task-2.md')).toBe(false)
     expect(meta.get('local:journal/task-2.md').deleted).toBe(true)
+  })
+
+  it('does not replay an empty old mirror before the existing device board has been imported', async () => {
+    const board = '## Today\n\n| ID | Task |\n|---|---|\n| 1 | Recovered |\n'
+    const local = adapter()
+    local.files.set('planner.md', board)
+    meta.set('local:planner.md', { content: '', mtime: 1 })
+    const engine = createSyncEngine({ localAdapter: local, providers: [], deferLocalInit: true, redirectUri: '' })
+    await vi.advanceTimersByTimeAsync(900)
+    expect(local.files.get('planner.md')).toBe(board)
+    await engine.initLocal()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(local.files.get('planner.md')).toBe(board)
+    expect(meta.get('local:planner.md').content).toBe(board)
+  })
+
+  it('preserves an external edit made after startup instead of replaying the old mirror', async () => {
+    const local = adapter()
+    local.files.set('journal/task-1.md', 'OLD')
+    const engine = createSyncEngine({ localAdapter: local, providers: [], deferLocalInit: true, redirectUri: '' })
+    await engine.initLocal()
+    local.files.set('journal/task-1.md', 'External agent note')
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await vi.advanceTimersByTimeAsync(900)
+    expect(local.files.get('journal/task-1.md')).toBe('External agent note')
+    expect(meta.get('local:journal/task-1.md').content).toBe('External agent note')
+    const conflictKey = [...meta.keys()].find(key => key.startsWith('local:sync-conflicts/'))
+    expect(meta.get(conflictKey).content).toBe('OLD')
+    log.mockRestore()
+  })
+
+  it('still replays a missed remote update when the active copy matches its last-applied baseline', async () => {
+    const local = adapter()
+    local.files.set('journal/task-1.md', 'OLD')
+    const engine = createSyncEngine({ localAdapter: local, providers: [], deferLocalInit: true, redirectUri: '' })
+    await engine.initLocal()
+    meta.set('local:journal/task-1.md', { content: 'Remote update', mtime: 2 })
+    await vi.advanceTimersByTimeAsync(900)
+    expect(local.files.get('journal/task-1.md')).toBe('Remote update')
+    expect(meta.get('applied:journal/task-1.md').content).toBe('Remote update')
   })
 })
