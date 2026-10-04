@@ -133,11 +133,12 @@ try {
   Check 'read-only portal access is not gated by model sensitivity' ($skill.Contains('read-only portal access even if the') -and $skill.Contains('model considers the data sensitive'))
   Check 'unrequested email is an offer, not a blocker' ($skill.Contains('sending an email') -and $skill.Contains('`-Ask offer` after the task is done'))
   Check 'only a user pause counts as a not-yet-started proposal' ($livenessSource.Contains("String(st.status_by).toLowerCase() === 'user'"))
-  Check 'plan-review dispatch and gated-plan approval paths are removed' `
+  Check 'proposal-only dispatch is removed while explicit gated steps retain the dispatch-time floor' `
     (-not $skill.Contains('PlanDispatch') -and -not $skill.Contains('plan_review_due') `
       -and -not $stateSource.Contains('PlanDispatch') -and -not $stateSource.Contains('plan_review_due') `
       -and -not $scanSource.Contains('plan_review_due') -and -not $sessionSource.Contains('PlanDispatch') `
-      -and -not $sessionSource.Contains('assertGatedPlanConsent') -and -not $argsSource.Contains('PlanDispatch') `
+      -and $stateSource.Contains('Assert-GatedPlanConsent') -and $sessionSource.Contains('assertGatedPlanConsent') `
+      -and -not $argsSource.Contains('PlanDispatch') `
       -and -not $writerSource.Contains('G19'))
 
   Write-Host "mutcheck-autopilot-dispatch: $passed passed"

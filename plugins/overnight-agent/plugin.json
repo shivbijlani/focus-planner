@@ -1,7 +1,7 @@
 {
   "name": "overnight-agent",
   "description": "Autonomously dispatches eligible planner tasks to their own autopilot sessions; only irreversible actions require consent under the reversibility rules and agent-gate.md.",
-  "version": "1.57.53",
+  "version": "1.57.54",
   "author": {
     "name": "Shiv Bijlani",
     "url": "https://github.com/shivbijlani"

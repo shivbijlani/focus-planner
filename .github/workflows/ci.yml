@@ -1462,6 +1462,21 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-coordinator-no-task-work.ps1
 
+  gated-plan-dispatch:
+    name: Gated task plans require consent before dispatch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check (PowerShell state engine)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-gated-dispatch.ps1 -ScriptPath ./plugins/overnight-agent/skills/overnight-agent/oa-state.ps1
+      - name: Mutation check (Node state engine)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-gated-dispatch.ps1 -ScriptPath ./plugins/overnight-agent/skills/overnight-agent/oa-state.mjs
+
   # A TURN CAN ADVERTISE A REPLY WORD ITS OWN READER REJECTS (GH #491).
   #
   # `oa-state.ps1` decides whether Shiv approved by matching his reply against one fixed

@@ -1892,6 +1892,11 @@ See PHASE 0.
   reading above. **You never write `agent-gate.md`** — that one-way property is the only reason its
   contents can be trusted without an attribution marker. Asserted by `mutcheck-agent-gate.ps1`, whose
   seven mutations each break one guarantee and are each killed by that guarantee's own arm.
+- **A numbered `[gated]` step is stopped before dispatch unless the consent reader allows it.** This
+  preserves the #804/#813 dispatch-time floor for an explicitly classified task step, without adding
+  a proposal/wait route for ordinary tasks. It is not a general tool interceptor: a task session must
+  still call `consent -Action` before other irreversible actions; the current CLI does not mechanically
+  block every matching tool call if a session omits that check.
 - **No surprise irreversible actions.** Never add an unrequested send, form submission, purchase,
   public post, merge/deploy, or other external side effect. Finish the requested work, then offer the
   optional follow-up with `-Ask offer`. The Auto-send allow-list does not bypass action consent.

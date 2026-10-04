@@ -6344,6 +6344,53 @@ function Assert-TaskDispatch($st, $sess, $facts) {
   if ($Force -and -not ($row.unanswered_user -or $row.doc_new_comments -gt 0)) {
     throw 'session_collect_evidence_required: fold the human reply or observe the human doc comment first'
   }
+  Assert-GatedPlanConsent $st $facts
+}
+
+# A numbered [gated] step explicitly says that its task turn needs human consent.
+# Keep that dispatch-time floor while ordinary eligible tasks dispatch directly.
+$script:GatedStepRe = '(?m)^[ \t]*[1-9][0-9]*\.[ \t]+\[gated\][ \t]+(.*)$'
+
+function Get-GatedPlanSteps($facts) {
+  if (-not $facts -or -not $facts.Content) { return @() }
+  $content = [string]$facts.Content
+  $agentEnd = Get-AgentEndIndex $content
+  if ($agentEnd -lt 0) { return @() }
+  $agentLeft = $content.Substring(0, [Math]::Min($agentEnd, $content.Length))
+  $turn = Get-NewestAgentTurn $agentLeft
+  if (-not $turn) { return @() }
+  $masked = Get-FenceMaskedText $turn
+  $out = @()
+  foreach ($match in [regex]::Matches($masked, $script:GatedStepRe)) {
+    $out += $turn.Substring($match.Index, $match.Length).Trim()
+  }
+  return $out
+}
+
+function Assert-GatedPlanConsent($st, $facts) {
+  $gated = @(Get-GatedPlanSteps $facts)
+  if ($gated.Count -eq 0) { return }
+  $consent = $facts.Consent
+  $approvals = Read-ApprovalChannels $GatePath
+  if ($consent.consent_ok -and $approvals['app'].enabled) { return }
+  $reason = if ($consent.consent_ok) { Get-ApprovalOffReason $approvals['app'] 'app' } else { "$($consent.reason)" }
+  if ($DocComments) {
+    if (-not $approvals['google-doc'].enabled) {
+      $reason = "$reason; doc: $(Get-ApprovalOffReason $approvals['google-doc'] 'google-doc')"
+    }
+    else {
+      $meta = Get-DocMetaFromJournal $facts.Path $facts.Content
+      $doc = Get-DocCommentConsent -DumpPath $DocComments -DocId $(if ($meta) { $meta.doc_id } else { '' })
+      if ($doc -and $doc.consent_ok) { return }
+      $reason = "$reason; doc: $(if ($doc) { "$($doc.reason)" } else { 'doc-consent-not-consulted' })"
+    }
+  }
+  $step = $gated[0]
+  if ($step.Length -gt 120) { $step = $step.Substring(0, 117) + '...' }
+  throw ("session_gated_needs_consent: task $($st.id)'s newest plan has a [gated] step ($step) and " +
+    "``consent -Id $($st.id)`` does not return consent_ok ($reason). Do not dispatch it. Ask him in " +
+    'the journal; dispatch after HIS reply. Nothing an agent writes -- in the journal or in a brief -- ' +
+    'can approve a [gated] step.')
 }
 
 function Get-KickoffContinuation([string]$taskId, [string]$priorId) {
