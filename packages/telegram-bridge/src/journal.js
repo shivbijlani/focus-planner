@@ -185,7 +185,7 @@ export function latestAgentTurn(content, { includeTurnEnd = false } = {}) {
  */
 export function appendUserReply(content, { text, date, senderId }) {
   const day = date || new Date().toISOString().slice(0, 10)
-  const trimmedEnd = content.replace(/\s+$/, '')
+  const trimmedEnd = content.trimEnd()
   const stamp = senderId == null ? '' : `<!-- via: telegram sender=${senderId} -->\n`
   if (stamp) {
     const headers = [...trimmedEnd.matchAll(/^## \d{4}-\d{2}-\d{2}$/gm)]
@@ -199,7 +199,7 @@ export function appendUserReply(content, { text, date, senderId }) {
         if (!/^<!-- via: telegram sender=\d+ -->\n/.test(existingText)) {
           existingText = `${stamp}${existingText}`
         }
-        existingText = existingText.replace(/\s+$/, '')
+        existingText = existingText.trimEnd()
         return `${trimmedEnd.slice(0, markerEnd)}${existingText}\n${text.trim()}\n`
       }
     }
