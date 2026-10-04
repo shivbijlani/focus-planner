@@ -194,13 +194,12 @@ export function appendUserReply(content, { text, date, senderId }) {
     const markerStart = trimmedEnd.lastIndexOf(marker)
     if (lastHeader && lastHeader.index === markerStart) {
       const markerEnd = markerStart + marker.length
-      let existingText = trimmedEnd.slice(markerEnd)
+      const existingText = trimmedEnd.slice(markerEnd)
       if (!existingText.includes(FROM_ME) && !existingText.includes('<!-- from: overnight-agent -->')) {
-        if (!/^<!-- via: telegram sender=\d+ -->\n/.test(existingText)) {
-          existingText = `${stamp}${existingText}`
+        if (existingText.startsWith(stamp)) {
+          const mergedText = existingText.trimEnd()
+          return `${trimmedEnd.slice(0, markerEnd)}${mergedText}\n${text.trim()}\n`
         }
-        existingText = existingText.trimEnd()
-        return `${trimmedEnd.slice(0, markerEnd)}${existingText}\n${text.trim()}\n`
       }
     }
   }
