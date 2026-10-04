@@ -19,7 +19,7 @@
             "guard": "G24",
             "line": 1,
             "snippet": "status=done status_by=agent completed_board=true",
-            "why": "task 9405 is closed by the user: it is on planner-completed.md; report it in the run summary under Replies on closed tasks; don't write to it and don't retry. Only the user can reopen a task he closed, even when he has replied below it. This guard cannot be disabled"
+            "why": "task 9405 is closed by the user: it is on planner-completed.md. He replied since the close: \"one more thing - can you also check whether the emissions test is due?\". Put that reply in the run report to him under Replies on closed tasks, with task 9405 and \"reopen the row to continue\"; don't write to it and don't retry. Only the user can reopen a task he closed. This guard cannot be disabled"
           }
         ],
         "g15Note": "",
