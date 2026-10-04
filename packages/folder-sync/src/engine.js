@@ -6,9 +6,10 @@
 
 import { enqueue, peekAll } from './queue.js'
 import { getTokens, clearTokens } from './auth/tokenStore.js'
-import { idbSet, idbGet, idbKeys, idbDel } from './idb.js'
+import { idbGet, idbKeys, idbDel } from './idb.js'
 import { isConsumerVisibleMirrorPath, syncStateKeysForProvider, planMirrorSync } from './reconcile.js'
 import { diag } from '../../diagnostics/src/index.js'
+import { readLocalSnapshot, saveLocalReplica, readAppliedContent, rememberAppliedContent } from './localReplica.js'
 
 const CHANNEL = 'folder-sync'
 const META_STORE = 'meta'
@@ -42,17 +43,6 @@ function addIntended(id) {
 }
 function removeIntended(id) {
   const s = readIntended(); s.delete(id); writeIntended(s)
-}
-
-async function mirrorWrite(name, content) {
-  await idbSet(META_STORE, `local:${name}`, { content, mtime: Date.now() })
-}
-async function mirrorDelete(name) {
-  await idbSet(META_STORE, `local:${name}`, { deleted: true, mtime: Date.now() })
-}
-async function mirrorRead(name) {
-  const r = await idbGet(META_STORE, `local:${name}`)
-  return r && !r.deleted ? r.content : null
 }
 
 // Clear a provider's sync state: per-file remote mtimes (`mtime:<id>:<name>`),
@@ -98,7 +88,7 @@ function isEditingText() {
   return tag === 'textarea' || tag === 'input' || tag === 'select'
 }
 
-export function createSyncEngine({ localAdapter, providers = [], redirectUri = (typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '') }) {
+export function createSyncEngine({ localAdapter, providers = [], deferLocalInit = false, redirectUri = (typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '') }) {
   if (!localAdapter) throw new Error('createSyncEngine: localAdapter is required')
 
   const providerMap = new Map(providers.map(p => [p.id, p]))
@@ -108,6 +98,14 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     lastSync: null,
     error: null,
     providers: {}, // providerId -> { connected, state, error }
+  }
+  let resolveLocalReady
+  const localReady = new Promise(resolve => { resolveLocalReady = resolve })
+  let preparingLocal = null
+  function reportLocalError(error) {
+    console.error('[folder-sync] local replica failed:', error)
+    status = { ...status, state: 'error', error: error.message || String(error) }
+    emit()
   }
 
   // Listen for SW status broadcasts.
@@ -137,14 +135,8 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     navigator.serviceWorker.addEventListener('message', async (evt) => {
       const msg = evt.data
       if (!msg || msg.type !== 'remote-update') return
-      await exclusive(async () => {
-        const content = await mirrorRead(msg.name)
-        if (content == null) {
-          await localAdapter.deleteFile(msg.name)
-        } else {
-          await localAdapter.writeFile(msg.name, content)
-        }
-      })
+      await localReady
+      try { await reconcileMirrorEntry(msg.name) } catch (error) { reportLocalError(error); return }
       // Tell consumer to refresh
       for (const fn of listeners) {
         try { fn({ ...status, lastRemoteUpdate: { name: msg.name, at: Date.now() } }) } catch { /* ignore */ }
@@ -170,6 +162,35 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     return run
   }
 
+  function reconcileMirrorEntry(name) {
+    return exclusive(async () => {
+      const rec = await idbGet(META_STORE, `local:${name}`)
+      if (!rec) return 'skip'
+      const activeContent = await localAdapter.readFile(name)
+      const applied = await readAppliedContent(name)
+      // Divergence from the last copy we applied means the file was edited or
+      // recovered externally. Import it instead of replaying older cached data.
+      if (activeContent !== '' && activeContent != null &&
+          activeContent !== rec.content && (!applied || activeContent !== applied.content)) {
+        const merged = await saveLocalReplica(name, activeContent, { importing: true })
+        if (merged !== activeContent) await localAdapter.writeFile(name, merged)
+        await rememberAppliedContent(name, merged)
+        await enqueue(name)
+        nudgeSW('external-edit').catch(reportLocalError)
+        return 'write'
+      }
+      const action = planMirrorSync({
+        mirrorDeleted: !!rec.deleted,
+        mirrorContent: rec.content,
+        activeContent,
+      })
+      if (action === 'write') await localAdapter.writeFile(name, rec.content)
+      else if (action === 'delete') await localAdapter.deleteFile(name)
+      await rememberAppliedContent(name, rec.deleted ? null : rec.content)
+      return action
+    })
+  }
+
   // Replay the SW's IDB mirror into the consumer-visible active store. This
   // repairs the case where the SW pulled remote files into the mirror but the
   // live `remote-update` message never reached a window (background sync, no
@@ -178,6 +199,7 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
   // deletions; it never clobbers an up-to-date file (see planMirrorSync).
   let reconcilingMirror = false
   async function reconcileMirrorToLocal() {
+    await localReady
     if (reconcilingMirror) return
     reconcilingMirror = true
     try {
@@ -194,22 +216,7 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
         // rewrites into the app store only triggers a no-op file-tree refresh.
         if (!isConsumerVisibleMirrorPath(name)) continue
         scanned++
-        const outcome = await exclusive(async () => {
-          const rec = await idbGet(META_STORE, k)
-          if (!rec) return 'skip'
-          let activeContent = ''
-          try { activeContent = await localAdapter.readFile(name) } catch { activeContent = '' }
-          const action = planMirrorSync({
-            mirrorDeleted: !!rec.deleted,
-            mirrorContent: rec.content,
-            activeContent,
-          })
-          try {
-            if (action === 'write') await localAdapter.writeFile(name, rec.content)
-            else if (action === 'delete') await localAdapter.deleteFile(name)
-          } catch { return 'skip' }
-          return action
-        })
+        const outcome = await reconcileMirrorEntry(name)
         if (outcome === 'write') { changed.push(name); writes++ } else if (outcome === 'delete') { changed.push(name); deletes++ } else skipped++
       }
       diag('folder-sync.reconcile', 'mirror-reconcile-summary', {
@@ -228,7 +235,7 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
           try { fn(snapshot) } catch { /* ignore */ }
         }
       }
-    } catch { /* ignore */ } finally {
+    } catch (error) { reportLocalError(error) } finally {
       reconcilingMirror = false
     }
   }
@@ -245,6 +252,7 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
   }
 
   async function nudgeSW(reason = 'write') {
+    await localReady
     const reg = await getSyncSwRegistration()
     if (!reg) return
     const sw = reg.active || reg.waiting || reg.installing
@@ -375,6 +383,43 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
   // Rehydrate the active store from the mirror on load, in case a prior
   // session pulled files (e.g. journals) that never reached a window.
   setTimeout(() => { reconcileMirrorToLocal().catch(() => {}) }, 800)
+  if (!deferLocalInit) prepareLocal().catch(() => {}) // prepareLocal reports failures
+
+  async function prepareLocal() {
+    if (preparingLocal) return preparingLocal
+    preparingLocal = exclusive(async () => {
+      await localAdapter.init?.()
+      // Import every existing file BEFORE the worker can seed a new target or
+      // replay an older mirror. Absence during startup is never a deletion.
+      const names = await localAdapter.listFiles()
+      for (const name of names) {
+        if (!isConsumerVisibleMirrorPath(name)) continue
+        const content = await localAdapter.readFile(name)
+        const snapshot = await readLocalSnapshot(name)
+        const applied = await readAppliedContent(name)
+        if (snapshot.content === content) {
+          await rememberAppliedContent(name, content)
+          continue
+        }
+        if (applied && content === applied.content) continue // unapplied remote update
+        const merged = await saveLocalReplica(name, content, { importing: true })
+        if (merged != null && merged !== content) await localAdapter.writeFile(name, merged)
+        await rememberAppliedContent(name, merged)
+        await enqueue(name)
+      }
+      // Conflict copies created during import must reach existing targets too.
+      for (const k of await idbKeys(META_STORE)) {
+        if (typeof k === 'string' && k.startsWith('local:sync-conflicts/')) await enqueue(k.slice('local:'.length))
+      }
+      resolveLocalReady()
+      return true
+    }).catch(error => {
+      preparingLocal = null
+      reportLocalError(error)
+      throw error
+    })
+    return preparingLocal
+  }
 
   return {
     // ---- local I/O (always immediate) ----
@@ -383,19 +428,26 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
     },
     async writeFile(name, contents) {
       const res = await exclusive(async () => {
+        const previousContent = await localAdapter.readFile(name)
         const r = await localAdapter.writeFile(name, contents)
-        await mirrorWrite(name, contents)
+        const merged = await saveLocalReplica(name, contents, { previousContent })
+        if (merged !== contents) await localAdapter.writeFile(name, merged)
+        await rememberAppliedContent(name, merged)
         return r
-      })
+      }).catch(error => { reportLocalError(error); throw error })
       await enqueue(name)
       nudgeSW('write')
       return res
     },
     async deleteFile(name) {
       await exclusive(async () => {
+        const previousContent = await localAdapter.readFile(name)
         await localAdapter.deleteFile(name)
-        await mirrorDelete(name)
-      })
+        // Record files retain row tombstones even when the markdown is removed.
+        // Plain files carry an explicit durable file tombstone.
+        await saveLocalReplica(name, null, { previousContent })
+        await rememberAppliedContent(name, null)
+      }).catch(error => { reportLocalError(error); throw error })
       await enqueue(name) // SW will see local missing → delete remote
       nudgeSW('delete')
     },
@@ -406,7 +458,7 @@ export function createSyncEngine({ localAdapter, providers = [], redirectUri = (
       return localAdapter.getFolderName()
     },
     async initLocal() {
-      return localAdapter.init?.() ?? true
+      return prepareLocal()
     },
     localAdapter,
 

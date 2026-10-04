@@ -120,6 +120,16 @@ describe('storage source recovery', () => {
     error.mockRestore()
   })
 
+  it('does not start sync or enter the ready UI when the local replica cannot initialize', async () => {
+    const storage = {
+      registerSyncWorker: vi.fn().mockResolvedValue(undefined),
+      restoreSyncTargets: vi.fn().mockRejectedValue(new Error('IndexedDB unavailable')),
+      startAutoSync: vi.fn(),
+    }
+    await expect(bootstrapSync(storage)).rejects.toThrow('IndexedDB unavailable')
+    expect(storage.startAutoSync).not.toHaveBeenCalled()
+  })
+
   it('prefers the active saved source of a provider type before reusing another', () => {
     const choices = [
       { id: 's1', providerType: 'fsa' },

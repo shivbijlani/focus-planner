@@ -166,7 +166,7 @@ function logSidecarWrite(side, path, sidecar, contentChanged, raw, meta) {
 
 // Fold the codec's frame into the record set so it merges by LWW like any other
 // record, then split it back out for serialize().
-function toCollection(codec, content) {
+export function toCollection(codec, content) {
   const { records, frame } = codec.parse(content ?? '')
   const all = { ...records }
   all[FRAME_ID] = { frame }
@@ -192,7 +192,7 @@ function fromCollection(codec, mergedRecords) {
  * @param {number} [args.now]
  * @returns {Promise<{changedLocal:boolean, changedRemote:boolean, content:string}>}
  */
-export async function reconcileRecordsFile({ path, codec, local, remote, now = Date.now() }) {
+export async function reconcileRecordsFile({ path, codec, local, remote, now = Date.now(), inferLocalDeletes = true }) {
   const scPath = sidecarPath(path)
   const [localContent, remoteContent, localSidecar, remoteSidecar] = await Promise.all([
     local.readContent(path),
@@ -203,17 +203,32 @@ export async function reconcileRecordsFile({ path, codec, local, remote, now = D
 
   const localRecords = toCollection(codec, localContent)
   const remoteRecords = toCollection(codec, remoteContent)
-  const localMeta = parseSidecar(localSidecar)
-  const remoteMeta = parseSidecar(remoteSidecar)
+  const localMeta = parseSidecar(localSidecar, { strict: true })
+  const remoteMeta = parseSidecar(remoteSidecar, { strict: true })
   logSidecarRead(path, localSidecar, remoteSidecar, localMeta, remoteMeta)
 
   // Detect and stamp any local edits (from our UI *or* an external editor such
   // as the desktop server / OneDrive web) so they carry an honest clock.
-  stampLocalChanges(localRecords, localMeta, now)
-  // The remote side's edits were stamped on whatever device produced them; we
-  // only stamp here for the very first sync where the remote has content but no
-  // sidecar yet (legacy backup). Use clock 0 so a real local edit wins ties.
-  if (!remoteSidecar) stampLocalChanges(remoteRecords, remoteMeta, 0)
+  stampLocalChanges(localRecords, localMeta, now, {
+    // A missing file is not an edit. Only an explicit save/delete may turn its
+    // absence into tombstones. Ignore the structural frame in collapse checks.
+    inferDeletes: inferLocalDeletes && localContent != null,
+    ignoredIds: [FRAME_ID],
+  })
+  // Legacy imports lose conflicts to known device edits. Once metadata exists,
+  // recognize edits made directly to cloud markdown, but never infer a delete
+  // from a missing row/file. Older entries without fingerprints establish a
+  // baseline at their existing clock instead of masquerading as fresh edits.
+  if (!remoteSidecar) {
+    stampLocalChanges(remoteRecords, remoteMeta, 0, { inferDeletes: false })
+  } else {
+    for (const [id, record] of Object.entries(remoteRecords)) {
+      if (remoteMeta[id] && !remoteMeta[id].deleted && remoteMeta[id].fp === undefined) {
+        remoteMeta[id].fp = fingerprint(record)
+      }
+    }
+    stampLocalChanges(remoteRecords, remoteMeta, now, { inferDeletes: false })
+  }
 
   const merged = mergeCollections(
     { records: localRecords, meta: localMeta },
@@ -282,7 +297,14 @@ export async function reconcileRecordsFile({ path, codec, local, remote, now = D
   const changedLocal = mergedContent !== (localContent ?? '') || merged.localChanged
   const changedRemote = mergedContent !== (remoteContent ?? '') || merged.remoteChanged
 
-  if (changedLocal) {
+  if (local.commitSnapshot) {
+    const committed = await local.commitSnapshot({
+      content: mergedContent,
+      sidecar: mergedSidecar,
+      changedLocal,
+    })
+    if (!committed) throw new Error('local-snapshot-changed')
+  } else if (changedLocal) {
     await local.writeContent(path, mergedContent)
     await local.writeSidecar(scPath, mergedSidecar)
     logSidecarWrite('local', path, scPath, true, mergedSidecar, merged.meta)

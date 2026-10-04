@@ -51,10 +51,12 @@ const COLLAPSE_MIN_ALIVE = 2
  * A single-row delete-to-empty (alive count 1) is left unguarded so ordinary
  * "removed my last row" edits still tombstone normally.
  */
-export function isCollapse(records, meta, minAlive = COLLAPSE_MIN_ALIVE) {
-  if (Object.keys(records).length > 0) return false
+export function isCollapse(records, meta, minAlive = COLLAPSE_MIN_ALIVE, ignoredIds = []) {
+  const ignored = new Set(ignoredIds)
+  if (Object.keys(records).some(id => !ignored.has(id))) return false
   let alive = 0
   for (const id of Object.keys(meta)) {
+    if (ignored.has(id)) continue
     if (!meta[id].deleted && ++alive >= minAlive) return true
   }
   return false
@@ -340,7 +342,7 @@ export function reconcileExternal(records, meta, clock = Date.now(), opts = {}) 
   }
   // #371: don't tombstone everything when the record set collapsed to empty —
   // that's a failed/empty load, not a full-board delete. Preserve the alive rows.
-  if (opts.guardCollapse !== false && isCollapse(records, meta)) return meta
+  if (opts.guardCollapse !== false && isCollapse(records, meta, COLLAPSE_MIN_ALIVE, opts.ignoredIds)) return meta
   for (const id of Object.keys(meta)) {
     if (!meta[id].deleted && !(id in records)) meta[id] = { clock, deleted: true }
   }
@@ -398,7 +400,8 @@ export function stampLocalChanges(records, meta, clock = Date.now(), opts = {}) 
   // alive rows, this is a load failure (e.g. empty IndexedDB after the #113
   // migration), not the user deleting their whole board. Skip the delete pass so
   // we don't tombstone the entire board and lose it across every device.
-  if (opts.guardCollapse !== false && isCollapse(records, meta)) return meta
+  if (opts.inferDeletes === false) return meta
+  if (opts.guardCollapse !== false && isCollapse(records, meta, COLLAPSE_MIN_ALIVE, opts.ignoredIds)) return meta
   for (const id of Object.keys(meta)) {
     if (!meta[id].deleted && !(id in records)) {
       // Tombstone the removed row, keeping its fingerprint so a later stale-file
@@ -453,12 +456,23 @@ export function serializeSidecar(meta, now = Date.now()) {
 }
 
 /** Parse a sidecar JSON string back into a meta object. Tolerant of garbage. */
-export function parseSidecar(raw) {
+export function parseSidecar(raw, { strict = false } = {}) {
   if (!raw) return {}
   try {
     const obj = JSON.parse(raw)
+    if (strict) {
+      if (obj?.version !== SIDECAR_VERSION || !obj.entries || typeof obj.entries !== 'object' || Array.isArray(obj.entries)) {
+        throw new Error('Unsupported or malformed sync sidecar')
+      }
+      for (const entry of Object.values(obj.entries)) {
+        if (!entry || !Number.isFinite(entry.clock) || typeof entry.deleted !== 'boolean') {
+          throw new Error('Malformed sync record metadata')
+        }
+      }
+    }
     return obj && typeof obj === 'object' && obj.entries ? obj.entries : {}
-  } catch {
+  } catch (error) {
+    if (strict) throw new Error(`Cannot read sync sidecar: ${error.message}`)
     return {}
   }
 }

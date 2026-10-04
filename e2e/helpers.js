@@ -67,7 +67,7 @@ export async function writeFile(page, path, content) {
   `, [path, content])
 }
 
-/** Remove a file straight from the IndexedDB provider's store. */
+/** Explicitly delete a plain file from both the active store and sync replica. */
 export async function removeFile(page, path) {
   await idbRequest(page, `
     const tx = db.transaction('files', 'readwrite')
@@ -75,6 +75,22 @@ export async function removeFile(page, path) {
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error)
   `, path)
+  // Merely losing an active-store file is now repaired from the durable replica.
+  // Represent the intentional delete (as engine.deleteFile does), not a failed
+  // or partial load of the active store.
+  await page.evaluate((name) => new Promise((resolve, reject) => {
+    const open = indexedDB.open('folder-sync')
+    open.onerror = () => reject(open.error)
+    open.onsuccess = () => {
+      const db = open.result
+      const tx = db.transaction(['meta', 'queue'], 'readwrite')
+      tx.objectStore('meta').put({ deleted: true, mtime: Date.now() }, `local:${name}`)
+      tx.objectStore('meta').put({ content: null }, `applied:${name}`)
+      tx.objectStore('queue').put({ enqueuedAt: Date.now() }, name)
+      tx.oncomplete = () => { db.close(); resolve() }
+      tx.onerror = () => { db.close(); reject(tx.error) }
+    }
+  }), path)
 }
 
 /** List every stored path. */

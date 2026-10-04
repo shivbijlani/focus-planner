@@ -118,7 +118,7 @@ function getEngine() {
   if (GOOGLE_CLIENT_ID) providers.push(googleDriveProvider({ clientId: GOOGLE_CLIENT_ID }))
   // Constructing the engine kicks off connected-flag refresh and OAuth-redirect
   // completion, and wires online/visibility nudges to the service worker.
-  _engine = createSyncEngine({ localAdapter, providers, ..._engineOpts })
+  _engine = createSyncEngine({ localAdapter, providers, deferLocalInit: true, ..._engineOpts })
   // Record provider error transitions into Diagnostics (deduped per provider so
   // a stuck error doesn't spam the buffer). No-op unless diagnostics are enabled.
   try {
@@ -146,7 +146,7 @@ function mapTargetStatus(p, overall) {
   if (!p) return TARGET_STATUS.DISCONNECTED
   if (p.state === 'reconnect-required') return TARGET_STATUS.RECONNECT_NEEDED
   if (!p.connected) return TARGET_STATUS.DISCONNECTED
-  if (p.state === 'error') return TARGET_STATUS.ERROR
+  if (overall === 'error' || p.state === 'error') return TARGET_STATUS.ERROR
   if (overall === 'syncing' || p.state === 'syncing') return TARGET_STATUS.SYNCING
   return TARGET_STATUS.SYNCED // connected & (synced | idle)
 }
@@ -156,7 +156,7 @@ function mapEngineStatus(s) {
   const targets = {}
   for (const id of [PROVIDERS.ONEDRIVE, PROVIDERS.GOOGLE_DRIVE]) {
     const p = provStates[id]
-    targets[id] = { status: mapTargetStatus(p, s?.state), message: p?.error || '' }
+    targets[id] = { status: mapTargetStatus(p, s?.state), message: p?.error || s?.error || '' }
   }
   const statuses = Object.values(targets).map(t => t.status)
   let aggregate = TARGET_STATUS.DISCONNECTED
@@ -164,7 +164,7 @@ function mapEngineStatus(s) {
     aggregate = TARGET_STATUS.SYNCING
   } else if (statuses.includes(TARGET_STATUS.RECONNECT_NEEDED)) {
     aggregate = TARGET_STATUS.RECONNECT_NEEDED
-  } else if (statuses.includes(TARGET_STATUS.ERROR)) {
+  } else if (s?.state === 'error' || statuses.includes(TARGET_STATUS.ERROR)) {
     aggregate = TARGET_STATUS.ERROR
   } else if (statuses.includes(TARGET_STATUS.SYNCED)) {
     aggregate = TARGET_STATUS.SYNCED
@@ -233,7 +233,7 @@ export function subscribeSyncStatus(listener) {
 export async function restoreSyncTargets() {
   // Merely constructing the engine refreshes connected-provider flags and
   // completes any in-flight OAuth redirect; the SW handles push+pull from there.
-  getEngine()
+  await getEngine().initLocal()
 }
 
 export function startAutoSync() {

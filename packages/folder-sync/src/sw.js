@@ -1,36 +1,19 @@
 // Service worker — drains the dirty-file queue and pulls remote changes.
 // Registered with `{ type: 'module' }`.  Chromium / latest Firefox / Safari 16+.
 
-import { peekAll, dequeue } from './queue.js'
+import { enqueue, peekAll, dequeue } from './queue.js'
 import { getTokens } from './auth/tokenStore.js'
 import { idbGet, idbSet, idbKeys, idbDel } from './idb.js'
 import { reconcileRecordsFile, isSidecarPath } from './records.js'
 import { filesToDeleteLocally, planPlainPush, shouldPullRemote, isMassDeletion, isValidRemotePath, planProviderPush, pendingKey, seededKey } from './reconcile.js'
-import { mdTableCodec } from './codecs/mdTable.js'
 import { oneDriveProvider } from './providers/oneDrive.js'
 import { googleDriveProvider } from './providers/googleDrive.js'
 import { mockProvider } from './providers/mock.js'
+import { RECORD_CODECS } from './recordCodecs.js'
+import { readLocalSnapshot, commitLocalSnapshot, preserveLocalConflict } from './localReplica.js'
 
 const CHANNEL = 'folder-sync'
 const META_STORE = 'meta'
-
-// Files that sync at the record (row) level — per-row merge with tombstones —
-// instead of as opaque whole-file blobs, keyed by file name -> codec. This is
-// what prevents a stale push on one device from resurrecting a row deleted on
-// another. Files without a codec keep the legacy whole-file last-write-wins path.
-// NOTE: these MUST match the actual top-level file names the app uses
-// (see src/config/branding.js: PLAN_FILE / COMPLETED_FILE). The app was
-// rebranded from `focus-plan*.md` to `planner*.md`; the old key names left the
-// real files (planner.md / planner-completed.md) WITHOUT record-level merge,
-// so they were synced as opaque blobs and were vulnerable to being clobbered or
-// wiped. Map both the current and legacy names so per-row tombstone merge
-// applies regardless of which naming a given store still uses.
-const RECORD_CODECS = {
-  'planner.md': mdTableCodec,
-  'planner-completed.md': mdTableCodec,
-  'focus-plan.md': mdTableCodec,            // legacy (pre-rebrand)
-  'focus-plan-completed.md': mdTableCodec,  // legacy (pre-rebrand)
-}
 
 const PROVIDER_FACTORIES = {
   'onedrive': oneDriveProvider,
@@ -66,6 +49,7 @@ self.addEventListener('periodicsync', (evt) => {
 let inFlight = null
 async function runSync(reason) {
   if (inFlight) return inFlight
+  followUpScheduled = false
   inFlight = (async () => {
     await broadcast({ state: 'syncing', error: null })
     try {
@@ -120,7 +104,7 @@ async function runSync(reason) {
           : 'idle'
       await broadcast({ state: overall, lastSync: Date.now(), providers: providerStatuses, reason })
       // A push budget ran out: schedule another cycle to keep draining.
-      if ([...contexts.values()].some(c => !c.complete)) scheduleFollowUp()
+      if ([...contexts.values()].some(c => !c.complete) || (await peekAll()).length) scheduleFollowUp()
     } finally {
       inFlight = null
     }
@@ -128,7 +112,10 @@ async function runSync(reason) {
   return inFlight
 }
 
+let followUpScheduled = false
 function scheduleFollowUp() {
+  if (followUpScheduled) return
+  followUpScheduled = true
   const reg = self.registration
   if (reg && reg.sync && typeof reg.sync.register === 'function') {
     reg.sync.register('folder-sync').catch(() => setTimeout(() => runSync('follow-up'), 1000))
@@ -152,7 +139,15 @@ async function pushProvider(provider) {
   // after every file so a service worker killed mid-cycle resumes where it
   // stopped, and a time budget leaves room for the other providers and the
   // pull phase; whatever is left simply carries over to the next cycle.
-  const pending = await getPending(provider.id)
+  // Missing remote files are not tombstones. Repair an empty/reset target even
+  // if an older worker already marked its first-contact seed complete.
+  const pending = planProviderPush({
+    pending: await getPending(provider.id),
+    seed: (await localMirrorNames()).filter(name => !remoteNames.has(name)),
+    isRecordFile: name => !!RECORD_CODECS[name],
+    isSidecar: isSidecarPath,
+  })
+  await setPending(provider.id, pending)
   const startedAt = Date.now()
   let complete = true
   for (let i = 0; i < pending.length; i++) {
@@ -217,11 +212,26 @@ async function pullProvider(provider, { remoteList, remoteNames }, reconcileDele
     // "journals don't come down on reconnect" bug). readRemote returning null
     // (file vanished between list and read) still guards against resurrecting a
     // remote deletion.
-    const localPresent = (await readLocal(item.name)) != null
+    const snapshot = await readLocalSnapshot(item.name)
+    const localPresent = snapshot.content != null
     if (!shouldPullRemote({ lastSeen, remoteMtime: item.mtime, localPresent })) continue
     const remoteContent = await provider.readRemote(provider, item.name)
     if (remoteContent != null) {
-      await writeLocal(item.name, remoteContent)
+      if (snapshot.content != null && snapshot.content !== remoteContent) {
+        const conflictPath = await preserveLocalConflict(item.name, snapshot.content)
+        await enqueueRemoteChange(conflictPath)
+        await notifyLocalChange(conflictPath)
+      }
+      if (!await commitLocalSnapshot(item.name, snapshot, remoteContent)) {
+        // A save happened after the download began. Keep it pending and retry;
+        // do not clobber the new local value with this older remote snapshot.
+        await enqueueRemoteChange(item.name)
+        continue
+      }
+      if (snapshot.content !== remoteContent) {
+        await enqueueRemoteChange(item.name)
+        await notifyLocalChange(item.name)
+      }
       await setRemoteMtime(provider.id, item.name, item.mtime)
     }
   }
@@ -269,23 +279,40 @@ async function pullProvider(provider, { remoteList, remoteNames }, reconcileDele
 // both sides into records, merges per-row with tombstones, writes the merged
 // result + sidecar back to whichever side changed.
 async function reconcileRecord(provider, name, codec) {
-  const safe = async (fn) => { try { return await fn() } catch { return null } }
-  return reconcileRecordsFile({
-    path: name,
-    codec,
-    local: {
-      readContent: p => readLocal(p),
-      writeContent: (p, content) => writeLocal(p, content),
-      readSidecar: p => readLocal(p),
-      writeSidecar: (p, content) => writeLocal(p, content),
-    },
-    remote: {
-      readContent: p => safe(() => provider.readRemote(provider, p)),
-      writeContent: (p, content) => provider.writeRemote(provider, p, content),
-      readSidecar: p => safe(() => provider.readRemote(provider, p)),
-      writeSidecar: (p, content) => provider.writeRemote(provider, p, content),
-    },
-  })
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const snapshot = await readLocalSnapshot(name)
+    try {
+      const result = await reconcileRecordsFile({
+        path: name,
+        codec,
+        // Page saves stamp deliberate row deletes. A missing/partial mirror is
+        // not evidence of deletion and must not manufacture fresh tombstones.
+        inferLocalDeletes: false,
+        local: {
+          readContent: async () => snapshot.content,
+          readSidecar: async () => snapshot.rawSidecar,
+          commitSnapshot: ({ content, sidecar }) => commitLocalSnapshot(name, snapshot, content, sidecar),
+        },
+        remote: {
+          // Providers return null ONLY for not-found. Auth, network and API
+          // failures must abort, not masquerade as an empty cloud snapshot.
+          readContent: p => provider.readRemote(provider, p),
+          writeContent: (p, content) => provider.writeRemote(provider, p, content),
+          readSidecar: p => provider.readRemote(provider, p),
+          writeSidecar: (p, content) => provider.writeRemote(provider, p, content),
+        },
+      })
+      if (result.changedLocal) {
+        await enqueueRemoteChange(name)
+        await notifyLocalChange(name)
+      }
+      return result
+    } catch (error) {
+      if (error.message === 'local-snapshot-changed') continue
+      throw error
+    }
+  }
+  throw new Error(`Local replica changed repeatedly while syncing ${name}; retry sync`)
 }
 
 // ---- local I/O from SW context ----
@@ -307,9 +334,13 @@ async function readLocal(name) {
   if (!rec) return null
   return rec.deleted ? null : rec.content
 }
-async function writeLocal(name, content) {
-  await idbSet(META_STORE, `local:${name}`, { content, mtime: Date.now() })
-  if (isSidecarPath(name)) return
+async function enqueueRemoteChange(name) {
+  // A pull/merge is a local replica change too: fan it out to every other
+  // provider next cycle, including ones that were offline during this cycle.
+  await enqueue(name)
+}
+
+async function notifyLocalChange(name) {
   // Notify clients so they can refresh their in-memory state / re-read via adapter.
   // Use `includeUncontrolled: true` because the SW's scope is narrow
   // (`/folder-sync/`) and the app page may not be controlled by this SW.

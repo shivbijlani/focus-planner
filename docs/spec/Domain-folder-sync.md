@@ -43,7 +43,7 @@ export function mergeCollections(local = {}, remote = {}, opts = {}) {
 | `packages/folder-sync/src/auth/tokenStore.js` | `clearTokens`, `getTokens`, `isExpired`, `setTokens` | IndexedDB-backed token store per provider. |
 | `packages/folder-sync/src/codecs/mdTable.js` | `FRAME_ID`, `mdTableCodec`, `parse`, `serialize` | Planner-board codec: markdown tables plus preserved frame text. |
 | `packages/folder-sync/src/engine.js` | `createSyncEngine`, `readAuthResponseParams`, `recentAutoReconnects`, `registerServiceWorker` | Main-thread consumer API, OAuth redirect handling (query `code` or fragment `access_token`), auto-reconnect with a redirect-loop guard, and SW registration helper. |
-| `packages/folder-sync/src/idb.js` | `idbDel`, `idbEntries`, `idbGet`, `idbKeys`, `idbSet`, `openDB` | Minimal IndexedDB primitives shared by page and worker. |
+| `packages/folder-sync/src/idb.js` | `idbCompareAndSet`, `idbDel`, `idbEntries`, `idbGet`, `idbKeys`, `idbSet`, `openDB` | IndexedDB primitives and atomic snapshot commits shared by page and worker. |
 | `packages/folder-sync/src/index.js` | `browserStorageAdapter`, `createSyncEngine`, `fsaAdapter`, `googleDriveProvider`, `mockProvider`, `oneDriveProvider`, `registerServiceWorker` | Public package surface. |
 | `packages/folder-sync/src/merge.js` | `findAliveWithoutRecord`, `fingerprint`, `gcTombstones`, `isCollapse`, `mergeCollections`, `parseSidecar`, `reconcileExternal`, `serializeSidecar`, `stampDelete`, `stampLocalChanges`, `stampWrite` | Pure record-level conflict resolution. |
 | `packages/folder-sync/src/mutcheck-meta-nodrop.mjs` | — | Mutation harness proving the phantom-meta guard is load-bearing. |
@@ -51,8 +51,10 @@ export function mergeCollections(local = {}, remote = {}, opts = {}) {
 | `packages/folder-sync/src/providers/mock.js` | `mockProvider` | IndexedDB-only mock remote for offline tests. |
 | `packages/folder-sync/src/providers/oneDrive.js` | `listFolderRecursive`, `oneDriveProvider` | OneDrive AppFolder transport with recursive pagination. |
 | `packages/folder-sync/src/queue.js` | `dequeue`, `enqueue`, `has`, `peekAll` | Persistent dirty-file queue. |
+| `packages/folder-sync/src/localReplica.js` | `commitLocalSnapshot`, `preserveLocalConflict`, `readAppliedContent`, `readLocalSnapshot`, `rememberAppliedContent`, `saveLocalReplica` | Durable device replica, explicit edit stamping, replay baseline, and preserved conflict copies. |
+| `packages/folder-sync/src/recordCodecs.js` | `RECORD_CODECS` | Shared board-codec mapping for page and worker. |
 | `packages/folder-sync/src/reconcile.js` | `filesToDeleteLocally`, `isConsumerVisibleMirrorPath`, `isMassDeletion`, `isValidRemotePath`, `mtimeKeysForProvider`, `planMirrorSync`, `planPlainPush`, `shouldPullRemote` | Pure decision logic for pushes, pulls, mirror repair, and deletion propagation. |
-| `packages/folder-sync/src/records.js` | `frameHasStructure`, `framePriorityCount`, `isSidecarPath`, `preferPopulatedPriorityFrame`, `preferStructuredFrame`, `reconcileRecordsFile`, `sidecarPath` | File-level reconcile around the merge core. |
+| `packages/folder-sync/src/records.js` | `frameHasStructure`, `framePriorityCount`, `isSidecarPath`, `preferPopulatedPriorityFrame`, `preferStructuredFrame`, `reconcileRecordsFile`, `sidecarPath`, `toCollection` | File-level reconcile around the merge core. |
 | `packages/folder-sync/src/sw.js` | — | Background sync worker and record-codec dispatch. |
 
 </details>
@@ -83,3 +85,15 @@ The domain's behavioural spec comes from `packages/folder-sync/src/codecs/mdTabl
 ## Failure modes
 
 This domain treats silent data loss as the primary enemy. The failure modes named in code are: a stale device resurrects a deleted board row; an empty load is misread as a whole-board delete; an alive sidecar row with no parsed content crashes fingerprinting; a newly connected provider clobbers cloud data it has never seen; pagination hides journals in subfolders; and a poison filename blocks the queue forever because the remote rejects it. The consistent mitigation is to preserve evidence, prefer non-destructive interpretations, and keep the decision logic pure enough that the test suite can pin each branch directly.
+
+## Multi-provider safety
+
+The device's durable IndexedDB replica is independent of either cloud. Before the engine can nudge the worker or replay its cache, `initLocal()` imports existing active-store files. Startup imports merge board rows without inferring deletions from absent rows. An empty or scaffolded provider therefore contributes no deletion: the device retains its rows and exports the merged board back to that provider. Missing remote files are repaired even when a previous worker already marked that provider seeded.
+
+Deliberate board saves/deletes stamp row clocks and tombstones immediately, atomically with the cached markdown and sidecar. Explicit edit clocks advance beyond observed clocks even when the device's wall clock is behind. The worker merges those records, not a deletion inferred from a missing cached file. The empty-board safeguard excludes the structural `__frame__` record; a frame alone is not a populated board. A real clear-to-zero is still supported because the page has already recorded its explicit tombstones.
+
+Page and worker commits use IndexedDB compare-and-set transactions over both board content and sidecar. If a user saves while a cloud read is in flight, the worker retries against the newer local snapshot before exporting. Rows or files learned from one provider are queued for every other provider and trigger a follow-up cycle; no additional user edit is required for convergence.
+
+Read/auth/network errors and malformed sidecars abort reconciliation and surface an error, rather than being interpreted as an empty provider. The engine remembers the content last applied to the active store. An untouched active copy receives missed remote updates; a copy that differs from that baseline is an external edit/recovery and is imported instead of overwritten. Non-board files remain whole-file documents, not row-level collections. When differing versions must be replaced, sync preserves a deterministic copy under `sync-conflicts/` and backs that copy up too. Startup board rows suppressed by existing tombstones are also archived rather than silently discarded. This avoids losing either journal version; it does not attempt to merge arbitrary prose.
+
+Regression coverage includes the actual worker with OneDrive and Google Drive adapters simulated over separate stores, real IndexedDB transactions, 153-row boards in both provider orders, completed tasks and journals, empty already-seeded targets, scaffolded/missing content with surviving metadata, deliberate deletions, independently stale replicas, edits during remote reads, journal conflicts, and provider read failures. These scenarios live in `sw.multiProvider.test.js`, `localReplica.test.js`, `engine.lane.test.js`, and `records.test.js`.
