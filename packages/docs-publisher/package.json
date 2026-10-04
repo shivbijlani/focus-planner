@@ -1,0 +1,13 @@
+{
+  "name": "@focus/docs-publisher",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Sanctioned atomic publisher for Focus Planner Docs.",
+  "bin": {
+    "fp-docs": "bin/fp-docs.js"
+  },
+  "scripts": {
+    "test": "vitest run"
+  }
+}

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { parseDoc, parseDocHeader, changedBlockIds, outline, statusLine, blockPlainText } from './doc.js'
+import {
+  assignBlockIds, parseDoc, parseDraftBlocks, parseDocHeader, changedBlockIds, outline, statusLine, blockPlainText,
+} from './doc.js'
 import { fencedLineMask, visibleLines } from './grammar.js'
 import { journalReadLoad } from './readLoad.js'
 
@@ -41,6 +43,25 @@ describe('parseDoc', () => {
     expect(d.blocks[3].lines).toEqual(['```md', '<!-- @b99 -->', '# not a title', '```'])
   })
 
+  it('splits unanchored drafts into renderable blocks', () => {
+    const blocks = parseDraftBlocks([
+      '# Draft',
+      '',
+      '**Status: Ready.**',
+      '',
+      '- first item',
+      '- second item',
+      '',
+      '| first row |',
+      '| second row |',
+      '',
+      '```md',
+      '# literal code heading',
+      '```',
+    ].join('\n'))
+    expect(blocks.map((block) => block.kind)).toEqual(['para', 'list', 'list', 'table', 'table', 'code'])
+  })
+
   it('exposes the bold status line', () => {
     expect(parseDoc(DOC).statusLine).toBe('Status: 2 options ready — tell me which one to lock.')
     expect(statusLine([{ kind: 'para', lines: ['plain'] }])).toBeNull()
@@ -75,6 +96,28 @@ describe('changes and outline', () => {
   })
   it('strips markdown for plain text', () => {
     expect(blockPlainText({ lines: ['- **bold** [x](doc:d-aaaaaa)'] })).toBe('bold x')
+  })
+
+  it('carries unique exact and similar block ids without reusing retired ids', () => {
+    const previous = [
+      { id: 'b1', lines: ['The mortgage rate is fixed at five percent.'] },
+      { id: 'b2', lines: ['Keep this separate.'] },
+    ]
+    const { blocks, nextId } = assignBlockIds([
+      { lines: ['Keep this separate.'] },
+      { lines: ['The mortgage rate is fixed at five percent today.'] },
+      { lines: ['A new block.'] },
+    ], previous, 3)
+    expect(blocks.map((block) => block.id)).toEqual(['b2', 'b1', 'b3'])
+    expect(nextId).toBe(4)
+  })
+
+  it('does not carry an id across ambiguous duplicate blocks', () => {
+    const { blocks } = assignBlockIds([
+      { lines: ['An identical paragraph.'] },
+      { lines: ['An identical paragraph.'] },
+    ], [{ id: 'b1', lines: ['An identical paragraph.'] }], 2)
+    expect(blocks.map((block) => block.id)).toEqual(['b2', 'b3'])
   })
 })
 
