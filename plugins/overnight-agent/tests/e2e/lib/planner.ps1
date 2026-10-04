@@ -5,7 +5,7 @@ function New-SandboxSettingsText($L, [string]$ProjectId, [int]$Concurrency) {
   @"
 # Overnight Agent - user settings (SANDBOX)
 
-Synthetic settings for an end-to-end sandbox run (plugins/overnight-agent/tests/e2e). Every path
+Synthetic settings for an end-to-end sandbox run. Every path
 points inside the sandbox; nothing here names a real account.
 
 ## Settings

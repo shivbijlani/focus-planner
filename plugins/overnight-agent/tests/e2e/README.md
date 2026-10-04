@@ -69,7 +69,13 @@ each tripwire is load-bearing. The harness refuses a `-Ref` that predates the tr
 
 **The subject never sees its exam.** The source under test is exported into `<sandbox>\repo` WITHOUT
 `plugins\overnight-agent\tests\` (`lib\sandbox.ps1` `Remove-PluginTests`, both export paths): this README,
-`lib\scenarios.ps1` and the characterization cases describe exactly what each run is scored on, and a read this file on main db57aae. Nothing the product runs needs that folder. Invariant i5 any tool call that names it anyway (`lib\analyze-events.test.mjs` holds the mutations).
+`lib\scenarios.ps1` and the characterization cases describe exactly what each run is scored on, and a
+coordinator read this file on main db57aae. Nothing the product runs needs that folder. Invariant i5
+fails any tool call that names it anyway (`lib\analyze-events.test.mjs` holds the mutations). The sandbox
+must not point at it either: a coordinator globbed `tests\e2e` after reading a seeded user-settings line
+that named it (20261003-203652-candidate-828-rebased). `lib\sandbox.ps1` `Assert-NoTestPathLeak` scans
+every seeded, sandbox-visible text before a run -- planner, homes, the harness MCP server copy, and the
+product copy -- and refuses to start if any names the plugin's tests (`lib\test-path-leak.test.mjs`).
 
 **Nothing external is reachable.** No email, Google, Telegram or browser MCP server exists in the
 isolated `COPILOT_HOME`; the builtin GitHub MCP server is disabled; `gh` points at a host that does

@@ -165,6 +165,54 @@ function Remove-PluginTests([string]$Dest) {
   if (Test-Path -LiteralPath $tests) { throw "could not remove the plugin's tests\ from the sandbox copy: $tests" }
 }
 
+# Removing tests\ is not enough if the sandbox still TELLS the subject where they live: measured on
+# 20261003-203652-candidate-828-rebased, the coordinator read the seeded user-settings.md ("...sandbox
+# run (plugins/overnight-agent/tests/e2e)") and globbed that folder as its 4th call. Every seeded,
+# sandbox-visible text is scanned before the run. Harness-written text (planner, homes, the harness
+# MCP server whose tool descriptions the subject sees, everything outside repo\) must name neither
+# the plugin's tests folder nor `tests/e2e`. The product copy (repo\plugins\overnight-agent: SKILL.md,
+# scripts, README) must not name `plugins/overnight-agent/tests`; its source comments may cite
+# `tests/e2e/run-sandbox.ps1` relative to the plugin, a folder the export has already removed.
+$script:TestPathFull = '(?i)plugins[\\/]+overnight-agent[\\/]+tests(?![\w-])'
+$script:TestPathLoose = '(?i)(?<![\w-])tests[\\/]+e2e(?![\w-])'
+function Find-TestPathLeaks($L) {
+  $textExt = @('.md', '.txt', '.json', '.jsonl', '.mjs', '.js', '.ps1', '.psm1', '.yml', '.yaml', '.csv', '.html')
+  # Enumerate from ONE resolved root item and compare nothing by string prefix: a temp root given as an
+  # 8.3 short path (CI: C:\Users\RUNNER~1\...) enumerates children under their long names, so a prefix
+  # test against the layout's own strings silently stops excluding repo\ (measured on CI, #840).
+  $root = Get-Item -LiteralPath $L.Root -Force
+  $hits = [System.Collections.Generic.List[string]]::new()
+  $check = {
+    param($File, [string[]]$Patterns)
+    if ($textExt -notcontains $File.Extension.ToLowerInvariant() -or $File.Length -gt 4MB) { return }
+    $text = [IO.File]::ReadAllText($File.FullName)
+    foreach ($p in $Patterns) {
+      $m = [regex]::Match($text, $p)
+      if ($m.Success) { $hits.Add("$($File.FullName.Substring($root.FullName.Length).TrimStart('\', '/')): '$($m.Value)'"); break }
+    }
+  }
+  $both = @($script:TestPathFull, $script:TestPathLoose)
+  foreach ($top in (Get-ChildItem -LiteralPath $root.FullName -Force)) {
+    if ($top.PSIsContainer -and $top.Name -ieq 'repo') {
+      # The product copy: only the full plugin tests path is a leak (see above).
+      $plugin = Join-Path $top.FullName 'plugins\overnight-agent'
+      if (Test-Path -LiteralPath $plugin) {
+        foreach ($f in (Get-ChildItem -LiteralPath $plugin -Recurse -File -Force -ErrorAction SilentlyContinue)) { & $check $f @($script:TestPathFull) }
+      }
+      continue
+    }
+    $files = if ($top.PSIsContainer) { Get-ChildItem -LiteralPath $top.FullName -Recurse -File -Force -ErrorAction SilentlyContinue } else { @($top) }
+    foreach ($f in $files) { & $check $f $both }
+  }
+  return , @($hits)
+}
+function Assert-NoTestPathLeak($L) {
+  $hits = Find-TestPathLeaks $L
+  if ($hits.Count) {
+    throw "the sandbox tells the subject where its tests are (it must not; see Find-TestPathLeaks): $($hits -join ' | ')"
+  }
+}
+
 function Export-SourceUnderTest([string]$Ref, [string]$RepoRoot, [string]$Dest) {
   New-Item -ItemType Directory -Force -Path $Dest | Out-Null
   if ($Ref -and (Test-Path -LiteralPath $Ref -PathType Container)) {

@@ -130,6 +130,7 @@ function Invoke-Attempt($Scenarios, [int]$Attempt, [string]$SessionRoot, [string
   $pre = @($ctx.PreexistingSessions | ForEach-Object {
       [ordered]@{ id = $_.id; name = $_.name; project_id = $ctx.ProjectId; path = $L.TaskChats; created_at = (Get-Date).AddDays(-3).ToString('o'); sends = 1 } })
   Write-Utf8 (Join-Path $L.AppDir 'sessions.json') (ConvertTo-Json -InputObject @($pre) -Depth 5)
+  Assert-NoTestPathLeak $L
 
   $prechecks = @(Invoke-Prechecks $ctx $Scenarios)
   $meta = [ordered]@{ attempt = $Attempt; dir = $dir; scenarios = @($Scenarios.Name); source = $src
