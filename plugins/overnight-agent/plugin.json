@@ -1,7 +1,7 @@
 {
   "name": "overnight-agent",
-  "description": "Autonomously makes progress on your planner tasks overnight. Dispatches reversible or standing-rule-allowed steps immediately and asks only before gated actions.",
-  "version": "1.57.54",
+  "description": "Autonomously dispatches eligible planner tasks to their own autopilot sessions; only irreversible actions require consent under the reversibility rules and agent-gate.md.",
+  "version": "1.57.52",
   "author": {
     "name": "Shiv Bijlani",
     "url": "https://github.com/shivbijlani"
