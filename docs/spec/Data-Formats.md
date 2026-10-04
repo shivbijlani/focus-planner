@@ -186,7 +186,35 @@ The design rationale is explicit in comments and tests: plain markdown always de
 
 Known gap: issue #569 reports that one Overnight Agent reopen reader still misses user text edited **above** the sentinel. The journal format itself is stable; one consumer still under-reads it.
 
-## 3. Agent permissions, settings, and per-task state
+## 3. Native catch-up Docs
+
+Docs is an optional, markdown-backed catch-up surface for long task journals. It is enabled only
+when `docs/index.json` exists; without that file, a user sees no Docs UI or changed agent behavior.
+Each task has at most one primary catch-up document, and that document can link to supporting docs.
+The app writes user comments, the publisher writes documents and responses, and the publisher
+maintains the task-to-primary registry. This one-writer-per-file split keeps simultaneous user
+comments mergeable without allowing an agent and the app to overwrite each other's work.
+
+The full behavior contract, lifecycle, publisher interface, validation errors, threshold,
+review-set traversal, and normative test vectors are in
+[Domain-docs](Domain-docs).
+
+| Format | Location and writer | Purpose |
+| --- | --- | --- |
+| `index.json` | `docs/index.json`; `fp-docs` publisher | Library listing, document metadata, links, task-to-primary binding, and badge counts. |
+| `doc.md` | `docs/<doc-id>/doc.md`; `fp-docs` publisher | Renderer-compatible Markdown body, publisher revision stamp, and stable `@bN` block anchors. |
+| `review.json` | `docs/<doc-id>/review.json`; Docs app | Submitted span comments, review batches, per-comment logical clocks, and read revision. |
+| `response.json` | `docs/<doc-id>/response.json`; `fp-docs` publisher | Revision summaries, per-comment dispositions, and acknowledged review id. |
+| `history/rNNNN.md` | `docs/<doc-id>/history/`; `fp-docs` publisher | Immutable snapshots of the latest 20 published revisions. |
+
+The JSON contracts are machine-readable in [`schemas/docs-index.schema.json`](schemas/docs-index.schema.json),
+[`schemas/docs-review.schema.json`](schemas/docs-review.schema.json), and
+[`schemas/docs-response.schema.json`](schemas/docs-response.schema.json). `doc.md` uses the
+existing journal Markdown subset; it is not a JSON format. The threshold is 1,500 visible journal
+words by default, after hidden HTML comments and marker metadata are stripped. The Docs app and
+agent use the same measure.
+
+## 4. Agent permissions, settings, and per-task state
 
 ### `agent-gate.md`
 
@@ -526,7 +554,7 @@ and app behaviour, and test vectors — is [Domain-lanes](Domain-lanes).
 
 </details>
 
-## 4. Telegram bridge state — `state.json`
+## 5. Telegram bridge state — `state.json`
 
 The Telegram bridge keeps operational JSON in a separate state directory, outside the repo and outside OneDrive. Unlike journals and boards, this is **host-local machinery**, not planner content.
 
@@ -588,7 +616,7 @@ Source-faithful sample built from `emptyState()` plus the reducers in `packages/
 
 </details>
 
-## 5. Folder-sync sidecars — `<file>.sync.json`
+## 6. Folder-sync sidecars — `<file>.sync.json`
 
 Folder sync does not treat `planner.md` as one opaque blob. It splits the file into record rows plus a structural `__frame__` record and writes per-record metadata to a neighboring JSON sidecar.
 
@@ -634,7 +662,7 @@ Source-faithful sample from `packages/folder-sync/src/merge.js`, `packages/folde
 
 The comments explain the design plainly: the unit of sync is the **row**, because that is the only way to keep deletes durable and make concurrent edits to different tasks commute.
 
-## 6. MCP credential pointer file — `mcp-secrets.json`
+## 7. MCP credential pointer file — `mcp-secrets.json`
 
 This file never stores secret values. It is a non-secret pointer that tells the local launcher which credential-vault entries and public ids exist.
 

@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://focus-planner.invalid/schemas/docs-review.schema.json",
+  "title": "Focus Planner Docs review",
+  "description": "App-owned submitted comments, review batches, and read revision for one document.",
+  "type": "object",
+  "required": ["version", "comments", "reviews", "readRev"],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "comments": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^c_[A-Za-z0-9_-]+$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/comment"
+      }
+    },
+    "reviews": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^rv_[A-Za-z0-9_-]+$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/review"
+      }
+    },
+    "readRev": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "$defs": {
+    "blockId": {
+      "type": "string",
+      "pattern": "^b[1-9][0-9]*$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "anchor": {
+      "type": "object",
+      "required": ["block", "quote"],
+      "properties": {
+        "block": {
+          "$ref": "#/$defs/blockId"
+        },
+        "endBlock": {
+          "$ref": "#/$defs/blockId"
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prefix": {
+          "type": "string"
+        },
+        "suffix": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "comment": {
+      "type": "object",
+      "required": [
+        "rev",
+        "anchor",
+        "intent",
+        "body",
+        "createdAt",
+        "reviewId",
+        "status",
+        "clock"
+      ],
+      "properties": {
+        "rev": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "anchor": {
+          "$ref": "#/$defs/anchor"
+        },
+        "intent": {
+          "enum": ["approve", "question", "do-more", "note"]
+        },
+        "body": {
+          "type": "string"
+        },
+        "createdAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "reviewId": {
+          "type": "string",
+          "pattern": "^rv_[A-Za-z0-9_-]+$"
+        },
+        "status": {
+          "enum": ["open", "reopened"]
+        },
+        "clock": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reopenedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "reopenedRev": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "reopened"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["reopenedAt", "reopenedRev"]
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "review": {
+      "type": "object",
+      "required": ["submittedAt", "rev"],
+      "properties": {
+        "submittedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "rev": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
