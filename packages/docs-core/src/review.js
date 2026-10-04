@@ -6,6 +6,7 @@
 // broken deterministically) — the same code that merges planner.md rows.
 
 import { mergeCollections } from '../../folder-sync/src/merge.js'
+import { validateIndexText } from './validate.js'
 
 export const REVIEW_VERSION = 1
 export const INTENTS = ['approve', 'question', 'do-more', 'note']
@@ -57,9 +58,7 @@ export function parseResponse(text) {
 }
 
 export function parseIndex(text) {
-  const j = safeJson(text)
-  if (!j || typeof j !== 'object') return null
-  return { version: j.version || 1, tasks: j.tasks || {}, docs: j.docs || {} }
+  return validateIndexText(text)
 }
 
 function toCollection(review) {

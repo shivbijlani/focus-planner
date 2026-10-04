@@ -47,7 +47,7 @@ function useIsWide() {
     const on = () => setWide(m.matches)
     m.addEventListener?.('change', on)
     return () => m.removeEventListener?.('change', on)
-  }, [])
+  }, [docId, entry])
   return wide
 }
 
@@ -75,7 +75,7 @@ export default function DocView({ docId, index, route, onOpenDoc, onBack, reload
   // Load (and reload on remote change) the doc, its review and response.
   useEffect(() => {
     let cancelled = false
-    loadDoc(docId).then(async (d) => {
+    loadDoc(docId, index).then(async (d) => {
       if (cancelled) return
       if (!d) { setLoadError('This document is not on this device yet.'); return }
       setData(d)
@@ -86,7 +86,7 @@ export default function DocView({ docId, index, route, onOpenDoc, onBack, reload
         const rev = d.parsed.header?.rev ?? d.response.rev
         const b = { docId, readRev, rev, changed: new Set() }
         if (readRev > 0 && readRev < rev) {
-          loadHistory(docId, readRev).then((h) => {
+          loadHistory(docId, readRev, index?.docs?.[docId]).then((h) => {
             if (!cancelled && h) setBaseline({ ...b, changed: changedBlockIds(d.parsed, h) })
           })
         }
@@ -94,7 +94,7 @@ export default function DocView({ docId, index, route, onOpenDoc, onBack, reload
       })
     }).catch((e) => !cancelled && setLoadError(String(e?.message || e)))
     return () => { cancelled = true }
-  }, [docId, reloadKey])
+  }, [docId, index, reloadKey])
 
   useEffect(() => { setDrafts(loadDrafts(docId)); markedReadRef.current = false; setViewing(null); setBaseline(null) }, [docId])
   useEffect(() => { saveDrafts(docId, drafts) }, [docId, drafts])
@@ -355,7 +355,10 @@ export default function DocView({ docId, index, route, onOpenDoc, onBack, reload
   const viewRev = async (r) => {
     setSheet(null)
     if (r == null) { setViewing(null); return }
-    const [h, prev] = await Promise.all([loadHistory(docId, r), r > 1 ? loadHistory(docId, r - 1) : null])
+    const [h, prev] = await Promise.all([
+      loadHistory(docId, r, entry),
+      r > 1 ? loadHistory(docId, r - 1, entry) : null,
+    ])
     if (!h) { flash(`r${r} isn't in history`); return }
     setViewing({ rev: r, parsed: h, changed: prev ? changedBlockIds(h, prev) : new Set() })
     window.scrollTo({ top: 0 })
@@ -425,7 +428,7 @@ export default function DocView({ docId, index, route, onOpenDoc, onBack, reload
         onClick={onArticleClick}
       >
         <h1 className="dv-title">{shown.title}</h1>
-        {taskId != null && <Trio taskId={taskId} telegram={entry?.telegram} current />}
+        {taskId != null && <Trio taskId={taskId} telegram={entry?.telegramUrl} current />}
         {shown.blocks.map((b) => (
           <Block
             key={`${viewing ? viewing.rev : 'cur'}-${b.id}`}
@@ -446,7 +449,7 @@ export default function DocView({ docId, index, route, onOpenDoc, onBack, reload
               ))}
             </div>
           )}
-          {taskId != null && <Trio taskId={taskId} telegram={entry?.telegram} current />}
+          {taskId != null && <Trio taskId={taskId} telegram={entry?.telegramUrl} current />}
           <div className="dv-foot-meta">{docId} · r{rev}{data.parsed.header?.by ? ` · published by ${data.parsed.header.by}` : ''}</div>
         </footer>
       </article>

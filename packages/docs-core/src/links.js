@@ -3,10 +3,10 @@
 //   [Mortgage options brief](doc:d-9a1c0q)        → whole doc
 //   [the escrow note](doc:d-9a1c0q#b9)             → a block in it
 
-export const DOC_ID_RE = /^d-[a-z0-9]{6}$/
+export const DOC_ID_RE = /^d-[a-z0-9]{6,}$/
 
 export function parseDocHref(href) {
-  const m = String(href || '').trim().match(/^doc:(d-[a-z0-9]+)(?:#(b\d+))?$/)
+  const m = String(href || '').trim().match(/^doc:(d-[a-z0-9]{6,})(?:#(b\d+))?$/)
   if (!m) return null
   return { docId: m[1], block: m[2] || null }
 }
@@ -19,7 +19,7 @@ export function isDocHref(href) {
 export function extractDocLinks(content) {
   const out = []
   const seen = new Set()
-  const re = /\]\(\s*doc:(d-[a-z0-9]+)(?:#b\d+)?\s*\)/g
+  const re = /\]\(\s*doc:(d-[a-z0-9]{6,})(?:#b\d+)?\s*\)/g
   let m
   while ((m = re.exec(String(content || '')))) {
     if (!seen.has(m[1])) { seen.add(m[1]); out.push(m[1]) }
@@ -68,7 +68,7 @@ export function docHref(docId, { block, comment } = {}) {
 /** Parse the Docs app hash route: '' | '#/' → library; '#/d/<id>?block=&comment=' → doc. */
 export function parseRoute(hash) {
   const h = String(hash || '').replace(/^#/, '')
-  const m = h.match(/^\/d\/(d-[a-z0-9]+)(?:\?(.*))?$/)
+  const m = h.match(/^\/d\/(d-[a-z0-9]{6,})(?:\?(.*))?$/)
   if (!m) return { view: 'library' }
   const params = new URLSearchParams(m[2] || '')
   return { view: 'doc', docId: m[1], block: params.get('block'), comment: params.get('comment') }

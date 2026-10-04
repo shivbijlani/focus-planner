@@ -4,6 +4,7 @@ export * from './links.js'
 export * from './anchor.js'
 export * from './review.js'
 export * from './readLoad.js'
+export * from './validate.js'
 
 /** Storage paths of the on-disk format (plans/docs-app-design.md §4). */
 export const DOCS_DIR = 'docs'

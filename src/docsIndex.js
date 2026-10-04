@@ -62,6 +62,17 @@ export function docsAppHref(docId) {
   return `${base}docs.html${docHref(docId)}`
 }
 
+export function taskLinkPlan({ mobile = false, hasDoc = false, hasTelegram = false, hasJournal = false } = {}) {
+  const desktop = [
+    ...(hasTelegram ? ['telegram'] : []),
+    ...(hasJournal ? ['journal'] : []),
+    ...(hasDoc ? ['doc'] : []),
+  ]
+  if (!mobile) return { desktop, rail: null, overflow: [] }
+  const rail = hasDoc ? 'doc' : hasTelegram ? 'telegram' : hasJournal ? 'journal' : null
+  return { desktop, rail, overflow: desktop.filter((link) => link !== rail) }
+}
+
 /** { docId, unread, needsYou, href } for a task's primary doc, or null. */
 export function useTaskDoc(provider, taskId) {
   const [state, setState] = useState({ key: null, doc: null })
