@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://focus-planner.invalid/schemas/docs-index.schema.json",
+  "title": "Focus Planner Docs index",
+  "description": "Publisher-owned registry of Docs documents and primary task bindings.",
+  "type": "object",
+  "required": ["version", "tasks", "docs"],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "tasks": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[1-9][0-9]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/docId"
+      }
+    },
+    "docs": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/docId"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/docEntry"
+      }
+    }
+  },
+  "$defs": {
+    "docId": {
+      "type": "string",
+      "pattern": "^d-[a-z0-9]{6,}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "docEntry": {
+      "type": "object",
+      "required": ["title", "primary", "rev", "updatedAt", "links"],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "primary": {
+          "type": "boolean"
+        },
+        "rev": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "updatedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "telegramUrl": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1
+        },
+        "links": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/docId"
+          }
+        },
+        "openDispositions": {
+          "type": "object",
+          "propertyNames": {
+            "enum": ["needs-you"]
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "primary": {
+                "const": true
+              }
+            },
+            "required": ["primary"]
+          },
+          "then": {
+            "required": ["task"]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["task"]
+                },
+                {
+                  "required": ["telegramUrl"]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

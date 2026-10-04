@@ -48,7 +48,8 @@ generation pipeline (`scripts`). See [Architecture](Architecture) for how they c
 | --- | --- |
 | [Architecture](Architecture) | Domains, module graph, runtime processes, data-flow from user action to persisted state. |
 | [Technical Architecture](Technical-Architecture) | Optional architectural ideas, diagrams, and principles, without implementation code. |
-| [Data-Formats](Data-Formats) | Every persisted format — board, journals, agent/bridge state — with annotated real samples and invariants. |
+| [Data-Formats](Data-Formats) | Every persisted format — board, journals, Docs, agent/bridge state — with annotated real samples and invariants. |
+| [Domain-docs](Domain-docs) | Native catch-up Docs: file ownership, data formats, block/comment preservation, publisher and agent-loop contracts, test vectors. |
 | [Domain-agent-metadata](Domain-agent-metadata) | Per-device agent metadata files and the 🤖 session link: fingerprints, publisher and reader rules, test vectors. |
 | [Domain-lanes](Domain-lanes) | Lanes: scope each agent PC to part of the plan — `#lane:` tags, app assignments and inheritance, `agent-lanes.json`, engine and app rules, test vectors. |
 | [Domain-app](Domain-app) | The board UI and its pure content-transformation core. |
