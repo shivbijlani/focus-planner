@@ -338,7 +338,6 @@ async function enqueueRemoteChange(name) {
   // A pull/merge is a local replica change too: fan it out to every other
   // provider next cycle, including ones that were offline during this cycle.
   await enqueue(name)
-  scheduleFollowUp()
 }
 
 async function notifyLocalChange(name) {

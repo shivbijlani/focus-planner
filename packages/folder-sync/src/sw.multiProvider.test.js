@@ -178,7 +178,11 @@ describe('actual service worker: device + OneDrive + Google Drive', () => {
     clouds.get('google-drive').files.set(PATH, plan([2, 'Google-only row']))
     await enqueue(PATH)
     await cycle()
-    await cycle()
+    expect(self.registration.sync.register).toHaveBeenCalledOnce()
+    expect(self.registration.sync.register).toHaveBeenCalledWith('folder-sync')
+    let followUp
+    events.get('sync')({ tag: 'folder-sync', waitUntil: work => { followUp = work } })
+    await followUp
     expect(ids(clouds.get('onedrive').files.get(PATH))).toEqual(['1', '2'])
     expect(ids(clouds.get('google-drive').files.get(PATH))).toEqual(['1', '2'])
     expect(await idbKeys('queue')).toEqual([])
