@@ -92,15 +92,9 @@ export async function reconnectSavedSource(source, {
 }
 
 export async function bootstrapSync(storage) {
-  for (const operation of [
-    () => storage.registerSyncWorker(),
-    () => storage.restoreSyncTargets(),
-    () => storage.startAutoSync(),
-  ]) {
-    try {
-      await operation()
-    } catch (error) {
-      console.error('Sync bootstrap failed:', error)
-    }
-  }
+  try { await storage.registerSyncWorker() } catch (error) { console.error('Sync bootstrap failed:', error) }
+  // Replica initialization is local storage readiness, not optional network
+  // backup. Propagate failures so the app can show its storage recovery picker.
+  await storage.restoreSyncTargets()
+  try { await storage.startAutoSync() } catch (error) { console.error('Sync bootstrap failed:', error) }
 }
