@@ -56,11 +56,21 @@
           "type": "string",
           "minLength": 1
         },
+        "startQuote": {
+          "type": "string"
+        },
+        "endQuote": {
+          "type": "string"
+        },
         "prefix": {
           "type": "string"
         },
         "suffix": {
           "type": "string"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "additionalProperties": true

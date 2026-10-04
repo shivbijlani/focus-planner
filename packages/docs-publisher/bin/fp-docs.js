@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { DocsPublisherError, lintDraft, publish, readStatus } from '../src/index.js'
+import { DocsPublisherError, lintDraft, publish, readComments, readStatus } from '../src/index.js'
 
 const USAGE = `fp-docs — publish and inspect Focus Planner Docs
 
@@ -11,6 +11,7 @@ Usage:
   fp-docs publish --task N --draft FILE --summary TEXT [--base-rev R] [--linked new:<alias>=FILE|<id>=FILE] [--linked-base-rev R] [--force] [--adopt-external-edit] [--check-links]
   fp-docs lint --draft FILE [--check-links]
   fp-docs status --task N [--json]
+  fp-docs comments --task N [--json]
 `
 
 function argumentsOf(argv) {
@@ -59,13 +60,14 @@ async function main(argv = process.argv.slice(2)) {
     return 0
   }
   const command = positional[0]
-  if (!['publish', 'lint', 'status'].includes(command) || positional.length !== 1) {
+  if (!['publish', 'lint', 'status', 'comments'].includes(command) || positional.length !== 1) {
     throw new DocsPublisherError('D09 data', `unknown command or unexpected argument: ${positional.join(' ') || '(none)'}`, 'run fp-docs --help')
   }
   const options = {
     publish: new Set(['--task', '--draft', '--summary', '--base-rev', '--linked', '--linked-base-rev', '--force', '--adopt-external-edit', '--check-links']),
     lint: new Set(['--draft', '--check-links']),
     status: new Set(['--task', '--json']),
+    comments: new Set(['--task', '--json']),
   }[command]
   for (const option of flags.keys()) {
     if (!options.has(option)) throw new DocsPublisherError('D09 data', `${option} is not supported by ${command}`)
@@ -124,6 +126,27 @@ async function main(argv = process.argv.slice(2)) {
       linked,
     })
     console.log(`Published ${result.id} revision ${result.rev}`)
+    return 0
+  }
+
+  if (command === 'comments') {
+    const comments = await readComments({ root, task: positiveInteger(need(flags, '--task'), '--task') })
+    if (flags.has('--json')) {
+      console.log(JSON.stringify(comments, null, 2))
+    } else {
+      console.log(`Task ${comments.task}: ${comments.docs.reduce((n, doc) => n + doc.comments.length, 0)} open comments`)
+      for (const doc of comments.docs) {
+        console.log(`${doc.title} (${doc.id} r${doc.rev})`)
+        for (const comment of doc.comments) {
+          const where = comment.placement.status === 'outdated'
+            ? 'outdated'
+            : `block ${comment.placement.block}${comment.placement.status === 'moved' ? ' (moved)' : ''}`
+          const state = comment.status === 'reopened' ? 'reopened' : comment.state !== 'open' ? comment.state : null
+          console.log(`  ${comment.id} ${comment.intent}${state ? ` [${state}]` : ''} — “${comment.anchor.quote}” (${where})`)
+          if (comment.body) console.log(`    ${comment.body}`)
+        }
+      }
+    }
     return 0
   }
 

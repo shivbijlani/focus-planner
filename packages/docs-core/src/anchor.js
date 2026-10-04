@@ -1,8 +1,7 @@
 // W3C TextQuote anchoring scoped to a block (plans/docs-app-design.md §4.3).
 //
-// An anchor is { block, endBlock, quote, prefix, suffix } where the text is the block's
-// rendered text (DOM textContent in the app). Multi-block selections also carry
-// `startQuote` (the part inside `block`) and `endQuote` (the part inside `endBlock`).
+// An anchor stores the quote's zero-based block offset and optional prefix/suffix context.
+// Multi-block selections also carry `endBlock`, `startQuote`, and `endQuote`.
 //
 // Re-anchoring order, per the design: same block + quote → quote anywhere in the doc →
 // outdated. An outdated comment is kept and listed, never lost.
@@ -34,9 +33,19 @@ function commonPrefixLen(a, b) {
  * Find `quote` in `text`, disambiguating repeated occurrences by how well the
  * surrounding text matches `prefix` / `suffix`. Returns { start, end, score } or null.
  */
-export function findQuote(text, { quote, prefix = '', suffix = '' } = {}) {
-  if (!quote || typeof text !== 'string') return null
-  let best = null
+export function findQuote(text, { quote, prefix = '', suffix = '', offset } = {}) {
+  const hits = quoteHits(text, { quote, prefix, suffix })
+  if (!hits.length) return null
+  const bestScore = Math.max(...hits.map((hit) => hit.score))
+  const best = hits.filter((hit) => hit.score === bestScore)
+  const atOffset = best.filter((hit) => hit.start === offset)
+  if (Number.isInteger(offset) && atOffset.length === 1) return atOffset[0]
+  return best.length === 1 ? best[0] : null
+}
+
+function quoteHits(text, { quote, prefix = '', suffix = '' } = {}) {
+  if (!quote || typeof text !== 'string') return []
+  const hits = []
   let from = 0
   for (;;) {
     const i = text.indexOf(quote, from)
@@ -44,14 +53,31 @@ export function findQuote(text, { quote, prefix = '', suffix = '' } = {}) {
     const before = text.slice(Math.max(0, i - prefix.length), i)
     const after = text.slice(i + quote.length, i + quote.length + suffix.length)
     const score = commonSuffixLen(before, prefix) + commonPrefixLen(after, suffix)
-    if (!best || score > best.score) best = { start: i, end: i + quote.length, score }
+    hits.push({ start: i, end: i + quote.length, score })
     from = i + 1
   }
-  return best
+  return hits
 }
 
 export function isMultiBlock(anchor) {
   return !!(anchor && anchor.endBlock && anchor.endBlock !== anchor.block)
+}
+
+function flattenBlocks(entries) {
+  let text = ''
+  const blocks = []
+  for (const [id, blockText] of entries) {
+    if (blocks.length) text += '\n…\n'
+    const start = text.length
+    text += blockText
+    blocks.push({ id, start, end: text.length })
+  }
+  return { text, blocks }
+}
+
+function locationAt(blocks, offset) {
+  const block = blocks.find((item) => offset >= item.start && offset <= item.end)
+  return block ? { block: block.id, offset: offset - block.start } : null
 }
 
 /**
@@ -68,23 +94,42 @@ export function reanchor(anchor, blockTexts) {
     const order = entries.map(([id]) => id)
     const si = order.indexOf(anchor.block)
     const ei = order.indexOf(anchor.endBlock)
-    if (si === -1 || ei === -1 || ei < si) return { status: 'outdated' }
-    const s = findQuote(texts.get(anchor.block), { quote: anchor.startQuote, prefix: anchor.prefix })
-    const e = findQuote(texts.get(anchor.endBlock), { quote: anchor.endQuote, suffix: anchor.suffix })
-    if (!s || !e) return { status: 'outdated' }
-    return { status: 'anchored', block: anchor.block, start: s.start, endBlock: anchor.endBlock, end: e.end }
+    if (si !== -1 && ei !== -1 && ei >= si) {
+      const s = findQuote(texts.get(anchor.block), { quote: anchor.startQuote, prefix: anchor.prefix, offset: anchor.offset })
+      const e = findQuote(texts.get(anchor.endBlock), { quote: anchor.endQuote, suffix: anchor.suffix })
+      if (s && e) return { status: 'anchored', block: anchor.block, start: s.start, endBlock: anchor.endBlock, end: e.end }
+    }
+    const flattened = flattenBlocks(entries)
+    const hit = findQuote(flattened.text, anchor)
+    if (!hit) return { status: 'outdated' }
+    const start = locationAt(flattened.blocks, hit.start)
+    const end = locationAt(flattened.blocks, hit.end)
+    if (!start || !end) return { status: 'outdated' }
+    return { status: 'moved', block: start.block, start: start.offset, endBlock: end.block, end: end.offset }
   }
 
-  const same = texts.has(anchor.block) ? findQuote(texts.get(anchor.block), anchor) : null
+  const same = texts.has(anchor.block)
+    ? findQuote(texts.get(anchor.block), anchor)
+    : null
   if (same) return { status: 'anchored', block: anchor.block, start: same.start, endBlock: anchor.block, end: same.end }
 
-  let best = null
+  const hits = []
   for (const [id, text] of entries) {
-    if (id === anchor.block) continue
-    const hit = findQuote(text, anchor)
-    if (hit && (!best || hit.score > best.hit.score)) best = { id, hit }
+    for (const hit of quoteHits(text, anchor)) hits.push({ id, ...hit })
   }
-  if (best) return { status: 'moved', block: best.id, start: best.hit.start, endBlock: best.id, end: best.hit.end }
+  if (hits.length) {
+    const bestScore = Math.max(...hits.map((hit) => hit.score))
+    const best = hits.filter((hit) => hit.score === bestScore)
+    if (best.length === 1) {
+      return {
+        status: best[0].id === anchor.block ? 'anchored' : 'moved',
+        block: best[0].id,
+        start: best[0].start,
+        endBlock: best[0].id,
+        end: best[0].end,
+      }
+    }
+  }
   return { status: 'outdated' }
 }
 
@@ -95,13 +140,14 @@ export function reanchor(anchor, blockTexts) {
 export function makeAnchor({ block, startText, start, endBlock, endText, end }) {
   if (!endBlock || endBlock === block) {
     const sel = quoteSelector(startText, start, end)
-    return { block, endBlock: block, ...sel }
+    return { block, endBlock: block, offset: Math.max(0, Math.min(start, end)), ...sel }
   }
   const startQuote = startText.slice(start)
   const endQuote = endText.slice(0, end)
   return {
     block,
     endBlock,
+    offset: Math.max(0, start),
     quote: `${startQuote}\n…\n${endQuote}`,
     prefix: startText.slice(Math.max(0, start - CONTEXT_CHARS), start),
     suffix: endText.slice(end, end + CONTEXT_CHARS),

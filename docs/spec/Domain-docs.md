@@ -226,7 +226,7 @@ A sent comment requires:
 | Field | Rule |
 | --- | --- |
 | `rev` | Positive revision on which the user made the selection. |
-| `anchor` | `block`, exact selected `quote`, and optional `endBlock`, `prefix`, `suffix`. |
+| `anchor` | `block`, exact selected `quote`, its zero-based UTF-16 rendered-text `offset`, and optional `endBlock`, `startQuote`, `endQuote`, `prefix`, `suffix`. |
 | `intent` | `approve`, `question`, `do-more`, or `note`. Approval applies only to the selected span. |
 | `body` | User's comment text; may be empty for a one-tap approval. |
 | `createdAt` | UTC ISO-8601 timestamp. |

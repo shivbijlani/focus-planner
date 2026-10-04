@@ -18,6 +18,21 @@ describe('TextQuote anchoring', () => {
     expect(findQuote(t, { quote: 'nope' })).toBeNull()
   })
 
+  it('uses the stored offset for a repeated quote and marks unresolved ties outdated', () => {
+    const t = 'one quote; two quote'
+    const anchor = makeAnchor({ block: 'b1', startText: t, start: 15, end: 20 })
+    expect(anchor.offset).toBe(15)
+    expect(reanchor(anchor, { b1: t })).toMatchObject({ status: 'anchored', start: 15 })
+    expect(reanchor({ block: 'b1', quote: 'target', prefix: 'same ', suffix: ' same' }, {
+      b1: 'same target same / same target same',
+    })).toEqual({ status: 'outdated' })
+    expect(reanchor({ block: 'b1', quote: 'target', prefix: 'same ', suffix: ' same' }, {
+      b1: 'gone',
+      b2: 'same target same',
+      b3: 'same target same',
+    })).toEqual({ status: 'outdated' })
+  })
+
   it('re-anchors: same block, then anywhere, then outdated', () => {
     const a = { block: 'b7', endBlock: 'b7', quote: '5.9%', prefix: 'at ', suffix: ' with' }
     expect(reanchor(a, { b6: 'x', b7: 'rate at 5.9% with' })).toMatchObject({ status: 'anchored', block: 'b7', start: 8, end: 12 })
@@ -30,6 +45,8 @@ describe('TextQuote anchoring', () => {
     expect(a).toMatchObject({ block: 'b1', endBlock: 'b2', startQuote: 'para tail', endQuote: 'second' })
     expect(reanchor(a, { b1: 'first para tail', b2: 'second para' })).toMatchObject({ status: 'anchored', start: 6, end: 6, endBlock: 'b2' })
     expect(reanchor(a, { b2: 'second para', b1: 'first para tail' }).status).toBe('outdated')
+    expect(reanchor(a, { b9: 'first para tail', b10: 'second para' }))
+      .toMatchObject({ status: 'moved', block: 'b9', start: 6, endBlock: 'b10', end: 6 })
     expect(reanchor(a, { b1: 'changed', b2: 'second para' }).status).toBe('outdated')
   })
 })

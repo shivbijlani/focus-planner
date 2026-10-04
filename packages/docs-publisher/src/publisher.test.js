@@ -9,8 +9,10 @@ import {
   DOCS_LIMITS, docBodyByteLength, historyPath, responsePath, reviewSet, validateDocText,
   validateIndexText, validateResponseText, validateReviewText,
 } from '../../docs-core/src/index.js'
-import { SAMPLE_DOC_FILES, SAMPLE_JOURNAL, SAMPLE_PRIMARY_ID, SAMPLE_TASK_ID, SAMPLE_TITLE } from '../../../e2e/fixtures/docs-sample.js'
-import { lintDraft, publish, readStatus, writeAtomically } from './publisher.js'
+import {
+  SAMPLE_DOC_FILES, SAMPLE_JOURNAL, SAMPLE_LINKED_ID, SAMPLE_PRIMARY_ID, SAMPLE_TASK_ID, SAMPLE_TITLE,
+} from '../../../e2e/fixtures/docs-sample.js'
+import { lintDraft, publish, readComments, readStatus, writeAtomically } from './publisher.js'
 
 const roots = []
 const publishedAt = '2026-10-04T10:00:00Z'
@@ -70,6 +72,46 @@ async function seedSample(root) {
     await put(root, relative, text)
   }
   await put(root, `journal/task-${SAMPLE_TASK_ID}.md`, SAMPLE_JOURNAL)
+}
+
+function reviewFile(comments) {
+  return JSON.stringify({
+    version: 1,
+    comments,
+    reviews: { rv_batch: { submittedAt: publishedAt, rev: 1 } },
+    readRev: 0,
+  })
+}
+
+function comment({ block = 'b1', quote, prefix = '', suffix = '', offset = 0, status = 'open' }) {
+  return {
+    rev: 1,
+    anchor: { block, quote, prefix, suffix, offset },
+    intent: 'question',
+    body: 'Please clarify.',
+    createdAt: publishedAt,
+    reviewId: 'rv_batch',
+    status,
+    clock: 1,
+    ...(status === 'reopened' ? { reopenedAt: publishedAt, reopenedRev: 1 } : {}),
+  }
+}
+
+async function seedCommentReviews(root) {
+  await seedSample(root)
+  const primaryResponse = JSON.parse(SAMPLE_DOC_FILES[`docs/${SAMPLE_PRIMARY_ID}/response.json`])
+  primaryResponse.dispositions.c_resolved = { status: 'answered', rev: 1, blocks: ['b1'] }
+  await put(root, `docs/${SAMPLE_PRIMARY_ID}/response.json`, JSON.stringify(primaryResponse))
+  await put(root, `docs/${SAMPLE_PRIMARY_ID}/review.json`, reviewFile({
+    c_exact: comment({ quote: 'Sample reader', prefix: 'Status: ', suffix: ' is ready.', offset: 8 }),
+    c_moved: comment({ block: 'b9', quote: 'This seeded task' }),
+    c_outdated: comment({ block: 'b7', quote: 'text no longer present' }),
+    c_resolved: comment({ quote: 'Sample reader' }),
+    c_reopened: comment({ block: 'b2', quote: 'This seeded task', offset: 8, status: 'reopened' }),
+  }))
+  await put(root, `docs/${SAMPLE_LINKED_ID}/review.json`, reviewFile({
+    c_linked: comment({ quote: 'This linked sample document' }),
+  }))
 }
 
 describe('fp-docs draft validation', () => {
@@ -285,6 +327,24 @@ describe('fp-docs publish', () => {
     expect(validateResponseText(await fs.readFile(path.join(root, 'docs/d-support845/response.json'), 'utf8')).rev).toBe(2)
   })
 
+  it('returns open and reopened comments grouped by review-set doc with re-anchored placements', async () => {
+    const root = await rootDir()
+    await seedCommentReviews(root)
+    const result = await readComments({ root, task: SAMPLE_TASK_ID })
+    expect(result.task).toBe(SAMPLE_TASK_ID)
+    expect(result.docs.map(({ id }) => id)).toEqual([SAMPLE_PRIMARY_ID, SAMPLE_LINKED_ID])
+    expect(result.docs[0]).toMatchObject({ title: SAMPLE_TITLE, rev: 1 })
+    const primaryComments = Object.fromEntries(result.docs[0].comments.map((item) => [item.id, item]))
+    expect(primaryComments.c_exact.placement).toEqual({ status: 'anchored', block: 'b1', start: 8, endBlock: 'b1', end: 21 })
+    expect(primaryComments.c_moved.placement).toMatchObject({ status: 'moved', block: 'b2', start: 8 })
+    expect(primaryComments.c_outdated.placement).toEqual({ status: 'outdated' })
+    expect(primaryComments.c_reopened).toMatchObject({ status: 'reopened', placement: { status: 'anchored', block: 'b2', start: 8 } })
+    expect(primaryComments).not.toHaveProperty('c_resolved')
+    expect(result.docs[1].comments[0]).toMatchObject({
+      id: 'c_linked', placement: { status: 'anchored', block: 'b1' },
+    })
+  })
+
   it('status reports the shared threshold result and primary revision', async () => {
     const root = await rootDir()
     await publish({ root, task: taskId, draft: draft(), summary: 'Initial', force: true, makeId: () => 'd-sample845' })
@@ -308,6 +368,30 @@ describe('fp-docs publish', () => {
 })
 
 describe('fp-docs CLI', () => {
+  it('prints grouped comments as JSON without modifying publisher files', async () => {
+    const root = await rootDir()
+    await seedCommentReviews(root)
+    const cli = path.resolve('packages/docs-publisher/bin/fp-docs.js')
+    const env = { ...process.env, PLANNER_PATH: root }
+    const paths = [
+      'docs/index.json',
+      `docs/${SAMPLE_PRIMARY_ID}/review.json`,
+      `docs/${SAMPLE_PRIMARY_ID}/doc.md`,
+      `docs/${SAMPLE_PRIMARY_ID}/response.json`,
+    ]
+    const before = await Promise.all(paths.map((relative) => fs.readFile(path.join(root, relative), 'utf8')))
+    const result = spawnSync(process.execPath, [
+      cli, 'comments', '--task', String(SAMPLE_TASK_ID), '--json',
+    ], { encoding: 'utf8', env })
+    expect(result.status, result.stderr).toBe(0)
+    const output = JSON.parse(result.stdout)
+    expect(output.task).toBe(SAMPLE_TASK_ID)
+    expect(output.docs.map(({ id }) => id)).toEqual([SAMPLE_PRIMARY_ID, SAMPLE_LINKED_ID])
+    expect(output.docs[0].comments.map(({ id }) => id)).toContain('c_exact')
+    expect(output.docs[1].comments.map(({ id }) => id)).toContain('c_linked')
+    expect(await Promise.all(paths.map((relative) => fs.readFile(path.join(root, relative), 'utf8')))).toEqual(before)
+  })
+
   it('prints JSON status and rejects non-canonical task ids', async () => {
     const root = await rootDir()
     const cli = path.resolve('packages/docs-publisher/bin/fp-docs.js')

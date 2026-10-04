@@ -24,6 +24,33 @@ describe('review.json merge', () => {
     expect(m.readRev).toBe(3)
   })
 
+  it('uses the spec tie-break for equal clocks and is commutative and idempotent', () => {
+    const common = {
+      rev: 1, anchor, intent: 'note', createdAt: '2026-10-01T12:00:00Z',
+      reviewId: 'rv_one', status: 'open', clock: 42,
+    }
+    const left = { ...emptyReview(), comments: { c_a: { ...common, body: 'alpha' } } }
+    const right = { ...emptyReview(), comments: { c_a: { ...common, body: 'zeta' }, c_b: { ...common, body: 'separate id' } } }
+    const merged = mergeReviews(left, right)
+    expect(merged.comments.c_a.body).toBe('zeta')
+    expect(Object.keys(merged.comments).sort()).toEqual(['c_a', 'c_b'])
+    expect(mergeReviews(left, right)).toEqual(mergeReviews(right, left))
+    expect(mergeReviews(merged, merged)).toEqual(merged)
+
+    const tieBase = {
+      rev: 1, anchor, intent: 'note', createdAt: '2026-10-01T12:00:00Z',
+      reviewId: 'rv_one', status: 'open', body: 'same',
+    }
+    const orderedLeft = { ...tieBase, extension: 'a', clock: 42 }
+    const orderedRight = { ...tieBase, clock: 42, extension: 'z' }
+    const tie = mergeReviews(
+      { ...emptyReview(), comments: { c_tie: orderedLeft } },
+      { ...emptyReview(), comments: { c_tie: orderedRight } },
+    )
+    expect(JSON.stringify(orderedLeft) > JSON.stringify(orderedRight)).toBe(true)
+    expect(tie.comments.c_tie).toEqual(orderedLeft)
+  })
+
   it('serializes stably and parses defensively', () => {
     const r = submitDrafts(emptyReview(), [{ id: 'c_a', anchor, intent: 'approve' }], { rev: 1, now: 1 }).review
     const text = serializeReview(r)

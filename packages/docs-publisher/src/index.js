@@ -1,3 +1,3 @@
 export {
-  DocsPublisherError, lintDraft, publish, readStatus, writeAtomically,
+  DocsPublisherError, lintDraft, publish, readComments, readStatus, writeAtomically,
 } from './publisher.js'

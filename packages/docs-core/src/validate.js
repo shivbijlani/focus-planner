@@ -131,8 +131,11 @@ function validateReviewObject(review) {
     const a = c.anchor
     if (!integer(c.rev, 1) || !object(a) || !BLOCK_ID_RE.test(a.block || '') || typeof a.quote !== 'string' || !a.quote
       || (a.endBlock !== undefined && !BLOCK_ID_RE.test(a.endBlock))
+      || (a.startQuote !== undefined && typeof a.startQuote !== 'string')
+      || (a.endQuote !== undefined && typeof a.endQuote !== 'string')
       || (a.prefix !== undefined && typeof a.prefix !== 'string')
       || (a.suffix !== undefined && typeof a.suffix !== 'string')
+      || (a.offset !== undefined && !integer(a.offset))
       || !INTENTS.has(c.intent) || typeof c.body !== 'string' || !timestamp(c.createdAt)
       || typeof c.reviewId !== 'string' || !REVIEW_ID_RE.test(c.reviewId)
       || !['open', 'reopened'].includes(c.status) || !integer(c.clock)) {
@@ -143,7 +146,7 @@ function validateReviewObject(review) {
     }
     comments[id] = {
       ...known(c, ['rev', 'intent', 'body', 'createdAt', 'reviewId', 'status', 'clock', 'reopenedAt', 'reopenedRev']),
-      anchor: known(a, ['block', 'endBlock', 'quote', 'prefix', 'suffix']),
+      anchor: known(a, ['block', 'endBlock', 'quote', 'startQuote', 'endQuote', 'prefix', 'suffix', 'offset']),
     }
   }
   const reviews = {}

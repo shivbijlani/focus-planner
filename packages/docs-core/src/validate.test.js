@@ -64,11 +64,60 @@ describe('Docs reader validation', () => {
 
   it('validates review and response schemas while ignoring unknown fields', () => {
     const review = validateReviewText(JSON.stringify({
-      version: 1, comments: {}, reviews: {}, readRev: 2, futureField: true,
+      version: 1, comments: {
+        c_one: {
+          rev: 1,
+          anchor: { block: 'b1', quote: 'selected', offset: 7 },
+          intent: 'note',
+          body: 'Context',
+          createdAt: at,
+          reviewId: 'rv_one',
+          status: 'open',
+          clock: 1,
+        },
+        c_two: {
+          rev: 1,
+          anchor: {
+            block: 'b1', endBlock: 'b2', quote: 'first\n…\nlast',
+            startQuote: 'first', endQuote: 'last', offset: 3,
+          },
+          intent: 'note',
+          body: 'Across blocks',
+          createdAt: at,
+          reviewId: 'rv_one',
+          status: 'open',
+          clock: 2,
+        },
+      }, reviews: { rv_one: { submittedAt: at, rev: 1 } }, readRev: 2, futureField: true,
     }))
     const parsedResponse = validateResponseText(JSON.stringify(response({ futureField: true })))
-    expect(review).toEqual({ version: 1, comments: {}, reviews: {}, readRev: 2 })
+    expect(review.comments.c_one.anchor.offset).toBe(7)
+    expect(review.comments.c_two.anchor).toMatchObject({
+      endBlock: 'b2', startQuote: 'first', endQuote: 'last', offset: 3,
+    })
+    expect(review.reviews.rv_one).toEqual({ submittedAt: at, rev: 1 })
+    expect(review.readRev).toBe(2)
     expect(parsedResponse).not.toHaveProperty('futureField')
+  })
+
+  it('rejects a negative anchor offset', () => {
+    expect(() => validateReviewText(JSON.stringify({
+      version: 1,
+      comments: {
+        c_one: {
+          rev: 1,
+          anchor: { block: 'b1', quote: 'selected', offset: -1 },
+          intent: 'note',
+          body: 'Context',
+          createdAt: at,
+          reviewId: 'rv_one',
+          status: 'open',
+          clock: 1,
+        },
+      },
+      reviews: { rv_one: { submittedAt: at, rev: 1 } },
+      readRev: 0,
+    }))).toThrow(/required fields/)
   })
 
   it('refuses invalid required fields in each JSON format', () => {
