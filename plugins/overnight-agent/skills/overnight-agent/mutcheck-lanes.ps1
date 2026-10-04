@@ -1,4 +1,4 @@
-<#
+﻿<#
   mutcheck-lanes.ps1 -- lanes are enforced in code, in both engines (docs/spec/Domain-lanes.md).
 
   WHY: lanes scope each PC to part of the plan. The lesson of items 4-5 is that anything the agent
