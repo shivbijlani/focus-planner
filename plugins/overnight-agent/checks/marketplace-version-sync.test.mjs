@@ -22,12 +22,10 @@ test('the repo as committed is in sync', () => {
   assert.equal(r.ok, true, r.reason);
 });
 
-test('the plugin ships only the coordinator guard extension', () => {
+test('plugin.json declares no extensions and the plugin ships no extension directory', () => {
   const manifest = JSON.parse(realPlugin);
-  assert.equal(manifest.extensions, 'extensions/');
-  assert.equal(existsSync(join(root, 'plugins', 'overnight-agent', 'extensions',
-    'coordinator-guard', 'extension.mjs')), true);
-  assert.equal(existsSync(join(root, 'plugins', 'overnight-agent', 'extensions', 'task-dispatch', 'extension.mjs')), false);
+  assert.equal(Object.hasOwn(manifest, 'extensions'), false);
+  assert.equal(existsSync(join(root, 'plugins', 'overnight-agent', 'extensions')), false);
 });
 
 test('equal versions pass', () => {
