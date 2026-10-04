@@ -42,7 +42,7 @@ import * as ops from './focusPlanOps.js'
 import { deleteJournalForTask } from './journalDelete.js'
 import { parseTgLink } from '../packages/telegram-bridge/src/deepLink.js'
 import { renderJournalLines } from './markdown/markdownRender.jsx'
-import { useTaskDoc, journalDeepLink, taskLinkPlan } from './docsIndex.js'
+import { useTaskDoc, journalDeepLink, taskLinkPlan, mobileTaskMenuLinks } from './docsIndex.js'
 import { useAgentSessionLinks, useAnnouncedDevices } from './useAgentMetadata.js'
 import AgentSessionLinks from './AgentSessionLinks.jsx'
 import LaneChip from './LaneChip.jsx'
@@ -1919,28 +1919,26 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
     // With Telegram the rail icon is 💬 Chat → Telegram, so 📔 Journal goes here.
     // Without Telegram the rail falls back to 📔 Journal, so in-app 💬 Chat goes here.
     // Docs §3.2: with a catch-up doc the rail is 📄, so BOTH 💬 Telegram and 📔 Journal go here.
-    const mobileOverflow = taskLinkPlan({
-      mobile: true,
+    const mobileMenuLinks = mobileTaskMenuLinks({
       hasDoc: !!taskDoc,
       hasTelegram: !!telegram?.url,
       hasJournal: !!journalPath,
-    }).overflow
-    if (isMobile && mobileOverflow.includes('telegram')) {
-      options.push({
-        label: 'Open Telegram',
-        icon: '💬',
-        action: () => { window.open(telegram.url, '_blank', 'noopener,noreferrer') }
-      })
-    }
-    if (isMobile && mobileOverflow.includes('journal') && journalPath && taskId) {
-      options.push({
-        label: 'Open journal',
-        icon: '📔',
-        action: () => {
-          readStateService.emitJournalOpened(rowReadStateId)
-          onNavigate(qualifiedJournalPath, null, 'chat')
-        }
-      })
+    })
+    if (isMobile) {
+      for (const link of mobileMenuLinks) {
+        options.push({
+          label: link.label,
+          icon: link.icon,
+          action: () => {
+            if (link.key === 'telegram') {
+              window.open(telegram.url, '_blank', 'noopener,noreferrer')
+              return
+            }
+            readStateService.emitJournalOpened(rowReadStateId)
+            onNavigate(qualifiedJournalPath, null, 'chat')
+          },
+        })
+      }
     }
 
     // Add "Create Journal" option if no journal exists and we have a task ID

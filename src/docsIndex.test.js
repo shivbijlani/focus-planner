@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getTaskDocs, taskLinkPlan } from './docsIndex.js'
+import { getTaskDocs, mobileTaskMenuLinks, taskLinkPlan } from './docsIndex.js'
 
 describe('Docs task link gate and placement', () => {
   it('checks only docs/index.json when Docs are absent', async () => {
@@ -27,5 +27,18 @@ describe('Docs task link gate and placement', () => {
       .toEqual({ desktop: ['telegram', 'journal'], rail: 'telegram', overflow: ['journal'] })
     expect(taskLinkPlan({ mobile: true, hasJournal: true }))
       .toEqual({ desktop: ['journal'], rail: 'journal', overflow: [] })
+  })
+
+  it('preserves mobile task-menu labels and order for journal-only and Telegram tasks', () => {
+    expect(mobileTaskMenuLinks({ hasJournal: true }).map(({ label, icon }) => ({ label, icon })))
+      .toEqual([{ label: 'Open chat', icon: '💬' }])
+    expect(mobileTaskMenuLinks({ hasJournal: true, hasTelegram: true }).map(({ label, icon }) => ({ label, icon })))
+      .toEqual([{ label: 'Open journal', icon: '📔' }])
+    expect(mobileTaskMenuLinks({ hasJournal: true, hasTelegram: true, hasDoc: true })
+      .map(({ label, icon }) => ({ label, icon })))
+      .toEqual([
+        { label: 'Open Telegram', icon: '💬' },
+        { label: 'Open journal', icon: '📔' },
+      ])
   })
 })

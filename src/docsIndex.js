@@ -74,6 +74,19 @@ export function taskLinkPlan({ mobile = false, hasDoc = false, hasTelegram = fal
   return { desktop, rail, overflow: desktop.filter((link) => link !== rail) }
 }
 
+export function mobileTaskMenuLinks({ hasDoc = false, hasTelegram = false, hasJournal = false } = {}) {
+  if (hasDoc) {
+    return [
+      ...(hasTelegram ? [{ key: 'telegram', label: 'Open Telegram', icon: '💬' }] : []),
+      ...(hasJournal ? [{ key: 'journal', label: 'Open journal', icon: '📔' }] : []),
+    ]
+  }
+  if (!hasJournal) return []
+  return hasTelegram
+    ? [{ key: 'journal', label: 'Open journal', icon: '📔' }]
+    : [{ key: 'chat', label: 'Open chat', icon: '💬' }]
+}
+
 /** { docId, unread, needsYou, href } for a task's primary doc, or null. */
 export function useTaskDoc(provider, taskId) {
   const [state, setState] = useState({ key: null, doc: null })
