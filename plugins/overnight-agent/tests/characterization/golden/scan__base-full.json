@@ -992,7 +992,7 @@
           "dispatch_input": "8f7de6d55365945821294755436927cebcd7145f4bfd4438de87af5c3b31a300",
           "dispatch_skip_reason": null,
           "doc_bound": true,
-          "doc_channel": "stale",
+          "doc_channel": "fresh",
           "doc_id": "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdEF",
           "doc_new_comments": 0,
           "doc_observed_at": "<INVTIME-30m>",

@@ -134,12 +134,14 @@ export function getDocState(st, path, content = null) {
 
 export function getDocChannelState(doc) {
   if (!doc || !psStr(get(doc, 'doc_id'))) return null;
-  const observed = psStr(get(doc, 'observed_at'));
-  if (!observed) return 'unread';
+  const raw = get(doc, 'observed_at');
+  if (raw === null || raw === undefined || !psStr(raw)) return 'unread';
+  // #808 (oa-state.ps1 Get-DocChannelState): use the parsed value by its kind -- never its text,
+  // which drops the offset and was then shifted again by the host's UTC offset.
   let parsed;
-  try { parsed = parseDateTime(observed); } catch { return 'unread'; }
-  const local = parsed instanceof PsDate ? parsed.toLocalTime() : parsed;
-  const age = PsDate.now().diffMs(local) / 60000;
+  if (raw instanceof PsDate) parsed = raw;
+  else { try { parsed = parseDateTime(String(raw)); } catch { return 'unread'; } }
+  const age = (Date.now() - parsed.instantMs()) / 60000;
   if (age >= DocObservationFreshMinutes) return 'stale';
   return 'fresh';
 }
