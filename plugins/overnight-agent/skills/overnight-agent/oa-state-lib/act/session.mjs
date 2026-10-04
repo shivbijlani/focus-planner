@@ -8,8 +8,8 @@ import { readState, writeState, nowIso } from '../collect/state.mjs';
 import { getJournalFacts, getAgentEndIndex, getNewestAgentTurn, getFenceMaskedText } from '../collect/journal.mjs';
 import { getDocMetaFromJournal } from '../collect/doc.mjs';
 import { getDocCommentConsent } from '../plan/consent.mjs';
-import { readApprovalChannels, getApprovalOffReason } from '../plan/gate.mjs';
 import { getAgentModelSettings } from '../collect/settings.mjs';
+import { readApprovalChannels, getApprovalOffReason } from '../plan/gate.mjs';
 import {
   assertChatWorkspace,
   convertToIsoText,
@@ -67,11 +67,8 @@ export function assertTaskDispatch(ctx, st, sess, facts) {
   if (row && psStr(get(row, 'dispatch_skip_reason'))) {
     throw new Error(`${psStr(get(row, 'dispatch_skip_reason'))}: bound session ${psStr(get(sess, 'session_id'))} cannot be dispatched`);
   }
-  if (!row || (!get(row, 'eligible') && !(ctx.p.PlanDispatch && get(row, 'plan_review_due'))) || get(row, 'session_paused')) {
+  if (!row || !get(row, 'eligible') || get(row, 'session_paused')) {
     throw new Error('session_not_eligible: follow the current Today-first worklist and user pauses');
-  }
-  if (ctx.p.PlanDispatch && !get(row, 'plan_review_due')) {
-    throw new Error('session_plan_not_reviewable: -PlanDispatch only applies to an agent-authored proposal');
   }
   if (ctx.p.DispatchInput && ctx.p.DispatchInput !== psStr(get(row, 'dispatch_input'))) {
     throw new Error('session_input_changed: the prepared task brief is stale');
@@ -82,9 +79,8 @@ export function assertTaskDispatch(ctx, st, sess, facts) {
   assertGatedPlanConsent(ctx, st, facts);
 }
 
-// The floor, in code (#804): a numbered `[gated]` step in the newest agent turn needs the consent
-// reader's own `consent_ok: true` before a session is woken for it. See oa-state.ps1
-// Assert-GatedPlanConsent for the measured failure this closes.
+// A numbered [gated] step is an explicit signal that the task turn needs human consent.
+// Keep the dispatch brake on that declared case; ordinary tasks still dispatch directly.
 export const GatedStepRe = '(?m)^[ \\t]*[1-9][0-9]*\\.[ \\t]+\\[gated\\][ \\t]+(.*)$';
 
 export function getGatedPlanSteps(facts) {
@@ -95,24 +91,26 @@ export function getGatedPlanSteps(facts) {
   const turn = getNewestAgentTurn(content.substring(0, Math.min(agentEnd, content.length)));
   if (!turn) return [];
   const masked = getFenceMaskedText(turn);
-  return rxMatches(masked, GatedStepRe).map((m) => netTrim(turn.substring(m.index, m.index + m[0].length)));
+  return rxMatches(masked, GatedStepRe).map((match) => netTrim(turn.substring(match.index, match.index + match[0].length)));
 }
 
 export function assertGatedPlanConsent(ctx, st, facts) {
   const gated = getGatedPlanSteps(facts);
   if (!gated.length) return;
-  const c = facts.Consent;
+  const consent = facts.Consent;
   const approvals = readApprovalChannels(ctx.p.GatePath);
-  if (c && c.consent_ok && approvals.app.enabled) return;
-  let reason = c && c.consent_ok ? getApprovalOffReason(approvals.app, 'app') : psStr(c?.reason);
+  if (consent && consent.consent_ok && approvals.app.enabled) return;
+  let reason = consent && consent.consent_ok
+    ? getApprovalOffReason(approvals.app, 'app')
+    : psStr(consent?.reason);
   if (ctx.p.DocComments) {
     if (!approvals['google-doc'].enabled) {
-      reason = `${reason}; doc: ${getApprovalOffReason(approvals['google-doc'], 'google-doc')}`;
+      reason += `; doc: ${getApprovalOffReason(approvals['google-doc'], 'google-doc')}`;
     } else {
       const meta = getDocMetaFromJournal(facts.Path, facts.Content);
       const doc = getDocCommentConsent(ctx, ctx.p.DocComments, meta ? meta.doc_id : '');
       if (doc && psTruthy(get(doc, 'consent_ok'))) return;
-      reason = `${reason}; doc: ${doc ? psStr(get(doc, 'reason')) : 'doc-consent-not-consulted'}`;
+      reason += `; doc: ${doc ? psStr(get(doc, 'reason')) : 'doc-consent-not-consulted'}`;
     }
   }
   let step = gated[0];
@@ -190,9 +188,6 @@ export function cmdSession(ctx) {
   const agentModel = getAgentModelSettings(ctx);
   if (ctx.p.ForDispatch && !ctx.p.SessionsStatusFile) {
     throw new Error('session_status_required: -ForDispatch requires a fresh get_sessions_status snapshot');
-  }
-  if (ctx.p.PlanDispatch && (!ctx.p.ForDispatch || ctx.p.Force)) {
-    throw new Error('session_plan_dispatch_flags: -PlanDispatch requires -ForDispatch and cannot use -Force');
   }
   if ((ctx.p.CheckDispatch || ctx.p.ForDispatch)
       && (!ctx.p.Id || (ctx.p.CheckDispatch && ctx.p.ForDispatch) || ctx.p.SessionId

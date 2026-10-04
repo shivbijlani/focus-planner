@@ -1,4 +1,4 @@
-<#
+﻿<#
   mutcheck-write-turn.ps1 -- proves every guard in write-turn.ps1 is load-bearing.
 
   Two things are being established, and the second is the one that matters:
@@ -213,8 +213,7 @@ Use the moon first instead.
   # This one genuinely carries BOTH defects and must say so: G4 is defined by there
   # being no heading above the marker, so giving it an anchor to isolate G4 would
   # delete the very condition under test. Asserting both keeps the fixture honest.
-  # `In progress`, not `Proposed`: since #739 a Proposed status with no classified plan trips G19,
-  # which would make this fixture assert a third defect while claiming to test G4.
+  # `In progress` keeps this fixture focused on the structural marker guards.
   @{ name = 'g4-stray-marker';  expect = @('G4', 'G5'); nl = 'LF';   body = @'
 <!-- from: overnight-agent -->
 
@@ -245,6 +244,19 @@ Some preamble the turn opens with.
 <!-- from: overnight-agent -->
 
 Body text.
+'@ }
+
+  # G25 -- the journal sentinel belongs to the writer, not the appended body.
+  @{ name = 'g25-body-sentinel'; expect = @('G25'); nl = 'LF'; body = @'
+## MOON Overnight Agent -- 2026-09-29 reply
+
+<!-- from: overnight-agent -->
+
+<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->
+
+**Status:** In-progress · 2026-09-29
+
+**Needs from you:** nothing.
 '@ }
 
   # G7 -- a moon-anchored turn with NO provenance stamp under it. This is the shape that
@@ -342,7 +354,7 @@ if ($failures.Count -gt 0) {
 # --- 2. mutation: disabling guard G must change EXACTLY G's own fixtures -------------
 Write-Host ''
 Write-Host '--- mutation (disable one guard at a time) ---'
-foreach ($g in @('G1', 'G2', 'G3', 'G4', 'G5', 'G7')) {
+foreach ($g in @('G1', 'G2', 'G3', 'G4', 'G5', 'G7', 'G25')) {
   $ownFixtures = @($fixtures | Where-Object { $_.expect -contains $g })
   if ($ownFixtures.Count -eq 0) { $failures += "no fixture exercises $g"; continue }
 

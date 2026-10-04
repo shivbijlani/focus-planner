@@ -131,11 +131,9 @@
   Every appended turn carries `<!-- oa-by: session=<id> host=<host> -->` under its `oa-ask` stamp,
   so which agent wrote a turn, and from which machine, is in the journal itself. G21 refuses a body
   that writes its own; G20 refuses any target other than this task's journal inside -JournalDir
-  (agent-gate.md and user-settings.md are the user's alone). G22 refuses snoozed tasks. G24
-  refuses a task the user closed (Test-UserClosed), even with a reply below it. G23
-  refuses a coordinator-authored outcome turn on a task whose journal currently carries a human
-  approval. The coordinator must dispatch; the bound task session writes the outcome. None can be
-  disabled.
+  (agent-gate.md and user-settings.md are the user's alone). G22 refuses snoozed tasks. G23 keeps
+  consented action outcomes in the task session. G24 refuses a task the user closed, even when he
+  replies below it. G25 refuses a body-written journal sentinel. These guards cannot be disabled.
 #>
 [CmdletBinding()]
 param(
@@ -233,6 +231,8 @@ if ($env:OA_SANDBOX_ROOT) {
 $script:IssueResolver = if ($env:WRITE_TURN_ISSUE_RESOLVER) { $env:WRITE_TURN_ISSUE_RESOLVER }
                         else { [IO.Path]::Combine($PSScriptRoot, '..', '..', 'checks', 'issue-shipped.mjs') }
 $script:OaStatePs1 = [IO.Path]::Combine($PSScriptRoot, 'oa-state.ps1')
+$script:SentinelLine = '<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->'
+$script:StructuralSentinelRe = '(?i)^[ \t]*<!--[ \t]*OVERNIGHT-AGENT[ \t]+do[ \t]+not[ \t]+edit[ \t]+this[ \t]+line\b'
 
 # --- #627 the user pause, read on the WRITE side -----------------------------------------
 # Kept in step with `$script:PausedStatus` in oa-state.ps1, which is derived there as
@@ -363,6 +363,50 @@ function Get-FenceMaskedText([string]$text) {
     if ($fence) { $lines[$i] = ' ' * $lines[$i].Length }
   }
   return ($lines -join '')
+}
+
+function Get-InlineCodeMaskedText([string]$text) {
+  $chars = $text.ToCharArray()
+  $i = 0
+  while ($i -lt $chars.Length) {
+    if ($chars[$i] -ne [char]96) { $i++; continue }
+
+    $start = $i
+    while ($i -lt $chars.Length -and $chars[$i] -eq [char]96) { $i++ }
+    $delimiterLength = $i - $start
+    $closing = -1
+    $j = $i
+    while ($j -lt $chars.Length) {
+      if ($chars[$j] -ne [char]96) { $j++; continue }
+      $runStart = $j
+      while ($j -lt $chars.Length -and $chars[$j] -eq [char]96) { $j++ }
+      if (($j - $runStart) -eq $delimiterLength) { $closing = $runStart; break }
+    }
+    if ($closing -lt 0) { $i = $start + $delimiterLength; continue }
+
+    $end = $closing + $delimiterLength
+    for ($k = $start; $k -lt $end; $k++) {
+      if ($chars[$k] -ne [char]10 -and $chars[$k] -ne [char]13) { $chars[$k] = ' ' }
+    }
+    $i = $end
+  }
+  return (-join $chars)
+}
+
+function Get-SentinelScanText([string]$text) {
+  return (Get-InlineCodeMaskedText (Get-FenceMaskedText $text))
+}
+
+function Get-StructuralSentinelCounts([string]$text) {
+  $structural = 0
+  $canonical = 0
+  foreach ($line in (Get-SentinelScanText $text) -split "`r?`n") {
+    if ($line -match $script:StructuralSentinelRe) {
+      $structural++
+      if ($line.Trim() -ceq $script:SentinelLine) { $canonical++ }
+    }
+  }
+  return [pscustomobject]@{ structural = $structural; canonical = $canonical }
 }
 
 function Get-JournalDocMeta([string]$path) {
@@ -1320,6 +1364,19 @@ function Test-TurnBody {
     }
   }
 
+  # --- G25: the writer, not a task turn, owns the journal sentinel ----------------
+  if (& $on 'G25') {
+    $sentinelLines = (Get-SentinelScanText $Body) -split "`r?`n"
+    for ($i = 0; $i -lt $sentinelLines.Count; $i++) {
+      if ($sentinelLines[$i] -match $script:StructuralSentinelRe) {
+        $findings += New-Finding 'G25' ($i + 1) $lines[$i].Trim() (
+          'the journal sentinel is structural and must be written once by write-turn, not copied ' +
+          'into a task turn; remove it from this body')
+        break
+      }
+    }
+  }
+
   # --- G14: the declared ask must not contradict this turn's own question (#618) ----
   # Deliberately OUTSIDE the doc-bound block above. The measured failures are ordinary
   # tasks -- #472, the row that asked two questions and declared `offer`, has no catch-up
@@ -1475,37 +1532,6 @@ function Test-TurnBody {
              'git grep "#' + $s.n + '" origin/main -- packages plugins, then propose something unworked. ' +
              'Use -DisableGuard G15 if he has asked for a second look at it')
           )
-        }
-      }
-    }
-  }
-
-  # --- G19: a proposed plan must start with an explicitly gated step (#739) --------
-  # A blocking proposal of entirely reversible work parks the task before it can be
-  # dispatched. Require the first numbered step's classification rather than trying to
-  # infer reversibility from arbitrary prose. Older turns are not rewritten by this guard.
-  if (& $on 'G19') {
-    $proposedLine = -1
-    $firstStep = -1
-    for ($i = 0; $i -lt $lines.Count; $i++) {
-      if ($inFence[$i]) { continue }
-      if ($lines[$i] -match '^[ \t]*\*\*Status:\*\*[ \t]*Proposed\b') { $proposedLine = $i }
-      if ($proposedLine -ge 0 -and $firstStep -lt 0 -and
-          $lines[$i] -match '^[ \t]*1\.[ \t]+') { $firstStep = $i }
-    }
-    if ($proposedLine -ge 0) {
-      if ($Ask -ne 'blocking' -or $firstStep -lt 0 -or
-          $lines[$firstStep] -notmatch '^[ \t]*1\.[ \t]+\[gated\][ \t]+') {
-        $findings += New-Finding 'G19' ($proposedLine + 1) $lines[$proposedLine].Trim() (
-          'proposed parks the task: its first numbered step must be [gated] and -Ask blocking. ' +
-          'For reversible or gate-allowed first steps, dispatch them this wake and write the ' +
-          'outcome as in-progress/done (or blocked only when gated work remains)')
-      }
-      for ($i = $proposedLine + 1; $i -lt $lines.Count; $i++) {
-        if ($inFence[$i] -or $lines[$i] -notmatch '^[ \t]*[1-9][0-9]*\.[ \t]+') { continue }
-        if ($lines[$i] -notmatch '^[ \t]*[1-9][0-9]*\.[ \t]+\[(reversible|gate-allowed|gated)\][ \t]+') {
-          $findings += New-Finding 'G19' ($i + 1) $lines[$i].Trim() (
-            'classify each proposed plan step as [reversible], [gate-allowed] or [gated]')
         }
       }
     }
@@ -1994,9 +2020,10 @@ $sep = if ($existing.EndsWith("`n")) { $nl } else { $nl + $nl }
 # Append-only, like the rest of this script: when the marker is absent we emit
 # it immediately above the new turn, which opens the managed block here and
 # leaves every byte above untouched.
-$sentinelLine = '<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->'
+$sentinelLine = $script:SentinelLine
 $prefix = ''
-if ($existing -notmatch [regex]::Escape('<!-- OVERNIGHT-AGENT do not edit this line')) {
+$existingSentinels = Get-StructuralSentinelCounts $existing
+if ($existingSentinels.structural -eq 0) {
   $prefix = '---' + $nl + $sentinelLine + $nl + $nl
   if (-not $Json) {
     Write-Host '[write-turn] journal had no OVERNIGHT-AGENT sentinel - adding it (the Telegram bridge skips tasks without one).' -ForegroundColor Yellow
@@ -2004,6 +2031,11 @@ if ($existing -notmatch [regex]::Escape('<!-- OVERNIGHT-AGENT do not edit this l
 }
 
 $out = $existing + $sep + $prefix + ((Add-AskStamp -Body $body.TrimEnd() -Ask $askVal -By (Get-IdentityStamp $Author)) -replace "`r?`n", $nl) + $nl
+$sentinelCounts = Get-StructuralSentinelCounts $out
+if ($sentinelCounts.structural -ne 1 -or $sentinelCounts.canonical -ne 1) {
+  Write-Host "[write-turn] REFUSED - journal must contain exactly one OVERNIGHT-AGENT sentinel (found $($sentinelCounts.structural)); nothing written." -ForegroundColor Red
+  exit 2
+}
 
 [IO.File]::WriteAllText($journal, $out, (New-Object Text.UTF8Encoding($false)))
 if (-not $Json) {

@@ -26,6 +26,8 @@ export function testWorkable(row) {
   if (testReopenedClosed(row)) return false;
   if (psTruthy(get(row, 'reopened'))) return true;
   if (testUnansweredUser(row)) return true;
+  if (lowerInvariant(psStr(get(row, 'status'))) === 'proposed'
+      && lowerInvariant(psStr(get(row, 'status_by'))) === 'agent') return true;
   if (psTruthy(get(row, 'awaiting_reply')) && !psTruthy(get(row, 'due_poll')) && !psTruthy(get(row, 'due_recheck'))) return false;
   if (psTruthy(get(row, 'due_recheck')) && lowerInvariant(psStr(get(row, 'status'))) === 'blocked') return true;
   return !ciContains(NonWorkableStatus, lowerInvariant(psStr(get(row, 'status'))));

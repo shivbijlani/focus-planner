@@ -354,7 +354,9 @@ Check 'G reopened preempts' {
 # declaration and backstop paths, preserving F's original assertion in full.
 [void](Invoke-Oa @('mark', '-Id', '730', '-Status', 'done'))
 [void](Invoke-Oa @('mark', '-Id', '710', '-Status', 'blocked'))
-[void](Invoke-Oa @('mark', '-Id', '720', '-Status', 'proposed'))
+# Agent-authored proposals are ordinary work now, so make 720 a user pause explicitly; this arm
+# tests that the gate opens only when every Today row is actually terminal or waiting on the user.
+[void](Invoke-Oa @('mark', '-Id', '720', '-Status', 'proposed', '-StatusBy', 'user'))
 $rowsF = Get-RowsWith @('-TodayServedMinutes', '0')
 Check 'F terminal Today opens gate' {
   (Get-Row $rowsF '740').eligible -eq $true -and (Get-Row $rowsF '760').eligible -eq $true

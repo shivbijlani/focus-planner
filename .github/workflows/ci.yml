@@ -1195,15 +1195,6 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-declared-ask.ps1
 
-  plan-dispatch:
-    name: Reversible plan dispatch
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Mutation check (old proposals re-evaluated, gated steps still wait)
-        shell: pwsh
-        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-plan-dispatch.ps1
-
   # THE SAFETY FLOOR ITSELF, AND IT HAS NEVER RUN IN CI (GH #302).
   #
   # `mutcheck-agent-gate.ps1` is the suite that proves the floor outranks the allow list and
@@ -1471,6 +1462,21 @@ jobs:
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-coordinator-no-task-work.ps1
 
+  gated-plan-dispatch:
+    name: Gated task plans require consent before dispatch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Mutation check (PowerShell state engine)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-gated-dispatch.ps1 -ScriptPath ./plugins/overnight-agent/skills/overnight-agent/oa-state.ps1
+      - name: Mutation check (Node state engine)
+        shell: pwsh
+        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-gated-dispatch.ps1 -ScriptPath ./plugins/overnight-agent/skills/overnight-agent/oa-state.mjs
+
   # A TURN CAN ADVERTISE A REPLY WORD ITS OWN READER REJECTS (GH #491).
   #
   # `oa-state.ps1` decides whether Shiv approved by matching his reply against one fixed
@@ -1531,7 +1537,7 @@ jobs:
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-doc-consent.ps1
       # Where he can approve (#124 item 4 step 5): a doc comment whose id is in write-turn's
       # sent-messages ledger is the agent's, and agent-gate.md's ## Approvals section can switch a
-      # channel off (an unenforceable rule is off too); the gated-dispatch floor obeys the same.
+      # channel off (an unenforceable rule is off too).
       - name: Mutation check (sent-messages ledger and per-channel approval rules)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-consent-channels.ps1
@@ -1814,9 +1820,6 @@ jobs:
         run: node ./plugins/overnight-agent/checks/mutcheck-shipped-but-open.mjs
       - name: Mutation check (the preflight's exit-code contract, incl. 2 != 0)
         run: node ./plugins/overnight-agent/checks/mutcheck-issue-shipped.mjs
-      - name: Mutation check (a [gated] step is never dispatched without HIS consent, #804)
-        shell: pwsh
-        run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-gated-dispatch.ps1
       - name: Mutation check (lanes -- scan and session enforce them in code, and off is off; item 6)
         shell: pwsh
         run: ./plugins/overnight-agent/skills/overnight-agent/mutcheck-lanes.ps1
@@ -1920,9 +1923,9 @@ jobs:
   # use, translated from .NET regex semantics, compared match-for-match against .NET itself; and
   # random turns x random destinations x random flags run through BOTH implementations in twin
   # sandboxes, comparing exit code, output and every file effect. Finally every mutation check
-  # that drives write-turn runs against the port as well -- and the three that ran nowhere in CI
-  # (mutcheck-write-turn, -sentinel, turn-ask; the first had rotted when G19 landed) now run
-  # against the PowerShell too. windows-latest: those three drive Windows PowerShell, as
+  # that drives write-turn runs against the port as well -- including focused checks that ran nowhere in CI
+  # (mutcheck-write-turn, -sentinel, turn-ask, coordinator ownership) now run
+  # against the PowerShell too. windows-latest: the PowerShell checks drive Windows PowerShell, as
   # production does, and the goldens are Windows-recorded.
   write-turn-node:
     name: write-turn Node port (goldens, differential, mutation checks)
@@ -1978,8 +1981,7 @@ jobs:
             @{ f = "$skill/mutcheck-snooze-write.ps1";          node = @('-ScriptPath', $wt);    ps = $null },
             @{ f = "$skill/mutcheck-closed-task-write.ps1";     node = @('-ScriptPath', $wt);    ps = $null },
             @{ f = "$skill/mutcheck-coordinator-no-task-work.ps1"; node = @('-ScriptPath', $wt); ps = $null },
-            @{ f = "$skill/mutcheck-shipped-pick.ps1";          node = @('-WriteTurnPath', $wt); ps = $null },
-            @{ f = "$skill/mutcheck-plan-dispatch.ps1";         node = @('-TurnScript', $wt);    ps = $null }
+            @{ f = "$skill/mutcheck-shipped-pick.ps1";          node = @('-WriteTurnPath', $wt); ps = $null }
           )
           # ps = $null: the PowerShell run already has its own job elsewhere in this workflow.
           foreach ($r in $runs) {
@@ -1994,6 +1996,17 @@ jobs:
             }
           }
           if ($failed.Count) { $failed | ForEach-Object { Write-Host "FAILED: $_" }; exit 1 }
+      - name: The coordinator cannot write a consented task's outcome
+        shell: pwsh
+        run: |
+          $skill = './plugins/overnight-agent/skills/overnight-agent'
+          foreach ($engine in @(
+            @{ write = "$skill/write-turn.ps1"; state = "$skill/oa-state.ps1" },
+            @{ write = "$skill/write-turn.mjs"; state = "$skill/oa-state.mjs" }
+          )) {
+            & pwsh -NoProfile -File "$skill/mutcheck-coordinator-no-task-work.ps1" -WriteTurnPath $engine.write -OaStatePath $engine.state
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
   # sync-oa-home.ps1 deploys .ps1/.mjs/.js into the flat OA home BY BASENAME and refuses a name
   # that exists at two paths in the plugin -- so a test fixture that reuses a deployable name

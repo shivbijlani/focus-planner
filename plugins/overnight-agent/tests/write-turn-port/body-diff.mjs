@@ -131,7 +131,7 @@ function genCase(k) {
   if (c.args.Ask === '' && chance(0.5)) delete c.args.Ask;
   if (chance(0.55) || !useId) c.args.Validate = true;
   if (chance(0.5)) c.args.Json = true;
-  if (chance(0.25)) c.args.DisableGuard = pick(['G12', 'G7', 'g13', 'G15', 'G3', 'G11', 'G19', 'G16', 'G20', 'G21']);
+  if (chance(0.25)) c.args.DisableGuard = pick(['G12', 'G7', 'g13', 'G15', 'G3', 'G11', 'G16', 'G20', 'G21', 'G24', 'G25']);
   if (chance(0.3)) c.env.COPILOT_AGENT_SESSION_ID = pick(['sess-A', 'AGENT']);
   if (chance(0.3)) c.env.WRITE_TURN_HOST = pick(['host-1', 'AGENT-PC', 'a b/c']);
   if (chance(0.3)) c.env.CHAR_SHIPPED = pick(['640,641', '!fail', '900']);
@@ -204,9 +204,101 @@ function sameButClock(a, b) {
   return na.length === nb.length && na.every((x, i) => Math.abs(x - nb[i]) <= 1) && a.replace(re, 'N min') === b.replace(re, 'N min');
 }
 
+const FLEX_SENTINEL = '<!-- \tOVERNIGHT-AGENT \tdo  not\t edit   this line; flexible whitespace -->';
+const VALID_SENTINEL_BODY = `## ${MOON} Overnight Agent — 2026-10-04\n\n<!-- from: overnight-agent -->\n\n**Status:** In progress\n\nDid the thing.\n\n**Needs from you:** nothing.\n`;
+const PLAIN_SENTINEL_JOURNAL = '# Task {id}: sentinel fixture\n\nUser note.\n';
+const sentinelFixtures = [
+  {
+    name: 'fenced body marker is inert',
+    body: `${VALID_SENTINEL_BODY}\nFenced example:\n\n\`\`\`md\n${SENT}\n\`\`\`\n`,
+    journal: PLAIN_SENTINEL_JOURNAL,
+    expectedExit: 0,
+  },
+  {
+    name: 'multiline inline body marker is inert',
+    body: `${VALID_SENTINEL_BODY}\nInline example: \`quoted\n${SENT}\nquoted\`.\n`,
+    journal: PLAIN_SENTINEL_JOURNAL,
+    expectedExit: 0,
+  },
+  {
+    name: 'flexible-whitespace body marker is refused',
+    body: `${VALID_SENTINEL_BODY}\n${FLEX_SENTINEL}\n`,
+    journal: PLAIN_SENTINEL_JOURNAL,
+    expectedExit: 2,
+  },
+  {
+    name: 'fenced journal marker does not suppress insertion',
+    body: VALID_SENTINEL_BODY,
+    journal: `# Task {id}: sentinel fixture\n\n\`\`\`md\n${SENT}\n\`\`\`\n`,
+    expectedExit: 0,
+  },
+  {
+    name: 'inline journal marker does not suppress insertion',
+    body: VALID_SENTINEL_BODY,
+    journal: `# Task {id}: sentinel fixture\n\nExample: \`${SENT}\`.\n`,
+    expectedExit: 0,
+  },
+  {
+    name: 'flexible-whitespace journal marker is not canonical',
+    body: VALID_SENTINEL_BODY,
+    journal: `# Task {id}: sentinel fixture\n\n${FLEX_SENTINEL}\n`,
+    expectedExit: 2,
+  },
+  {
+    name: 'flexible-whitespace duplicate is counted structurally',
+    body: VALID_SENTINEL_BODY,
+    journal: `# Task {id}: sentinel fixture\n\n---\n${SENT}\n\n${FLEX_SENTINEL}\n`,
+    expectedExit: 2,
+  },
+];
+
+async function runSentinelDifferentialCases() {
+  let failures = 0;
+  for (let i = 0; i < sentinelFixtures.length; i++) {
+    const fixture = sentinelFixtures[i];
+    const id = String(9700 + i);
+    const journalPath = `data/journal/task-${id}.md`;
+    const originalJournal = fixture.journal.replaceAll('{id}', id);
+    const c = {
+      k: `sentinel-${fixture.name}`,
+      id,
+      files: { 'input/body.md': fixture.body, [journalPath]: originalJournal },
+      args: { BodyFile: '{root}/input/body.md', Id: id, Ask: 'none' },
+      env: {},
+    };
+    const [ps, node] = await Promise.all([runOne('ps', c), runOne('node', c)]);
+    const problems = [];
+    if (ps.exit !== node.exit) problems.push(`exit differs: ps=${ps.exit}, node=${node.exit}`);
+    if (ps.stdout !== node.stdout && !sameButClock(ps.stdout, node.stdout)) {
+      problems.push(`stdout differs: ps=${JSON.stringify(ps.stdout)}, node=${JSON.stringify(node.stdout)}`);
+    }
+    if (JSON.stringify(ps.stderr) !== JSON.stringify(node.stderr)) problems.push('stderr differs');
+    const keys = new Set([...Object.keys(ps.files), ...Object.keys(node.files)]);
+    for (const key of keys) if (ps.files[key] !== node.files[key]) problems.push(`file differs: ${key}`);
+
+    for (const [engine, result] of [['PowerShell', ps], ['Node', node]]) {
+      if (result.exit !== fixture.expectedExit) problems.push(`${engine} expected exit ${fixture.expectedExit}, got ${result.exit}`);
+      const journal = result.files[journalPath] ? Buffer.from(result.files[journalPath], 'base64').toString('utf8') : '';
+      if (fixture.expectedExit === 0 && !journal.includes(`---\n${SENT}\n\n`)) {
+        problems.push(`${engine} accepted without writing the canonical structural sentinel`);
+      }
+      if (fixture.expectedExit !== 0 && journal !== originalJournal) {
+        problems.push(`${engine} changed the journal on refusal`);
+      }
+    }
+
+    console.log(`  ${problems.length ? 'FAIL' : 'PASS'} ${fixture.name}`);
+    if (problems.length) {
+      failures++;
+      console.log(`    ${problems.join('\n    ')}`);
+    }
+  }
+  return failures;
+}
+
+let diffs = await runSentinelDifferentialCases();
 const cases = [];
 for (let k = 0; k < N; k++) cases.push(k);
-let diffs = 0;
 const exits = {};
 let next = 0;
 async function worker() {
@@ -233,5 +325,5 @@ async function worker() {
   }
 }
 await Promise.all(Array.from({ length: JOBS }, worker));
-console.log(`body-diff: ${N} cases, ${diffs} difference(s); ps exit codes ${JSON.stringify(exits)}`);
+console.log(`body-diff: ${sentinelFixtures.length} sentinel cases + ${N} random cases, ${diffs} difference(s); ps exit codes ${JSON.stringify(exits)}`);
 process.exit(diffs ? 1 : 0);

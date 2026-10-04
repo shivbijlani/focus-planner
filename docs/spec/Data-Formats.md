@@ -291,7 +291,7 @@ An optional section of the same file names, per channel, the rule a reply must m
 
 | Channel | Default rule | Read by the consumer engine |
 | --- | --- | --- |
-| `app` | `editor`: the journal, written through the app's editor (`<!-- from: me -->`) | yes: `consent` and the gated-dispatch floor |
+| `app` | `editor`: the journal, written through the app's editor (`<!-- from: me -->`) | yes: `consent` |
 | `google-doc` | `no-signature + not-in-sent-ledger`: a catch-up-doc comment with no agent signature whose id is not in the sent-messages ledger | yes: `consent -DocComments` |
 | `telegram` | `sender-id`: enforced by the bridge, which folds only the user's chat into the journal | via the journal |
 | `teams`, `mail` | `no-signature + not-in-sent-ledger` | no reader, so they never approve here |

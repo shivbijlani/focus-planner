@@ -26,8 +26,8 @@
     G12 one turn per wake (property of the destination)  G13 the declared ask (-Ask required)
     G14 a question declared as not needing him           G15 proposing already-shipped work
     G16 an advertised reply word the reader rejects      G17 a turn into a user-paused task
-    G18 an unverified agent-gate edit ask                G19 a proposed plan's first step
-    G23 a coordinator outcome turn for a human-approved task whose task session owns the work
+    G18 an unverified agent-gate edit ask                      G23 task-session action ownership
+    G24 user-closed task refusal                          G25 a body-written journal sentinel
   G6 is not a refusal: a journal with no OVERNIGHT-AGENT sentinel gets one on append.
   G20 a target that is not this task's own journal (agent-gate.md, user-settings.md, a path in
       -Id, a symlink out of -JournalDir). G21 a hand-written `oa-by` identity stamp. G22 a turn
@@ -480,6 +480,7 @@ const H2PrefixRe = '^[ \\t]*##[ \\t]+';
 const AgentMarkerRe = '^[ \\t]*<!--[ \\t]*from:[ \\t]*overnight-agent[ \\t]*-->';
 const SENTINEL_FIND = 'OVERNIGHT-AGENT do not edit';
 const SENTINEL_LINE = '<!-- OVERNIGHT-AGENT do not edit this line; the agent manages everything below it -->';
+const SENTINEL_STRUCTURAL_RE = '(?i)^[ \\t]*<!--[ \\t]*OVERNIGHT-AGENT[ \\t]+do[ \\t]+not[ \\t]+edit[ \\t]+this[ \\t]+line\\b';
 
 const isH2 = (l) => psMatch(l, H2Re) && !psMatch(l, H3Re);
 const afterH2 = (l) => netRe(H2PrefixRe).replaceFirst(l, '');
@@ -542,6 +543,49 @@ function fenceMaskedText(text) {
     if (fence) parts[i] = ' '.repeat(parts[i].length);
   }
   return parts.join('');
+}
+
+function maskInlineCodeSpans(text) {
+  const chars = text.split('');
+  for (let i = 0; i < chars.length;) {
+    if (chars[i] !== '`') { i++; continue; }
+
+    const start = i;
+    while (i < chars.length && chars[i] === '`') i++;
+    const delimiterLength = i - start;
+    let closing = -1;
+    let j = i;
+    while (j < chars.length) {
+      if (chars[j] !== '`') { j++; continue; }
+      const runStart = j;
+      while (j < chars.length && chars[j] === '`') j++;
+      if (j - runStart === delimiterLength) { closing = runStart; break; }
+    }
+    if (closing < 0) { i = start + delimiterLength; continue; }
+
+    const end = closing + delimiterLength;
+    for (let k = start; k < end; k++) {
+      if (chars[k] !== '\n' && chars[k] !== '\r') chars[k] = ' ';
+    }
+    i = end;
+  }
+  return chars.join('');
+}
+
+function sentinelScanText(text) {
+  return maskInlineCodeSpans(fenceMaskedText(text));
+}
+
+function structuralSentinelCounts(text) {
+  let structural = 0;
+  let canonical = 0;
+  for (const line of splitLines(sentinelScanText(text))) {
+    if (psMatch(line, SENTINEL_STRUCTURAL_RE)) {
+      structural++;
+      if (line.trim() === SENTINEL_LINE) canonical++;
+    }
+  }
+  return { structural, canonical };
 }
 
 // READ ONLY, from the JOURNAL (never state): the task's catch-up doc binding, fences masked.
@@ -1040,6 +1084,18 @@ function turnBodyFindings(ctx, body, disabled, doc, ask) {
     }
   }
 
+  // G25: the structural journal sentinel is emitted by the writer, never copied into a turn body.
+  if (on('G25')) {
+    const sentinelLines = splitLines(sentinelScanText(body));
+    for (let i = 0; i < lines.length; i++) {
+      if (psMatch(sentinelLines[i], SENTINEL_STRUCTURAL_RE)) {
+        findings.push(newFinding('G25', i + 1, netTrim(lines[i]),
+          'the journal sentinel is structural and must be written once by write-turn, not copied into a task turn; remove it from this body'));
+        break;
+      }
+    }
+  }
+
   // G14 (#618): a not-blocking declaration over a direct question.
   if (on('G14') && (ciEq(ask, 'offer') || ciEq(ask, 'none'))) {
     const contra = askContradiction(body);
@@ -1110,33 +1166,6 @@ function turnBodyFindings(ctx, body, disabled, doc, ask) {
             'twelve such picks were made in two days (#635). Verify with ' +
             'git grep "#' + n + '" origin/main -- packages plugins, then propose something unworked. ' +
             'Use -DisableGuard G15 if he has asked for a second look at it'));
-        }
-      }
-    }
-  }
-
-  // G19 (#739): a Proposed plan must open with a [gated] step under -Ask blocking, and every
-  // numbered step after the status line must be classified.
-  if (on('G19')) {
-    let proposedLine = -1;
-    let firstStep = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (inFence[i]) continue;
-      if (psMatch(lines[i], '^[ \\t]*\\*\\*Status:\\*\\*[ \\t]*Proposed\\b')) proposedLine = i;
-      if (proposedLine >= 0 && firstStep < 0 && psMatch(lines[i], '^[ \\t]*1\\.[ \\t]+')) firstStep = i;
-    }
-    if (proposedLine >= 0) {
-      if (!ciEq(ask, 'blocking') || firstStep < 0 || !psMatch(lines[firstStep], '^[ \\t]*1\\.[ \\t]+\\[gated\\][ \\t]+')) {
-        findings.push(newFinding('G19', proposedLine + 1, netTrim(lines[proposedLine]),
-          'proposed parks the task: its first numbered step must be [gated] and -Ask blocking. ' +
-          'For reversible or gate-allowed first steps, dispatch them this wake and write the ' +
-          'outcome as in-progress/done (or blocked only when gated work remains)'));
-      }
-      for (let i = proposedLine + 1; i < lines.length; i++) {
-        if (inFence[i] || !psMatch(lines[i], '^[ \\t]*[1-9][0-9]*\\.[ \\t]+')) continue;
-        if (!psMatch(lines[i], '^[ \\t]*[1-9][0-9]*\\.[ \\t]+\\[(reversible|gate-allowed|gated)\\][ \\t]+')) {
-          findings.push(newFinding('G19', i + 1, netTrim(lines[i]),
-            'classify each proposed plan step as [reversible], [gate-allowed] or [gated]'));
         }
       }
     }
@@ -1571,13 +1600,20 @@ function run(argv, out) {
 
   // G6: the Telegram bridge skips a journal with no sentinel, so open the managed block here.
   let prefix = '';
-  if (!psMatch(existing, '<!-- OVERNIGHT-AGENT do not edit this line')) {
+  const existingSentinels = structuralSentinelCounts(existing);
+  if (existingSentinels.structural === 0) {
     prefix = '---' + nl + SENTINEL_LINE + nl + nl;
     if (!P.Json) say('[write-turn] journal had no OVERNIGHT-AGENT sentinel - adding it (the Telegram bridge skips tasks without one).');
   }
 
   const turn = addAskStamp(netTrimEnd(body), askVal, identityStamp(author)).replace(/\r?\n/g, nl);
-  writeAllText(journal, existing + sep + prefix + turn + nl);
+  const journalOutput = existing + sep + prefix + turn + nl;
+  const sentinelCounts = structuralSentinelCounts(journalOutput);
+  if (sentinelCounts.structural !== 1 || sentinelCounts.canonical !== 1) {
+    say(`[write-turn] REFUSED - journal must contain exactly one OVERNIGHT-AGENT sentinel (found ${sentinelCounts.structural}); nothing written.`);
+    return 2;
+  }
+  writeAllText(journal, journalOutput);
   if (!P.Json) say(`[write-turn] appended ${bodyLen} chars to task-${id}.md (ask: ${askVal}, backup: task-${id}.bak-${stamp}.md)`);
   return 0;
 }

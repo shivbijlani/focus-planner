@@ -43,8 +43,8 @@ function pausedError(ctx, st) {
     'instruction as a side effect of reporting work he asked you to stop (#540).';
 }
 
-const approvedWorkStatuses = ['in-progress', 'done', 'blocked'];
 const userPauseStatuses = ['proposed', 'blocked'];
+const approvedWorkStatuses = ['in-progress', 'done', 'blocked'];
 
 function taskSessionOwnsStatusChange(ctx, st) {
   const caller = ctx.p.TurnBy || process.env.COPILOT_AGENT_SESSION_ID || '';
