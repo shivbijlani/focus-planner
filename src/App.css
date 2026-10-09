@@ -345,6 +345,31 @@ body {
   color: #fff;
 }
 
+.file.with-role {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.file-icon {
+  flex-shrink: 0;
+}
+
+.file-details {
+  min-width: 0;
+}
+
+.file-role {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.file-name {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
 .content {
   flex: 1;
   padding: 2rem;
