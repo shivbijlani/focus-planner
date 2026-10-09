@@ -50,6 +50,7 @@ import LanesSettingsSection, { LanePicker } from './LanesSettings.jsx'
 import { LanesBoardContext, useLanes } from './useLanes.js'
 import { canonicalTaskId, laneView, readLaneBoard, resolveTaskLane } from './lanes/lanes.js'
 import { hideDocsFolder, hideAgentMetadataFolder } from './fileTreeFilter.js'
+import { journalFilePresentation } from './fileTreePresentation.js'
 
 // Docs' task chip / 📔 link opens the planner at `#journal=<id>` (plans/docs-app-design.md §3).
 // Captured once at load: init can run more than once (StrictMode, source switches), and the
@@ -855,38 +856,50 @@ function FileTree({ items, onSelect, selectedPath }) {
 
   return (
     <ul className="file-tree">
-      {items.map((item) => (
-        <li key={item.path}>
-          {item.type === 'directory' ? (
-            <>
+      {items.map((item) => {
+        const presentation = item.type === 'file' ? journalFilePresentation(item.path) : null
+        return (
+          <li key={item.path}>
+            {item.type === 'directory' ? (
+              <>
+                <button
+                  type="button"
+                  className={`folder${openPaths.has(item.path) ? ' open' : ''}`}
+                  onClick={() => handleFolderClick(item)}
+                  aria-expanded={openPaths.has(item.path)}
+                >
+                  <span className="folder-caret">{openPaths.has(item.path) ? '▾' : '▸'}</span>
+                  <span className="folder-icon">📁</span>
+                  <span className="folder-name">{item.name}</span>
+                  {(() => {
+                    const count = countTreeFiles(item)
+                    return count > 0 ? <span className="folder-count">{count}</span> : null
+                  })()}
+                </button>
+                {openPaths.has(item.path) && item.children && (
+                  <FileTree items={item.children} onSelect={onSelect} selectedPath={selectedPath} />
+                )}
+              </>
+            ) : (
               <button
-                type="button"
-                className={`folder${openPaths.has(item.path) ? ' open' : ''}`}
-                onClick={() => handleFolderClick(item)}
-                aria-expanded={openPaths.has(item.path)}
+                className={`file ${presentation ? 'with-role' : ''} ${selectedPath === item.path ? 'selected' : ''}`}
+                onClick={() => onSelect(item.path)}
+                title={presentation ? `${presentation.title}\n${item.path}` : item.path}
               >
-                <span className="folder-caret">{openPaths.has(item.path) ? '▾' : '▸'}</span>
-                <span className="folder-icon">📁</span>
-                <span className="folder-name">{item.name}</span>
-                {(() => {
-                  const count = countTreeFiles(item)
-                  return count > 0 ? <span className="folder-count">{count}</span> : null
-                })()}
+                {presentation ? (
+                  <>
+                    <span className="file-icon" aria-hidden="true">{presentation.icon}</span>
+                    <span className="file-details">
+                      <span className="file-role">{presentation.label}</span>
+                      <span className="file-name">{item.name}</span>
+                    </span>
+                  </>
+                ) : <>📄 {item.name}</>}
               </button>
-              {openPaths.has(item.path) && item.children && (
-                <FileTree items={item.children} onSelect={onSelect} selectedPath={selectedPath} />
-              )}
-            </>
-          ) : (
-            <button
-              className={`file ${selectedPath === item.path ? 'selected' : ''}`}
-              onClick={() => onSelect(item.path)}
-            >
-              📄 {item.name}
-            </button>
-          )}
-        </li>
-      ))}
+            )}
+          </li>
+        )
+      })}
     </ul>
   )
 }

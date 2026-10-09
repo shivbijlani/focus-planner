@@ -9,6 +9,65 @@ import {
 
 const JOURNAL_1 = 'journal/task-1.md'
 
+const JOURNAL_431 = 'journal/task-431.md'
+const REPORT_431 = 'journal/task-431-webmcp-evaluation.md'
+const journal431 = '# Task 431: Evaluate WebMCP\n\n## 2026-08-20\n\nChronological journal note.\n\nDelivered [WebMCP evaluation](journal/task-431-webmcp-evaluation.md).\n'
+const report431 = '# WebMCP evaluation\n\nThe supporting report has different content.\n\n[Return to journal](journal/task-431.md)\n'
+
+async function seedJournalAndReport(page) {
+  await seedPlan(page, planWith({
+    today: ['| 431 | 🟡 | Evaluate WebMCP | - | 2026-08-20 | |'],
+  }), { [JOURNAL_431]: journal431, [REPORT_431]: report431 })
+}
+
+for (const phone of [false, true]) {
+  test(`${phone ? 'phone' : 'desktop'}: sidebar distinguishes a task journal from its supporting document`, async ({ page }) => {
+    if (phone) await page.setViewportSize({ width: 375, height: 667 })
+    await seedJournalAndReport(page)
+    if (phone) await page.getByRole('button', { name: /Open Planner menu/ }).click()
+
+    const sidebar = page.locator('.sidebar-file-tree')
+    const folder = sidebar.getByRole('button', { name: /journal/ })
+    await folder.click()
+    await expect(folder.locator('.folder-count')).toHaveText('2')
+    const journal = sidebar.getByRole('button', { name: /task-431\.md/ })
+    const report = sidebar.getByRole('button', { name: /task-431-webmcp-evaluation\.md/ })
+    await expect(journal.locator('.file-role')).toHaveText('Journal · Task 431')
+    await expect(report.locator('.file-role')).toHaveText('Supporting doc · Task 431')
+    await expect(journal).toBeVisible()
+    await expect(report).toBeVisible()
+    // A long filename must wrap inside the sidebar, not hide the role or overflow.
+    expect(await report.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+  })
+}
+
+test('journal and supporting document remain independently accessible with unchanged contents and links', async ({ page }) => {
+  await seedJournalAndReport(page)
+  const sidebar = page.locator('.sidebar-file-tree')
+  await sidebar.getByRole('button', { name: /journal/ }).click()
+  const journal = sidebar.getByRole('button', { name: /task-431\.md/ })
+  const report = sidebar.getByRole('button', { name: /task-431-webmcp-evaluation\.md/ })
+  const view = page.locator('.journal-chat-view')
+
+  await journal.click()
+  await expect(journal).toHaveClass(/selected/)
+  await expect(view).toContainText('Chronological journal note.')
+  await expect(view).not.toContainText('The supporting report has different content.')
+  await view.getByRole('link', { name: 'WebMCP evaluation', exact: true }).click()
+  await expect(report).toHaveClass(/selected/)
+  await expect(view).toContainText('The supporting report has different content.')
+  await view.getByRole('link', { name: 'Return to journal' }).click()
+  await expect(journal).toHaveClass(/selected/)
+  await expect(view).toContainText('Chronological journal note.')
+
+  await report.click()
+  await expect(report).toHaveClass(/selected/)
+  await expect(view).toContainText('The supporting report has different content.')
+  expect(await readFile(page, JOURNAL_431)).toBe(journal431)
+  expect(await readFile(page, REPORT_431)).toBe(report431)
+  expect(await listFiles(page)).toEqual(expect.arrayContaining([JOURNAL_431, REPORT_431]))
+})
+
 test('create a journal, post from the composer, and it renders as a "me" bubble', async ({ page }) => {
   await seedPlan(page, planWith({
     today: ['| 1 | 🟡 | Journaled task | - | 2026-01-01 | |'],
