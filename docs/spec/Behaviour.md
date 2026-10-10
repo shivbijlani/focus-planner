@@ -206,6 +206,20 @@ These suites pin the lower-level support systems that the app and plugins rely o
 
 </details>
 
+## Docs behaviour ([Domain-docs-core](Domain-docs-core), [Domain-docs-publisher](Domain-docs-publisher))
+
+- A document parses into a header, title and anchored blocks; unanchored content becomes block `b0`; anchors and headings inside fences are literal; BOMs and CRLF are tolerated; the bold status line is exposed.
+- Unique exact and similar blocks carry their ids across revisions; ambiguous duplicates do not; retired ids are never reused; only new and edited blocks are flagged as changed.
+- A comment re-anchors in the same block, then anywhere in the document, and otherwise becomes outdated; repeated quotes are disambiguated by context and by stored offset, and unresolved ties are marked outdated. Multi-block selections anchor to start and end blocks.
+- The review set is walked breadth-first, cycle-safe, to a depth cap; `doc:` links parse, de-duplicate in order and round-trip through hash routes.
+- Review files from two devices union by comment id; the newer clock wins, equal clocks use a deterministic tie-break, and the merge is commutative and idempotent. A disposition resolves a comment; a reopen overrides older dispositions; document state is derived from the files.
+- Readers ignore unknown fields and refuse invalid required fields, negative anchor offsets, mismatched stamps or titles, and files over their size limit.
+- The journal read load counts visible words only.
+- `fp-docs lint` never modifies files and identifies a malformed index as a data error; it does not probe local addresses when link checking is requested.
+- `fp-docs publish` writes a reader-valid first revision, carries block ids on republish, keeps twenty snapshots, never reuses retired ids, refuses an un-adopted stamp change or body-only hand edit, creates supporting documents from aliases, copies a Telegram deep link into the primary entry, and requires the base revision when updating a linked document.
+- `fp-docs status` and `comments` are read-only; comments are grouped by review-set document with re-anchored placements; the CLI prints JSON and rejects non-canonical task ids.
+- Oversized index, review or review-set data is refused; an interrupted staged write restores earlier files and removes newly created directories.
+
 ## Overnight-agent named-test inventory ([Domain-overnight-agent](Domain-overnight-agent))
 
 The inventory includes two overnight-agent check files, but `spec-facts.json` captured zero named `tests[]` entries for them. The file presence still matters because the acceptance corpus expects these checks to exist.

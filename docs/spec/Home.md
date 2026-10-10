@@ -34,10 +34,12 @@ Every core design decision in this system exists to make that safe:
 
 ## How the pieces fit together
 
-Twelve domains divide the system: a browser-facing board (`app`), the on-disk formats and their
+Fourteen domains divide the system: a browser-facing board (`app`), the on-disk formats and their
 shared config (`config`, `storage`), a bidirectional sync engine (`folder-sync`), an autonomous
 overnight worker (`overnight-agent`), a Telegram mirror (`telegram-bridge`), a static journal
-publisher (`task-paper`), supporting services (`mcp-cred-vault`, `install-prompt`, `diagnostics`),
+publisher (`task-paper`), native catch-up documents (`docs-core`, the shared reading library, and
+`docs-publisher`, the `fp-docs` writer), supporting services (`mcp-cred-vault`, `install-prompt`,
+`diagnostics`),
 the server and build entry points (`root`), and repository tooling including this spec's own
 generation pipeline (`scripts`). See [Architecture](Architecture) for how they compose at runtime and
 [Rebuilding](Rebuilding) for the order to build them in.
@@ -50,6 +52,8 @@ generation pipeline (`scripts`). See [Architecture](Architecture) for how they c
 | [Technical Architecture](Technical-Architecture) | Optional architectural ideas, diagrams, and principles, without implementation code. |
 | [Data-Formats](Data-Formats) | Every persisted format — board, journals, Docs, agent/bridge state — with annotated real samples and invariants. |
 | [Domain-docs](Domain-docs) | Native catch-up Docs: file ownership, data formats, block/comment preservation, publisher and agent-loop contracts, test vectors. |
+| [Domain-docs-core](Domain-docs-core) | The shared Docs library: grammar, parsing, block ids, anchors, review merge, derived state, validation limits. |
+| [Domain-docs-publisher](Domain-docs-publisher) | The `fp-docs` publisher: the sole writer of published documents, with atomic, recoverable writes. |
 | [Domain-agent-metadata](Domain-agent-metadata) | Per-device agent metadata files and the 🤖 session link: fingerprints, publisher and reader rules, test vectors. |
 | [Domain-lanes](Domain-lanes) | Lanes: scope each agent PC to part of the plan — `#lane:` tags, app assignments and inheritance, `agent-lanes.json`, engine and app rules, test vectors. |
 | [Domain-app](Domain-app) | The board UI and its pure content-transformation core. |

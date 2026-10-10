@@ -106,7 +106,10 @@ route, a per-user `HKCU\...\Run` value, deliberately distinct from the Scheduled
 route above: an out-of-band supervisor should not depend on the same dispatch mechanism as the
 thing (or the other supervisor) it exists to catch failing. Full behavior, configuration
 (`user-settings.md`), and troubleshooting live in `plugins/overnight-agent/README.md`; this page
-only records where it fits in the reliability stack.
+only records where it fits in the reliability stack. The tray's policy engine is exercised by
+`plugins/overnight-agent/checks/reliability-supervisor.tests.mjs`, which pins durable validated
+defaults that enable preventive recycling, a stable CLI result contract, a shared action lock that the
+direct CLI cannot override, and refusal to admit stale last-moment activity as evidence.
 
 ## Liveness-gated stuck detection and orphan repair
 
