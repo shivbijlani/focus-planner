@@ -6,13 +6,13 @@ import { assertSandboxPath } from '../skills/overnight-agent/oa-state-lib/core/c
 
 export async function checkPublisherStamps(root) {
   assertSandboxPath(root, 'Docs stamp root');
+  let indexText;
+  try { indexText = await fs.readFile(path.join(root, 'docs', 'index.json'), 'utf8'); }
+  catch (error) { if (error.code === 'ENOENT') return { enabled: false, documents: 0 }; throw error; }
   const publisher = docsPublisherPath();
   const { readStatus } = await import(pathToFileURL(path.resolve(path.dirname(publisher), '..', 'src', 'index.js')));
   const { validateIndexText, validateDocText, validateResponseText } =
     await import(pathToFileURL(path.resolve(path.dirname(publisher), '..', '..', 'docs-core', 'src', 'index.js')));
-  let indexText;
-  try { indexText = await fs.readFile(path.join(root, 'docs', 'index.json'), 'utf8'); }
-  catch (error) { if (error.code === 'ENOENT') return { enabled: false, documents: 0 }; throw error; }
   const index = validateIndexText(indexText);
   if (!index) throw new Error('docs_stamp_invalid: docs/index.json is empty');
   for (const task of Object.keys(index.tasks)) await readStatus({ root, task });

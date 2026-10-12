@@ -22,6 +22,12 @@ describe('review.json merge', () => {
     const m = mergeReviews(base, reopened)
     expect(m.comments.c_a.status).toBe('reopened')
     expect(m.readRev).toBe(3)
+    expect(reopened.comments.c_a.reviewId).not.toBe(base.comments.c_a.reviewId)
+    expect(reopened.comments.c_a.anchor).toEqual(base.comments.c_a.anchor)
+    expect(reopened.comments.c_a.body).toBe('v1')
+    expect(deriveDocState({ entry: { rev: 2 }, review: reopened,
+      response: { rev: 2, ackedReview: base.comments.c_a.reviewId, dispositions: {} } }).pendingReviews)
+      .toEqual([reopened.comments.c_a.reviewId])
   })
 
   it('uses the spec tie-break for equal clocks and is commutative and idempotent', () => {

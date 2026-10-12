@@ -201,7 +201,9 @@ describe('fp-docs native feedback loop', () => {
   it('distinguishes an actual empty review from corrupt or unreadable reviews', async () => {
     const { root, first } = await reviewedPair()
     await put(root, `docs/${first.id}/review.json`, '{"version":1,"comments":{},"reviews":{},"readRev":0}')
-    expect((await readStatus({ root, task: taskId })).primary.openCount).toBe(0)
+    expect(await readStatus({ root, task: taskId })).toMatchObject({ threshold: 'reached', primary: { openCount: 0 } })
+    await put(root, `docs/${first.id}/review.json`, ' \n')
+    await expect(readStatus({ root, task: taskId })).rejects.toThrow(/D09 data.*empty or truncated/)
     await put(root, `docs/${first.id}/review.json`, '{')
     await expect(readStatus({ root, task: taskId })).rejects.toThrow(/D09 data.*not valid JSON/)
     const io = { ...fs, readFile: async (filename) => {
@@ -209,6 +211,12 @@ describe('fp-docs native feedback loop', () => {
       return fs.readFile(filename)
     } }
     await expect(readStatus({ root, task: taskId, io })).rejects.toThrow('Synthetic transport failure')
+  })
+
+  it('reports the normative below-threshold spelling without creating a primary', async () => {
+    const root = await rootDir()
+    await put(root, `journal/task-${taskId}.md`, '# Short journal\n\nOne note.\n')
+    expect(await readStatus({ root, task: taskId })).toMatchObject({ threshold: 'not-reached', primary: null })
   })
 })
 
