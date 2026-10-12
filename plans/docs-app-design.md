@@ -51,6 +51,14 @@ The app already shows 📔 Journal and, when the journal has a `tg-meta` line, �
 - **Mobile row**: see Q10 (single rail slot today).
 - **Everywhere else, the same trio**: journal view header, Docs doc header, and the Telegram thread (the bridge posts the doc link once when it's created). `fp-docs` copies the task's Telegram URL from the journal's `tg-meta` into `index.json` so the Docs app can show 💬 without reading journals.
 
+An optional Markdown briefing at `journal/task-<id>-briefing.md` is a distinct file-based link,
+not another Docs primary. It appears only when that exact file exists. If both it and a registered
+Docs primary exist, both links remain available: 📄 keeps the Docs app destination and its tracked
+unread/needs-you badges, while 📑 opens the Markdown briefing without those badges. The native
+Docs primary keeps the mobile rail slot when both exist; the briefing moves to task actions.
+Without a Docs primary, the briefing may use the mobile rail. Other descriptive journal-folder
+files remain supporting artifacts and are not guessed or migrated into briefings.
+
 ## 4. Data model — one writer per file
 
 ```

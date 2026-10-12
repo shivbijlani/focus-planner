@@ -122,6 +122,8 @@ Known gap: issue #556 shows that a reused task id on both boards can make a live
 
 Journals are append-only markdown chat threads. `src/journalChat.js` renders them in the app; `packages/telegram-bridge/src/journal.js` folds Telegram replies back in; the Overnight Agent reads the same bytes. `src/config/agentsDoc.js` is the human-readable contract that the app scaffolds into each folder.
 
+An optional task briefing can live beside the journal as `journal/task-<id>-briefing.md`. This exact filename is reserved for the primary Markdown briefing; it is independent of `journal/task-<id>.md` and any native Docs primary. Other descriptive filenames remain supporting documents and are never inferred as briefings. The app links to a briefing only when that exact file exists in the active storage source; it does not create, rename, or migrate files.
+
 Real sample, combining the fixture in `src/journalChat.test.js` with exact markers from `src/config/agentsDoc.js` and `packages/telegram-bridge/src/journal.js`:
 
 > [!NOTE]

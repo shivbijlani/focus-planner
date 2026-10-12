@@ -50,6 +50,8 @@ import LanesSettingsSection, { LanePicker } from './LanesSettings.jsx'
 import { LanesBoardContext, useLanes } from './useLanes.js'
 import { canonicalTaskId, laneView, readLaneBoard, resolveTaskLane } from './lanes/lanes.js'
 import { hideDocsFolder, hideAgentMetadataFolder } from './fileTreeFilter.js'
+import { journalFilePresentation } from './fileTreePresentation.js'
+import { useTaskBriefing } from './taskBriefing.js'
 
 // Docs' task chip / 📔 link opens the planner at `#journal=<id>` (plans/docs-app-design.md §3).
 // Captured once at load: init can run more than once (StrictMode, source switches), and the
@@ -855,38 +857,50 @@ function FileTree({ items, onSelect, selectedPath }) {
 
   return (
     <ul className="file-tree">
-      {items.map((item) => (
-        <li key={item.path}>
-          {item.type === 'directory' ? (
-            <>
+      {items.map((item) => {
+        const presentation = item.type === 'file' ? journalFilePresentation(item.path) : null
+        return (
+          <li key={item.path}>
+            {item.type === 'directory' ? (
+              <>
+                <button
+                  type="button"
+                  className={`folder${openPaths.has(item.path) ? ' open' : ''}`}
+                  onClick={() => handleFolderClick(item)}
+                  aria-expanded={openPaths.has(item.path)}
+                >
+                  <span className="folder-caret">{openPaths.has(item.path) ? '▾' : '▸'}</span>
+                  <span className="folder-icon">📁</span>
+                  <span className="folder-name">{item.name}</span>
+                  {(() => {
+                    const count = countTreeFiles(item)
+                    return count > 0 ? <span className="folder-count">{count}</span> : null
+                  })()}
+                </button>
+                {openPaths.has(item.path) && item.children && (
+                  <FileTree items={item.children} onSelect={onSelect} selectedPath={selectedPath} />
+                )}
+              </>
+            ) : (
               <button
-                type="button"
-                className={`folder${openPaths.has(item.path) ? ' open' : ''}`}
-                onClick={() => handleFolderClick(item)}
-                aria-expanded={openPaths.has(item.path)}
+                className={`file ${presentation ? 'with-role' : ''} ${selectedPath === item.path ? 'selected' : ''}`}
+                onClick={() => onSelect(item.path)}
+                title={presentation ? `${presentation.title}\n${item.path}` : item.path}
               >
-                <span className="folder-caret">{openPaths.has(item.path) ? '▾' : '▸'}</span>
-                <span className="folder-icon">📁</span>
-                <span className="folder-name">{item.name}</span>
-                {(() => {
-                  const count = countTreeFiles(item)
-                  return count > 0 ? <span className="folder-count">{count}</span> : null
-                })()}
+                {presentation ? (
+                  <>
+                    <span className="file-icon" aria-hidden="true">{presentation.icon}</span>
+                    <span className="file-details">
+                      <span className="file-role">{presentation.label}</span>
+                      <span className="file-name">{item.name}</span>
+                    </span>
+                  </>
+                ) : <>📄 {item.name}</>}
               </button>
-              {openPaths.has(item.path) && item.children && (
-                <FileTree items={item.children} onSelect={onSelect} selectedPath={selectedPath} />
-              )}
-            </>
-          ) : (
-            <button
-              className={`file ${selectedPath === item.path ? 'selected' : ''}`}
-              onClick={() => onSelect(item.path)}
-            >
-              📄 {item.name}
-            </button>
-          )}
-        </li>
-      ))}
+            )}
+          </li>
+        )
+      })}
     </ul>
   )
 }
@@ -1098,9 +1112,11 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
   const journalProvider = getActiveProvider()
   // Docs (#3.2 of plans/docs-app-design.md): the task's catch-up doc, when docs/index.json binds one.
   const taskDoc = useTaskDoc(journalProvider, taskId)
+  const taskBriefing = useTaskBriefing(journalProvider, taskId)
   const taskLinks = taskLinkPlan({
     mobile: isMobile,
     hasDoc: !!taskDoc,
+    hasBriefing: !!taskBriefing.path,
     hasTelegram: !!telegram?.url,
     hasJournal: !!journalPath,
   })
@@ -1185,7 +1201,7 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
 
   const handleContextMenu = (e) => {
     e.preventDefault()
-    onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence, taskDoc)
+    onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence, taskDoc, taskBriefing.path)
   }
 
   // Mobile (#335): visible kebab opens the same row-action sheet — no hidden
@@ -1193,7 +1209,7 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
   const handleKebab = (e) => {
     e.preventDefault()
     e.stopPropagation()
-    onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence, taskDoc)
+    onContextMenu(e, rawLine, row, journalPath, taskId, telegram, journalState.existence, taskDoc, taskBriefing.path)
   }
 
   // Filter to only uncompleted todos
@@ -1252,6 +1268,7 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
         className={[getPriorityClass(row[priorityCol]), activeSnoozeUntil ? 'task-row-snoozed' : ''].filter(Boolean).join(' ')}
         onContextMenu={handleContextMenu}
         data-task-id={taskId || undefined}
+        data-briefing-status={taskBriefing.status}
       >
         {headers.map((h, i) => {
           const cellValue = row[h]
@@ -1493,6 +1510,21 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
                                 ) : null}
                               </a>
                             )}
+                            {taskLinks.desktop.includes('briefing') && taskBriefing.path && (
+                              <a
+                                href="#"
+                                className="journal-link journal-link-briefing"
+                                aria-label="Open task briefing"
+                                title="Open the optional Markdown briefing (separate from the Docs primary)"
+                                onClick={(e) => {
+                                  e.preventDefault()
+                                  e.stopPropagation()
+                                  onNavigate(taskBriefing.path)
+                                }}
+                              >
+                                📑
+                              </a>
+                            )}
                             <AgentSessionLinks links={agentLinks} />
                           </span>
                         )}
@@ -1509,6 +1541,16 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
                       title="The journal could not be loaded. Retry without creating or overwriting it."
                     >
                       Journal unavailable — Retry
+                    </button>
+                  )}
+                  {taskBriefing.status === 'error' && (
+                    <button
+                      type="button"
+                      className="journal-load-retry briefing-load-retry"
+                      onClick={() => taskBriefing.retry().catch(() => {})}
+                      title="The optional briefing could not be checked in this storage source. Retry without changing files."
+                    >
+                      Briefing unavailable — Retry
                     </button>
                   )}
                 </div>
@@ -1603,6 +1645,20 @@ function TaskRow({ row, sourceId, headers, onNavigate, managerPriorities, onScro
                           <span className="journal-badge doc-badge-unread" aria-label="New revision">●</span>
                         ) : null}
                       </span>
+                    </a>
+                  ) : taskLinks.rail === 'briefing' && taskBriefing.path ? (
+                    <a
+                      href="#"
+                      className="row-action-btn briefing-action"
+                      aria-label="Open task briefing"
+                      title="Open the optional Markdown briefing"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        onNavigate(taskBriefing.path)
+                      }}
+                    >
+                      📑
                     </a>
                   ) : taskLinks.rail === 'telegram' ? (
                       // #352: Telegram-active tasks show the 💬 Chat icon, which
@@ -1842,7 +1898,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
     }
   }
 
-  const handleContextMenu = (e, rawLine, row, journalPath, taskId, telegram, journalExistence, taskDoc) => {
+  const handleContextMenu = (e, rawLine, row, journalPath, taskId, telegram, journalExistence, taskDoc, taskBriefingPath) => {
     const options = []
     const rowSourceId = getActiveSourceId()
     const rowReadStateId = journalReadStateId(rowSourceId, taskId)
@@ -1921,6 +1977,7 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
     // Docs §3.2: with a catch-up doc the rail is 📄, so BOTH 💬 Telegram and 📔 Journal go here.
     const mobileMenuLinks = mobileTaskMenuLinks({
       hasDoc: !!taskDoc,
+      hasBriefing: !!taskBriefingPath,
       hasTelegram: !!telegram?.url,
       hasJournal: !!journalPath,
     })
@@ -1932,6 +1989,10 @@ function TaskSection({ title, tableLines, onNavigate, defaultOpen = true, manage
           action: () => {
             if (link.key === 'telegram') {
               window.open(telegram.url, '_blank', 'noopener,noreferrer')
+              return
+            }
+            if (link.key === 'briefing') {
+              onNavigate(taskBriefingPath)
               return
             }
             readStateService.emitJournalOpened(rowReadStateId)

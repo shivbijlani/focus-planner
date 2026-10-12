@@ -31,6 +31,55 @@ test('over-threshold sample opens its primary document and follows a linked docu
   await expect(page.locator('.dv-linked-from')).toContainText(SAMPLE_TITLE)
 })
 
+test('Docs primary and exact Markdown briefing coexist without sharing links or tracked badges', async ({ page }) => {
+  const briefing = '# Task 845: Sample briefing\n\nMarkdown briefing contents.\n'
+  const docsIndex = JSON.parse(SAMPLE_DOC_FILES['docs/index.json'])
+  docsIndex.docs[SAMPLE_PRIMARY_ID].openDispositions = { 'needs-you': 1 }
+  await seedPlan(page, planWith({ today: [taskRow] }), {
+    ...SAMPLE_DOC_FILES,
+    'docs/index.json': JSON.stringify(docsIndex, null, 2),
+    [`journal/task-${SAMPLE_TASK_ID}-briefing.md`]: briefing,
+  })
+
+  const task = row(page, SAMPLE_TASK_ID)
+  const docsLink = task.locator('.journal-link-doc')
+  const briefingLink = task.locator('.journal-link-briefing')
+  await expect(docsLink).toHaveAttribute('href', new RegExp(`docs\\.html#\\/d\\/${SAMPLE_PRIMARY_ID}`))
+  await expect(docsLink.locator('.doc-badge-needs')).toBeVisible()
+  await expect(briefingLink).toBeVisible()
+  await expect(briefingLink.locator('.journal-badge')).toHaveCount(0)
+  await briefingLink.click()
+  await expect(page.locator('.journal-chat-view')).toContainText('Markdown briefing contents.')
+  await page.getByRole('button', { name: 'Back to Focus Plan' }).click()
+  await expect(task.locator('.journal-link-doc')).toHaveAttribute('href', new RegExp(`docs\\.html#\\/d\\/${SAMPLE_PRIMARY_ID}`))
+  await expect(task.locator('.journal-link-doc .doc-badge-needs')).toBeVisible()
+  await task.locator('.journal-link-doc').click()
+  await expect(page).toHaveURL(new RegExp(`docs\\.html#\\/d\\/${SAMPLE_PRIMARY_ID}`))
+  await expect(page.locator('.dv-title')).toHaveText(SAMPLE_TITLE)
+  expect(await readFile(page, `journal/task-${SAMPLE_TASK_ID}-briefing.md`)).toBe(briefing)
+  expect(await readFile(page, `docs/${SAMPLE_PRIMARY_ID}/doc.md`)).toBe(SAMPLE_DOC_FILES[`docs/${SAMPLE_PRIMARY_ID}/doc.md`])
+})
+
+test('phone keeps a native Docs primary on the rail and opens the Markdown briefing from task actions', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const briefing = '# Task 845: Sample briefing\n\nPhone briefing contents.\n'
+  await seedPlan(page, planWith({ today: [taskRow] }), {
+    ...SAMPLE_DOC_FILES,
+    [`journal/task-${SAMPLE_TASK_ID}-briefing.md`]: briefing,
+  })
+
+  const task = row(page, SAMPLE_TASK_ID)
+  const docsAction = task.locator('.doc-action')
+  await expect(docsAction).toBeVisible()
+  await expect(docsAction.locator('.doc-badge-unread')).toBeVisible()
+  await task.getByRole('button', { name: 'Task actions' }).click()
+  const actions = page.getByRole('dialog', { name: 'Task actions' })
+  await expect(actions.getByRole('button', { name: 'Open briefing' })).toBeVisible()
+  await actions.getByRole('button', { name: 'Open briefing' }).click()
+  await expect(page.locator('.journal-chat-view')).toContainText('Phone briefing contents.')
+  expect(await readFile(page, `journal/task-${SAMPLE_TASK_ID}-briefing.md`)).toBe(briefing)
+})
+
 test('phone rail gives the primary doc priority and puts Telegram and Journal in task actions', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await seedPlan(page, planWith({ today: [taskRow] }), SAMPLE_DOC_FILES)

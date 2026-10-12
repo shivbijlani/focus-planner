@@ -21,6 +21,17 @@ Copilot will automatically:
 - Mark tasks as complete
 - Edit any markdown file directly
 
+## Journals and supporting documents
+
+In the sidebar's `journal` folder, `task-<ID>.md` is labeled **Journal**.
+An optional primary Markdown briefing may use the exact filename
+`task-<ID>-briefing.md` and is labeled **Briefing**.
+Descriptive files such as `task-431-webmcp-evaluation.md` are labeled
+**Supporting doc** for the same task, not a second journal. Both retain their
+original filenames, remain independently accessible, and keep their contents
+and links; these labels do not rename, combine, or remove any files. A Docs
+primary remains a separate link from the Markdown briefing.
+
 ## Manual Start
 
 ```powershell
@@ -89,4 +100,3 @@ Vendored (private, not published) packages under `packages/`:
   MCP secrets in Credential Manager (DPAPI) instead of plaintext config, with a
   `npm run setup` bootstrap to reproduce it on any machine. See
   [`packages/mcp-cred-vault/README.md`](packages/mcp-cred-vault/README.md).
-
