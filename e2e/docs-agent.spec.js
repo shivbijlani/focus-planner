@@ -7,6 +7,7 @@ import { readFile, row, seedPlan, writeFile } from './helpers.js'
 test('native Docs submitted primary and linked comments drive two real unattended agent revisions', async ({ page }) => {
   test.skip(process.env.DOCS_AGENT_ACCEPTANCE !== '1', 'Explicit opt-in: invokes real Copilot agents with synthetic isolated data.')
   test.setTimeout(20 * 60 * 1000)
+  page.setDefaultTimeout(15000)
   const fixture = await createAgentFixture()
   const initial = await fixtureFiles(fixture)
   await seedPlan(page, initial['planner.md'], initial)
@@ -83,7 +84,7 @@ test('native Docs submitted primary and linked comments drive two real unattende
     await expect(page.locator('.dv-page')).toContainText(expected)
     await page.getByRole('button', { name: /Comments/ }).click()
     const comments = page.getByRole('dialog', { name: 'Comments' })
-    await comments.getByRole('button', { name: /Resolved/ }).click()
+    await comments.getByRole('tab', { name: /Resolved/ }).click()
     await expect(comments).toContainText(request)
     await comments.getByRole('button', { name: 'Close', exact: true }).click()
     await page.screenshot({ path: path.join(run.artifact, 'reopened-reader.png'), fullPage: true })

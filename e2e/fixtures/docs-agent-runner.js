@@ -33,7 +33,12 @@ export async function createAgentFixture() {
     copilotHome, path.join(root, 'tmp'), path.join(home, 'AppData', 'Roaming')]) {
     await fs.mkdir(folder, { recursive: true })
   }
-  const identity = JSON.parse(await fs.readFile(path.join(os.homedir(), '.copilot', 'config.json'), 'utf8'))
+  const identityPath = path.join(os.homedir(), '.copilot', 'config.json').replace(/'/g, "''")
+  const identityResult = spawnSync('pwsh', ['-NoProfile', '-Command',
+    `$config = Get-Content -LiteralPath '${identityPath}' -Raw | ConvertFrom-Json; @{ lastLoggedInUser = $config.lastLoggedInUser; loggedInUsers = $config.loggedInUsers } | ConvertTo-Json -Depth 20 -Compress`],
+  { encoding: 'utf8', windowsHide: true })
+  if (identityResult.status !== 0) throw new Error(`Cannot read Copilot login identity: ${identityResult.stderr}`)
+  const identity = JSON.parse(identityResult.stdout)
   const config = Object.fromEntries(['lastLoggedInUser', 'loggedInUsers'].filter((key) => key in identity).map((key) => [key, identity[key]]))
   await fs.writeFile(path.join(copilotHome, 'config.json'), JSON.stringify(config))
   await fs.writeFile(path.join(copilotHome, 'mcp-config.json'), '{"mcpServers":{}}')
@@ -42,9 +47,9 @@ export async function createAgentFixture() {
   await fs.writeFile(path.join(planner, 'planner-completed.md'), '')
   await fs.writeFile(path.join(planner, 'agent-gate.md'), '# Agent gate\n\n## Do not gate\n\n- Reversible local document edits.\n\n## Always ask\n\n- Spend money or delete data.\n')
   await fs.writeFile(path.join(planner, 'user-settings.md'), '# Settings\n\n| Setting | Value |\n|---|---|\n| Catch-up doc threshold | 1500 |\n| Agent inbox | off |\n| Telegram | off |\n')
-  await fs.writeFile(path.join(planner, 'journal', 'task-9450.md'), '# Task 9450: Synthetic delivery\n\n' + Array(1500).fill('context').join(' ') + '\n')
+  await fs.writeFile(path.join(planner, 'journal', 'task-9450.md'), '# Task 9450: Synthetic delivery\n\nThe native catch-up and supporting notes describe a synthetic parcel. Wait for the next submitted document review; do not purchase or schedule anything.\n')
   await fs.writeFile(path.join(planner, 'journal', 'task-9450-briefing.md'), '# Synthetic Markdown briefing\n\nKeep this independent file unchanged.\n')
-  const first = await publish({ root: planner, task: 9450, draft: DELIVERY_DRAFT, summary: 'Synthetic initial document',
+  const first = await publish({ root: planner, task: 9450, draft: DELIVERY_DRAFT, force: true, summary: 'Synthetic initial document',
     linked: [{ alias: 'notes', draft: '# Supporting delivery notes\n\nThe parcel weighs 2 kg.\n' }] })
   const sessionId = randomUUID()
   const env = { ...process.env,
@@ -77,10 +82,10 @@ export async function createAgentFixture() {
   const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).stdout.trim()
   const diff = spawnSync('git', ['diff', 'HEAD'], { cwd: repo, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }).stdout
   const manifest = { buildSha: sha, diffSha256: createHash('sha256').update(diff).digest('hex'), fixtureRoot: root,
-    planner, source, sessionId, primary: first.id, supporting: first.linked[0].id,
+    planner, source, sessionId, model: 'claude-sonnet-5', primary: first.id, supporting: first.linked[0].id,
     transport: 'Browser IndexedDB provider; harness mirrors submitted review and published files between its store and the isolated local planner.' }
   await fs.writeFile(path.join(root, 'fixture.json'), JSON.stringify(manifest, null, 2))
-  return { ...manifest, env, invokeState, skill, copilotHome }
+  return { ...manifest, root, env, invokeState, skill, copilotHome }
 }
 
 export async function fixtureFiles(fixture) {
@@ -112,7 +117,7 @@ Submitted batches from scan: ${JSON.stringify(row.docs_review_submitted)}.
 Use node ${path.join(fixture.skill, 'write-turn.mjs')} and node ${path.join(fixture.skill, 'oa-state.mjs')} to finish the turn.`
   await fs.writeFile(path.join(artifact, 'prompt.txt'), prompt)
   const args = ['-C', fixture.root, '--plugin-dir', path.join(fixture.source, 'plugins', 'overnight-agent'),
-    '-p', prompt, '--session-id', fixture.sessionId, '--allow-all-tools', '--no-ask-user',
+    '-p', prompt, '--model', fixture.model, '--session-id', fixture.sessionId, '--allow-all-tools', '--no-ask-user',
     '--disable-builtin-mcps', '--no-custom-instructions', '--no-auto-update', '--no-remote',
     '--max-ai-credits', '200', '--output-format', 'json', '--share', path.join(artifact, 'transcript.md'),
     '--log-dir', path.join(artifact, 'logs'), '--usage-output-file', path.join(artifact, 'usage.json')]
@@ -124,7 +129,7 @@ Use node ${path.join(fixture.skill, 'write-turn.mjs')} and node ${path.join(fixt
   const timer = setTimeout(() => child.kill(), 8 * 60 * 1000)
   let code
   try {
-    code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve) })
+    code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve) })
   } finally { clearTimeout(timer) }
   await fs.writeFile(path.join(artifact, 'stdout.jsonl'), stdout)
   await fs.writeFile(path.join(artifact, 'stderr.log'), stderr)
