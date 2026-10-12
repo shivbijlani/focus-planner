@@ -95,7 +95,7 @@ const tools = [
       properties: {
         project_id: { type: 'string' }, name: { type: 'string' }, workspace_type: { type: 'string' },
         base_branch: { type: 'string' }, execution_location: { type: 'string' },
-        kickoff: { type: 'object', properties: { prompt: { type: 'string' } } },
+        kickoff: { type: 'object', properties: { prompt: { type: 'string' }, mode: { type: 'string' } } },
         detached: { type: 'boolean' }, coordinate_with_creator: { type: 'boolean' }, notify_on_idle: { type: 'string' },
       },
     },

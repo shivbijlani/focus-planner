@@ -35,7 +35,7 @@ export const PARAMS = [
   { name: 'SessionProject', type: S }, { name: 'SessionWorkspace', type: S },
   { name: 'WorkspaceType', type: S, set: ['worktree', 'branch', 'folder'] },
   { name: 'RunWorkspace', type: S }, { name: 'SessionDead', type: W }, { name: 'CheckDispatch', type: W },
-  { name: 'ForDispatch', type: W }, { name: 'PlanDispatch', type: W }, { name: 'DispatchInput', type: S },
+  { name: 'ForDispatch', type: W }, { name: 'DispatchInput', type: S },
   { name: 'SessionsStatusFile', type: S }, { name: 'RequiresTools', type: A }, { name: 'CapabilitiesPath', type: S },
   { name: 'SessionRelease', type: W }, { name: 'WorkspaceGone', type: S },
   { name: 'JournalDir', type: S }, { name: 'StateDir', type: S }, { name: 'SessionStateDir', type: S },

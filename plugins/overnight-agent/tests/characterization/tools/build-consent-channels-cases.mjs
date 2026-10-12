@@ -7,7 +7,6 @@
 //   - Each channel's rule lives in an `## Approvals` section of agent-gate.md, with defaults
 //     (app: editor; google-doc: no-signature + not-in-sent-ledger). `off` switches a channel off;
 //     any rule this engine cannot enforce switches it off too. Teams/mail have no reader here.
-//   - The gated-dispatch floor (#813) asks the same reader, so it obeys the same channels.
 // Every existing consent golden is unchanged: no ledger and no `## Approvals` section is the default.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -61,26 +60,9 @@ const cases = [
     ...consent('960', { ...noReply, 'data/agent-gate.md': approvals('app: editor') + '\n## Notes\n- google-doc: off\n' }) },
 ];
 
-// The gated-dispatch floor obeys the same channels.
-const gatedPlan = '**Status:** Proposed\n\n### Proposed plan (v1)\n1. [gated] Order the Bosch 300 with installation, $899 charged to the card on file.\n\n**Needs from you:** approve the $899 order?\n';
-const gatedFiles = (gate) => ({
-  'data/planner.md': '## Today\n\n| ID | Task |\n|---|---|\n| 961 | task 961 |\n',
-  'data/journal/task-961.md': journal('961', hisApproval, gatedPlan).replace('<!-- oa-ask: offer -->', '<!-- oa-ask: blocking -->'),
-  'data/agent-gate.md': gate,
-  'home/sessions.json': JSON.stringify({ sessions: [{ id: 'S-961', activity: { status: 'idle' } }] }),
-  'state/task-961.json': JSON.stringify({ id: '961', status: 'proposed', status_by: 'agent', version: 1, plan_id: 't961-v1', processed_file_hash: '',
-    has_agent_block: true, seeded: false, updated: '2020-03-01T12:00:00Z',
-    session: { session_id: 'S-961', kind: 'chat', project: 'p', workspace: '', workspace_type: 'folder', created_at: '2020-03-01T00:00:00Z', last_woken_at: '', state: 'live', prior_session_id: '', replaced_at: '' } }),
-});
-const check = { tool: 'oa-state', command: 'session', args: { Id: '961', CheckDispatch: true, SessionsStatusFile: '{home}/sessions.json' } };
-cases.push(
-  { id: 'mc/consent-channels/gated-dispatch-his-approval-granted', note: 'control: his journal approval of a [gated] plan, default channels: dispatch allowed', files: gatedFiles(''), ...check },
-  { id: 'mc/consent-channels/gated-dispatch-app-off-refused', note: 'the same approval with app: off: the floor refuses, naming the channel', files: gatedFiles(approvals('app: off')), ...check },
-);
-
 const doc = {
   fixture: 'base',
-  covers: ['mc-consent-channels', 'mutcheck-doc-consent', 'mutcheck-gated-dispatch'],
+  covers: ['mc-consent-channels', 'mutcheck-doc-consent'],
   note: 'Item 4 step 5 (#124): the consent reader consults the sent-messages ledger and the per-channel ## Approvals rules. Recorded from oa-state.ps1.',
   cases,
 };

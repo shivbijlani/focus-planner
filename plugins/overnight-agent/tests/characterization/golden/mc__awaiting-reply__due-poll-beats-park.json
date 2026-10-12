@@ -42,7 +42,6 @@
           "on_board": true,
           "order": 1,
           "paused_at": null,
-          "plan_review_due": false,
           "poll_cadence": "daily",
           "priorities_rank": 999999,
           "recheck_cadence": null,

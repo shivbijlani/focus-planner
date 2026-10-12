@@ -63,7 +63,6 @@
             "id": "900",
             "linked": [],
             "order": 1,
-            "plan_review_due": false,
             "poll_cadence": null,
             "priorities_rank": 999999,
             "recheck_kind": null,

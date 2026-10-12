@@ -445,6 +445,10 @@ function New-Mutant([string]$name, [string]$find, [string]$replace) {
   if ($src -notmatch [regex]::Escape($find)) { return $null }
   $dir = Join-Path $root "mutant-$name"
   New-Item -ItemType Directory -Path $dir -Force | Out-Null
+  # G23 asks the sibling state engine whether consent is live. Keep that dependency beside the
+  # mutant, or its fail-closed error masks the pointer mutation under test.
+  Copy-Item -LiteralPath $Oa -Destination $dir
+  Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $Oa) 'oa-state-lib') -Destination $dir -Recurse
   $p = Join-Path $dir ([IO.Path]::GetFileName($Target))
   # #804/G23 asks write-turn's sibling consent engine. Source mutants used to be copied as a
   # lone file, making G23 fail closed on "engine not found" and causing every pointer arm to fail

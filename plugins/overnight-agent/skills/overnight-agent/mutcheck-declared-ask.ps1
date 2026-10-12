@@ -283,6 +283,12 @@ function New-Mutant {
   if (-not $src.Contains($Find)) { throw "mutant $Name : anchor not found in $Source -> $Find" }
   $dir = Join-Path $root "mutant-$Name"
   New-Item -ItemType Directory -Path $dir -Force | Out-Null
+  # G23 asks the sibling state engine whether consent is live. Keep that dependency beside the
+  # mutant, or its fail-closed error masks the ask-declaration mutation under test.
+  $engineName = if ($Source -like '*.mjs') { 'oa-state.mjs' } else { 'oa-state.ps1' }
+  $skillDir = Split-Path -Parent $Source
+  Copy-Item -LiteralPath (Join-Path $skillDir $engineName) -Destination $dir
+  Copy-Item -LiteralPath (Join-Path $skillDir 'oa-state-lib') -Destination $dir -Recurse
   $dst = Join-Path $dir ([IO.Path]::GetFileName($Source))
   # #804/G23 asks write-turn's sibling consent engine. A lone source-mutant copy makes G23
   # fail closed on "engine not found", masking the G13 arm this harness is trying to mutate.

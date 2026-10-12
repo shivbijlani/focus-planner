@@ -241,15 +241,15 @@ function Invoke-Attempt($Scenarios, [int]$Attempt, [string]$SessionRoot, [string
     foreach ($line in Get-Content -LiteralPath $logFile) {
       if (-not $line.Trim()) { continue }
       $e = $line | ConvertFrom-Json -Depth 20
-      $msg = $null; $sid = $null
-      if ($e.tool -eq 'send_session_message') { $msg = "$($e.args.message)"; $sid = "$($e.args.session_id)" }
-      elseif ($e.tool -eq 'create_session' -and $e.args.PSObject.Properties['kickoff'] -and $e.args.kickoff) { $msg = "$($e.args.kickoff.prompt)"; $sid = "$($e.result.id)" }
+      $msg = $null; $sid = $null; $mode = $null
+      if ($e.tool -eq 'send_session_message') { $msg = "$($e.args.message)"; $sid = "$($e.args.session_id)"; $mode = "$($e.args.mode)" }
+      elseif ($e.tool -eq 'create_session' -and $e.args.PSObject.Properties['kickoff'] -and $e.args.kickoff) { $msg = "$($e.args.kickoff.prompt)"; $sid = "$($e.result.id)"; $mode = "$($e.args.kickoff.mode)" }
       else { continue }
       if ($e.error) { continue }
       $task = $null
       if ($msg -match 'task session for planner task #(\d+)') { $task = $Matches[1] }
       elseif ($bindings.ContainsKey($sid)) { $task = $bindings[$sid] }
-      $dispatches += [pscustomobject]@{ at = $e.at; tool = $e.tool; session_id = $sid; task_id = $task; message = $msg }
+      $dispatches += [pscustomobject]@{ at = $e.at; tool = $e.tool; session_id = $sid; task_id = $task; message = $msg; mode = $mode }
     }
   }
   $facts = [pscustomobject]@{

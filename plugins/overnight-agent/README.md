@@ -1,10 +1,14 @@
 # Overnight Agent (Copilot CLI plugin)
 
 Autonomously makes progress on your **Focus Planner** tasks overnight. Each
-step is classified: reversible and standing-rule-allowed work goes to the
-task's session in the same run; actions that need approval wait behind one
-specific question in its journal. A plan is proposed for approval only when
-its first step is gated.
+eligible task is dispatched to its own task session in autopilot. Before an
+irreversible action, the task session checks the reversibility rules and
+`agent-gate.md` consent; a denied requested action pauses with one focused
+question. Unrequested irreversible actions are offered but never block the
+requested work. As an explicit dispatch-time floor, a numbered `[gated]` step
+in the newest task turn is not dispatched until the consent reader allows it;
+this is not an interception of arbitrary tool calls, so task sessions must still
+follow the action-level consent check before other irreversible actions.
 
 This plugin packages the `overnight-agent` skill (its `SKILL.md`, helper
 PowerShell scripts, and a settings template) so it can be installed with one

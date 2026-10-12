@@ -172,10 +172,9 @@ for (const id of boardTitle.keys()) {
     try { st = JSON.parse(raw); } catch (e) { console.error(`PARSE FAIL task-${id}.json: ${e.message}`); parseFails++; }
   }
 
-  // A `proposed` task's cadence has never been approved, so it cannot have STOPPED running -
-  // it never started. Flagging it as a dead recurring job is a category error (it is simply
-  // waiting on Shiv, which is by design). Verified on #351: ask delivered, awaiting his "go".
-  const notYetStarted = st && st.status === 'proposed';
+  // Only a user-authored `proposed` status is a pause. Agent-authored proposals belong to the
+  // retired plan-approval flow and are dispatched as ordinary work now.
+  const notYetStarted = st && st.status === 'proposed' && String(st.status_by).toLowerCase() === 'user';
 
   // ⚠️ UNSCHEDULABLE: a recurring job whose status is TERMINAL is run by nobody.
   // PHASE 1 executes `approved` (+ in-progress whose next step is approved); PHASE 2 explicitly
@@ -238,7 +237,7 @@ console.log(`run-by-workflow (terminal status, but a live scheduled workflow dri
   (COVERED.size ? '' : '   [coverage file missing - nothing treated as covered]'));
 console.log(`UNSURE  (cadence line sits in an unattributable region - read it before believing): ` +
   (unsures.map(r => '#' + r.id).join(', ') || '(none)'));
-console.log(`not-yet-started (status=proposed; awaiting Shiv, by design): ` +
+console.log(`user-paused (status=proposed; waiting on Shiv, by design): ` +
   (unstarted.map(r => '#' + r.id).join(', ') || '(none)'));
 
 // ⚠️ Read the FLAG list with this caveat, or you will manufacture false alarms.
@@ -253,4 +252,3 @@ console.log(`not-yet-started (status=proposed; awaiting Shiv, by design): ` +
 // remainder really is run by nobody, and that IS a structural fact about the status.
 console.log(`\nnote: FLAG is journal-write-based; the quiet-runs rule suppresses no-news entries,`);
 console.log(`      so corroborate a polling task against its queue folder before believing a FLAG.`);
-
