@@ -90,6 +90,7 @@ test('native Docs submitted primary and linked comments drive two real unattende
     await page.screenshot({ path: path.join(run.artifact, 'reopened-reader.png'), fullPage: true })
   }
   const duplicate = fixture.invokeState('scan', '-Compact')
+  await fs.writeFile(path.join(fixture.root, 'duplicate-scan.json'), JSON.stringify(duplicate, null, 2))
   const duplicateRow = duplicate.rows.find((item) => item.id === '9450')
   expect(duplicateRow?.docs_review_submitted || []).toEqual([])
   expect(duplicateRow?.docs_work_pending || false).toBe(false)
