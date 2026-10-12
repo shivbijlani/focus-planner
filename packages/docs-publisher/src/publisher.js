@@ -8,11 +8,12 @@ import path from 'node:path'
 import {
   assignBlockIds, docBodyByteLength, docPath, extractDocLinks, historyPath, journalReadLoad,
   parseDoc, parseDraftBlocks, parseDocHeader, parseDocHref, reviewPath, reviewSet, responsePath, validateDocText,
-  validateIndexText, validateResponseText, validateReviewText, DOCS_LIMITS, fencedLineMask,
+  validateIndexText, validateResponseText, validateReviewText as validateCoreReviewText, DOCS_LIMITS, fencedLineMask,
   commentStatus, reanchor,
 } from '../../docs-core/src/index.js'
 import { deriveDocState } from '../../docs-core/src/review.js'
 import { splitLines, walkVisibleLines } from '../../docs-core/src/grammar.js'
+import { acquireLock, releaseLock } from '../../../plugins/overnight-agent/skills/overnight-agent/oa-state-lib/core/lock.mjs'
 
 const HTML_RE = /<\/?[a-z][^>]*>/i
 const CORRUPTION_MARKERS = ['\uFFFD', 'Ã', 'Â', 'â€', 'ðŸ', 'ï¿½']
@@ -87,6 +88,13 @@ export class DocsPublisherError extends Error {
 
 function fail(code, detail, action) {
   throw new DocsPublisherError(code, detail, action)
+}
+
+function validateReviewText(text) {
+  if (text !== null && text !== undefined && !String(text).trim()) {
+    fail('D09 data', 'review.json is empty or truncated', 'restore valid review JSON; absence is different from a failed write')
+  }
+  return validateCoreReviewText(text)
 }
 
 function readText(bytes, label) {
@@ -484,9 +492,21 @@ async function ensureReviewSetSize(root, index, primaryId, io, pending = new Map
   }
 }
 
-export async function publish({
+async function withPublisherLock(root, action) {
+  const lock = acquireLock(path.join(root, '.fp-docs.lock'), 5000, {
+    reclaimDeadHolder: true, timeoutMessage: 'D06 concurrency: another publisher owns .fp-docs.lock; retry after it finishes',
+  })
+  try { return await action() } finally { releaseLock(lock) }
+}
+
+export async function publish(options) {
+  return withPublisherLock(options.root, () => publishUnlocked(options))
+}
+
+async function publishUnlocked({
   root, task, draft, summary, baseRev, force = false, adoptExternalEdit = false,
-  checkLinks = false, linked = [], io = fs.promises, now, makeId,
+  checkLinks = false, linked = [], dispositions = [], partial = false, reason = '',
+  io = fs.promises, now, makeId,
 }) {
   if (!Number.isSafeInteger(Number(task)) || Number(task) < 1) {
     fail('D08 binding', 'task must be a positive integer', 'pass --task N')
@@ -688,6 +708,57 @@ export async function publish({
     if (entry.links.some((link) => !nextIndex.docs[link])) {
       fail('D04 link', `${docId} links to a missing document`, 'publish the target or remove the link')
     }
+    const reviewIds = new Set([
+      ...(oldId ? reviewSet(oldIndex, oldId, 3) : []),
+      ...reviewSet(nextIndex, allDrafts[0].id, 3),
+    ])
+    if (partial && !reason.trim()) fail('D05 disposition', '--partial requires a non-empty --reason', 'explain the unfinished work')
+    if (!Array.isArray(dispositions)) fail('D05 disposition', 'dispositions must be an array', 'provide per-comment dispositions')
+    const supplied = new Set()
+    for (const disposition of dispositions) {
+      if (!disposition || !['answered', 'done', 'needs-you', 'declined'].includes(disposition.status)) {
+        fail('D05 disposition', 'invalid disposition status', 'use answered, done, needs-you, or declined')
+      }
+      const docId = disposition.doc || allDrafts[0].id
+      const staged = pending.get(docId)
+      const key = `${docId}/${disposition.id}`
+      if (!reviewIds.has(docId) || !staged || supplied.has(key)) {
+        fail('D05 disposition', `invalid, duplicate, or unpublished disposition ${key}`, 'include the supporting draft and its base revision')
+      }
+      const review = validateReviewText(await readFileText(root, reviewPath(docId), io))
+      if (!review.comments[disposition.id]) fail('D05 disposition', `unknown comment ${key}`, 'read fp-docs comments first')
+      const blocks = parseDoc(staged.docText).blocks
+      const pointers = (disposition.blocks || []).map((pointer) => {
+        const ordinal = /^@([1-9][0-9]*)$/.exec(pointer)
+        return ordinal ? blocks[Number(ordinal[1]) - 1]?.id : pointer
+      })
+      if (!pointers.length || pointers.some((id) => !blocks.some((block) => block.id === id))) {
+        fail('D05 disposition', `invalid response blocks for ${key}`, 'point to current bN ids or @N draft block ordinals')
+      }
+      staged.response.dispositions = {
+        ...staged.response.dispositions,
+        [disposition.id]: {
+          status: disposition.status, rev: staged.response.rev, blocks: pointers,
+          ...(disposition.note !== undefined ? { note: disposition.note } : {}),
+        },
+      }
+      supplied.add(key)
+    }
+    for (const docId of reviewIds) {
+      const review = validateReviewText(await readFileText(root, reviewPath(docId), io))
+      const staged = pending.get(docId)
+      const response = staged?.response || validateResponseText(await readFileText(root, responsePath(docId), io))
+      assertReviewBinding(review, response, docId)
+      for (const [commentId, comment] of Object.entries(review.comments)) {
+        if (commentStatus(comment, response.dispositions[commentId]) === 'open' && !partial) {
+          fail('D05 disposition', `comment ${docId}/${commentId} has no disposition`, 'answer it in the document, or use --partial --reason')
+        }
+      }
+      if (staged) {
+        staged.entry.openDispositions = { 'needs-you': deriveDocState({ entry: staged.entry, review, response }).needsYou }
+        if (partial) staged.response.revisions[0].summary += ` (Partial: ${reason.trim()})`
+      }
+    }
   }
   for (const target of allDrafts) {
     const staged = pending.get(target.id)
@@ -747,7 +818,7 @@ export async function readStatus({ root, task, io = fs.promises, threshold } = {
   const journalText = await readFileText(root, `journal/task-${taskId}.md`, io)
   if (journalText == null) fail('D08 binding', `journal/task-${taskId}.md does not exist`, 'create the task journal first')
   const readLoad = journalReadLoad(journalText, threshold ?? await catchupThreshold(root, io))
-  const { index } = await loadIndex(root, io)
+  const { index, text: indexText } = await loadIndex(root, io)
   const primaryId = index.tasks[taskId] || null
   const primary = primaryId ? index.docs[primaryId] : null
   const docs = []
@@ -764,6 +835,7 @@ export async function readStatus({ root, task, io = fs.promises, threshold } = {
       try {
         const review = validateReviewText(reviewText)
         const response = validateResponseText(responseText)
+        assertReviewBinding(review, response, id)
         if (!docText) fail('D04 link', `linked document ${id} is missing`, 'publish the target or remove the link')
         validateDocText(docText, { docId: id, entry, response })
         reviewSetBytes += docBodyByteLength(docText)
@@ -775,12 +847,15 @@ export async function readStatus({ root, task, io = fs.promises, threshold } = {
         docs.push({
           id,
           rev: entry.rev,
+          updatedAt: entry.updatedAt,
           state: state.state,
           readRev: state.readRev,
           unread: state.unread,
           readStatus: state.unread ? 'unread' : 'read',
           openCount: state.openCount,
           needsYou: state.needsYou,
+          pendingReviews: state.pendingReviews,
+          ackedReview: response.ackedReview,
         })
       } catch (error) {
         if (error instanceof DocsPublisherError) throw error
@@ -792,8 +867,9 @@ export async function readStatus({ root, task, io = fs.promises, threshold } = {
   }
   return {
     task: Number(task),
+    enabled: indexText !== null,
     journal: readLoad,
-    threshold: readLoad.reached ? 'reached' : 'not reached',
+    threshold: readLoad.reached ? 'reached' : 'not-reached',
     primary: primary ? { id: primaryId, rev: primary.rev, title: primary.title, ...docs[0] } : null,
     linkedDocs: docs.slice(1),
     docs,
@@ -857,6 +933,7 @@ export async function readComments({ root, task, io = fs.promises } = {}) {
       if (!docText) fail('D04 link', `linked document ${id} is missing`, 'publish the target or remove the link')
       const review = validateReviewText(reviewText)
       const response = validateResponseText(responseText)
+      assertReviewBinding(review, response, id)
       const parsed = validateDocText(docText, { docId: id, entry, response })
       reviewSetBytes += docBodyByteLength(docText)
       if (reviewSetBytes > DOCS_LIMITS.reviewSetBytes) {
@@ -881,6 +958,40 @@ export async function readComments({ root, task, io = fs.promises } = {}) {
     }
   }
   return { task: Number(task), docs }
+}
+
+function assertReviewBinding(review, response, id) {
+  for (const [commentId, comment] of Object.entries(review.comments)) {
+    if (!review.reviews[comment.reviewId]) fail('D09 data', `${id}/${commentId} references a missing review`, 'restore its submitted batch')
+  }
+  if (response.ackedReview && !review.reviews[response.ackedReview]) {
+    fail('D09 data', `${id} ackedReview references a missing review`, 'restore the acknowledged batch')
+  }
+}
+
+export async function acknowledgeReview(options) {
+  return withPublisherLock(options.root, () => acknowledgeReviewUnlocked(options))
+}
+
+async function acknowledgeReviewUnlocked({ root, task, review: reviewId, doc, io = fs.promises }) {
+  const status = await readStatus({ root, task, io })
+  const matches = []
+  for (const entry of status.docs) {
+    if (doc && doc !== entry.id) continue
+    const review = validateReviewText(await readFileText(root, reviewPath(entry.id), io))
+    if (review.reviews[reviewId]) matches.push(entry)
+  }
+  if (matches.length !== 1) {
+    fail('D09 data', `review ${reviewId} has ${matches.length} matches in task ${task}'s review set`, 'name a submitted review and use --doc for an ambiguous batch id')
+  }
+  const entry = matches[0]
+  if (!entry.pendingReviews.includes(reviewId)) return { task: Number(task), doc: entry.id, review: reviewId, acknowledged: false }
+  if (entry.pendingReviews[0] !== reviewId) fail('D09 data', `review ${reviewId} would skip an earlier review`, 'ack pending reviews in status order')
+  const filename = path.join(root, responsePath(entry.id))
+  const response = validateResponseText(await readFileText(root, responsePath(entry.id), io))
+  response.ackedReview = reviewId
+  await writeAtomically([{ path: filename, content: `${JSON.stringify(response, null, 2)}\n` }], { io })
+  return { task: Number(task), doc: entry.id, review: reviewId, acknowledged: true }
 }
 
 async function catchupThreshold(root, io) {

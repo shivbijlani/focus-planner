@@ -3,7 +3,9 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { DocsPublisherError, lintDraft, publish, readComments, readStatus } from '../src/index.js'
+import { DocsPublisherError, acknowledgeReview, lintDraft, publish, readComments, readStatus } from '../src/index.js'
+import { assertSandboxPath } from '../../../plugins/overnight-agent/skills/overnight-agent/oa-state-lib/core/context.mjs'
+import { assertDocsTaskWritable } from '../../../plugins/overnight-agent/skills/overnight-agent/oa-state-lib/act/native-docs-guard.mjs'
 
 const USAGE = `fp-docs — publish and inspect Focus Planner Docs
 
@@ -12,13 +14,16 @@ Usage:
   fp-docs lint --draft FILE [--check-links]
   fp-docs status --task N [--json]
   fp-docs comments --task N [--json]
+  fp-docs ack --task N --review ID [--doc ID]
+  publish review replies: [--disposition [DOC/]COMMENT=STATUS:bN,@N:NOTE]
+    [--dispositions FILE] [--partial --reason TEXT]
 `
 
 function argumentsOf(argv) {
   const positional = []
   const flags = new Map()
-  const repeated = new Set(['--linked', '--linked-base-rev'])
-  const takesValue = new Set(['--task', '--draft', '--summary', '--base-rev', ...repeated])
+  const repeated = new Set(['--linked', '--linked-base-rev', '--disposition'])
+  const takesValue = new Set(['--task', '--draft', '--summary', '--base-rev', '--review', '--doc', '--dispositions', '--reason', ...repeated])
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]
     if (arg === '-h' || arg === '--help') return { help: true }
@@ -26,7 +31,7 @@ function argumentsOf(argv) {
       positional.push(arg)
       continue
     }
-    if (!['--task', '--draft', '--summary', '--base-rev', '--linked', '--linked-base-rev', '--force', '--adopt-external-edit', '--check-links', '--json'].includes(arg)) {
+    if (!takesValue.has(arg) && !['--force', '--adopt-external-edit', '--check-links', '--json', '--partial'].includes(arg)) {
       throw new DocsPublisherError('D09 data', `unknown option ${arg}`, 'run fp-docs --help for supported options')
     }
     if (flags.has(arg) && !repeated.has(arg)) throw new DocsPublisherError('D09 data', `option ${arg} was supplied more than once`)
@@ -60,20 +65,36 @@ async function main(argv = process.argv.slice(2)) {
     return 0
   }
   const command = positional[0]
-  if (!['publish', 'lint', 'status', 'comments'].includes(command) || positional.length !== 1) {
+  if (!['publish', 'lint', 'status', 'comments', 'ack'].includes(command) || positional.length !== 1) {
     throw new DocsPublisherError('D09 data', `unknown command or unexpected argument: ${positional.join(' ') || '(none)'}`, 'run fp-docs --help')
   }
   const options = {
-    publish: new Set(['--task', '--draft', '--summary', '--base-rev', '--linked', '--linked-base-rev', '--force', '--adopt-external-edit', '--check-links']),
+    publish: new Set(['--task', '--draft', '--summary', '--base-rev', '--linked', '--linked-base-rev', '--force', '--adopt-external-edit', '--check-links', '--disposition', '--dispositions', '--partial', '--reason']),
     lint: new Set(['--draft', '--check-links']),
     status: new Set(['--task', '--json']),
     comments: new Set(['--task', '--json']),
+    ack: new Set(['--task', '--review', '--doc', '--json']),
   }[command]
   for (const option of flags.keys()) {
     if (!options.has(option)) throw new DocsPublisherError('D09 data', `${option} is not supported by ${command}`)
   }
   const root = process.env.PLANNER_PATH
   if (!root) throw new DocsPublisherError('D09 data', 'PLANNER_PATH is not set', 'set it to the planner data folder')
+  assertSandboxPath(root, 'PLANNER_PATH')
+  for (const flag of ['--draft', '--dispositions']) {
+    if (flags.has(flag)) assertSandboxPath(path.resolve(flags.get(flag)), flag)
+  }
+  if (command === 'ack' || command === 'publish') {
+    assertDocsTaskWritable({ root, task: positiveInteger(need(flags, '--task'), '--task') })
+  }
+  if (command === 'ack') {
+    const result = await acknowledgeReview({
+      root, task: positiveInteger(need(flags, '--task'), '--task'),
+      review: need(flags, '--review'), doc: flags.get('--doc'),
+    })
+    console.log(JSON.stringify(result))
+    return 0
+  }
   if (command === 'lint') {
     const draftPath = path.resolve(need(flags, '--draft'))
     const result = await lintDraft({
@@ -98,6 +119,7 @@ async function main(argv = process.argv.slice(2)) {
       }
       const target = spec.slice(0, separator)
       const linkedPath = path.resolve(spec.slice(separator + 1))
+      assertSandboxPath(linkedPath, '--linked')
       if (target.startsWith('new:')) {
         linked.push({ alias: target.slice(4), draft: await fs.readFile(linkedPath) })
       } else {
@@ -114,6 +136,13 @@ async function main(argv = process.argv.slice(2)) {
     if (baseRevisionIndex !== baseRevisions.length) {
       throw new DocsPublisherError('D11 linked input', 'too many --linked-base-rev values were supplied')
     }
+    const dispositions = flags.has('--dispositions')
+      ? JSON.parse(await fs.readFile(path.resolve(flags.get('--dispositions')), 'utf8')) : []
+    for (const spec of flags.get('--disposition') || []) {
+      const match = /^(?:(d-[a-z0-9]{6,})\/)?(c_[A-Za-z0-9_-]+)=(answered|done|needs-you|declined):([^:]+)(?::([\s\S]*))?$/.exec(spec)
+      if (!match) throw new DocsPublisherError('D05 disposition', `invalid disposition: ${spec}`, 'use [DOC/]COMMENT=STATUS:bN,@N:NOTE')
+      dispositions.push({ doc: match[1], id: match[2], status: match[3], blocks: match[4].split(','), ...(match[5] ? { note: match[5] } : {}) })
+    }
     const result = await publish({
       root,
       task,
@@ -124,6 +153,9 @@ async function main(argv = process.argv.slice(2)) {
       adoptExternalEdit: flags.has('--adopt-external-edit'),
       checkLinks: flags.has('--check-links'),
       linked,
+      dispositions,
+      partial: flags.has('--partial'),
+      reason: flags.get('--reason') || '',
     })
     console.log(`Published ${result.id} revision ${result.rev}`)
     return 0

@@ -131,12 +131,14 @@ export function submitDrafts(review, drafts, { rev, now = Date.now() } = {}) {
 export function reopenComment(review, commentId, { rev, now = Date.now() } = {}) {
   const c = review?.comments?.[commentId]
   if (!c) return review
+  const reviewId = newReviewId(now)
   return {
     ...review,
     comments: {
       ...review.comments,
-      [commentId]: { ...c, status: 'reopened', reopenedRev: rev, reopenedAt: new Date(now).toISOString(), clock: Math.max(now, (c.clock || 0) + 1) },
+      [commentId]: { ...c, reviewId, status: 'reopened', reopenedRev: rev, reopenedAt: new Date(now).toISOString(), clock: Math.max(now, (c.clock || 0) + 1) },
     },
+    reviews: { ...review.reviews, [reviewId]: { submittedAt: new Date(now).toISOString(), rev } },
   }
 }
 
@@ -175,7 +177,8 @@ export function deriveDocState({ entry, review, response, drafts = 0 } = {}) {
   if (!Object.keys(rv.comments || {}).length && entry?.openDispositions?.['needs-you']) {
     needsYou = entry.openDispositions['needs-you']
   }
-  const reviews = Object.entries(rv.reviews || {}).sort((x, y) => String(x[1].submittedAt).localeCompare(String(y[1].submittedAt)))
+  const reviews = Object.entries(rv.reviews || {}).sort((x, y) =>
+    String(x[1].submittedAt).localeCompare(String(y[1].submittedAt)) || x[0].localeCompare(y[0]))
   const ackedIdx = response?.ackedReview ? reviews.findIndex(([id]) => id === response.ackedReview) : -1
   const pendingReviews = reviews.slice(ackedIdx + 1).map(([id]) => id)
   let state = 'awaiting-review'

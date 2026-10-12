@@ -21,9 +21,17 @@ export function testUnansweredUser(row) {
   return !!(psTruthy(get(row, 'unanswered_user')) && !testUserClosed(row));
 }
 
+export function testDocsWake(row) {
+  return !!((row.docs_review_submitted?.length || row.docs_work_pending || row.docs_primary_due)
+    && !row.docs_error && !row.session_paused && !row.snoozed && !testUserClosed(row));
+}
+
 export function testWorkable(row) {
   if (psTruthy(get(row, 'snoozed'))) return false;
   if (testReopenedClosed(row)) return false;
+  if (row.docs_error) return false;
+  if (testDocsWake(row)) return true;
+  if (row.docs_needs_you) return false;
   if (psTruthy(get(row, 'reopened'))) return true;
   if (testUnansweredUser(row)) return true;
   if (psTruthy(get(row, 'awaiting_reply')) && !psTruthy(get(row, 'due_poll')) && !psTruthy(get(row, 'due_recheck'))) return false;

@@ -24,6 +24,18 @@ nothing loaded.
 This skill is only about **producing the document**. It does not do the underlying work, and it
 does not merge, close, deploy, or send anything.
 
+## Native Docs output (optional)
+
+With `docs/index.json` present in the planner folder, a task's native primary is addressed
+by `index.tasks[N]`. Use the shipped `docs-publish` skill and `fp-docs` publisher for this
+target, including review acknowledgement and per-comment dispositions. Draft in the
+session workspace; never hand-edit publisher-owned Docs files or user review files.
+Use the required headings below with a bold status immediately after the H1, LF and
+UTF-8 without BOM. Native Docs uses plain headings rather than raw `<details>` HTML.
+After publication, the task journal holds only an attributed short pointer and link.
+Google documents and exact `journal/task-N-briefing.md` files remain separate targets;
+do not silently migrate, import, or replace either.
+
 ## Why this lives in the plugin
 
 These conventions used to be spread across `SKILL.md` prose, a user-scoped skill folder, and the
