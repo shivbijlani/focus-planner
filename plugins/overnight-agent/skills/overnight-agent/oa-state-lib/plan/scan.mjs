@@ -23,7 +23,7 @@ import {
   getSessionActivities, getTodayGateVerdict, testReopenedClosed, testUnansweredUser, testWorkable, testDocsWake,
 } from './workable.mjs';
 import { readLanes, addLaneFields, newLanesSummary } from './lanes.mjs';
-import { nativeDocsStatus } from '../collect/native-docs.mjs';
+import { nativeDocsStatuses } from '../collect/native-docs.mjs';
 
 // The lanes in force for the last getScanRows (null = lanes off: no agent-lanes.json). Read by the
 // summaries, which have no ctx; oa-state.ps1 keeps the same value in $script:ScanLanes.
@@ -186,12 +186,21 @@ export function getScanRows(ctx) {
   }
 
   for (const r of rows) if (!Object.prototype.hasOwnProperty.call(r, 'has_journal')) setMember(r, 'has_journal', true);
+  let nativeStatuses = null;
+  let nativeError = null;
+  const nativeTaskIds = rows.filter((r) => r.has_journal).map((r) => r.id);
+  if (nativeTaskIds.length) {
+    try { nativeStatuses = nativeDocsStatuses(path.dirname(ctx.p.PlannerBoard), nativeTaskIds); }
+    catch (error) { nativeError = error.message; }
+  }
   for (const r of rows) {
     if (!Object.prototype.hasOwnProperty.call(r, 'doc_observed_at')) setMember(r, 'doc_observed_at', null);
     if (!Object.prototype.hasOwnProperty.call(r, 'doc_channel')) setMember(r, 'doc_channel', null);
     if (r.has_journal) {
       try {
-        const native = nativeDocsStatus(path.dirname(ctx.p.PlannerBoard), r.id);
+        if (nativeError) throw new Error(nativeError);
+        const native = nativeStatuses?.[r.id];
+        if (native?.error) throw new Error(native.error);
         if (native) {
           r.docs_primary = native.primary?.id ?? null;
           r.docs_review_submitted = native.docs.flatMap((doc) =>

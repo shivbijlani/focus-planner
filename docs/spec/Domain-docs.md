@@ -470,6 +470,14 @@ so a brief prepared before a new review/claim/revision is stale. No native field
 when the Docs gate is absent. The existing dispatch and consent readers are unchanged:
 native comments are not converted into blanket journal-plan consent.
 
+Native scanning uses one `fp-docs status --tasks N,N,... --json` invocation per scan,
+not a subprocess per journal. The publisher validates one registry snapshot and caches
+file reads for that batch, including shared supporting documents. Individual task read
+errors remain explicit per-task errors; a registry/transport failure makes the affected
+scan rows ineligible. With no Docs index, the publisher is not invoked. The bounded-count
+regression uses 464 synthetic journals and asserts one publisher invocation and one
+registry read, rather than relying on a machine-dependent timing threshold.
+
 `mark` records a threshold crossing at the end of a turn and the latest native revision/claims.
 Native journal turns retain the normal moon heading, provenance, ask and author stamps, with
 one short visible prose line beginning `**Needs from you:**` and linking the doc. The writer

@@ -12,7 +12,7 @@ import {
 import {
   SAMPLE_DOC_FILES, SAMPLE_JOURNAL, SAMPLE_LINKED_ID, SAMPLE_PRIMARY_ID, SAMPLE_TASK_ID, SAMPLE_TITLE,
 } from '../../../e2e/fixtures/docs-sample.js'
-import { acknowledgeReview, lintDraft, publish, readComments, readStatus, writeAtomically } from './publisher.js'
+import { acknowledgeReview, lintDraft, publish, readComments, readStatus, readStatuses, writeAtomically } from './publisher.js'
 
 const roots = []
 const publishedAt = '2026-10-04T10:00:00Z'
@@ -217,6 +217,30 @@ describe('fp-docs native feedback loop', () => {
     const root = await rootDir()
     await put(root, `journal/task-${taskId}.md`, '# Short journal\n\nOne note.\n')
     expect(await readStatus({ root, task: taskId })).toMatchObject({ threshold: 'not-reached', primary: null })
+  })
+})
+
+describe('fp-docs batch status', () => {
+  it('reads and validates one registry snapshot, caches files, and preserves per-task read errors', async () => {
+    const root = await rootDir()
+    const first = await publish({ root, task: taskId, draft: draft(), summary: 'Initial' })
+    await put(root, 'journal/task-846.md', '# Short journal\n\nOne note.\n')
+    const reads = new Map()
+    const io = { ...fs, readFile: async (filename, ...args) => {
+      reads.set(String(filename), (reads.get(String(filename)) || 0) + 1)
+      return fs.readFile(filename, ...args)
+    } }
+    const statuses = await readStatuses({ root, tasks: [taskId, taskId, 846], io })
+    expect(statuses.tasks[String(taskId)]).toEqual(await readStatus({ root, task: taskId }))
+    expect(statuses.tasks['846']).toMatchObject({ primary: null, threshold: 'not-reached' })
+    expect([...reads.values()].every((count) => count === 1)).toBe(true)
+    expect(reads.get(path.join(root, 'docs', 'index.json'))).toBe(1)
+    await put(root, `docs/${first.id}/review.json`, '{')
+    const corrupt = await readStatuses({ root, tasks: [taskId, 846] })
+    expect(corrupt.tasks[String(taskId)].error).toMatch(/D09 data.*not valid JSON/)
+    expect(corrupt.tasks['846']).toMatchObject({ primary: null, threshold: 'not-reached' })
+    await put(root, 'docs/index.json', '{')
+    await expect(readStatuses({ root, tasks: [taskId, 846] })).rejects.toThrow(/D09 data.*not valid JSON/)
   })
 })
 

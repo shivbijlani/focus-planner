@@ -40,3 +40,27 @@ export function nativeDocsStatus(root, task) {
   }
   return status;
 }
+
+export function nativeDocsStatuses(root, tasks) {
+  assertSandboxPath(root, 'Docs planner root');
+  try { fs.statSync(path.join(root, 'docs', 'index.json')); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  const result = spawnSync(process.execPath, [docsPublisherPath(), 'status', '--tasks', tasks.join(','), '--json'], {
+    env: { ...process.env, PLANNER_PATH: root }, encoding: 'utf8', timeout: 30000,
+    maxBuffer: 16 * 1024 * 1024, windowsHide: true,
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error(`docs_read_failed: ${result.error?.message || result.stderr.trim() || `publisher exited ${result.status}`}`);
+  }
+  const batch = JSON.parse(result.stdout);
+  if (batch.enabled !== true || !batch.tasks || typeof batch.tasks !== 'object') {
+    throw new Error('docs_read_failed: invalid publisher batch status');
+  }
+  for (const task of tasks) {
+    const status = batch.tasks[String(task)];
+    if (!status || (!status.error && (status.task !== Number(task) || !Array.isArray(status.docs) || status.enabled !== true))) {
+      throw new Error(`docs_read_failed: task ${task}: invalid publisher batch status`);
+    }
+  }
+  return batch.tasks;
+}

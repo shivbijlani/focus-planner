@@ -813,12 +813,12 @@ async function trimHistory(root, id, io) {
   for (const item of history.slice(20)) await io.rm(path.join(directory, item.filename), { force: true })
 }
 
-export async function readStatus({ root, task, io = fs.promises, threshold } = {}) {
+async function readStatusWithIndex({ root, task, io = fs.promises, threshold } = {}, indexData) {
   const taskId = String(Number(task))
   const journalText = await readFileText(root, `journal/task-${taskId}.md`, io)
   if (journalText == null) fail('D08 binding', `journal/task-${taskId}.md does not exist`, 'create the task journal first')
   const readLoad = journalReadLoad(journalText, threshold ?? await catchupThreshold(root, io))
-  const { index, text: indexText } = await loadIndex(root, io)
+  const { index, text: indexText } = indexData || await loadIndex(root, io)
   const primaryId = index.tasks[taskId] || null
   const primary = primaryId ? index.docs[primaryId] : null
   const docs = []
@@ -875,6 +875,30 @@ export async function readStatus({ root, task, io = fs.promises, threshold } = {
     docs,
     openCount,
   }
+}
+
+export async function readStatus(options = {}) {
+  return readStatusWithIndex(options)
+}
+
+export async function readStatuses({ root, tasks, io = fs.promises } = {}) {
+  const reads = new Map()
+  const cachedIo = { ...io, readFile(filename, ...args) {
+    const key = JSON.stringify([String(filename), args])
+    if (!reads.has(key)) reads.set(key, io.readFile(filename, ...args))
+    return reads.get(key)
+  } }
+  const indexData = await loadIndex(root, cachedIo)
+  const threshold = await catchupThreshold(root, cachedIo)
+  const statuses = {}
+  for (const task of new Set(tasks)) {
+    try {
+      statuses[String(task)] = await readStatusWithIndex({ root, task, io: cachedIo, threshold }, indexData)
+    } catch (error) {
+      statuses[String(task)] = { error: error.message }
+    }
+  }
+  return { enabled: indexData.text !== null, tasks: statuses }
 }
 
 function visibleInlineText(text) {

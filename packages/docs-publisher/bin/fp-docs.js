@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { DocsPublisherError, acknowledgeReview, lintDraft, publish, readComments, readStatus } from '../src/index.js'
+import { DocsPublisherError, acknowledgeReview, lintDraft, publish, readComments, readStatus, readStatuses } from '../src/index.js'
 import { assertSandboxPath } from '../../../plugins/overnight-agent/skills/overnight-agent/oa-state-lib/core/context.mjs'
 import { assertDocsTaskWritable } from '../../../plugins/overnight-agent/skills/overnight-agent/oa-state-lib/act/native-docs-guard.mjs'
 
@@ -13,6 +13,7 @@ Usage:
   fp-docs publish --task N --draft FILE --summary TEXT [--base-rev R] [--linked new:<alias>=FILE|<id>=FILE] [--linked-base-rev R] [--force] [--adopt-external-edit] [--check-links]
   fp-docs lint --draft FILE [--check-links]
   fp-docs status --task N [--json]
+  fp-docs status --tasks N,N,... --json
   fp-docs comments --task N [--json]
   fp-docs ack --task N --review ID [--doc ID]
   publish review replies: [--disposition [DOC/]COMMENT=STATUS:bN,@N:NOTE]
@@ -23,7 +24,7 @@ function argumentsOf(argv) {
   const positional = []
   const flags = new Map()
   const repeated = new Set(['--linked', '--linked-base-rev', '--disposition'])
-  const takesValue = new Set(['--task', '--draft', '--summary', '--base-rev', '--review', '--doc', '--dispositions', '--reason', ...repeated])
+  const takesValue = new Set(['--task', '--tasks', '--draft', '--summary', '--base-rev', '--review', '--doc', '--dispositions', '--reason', ...repeated])
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]
     if (arg === '-h' || arg === '--help') return { help: true }
@@ -71,7 +72,7 @@ async function main(argv = process.argv.slice(2)) {
   const options = {
     publish: new Set(['--task', '--draft', '--summary', '--base-rev', '--linked', '--linked-base-rev', '--force', '--adopt-external-edit', '--check-links', '--disposition', '--dispositions', '--partial', '--reason']),
     lint: new Set(['--draft', '--check-links']),
-    status: new Set(['--task', '--json']),
+    status: new Set(['--task', '--tasks', '--json']),
     comments: new Set(['--task', '--json']),
     ack: new Set(['--task', '--review', '--doc', '--json']),
   }[command]
@@ -182,6 +183,14 @@ async function main(argv = process.argv.slice(2)) {
     return 0
   }
 
+  if (flags.has('--tasks')) {
+    if (flags.has('--task') || !flags.has('--json')) {
+      throw new DocsPublisherError('D09 data', '--tasks requires --json and cannot be combined with --task')
+    }
+    const tasks = need(flags, '--tasks').split(',').map((task) => positiveInteger(task, '--tasks'))
+    console.log(JSON.stringify(await readStatuses({ root, tasks })))
+    return 0
+  }
   const status = await readStatus({ root, task: positiveInteger(need(flags, '--task'), '--task') })
   if (flags.has('--json')) {
     console.log(JSON.stringify(status, null, 2))

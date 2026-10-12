@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
+import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { emptyReview, serializeReview, submitDrafts } from '../../docs-core/src/index.js'
 import { publish } from './publisher.js'
@@ -58,6 +59,42 @@ async function submit(planner, id, { commentId = 'c_delivery', quote = 'Delivery
 }
 
 describe('native Docs Node loop', { timeout: 30000 }, () => {
+  it('scans 464 journals with one publisher invocation and one registry read', async () => {
+    const f = await fixture()
+    await publish({ root: f.planner, task: 9450, draft: primaryDraft, summary: 'Initial' })
+    await Promise.all(Array.from({ length: 463 }, (_, i) =>
+      fs.writeFile(path.join(f.planner, 'journal', `task-${9451 + i}.md`), 'A short synthetic journal.\n')))
+    const counter = path.join(f.root, 'counts.jsonl')
+    const preload = path.join(f.root, 'count.mjs')
+    await fs.writeFile(counter, '')
+    await fs.writeFile(preload, `
+import fs from 'node:fs';
+import cp from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const record = (type) => fs.appendFileSync(process.env.SCAN_COUNT_FILE, JSON.stringify({ type }) + '\\n');
+const spawn = cp.spawnSync;
+cp.spawnSync = function(command, args, options) {
+  if (args?.some((arg) => /fp-docs\\.js$/.test(arg))) record('publisher');
+  return spawn.call(this, command, args, options);
+};
+const read = fs.promises.readFile;
+fs.promises.readFile = function(filename, ...rest) {
+  if (String(filename).split(String.fromCharCode(92)).join('/').endsWith('/docs/index.json')) record('registry');
+  return read.call(this, filename, ...rest);
+};
+syncBuiltinESMExports();
+`)
+    f.env.NODE_OPTIONS = `--import=${pathToFileURL(preload)}`
+    f.env.SCAN_COUNT_FILE = counter
+    const rows = f.state('scan')
+    expect(rows).toHaveLength(464)
+    expect(rows.find((item) => item.id === '9450')).toHaveProperty('docs_primary')
+    expect(rows.every((item) => !item.docs_error)).toBe(true)
+    const calls = (await fs.readFile(counter, 'utf8')).trim().split('\n').map(JSON.parse)
+    expect(calls.filter((item) => item.type === 'publisher')).toHaveLength(1)
+    expect(calls.filter((item) => item.type === 'registry')).toHaveLength(1)
+  })
+
   it('records inclusive threshold at turn end and wakes the next turn once', async () => {
     const f = await fixture({ words: 1499 })
     expect(f.row().docs_primary_due).toBe(false)
