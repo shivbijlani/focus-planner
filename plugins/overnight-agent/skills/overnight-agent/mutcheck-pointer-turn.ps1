@@ -464,7 +464,7 @@ function New-Mutant([string]$name, [string]$find, [string]$replace) {
 # Opt-in removed: every task is treated as doc-bound. Each has a PowerShell and a Node anchor.
 if ($Target -like '*.mjs') {
   $mFence = New-Mutant 'fence' 'if (fence) parts[i] = '' ''.repeat(parts[i].length);' '// mutated: fence mask removed'
-  $mOptIn = New-Mutant 'optin' 'const doc = dest ? journalDocMeta(dest) : null;' `
+  $mOptIn = New-Mutant 'optin' 'let doc = dest ? journalDocMeta(dest) : null;' `
     'let doc = dest ? journalDocMeta(dest) : null;
   if (!doc) doc = { doc_id: ''MUTANT'', doc_url: '''' };'
 } else {
