@@ -2068,6 +2068,14 @@ span.agent-session-link {
   font-size: 1rem;
 }
 
+.journal-link-briefing {
+  font-size: 1rem;
+}
+
+.briefing-action {
+  font-size: 1.15rem;
+}
+
 /* --- Mobile bottom sheet (#335) ------------------------------------------ */
 .bottom-sheet-backdrop {
   position: fixed;

@@ -24,10 +24,13 @@ Copilot will automatically:
 ## Journals and supporting documents
 
 In the sidebar's `journal` folder, `task-<ID>.md` is labeled **Journal**.
+An optional primary Markdown briefing may use the exact filename
+`task-<ID>-briefing.md` and is labeled **Briefing**.
 Descriptive files such as `task-431-webmcp-evaluation.md` are labeled
 **Supporting doc** for the same task, not a second journal. Both retain their
 original filenames, remain independently accessible, and keep their contents
-and links; these labels do not rename, combine, or remove any files.
+and links; these labels do not rename, combine, or remove any files. A Docs
+primary remains a separate link from the Markdown briefing.
 
 ## Manual Start
 

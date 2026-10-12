@@ -63,19 +63,28 @@ export function docsAppHref(docId) {
   return `${base}docs.html${docHref(docId)}`
 }
 
-export function taskLinkPlan({ mobile = false, hasDoc = false, hasTelegram = false, hasJournal = false } = {}) {
+export function taskLinkPlan({ mobile = false, hasDoc = false, hasBriefing = false, hasTelegram = false, hasJournal = false } = {}) {
   const desktop = [
     ...(hasTelegram ? ['telegram'] : []),
     ...(hasJournal ? ['journal'] : []),
     ...(hasDoc ? ['doc'] : []),
+    ...(hasBriefing ? ['briefing'] : []),
   ]
   if (!mobile) return { desktop, rail: null, overflow: [] }
-  const rail = hasDoc ? 'doc' : hasTelegram ? 'telegram' : hasJournal ? 'journal' : null
+  const rail = hasDoc ? 'doc' : hasBriefing ? 'briefing' : hasTelegram ? 'telegram' : hasJournal ? 'journal' : null
   return { desktop, rail, overflow: desktop.filter((link) => link !== rail) }
 }
 
-export function mobileTaskMenuLinks({ hasDoc = false, hasTelegram = false, hasJournal = false } = {}) {
+export function mobileTaskMenuLinks({ hasDoc = false, hasBriefing = false, hasTelegram = false, hasJournal = false } = {}) {
+  const briefing = hasBriefing ? [{ key: 'briefing', label: 'Open briefing', icon: '📑' }] : []
   if (hasDoc) {
+    return [
+      ...(hasTelegram ? [{ key: 'telegram', label: 'Open Telegram', icon: '💬' }] : []),
+      ...(hasJournal ? [{ key: 'journal', label: 'Open journal', icon: '📔' }] : []),
+      ...briefing,
+    ]
+  }
+  if (hasBriefing) {
     return [
       ...(hasTelegram ? [{ key: 'telegram', label: 'Open Telegram', icon: '💬' }] : []),
       ...(hasJournal ? [{ key: 'journal', label: 'Open journal', icon: '📔' }] : []),

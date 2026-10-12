@@ -69,6 +69,15 @@ created. The Docs link is driven by the actual index binding, not by the thresho
 points to a document that has not been published. A new revision or `needs-you` disposition badges
 📄; the journal keeps its existing ★ unread badge.
 
+An optional Markdown briefing at `journal/task-<id>-briefing.md` is a separate file-based
+entry point, not a Docs primary and not a replacement for the journal. When it coexists with a
+registered Docs primary, both task-row links stay available: 📄 continues to open the native Docs
+primary with its existing unread/needs-you badges, and 📑 opens the Markdown briefing with no
+tracked Docs badge. On mobile, the native Docs primary retains the rail slot and the Markdown
+briefing is available in task actions. Without a Docs primary, an existing Markdown briefing may
+use the mobile rail. Only the exact `-briefing.md` suffix gets this role; arbitrary descriptive
+files remain independent supporting documents.
+
 ## Terms and file layout
 
 - **Primary doc**: the task's one catch-up doc, looked up by task id in `index.json`.

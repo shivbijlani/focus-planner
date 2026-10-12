@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { journalFilePresentation } from './fileTreePresentation.js'
+import { journalFilePresentation, taskBriefingPath } from './fileTreePresentation.js'
 
 describe('journalFilePresentation', () => {
   it('labels the canonical task file as the chronological journal', () => {
@@ -8,6 +8,19 @@ describe('journalFilePresentation', () => {
       label: 'Journal · Task 431',
       title: 'Chronological journal for Task 431',
     })
+  })
+
+  it('reserves only the exact briefing filename for the primary Markdown briefing role', () => {
+    expect(journalFilePresentation('journal/task-431-briefing.md')).toEqual({
+      icon: '📑',
+      label: 'Briefing · Task 431',
+      title: 'Primary Markdown briefing for Task 431; independent from the journal and any Docs primary',
+    })
+    expect(journalFilePresentation('journal/task-431-Briefing.md').label).toBe('Supporting doc · Task 431')
+    expect(journalFilePresentation('journal/task-431-briefing-notes.md').label).toBe('Supporting doc · Task 431')
+    expect(taskBriefingPath(431)).toBe('journal/task-431-briefing.md')
+    expect(taskBriefingPath('431')).toBe('journal/task-431-briefing.md')
+    expect(taskBriefingPath('431a')).toBeNull()
   })
 
   it.each([
