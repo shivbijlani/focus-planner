@@ -126,6 +126,32 @@ leaves an index of every archived heading.
 
 ## The agent's memory (skill-owned state — invisible to the user)
 
+### Optional native Docs feedback loop
+
+When the configured planner folder contains `docs/index.json`, load the shipped
+`docs-publish` skill for task turns. This is separate from the Google binding below and
+from optional `journal/task-N-briefing.md` files; all three may coexist.
+`oa-state.mjs scan` reads native Docs locally through the matching repository publisher
+(`FOCUS_PLANNER_REPO` when installed). It includes parked tasks and emits
+`docs_review_signal: docs_review_submitted`, with `{doc, review}` batches from the primary's
+bounded, cycle-safe review set. `docs_error` is an explicit failed read, not zero comments:
+report it and do not dispatch that task until repaired.
+
+Submitted reviews and unresolved claimed work wake an otherwise parked task, subject to
+the same closed/snoozed/paused/lane and gated-plan checks. They grant no blanket approval.
+`docs_needs_you` is blocking until fresh user input; `docs_primary_due` means a previous
+turn reached the threshold and the next task turn should publish the first primary.
+The coordinator uses its existing dispatch procedure and sends the docs-publish procedure
+in the brief; it does not ack or publish on behalf of the task session. Include the exact
+native batches and primary id from the scan. Task sessions read comments, claim batches,
+do real work, publish per-comment dispositions, write a one-line attributed journal
+pointer, then mark. A failed/partial turn is not silently acknowledged as completed.
+Native `approve` comments authorize only an explicit selected proposal, always subject to
+the existing consent reader and agent-gate floor; they never close the task.
+
+The Google observation/ack path below stays active for Google-bound tasks. Native Docs
+binding comes solely from `index.tasks`, never from titles or Google `doc-meta`.
+
 **The journal `.md` is pure prose. It carries no machine metadata the user has to understand or
 edit.** The user just reads it and replies in plain English — usually by typing at the **bottom**, the
 way the Focus Planner app appends chat. All structured state (status, plan version, and "what have I
@@ -1428,6 +1454,12 @@ an earlier phase or perform any follow-up.
    action, and stops if the floor blocks or a human has spoken. The coordinator writes no
    plan turn before dispatch: G12 reserves this wake's sole turn for the task session's
    actual outcome.
+
+   If the scan has native `docs_primary`, `docs_primary_due`, `docs_review_submitted`,
+   or `docs_work_pending`, include the shipped `docs-publish` skill path and native review
+   batches in the brief. The task session, not this coordinator, claims reviews and
+   publishes the primary/supporting revisions with dispositions. Do not replace its
+   existing approved plan with an assumed whole-document approval.
 
    After creating/binding idle sessions, scan again and prepare from that snapshot. Pass the
    exact `dispatch_input` from this scan to `session -ForDispatch`; never copy a newer hash onto

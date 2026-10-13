@@ -63,7 +63,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const MOON = '\u{1F319}';
 const IS_WIN = process.platform === 'win32';
@@ -1467,14 +1467,48 @@ function run(argv, out) {
   // on that file being readable, and a transient lock exited 1 instead of refusing with 2.
   const prot = id ? protectedTargetFinding(journalDir, id, journal) : null;
   const dest = prot ? null : journal;
-  const doc = dest ? journalDocMeta(dest) : null;
+  let doc = dest ? journalDocMeta(dest) : null;
+  let native = null;
+  let nativeReviewReply = false;
+  if (dest && /^(?:[1-9][0-9]*)$/.test(id)) {
+    const statusTool = path.join(here, 'oa-state-lib', 'collect', 'native-docs.mjs');
+    // Resolve on demand: characterization can still run this standalone writer with Docs off.
+    if (testPath(path.join(path.dirname(journalDir), 'docs', 'index.json'))) {
+      const probe = spawnSync(process.execPath, ['--input-type=module', '-e',
+        `import { nativeDocsStatus } from ${JSON.stringify(pathToFileURL(statusTool).href)}; console.log(JSON.stringify(nativeDocsStatus(process.argv[1], process.argv[2])))`,
+        path.dirname(journalDir), id], { env: process.env, encoding: 'utf8', windowsHide: true });
+      if (probe.error || probe.status !== 0) throw fail(`docs_read_failed: ${probe.error?.message || probe.stderr}`);
+      native = JSON.parse(probe.stdout);
+      if (native?.primary) doc = { doc_id: native.primary.id, doc_url: `docs.html#/d/${native.primary.id}` };
+    }
+  }
   ctx.pauseVerdict = dest ? userPauseVerdict(ctx, id, dest) : null;
   const snoozeVerdict = dest ? writeSnoozeVerdict(id, journalDir) : null;
   const closedVerdict = dest ? writeClosedVerdict(ctx, id) : null;
   if (closedVerdict && closedVerdict.kind === 'closed') closedVerdict.reply = closedReplyQuote(dest);
 
   let findings = turnBodyFindings(ctx, body, disabled, doc, ask);
-  if (dest && !ciContains(disabled, 'G12')) {
+  if (native?.primary) {
+    const prose = body.split(/\r?\n/).filter((line) => line.trim() && !/^\s*(?:<!--.*-->|\u{1f319}|#{1,6}\s)/u.test(line));
+    const link = new RegExp(`\\[[^\\]]+\\]\\((?:doc:${native.primary.id}|https?:\\/\\/[^)\\s]*docs\\.html#\\/d\\/${native.primary.id})\\)`);
+    const statePath = joinPS(joinPS(oaHome, 'state'), `task-${id}.json`);
+    const saved = testPath(statePath) ? JSON.parse(readAllText(statePath).replace(/^\uFEFF/, '')) : null;
+    nativeReviewReply = !!(saved?.docs_revision && native.primary.rev > saved.docs_revision
+      && native.docs.some((entry) => entry.ackedReview && entry.ackedReview !== saved.docs_acked_reviews?.[entry.id]));
+    if (prose.length !== 1 || !link.test(prose[0]) || netTrim(body).length > POINTER_NUDGE) {
+      findings.push(newFinding('G25', 1, 'native Docs pointer',
+        'Native Docs turns contain one short prose line with the doc link; put the full answer and status in fp-docs publish.'));
+    }
+    if (saved?.docs_revision >= native.primary.rev) {
+      findings.push(newFinding('G26', 1, 'native Docs revision unchanged',
+        'Publish this turn in fp-docs before writing its journal pointer.'));
+    }
+    if (native.docs.some((entry) => entry.needsYou) && lowerInvariant(ask) !== 'blocking') {
+      findings.push(newFinding('G27', 1, 'native Docs needs-you',
+        'A needs-you disposition requires -Ask blocking and its short ask on the pointer line.'));
+    }
+  }
+  if (dest && !nativeReviewReply && !ciContains(disabled, 'G12')) {
     const wake = wakeTurnFinding(ctx, dest, id);
     if (wake) findings = [...findings, wake];
   }

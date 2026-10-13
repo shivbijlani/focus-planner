@@ -32,6 +32,21 @@ original filenames, remain independently accessible, and keep their contents
 and links; these labels do not rename, combine, or remove any files. A Docs
 primary remains a separate link from the Markdown briefing.
 
+## Native Docs agent reviews
+
+Native Docs is enabled only when the planner folder already has `docs/index.json`.
+The Node Overnight Agent scanner reads submitted primary/supporting reviews, including
+parked tasks; the task session uses the shipped `docs-publish` skill to acknowledge, amend,
+and publish per-comment dispositions. A `needs-you` reply is blocking. Task closure, snooze,
+pauses, lanes, ownership, attribution and consent still apply; approving a span is not
+whole-document approval. Google documents and Markdown briefings are not migrated.
+
+For installed plugins, configure `FOCUS_PLANNER_REPO` to the matching deployed repository
+and `PLANNER_PATH` to the planner data folder for `fp-docs`. Run
+`node packages\docs-publisher\bin\fp-docs.js --help` from that repository.
+See [the behavior contract](docs/spec/Domain-docs.md) and
+[the publishing procedure](plugins/overnight-agent/skills/docs-publish/SKILL.md).
+
 ## Manual Start
 
 ```powershell
@@ -61,6 +76,19 @@ the browser-only **Browser Storage** (IndexedDB) provider — no sign-in or netw
 characterization suite for today's mainline flows (first run, add/prioritise/move/snooze/search,
 linked tasks, journal chat and unread star, complete/delete, reload persistence, agent gate and
 settings editors, phone layout, storage choices), asserting on both the DOM and the stored files.
+
+The optional `e2e/docs-agent.spec.js` acceptance test invokes real unattended Copilot task
+runs against synthetic isolated data. It opens native Docs from a task row, submits a
+concrete primary revision request and a linked supporting-doc request in the UI, then
+reopens the published answers and preserved comments after two actual agent cycles.
+It uses the real IndexedDB provider, with an explicit harness bridge to mirror files to
+the isolated Node planner; it does not prove live cloud sync or deployed-site acceptance.
+Run with `$env:DOCS_AGENT_ACCEPTANCE='1'` and
+`npm run test:smoke -- e2e/docs-agent.spec.js --workers=1`.
+`DOCS_ACCEPTANCE_ROOT` selects an artifact parent; fixtures, build SHA, transcripts,
+actual events, before/after files and browser screenshots are retained there. No live
+planner is touched and no automation is enabled. The default CI smoke run skips real
+model invocations; deterministic Node/publisher tests always run.
 
 First time only: `npx playwright install chromium`. Useful flags: `npm run test:smoke -- --headed`,
 `-- --ui`, `-- e2e/journal.spec.js`. Locally an already-running server on the port is reused, so

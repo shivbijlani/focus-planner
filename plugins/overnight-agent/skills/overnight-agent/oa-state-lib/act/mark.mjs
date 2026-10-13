@@ -7,6 +7,8 @@ import { getAgentEndIndex, getFenceMaskedText, getJournalFacts, TurnEndMarker, T
 import { newPollObject, newRecheckObject, nowIso, parsePollMinutes, readState, writeState } from '../collect/state.mjs';
 import { getTodaySectionHash } from '../collect/board.mjs';
 import { testUserPaused } from '../plan/pause.mjs';
+import path from 'node:path';
+import { nativeDocsStatus } from '../collect/native-docs.mjs';
 
 export function addTurnTerminator(path) {
   let content = readJournalText(path);
@@ -176,6 +178,19 @@ export function cmdMark(ctx) {
   const timerOnly = ctx.p.PollDone || ctx.p.PollClear || ctx.p.RecheckDone || ctx.p.RecheckClear || (ctx.p.RecheckKind && !ctx.p.Recheck);
   const isTurn = !(timerOnly && !ctx.p.Status && ctx.p.Version <= 0 && !ctx.p.PlanId);
   if (isTurn) {
+    const docs = nativeDocsStatus(path.dirname(ctx.p.PlannerBoard), ctx.p.Id);
+    if (docs) {
+      if (docs.primary) {
+        setMember(st, 'docs_revision', docs.primary.rev);
+        setMember(st, 'docs_acked_reviews', Object.fromEntries(docs.docs.map((doc) => [doc.id, doc.ackedReview])));
+        setMember(st, 'docs_threshold_reached_at', null);
+        if (docs.docs.some((doc) => doc.needsYou) && !facts.HasBlockingAsk) {
+          throw new Error('docs_needs_you_blocking: publish a short pointer with -Ask blocking before mark');
+        }
+      } else if (docs.journal.reached) {
+        setMember(st, 'docs_threshold_reached_at', get(st, 'docs_threshold_reached_at') || nowIso());
+      }
+    }
     setMember(st, 'last_turn_at', nowIso());
     const by = ctx.p.TurnBy || process.env.COPILOT_AGENT_SESSION_ID || 'unknown';
     setMember(st, 'last_turn_by', by);

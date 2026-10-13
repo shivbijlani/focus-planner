@@ -12,7 +12,7 @@ import {
 import {
   SAMPLE_DOC_FILES, SAMPLE_JOURNAL, SAMPLE_LINKED_ID, SAMPLE_PRIMARY_ID, SAMPLE_TASK_ID, SAMPLE_TITLE,
 } from '../../../e2e/fixtures/docs-sample.js'
-import { lintDraft, publish, readComments, readStatus, writeAtomically } from './publisher.js'
+import { acknowledgeReview, lintDraft, publish, readComments, readStatus, readStatuses, writeAtomically } from './publisher.js'
 
 const roots = []
 const publishedAt = '2026-10-04T10:00:00Z'
@@ -113,6 +113,136 @@ async function seedCommentReviews(root) {
     c_linked: comment({ quote: 'This linked sample document' }),
   }))
 }
+
+describe('fp-docs native feedback loop', () => {
+  async function reviewedPair() {
+    const root = await rootDir()
+    const first = await publish({
+      root, task: taskId, draft: draft({ link: 'doc:new:notes' }), summary: 'Initial',
+      linked: [{ alias: 'notes', draft: '# Notes\n\nDelivery is Friday.\n' }],
+    })
+    await put(root, `docs/${first.id}/review.json`, reviewFile({
+      c_primary: comment({ quote: 'Ready for review.' }),
+    }))
+    await put(root, `docs/${first.linked[0].id}/review.json`, reviewFile({
+      c_linked: comment({ quote: 'Delivery is Friday.' }),
+    }))
+    return { root, first, linked: first.linked[0].id }
+  }
+
+  it('acknowledges a linked batch once without a revision, and never skips earlier work', async () => {
+    const { root, first, linked } = await reviewedPair()
+    await expect(acknowledgeReview({ root, task: taskId, review: 'rv_batch' })).rejects.toThrow(/2 matches/)
+    const args = { root, task: taskId, doc: linked, review: 'rv_batch' }
+    expect(await acknowledgeReview(args)).toMatchObject({ acknowledged: true, doc: linked })
+    const before = await fs.readFile(path.join(root, `docs/${linked}/response.json`), 'utf8')
+    expect(await acknowledgeReview(args)).toMatchObject({ acknowledged: false })
+    expect(await fs.readFile(path.join(root, `docs/${linked}/response.json`), 'utf8')).toBe(before)
+    const status = await readStatus({ root, task: taskId })
+    expect(status.linkedDocs[0]).toMatchObject({ rev: 1, state: 'working', pendingReviews: [], openCount: 1 })
+    const review = JSON.parse(await fs.readFile(path.join(root, `docs/${first.id}/review.json`), 'utf8'))
+    review.reviews.rv_later = { submittedAt: '2026-10-05T10:00:00Z', rev: 1 }
+    await put(root, `docs/${first.id}/review.json`, JSON.stringify(review))
+    await expect(acknowledgeReview({ root, task: taskId, doc: first.id, review: 'rv_later' })).rejects.toThrow(/skip an earlier review/)
+    await expect(acknowledgeReview({ root, task: taskId, doc: linked, review: 'rv_missing' })).rejects.toThrow(/0 matches/)
+  })
+
+  it('publishes primary and supporting answers with anchored dispositions, preserving every comment', async () => {
+    const { root, first, linked } = await reviewedPair()
+    const reviewsBefore = await Promise.all([first.id, linked].map((id) => fs.readFile(path.join(root, `docs/${id}/review.json`), 'utf8')))
+    for (const id of [first.id, linked]) await acknowledgeReview({ root, task: taskId, doc: id, review: 'rv_batch' })
+    await expect(publish({
+      root, task: taskId, draft: draft({ link: `doc:${linked}` }), baseRev: 1, summary: 'Missing responses',
+    })).rejects.toThrow(/D05 disposition.*c_primary/)
+    const next = await publish({
+      root, task: taskId, draft: draft({ status: '**Status: Delivery is Monday.**', link: `doc:${linked}` }),
+      baseRev: 1, summary: 'Answer delivery requests',
+      linked: [{ id: linked, baseRev: 1, draft: '# Notes\n\nDelivery is Monday.\n' }],
+      dispositions: [
+        { id: 'c_primary', status: 'answered', blocks: ['@1'] },
+        { doc: linked, id: 'c_linked', status: 'done', blocks: ['@1'] },
+      ],
+    })
+    expect(next.rev).toBe(2)
+    expect(next.linked[0].rev).toBe(2)
+    expect(next.response.dispositions.c_primary).toMatchObject({ status: 'answered', rev: 2, blocks: [next.blocks[0].id] })
+    expect(await readComments({ root, task: taskId })).toEqual({ task: taskId, docs: [] })
+    expect(await Promise.all([first.id, linked].map((id) => fs.readFile(path.join(root, `docs/${id}/review.json`), 'utf8')))).toEqual(reviewsBefore)
+    expect((await readStatus({ root, task: taskId })).docs.every((doc) => doc.unread && doc.pendingReviews.length === 0)).toBe(true)
+  })
+
+  it('cannot evade linked comments by unlinking, and names partial work explicitly', async () => {
+    const { root, first, linked } = await reviewedPair()
+    await expect(publish({ root, task: taskId, draft: draft(), summary: 'Unlink', baseRev: 1 })).rejects.toThrow(/D05 disposition/)
+    await expect(publish({ root, task: taskId, draft: draft(), summary: 'Partial', partial: true })).rejects.toThrow(/--reason/)
+    const result = await publish({ root, task: taskId, draft: draft({ link: `doc:${linked}` }), summary: 'Partial', partial: true, reason: 'Waiting for research' })
+    expect(result.response.revisions[0].summary).toContain('Partial: Waiting for research')
+    expect((await readComments({ root, task: taskId })).docs.map((doc) => doc.id)).toEqual([first.id, linked])
+  })
+
+  it('makes needs-you visible to badges, and rejects invalid blocks without writes', async () => {
+    const { root, first, linked } = await reviewedPair()
+    const input = {
+      root, task: taskId, draft: draft({ link: `doc:${linked}` }), summary: 'Question', baseRev: 1,
+      linked: [{ id: linked, baseRev: 1, draft: '# Notes\n\nWhich delivery day do you want?\n' }],
+      dispositions: [{ id: 'c_primary', status: 'answered', blocks: ['@1'] },
+        { doc: linked, id: 'c_linked', status: 'needs-you', blocks: ['@1'] }],
+    }
+    await expect(publish({ ...input, dispositions: [{ id: 'c_primary', status: 'done', blocks: ['b9999'] }] })).rejects.toThrow(/D05 disposition.*blocks/)
+    expect((await readStatus({ root, task: taskId })).primary.rev).toBe(1)
+    await publish(input)
+    const state = await readStatus({ root, task: taskId })
+    expect(state.linkedDocs[0].needsYou).toBe(1)
+    const index = JSON.parse(await fs.readFile(path.join(root, 'docs/index.json'), 'utf8'))
+    expect(index.docs[linked].openDispositions).toEqual({ 'needs-you': 1 })
+    expect(index.tasks[String(taskId)]).toBe(first.id)
+  })
+
+  it('distinguishes an actual empty review from corrupt or unreadable reviews', async () => {
+    const { root, first } = await reviewedPair()
+    await put(root, `docs/${first.id}/review.json`, '{"version":1,"comments":{},"reviews":{},"readRev":0}')
+    expect(await readStatus({ root, task: taskId })).toMatchObject({ threshold: 'reached', primary: { openCount: 0 } })
+    await put(root, `docs/${first.id}/review.json`, ' \n')
+    await expect(readStatus({ root, task: taskId })).rejects.toThrow(/D09 data.*empty or truncated/)
+    await put(root, `docs/${first.id}/review.json`, '{')
+    await expect(readStatus({ root, task: taskId })).rejects.toThrow(/D09 data.*not valid JSON/)
+    const io = { ...fs, readFile: async (filename) => {
+      if (filename.endsWith(`${first.id}${path.sep}review.json`)) throw Object.assign(new Error('Synthetic transport failure'), { code: 'EIO' })
+      return fs.readFile(filename)
+    } }
+    await expect(readStatus({ root, task: taskId, io })).rejects.toThrow('Synthetic transport failure')
+  })
+
+  it('reports the normative below-threshold spelling without creating a primary', async () => {
+    const root = await rootDir()
+    await put(root, `journal/task-${taskId}.md`, '# Short journal\n\nOne note.\n')
+    expect(await readStatus({ root, task: taskId })).toMatchObject({ threshold: 'not-reached', primary: null })
+  })
+})
+
+describe('fp-docs batch status', () => {
+  it('reads and validates one registry snapshot, caches files, and preserves per-task read errors', async () => {
+    const root = await rootDir()
+    const first = await publish({ root, task: taskId, draft: draft(), summary: 'Initial' })
+    await put(root, 'journal/task-846.md', '# Short journal\n\nOne note.\n')
+    const reads = new Map()
+    const io = { ...fs, readFile: async (filename, ...args) => {
+      reads.set(String(filename), (reads.get(String(filename)) || 0) + 1)
+      return fs.readFile(filename, ...args)
+    } }
+    const statuses = await readStatuses({ root, tasks: [taskId, taskId, 846], io })
+    expect(statuses.tasks[String(taskId)]).toEqual(await readStatus({ root, task: taskId }))
+    expect(statuses.tasks['846']).toMatchObject({ primary: null, threshold: 'not-reached' })
+    expect([...reads.values()].every((count) => count === 1)).toBe(true)
+    expect(reads.get(path.join(root, 'docs', 'index.json'))).toBe(1)
+    await put(root, `docs/${first.id}/review.json`, '{')
+    const corrupt = await readStatuses({ root, tasks: [taskId, 846] })
+    expect(corrupt.tasks[String(taskId)].error).toMatch(/D09 data.*not valid JSON/)
+    expect(corrupt.tasks['846']).toMatchObject({ primary: null, threshold: 'not-reached' })
+    await put(root, 'docs/index.json', '{')
+    await expect(readStatuses({ root, tasks: [taskId, 846] })).rejects.toThrow(/D09 data.*not valid JSON/)
+  })
+})
 
 describe('fp-docs draft validation', () => {
   it.each([

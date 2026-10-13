@@ -127,7 +127,7 @@ function Test-Arms([string]$engine, [string]$label) {
 
 $mutants = if ($isNode) {
   @(
-    @{ n = 'M1'; kills = 'A'; find = "    if (notHere(r)) eligible = false;`n    else if (!r.snoozed) {"; repl = "    if (!r.snoozed) {" },
+    @{ n = 'M1'; kills = 'A'; find = "    if (notHere(r)) eligible = false;"; repl = "    if (false) eligible = false;" },
     @{ n = 'M2'; kills = 'B'; find = "if (r.section === 'today' && !notHere(r)) verdicts"; repl = "if (r.section === 'today') verdicts" },
     @{ n = 'M3'; kills = 'C'; find = "  assertLaneServed(ctx, psStr(get(st, 'id')));"; repl = '' },
     @{ n = 'M4'; kills = 'D'; find = "    assertLaneServed(ctx, ctx.p.Id);"; repl = '' },

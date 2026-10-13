@@ -372,6 +372,22 @@ command-line path. Agent reads of docs are allowed; comments are consumed throug
 | `comments --task N [--json]` | Return open/reopened comments over the review set, grouped by doc and re-anchored for display. |
 | `ack --task N --review ID` | Claim a submitted review in `response.json`; this derives the Working state and wakes no unrelated task. |
 
+The CLI accepts `--dispositions FILE` (a JSON array of `{doc, id, status, blocks, note}`)
+or repeated `--disposition [DOC/]COMMENT=STATUS:bN,@N:NOTE`. `doc` defaults to the primary;
+supporting replies must name their document and include its draft/base revision. `@N` selects
+the Nth draft body block, excluding the H1, and is converted to the publisher-assigned block id.
+Stored dispositions contain only `bN` ids. `ack --doc ID` disambiguates a review id shared by
+two documents; batches are claimed in status order, and repeating a claim is a no-op.
+Claimed but undispositioned comments remain work after an interruption. Reopening a resolved
+comment submits a new review batch while preserving the original comment id and quote.
+
+Native turn tooling resolves the matching publisher from `FOCUS_PLANNER_REPO`, or the current
+repository when running from a checkout. An installed plugin with Docs enabled must configure
+that repository path; missing tooling is an explicit error, not an empty review. Publisher
+mutations are serialized with a recoverable process lock, retain the existing task-session,
+closed/snoozed/paused/lane guards, and never write `review.json`. The publisher-stamp check is
+`plugins/overnight-agent/checks/docs-publisher-stamp.mjs` with `PLANNER_PATH` configured.
+
 `--linked new:<alias>=FILE` creates a supporting doc and rewrites `doc:new:<alias>` references to
 its generated id. `--linked <id>=FILE --linked-base-rev R` updates an existing linked doc with
 optimistic concurrency. A primary's links and a newly created target are published by the same
@@ -445,6 +461,28 @@ The Overnight Agent targets the **Node engine**, currently
    `write-turn.mjs`, then mark the task; the full status and answer live in the doc.
 5. A span approval authorizes only that span's explicit proposal, subject to the agent-gate rule
    described above. It is not approval of the whole doc or task completion.
+
+The scanner exposes native fields separately from the Google binding: `docs_primary`,
+`docs_review_signal`, `docs_review_submitted` (`{doc, review}` batches), `docs_work_pending`,
+`docs_needs_you`, `docs_primary_due`, and `docs_error`. A read error makes the task ineligible
+and remains visible in a compact scan. Native review state participates in `dispatch_input`
+so a brief prepared before a new review/claim/revision is stale. No native fields are added
+when the Docs gate is absent. The existing dispatch and consent readers are unchanged:
+native comments are not converted into blanket journal-plan consent.
+
+Native scanning uses one `fp-docs status --tasks N,N,... --json` invocation per scan,
+not a subprocess per journal. The publisher validates one registry snapshot and caches
+file reads for that batch, including shared supporting documents. Individual task read
+errors remain explicit per-task errors; a registry/transport failure makes the affected
+scan rows ineligible. With no Docs index, the publisher is not invoked. The bounded-count
+regression uses 464 synthetic journals and asserts one publisher invocation and one
+registry read, rather than relying on a machine-dependent timing threshold.
+
+`mark` records a threshold crossing at the end of a turn and the latest native revision/claims.
+Native journal turns retain the normal moon heading, provenance, ask and author stamps, with
+one short visible prose line beginning `**Needs from you:**` and linking the doc. The writer
+requires a new published primary revision and a blocking ask for `needs-you`; a newly claimed
+review permits its response within the same wake window without permitting duplicate turns.
 
 The `index.json.tasks` map replaces title search and Google-doc-id mapping for task binding.
 Google Docs-specific workarounds, GitHub-issue handling, gh-issue-work changes, and the S3

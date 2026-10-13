@@ -20,9 +20,10 @@ import * as Sessions from '../collect/sessions.mjs';
 import * as Pause from './pause.mjs';
 import { DocObservationFreshMinutes, PausedStatus } from './status.mjs';
 import {
-  getSessionActivities, getTodayGateVerdict, testReopenedClosed, testUnansweredUser, testWorkable,
+  getSessionActivities, getTodayGateVerdict, testReopenedClosed, testUnansweredUser, testWorkable, testDocsWake,
 } from './workable.mjs';
 import { readLanes, addLaneFields, newLanesSummary } from './lanes.mjs';
+import { nativeDocsStatuses } from '../collect/native-docs.mjs';
 
 // The lanes in force for the last getScanRows (null = lanes off: no agent-lanes.json). Read by the
 // summaries, which have no ctx; oa-state.ps1 keeps the same value in $script:ScanLanes.
@@ -185,9 +186,38 @@ export function getScanRows(ctx) {
   }
 
   for (const r of rows) if (!Object.prototype.hasOwnProperty.call(r, 'has_journal')) setMember(r, 'has_journal', true);
+  let nativeStatuses = null;
+  let nativeError = null;
+  const nativeTaskIds = rows.filter((r) => r.has_journal).map((r) => r.id);
+  if (nativeTaskIds.length) {
+    try { nativeStatuses = nativeDocsStatuses(path.dirname(ctx.p.PlannerBoard), nativeTaskIds); }
+    catch (error) { nativeError = error.message; }
+  }
   for (const r of rows) {
     if (!Object.prototype.hasOwnProperty.call(r, 'doc_observed_at')) setMember(r, 'doc_observed_at', null);
     if (!Object.prototype.hasOwnProperty.call(r, 'doc_channel')) setMember(r, 'doc_channel', null);
+    if (r.has_journal) {
+      try {
+        if (nativeError) throw new Error(nativeError);
+        const native = nativeStatuses?.[r.id];
+        if (native?.error) throw new Error(native.error);
+        if (native) {
+          r.docs_primary = native.primary?.id ?? null;
+          r.docs_review_submitted = native.docs.flatMap((doc) =>
+            doc.pendingReviews.map((review) => ({ doc: doc.id, review })));
+          r.docs_work_pending = native.docs.some((doc) => doc.openCount > doc.needsYou
+            && !doc.pendingReviews.length && doc.ackedReview);
+          r.docs_needs_you = native.docs.reduce((sum, doc) => sum + doc.needsYou, 0);
+          r.docs_primary_due = !native.primary && !!readState(ctx, r.id)?.docs_threshold_reached_at;
+          r.docs_review_signal = r.docs_review_submitted.length ? 'docs_review_submitted' : null;
+          r.dispatch_input = crypto.createHash('sha256').update(JSON.stringify([
+            r.dispatch_input, native.docs, r.docs_primary_due,
+          ])).digest('hex');
+        }
+      } catch (error) {
+        r.docs_error = `docs_review_read_failed: ${error.message}`;
+      }
+    }
   }
   // Add-Member -Force in oa-state.ps1: the existing `reopened_closed: false` moves to the end.
   for (const r of rows) addMemberForce(r, 'reopened_closed', !!testReopenedClosed(r));
@@ -211,10 +241,12 @@ export function getScanRows(ctx) {
     order++;
     let eligible = false;
     if (notHere(r)) eligible = false;
+    else if (r.docs_error) eligible = false;
     else if (!r.snoozed) {
       if (testReopenedClosed(r)) eligible = false;
       else if (r.reopened) eligible = true;
       else if (testUnansweredUser(r)) eligible = true;
+      else if (testDocsWake(r)) eligible = true;
       else if (r.section === 'today') eligible = testWorkable(r);
       else if (todayHolding === 0) eligible = testWorkable(r);
     }
@@ -222,7 +254,7 @@ export function getScanRows(ctx) {
     setMember(r, 'order', order);
     setMember(r, 'eligible', eligible);
     const planReview = !!(r.status === 'proposed' && r.status_by === 'agent'
-      && r.on_board && !r.snoozed && !r.session_paused && !r.reopened && !r.unanswered_user
+      && r.on_board && !r.docs_error && !r.snoozed && !r.session_paused && !r.reopened && !r.unanswered_user
       && (r.section === 'today' || todayHolding === 0) && !notHere(r));
     setMember(r, 'plan_review_due', planReview);
     setMember(r, 'holds_today_gate', !!(v !== undefined && v !== null && v.holds));
@@ -255,7 +287,7 @@ function compareValue(a, b) {
 
 function compareRows(a, b) {
   const keys = [
-    (r) => (r.reopened || testUnansweredUser(r)) ? 0 : 1,
+    (r) => (r.reopened || testUnansweredUser(r) || testDocsWake(r)) ? 0 : 1,
     (r) => Board.getSectionRank(r.section),
     (r) => Board.getPriorityRank(r.work_priority),
     (r) => Board.getUrgencyRank(r.urgency),
@@ -315,6 +347,8 @@ export const CompactFields = [
   'session_process_dead', 'replacements_24h',
   'session_workspace_missing',
   'plan_review_due', 'dispatch_input', 'no_journal_reason',
+  'docs_primary', 'docs_review_submitted', 'docs_review_signal', 'docs_work_pending',
+  'docs_needs_you', 'docs_primary_due', 'docs_error',
   'lane', 'lane_source', 'lane_from', 'lane_problem', 'lane_candidates', 'lane_served_here',
 ];
 
@@ -322,6 +356,7 @@ export function testCompactRowNeeded(r) {
   // Another PC's lane: its business, counted in summary.lanes.rows_out_of_lane, never listed here.
   if (Object.prototype.hasOwnProperty.call(r, 'lane_served_here') && !r.lane_served_here) return false;
   if (r.eligible) return true;
+  if (r.docs_error || r.docs_review_submitted?.length || r.docs_work_pending || r.docs_primary_due) return true;
   if (r.dispatch_skip_reason) return true;
   if (r.plan_review_due) return true;
   if (r.holds_today_gate) return true;
