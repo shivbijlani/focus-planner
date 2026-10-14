@@ -9,7 +9,7 @@ export function docsPublisherPath() {
   const candidates = configured ? [configured] : [process.cwd(), path.dirname(fileURLToPath(import.meta.url))];
   for (let directory of candidates) {
     for (;;) {
-      const entry = path.join(directory, 'packages', 'docs-publisher', 'bin', 'fp-docs.js');
+      const entry = path.join(directory, 'scripts', 'fp-docs.js');
       if (fs.existsSync(entry)) {
         assertSandboxPath(entry, 'Docs publisher');
         return entry;
@@ -20,7 +20,7 @@ export function docsPublisherPath() {
       directory = parent;
     }
   }
-  throw new Error('docs_publisher_missing: set FOCUS_PLANNER_REPO to the matching Focus Planner repository containing packages/docs-publisher');
+  throw new Error('docs_publisher_missing: set FOCUS_PLANNER_REPO to the matching Focus Planner repository containing scripts/fp-docs.js');
 }
 
 export function nativeDocsStatus(root, task) {

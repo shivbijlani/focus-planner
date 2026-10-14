@@ -37,3 +37,6 @@ export function filterLibrary(cards, tab, query = '', now = Date.now()) {
   if (tab === 'recent') list = list.filter((c) => now - Date.parse(c.updatedAt || 0) < 14 * 86400e3)
   return list.sort(byUpdated)
 }
+export function plannerUrl() {
+  return import.meta.env?.BASE_URL || '/'
+}

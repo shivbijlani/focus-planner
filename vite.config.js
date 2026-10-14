@@ -29,6 +29,10 @@ export default defineConfig({
         find: '#planner/storage-bootstrap',
         replacement: resolve(__dirname, process.env.VITE_STORAGE_BOOTSTRAP_MODULE || 'src/storage/registerBuiltinProviders.js'),
       },
+      {
+        find: '#planner/docs-bootstrap',
+        replacement: resolve(__dirname, process.env.VITE_DOCS_BOOTSTRAP_MODULE || 'src/docs-app/storageBoot.js'),
+      },
     ],
   },
   build: {

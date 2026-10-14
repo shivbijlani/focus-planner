@@ -388,7 +388,7 @@ describe('fp-docs publish', () => {
     roots.push(draftWorkspace)
     const sampleDraft = path.join(draftWorkspace, 'sample-draft.md')
     await fs.writeFile(sampleDraft, draft({ link: 'doc:d-support845' }))
-    const cli = path.resolve('packages/docs-publisher/bin/fp-docs.js')
+    const cli = path.resolve('scripts/fp-docs.js')
     const result = spawnSync(process.execPath, [
       cli, 'publish', '--task', String(SAMPLE_TASK_ID), '--draft', sampleDraft,
       '--summary', 'Publisher e2e fixture', '--base-rev', '1',
@@ -501,7 +501,7 @@ describe('fp-docs CLI', () => {
   it('prints grouped comments as JSON without modifying publisher files', async () => {
     const root = await rootDir()
     await seedCommentReviews(root)
-    const cli = path.resolve('packages/docs-publisher/bin/fp-docs.js')
+    const cli = path.resolve('scripts/fp-docs.js')
     const env = { ...process.env, PLANNER_PATH: root }
     const paths = [
       'docs/index.json',
@@ -524,7 +524,7 @@ describe('fp-docs CLI', () => {
 
   it('prints JSON status and rejects non-canonical task ids', async () => {
     const root = await rootDir()
-    const cli = path.resolve('packages/docs-publisher/bin/fp-docs.js')
+    const cli = path.resolve('scripts/fp-docs.js')
     const env = { ...process.env, PLANNER_PATH: root }
     const result = spawnSync(process.execPath, [cli, 'status', '--task', String(taskId), '--json'], { encoding: 'utf8', env })
     expect(result.status, result.stderr).toBe(0)
@@ -540,7 +540,7 @@ describe('fp-docs CLI', () => {
     const linkedFile = path.join(root, 'linked.md')
     await fs.writeFile(primaryFile, draft({ link: 'doc:new:notes' }))
     await fs.writeFile(linkedFile, '# Supporting notes\n\nLinked context.\n')
-    const cli = path.resolve('packages/docs-publisher/bin/fp-docs.js')
+    const cli = path.resolve('scripts/fp-docs.js')
     const result = spawnSync(process.execPath, [
       cli, 'publish', '--task', String(taskId), '--draft', primaryFile,
       '--summary', 'CLI publish', '--force', '--linked', `new:notes=${linkedFile}`,

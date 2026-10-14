@@ -10,10 +10,9 @@ import {
   parseDoc, parseDraftBlocks, parseDocHeader, parseDocHref, reviewPath, reviewSet, responsePath, validateDocText,
   validateIndexText, validateResponseText, validateReviewText as validateCoreReviewText, DOCS_LIMITS, fencedLineMask,
   commentStatus, reanchor,
-} from '../../docs-core/src/index.js'
-import { deriveDocState } from '../../docs-core/src/review.js'
-import { splitLines, walkVisibleLines } from '../../docs-core/src/grammar.js'
-import { acquireLock, releaseLock } from '../../../plugins/overnight-agent/skills/overnight-agent/oa-state-lib/core/lock.mjs'
+  deriveDocState, splitLines, walkVisibleLines,
+} from '@focus/docs-core'
+import { acquireLock, releaseLock } from './lock.js'
 
 const HTML_RE = /<\/?[a-z][^>]*>/i
 const CORRUPTION_MARKERS = ['\uFFFD', 'Ã', 'Â', 'â€', 'ðŸ', 'ï¿½']
@@ -500,7 +499,10 @@ async function withPublisherLock(root, action) {
 }
 
 export async function publish(options) {
-  return withPublisherLock(options.root, () => publishUnlocked(options))
+  return withPublisherLock(options.root, async () => {
+    await options.assertWritable?.({ root: options.root, task: options.task })
+    return publishUnlocked(options)
+  })
 }
 
 async function publishUnlocked({
@@ -994,7 +996,10 @@ function assertReviewBinding(review, response, id) {
 }
 
 export async function acknowledgeReview(options) {
-  return withPublisherLock(options.root, () => acknowledgeReviewUnlocked(options))
+  return withPublisherLock(options.root, async () => {
+    await options.assertWritable?.({ root: options.root, task: options.task })
+    return acknowledgeReviewUnlocked(options)
+  })
 }
 
 async function acknowledgeReviewUnlocked({ root, task, review: reviewId, doc, io = fs.promises }) {

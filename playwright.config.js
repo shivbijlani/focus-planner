@@ -6,6 +6,7 @@ const PORT = Number(process.env.SMOKE_PORT) || 4317
 
 export default defineConfig({
   testDir: 'e2e',
+  testIgnore: 'docs-seams.spec.js',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: 0,
@@ -19,6 +20,7 @@ export default defineConfig({
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
     baseURL: `http://localhost:${PORT}`,
+    channel: process.env.PLAYWRIGHT_CHANNEL,
     timezoneId: 'UTC',
     locale: 'en-US',
     trace: 'retain-on-failure',

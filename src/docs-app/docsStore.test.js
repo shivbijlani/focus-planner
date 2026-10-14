@@ -2,13 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOCS_LIMITS, docPath, reviewPath } from '../../packages/docs-core/src/index.js'
 
 const { files } = vi.hoisted(() => ({ files: {} }))
+const provider = vi.hoisted(() => ({ current: null }))
 vi.mock('../storage/storage.js', () => ({
   read: async (path) => files[path] ?? '',
   write: async (path, content) => { files[path] = content },
-  getActiveProvider: () => null,
+  getActiveProvider: () => provider.current,
 }))
 
-import { markRead, validateReviewSet } from './docsStore.js'
+import { draftKey, loadDrafts, saveDrafts, markRead, updateReview, validateReviewSet } from './docsStore.js'
 
 const at = '2026-10-01T12:00:00Z'
 const primaryId = 'd-primary001'
@@ -30,7 +31,76 @@ function docText(id, title, body) {
 
 describe('Docs storage readers', () => {
   beforeEach(() => {
+    provider.current = null
     for (const key of Object.keys(files)) delete files[key]
+  })
+
+  it('refuses an in-flight review write after the account/source provider changes', async () => {
+    await expect(updateReview(primaryId, (review) => {
+      provider.current = {}
+      return review
+    })).rejects.toThrow('Docs storage changed')
+    expect(files[reviewPath(primaryId)]).toBeUndefined()
+  })
+
+  it('refuses a pending review write when its Docs session is unmounted', async () => {
+    const controller = new AbortController()
+    await expect(updateReview(primaryId, (review) => {
+      controller.abort()
+      return review
+    }, { signal: controller.signal })).rejects.toThrow()
+    expect(files[reviewPath(primaryId)]).toBeUndefined()
+  })
+
+  describe('Scoped Docs drafts', () => {
+    const a = { accountId: 'tenant/alice', sourceId: 'folder/one' }
+    const b = { accountId: 'tenant/bob', sourceId: 'folder/one' }
+    const c = { accountId: 'tenant/alice', sourceId: 'folder/two' }
+    let stored
+
+    beforeEach(() => {
+      stored = new Map()
+      vi.stubGlobal('localStorage', {
+        getItem: (key) => stored.get(key) ?? null,
+        setItem: (key, value) => stored.set(key, value),
+        removeItem: (key) => stored.delete(key),
+      })
+    })
+
+    it('isolates identical document IDs across accounts and sources', () => {
+      saveDrafts(primaryId, [{ id: 'alice-one' }], a)
+      saveDrafts(primaryId, [{ id: 'bob-one' }], b)
+      saveDrafts(primaryId, [{ id: 'alice-two' }], c)
+      expect(new Set([draftKey(primaryId, a), draftKey(primaryId, b), draftKey(primaryId, c)]).size).toBe(3)
+      expect(loadDrafts(primaryId, a)).toEqual([{ id: 'alice-one' }])
+      expect(loadDrafts(primaryId, b)).toEqual([{ id: 'bob-one' }])
+      expect(loadDrafts(primaryId, c)).toEqual([{ id: 'alice-two' }])
+    })
+
+    it('does not attribute legacy consumer drafts to any account or source', () => {
+      stored.set(`fp-docs-drafts:${primaryId}`, '[{"id":"legacy"}]')
+      for (const scope of [a, b, c]) expect(loadDrafts(primaryId, scope)).toEqual([])
+      expect(stored.get(`fp-docs-drafts:${primaryId}`)).toContain('legacy')
+    })
+
+    it('refuses missing scope and delimiter collisions', () => {
+      expect(() => loadDrafts(primaryId)).toThrow('accountId and sourceId')
+      expect(draftKey(primaryId, { accountId: 'a:b', sourceId: 'c' }))
+        .not.toBe(draftKey(primaryId, { accountId: 'a', sourceId: 'b:c' }))
+    })
+
+    it('reports malformed or inaccessible drafts instead of hiding data loss', () => {
+      stored.set(draftKey(primaryId, a), '{}')
+      expect(() => loadDrafts(primaryId, a)).toThrow("Couldn't load Docs drafts")
+      vi.stubGlobal('localStorage', {
+        getItem: () => { throw new Error('Access denied') },
+        setItem: () => { throw new Error('Quota exceeded') },
+        removeItem: () => { throw new Error('Access denied') },
+      })
+      expect(() => loadDrafts(primaryId, a)).toThrow('Access denied')
+      expect(() => saveDrafts(primaryId, [{}], a)).toThrow('Quota exceeded')
+      expect(() => saveDrafts(primaryId, [], a)).toThrow('Access denied')
+    })
   })
 
   it('refuses a task review set larger than the aggregate body limit', async () => {

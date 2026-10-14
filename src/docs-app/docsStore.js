@@ -80,7 +80,8 @@ export class ReviewConflictError extends Error {}
  * another device is never lost. When the active provider supports eTags (OneDrive as
  * the active source) the write is conditional and retried on 412.
  */
-export async function updateReview(docId, mutate, { attempts = 3 } = {}) {
+export async function updateReview(docId, mutate, { attempts = 3, signal } = {}) {
+  signal?.throwIfAborted()
   const path = reviewPath(docId)
   const provider = storage.getActiveProvider()
   const conditional = typeof provider?.readWithEtag === 'function'
@@ -97,6 +98,10 @@ export async function updateReview(docId, mutate, { attempts = 3 } = {}) {
     const next = mergeReviews(current, mutate(current) || current)
     const text = serializeReview(next)
     validateReviewText(text)
+    signal?.throwIfAborted()
+    if (storage.getActiveProvider() !== provider) {
+      throw new Error('Docs storage changed while updating the review; retry in the current account and source')
+    }
     if (!conditional) {
       await storage.write(path, text)
       return next
@@ -111,43 +116,68 @@ export async function updateReview(docId, mutate, { attempts = 3 } = {}) {
   throw new ReviewConflictError('review.json kept changing; please try again')
 }
 
-export function sendDrafts(docId, drafts, rev) {
+export function sendDrafts(docId, drafts, rev, options) {
   let reviewId = null
   return updateReview(docId, (cur) => {
     const res = submitDrafts(cur, drafts, { rev })
     reviewId = res.reviewId
     return res.review
-  }).then((review) => ({ review, reviewId }))
+  }, options).then((review) => ({ review, reviewId }))
 }
 
-export function markRead(docId, rev) {
-  return updateReview(docId, (cur) => (cur.readRev >= rev ? cur : { ...cur, readRev: rev }))
+export function markRead(docId, rev, options) {
+  return updateReview(docId, (cur) => (cur.readRev >= rev ? cur : { ...cur, readRev: rev }), options)
 }
 
-export function reopen(docId, commentId, rev) {
-  return updateReview(docId, (cur) => reopenComment(cur, commentId, { rev }))
+export function reopen(docId, commentId, rev, options) {
+  return updateReview(docId, (cur) => reopenComment(cur, commentId, { rev }), options)
 }
 
 // ── Drafts: on-device until "Send to agent" ────────────────────────────────
 
-const draftKey = (docId) => `fp-docs-drafts:${docId}`
-
-export function loadDrafts(docId) {
-  try {
-    const v = JSON.parse(localStorage.getItem(draftKey(docId)) || '[]')
-    return Array.isArray(v) ? v : []
-  } catch { return [] }
+export function draftScopeKey(scope) {
+  if (!scope || typeof scope.accountId !== 'string' || !scope.accountId.trim()
+    || typeof scope.sourceId !== 'string' || !scope.sourceId.trim()) {
+    throw new Error('Docs drafts require nonempty accountId and sourceId')
+  }
+  return JSON.stringify([scope.accountId, scope.sourceId])
 }
 
-export function saveDrafts(docId, drafts) {
+export const draftKey = (docId, scope) => `fp-docs-drafts:v2:${JSON.stringify([draftScopeKey(scope), docId])}`
+
+export function legacyDraftNotice(docId) {
   try {
-    if (drafts.length) localStorage.setItem(draftKey(docId), JSON.stringify(drafts))
-    else localStorage.removeItem(draftKey(docId))
-  } catch { /* storage full: drafts stay in memory for this session */ }
+    return localStorage.getItem(`fp-docs-drafts:${docId}`)
+      ? 'Older, unscoped drafts are retained on this device but cannot safely be attributed to this account and source. They have not been loaded or deleted.'
+      : null
+  } catch (error) {
+    throw new Error(`Couldn't check older Docs drafts: ${error.message}`, { cause: error })
+  }
 }
 
-export function draftCount(docId) {
-  return loadDrafts(docId).length
+export function loadDrafts(docId, scope) {
+  const key = draftKey(docId, scope)
+  try {
+    const v = JSON.parse(localStorage.getItem(key) || '[]')
+    if (!Array.isArray(v)) throw new Error('Stored drafts are not an array')
+    return v
+  } catch (error) {
+    throw new Error(`Couldn't load Docs drafts: ${error.message}`, { cause: error })
+  }
+}
+
+export function saveDrafts(docId, drafts, scope) {
+  const key = draftKey(docId, scope)
+  try {
+    if (drafts.length) localStorage.setItem(key, JSON.stringify(drafts))
+    else localStorage.removeItem(key)
+  } catch (error) {
+    throw new Error(`Couldn't save Docs drafts; keep this page open to retain unsent comments: ${error.message}`, { cause: error })
+  }
+}
+
+export function draftCount(docId, scope) {
+  return loadDrafts(docId, scope).length
 }
 
 export { emptyReview }

@@ -112,7 +112,7 @@ export async function runReviewAgent(fixture, cycle) {
 Read ${path.join(fixture.source, 'plugins', 'overnight-agent', 'skills', 'docs-publish', 'SKILL.md')} and follow the native Docs turn procedure.
 Consume the submitted user review on this synthetic task from the configured planner, do the requested reversible document work, acknowledge the batch, publish the revision with dispositions, append its short journal pointer, and mark blocked when this review's work is finished (waiting for the next review, not a task closure).
 This is an isolated sandbox. All data and tools are inside ${fixture.root}; no external work or live automation is authorized. Do not run tests or inspect test files.
-Preserve the original comments, unrelated document text, supporting links, and the separate Markdown briefing. Do not directly write published Docs files or reviews; use fp-docs from ${path.join(fixture.source, 'packages', 'docs-publisher', 'bin', 'fp-docs.js')}.
+Preserve the original comments, unrelated document text, supporting links, and the separate Markdown briefing. Do not directly write published Docs files or reviews; use fp-docs from ${path.join(fixture.source, 'scripts', 'fp-docs.js')}.
 Submitted batches from scan: ${JSON.stringify(row.docs_review_submitted)}.
 Use node ${path.join(fixture.skill, 'write-turn.mjs')} and node ${path.join(fixture.skill, 'oa-state.mjs')} to finish the turn.`
   await fs.writeFile(path.join(artifact, 'prompt.txt'), prompt)

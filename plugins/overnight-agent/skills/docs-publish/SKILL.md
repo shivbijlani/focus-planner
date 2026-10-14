@@ -12,7 +12,7 @@ folder. Do not create that gate implicitly, import old documents, convert
 Resolve the matching repository from `FOCUS_PLANNER_REPO` (or the current repository).
 Installed plugins need this variable set to their matching deployed repository; a missing
 publisher is an error, not an empty review. Set `PLANNER_PATH` to the configured planner
-folder. Run `node <repo>\packages\docs-publisher\bin\fp-docs.js` for each command below.
+folder. Run `node <repo>\scripts\fp-docs.js` for each command below.
 The publisher and Node tools refuse paths outside `OA_SANDBOX_ROOT` in a sandbox.
 
 ## One task, one writer

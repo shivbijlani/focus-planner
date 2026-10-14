@@ -6,8 +6,9 @@ import { filterLibrary, timeAgo } from './util.js'
 
 const TABS = [['needs', 'Needs you'], ['recent', 'Recent'], ['all', 'All']]
 
-export default function Library({ index, onOpenDoc, plannerHref, reloadKey }) {
+export default function Library({ index, draftScope, onOpenDoc, plannerHref, reloadKey }) {
   const [summaries, setSummaries] = useState({})
+  const [draftCounts, setDraftCounts] = useState({})
   const [loadError, setLoadError] = useState(null)
   const [tab, setTab] = useState(() => sessionStorage.getItem('fp-docs-tab') || 'needs')
   const [q, setQ] = useState('')
@@ -18,6 +19,7 @@ export default function Library({ index, onOpenDoc, plannerHref, reloadKey }) {
     const ids = Object.keys(index?.docs || {})
     Promise.all(ids.map(async (id) => [id, await loadReviewSummary(id)])).then((pairs) => {
       if (!cancelled) {
+        setDraftCounts(Object.fromEntries(ids.map((id) => [id, draftCount(id, draftScope)])))
         setSummaries(Object.fromEntries(pairs))
         setLoadError(null)
       }
@@ -25,16 +27,16 @@ export default function Library({ index, onOpenDoc, plannerHref, reloadKey }) {
       if (!cancelled) setLoadError(String(e?.message || e))
     })
     return () => { cancelled = true }
-  }, [index, reloadKey])
+  }, [index, reloadKey, draftScope])
 
   const cards = useMemo(() => Object.entries(index?.docs || {}).map(([id, e]) => {
     const s = summaries[id]
-    const st = deriveDocState({ entry: e, review: s?.review, response: s?.response, drafts: draftCount(id) })
+    const st = deriveDocState({ entry: e, review: s?.review, response: s?.response, drafts: draftCounts[id] || 0 })
     return {
       id, title: e.title || id, task: e.task ?? null, primary: !!e.primary, updatedAt: e.updatedAt,
       rev: st.rev, unread: s ? st.unread : false, needsYou: st.needsYou, open: st.openCount, drafts: st.drafts, state: st.state,
     }
-  }), [index, summaries])
+  }), [index, summaries, draftCounts])
 
   const list = filterLibrary(cards, tab, q)
 
