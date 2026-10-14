@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest'
 
 import { sortTasksByPriority, isNeededForUrgentTask } from './taskSort.js'
+import * as consumer from './taskSort.js'
+import * as shared from '../packages/planner-shared-core/src/taskSort.js'
+
+it('re-exports all six shared functions without adapters', () => {
+  expect(Object.keys(consumer).sort()).toEqual([
+    'extractTaskId', 'getChainDepthToManagerPriority', 'isNeededForUrgentTask',
+    'parseManagerPriorities', 'resolveManagerPriority', 'sortTasksByPriority',
+  ])
+  for (const name of Object.keys(consumer)) {
+    expect(consumer[name]).toBe(shared[name])
+  }
+  expect(consumer.resolveManagerPriority('a', { a: 'external' }, { p: 1 }, { external: 'p' }))
+    .toEqual({ id: 'p', order: 1 })
+  expect(consumer.getChainDepthToManagerPriority('a', { a: 'external' }, { p: 1 }, { external: 'p' }))
+    .toBe(1)
+})
 
 function makeTask(id, priority = '🟡', linkedId = null) {
   return {

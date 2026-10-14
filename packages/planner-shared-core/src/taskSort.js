@@ -12,7 +12,9 @@ export function parseManagerPriorities(lines) {
   return priorities
 }
 
-export function resolveManagerPriority(taskId, linkedIdMap, managerPriorities, maxDepth = 20) {
+export function resolveManagerPriority(taskId, linkedIdMap, managerPriorities, aliasMapOrMaxDepth = {}, maybeMaxDepth = 20) {
+  const aliasMap = typeof aliasMapOrMaxDepth === 'number' ? {} : (aliasMapOrMaxDepth || {})
+  const maxDepth = typeof aliasMapOrMaxDepth === 'number' ? aliasMapOrMaxDepth : maybeMaxDepth
   let current = taskId
   const visited = new Set()
   for (let i = 0; i < maxDepth; i++) {
@@ -20,18 +22,26 @@ export function resolveManagerPriority(taskId, linkedIdMap, managerPriorities, m
     if (managerPriorities[current]) {
       return { id: current, order: managerPriorities[current] }
     }
+    const alias = aliasMap[current]
+    if (alias && managerPriorities[alias]) {
+      return { id: alias, order: managerPriorities[alias] }
+    }
     visited.add(current)
     current = linkedIdMap[current] || null
   }
   return null
 }
 
-export function getChainDepthToManagerPriority(taskId, linkedIdMap, managerPriorities, maxDepth = 20) {
+export function getChainDepthToManagerPriority(taskId, linkedIdMap, managerPriorities, aliasMapOrMaxDepth = {}, maybeMaxDepth = 20) {
+  const aliasMap = typeof aliasMapOrMaxDepth === 'number' ? {} : (aliasMapOrMaxDepth || {})
+  const maxDepth = typeof aliasMapOrMaxDepth === 'number' ? aliasMapOrMaxDepth : maybeMaxDepth
   let current = taskId
   const visited = new Set()
   for (let depth = 0; depth < maxDepth; depth++) {
     if (!current || visited.has(current)) return null
     if (managerPriorities[current]) return depth
+    const alias = aliasMap[current]
+    if (alias && managerPriorities[alias]) return depth
     visited.add(current)
     current = linkedIdMap[current] || null
   }
@@ -63,7 +73,9 @@ export function extractTaskId(row) {
   return match ? match[1] : null
 }
 
-export function sortTasksByPriority(rows, rawLines, headers, linkedIdMap, managerPriorities) {
+export function sortTasksByPriority(rows, rawLines, headers, linkedIdMap, managerPriorities, aliasMap = {}) {
+  // Older callers passed an unused date argument in this position.
+  const aliases = typeof aliasMap === 'object' ? (aliasMap || {}) : {}
   const priorityOrder = { '🔴': 0, '🐸': 1, '🟡': 2, '🔵': 3, '📖': 4, '⚪': 5, '✅': 6 }
   const priorityCol = headers.find(h => h.includes('🎯')) || '🎯'
 
@@ -87,8 +99,8 @@ export function sortTasksByPriority(rows, rawLines, headers, linkedIdMap, manage
 
     const aTaskId = extractTaskId(a.row)
     const bTaskId = extractTaskId(b.row)
-    const aManager = aTaskId ? resolveManagerPriority(aTaskId, linkedIdMap || {}, managerPriorities || {}) : null
-    const bManager = bTaskId ? resolveManagerPriority(bTaskId, linkedIdMap || {}, managerPriorities || {}) : null
+    const aManager = aTaskId ? resolveManagerPriority(aTaskId, linkedIdMap || {}, managerPriorities || {}, aliases) : null
+    const bManager = bTaskId ? resolveManagerPriority(bTaskId, linkedIdMap || {}, managerPriorities || {}, aliases) : null
     const aManagerOrder = aManager ? aManager.order : Infinity
     const bManagerOrder = bManager ? bManager.order : Infinity
 
@@ -97,10 +109,10 @@ export function sortTasksByPriority(rows, rawLines, headers, linkedIdMap, manage
     }
 
     const aDepth = aTaskId
-      ? getChainDepthToManagerPriority(aTaskId, linkedIdMap || {}, managerPriorities || {})
+      ? getChainDepthToManagerPriority(aTaskId, linkedIdMap || {}, managerPriorities || {}, aliases)
       : null
     const bDepth = bTaskId
-      ? getChainDepthToManagerPriority(bTaskId, linkedIdMap || {}, managerPriorities || {})
+      ? getChainDepthToManagerPriority(bTaskId, linkedIdMap || {}, managerPriorities || {}, aliases)
       : null
     const aDepthRank = aDepth === null ? -1 : aDepth
     const bDepthRank = bDepth === null ? -1 : bDepth

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { sortTasksByPriority, isNeededForUrgentTask } from './taskSort.js'
+import {
+  sortTasksByPriority, isNeededForUrgentTask,
+  resolveManagerPriority, getChainDepthToManagerPriority,
+} from './taskSort.js'
 
 function makeTask(id, priority = '🟡', linkedId = null) {
   return {
@@ -9,6 +12,92 @@ function makeTask(id, priority = '🟡', linkedId = null) {
     Task: `Task ${id}`,
   }
 }
+
+describe.each([
+  ['resolveManagerPriority', resolveManagerPriority, { id: 'p', order: 1 }],
+  ['getChainDepthToManagerPriority', getChainDepthToManagerPriority, 1],
+])('%s argument compatibility', (_, lookup, expected) => {
+  const links = { a: 'external' }
+  const priorities = { p: 1 }
+  const aliases = { external: 'p' }
+
+  it('resolves an external link at its existing depth, without an extra hop', () => {
+    expect(lookup('a', links, priorities, aliases)).toEqual(expected)
+    expect(lookup('a', links, priorities, aliases, 2)).toEqual(expected)
+    expect(lookup('a', links, priorities, aliases, 1)).toBeNull()
+  })
+
+  it('preserves numeric fourth-argument depth limits and ignores a fifth argument', () => {
+    const directLinks = { a: 'p' }
+    expect(lookup('a', directLinks, priorities)).toEqual(expected)
+    expect(lookup('a', directLinks, priorities, 2)).toEqual(expected)
+    expect(lookup('a', directLinks, priorities, 1)).toBeNull()
+    expect(lookup('a', directLinks, priorities, 0)).toBeNull()
+    expect(lookup('a', directLinks, priorities, 2, 0)).toEqual(expected)
+    expect(lookup('a', directLinks, priorities, {}, 2)).toEqual(expected)
+    expect(lookup('a', directLinks, priorities, {}, 1)).toBeNull()
+    expect(lookup('a', directLinks, priorities, {}, 0)).toBeNull()
+  })
+
+  it('does not resolve external links unless aliases are supplied', () => {
+    expect(lookup('a', links, priorities)).toBeNull()
+    expect(lookup('a', links, priorities, 20)).toBeNull()
+    expect(lookup('a', links, priorities, {})).toBeNull()
+    expect(lookup('a', links, priorities, { external: 'missing' })).toBeNull()
+  })
+
+  it('guards cycles and does not recursively traverse aliases', () => {
+    expect(lookup('a', { a: 'b', b: 'a' }, priorities, aliases)).toBeNull()
+    expect(lookup('a', links, priorities, { external: 'next', next: 'p' })).toBeNull()
+    expect(lookup('a', links, priorities, { external: 'a', a: 'external' })).toBeNull()
+    expect(lookup('missing', {}, priorities, aliases)).toBeNull()
+  })
+
+  it('preserves the default 20-node cap for both forms', () => {
+    const chain = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [String(i), String(i + 1)]))
+    const endPriority = { '20': 1 }
+    expect(lookup('0', chain, endPriority)).toBeNull()
+    expect(lookup('0', chain, endPriority, {})).toBeNull()
+    expect(lookup('0', chain, endPriority, 21)).toEqual(
+      lookup === resolveManagerPriority ? { id: '20', order: 1 } : 20,
+    )
+    expect(lookup('0', chain, endPriority, {}, 21)).toEqual(
+      lookup === resolveManagerPriority ? { id: '20', order: 1 } : 20,
+    )
+  })
+})
+
+describe('alias priority precedence', () => {
+  it('prefers a direct manager priority over its alias and supports aliases at depth zero', () => {
+    const priorities = { external: 2, p: 1 }
+    const aliases = { external: 'p' }
+    expect(resolveManagerPriority('external', {}, priorities, aliases)).toEqual({ id: 'external', order: 2 })
+    expect(getChainDepthToManagerPriority('external', {}, priorities, aliases)).toBe(0)
+    expect(resolveManagerPriority('external', {}, { p: 1 }, aliases)).toEqual({ id: 'p', order: 1 })
+    expect(getChainDepthToManagerPriority('external', {}, { p: 1 }, aliases)).toBe(0)
+  })
+
+  it('sorts aliases by manager rank before depth, keeping urgent rows first and raw lines paired', () => {
+    const rows = [
+      makeTask('9'), makeTask('4'), makeTask('1'),
+      makeTask('5'), makeTask('3'), makeTask('2', '🔴'),
+    ]
+    const rawLines = rows.map(row => `raw-${row.ID.id}`)
+    const links = { '1': 'external', '3': '1', '4': 'lower', '5': 'lower' }
+    const priorities = { p: 1, q: 2 }
+    const aliases = { external: 'p', lower: 'q' }
+    const originalRows = [...rows]
+    const originalLines = [...rawLines]
+    const result = sortTasksByPriority(rows, rawLines, ['ID', '🎯'], links, priorities, aliases)
+
+    expect(result.sortedRows.map(row => row.ID.id)).toEqual(['2', '3', '1', '4', '5', '9'])
+    expect(result.sortedRawLines).toEqual(['raw-2', 'raw-3', 'raw-1', 'raw-4', 'raw-5', 'raw-9'])
+    expect(rows).toEqual(originalRows)
+    expect(rawLines).toEqual(originalLines)
+    expect(sortTasksByPriority(rows, rawLines, ['ID', '🎯'], links, priorities).sortedRows.map(row => row.ID.id))
+      .toEqual(['2', '9', '4', '1', '5', '3'])
+  })
+})
 
 describe('sortTasksByPriority', () => {
   it('orders dependency chains prerequisite-first within the same manager priority', () => {
