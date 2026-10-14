@@ -12,7 +12,7 @@
     },
     {
       "id": "mc/critical-tools/default-tools-with-no-row",
-      "note": "missing settings row defaults to email and google-workspace",
+      "note": "missing settings row defaults to separate agent Gmail and personal google-workspace",
       "files": {
         "data/no-critical-settings.md": "# Settings\n\n| Setting | Value |\n|---|---|\n| Some other setting | yes |\n"
       },

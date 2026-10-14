@@ -8,7 +8,7 @@
       "json": {
         "settingsPath": "<ROOT>/data/user-settings.md",
         "tools": [
-          "email",
+          "google-workspace-agent-email",
           "google-workspace"
         ]
       },
