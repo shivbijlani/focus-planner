@@ -102,6 +102,7 @@ import {
   isDiagEnabled,
 } from '../packages/diagnostics/src/index.js'
 import '../packages/install-prompt/src/styles/install-prompt.css'
+import FirstRunTour from './tutorial/FirstRunTour.jsx'
 
 // Context Menu component
 function LinkPickerModal({ currentLinkedId, taskLookup, allTaskIds, onSelect, onCancel }) {
@@ -5433,6 +5434,13 @@ function App() {
     } finally {
       contentWriteInFlightRef.current = false
     }
+  }
+
+  // First-run tutorial (prototype): forced via ?tour=1 so the walkthrough is
+  // deterministic and doesn't require a storage source. The shipped version
+  // will instead auto-show on an empty board and persist to settings.json.
+  if (typeof window !== 'undefined' && /[?&]tour=1\b/.test(window.location.search)) {
+    return <FirstRunTour onExit={() => { window.location.href = window.location.pathname }} />
   }
 
   if (appState === 'loading') {
