@@ -74,6 +74,60 @@ Then call `create_project` with `path` set to `%LOCALAPPDATA%\overnight-agent\ta
 folder or a repository project: each non-code task gets a session in this fixed
 local folder project. The binding command refuses either unsafe location.
 
+### Separate agent Gmail connection
+
+Keep the personal `google-workspace` connection for Tasks, Docs, Drive and Calendar.
+Authorize a separate `google-workspace-agent-email` MCP connection for the backing
+Gmail identity and configure a verified Gmail **Send As** alias for agent mail.
+Never substitute the personal account or the legacy `email`/Zoho server.
+
+In the **external** settings file (not the bundled template), set:
+
+| Setting | Value |
+| --- | --- |
+| Agent email account | Your verified agent Send As alias |
+| Agent email Google account | The authorized backing Gmail address |
+| Critical tools | `google-workspace-agent-email, google-workspace` |
+
+Keep `Google account (Tasks)`, authorized senders and the auto-send allow-list unchanged.
+Remove any old instructions that mandate `mcp-direct-call.js`, `phase0-unread.json`,
+`email_*` calls or Zoho sends/mark-read; those would bypass the migrated inbox check.
+Historical Zoho delivery failures are not evidence about the new sender.
+
+`check-agent-inbox.ps1 -UserSettings <external file> -Capability email -Json`
+reads compact system labels and every unread page addressed to the agent alias using
+the backing identity (`in:inbox is:unread to:<alias>`), not its historical personal mail.
+This To-based filter may miss Bcc-only mail or forwards that rewrite recipient headers;
+verify the inbound route preserves the alias. Never silently broaden it to all backing mail.
+An empty filtered search proves only that no matching mail was found, not that alias routing works.
+Unknown/malformed responses, missing identity, auth failures and incomplete pagination
+report `NOT CHECKED` and `unread: null`. A probe does not authorize a coordinator run.
+The connector's eight tools intentionally omit organizing/mark-read operations.
+`agent-email.mjs was-handled|handled --account <backing Gmail> --message-id <id>`
+keeps account-scoped receipts in OA home's `agent-inbox-receipts.json`: record only
+durably handled authorized instructions, retry failed/unhandled messages, and leave
+non-authorized mail untouched. Do not claim that receipts change Gmail's unread state.
+
+Every send/draft must explicitly supply `from_email` (the alias), the backing
+`user_google_email`, and the signature **🤖 on behalf of Shiv**. Use HTML and
+`include_signature: false`; the workspace-mcp connector builds
+`multipart/alternative` with a derived text fallback. Preserve that behavior on
+connector upgrades: inspect a test message's raw MIME and verify both parts contain
+the signature. Replies use `thread_id`; approval/recipient gates are unchanged.
+Critical alerts use the same sender/format, confirm a sent message ID and record it
+in the sent-messages ledger. Failed sends remain undelivered; no Zoho fallback.
+
+**Rollout:** review/merge the PR separately, then deploy the plugin **and OA home**
+through the existing deployment/sync procedure (the relative-import closure includes
+`agent-email.mjs`). Apply the external settings edits above and restart the affected
+sessions so they load the separate connector. Verify the inbox check and connected-tool
+preflight; do not run a backlog scan merely to validate this migration. Before retiring
+Zoho access, separately verify inbound alias mail routes into the backing Gmail inbox,
+then verify an authorized external recipient actually receives
+alias mail and check SPF/DKIM/DMARC/SMTP relay delivery. Gmail API acceptance or a
+self-test in the backing mailbox does not prove external delivery. This migration
+does not revoke credentials, delete mail, change OAuth permissions or deploy itself.
+
 ### Optional machine hygiene (Windows)
 
 Run `checks/setup-machine-hygiene.ps1 -WhatIf` first. It reports whether Windows

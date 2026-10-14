@@ -833,7 +833,7 @@ function Get-SettingRow([string]$text, [string]$name) {
 }
 
 function Cmd-CriticalTools {
-  $names = @('email', 'google-workspace')
+  $names = @('google-workspace-agent-email', 'google-workspace')
   $settingsPath = Get-UserSettingsPath
   if ($settingsPath -and (Test-Path -LiteralPath $settingsPath)) {
     $row = Get-SettingRow (Get-Content -LiteralPath $settingsPath -Raw -ErrorAction Stop) 'Critical tools'

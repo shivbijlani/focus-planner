@@ -9,7 +9,7 @@
 //
 // The coordinator already has live, connected tools for the critical servers (it calls them
 // anyway for the inbox check and doc comments), so it makes the two real calls itself --
-// `email_test_account` for the Agent email account, `list_tasks` (max 1) for the Google account
+// `list_gmail_labels` for the Agent email Google account, `list_tasks` (max 1) for the Google account
 // (Tasks) setting -- and records the outcome with `--record name=ok` or
 // `--record name=down:<error>`. This is the ONE path: there is no subprocess probe left to fall
 // back to, and therefore no timeout/slow class. A tool the caller did not record for is treated
@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { readSettingRow } from '../../checks/settings-value.mjs';
 import { acquireFileLock, releaseFileLock, withFileLock } from './file-lock.mjs';
 import { gapForAlert, recordRunStart } from './run-ledger.mjs';
+import { AGENT_EMAIL_SERVER, gmailSendArguments, gmailSentId } from './agent-email.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const plugin = path.resolve(here, '..', '..');
@@ -191,17 +192,21 @@ async function sendAlert(text, settings, unavailable) {
   }
   const address = readSettingRow(settings, 'Critical alert email') ||
     readSettingRow(settings, 'Agent email account');
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) && !unavailable.includes('email')) {
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) && !unavailable.includes(AGENT_EMAIL_SERVER)) {
     try {
-      const accounts = payload(call('email', 'call', 'email_list_accounts', '{}'));
-      const account = accounts.find((a) =>
-        a.email === readSettingRow(settings, 'Agent email account')) ??
-        (accounts.length === 1 ? accounts[0] : null);
-      if (!account?.id) throw new Error('email account not uniquely identified');
-      payload(call('email', 'call', 'email_send', JSON.stringify({
-        accountId: account.id, to: [{ email: address }], subject: text.slice(0, 120),
-        body: { text },
-      })));
+      const escaped = text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+      const sentId = gmailSentId(call(AGENT_EMAIL_SERVER, 'call', 'send_gmail_message', JSON.stringify(gmailSendArguments({
+        account: readSettingRow(settings, 'Agent email Google account'),
+        sender: readSettingRow(settings, 'Agent email account'),
+        to: address, subject: text.slice(0, 120), body: `<p>${escaped}</p>`,
+      }))));
+      try {
+        execFileSync(process.execPath, [path.join(here, 'write-turn.mjs'), 'record-sent',
+          '-Channel', 'mail', '-MessageId', sentId], { encoding: 'utf8', timeout: 10000, windowsHide: true });
+      } catch (error) {
+        // Delivery already happened: retrying would duplicate it.
+        console.error(`Critical alert sent (${sentId}), but sent-messages ledger failed: ${error.message}`);
+      }
       return true;
     } catch (e) { console.error(`Email alert failed: ${e.message}`); }
   }

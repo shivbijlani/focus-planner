@@ -124,6 +124,32 @@ if (scenario === 'hang') {
     : [];
 
   const out = steps.map((s) => {
+    if (s.name === 'list_gmail_labels') {
+      if (process.argv[2] !== 'google-workspace-agent-email' ||
+          s.arguments.user_google_email !== 'backing@example.com' ||
+          s.arguments.compact !== true || s.arguments.include_system !== true) {
+        return { error: { message: 'wrong Gmail identity/server/probe arguments' } };
+      }
+      return wrap(scenario === 'silent' ? {count:0,labels:[]} :
+        {count:1,labels:[{id:'INBOX',name:'Inbox'}]});
+    }
+    if (s.name === 'search_gmail_messages') {
+      const query = 'in:inbox is:unread to:ai@example.com';
+      if (s.arguments.query !== query || s.arguments.user_google_email !== 'backing@example.com') {
+        return { error: { message: 'wrong Gmail search arguments' } };
+      }
+      if (scenario === 'search-error') return {result:{isError:true,content:[{type:'text',text:'permission denied'}]}};
+      if (scenario === 'malformed') return wrap([]);
+      if (scenario === 'healthy-messages') {
+        const id = s.arguments.page_token ? 'a2' : 'a1';
+        return wrap(`Found 1 messages matching '${query}':\n  1. Message ID: ${id}\n` +
+          (s.arguments.page_token ? '' : "page_token='next'"));
+      }
+      if (scenario === 'cycle') return wrap(`Found 1 messages matching '${query}':\n  1. Message ID: a1\npage_token='next'`);
+      if (scenario === 'full-page') return wrap(`Found 2 messages matching '${query}':\n  1. Message ID: a1\n  2. Message ID: a2`);
+      if (scenario === 'count-mismatch') return wrap(`Found 2 messages matching '${query}':\n  1. Message ID: a1`);
+      return wrap(`No messages found for query: '${query}'`);
+    }
     if (s.name === 'email_list_accounts') return wrap(accounts);
     if (s.name === 'email_test_account') {
       // `silent` is the #346 shape: the probe fails, and the SEARCH BELOW STILL ANSWERS [].
@@ -171,6 +197,8 @@ function Invoke-Subject {
     [string]$ScriptPath,
     [string]$Scenario,
     [switch]$AsJson,
+    [switch]$Gmail,
+    [string]$Settings,
     [int]$TimeoutSec = 20,
     [int]$OuterKillMs = 60000
   )
@@ -178,9 +206,13 @@ function Invoke-Subject {
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $psHost
   $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath,
-               '-Manifest', $manifestPath, '-ProberCommand', $node.Source, '-ProberScript', $fixturePath,
+               '-Manifest', $(if ($Gmail) { $gmailManifestPath } else { $manifestPath }), '-ProberCommand', $node.Source, '-ProberScript', $fixturePath,
                '-TimeoutSec', "$TimeoutSec")
   if ($AsJson) { $argList += '-Json' }
+  if ($Gmail) {
+    if ($Settings) { $argList += @('-UserSettings', $Settings) }
+    else { $argList += @('-Account', 'backing@example.com', '-AgentAddress', 'ai@example.com') }
+  }
   $psi.Arguments = (($argList | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join ' ')
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
@@ -336,6 +368,33 @@ if ($m4) { Test-Arms -ScriptPath $m4 -Label 'M4 -Json path picks its own exit co
 # red on any edit at all would be indistinguishable from one that tests behaviour.
 $m5 = New-Mutant -Name 'M5-control' -Needle '# ONE exit, reading the ONE verdict.' -Replacement '# ONE exit, reading the ONE verdict. (control mutation - semantically inert)'
 if ($m5) { Test-Arms -ScriptPath $m5 -Label 'M5 CONTROL: comment-only edit (must kill NOTHING)' -Expect $allArms | Out-Null }
+
+$gmailManifestPath = Join-Path $tmp 'gmail-capabilities.json'
+[IO.File]::WriteAllText($gmailManifestPath, @'
+{"capabilities":[{"id":"email","server":"google-workspace-agent-email","mandatory":true,
+"probe":{"kind":"gmail-inbox","healthTool":"list_gmail_labels","searchTool":"search_gmail_messages","limit":2}}]}
+'@, (New-Object Text.UTF8Encoding($false)))
+Write-Host 'GMAIL (separate identity, same-session labels/search, complete pagination)'
+$gmailEmpty = Invoke-Subject -ScriptPath $script:Subject -Scenario 'healthy-empty' -AsJson -Gmail
+Assert ($gmailEmpty.ExitCode -eq 0 -and $gmailEmpty.Json.verdict -eq 'checked' -and $gmailEmpty.Json.unread -eq 0) 'Gmail authenticated empty inbox'
+$gmailMessages = Invoke-Subject -ScriptPath $script:Subject -Scenario 'healthy-messages' -AsJson -Gmail
+Assert ($gmailMessages.ExitCode -eq 0 -and $gmailMessages.Json.unread -eq 2 -and
+  ($gmailMessages.Json.messageIds -join ',') -eq 'a1,a2') 'Gmail continuation read completely with exact IDs'
+foreach ($scenario in @('silent', 'dead', 'malformed', 'search-error', 'cycle', 'full-page', 'count-mismatch')) {
+  $r = Invoke-Subject -ScriptPath $script:Subject -Scenario $scenario -AsJson -Gmail
+  Assert ($r.ExitCode -eq 2 -and $r.Json.verdict -eq 'unreadable' -and $null -eq $r.Json.unread -and
+    $r.Json.wrapUp -clike '*NOT CHECKED*') "Gmail $scenario fails closed with no total"
+}
+$gmailHuman = Invoke-Subject -ScriptPath $script:Subject -Scenario 'silent' -Gmail
+Assert ($gmailHuman.ExitCode -eq 2 -and $gmailHuman.StdOut -clike '*NOT CHECKED*') 'Gmail human/JSON exit parity'
+$gmailSettings = Join-Path $tmp 'gmail-settings.md'
+[IO.File]::WriteAllText($gmailSettings, "| Agent email Google account | ``backing@example.com`` |`n| Agent email account | ``ai@example.com`` |")
+$gmailConfigured = Invoke-Subject -ScriptPath $script:Subject -Scenario 'healthy-empty' -AsJson -Gmail -Settings $gmailSettings
+Assert ($gmailConfigured.ExitCode -eq 0 -and $gmailConfigured.Json.verdict -eq 'checked') 'Gmail resolves backing identity from external settings'
+[IO.File]::WriteAllText($gmailSettings, '| Agent email account | `legacy@example.com` |')
+$gmailMissing = Invoke-Subject -ScriptPath $script:Subject -Scenario 'healthy-empty' -AsJson -Gmail -Settings $gmailSettings
+Assert ($gmailMissing.ExitCode -eq 2 -and $gmailMissing.Json.reason -eq 'account-missing' -and
+  $null -eq $gmailMissing.Json.unread) 'Missing backing identity never substitutes legacy alias'
 
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 
