@@ -4,7 +4,7 @@ import base from './playwright.config.js'
 
 export default defineConfig({
   ...base,
-  testMatch: 'docs-app.spec.js',
+  testMatch: ['board.spec.js', 'docs-app.spec.js'],
   outputDir: 'test-results/personal-baseline',
   workers: 1,
   webServer: undefined,

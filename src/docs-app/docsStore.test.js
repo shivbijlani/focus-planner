@@ -2,13 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOCS_LIMITS, docPath, reviewPath } from '../../packages/docs-core/src/index.js'
 
 const { files } = vi.hoisted(() => ({ files: {} }))
+const provider = vi.hoisted(() => ({ current: null }))
 vi.mock('../storage/storage.js', () => ({
   read: async (path) => files[path] ?? '',
   write: async (path, content) => { files[path] = content },
-  getActiveProvider: () => null,
+  getActiveProvider: () => provider.current,
 }))
 
-import { draftKey, loadDrafts, saveDrafts, markRead, validateReviewSet } from './docsStore.js'
+import { draftKey, loadDrafts, saveDrafts, markRead, updateReview, validateReviewSet } from './docsStore.js'
 
 const at = '2026-10-01T12:00:00Z'
 const primaryId = 'd-primary001'
@@ -30,7 +31,25 @@ function docText(id, title, body) {
 
 describe('Docs storage readers', () => {
   beforeEach(() => {
+    provider.current = null
     for (const key of Object.keys(files)) delete files[key]
+  })
+
+  it('refuses an in-flight review write after the account/source provider changes', async () => {
+    await expect(updateReview(primaryId, (review) => {
+      provider.current = {}
+      return review
+    })).rejects.toThrow('Docs storage changed')
+    expect(files[reviewPath(primaryId)]).toBeUndefined()
+  })
+
+  it('refuses a pending review write when its Docs session is unmounted', async () => {
+    const controller = new AbortController()
+    await expect(updateReview(primaryId, (review) => {
+      controller.abort()
+      return review
+    }, { signal: controller.signal })).rejects.toThrow()
+    expect(files[reviewPath(primaryId)]).toBeUndefined()
   })
 
   describe('Scoped Docs drafts', () => {

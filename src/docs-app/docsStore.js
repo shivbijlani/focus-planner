@@ -80,7 +80,8 @@ export class ReviewConflictError extends Error {}
  * another device is never lost. When the active provider supports eTags (OneDrive as
  * the active source) the write is conditional and retried on 412.
  */
-export async function updateReview(docId, mutate, { attempts = 3 } = {}) {
+export async function updateReview(docId, mutate, { attempts = 3, signal } = {}) {
+  signal?.throwIfAborted()
   const path = reviewPath(docId)
   const provider = storage.getActiveProvider()
   const conditional = typeof provider?.readWithEtag === 'function'
@@ -97,6 +98,10 @@ export async function updateReview(docId, mutate, { attempts = 3 } = {}) {
     const next = mergeReviews(current, mutate(current) || current)
     const text = serializeReview(next)
     validateReviewText(text)
+    signal?.throwIfAborted()
+    if (storage.getActiveProvider() !== provider) {
+      throw new Error('Docs storage changed while updating the review; retry in the current account and source')
+    }
     if (!conditional) {
       await storage.write(path, text)
       return next
@@ -111,21 +116,21 @@ export async function updateReview(docId, mutate, { attempts = 3 } = {}) {
   throw new ReviewConflictError('review.json kept changing; please try again')
 }
 
-export function sendDrafts(docId, drafts, rev) {
+export function sendDrafts(docId, drafts, rev, options) {
   let reviewId = null
   return updateReview(docId, (cur) => {
     const res = submitDrafts(cur, drafts, { rev })
     reviewId = res.reviewId
     return res.review
-  }).then((review) => ({ review, reviewId }))
+  }, options).then((review) => ({ review, reviewId }))
 }
 
-export function markRead(docId, rev) {
-  return updateReview(docId, (cur) => (cur.readRev >= rev ? cur : { ...cur, readRev: rev }))
+export function markRead(docId, rev, options) {
+  return updateReview(docId, (cur) => (cur.readRev >= rev ? cur : { ...cur, readRev: rev }), options)
 }
 
-export function reopen(docId, commentId, rev) {
-  return updateReview(docId, (cur) => reopenComment(cur, commentId, { rev }))
+export function reopen(docId, commentId, rev, options) {
+  return updateReview(docId, (cur) => reopenComment(cur, commentId, { rev }), options)
 }
 
 // ── Drafts: on-device until "Send to agent" ────────────────────────────────

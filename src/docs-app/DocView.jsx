@@ -71,7 +71,14 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
   const [sending, setSending] = useState(false)
   const articleRef = useRef(null)
   const markedReadRef = useRef(false)
+  const operationsRef = useRef(null)
   const wide = useIsWide()
+
+  useEffect(() => {
+    const controller = new AbortController()
+    operationsRef.current = controller
+    return () => controller.abort()
+  }, [])
 
   const entry = index?.docs?.[docId] || null
   const taskId = entry?.task ?? null
@@ -267,7 +274,7 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
     if (!drafts.length || sending) return
     setSending(true)
     try {
-      const { review } = await sendDrafts(docId, drafts, rev)
+      const { review } = await sendDrafts(docId, drafts, rev, { signal: operationsRef.current?.signal })
       setData((d) => ({ ...d, review }))
       const n = drafts.length
       setDrafts([])
@@ -285,7 +292,7 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
     if (!data || viewing) return
     if ((data.review.readRev || 0) >= rev) return
     try {
-      const review = await markRead(docId, rev)
+      const review = await markRead(docId, rev, { signal: operationsRef.current?.signal })
       setData((d) => ({ ...d, review }))
       if (!quiet) flash(`Marked r${rev} as read`)
       setStorageError(null)
@@ -515,7 +522,7 @@ export default function DocView({ docId, draftScope, index, route, onOpenDoc, on
           onEdit={(it) => setSheet({ type: 'comment', anchor: it.anchor, editId: it.id })}
           onReopen={async (it) => {
             try {
-              const review = await reopen(docId, it.id, rev)
+              const review = await reopen(docId, it.id, rev, { signal: operationsRef.current?.signal })
               setData((d) => ({ ...d, review }))
               flash('Reopened — the agent will see it on the next review')
             } catch (e) { flash(`Couldn't reopen: ${e?.message || e}`) }

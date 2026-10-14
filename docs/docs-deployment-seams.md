@@ -39,6 +39,8 @@ browser storage as recovery for a failed managed restore.
 `host.identity` also reset the session. Alternatively pass a changing
 `sessionKey` prop. The previous subtree unmounts immediately, clearing in-memory
 drafts, loaded documents, selection, and sheets before the new boot completes.
+Pending review writes are canceled on subtree unmount; a provider change during
+read/merge also refuses the write instead of sending old drafts to the new source.
 `DocsApp` also accepts a `bootStorage` prop for hosts already initialized by a
 parent shell. The function receives the same arguments as the alias.
 
@@ -121,7 +123,7 @@ npx playwright test docs-app.spec.js --workers 2
 npm run build
 ```
 
-`playwright.personal.config.js` runs the existing Docs flows on the actual
+`playwright.personal.config.js` runs the existing board and Docs flows on the actual
 published `https://plannermd.com` build using fresh, isolated Edge contexts and
 synthetic browser-local data. It does not attach to the user's open profile or
 test their authenticated cloud source. Production baseline checks do not prove
