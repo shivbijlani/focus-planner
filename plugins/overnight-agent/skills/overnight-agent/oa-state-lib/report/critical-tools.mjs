@@ -1,12 +1,12 @@
 // critical-tools.mjs -- Cmd-CriticalTools: the MCP servers PHASE 0 must find, from the
-// `Critical tools` settings row (default: email, google-workspace). Takes NO state lock (#778).
+// `Critical tools` settings row. Takes NO state lock (#778).
 import { readAllText, testPath, getContentRaw } from '../core/fsx.mjs';
 import { fromJson } from '../core/psjson.mjs';
 import { netTrim, lowerInvariant } from '../core/net.mjs';
 import { getSettingRow } from '../collect/settings.mjs';
 
 export function cmdCriticalTools(ctx) {
-  let names = ['email', 'google-workspace'];
+  let names = ['google-workspace-agent-email', 'google-workspace'];
   const settingsPath = ctx.userSettingsPath();
   if (settingsPath && testPath(settingsPath)) {
     const row = getSettingRow(getContentRaw(settingsPath), 'Critical tools');

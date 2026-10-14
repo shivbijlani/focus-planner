@@ -16,7 +16,7 @@ const targetArg = process.argv.includes('--target') ? process.argv[process.argv.
 const oa = targetArg || path.join(here, '..', 'skills', 'overnight-agent', 'oa-state.ps1');
 try {
   writeFileSync(settings, '| Critical tools | `email, bogus-tool` — configured outage floor |\n');
-  writeFileSync(config, JSON.stringify({ mcpServers: { email: {}, 'google-workspace': {} } }));
+  writeFileSync(config, JSON.stringify({ mcpServers: { email: {}, 'google-workspace': {}, 'google-workspace-agent-email': {} } }));
   const policy = (extra = []) => {
     const isNode = oa.endsWith('.mjs');
     const argv = isNode
@@ -30,7 +30,7 @@ try {
   writeFileSync(settings, '| Critical tools | `email, google-workspace` — configured outage floor |\n');
   assert.deepEqual(JSON.parse(policy().stdout).tools, ['email', 'google-workspace']);
   writeFileSync(settings, '# no override\n');
-  assert.deepEqual(JSON.parse(policy().stdout).tools, ['email', 'google-workspace']);
+  assert.deepEqual(JSON.parse(policy().stdout).tools, ['google-workspace-agent-email', 'google-workspace']);
 
   // GH #768: no timeout class. `parseRecord` only ever produces `ok` or `down:<error>`.
   assert.deepEqual(parseRecord('email=ok'), ['email', { status: 'ok' }]);
@@ -146,17 +146,21 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   if (m.method === 'initialize') result = {protocolVersion:'2024-11-05'};
   else if (m.method === 'tools/call') {
     const name = m.params.name;
-    const data = name === 'email_list_accounts' ? [{id:'acct',email:'self@example.test'}]
-    : name === 'email_send' ? (fs.appendFileSync(${JSON.stringify(sends)}, 'sent\\n'), {success:true})
-    : {success:true};
-    result = {content:[{type:'text',text:JSON.stringify(data)}]};
+    if (name !== 'send_gmail_message') throw new Error('Unexpected email tool: ' + name);
+    const a = m.params.arguments;
+    if (a.user_google_email !== 'backing@example.test' || a.from_email !== 'ai@example.test' ||
+        a.body_format !== 'html' || a.include_signature !== false ||
+        !a.body.includes('on behalf of Shiv')) throw new Error('Wrong Gmail send identity/format');
+    fs.appendFileSync(${JSON.stringify(sends)}, 'sent\\n');
+    result = {content:[{type:'text',text:'Email sent! Message ID: a123'}]};
   } else result = {tools:[]};
   process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');
 });`);
-  writeFileSync(config, JSON.stringify({ mcpServers: Object.fromEntries(['email', 'google-workspace']
+  writeFileSync(config, JSON.stringify({ mcpServers: Object.fromEntries(['email', 'google-workspace', 'google-workspace-agent-email']
     .map((name) => [name, { type: 'stdio', command: process.execPath, args: [server] }])) }));
-  writeFileSync(settings, '| Critical tools | email, google-workspace |\n' +
-    '| Agent email account | self@example.test |\n| Google account (Tasks) | self@example.test |\n');
+  writeFileSync(settings, '| Critical tools | google-workspace-agent-email, google-workspace |\n' +
+    '| Agent email account | ai@example.test |\n| Agent email Google account | backing@example.test |\n' +
+    '| Critical alert email | self@example.test |\n| Google account (Tasks) | self@example.test |\n');
   // GH #772: default every existing test call to a coordinator run (`--run <runId>`) -- what
   // follows already exercises the ledger-dependent gap detection above this line, and that
   // behavior must be unchanged for a real coordinator run.
@@ -165,8 +169,9 @@ readline.createInterface({input:process.stdin}).on('line', line => {
       path.join(here, '..', 'skills', 'overnight-agent', 'check-critical-tools.mjs'),
       '--settings', settings, '--mcp-config', mcpConfig, '--state', capabilities, '--ledger', ledger,
       '--state-dir', state, '--now', now, ...extraArgs,
-      ...recordArgs.flatMap((r) => ['--record', r]),
-    ], { encoding: 'utf8', timeout: 180000 },
+      ...recordArgs.flatMap((r) => ['--record', r.replace(/^email=/, 'google-workspace-agent-email=')]),
+    ], { encoding: 'utf8', timeout: 180000,
+      env: { ...process.env, OVERNIGHT_AGENT_HOME: temp, WRITE_TURN_OA_HOME: temp } },
   );
   const run1 = check('2026-09-29T10:00:00Z', ['email=ok', 'google-workspace=down:protocol mismatch']);
   assert.equal(run1.status, 2, run1.stderr);
@@ -207,6 +212,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   const disconnectedConfig = path.join(temp, 'disconnected-mcp-config.json');
   writeFileSync(disconnectedConfig, JSON.stringify({ mcpServers: {
     email: { type: 'stdio', command: 'missing-email-server' },
+    'google-workspace-agent-email': { type: 'stdio', command: 'missing-agent-gmail-server' },
     'google-workspace': { type: 'stdio', command: 'missing-google-server' },
   } }));
   const connectedRun = check('2026-09-29T15:00:00Z', ['email=ok', 'google-workspace=ok'], disconnectedConfig);
@@ -231,6 +237,11 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   assert.equal(JSON.parse(coordinated.stdout).run.runId, 'coordinator-run-2');
   assert.equal(ledgerLineCount(), beforeManual + 1,
     'a coordinator run (--run present) writes exactly one ledger line');
+  const beforeGmailDown = readFileSync(sends, 'utf8');
+  const gmailDown = check('2026-09-29T16:00:00Z', ['google-workspace=ok']);
+  assert.equal(gmailDown.status, 2, gmailDown.stderr);
+  assert.equal(JSON.parse(gmailDown.stdout).tools['google-workspace-agent-email'].error, 'absent from session');
+  assert.equal(readFileSync(sends, 'utf8'), beforeGmailDown, 'Gmail-down never sends through legacy email');
 
   console.log('PASS settings, --record, immediate down, absent-tool-is-down, outage/recovery, gap, skip, tray, ' +
     'ledger-write-gated-on---run');

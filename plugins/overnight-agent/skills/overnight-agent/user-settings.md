@@ -22,8 +22,9 @@ preferences.
 | Dev drive (repos) | `<path to your repos, e.g. V:\repos\>` (worktrees in `<...>.worktrees\`, packages in `<...>\packages\`) |
 | Non-code task project | `<project ID from create_project>` — local folder project rooted at `%LOCALAPPDATA%\overnight-agent\task-chats`; required before dispatching non-code tasks. |
 | GitHub owner | `github.com/<your-github-username>` |
-| Agent email account | `<agent-inbox@example.com>` (the name of this account as it appears in the email MCP) |
-| Critical tools | `email, google-workspace` — comma-separated MCP server names from `~\.copilot\mcp-config.json`. Unknown names are refused by name. Browser slots are deliberately not critical by default. |
+| Agent email account | `<agent-send-as@example.com>` — verified Gmail Send As alias; pass explicitly as `from_email` on every send/draft. |
+| Agent email Google account | `<backing-account@gmail.com>` — authorized backing Gmail identity for `google-workspace-agent-email`; never the personal productivity account. |
+| Critical tools | `google-workspace-agent-email, google-workspace` — comma-separated MCP server names from `~\.copilot\mcp-config.json`. Unknown names are refused by name. Browser slots are deliberately not critical by default. |
 | Critical alert Telegram DM | *(optional)* your private chat ID, not the mirror's forum-group ID. Used for outage alerts, especially when email is down. |
 | Critical alert email | *(optional)* your own email address; defaults to Agent email account when that is an address. Used when Telegram is not configured or is down. |
 | Google account (Tasks) | `<your.name@example.com>` — the Google account whose **Tasks** the PHASE 2 collect step reads (must be consented in the Google Workspace MCP). Leave blank / omit to disable Google-Tasks collection. |
@@ -97,9 +98,13 @@ falls back, it says so in the run summary rather than quietly pretending you ask
 - **Email replies / sends:** `allowed` to anyone on the **Auto-send allow-list** above — keep replies
   short. Emailing anyone **not** on that list still needs explicit approval.
 - **Email format:** `html` — send all emails (new sends, replies, forwards) as HTML with a plain-text
-  fallback. Set to `plain` for plain-text only.
+  fallback. The Gmail connector generates the text alternative from the HTML. Append the explicit
+  signature `🤖 on behalf of Shiv` to every message, and set `include_signature: false`; do not depend
+  on Gmail's stored signature. Set to `plain` only by explicit user preference (signature still required).
 - **Browser automation:** use a **Playwright MCP browser slot** — never the agent's built-in browser.
-- **Secrets:** never stored in this repo. Email credentials live in the email MCP's own store.
+- **Secrets:** never stored in this repo. Agent Gmail credentials belong to the separately authorized
+  `google-workspace-agent-email` connector. Personal `google-workspace` remains Tasks/Docs/Drive/Calendar,
+  not Gmail. No legacy email/Zoho fallback.
 
 ## Browser slots
 
